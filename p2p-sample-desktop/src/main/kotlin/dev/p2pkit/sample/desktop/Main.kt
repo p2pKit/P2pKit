@@ -19,7 +19,7 @@ import kotlinx.coroutines.runBlocking
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Minimal P2pKit CLI sample.
+ * Minimal P2pKit CLI sample with room-style broadcast.
  *
  * Usage:
  * ```
@@ -31,7 +31,10 @@ import java.util.concurrent.ConcurrentHashMap
  * - `peers`               — list currently discovered peers
  * - `connect <id-prefix>` — open a session to a peer whose id starts with `<id-prefix>`
  *                           (8 chars is usually enough); a plain name also works
- * - `send <text>`         — send a text message on the most-recently-active session
+ * - `send <text>`         — broadcast a text message to **every** active session
+ *                           (room semantics — if only one peer is connected, this
+ *                            sends to just that one)
+ * - `to <id-or-name> <text>` — targeted send to a single peer
  * - `sessions`            — list active sessions
  * - `close <id-prefix>`   — close a session
  * - `help`                — print the command list
@@ -145,19 +148,46 @@ private suspend fun repl(
 
             "send" -> {
                 if (arg.isEmpty()) {
-                    println("usage: send <text>")
+                    println("usage: send <text>  (broadcasts to every active session)")
                     continue
                 }
-                val session = pickMostRecent(sessions)
-                if (session == null) {
+                val snapshot = sessions.values.toList()
+                if (snapshot.isEmpty()) {
                     println("no active session; run `connect` first")
                     continue
                 }
+                val msg = P2pMessage.Text(arg)
+                println("[broadcast → ${snapshot.size}] $arg")
+                for (session in snapshot) {
+                    scope.launch {
+                        runCatching { session.send(msg) }.onFailure {
+                            System.err.println("send to ${session.peer.name} failed: ${it.message}")
+                        }
+                    }
+                }
+            }
+
+            "to" -> {
+                val space = arg.indexOf(' ')
+                if (space <= 0 || space == arg.length - 1) {
+                    println("usage: to <peer-id-prefix-or-name> <text>")
+                    continue
+                }
+                val target = arg.substring(0, space).trim()
+                val text = arg.substring(space + 1).trim()
+                if (text.isEmpty()) {
+                    println("usage: to <peer-id-prefix-or-name> <text>")
+                    continue
+                }
+                val session = sessions.values.firstOrNull { matches(it.peer, target) }
+                if (session == null) {
+                    println("no active session matching '$target'")
+                    continue
+                }
+                println("[to ${session.peer.name}] $text")
                 scope.launch {
-                    try {
-                        session.send(P2pMessage.Text(arg))
-                    } catch (e: Throwable) {
-                        System.err.println("send failed: ${e.message}")
+                    runCatching { session.send(P2pMessage.Text(text)) }.onFailure {
+                        System.err.println("send to ${session.peer.name} failed: ${it.message}")
                     }
                 }
             }
@@ -190,13 +220,14 @@ private fun printHelp() {
     println(
         """
         Commands:
-          peers                   — list discovered peers
-          connect <id-or-name>    — open a session
-          send <text>             — send a text message
-          sessions                — list active sessions
-          close <id-or-name>      — close a session
-          help                    — show this list
-          quit | exit             — stop and exit
+          peers                       — list discovered peers
+          connect <id-or-name>        — open a session
+          send <text>                 — broadcast to every active session (room)
+          to <id-or-name> <text>      — send to one peer
+          sessions                    — list active sessions
+          close <id-or-name>          — close a session
+          help                        — show this list
+          quit | exit                 — stop and exit
         """.trimIndent()
     )
 }
@@ -210,9 +241,6 @@ private fun findPeer(p2p: P2pKit, query: String): Peer? =
 
 private fun matches(peer: Peer, query: String): Boolean =
     peer.id.value.startsWith(query) || peer.name.equals(query, ignoreCase = true)
-
-private fun pickMostRecent(sessions: ConcurrentHashMap<String, P2pSession>): P2pSession? =
-    sessions.values.lastOrNull()
 
 private fun wireIncoming(session: P2pSession, scope: CoroutineScope) {
     session.incoming

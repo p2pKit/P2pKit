@@ -248,6 +248,61 @@ Full iOS verification — Local Network permission prompt, `NSUserDefaults` roun
 4. Phone B's peer list should show phone A with the **same** id-prefix.
 5. If you instead see a new id-prefix, the host app did not call `P2pKitAndroid.initialize(applicationContext)` from `Application.onCreate`. Check `adb logcat | grep p2pkit` for the warning `PeerId persistence: P2pKitAndroid.initialize(context) was not called …`.
 
+### Multi-peer room test (three-device minimum)
+
+Verifies that **N** devices on the same LAN can form a "room" where any peer's broadcast reaches every other connected peer. The SDK exposes one `P2pSession` per peer; the sample layer iterates the live session list and fans out sends — there is no peer-count constant in the code. Three devices is the **minimum** that distinguishes "broadcast" from "single-peer send"; the same flow works at 4, 5, 10, or more peers with no code changes.
+
+There is no fixed SDK or sample limit on peer count. Practical limits are **network-dependent** — they come from Wi-Fi router multicast-storm filtering, mDNS service-cache pressure on the local mDNSResponder, Android's per-app file-descriptor budget, and host CPU/RAM. A typical home Wi-Fi handles a dozen peers comfortably; corporate networks may rate-limit mDNS earlier.
+
+Setup: three or more endpoints on the same Wi-Fi, all using `appId = p2pkit-desktop-sample`. Any mix of Android and JVM. The recipe below uses A = JVM CLI (`Alice`), B = JVM CLI (`Bob`), C = Android (`Carol`) — extend to D, E, F by starting more instances; every step that says "broadcast" naturally reaches them all.
+
+1. **Start device A** (`Alice`):
+   ```powershell
+   .\p2p-sample-desktop\build\install\p2p-sample-desktop\bin\p2p-sample-desktop.bat Alice
+   ```
+2. **Start device B** (`Bob`) — second terminal:
+   ```powershell
+   .\p2p-sample-desktop\build\install\p2p-sample-desktop\bin\p2p-sample-desktop.bat Bob
+   ```
+3. **Start device C** (`Carol`) — Android sample: install, set name `Carol`, tap **Start**.
+4. **Confirm same appId.** Desktop banners say `appId=p2pkit-desktop-sample`. Android logcat (`adb logcat -s p2pkit`) prints `kit started: deviceName=Carol appId=p2pkit-desktop-sample`. All three must match.
+5. **Confirm discovery.** After ~5–10 s:
+   - A's `> peers` lists Bob and Carol.
+   - B's `> peers` lists Alice and Carol.
+   - C's "Discovered peers" panel shows Alice and Carol.
+6. **Connect A → B**, **A → C** (run on Alice's terminal):
+   ```
+   > connect bob
+   > connect carol
+   ```
+   Each prints `connected to <name> (<id-prefix>)`. Optionally `> connect carol` on Bob and tap **Connect** on Carol for Alice, depending on whether you want a full mesh.
+7. **Broadcast from A**:
+   ```
+   > send hello room from Alice
+   ```
+   A prints `[broadcast → 2] hello room from Alice`. B prints `[Alice] hello room from Alice`. C's room timeline gains `Alice → hello room from Alice`.
+8. **Broadcast from B**:
+   ```
+   > send hi from Bob
+   ```
+   A prints `[Bob] hi from Bob`. C's timeline gains `Bob → hi from Bob` (only if Bob is connected to Carol — connect first if not).
+9. **Broadcast from C** (Android): type "hi from Carol" with no peer chips selected (chips row shows nothing selected = broadcast). Tap **Broadcast (N)** button. A and B both receive `[Carol] hi from Carol`.
+10. **Targeted send A → B only**:
+    ```
+    > to bob private message
+    ```
+    A prints `[to Bob] private message`. B prints `[Alice] private message`. C does **not** receive it.
+11. **Targeted send from Android C → Alice only**: on Android, tap the Alice chip in the connected-peers row (chip becomes selected). Send button label changes to `Send to 1`. Send a message. Alice receives it; Bob does not.
+12. **Disconnect one peer, verify the rest still work**. On Alice: `> close bob`. Alice's session to Bob ends. Carol's session and any A↔C messages still flow.
+
+**Scaling beyond three peers.** Start additional desktop CLIs (`p2p-sample-desktop Dave`, `Eve`, …) or Android instances. Each new peer will appear in every other peer's discovery list. Connect any subset; broadcasts go to every connected peer; targeted sends use the chip selection (Android) or `to <name> <text>` (desktop), and the same `to` syntax can be used repeatedly to address different individual peers within the same room.
+
+If any step fails, the most common causes are:
+- different `appId` between endpoints (check log lines in step 4);
+- Wi-Fi router blocking multicast (test on a phone hotspot);
+- Windows Firewall blocking inbound TCP on the JVM ports;
+- Android Wi-Fi multicast filter — fixed in v0.2 task 5; if backporting the sample, confirm `AndroidLanDiscoveryTransport` holds a `WifiManager.MulticastLock`.
+
 ### Verifying ReconnectPolicy.Enabled manually (v0.2 Task 3)
 
 This exercises the **outgoing-only** reconnect path. The accepting peer doesn't auto-redial — it sees the dropped session as `Failed` and a new incoming session arrives once the dialler retries.

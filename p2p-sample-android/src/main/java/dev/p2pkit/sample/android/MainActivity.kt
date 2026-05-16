@@ -13,11 +13,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -34,7 +38,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.Peer
 
 class MainActivity : ComponentActivity() {
@@ -71,7 +74,7 @@ private fun P2pKitSampleApp(vm: P2pKitViewModel) {
                 onStart = vm::start
             )
         } else {
-            RunningScreen(
+            RoomScreen(
                 paddingValues = padding,
                 vm = vm
             )
@@ -94,7 +97,7 @@ private fun SetupScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
-            text = "P2pKit v0.1 sample — discover other devices on the local network and exchange messages.",
+            text = "P2pKit sample — discover devices on your Wi-Fi and chat with all of them in a room.",
             style = MaterialTheme.typography.bodyMedium
         )
         OutlinedTextField(
@@ -115,7 +118,7 @@ private fun SetupScreen(
 }
 
 @Composable
-private fun RunningScreen(
+private fun RoomScreen(
     paddingValues: PaddingValues,
     vm: P2pKitViewModel
 ) {
@@ -142,12 +145,13 @@ private fun RunningScreen(
         Spacer(Modifier.height(8.dp))
 
         LazyColumn(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().height(160.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(peers, key = { it.id.value }) { peer ->
                 PeerCard(
                     peer = peer,
+                    isConnected = vm.connectedSessions.any { it.peer.id.value == peer.id.value },
                     onConnect = { vm.connect(peer) }
                 )
             }
@@ -155,58 +159,110 @@ private fun RunningScreen(
 
         Spacer(Modifier.height(16.dp))
 
-        val active = vm.selectedSession
-        if (active != null) {
-            val sessionState by active.state.collectAsState()
+        // Connected peers + target selection ------------------------------------
+        val connected = vm.connectedSessions.toList()
+        if (connected.isNotEmpty()) {
             Text(
-                text = "Session with ${active.peer.name} — ${sessionState.name}",
-                style = MaterialTheme.typography.titleSmall
+                text = "Room (${connected.size} connected)",
+                style = MaterialTheme.typography.titleMedium
             )
             Spacer(Modifier.height(8.dp))
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().height(220.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                items(vm.messages.toList()) { line ->
-                    Text(
-                        text = "${line.from}: ${line.formatted}",
-                        maxLines = 4,
-                        overflow = TextOverflow.Ellipsis
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(connected, key = { it.id }) { session ->
+                    val pid = session.peer.id.value
+                    val selected = vm.targetedPeerIds.contains(pid)
+                    FilterChip(
+                        selected = selected,
+                        onClick = { vm.togglePeerTarget(pid) },
+                        label = { Text(session.peer.name) }
                     )
                 }
-            }
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = draft,
-                onValueChange = { draft = it },
-                label = { Text("Message") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = {
-                    val text = draft.trim()
-                    if (text.isEmpty()) return@Button
-                    draft = ""
-                    vm.sendText(text)
-                },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = sessionState == ConnectionState.Connected
-            ) {
-                Text("Send")
+                item {
+                    if (vm.targetedPeerIds.isNotEmpty()) {
+                        AssistChip(
+                            onClick = vm::clearPeerTargets,
+                            label = { Text("Broadcast") },
+                            colors = AssistChipDefaults.assistChipColors()
+                        )
+                    }
+                }
             }
         } else {
             Text(
-                text = "Tap a peer to connect.",
+                text = "Tap Connect on a peer to start a room.",
                 style = MaterialTheme.typography.bodyMedium
             )
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // Room timeline ---------------------------------------------------------
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().height(260.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            items(vm.roomMessages.toList(), key = { it.id }) { line ->
+                RoomLine(line)
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Input + Send ----------------------------------------------------------
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            label = { Text("Message") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(8.dp))
+        val targetCount = vm.targetedPeerIds.size
+        val sendLabel = when {
+            connected.isEmpty() -> "No peers connected"
+            targetCount == 0 -> "Broadcast (${connected.size})"
+            else -> "Send to $targetCount"
+        }
+        Button(
+            onClick = {
+                val text = draft.trim()
+                if (text.isEmpty()) return@Button
+                draft = ""
+                vm.sendRoomMessage(text)
+            },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = connected.isNotEmpty() && draft.isNotBlank()
+        ) {
+            Text(sendLabel)
         }
     }
 }
 
 @Composable
-private fun PeerCard(peer: Peer, onConnect: () -> Unit) {
+private fun RoomLine(message: RoomMessage) {
+    val style = MaterialTheme.typography.bodyMedium
+    val prefix = when (message.direction) {
+        RoomMessage.Direction.Incoming -> "${message.senderName} → "
+        RoomMessage.Direction.Outgoing -> {
+            val tgt = message.target
+            val tag = when (tgt) {
+                SendTarget.All -> "broadcast"
+                is SendTarget.Specific -> "→ ${tgt.peerIds.size} peer(s)"
+            }
+            "me [$tag]: "
+        }
+        RoomMessage.Direction.System -> "[system] "
+    }
+    Text(
+        text = "$prefix${message.displayBody}",
+        style = style,
+        maxLines = 4,
+        overflow = TextOverflow.Ellipsis
+    )
+}
+
+@Composable
+private fun PeerCard(peer: Peer, isConnected: Boolean, onConnect: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -222,7 +278,11 @@ private fun PeerCard(peer: Peer, onConnect: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall
                 )
             }
-            TextButton(onClick = onConnect) { Text("Connect") }
+            if (isConnected) {
+                Text(text = "Connected", style = MaterialTheme.typography.labelSmall)
+            } else {
+                TextButton(onClick = onConnect) { Text("Connect") }
+            }
         }
     }
 }

@@ -27,21 +27,22 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Owns the [P2pKit] instance and all session/peer/chat state for the sample
- * app, surviving configuration changes (rotation, dark mode, locale, etc.).
+ * Owns the [P2pKit] instance and the **room** state of the sample.
  *
- * Lifecycle:
- * - Created on first `viewModel()` call; reused across [MainActivity] recreations.
- * - `onCleared()` runs when the ViewModelStore is permanently destroyed —
- *   i.e., the user really leaves the app, not on a rotation. At that point
- *   `viewModelScope` has already been cancelled, so a dedicated cleanup scope
- *   is used to let `kit.stop()` complete asynchronously.
- * - **Process death is not handled**: if Android kills the app process while
- *   it's in the background, the kit and its in-memory state are lost.
- *   `SavedStateHandle`-based recovery is intentionally out of scope; the next
- *   launch starts at the setup screen with a fresh kit. The persistent
- *   `PeerId` from v0.2 Task 1 still carries over so other peers recognise
- *   the device.
+ * Architecture rule: the SDK exposes one [P2pSession] per peer. There is no
+ * "room" type in :p2p-core. This ViewModel implements the room/broadcast UX
+ * purely on the sample side by iterating [P2pKit.sessions] and fanning out
+ * sends. Incoming messages from every active session are merged into a
+ * single [roomMessages] timeline so messages from non-targeted peers are
+ * never dropped.
+ *
+ * No fixed cap on connected peers: broadcast sends to every entry in the
+ * live [connectedSessions] snapshot, and targeted sends use any subset of
+ * peer ids stored in [targetedPeerIds]. Practical limits are
+ * network-dependent (router multicast, mDNS cache pressure).
+ *
+ * Lifecycle survives Activity recreation (rotation, dark-mode, locale, …).
+ * Process death is out of scope (would require `SavedStateHandle`).
  */
 class P2pKitViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -56,27 +57,34 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     private val _peers = MutableStateFlow<List<Peer>>(emptyList())
     val peers: StateFlow<List<Peer>> = _peers.asStateFlow()
 
-    val sessions: SnapshotStateList<P2pSession> = mutableStateListOf()
-    val messages: SnapshotStateList<ChatLine> = mutableStateListOf()
+    /**
+     * Every currently-connected peer's session, observed from
+     * [P2pKit.sessions]. Used by the UI to render the connected-peers row.
+     */
+    val connectedSessions: SnapshotStateList<P2pSession> = mutableStateListOf()
 
-    var selectedSession: P2pSession? by mutableStateOf(null)
-        private set
+    /**
+     * One merged room timeline. Includes incoming messages from every active
+     * session, outgoing messages the local user sent, and system events
+     * (peer connected / disconnected).
+     */
+    val roomMessages: SnapshotStateList<RoomMessage> = mutableStateListOf()
+
+    /**
+     * Peer ids the user has explicitly targeted. Empty = broadcast to every
+     * connected peer.
+     */
+    val targetedPeerIds: SnapshotStateList<String> = mutableStateListOf()
 
     // --- internals ---------------------------------------------------------
 
     private var kit: P2pKit? = null
-
-    /**
-     * Scope for all in-flight collectors and ad-hoc launches while the kit
-     * is running. Cancelled on [stop] so a subsequent [start] doesn't have
-     * stale work from the previous run.
-     */
     private var runScope: CoroutineScope? = null
-
-    /**
-     * Outlives [viewModelScope] so [kit].stop() can finish after [onCleared].
-     */
     private val cleanupScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+    /** One incoming-collector job per session id, so we can cancel on session removal. */
+    private val sessionJobs: MutableMap<String, Job> = mutableMapOf()
+    private var nextMessageId: Long = 1L
 
     // --- intents from the UI -----------------------------------------------
 
@@ -84,8 +92,13 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         deviceName = name
     }
 
-    fun selectSession(session: P2pSession?) {
-        selectedSession = session
+    fun togglePeerTarget(peerId: String) {
+        if (targetedPeerIds.contains(peerId)) targetedPeerIds.remove(peerId)
+        else targetedPeerIds.add(peerId)
+    }
+
+    fun clearPeerTargets() {
+        targetedPeerIds.clear()
     }
 
     fun start() {
@@ -106,17 +119,16 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         scope.launch {
             newKit.peers.collect { _peers.value = it }
         }
+
+        // Single source of truth for "which peers do we have a session with":
+        // P2pKit.sessions. This handles incoming AND outgoing uniformly and
+        // also fires when a session terminates so we can clean up.
         scope.launch {
-            newKit.incomingSessions.collect { session ->
-                if (sessions.none { it.id == session.id }) sessions.add(session)
-                if (selectedSession == null) selectedSession = session
-                launch {
-                    session.incoming.collect { msg ->
-                        messages.add(ChatLine(session.peer.name, msg))
-                    }
-                }
+            newKit.sessions.collect { current ->
+                reconcileSessions(current, scope)
             }
         }
+
         scope.launch {
             runCatching { newKit.startAdvertising() }
             runCatching { newKit.startDiscovery() }
@@ -129,23 +141,60 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val currentKit = kit ?: return
         val scope = runScope ?: return
         scope.launch {
-            val session = runCatching { currentKit.connect(peer) }.getOrNull() ?: return@launch
-            if (sessions.none { it.id == session.id }) sessions.add(session)
-            selectedSession = session
-            launch {
-                session.incoming.collect { msg ->
-                    messages.add(ChatLine(session.peer.name, msg))
-                }
+            // The session itself is registered into newKit.sessions inside
+            // SessionManager — the reconcile collector above will pick it up
+            // and wire incoming. We only handle the connect-attempt failure.
+            runCatching { currentKit.connect(peer) }.onFailure {
+                Log.w(LOG_TAG, "connect to ${peer.name} failed", it)
+                appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
             }
         }
     }
 
-    fun sendText(text: String) {
-        val s = selectedSession ?: return
+    fun sendRoomMessage(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
         val scope = runScope ?: return
-        scope.launch {
-            runCatching { s.send(P2pMessage.Text(text)) }
-            messages.add(ChatLine("(me)", P2pMessage.Text(text)))
+
+        val sessionsSnapshot = connectedSessions.toList()
+        val targetedSet = targetedPeerIds.toSet()
+        val target: SendTarget = if (targetedSet.isEmpty()) SendTarget.All
+        else SendTarget.Specific(targetedSet)
+
+        val recipients = when (target) {
+            SendTarget.All -> sessionsSnapshot
+            is SendTarget.Specific -> sessionsSnapshot.filter { it.peer.id.value in target.peerIds }
+        }
+        if (recipients.isEmpty()) {
+            Log.i(LOG_TAG, "room: send skipped (no recipients)")
+            appendSystemMessage("nothing sent — no targeted peers are connected")
+            return
+        }
+
+        val body = P2pMessage.Text(trimmed)
+        val message = RoomMessage(
+            id = nextMessageId++,
+            senderPeerId = null,
+            senderName = "(me)",
+            body = body,
+            timestamp = System.currentTimeMillis(),
+            direction = RoomMessage.Direction.Outgoing,
+            target = target
+        )
+        roomMessages.add(message)
+        Log.i(
+            LOG_TAG,
+            "room: ${if (target is SendTarget.All) "broadcast" else "targeted"} " +
+                "→ ${recipients.size} peer(s): ${trimmed.take(60)}"
+        )
+
+        for (session in recipients) {
+            scope.launch {
+                runCatching { session.send(body) }.onFailure {
+                    Log.w(LOG_TAG, "room: send to ${session.peer.name} failed", it)
+                    appendSystemMessage("send to ${session.peer.name} failed: ${it.message ?: it::class.simpleName}")
+                }
+            }
         }
     }
 
@@ -155,10 +204,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         _isRunning.value = false
         runScope?.cancel()
         runScope = null
+        sessionJobs.clear()  // jobs are cancelled by runScope.cancel()
         _peers.value = emptyList()
-        sessions.clear()
-        messages.clear()
-        selectedSession = null
+        connectedSessions.clear()
+        targetedPeerIds.clear()
+        roomMessages.clear()
         // viewModelScope still alive here — let kit.stop() complete cleanly.
         viewModelScope.launch { runCatching { toStop.stop() } }
     }
@@ -179,19 +229,94 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // --- helpers -----------------------------------------------------------
+
+    private fun reconcileSessions(current: List<P2pSession>, scope: CoroutineScope) {
+        val currentIds = current.map { it.id }.toSet()
+
+        // Drop sessions that left the kit.
+        val droppedIds = sessionJobs.keys.toList().filter { it !in currentIds }
+        for (id in droppedIds) {
+            sessionJobs.remove(id)?.cancel()
+            val removed = connectedSessions.firstOrNull { it.id == id }
+            if (removed != null) {
+                connectedSessions.remove(removed)
+                targetedPeerIds.remove(removed.peer.id.value)
+                appendSystemMessage("disconnected from ${removed.peer.name}")
+                Log.i(LOG_TAG, "room: session removed ${removed.peer.name}")
+            }
+        }
+
+        // Add sessions that are new in the kit.
+        for (session in current) {
+            if (sessionJobs.containsKey(session.id)) continue
+            connectedSessions.add(session)
+            appendSystemMessage("connected to ${session.peer.name}")
+            Log.i(LOG_TAG, "room: session added ${session.peer.name}")
+            sessionJobs[session.id] = scope.launch {
+                session.incoming.collect { msg ->
+                    Log.i(LOG_TAG, "room: incoming from ${session.peer.name}")
+                    roomMessages.add(
+                        RoomMessage(
+                            id = nextMessageId++,
+                            senderPeerId = session.peer.id.value,
+                            senderName = session.peer.name,
+                            body = msg,
+                            timestamp = System.currentTimeMillis(),
+                            direction = RoomMessage.Direction.Incoming
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private fun appendSystemMessage(text: String) {
+        roomMessages.add(
+            RoomMessage(
+                id = nextMessageId++,
+                senderPeerId = null,
+                senderName = "(system)",
+                body = P2pMessage.Text(text),
+                timestamp = System.currentTimeMillis(),
+                direction = RoomMessage.Direction.System
+            )
+        )
+    }
+
     private companion object {
         const val APP_ID = "p2pkit-desktop-sample"
         const val LOG_TAG = "p2pkit"
     }
 }
 
-/** One line of chat displayed in the running screen. */
-data class ChatLine(val from: String, val message: P2pMessage) {
-    val formatted: String
-        get() = when (message) {
-            is P2pMessage.Text -> message.value
-            is P2pMessage.Binary -> "<binary ${message.bytes.size}B>"
+/**
+ * Sample-level message envelope rendered in the room timeline. Carries
+ * direction (incoming/outgoing/system), sender info, and the targeting
+ * choice the user made for outgoing sends.
+ */
+data class RoomMessage(
+    val id: Long,
+    val senderPeerId: String?,
+    val senderName: String,
+    val body: P2pMessage,
+    val timestamp: Long,
+    val direction: Direction,
+    val target: SendTarget = SendTarget.All
+) {
+    enum class Direction { Incoming, Outgoing, System }
+
+    val displayBody: String
+        get() = when (body) {
+            is P2pMessage.Text -> body.value
+            is P2pMessage.Binary -> "<binary ${body.bytes.size}B>"
         }
+}
+
+/** Targeting choice for an outgoing room send. */
+sealed class SendTarget {
+    data object All : SendTarget()
+    data class Specific(val peerIds: Set<String>) : SendTarget()
 }
 
 private object LogcatLogger : P2pLogger {
