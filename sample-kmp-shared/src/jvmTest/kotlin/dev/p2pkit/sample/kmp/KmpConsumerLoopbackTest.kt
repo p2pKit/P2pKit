@@ -1,5 +1,6 @@
 package dev.p2pkit.sample.kmp
 
+import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
@@ -7,6 +8,9 @@ import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.CompletableDeferred
+import java.io.File
+import java.nio.file.Files
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -19,18 +23,41 @@ import kotlin.test.assertTrue
  * This is the same level of proof as `:p2p-transport-lan:jvmTest`, but
  * driven through [createP2pKit] from `sample-kmp-shared` — proving the
  * KMP consumer integration pattern works end-to-end on JVM.
+ *
+ * Because v0.2 persists `PeerId` to `<user.home>/.p2pkit/<appId>/peer-id`, two
+ * kits in the same JVM with the same `appId` would otherwise share an id and
+ * each filter the other out as "self" in mDNS. The helper below points
+ * `user.home` at a fresh temp dir per kit so each one gets its own peer-id
+ * file.
  */
 class KmpConsumerLoopbackTest {
 
     private val appId = "kmp-consumer-itest-${System.currentTimeMillis()}"
+    private val tempHomes = mutableListOf<File>()
+
+    @AfterTest
+    fun cleanup() {
+        tempHomes.forEach { runCatching { it.deleteRecursively() } }
+        tempHomes.clear()
+    }
+
+    private fun createKit(deviceName: String): P2pKit {
+        val savedHome = System.getProperty("user.home")
+        val tempHome = Files.createTempDirectory("p2pkit-kmp-itest-${deviceName}-").toFile()
+        tempHomes.add(tempHome)
+        System.setProperty("user.home", tempHome.absolutePath)
+        return try {
+            createP2pKit(appId, deviceName)
+        } finally {
+            System.setProperty("user.home", savedHome ?: "")
+        }
+    }
 
     @Test
     fun sharedFactoryCreatesAKitThatCanGreetAPeer() {
         runBlocking {
-            // The "responder" — accepts whatever message arrives.
-            val responder = createP2pKit(appId, "Bob")
-            // The "greeter" — discovers and sends.
-            val greeter = createP2pKit(appId, "Alice")
+            val responder = createKit("Bob")
+            val greeter = createKit("Alice")
 
             try {
                 val incomingReady = CompletableDeferred<Unit>()

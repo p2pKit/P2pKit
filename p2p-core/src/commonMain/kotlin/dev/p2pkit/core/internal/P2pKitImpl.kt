@@ -233,22 +233,26 @@ internal fun newP2pKit(
     appKilledPolicy: AppKilledPolicy,
     securityMode: SecurityMode,
     provisioningConfig: NetworkProvisioningConfig,
-    logger: P2pLogger
-): P2pKit = P2pKitImpl(
-    appId = appId,
-    deviceName = deviceName,
-    localPlatform = currentPlatform(),
-    localPeerId = newRandomPeerId(),
-    transportFactories = transportFactories,
-    keepAlive = keepAlive,
-    reconnectPolicy = reconnectPolicy,
-    backgroundPolicy = backgroundPolicy,
-    appKilledPolicy = appKilledPolicy,
-    securityMode = securityMode,
-    provisioningConfig = provisioningConfig,
-    permissions = dev.p2pkit.core.permission.NoOpP2pPermissionManager(),
-    networkProvisioning = UnsupportedNetworkProvisioningManager(),
-    logger = logger,
-    clock = ::systemTimeMillis,
-    parentJob = null
-)
+    logger: P2pLogger,
+    peerIdStorageOverride: PeerIdStorage? = null
+): P2pKit {
+    val peerIdStorage = peerIdStorageOverride ?: defaultPeerIdStorage(appId, logger)
+    return P2pKitImpl(
+        appId = appId,
+        deviceName = deviceName,
+        localPlatform = currentPlatform(),
+        localPeerId = peerIdStorage.loadOrGenerate(),
+        transportFactories = transportFactories,
+        keepAlive = keepAlive,
+        reconnectPolicy = reconnectPolicy,
+        backgroundPolicy = backgroundPolicy,
+        appKilledPolicy = appKilledPolicy,
+        securityMode = securityMode,
+        provisioningConfig = provisioningConfig,
+        permissions = dev.p2pkit.core.permission.NoOpP2pPermissionManager(),
+        networkProvisioning = UnsupportedNetworkProvisioningManager(),
+        logger = logger,
+        clock = ::systemTimeMillis,
+        parentJob = null
+    )
+}

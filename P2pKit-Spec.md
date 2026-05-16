@@ -682,6 +682,14 @@ Calling either method posts to an internal channel; a worker coroutine applies t
 - **Process death:**
   - All sessions are lost. `PeerId` persists; everything else is rebuilt fresh.
 
+  **v0.2 status (Task 1):** Persistence is implemented. JVM writes to
+  `<user.home>/.p2pkit/<sanitized-appId>/peer-id`. Android writes to
+  `<filesDir>/p2pkit/<sanitized-appId>/peer-id` **after** the host app
+  calls `P2pKitAndroid.initialize(applicationContext)` from
+  `Application.onCreate()`. Without that init call on Android, the kit
+  falls back to in-memory storage and logs a `P2pLogger.warn` at
+  construction. JVM has no init step — persistence is automatic.
+
 ### 16.3 Network change handling
 
 If the underlying socket dies due to a network change (Wi-Fi → mobile data, network switch, etc.):

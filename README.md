@@ -130,6 +130,25 @@ scope.launch {
 
 No runtime permissions required. On first run, Windows Defender Firewall may prompt to allow inbound TCP on the chosen ephemeral port — **allow it**.
 
+### Android `Application.onCreate` (recommended)
+
+To enable persistent `PeerId` on Android, register an `Application` subclass and call `P2pKitAndroid.initialize(this)` once:
+
+```kotlin
+class MyApp : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        P2pKitAndroid.initialize(this)
+    }
+}
+```
+
+```xml
+<application android:name=".MyApp" …>
+```
+
+If you skip this on Android, P2pKit still works — it falls back to in-memory `PeerId` storage and logs a warning. The device will appear to other peers with a new id after every process restart.
+
 ## Why LAN/TCP first
 
 LAN + TCP is the **only transport that works the same way on every desktop and mobile platform** without proprietary stacks. Bluetooth, Wi-Fi Direct, and Multipeer each work great on one side but not the others. Starting with LAN keeps the public API honest about portability; pluggable transports are added behind it as separate Gradle modules.
@@ -254,20 +273,20 @@ Launch on both devices (same Wi-Fi), enter different names, tap **Start**, then 
 ./gradlew :p2p-core:assemble :p2p-transport-lan:assemble :p2p-sample-desktop:installDist :p2p-sample-android:assembleDebug
 ```
 
-v0.1 ships **69 unit + integration tests** (67 in `:p2p-core`, 2 in `:p2p-transport-lan`). The loopback integration test in `:p2p-transport-lan` runs two `P2pKit` instances inside one JVM and exchanges a 200 KB binary payload over real TCP + mDNS — exercise the full pipeline end-to-end without external machines.
+The current `v0.2-dev` branch ships **80 unit + integration tests** (across `:p2p-core`, `:p2p-transport-lan`, and `:sample-kmp-shared`). The loopback integration test in `:p2p-transport-lan` runs two `P2pKit` instances inside one JVM and exchanges a 200 KB binary payload over real TCP + mDNS — exercise the full pipeline end-to-end without external machines.
 
-## Known limitations (v0.1)
+## Known limitations (v0.1-internal, partial v0.2)
 
-- **`ReconnectPolicy.Enabled` is accepted but does not retry yet.** The configuration is validated, but v0.1 sessions still transition to `Failed` on disconnect — equivalent to `Disabled`. The kit emits a `P2pLogger.warn` at construction so this isn't silent, and the KDoc on `ReconnectPolicy.Enabled` says so. Real retry semantics with `maxAttempts` / `retryDelayMillis` land in v0.2.
-- **`PeerId` is regenerated every process.** A device that restarts shows up to other peers with a new id. Persistent identity (a file on JVM, `DataStore` on Android) is v0.2 — it needs a `Context` accessor on Android, which we'll add together with v0.2's `initP2pKitAndroid` rework. For v0.1 internal testing, treat each app launch as a new "device" from the peer's perspective.
+- **`PeerId` persistence (v0.2 task 1 — implemented).** JVM persists automatically under `<user.home>/.p2pkit/<appId>/peer-id`. Android persists under `<filesDir>/p2pkit/<appId>/peer-id` **after** the host app calls `P2pKitAndroid.initialize(applicationContext)` (typically from `Application.onCreate`). Without the init call, Android falls back to in-memory storage and the kit logs a `P2pLogger.warn` at construction. Apps wanting persistent identity must add the init.
+- **`ReconnectPolicy.Enabled` is accepted but does not retry yet.** The configuration is validated, but v0.1 sessions still transition to `Failed` on disconnect — equivalent to `Disabled`. The kit emits a `P2pLogger.warn` at construction so this isn't silent, and the KDoc on `ReconnectPolicy.Enabled` says so. Real retry semantics with `maxAttempts` / `retryDelayMillis` land in a later v0.2 task.
 - **Android sample's `appId` is hardcoded** to `dev.p2pkit.sample.android` while the desktop sample uses `p2pkit-desktop-sample`. For cross-platform demos, edit one to match — or expose the field in each sample's UI.
 - **No instrumented Android tests.** Android LAN paths (`NsdManager`, `AndroidLanDataTransport`, `AndroidRawConnection`) are validated by code review + manual two-device testing only. The protocol layer that flows over them is JVM-tested.
-- **Android sample loses session on screen rotation.** The kit lives inside the composable, so rotation tears it down. Moving state to a `ViewModel` is v0.2 polish.
+- **Android sample loses session on screen rotation.** The kit lives inside the composable, so rotation tears it down. Moving state to a `ViewModel` is a planned v0.2 sample polish.
 
 ## Status
 
-- **v0.1**: this release.
-- **v0.2**: Network Provisioning sidecar (Android `LocalOnlyHotspot` + Wi-Fi join helpers; JVM network state + manual IP fallback). Will also implement `ReconnectPolicy.Enabled` retries and persistent `PeerId`. Note: concurrent-`connect` idempotency and unknown-packet warn+skip are already fixed in v0.1-internal.
+- **v0.1**: shipped as `v0.1-internal` tag.
+- **v0.2-dev** (current branch): Task 1 — `PeerId` persistence — **done**. Still to do: Network Provisioning sidecar (Android `LocalOnlyHotspot` + Wi-Fi join helpers; JVM network state + manual IP fallback), `ReconnectPolicy.Enabled` retries, file transfer API, instrumented Android tests, sample-app `ViewModel` polish.
 - **v0.3+**: iOS / macOS LAN, BLE, Wi-Fi Direct, Multipeer, Relay, encryption.
 
 See `P2pKit-Spec.md` for the complete v0.1 and planned v0.2 contracts.
