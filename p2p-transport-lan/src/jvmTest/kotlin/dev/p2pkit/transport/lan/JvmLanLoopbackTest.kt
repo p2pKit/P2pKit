@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import java.io.File
+import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -42,15 +44,35 @@ class JvmLanLoopbackTest {
     }
 
     private val toStop = mutableListOf<P2pKit>()
+    private val tempHomes = mutableListOf<File>()
 
     @AfterTest
     fun teardown() = runBlocking {
         toStop.forEach { runCatching { it.stop() } }
         toStop.clear()
+        tempHomes.forEach { runCatching { it.deleteRecursively() } }
+        tempHomes.clear()
     }
 
+    /**
+     * Construct a [P2pKit] under a per-call temporary `user.home`. This forces
+     * the default JVM [dev.p2pkit.core.internal.PeerIdStorage] to write under a
+     * fresh directory, so two kits in the same JVM (sharing an `appId`) end up
+     * with **different** `PeerId`s — otherwise each would filter the other
+     * out of mDNS results as "self". The `user.home` swap is restored
+     * synchronously after [P2pKit.create] returns; the kit captures its
+     * `PeerId` at construction so later `user.home` changes don't affect it.
+     */
     private suspend fun startAndAdvertise(name: String): P2pKit {
-        val kit = newKit(name)
+        val savedHome = System.getProperty("user.home")
+        val tempHome = Files.createTempDirectory("p2pkit-itest-${name}-").toFile()
+        tempHomes.add(tempHome)
+        System.setProperty("user.home", tempHome.absolutePath)
+        val kit = try {
+            newKit(name)
+        } finally {
+            System.setProperty("user.home", savedHome ?: "")
+        }
         toStop.add(kit)
         kit.startAdvertising()
         kit.startDiscovery()

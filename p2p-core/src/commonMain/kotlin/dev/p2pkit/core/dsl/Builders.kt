@@ -8,6 +8,7 @@ import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
+import dev.p2pkit.core.internal.PeerIdStorage
 import dev.p2pkit.core.internal.newP2pKit
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
 import dev.p2pkit.core.transport.TransportFactory
@@ -45,6 +46,15 @@ public class P2pKitBuilder internal constructor() {
     internal var appKilledPolicy: AppKilledPolicy = AppKilledPolicy.NoPersistenceForMvp
     internal var securityMode: SecurityMode = SecurityMode.NoneForMvp
     internal var networkProvisioning: NetworkProvisioningConfig = NetworkProvisioningConfig()
+
+    /**
+     * Override the [PeerIdStorage] the kit uses. **Internal** — set from
+     * tests or from advanced internal code only. When `null`, the kit calls
+     * [dev.p2pkit.core.internal.defaultPeerIdStorage] which selects a
+     * platform-appropriate file-based store (or in-memory on Android if
+     * `P2pKitAndroid.initialize(context)` wasn't called).
+     */
+    internal var peerIdStorage: PeerIdStorage? = null
 
     public fun transports(block: TransportsBuilder.() -> Unit) {
         transportsBuilder.apply(block)
@@ -88,7 +98,8 @@ public class P2pKitBuilder internal constructor() {
             appKilledPolicy = appKilledPolicy,
             securityMode = securityMode,
             provisioningConfig = networkProvisioning,
-            logger = logger
+            logger = logger,
+            peerIdStorageOverride = peerIdStorage
         )
     }
 }

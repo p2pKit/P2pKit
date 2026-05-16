@@ -168,15 +168,33 @@ Also: **Android on mobile data only** cannot discover LAN peers — both endpoin
 
 ## 7. Success criteria
 
-A v0.1 internal release passes when **all five** are true:
+A v0.1-internal / v0.2-dev release passes when **all six** are true:
 
-1. `./gradlew :p2p-core:allTests :p2p-transport-lan:jvmTest` reports **69 tests, 0 failures**.
+1. `./gradlew :p2p-core:allTests :p2p-transport-lan:jvmTest :sample-kmp-shared:jvmTest` reports **all tests passing, 0 failures**.
 2. Two desktop CLIs on the same machine **discover each other within 10 s** and exchange a text message both ways.
 3. Two Android devices on the same Wi-Fi **discover each other within 10 s** and exchange a text message both ways.
 4. One desktop + one Android (with `appId` aligned per §4) discover each other and exchange a text message both ways.
-5. The seven items under **"Known limitations (v0.1)"** in [README.md](./README.md) have been reviewed and accepted by the tester.
+5. **`PeerId` persists across restarts** on both platforms — see "Verifying PeerId persistence manually" below.
+6. The items under **"Known limitations"** in [README.md](./README.md) have been reviewed and accepted by the tester.
 
 If any of these fails, file a bug. If discovery hangs on a network you suspect blocks multicast, **first** retry on a phone hotspot before filing.
+
+### Verifying PeerId persistence manually
+
+**Desktop ↔ Desktop:**
+
+1. Start one CLI (`Alice`). Note the `id-prefix` shown for Alice in another machine's peer list (or another desktop UI window on the same machine).
+2. `quit` Alice.
+3. Re-launch Alice with the same args.
+4. The other side's peers list should show Alice with the **same** id-prefix as before — confirming the JVM persisted `peer-id` under `<user.home>/.p2pkit/<appId>/peer-id`.
+
+**Android ↔ Android:**
+
+1. Launch the sample on phone A. Note the id-prefix shown for phone A in phone B's peer list.
+2. Force-stop phone A's app (Settings → Apps → P2pKit Sample → Force stop).
+3. Re-launch phone A's app.
+4. Phone B's peer list should show phone A with the **same** id-prefix.
+5. If you instead see a new id-prefix, the host app did not call `P2pKitAndroid.initialize(applicationContext)` from `Application.onCreate`. Check `adb logcat | grep p2pkit` for the warning `PeerId persistence: P2pKitAndroid.initialize(context) was not called …`.
 
 ---
 
@@ -184,7 +202,7 @@ If any of these fails, file a bug. If discovery hangs on a network you suspect b
 
 Run through this before tagging.
 
-- [ ] **All tests pass** — `./gradlew :p2p-core:allTests :p2p-transport-lan:jvmTest` → 69/69 green.
+- [ ] **All tests pass** — `./gradlew :p2p-core:allTests :p2p-transport-lan:jvmTest :sample-kmp-shared:jvmTest` → all green.
 - [ ] **Desktop sample runs** — `:p2p-sample-desktop:installDist` succeeds; two instances on one machine reach `connect` + `send` (§2).
 - [ ] **Android sample builds** — `:p2p-sample-android:assembleDebug` produces an APK; smoke-installs on one device and launches to the setup screen.
 - [ ] **Known limitations reviewed** — the seven items in `README.md` § "Known limitations (v0.1)" are still accurate; nothing new has slipped in.
