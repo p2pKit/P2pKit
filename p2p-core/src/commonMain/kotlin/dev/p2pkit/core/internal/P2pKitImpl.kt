@@ -121,10 +121,10 @@ internal class P2pKitImpl(
         sessionManager.startAcceptingIncoming(dataTransports)
 
         if (reconnectPolicy is ReconnectPolicy.Enabled) {
-            logger.warn(
-                "ReconnectPolicy.Enabled was configured, but P2pKit v0.1 does not retry " +
-                    "failed sessions. They will transition to Failed without reconnection. " +
-                    "Real retry semantics are planned for v0.2. See README 'Known limitations'."
+            logger.debug(
+                "ReconnectPolicy.Enabled (maxAttempts=${reconnectPolicy.maxAttempts}, " +
+                    "retryDelayMillis=${reconnectPolicy.retryDelayMillis}). Outgoing sessions " +
+                    "will retry after connection loss; incoming sessions still fail directly."
             )
         }
     }
