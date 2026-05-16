@@ -39,7 +39,7 @@ session.send(P2pMessage.Text("hello"))
 - Not Bluetooth, Wi-Fi Direct, Apple Multipeer, or a relay client — those are **future** transports designed to plug in behind the same API.
 - Not iOS / native macOS in v0.1.
 - Not encrypted in v0.1 (`SecurityMode.NoneForMvp`); the security abstraction exists so encryption can be added without breaking the public API.
-- Not a file-transfer SDK in v0.1 — text and binary messages up to **4 MiB per `send()`**.
+- Not a multimedia streaming SDK — file transfer (added in v0.2.2) streams discrete files via `sendFile` / `incomingFiles` with a 2 GiB default cap, but the SDK does not provide a media pipeline. Text and binary messages stay capped at **4 MiB per `send()`** (use `sendFile` for anything larger).
 - Does not request runtime permissions on your behalf — that's the app's responsibility.
 - Does not promise to put two devices on the same LAN automatically. **Network provisioning** is a planned v0.2 sidecar.
 
@@ -123,6 +123,36 @@ scope.launch {
 
 **Never use nested `collect { collect { … } }`** — always use `launchIn(scope)` on inner flows.
 
+### File transfer (v0.2.2)
+
+```kotlin
+// Outgoing (JVM): the convenience extension reads file.name / file.length() for you.
+import dev.p2pkit.core.transfer.sendFile
+
+val transfer = session.sendFile(java.io.File("/path/to/report.pdf"))
+transfer.state
+    .onEach { state -> println("$state ${transfer.bytesTransferred.value}/${transfer.sizeBytes}") }
+    .launchIn(scope)
+// transfer.cancel("user aborted") at any time
+
+// Outgoing (Android): pass an Activity Result Uri from the system picker; the
+// extension resolves name/size/mime via ContentResolver.
+import dev.p2pkit.core.transfer.sendFile
+
+session.sendFile(context, pickedUri)
+
+// Incoming: the peer's send arrives as a P2pFileOffer.
+session.incomingFiles
+    .onEach { offer ->
+        // sink can be Buffer(), File.outputStream().asSink(), getExternalFilesDir(...)... etc.
+        offer.accept(saveFile.outputStream().asSink())
+        // or: offer.reject("not now")
+    }
+    .launchIn(scope)
+```
+
+Files stream in 64 KiB chunks (configurable via `fileTransfer { chunkSizeBytes = … }`); the SDK never buffers the whole file in memory. The default 2 GiB cap and 30 s offer-timeout are also configurable.
+
 ## Required permissions
 
 ### Android (manifest, install-time)
@@ -165,10 +195,11 @@ LAN + TCP is the **only transport that works the same way on every desktop and m
 
 ## Future transport roadmap
 
-| Transport | Status | Notes |
+| Transport / capability | Status | Notes |
 |---|---|---|
-| LAN (mDNS + TCP) | **v0.1** | This release. |
-| Network provisioning sidecar | v0.2 | Android `LocalOnlyHotspot` + Wi-Fi join helpers. API shape is locked; not implemented yet. |
+| LAN (mDNS + TCP) | **v0.1** | Shipped. |
+| Network provisioning sidecar | **v0.2.1** | Android `LocalOnlyHotspot` host + Wi-Fi join via `WifiNetworkSpecifier`; JVM manual-IP fallback. Code complete, real-device verification pending (see backlog). |
+| File transfer (`sendFile` / `incomingFiles`) | **v0.2.2** | Streaming via `kotlinx.io.RawSource` / `RawSink`; default 2 GiB cap, 64 KiB chunks, 30 s offer timeout; JVM `sendFile(File)` and Android `sendFile(Context, Uri)` convenience extensions; integration-tested via 5 MiB SHA-256 LAN loopback. |
 | iOS / macOS LAN (Bonjour + `Network.framework`) | v0.3 | Same public API; iOS sample app to follow. |
 | BLE | v0.4+ | Discovery + small messages. **Not** for large file transfer. |
 | Android Wi-Fi Direct | v0.4+ | Android-to-Android offline. |
@@ -233,7 +264,7 @@ Detailed design lives in [`P2pKit-Spec.md`](./P2pKit-Spec.md).
 
 ## Modules
 
-- **`:p2p-core`** — public API, models, errors, protocol framing, session manager, peer registry. KMP module with `commonMain` / `jvmMain` / `androidMain` / `iosMain` (core scaffolding only — no LAN).
+- **`:p2p-core`** — public API, models, errors, protocol framing, session manager, peer registry, **file transfer** (`P2pSession.sendFile` / `incomingFiles`, JVM `sendFile(File)` and Android `sendFile(Context, Uri)` convenience extensions, configurable cap + chunk size + offer timeout via `fileTransfer { … }`). KMP module with `commonMain` / `jvmMain` / `androidMain` / `iosMain` (core scaffolding only — no LAN).
 - **`:p2p-transport-lan`** — mDNS discovery + TCP data. JmDNS on JVM, `NsdManager` on Android. **iOS targets are not declared on this module yet** (v0.3).
 - **`:p2p-sample-android`** — Compose UI room/broadcast test harness. **Primary visual harness** for v0.2. `./gradlew :p2p-sample-android:assembleDebug`.
 - **`:p2p-sample-desktop`** — JVM CLI test harness. **Canonical desktop harness** for v0.2. `./gradlew :p2p-sample-desktop:installDist` then run the launcher. Type `help` for commands.
@@ -243,7 +274,7 @@ Detailed design lives in [`P2pKit-Spec.md`](./P2pKit-Spec.md).
 
 Planned modules (not in v0.2.1): `:p2p-network-provisioning-android` (v0.2.1 task 11–12), `:p2p-transport-ble`, `:p2p-transport-android-wifidirect`, `:p2p-transport-apple-multipeer`, `:p2p-transport-relay`, `:p2p-sample-ios`.
 
-## Sample feature coverage (v0.2-dev)
+## Sample feature coverage (v0.2.2-dev)
 
 | Feature | Android sample | JVM CLI | Compose Desktop UI |
 |---|---|---|---|
@@ -267,6 +298,9 @@ Planned modules (not in v0.2.1): `:p2p-network-provisioning-android` (v0.2.1 tas
 | Auto-mesh (lexicographic tie-break) | ✅ Auto-mesh switch (default on) | ✅ `mesh on/off` (default on) | ✅ Auto-mesh switch (default on) |
 | MulticastLock | ✅ implicit (active while running) | N/A | N/A |
 | In-app log strip | ✅ tail of TailLogger | ✅ stderr | ✅ tail of TailLogger |
+| File transfer — pick & send (v0.2.2) | ✅ chip overflow → SAF picker | ✅ `sendfile <id> <path>` | ✅ chip overflow → AWT FileDialog |
+| File transfer — auto-accept inbound | ✅ `getExternalFilesDir/p2pkit-incoming/<sender>/` | ✅ `~/.p2pkit/incoming/<sender>/` | ✅ `~/.p2pkit/incoming/<sender>/` |
+| File transfer — live progress & cancel | ✅ transfer rows with % + Cancel | ✅ `[file …] state` lines | ✅ transfer rows with % + Cancel |
 
 ## Platform testing matrix (v0.2-dev)
 
@@ -342,7 +376,7 @@ Launch on both devices (same Wi-Fi), enter different names, tap **Start**, then 
 ./gradlew :p2p-core:assemble :p2p-transport-lan:assemble :p2p-sample-desktop:installDist :p2p-sample-android:assembleDebug
 ```
 
-The current `v0.2-dev` branch ships **94 unit + integration tests** in `:p2p-core` plus 2 in `:p2p-transport-lan` and 2 in `:sample-kmp-shared`. The loopback integration test in `:p2p-transport-lan` runs two `P2pKit` instances inside one JVM and exchanges a 200 KB binary payload over real TCP + mDNS — exercise the full pipeline end-to-end without external machines.
+The current `v0.2.2-dev` branch ships **123 unit + integration tests** in `:p2p-core` plus 3 in `:p2p-transport-lan` and the host-side tests under `:p2p-network-provisioning-android` and `:p2p-network-provisioning-desktop`. The LAN loopback suite runs two `P2pKit` instances inside one JVM over real TCP + mDNS — `largeBinaryPayloadRoundTripsOverTcp` exchanges a 200 KB binary, `fileTransferRoundTripsOverTcpWithMatchingHash` streams a deterministic 5 MiB temp file and SHA-256-verifies it on the receiver — so the full pipeline is exercised end-to-end without external machines.
 
 ## Known limitations (v0.1-internal, partial v0.2)
 
@@ -359,15 +393,17 @@ The current `v0.2-dev` branch ships **94 unit + integration tests** in `:p2p-cor
 
 - **v0.1**: shipped as `v0.1-internal` tag.
 - **v0.2-dev** → tagged **`v0.2-internal`** at `a9d683d`. v0.2 contents: Tasks 1–8 (`PeerId` persistence, rotation survival, `ReconnectPolicy.Enabled` retry, iOS scaffolding, Android `MulticastLock`, room/broadcast samples, local identity accessors, simultaneous-open arbitration).
-- **v0.2.1-dev** (current branch, `1465a7a`): Task 10 — JVM Network Provisioning sidecar with manual-IP fallback (`:p2p-network-provisioning-desktop`) — **done**. Task 11 — Android `LocalOnlyHotspot` host — **done (code+tests; pending real-device verification — see backlog)**. Task 12 — Android Wi-Fi join via `WifiNetworkSpecifier` (process-wide socket binding so the LAN transport routes through the joined AP) — **done (code+tests; pending real-device verification — see backlog)**. Plus the small SDK addition `ProvisioningContext.parentJob` so manager scopes are tied to `kit.stop()` cleanly. **Tagging `v0.2.1-internal` is blocked** on the real-device verification milestone below.
+- **v0.2.1-dev** (branch `v0.2.1-dev`, `1465a7a`): Task 10 — JVM Network Provisioning sidecar with manual-IP fallback (`:p2p-network-provisioning-desktop`) — **done**. Task 11 — Android `LocalOnlyHotspot` host — **done (code+tests; pending real-device verification — see backlog)**. Task 12 — Android Wi-Fi join via `WifiNetworkSpecifier` (process-wide socket binding so the LAN transport routes through the joined AP) — **done (code+tests; pending real-device verification — see backlog)**. Plus the small SDK addition `ProvisioningContext.parentJob` so manager scopes are tied to `kit.stop()` cleanly. **Tagging `v0.2.1-internal` is blocked** on the real-device verification milestone below.
+- **v0.2.2-dev** (current branch): file transfer track. Task 13 — `kotlinx-io` dep + protocol additions (FILE_OFFER / ACCEPT / REJECT / DATA / DONE / CANCEL) + commonMain `P2pFileTransfer` / `P2pFileOffer` / `FileTransferState` / `FileTransferConfig` + internal streaming sender / receiver — **done**. Task 14 — `FileTransferDispatcher` wired into `P2pSessionImpl`, `fileTransfer { … }` DSL block, offer-timeout + cancel propagation, `closeAll` on session close, 5 MiB SHA-256 LAN loopback test — **done**. Task 15 — JVM `sendFile(File)` and Android `sendFile(Context, Uri)` convenience extensions, source-close-on-terminal in dispatcher so the extensions never leak file handles — **done**. Task 16 — all three sample apps gain a "Send file…" menu, live progress rows, auto-accept of inbound offers to platform-appropriate folders — **done**. Code complete and tagged `v0.2.2-internal` blocked **only** on the same Task 11/12 real-device verification (file transfer itself is verified by the 5 MiB loopback test; pending verification covers the provisioning underlying it on Android-only scenarios).
 - **v0.3+**: full iOS LAN/TCP transport (`NWBrowser` + `NWListener` + `NWConnection` + iOS sample app), macOS native LAN, BLE, Wi-Fi Direct, Multipeer, Relay, encryption.
 
 ### Pending verification backlog
 
 | Milestone | What | Blocks |
 |---|---|---|
-| **Task 11 & 12 real-device manual verification** | Two real Android phones: host runs `LocalOnlyHotspot` via `HotspotCard`, guest joins via `JoinHotspotCard`, verify OS join prompt, `Joined` state, AP-subnet socket routing via `bindProcessToNetwork`, auto-mesh session formation across the AP, and clean teardown on `kit.stop()`. Full recipe in `INTERNAL_TESTING.md` §H + §I. | Tagging `v0.2.1-internal` from `1465a7a`. |
+| **Task 11 & 12 real-device manual verification** | Two real Android phones: host runs `LocalOnlyHotspot` via `HotspotCard`, guest joins via `JoinHotspotCard`, verify OS join prompt, `Joined` state, AP-subnet socket routing via `bindProcessToNetwork`, auto-mesh session formation across the AP, and clean teardown on `kit.stop()`. Full recipe in `INTERNAL_TESTING.md` §H + §I. | Tagging `v0.2.1-internal` from `v0.2.1-dev@1465a7a`, and `v0.2.2-internal` from `v0.2.2-dev` (the v0.2.2 file-transfer pipeline is automated-test-verified — 5 MiB SHA-256 LAN loopback — but the v0.2.2 branch transitively includes v0.2.1's provisioning work, so the same device verification gates both tags). |
+| **Cross-device file-transfer device verification** (optional) | Two real Android phones or one Android + one JVM desktop on the same Wi-Fi: send a file ≥ 10 MiB end-to-end via the sample UIs, verify the saved file is byte-identical, exercise the Cancel button mid-transfer. Full recipe in `INTERNAL_TESTING.md` §J. | Not blocking — the automated 5 MiB SHA-256 loopback test already covers the protocol layer. This recipe validates the sample UX, the Android SAF integration path, and the bind-through-hotspot routing if combined with §H/§I. |
 
-Other carried-forward deferrals (not blocking any tag): file transfer API, instrumented Android tests, process-death recovery via `SavedStateHandle`, per-socket network binding (Option C from Task 12 audit; current impl uses process-wide `bindProcessToNetwork`).
+Other carried-forward deferrals (not blocking any tag): instrumented Android tests, process-death recovery via `SavedStateHandle`, per-socket network binding (Option C from Task 12 audit; current impl uses process-wide `bindProcessToNetwork`), encryption, iOS LAN/TCP.
 
 See `P2pKit-Spec.md` for the complete v0.1 and planned v0.2 contracts.

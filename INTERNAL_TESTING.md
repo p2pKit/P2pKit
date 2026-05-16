@@ -270,6 +270,58 @@ Verifies `WifiNetworkSpecifier`-based Wi-Fi join: the guest device joins the hos
 
 ---
 
+## J. Cross-device file transfer (v0.2.2)
+
+Verifies the full `sendFile` / `incomingFiles` pipeline end-to-end: pick a file on the sender, watch progress + state on both sides, confirm the bytes on disk match. Three sub-recipes — pick whichever pair of platforms you have handy.
+
+The pipeline streams the file in `chunkSizeBytes` (default 64 KiB) frames through the same TCP socket as messages and PING/PONG; nothing is buffered in memory. Sender state walks `Offered → Accepted → Sending(progress) → Completed`. Receiver walks the same states.
+
+### J.1 — JVM CLI ↔ JVM CLI (smallest setup)
+
+1. **Both:** `./gradlew :p2p-sample-desktop:installDist`, then launch two instances in two terminals (`Alice`, `Bob`). Auto-mesh forms within ~5 seconds.
+2. **Bob (sender):** `> sendfile alice C:\path\to\large.zip` (or `/path/...` on macOS/Linux). The shell quotes paths with spaces (`> sendfile alice "C:\Users\me\Downloads\big file.zip"`).
+3. **Bob:** sees `[file → Alice large.zip] Offered`, then `Accepted`, then `Sending(0.05)` … `Sending(1.0)`, then `Completed`.
+4. **Alice:** sees `[file ← Bob] offered large.zip (10485760B) → C:\Users\me\.p2pkit\incoming\Bob\large.zip`, then state transitions, finally `Completed`.
+5. **Verify:** open the saved file under Alice's `<user.home>/.p2pkit/incoming/Bob/`. Optional sanity: `Get-FileHash` / `sha256sum` should match the source.
+
+**Pass criteria:** both sides reach `Completed`; the destination file is byte-identical to the source; the rest of the room (messages, peer discovery) keeps working during the transfer.
+
+### J.2 — Android ↔ JVM CLI
+
+1. **JVM CLI (Alice):** launch as above on a desktop on the same Wi-Fi.
+2. **Android (Bob):** install + launch the sample app, tap **Start**. Wait for Alice to appear in **Discovered peers**, then auto-mesh connects.
+3. **Android → JVM:** tap the **⋮** on Alice's chip in the Room row → **Send file…** → pick any file from the system picker (Downloads, Drive, Photos). The Android `sendFile(Context, Uri)` extension reads name/size/mime from `ContentResolver`.
+4. **Android:** a new card appears in **File transfers** showing the file name, peer (Alice), state (`offered → accepted → sending 0% → … 100%`), and bytes counter. Cancel button is available while active.
+5. **JVM (Alice):** auto-accepts; the destination prints in the CLI as `[file ← Bob] offered …`. State transitions echo as `[file ← Bob <name>] Sending(0.5)` etc. Final line: `Completed`.
+6. **JVM → Android:** in Alice's CLI: `> sendfile bob /path/to/file.bin`. Android auto-accepts to `getExternalFilesDir(null)/p2pkit-incoming/Alice/<name>` and renders the inbound row with the destination path.
+
+**Pass criteria:** both directions complete; the Android sample card shows real-time progress without UI freeze; the saved file on Android can be opened via `adb pull` or a file-manager app from the printed destination path.
+
+### J.3 — Android ↔ Android (real-device end-to-end)
+
+1. **Both phones:** install + launch the sample on the same Wi-Fi (or via §H/§I hotspot if no shared LAN). Tap **Start** on both. Auto-mesh connects them.
+2. **Sender:** tap **⋮** on the peer chip → **Send file…** → pick a file (a small image or a multi-MB document both work; the cap is 2 GiB by default).
+3. **Sender's File transfers card** shows the outgoing row with progress %.
+4. **Receiver:** within the same screen, a new row appears with the `↓` arrow, peer name, and a destination path under `Android/data/dev.p2pkit.sample.android/files/p2pkit-incoming/<sender>/<name>` — this is the app-scoped external-files dir, so no runtime storage permission is needed even on API 33+.
+5. **Both sides:** state goes to `Completed`. Verify with a file manager: navigate to the printed path on the receiver and open the file.
+6. **Cancel test:** start a second, larger transfer (e.g., a video). While the row shows `sending N%`, tap **Cancel** on the sender. Both sides should flip to `Cancelled(user cancelled)` within ~1 second; the partial destination file is left behind on disk (verify it's shorter than the original).
+7. **Reject test:** lower the receiver's `maxFileSizeBytes` to 1 MiB via the in-code `fileTransfer { … }` block (or just test with a file > 2 GiB on default settings). The sender's row goes straight to `Rejected — sizeBytes ... exceeds maxFileSizeBytes ...` without the offer ever surfacing to the receiver's UI.
+
+**Pass criteria:** transfer completes in proportional time (a 50 MiB file over Wi-Fi takes ~10 seconds); cancel propagates both ways promptly; the receiver's app-scoped storage path is readable without manifest permission changes.
+
+**Common failure reasons:**
+- `Failed — kotlinx.io.IOException: Source exhausted before ... bytes` — the source file shrunk or was moved between the metadata read and the streaming read. Pick again.
+- `Cancelled — offer not accepted within 30000ms` — receiver app was backgrounded or paused on the offer card too long. Default timeout is 30 s, raise with `fileTransfer { offerTimeoutMillis = ... }` if the test scenario expects user delay.
+- Android sample card shows `Failed — Cannot determine size for content://...` — some Storage Access Framework providers (cloud-only documents, recent picker entries) don't expose `OpenableColumns.SIZE`. Workaround: pick the file from the device's local Files app instead, or download it locally first.
+
+### Code-only verification (no device required)
+
+Apart from the device recipes above, the file transfer pipeline is also exercised by automated tests on every build:
+- `:p2p-core:allTests` includes **7 commonTest cases** in `FileTransferFlowTest` (happy path, reject, receiver-size cap, sender-side `PayloadTooLarge`, offer timeout, mid-stream cancel, parallel message+file send) plus **3 jvmTest cases** in `FileTransferJvmTest` (the JVM extension's `sendFile(File)` overload).
+- `:p2p-transport-lan:jvmTest` includes `fileTransferRoundTripsOverTcpWithMatchingHash` — two real `P2pKit` instances over real mDNS + TCP transfer a deterministic 5 MiB temp file, with SHA-256 verified on the receiver. Completes in ~13 s.
+
+---
+
 ## F. Unsupported iOS status
 
 iOS in v0.2 is **core scaffolding only**:
@@ -328,19 +380,23 @@ Also: **Android on mobile data only** cannot discover LAN peers — both endpoin
 
 ---
 
-## 7. Release checklist (v0.2-dev)
+## 7. Release checklist (v0.2.2-dev)
 
 Run through this before tagging.
 
-- [ ] `./gradlew :p2p-core:allTests :p2p-transport-lan:jvmTest :sample-kmp-shared:jvmTest :p2p-sample-android:assembleDebug :p2p-sample-desktop:installDist :p2p-sample-desktop-ui:assemble` → all green.
+- [ ] `./gradlew :p2p-core:allTests :p2p-transport-lan:jvmTest :p2p-network-provisioning-desktop:test :p2p-network-provisioning-android:testAndroidHostTest :p2p-sample-android:assembleDebug :p2p-sample-desktop:installDist :p2p-sample-desktop-ui:assemble` → all green. Expected counts: `:p2p-core:allTests` 123/0, `:p2p-transport-lan:jvmTest` 3/0 (includes the 5 MiB SHA-256 file-transfer round-trip).
 - [ ] **§A** Android ↔ JVM walkthrough passes nine-of-nine.
 - [ ] **§B** Three-device room broadcast verified at N ≥ 3 (4+ ideally).
 - [ ] **§C** ReconnectPolicy roundtrip verified: Connected → Reconnecting → Connected, and exhaustion → Failed.
 - [ ] **§D** PeerId persistence verified on both JVM and Android.
 - [ ] **§E** MulticastLock dumpsys diagnostic shows `p2pkit-mdns` during operation.
 - [ ] **§F** iOS scaffolding state is unchanged: targets visible in `:p2p-core:tasks --all`, no LAN transport.
+- [ ] **§G** JVM manual-IP fallback verified (two CLIs, `manual host:port`).
+- [ ] **§H** Android `LocalOnlyHotspot` host verified on two phones — *device verification pending; tracks the same backlog row as §I*.
+- [ ] **§I** Android Wi-Fi join via `WifiNetworkSpecifier` verified on two phones — *device verification pending*.
+- [ ] **§J** Cross-device file transfer verified (any one of J.1 / J.2 / J.3) — *device verification optional; the automated 5 MiB SHA-256 LAN loopback already covers the protocol layer*.
 - [ ] Known Limitations in `README.md` reviewed; nothing new has slipped in.
 - [ ] No leftover TODO / FIXME / debug `println` in shipping code (sample `println` is fine).
-- [ ] Compose Desktop UI sample (`:p2p-sample-desktop-ui`) launches at v0.2 parity — status header shows appId/peerId/state, Advertise/Discover switches work, room chips show state, broadcast and targeted send work the same as the Android sample.
+- [ ] Compose Desktop UI sample (`:p2p-sample-desktop-ui`) launches at v0.2.2 parity — status header shows appId/peerId/state, Advertise/Discover switches work, room chips show state, broadcast and targeted send work, **Send file…** menu picks via AWT and surfaces the live progress row.
 
-When all boxes tick, **tag the v0.2-internal milestone** and share this guide with the testers.
+When all boxes tick, **tag the v0.2.2-internal milestone** (which also subsumes v0.2.1's provisioning work) and share this guide with the testers.
