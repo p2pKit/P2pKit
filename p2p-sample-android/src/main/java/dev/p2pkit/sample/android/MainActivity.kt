@@ -1,8 +1,12 @@
 package dev.p2pkit.sample.android
 
+import android.Manifest
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -56,6 +60,7 @@ import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.provisioning.LocalNetworkResult
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -271,6 +276,9 @@ private fun RoomScreen(
                 )
             }
         }
+
+        Spacer(Modifier.height(12.dp))
+        HotspotCard(vm = vm)
 
         val connected = vm.connectedSessions.toList()
         Spacer(Modifier.height(12.dp))
@@ -510,6 +518,119 @@ private fun RoomLine(message: RoomMessage) {
         maxLines = 3,
         overflow = TextOverflow.Ellipsis
     )
+}
+
+@Composable
+private fun HotspotCard(vm: P2pKitViewModel) {
+    val result by vm.hotspotResult.collectAsState()
+    val missing by vm.missingPermissions.collectAsState()
+
+    // Pick the right runtime permission for the device's API level.
+    val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.NEARBY_WIFI_DEVICES
+    } else {
+        Manifest.permission.ACCESS_FINE_LOCATION
+    }
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        vm.refreshMissingPermissions()
+        // Try starting again — user may have just granted the perm.
+        vm.startHotspot()
+    }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = "Hotspot host (LocalOnlyHotspot)",
+                style = MaterialTheme.typography.titleSmall
+            )
+            Spacer(Modifier.height(4.dp))
+            val r = result
+            when {
+                r is LocalNetworkResult.Started -> {
+                    val info = r.manualConnectionInfo
+                    Text("SSID: ${r.credentials.ssid ?: "—"}", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        text = "Pass: ${r.credentials.password?.reveal() ?: "—"}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (info != null) {
+                        Text(
+                            text = "host(s): ${info.hostAddresses.joinToString(", ")}",
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text("port: ${info.port}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Button(onClick = vm::stopHotspot, modifier = Modifier.fillMaxWidth()) {
+                        Text("Stop hotspot")
+                    }
+                }
+                r is LocalNetworkResult.StartedWithoutCredentials -> {
+                    val info = r.manualConnectionInfo
+                    Text(
+                        text = "Hotspot up, but SSID/passphrase redacted by the OS. " +
+                            "Share host:port directly.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = "host(s): ${info.hostAddresses.joinToString(", ")}",
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text("port: ${info.port}", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(6.dp))
+                    Button(onClick = vm::stopHotspot, modifier = Modifier.fillMaxWidth()) {
+                        Text("Stop hotspot")
+                    }
+                }
+                r is LocalNetworkResult.Failed -> {
+                    Text(
+                        text = "Failed: ${r.error::class.simpleName} — ${r.error.message ?: ""}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Button(
+                        onClick = {
+                            if (missing.isNotEmpty()) launcher.launch(perm) else vm.startHotspot()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (missing.isNotEmpty()) "Grant permission and retry" else "Retry")
+                    }
+                }
+                r is LocalNetworkResult.Unsupported -> {
+                    Text(
+                        text = "Unsupported: ${r.reason}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                else -> {
+                    Text(
+                        text = "Host a LocalOnlyHotspot so a nearby peer can join (no SIM / no router needed). " +
+                            "Random SSID + passphrase chosen by Android.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Button(
+                        onClick = {
+                            if (missing.isNotEmpty()) launcher.launch(perm) else vm.startHotspot()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            if (missing.isNotEmpty()) "Grant permission and host hotspot"
+                            else "Host hotspot"
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable

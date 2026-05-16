@@ -34,6 +34,7 @@ android {
 dependencies {
     implementation(project(":p2p-core"))
     implementation(project(":p2p-transport-lan"))
+    implementation(project(":p2p-network-provisioning-android"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

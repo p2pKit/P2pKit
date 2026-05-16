@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Provisioning module manifest.
+
+  This library does NOT declare uses-permission entries for the runtime
+  permissions it surfaces (NEARBY_WIFI_DEVICES / ACCESS_FINE_LOCATION /
+  CHANGE_WIFI_STATE / ACCESS_WIFI_STATE). The host app is responsible for
+  declaring those in its own AndroidManifest.xml — P2pKit never requests
+  permissions itself, only reports which ones are missing via
+  P2pPermissionManager.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

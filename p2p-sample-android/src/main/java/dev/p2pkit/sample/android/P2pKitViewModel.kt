@@ -16,7 +16,13 @@ import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.ReconnectPolicy
+import dev.p2pkit.core.permission.P2pPermission
+import dev.p2pkit.core.provisioning.LocalNetworkConfig
+import dev.p2pkit.core.provisioning.LocalNetworkResult
+import dev.p2pkit.provisioning.android.AndroidP2pPermissionManager
+import dev.p2pkit.provisioning.android.android
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -106,6 +112,20 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     /** Last N lines from the logger; surfaced under the room timeline. */
     val logTail: SnapshotStateList<String> = mutableStateListOf()
 
+    // --- hotspot host (v0.2.1 task 11) ------------------------------------
+
+    /**
+     * Latest hotspot-host result. `null` when no host attempt has been made.
+     * `LocalNetworkResult.Started` or `StartedWithoutCredentials` while the
+     * hotspot is up; `Failed` when start failed or the system stopped it.
+     */
+    private val _hotspotResult = MutableStateFlow<LocalNetworkResult?>(null)
+    val hotspotResult: StateFlow<LocalNetworkResult?> = _hotspotResult.asStateFlow()
+
+    /** Missing perms reported by [AndroidP2pPermissionManager]; sample requests them. */
+    private val _missingPermissions = MutableStateFlow<List<P2pPermission>>(emptyList())
+    val missingPermissions: StateFlow<List<P2pPermission>> = _missingPermissions.asStateFlow()
+
     // --- internals --------------------------------------------------------
 
     private var kit: P2pKit? = null
@@ -142,10 +162,16 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     fun start() {
         if (_isRunning.value) return  // idempotent
         val choice = reconnectChoice
+        val ctx = getApplication<Application>().applicationContext
         val newKit = P2pKit.create {
             appId = AppId(APP_ID)
             this.deviceName = this@P2pKitViewModel.deviceName
-            transports { lan(getApplication<Application>().applicationContext) }
+            transports { lan(ctx) }
+            networkProvisioning {
+                enableLocalHotspot = true
+                enableManualIpFallback = true
+                android(ctx)
+            }
             lifecycle {
                 reconnectPolicy = when (choice) {
                     ReconnectChoice.Disabled -> ReconnectPolicy.Disabled
@@ -158,6 +184,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             logger = TailLogger(this@P2pKitViewModel)
         }
         kit = newKit
+        refreshMissingPermissions()
         _localPeerId.value = newKit.localPeerId.value
         Log.i(
             LOG_TAG,
@@ -222,6 +249,47 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 Log.w(LOG_TAG, "connect to ${peer.name} failed", it)
                 appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
             }
+        }
+    }
+
+    /**
+     * Refresh missing-permission state. Call this after the user grants or
+     * denies a permission so the UI updates.
+     */
+    fun refreshMissingPermissions() {
+        val scope = runScope ?: viewModelScope
+        scope.launch {
+            val pm = AndroidP2pPermissionManager(getApplication<Application>().applicationContext)
+            _missingPermissions.value = runCatching { pm.missingPermissions() }.getOrElse { emptyList() }
+        }
+    }
+
+    @OptIn(ExperimentalP2pApi::class)
+    fun startHotspot() {
+        val currentKit = kit ?: return
+        val scope = runScope ?: return
+        refreshMissingPermissions()
+        scope.launch {
+            val result = runCatching {
+                currentKit.networkProvisioning.startLocalNetwork(LocalNetworkConfig())
+            }.getOrElse { e ->
+                Log.w(LOG_TAG, "startHotspot threw", e)
+                LocalNetworkResult.Failed(
+                    dev.p2pkit.core.NetworkProvisioningError.PlatformError(e)
+                )
+            }
+            _hotspotResult.value = result
+            Log.i(LOG_TAG, "hotspot result: ${result::class.simpleName}")
+        }
+    }
+
+    fun stopHotspot() {
+        val currentKit = kit ?: return
+        val scope = runScope ?: return
+        scope.launch {
+            runCatching { currentKit.networkProvisioning.stopLocalNetwork() }
+            _hotspotResult.value = null
+            Log.i(LOG_TAG, "hotspot stopped")
         }
     }
 
@@ -329,7 +397,13 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         targetedPeerIds.clear()
         roomMessages.clear()
         _localPeerId.value = null
-        viewModelScope.launch { runCatching { toStop.stop() } }
+        _hotspotResult.value = null
+        _missingPermissions.value = emptyList()
+        // Best-effort tear down the hotspot too.
+        viewModelScope.launch {
+            runCatching { toStop.networkProvisioning.stopLocalNetwork() }
+            runCatching { toStop.stop() }
+        }
     }
 
     override fun onCleared() {

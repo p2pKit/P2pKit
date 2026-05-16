@@ -46,7 +46,7 @@ POSIX:
           :p2p-sample-android:assembleDebug
 ```
 
-**Expected**: `BUILD SUCCESSFUL`, 94 tests completed in `:p2p-core:allTests` / 0 failed, 6 tests in `:p2p-network-provisioning-desktop:test` / 0 failed, plus the LAN + KMP loopback tests green. APK at `p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk`. Launcher at `p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop[.bat]`.
+**Expected**: `BUILD SUCCESSFUL`, 94 tests completed in `:p2p-core:allTests` / 0 failed, 6 tests in `:p2p-network-provisioning-desktop:test` / 0 failed, 9 tests in `:p2p-network-provisioning-android:testAndroidHostTest` / 0 failed, plus the LAN + KMP loopback tests green. APK at `p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk`. Launcher at `p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop[.bat]`.
 
 Install the APK on the test device:
 ```powershell
@@ -200,6 +200,39 @@ Verifies the new `:p2p-network-provisioning-desktop` module: `getManualConnectio
 - `manual info  (none — provisioning not configured or no LAN port)` — ensure the kit was built with `networkProvisioning { jvm() }` (both desktop samples ship this by default).
 - `manual createManualPeer failed: host must not be blank` / `port out of range` — bad `host:port` syntax.
 - Connect-then-immediate-close — the address you typed isn't reachable, or the other peer's TCP server isn't bound on that interface (try a different host address from `info`).
+
+---
+
+## H. Android hotspot host (v0.2.1 task 11)
+
+Verifies the new `:p2p-network-provisioning-android` module: a phone can host a `LocalOnlyHotspot`, the sample shows the OS-chosen SSID + passphrase + `host:port`, and a second device joins via standard Wi-Fi settings.
+
+**Devices:** one Android phone running the sample (the host) + a second Android phone (the guest) or any laptop with Wi-Fi.
+
+1. **Install + launch the sample on the host phone.** Enter a name like `HostPhone`, leave reconnect at Disabled, tap **Start**. Logcat shows `kit started: …`.
+2. **Tap "Host hotspot"** in the "Hotspot host (LocalOnlyHotspot)" Card on the running screen. If `NEARBY_WIFI_DEVICES` (API 33+) or `ACCESS_FINE_LOCATION` (API ≤ 32) isn't granted, the system prompts. Grant it. The Card now reads:
+   ```
+   SSID: AndroidShare_xxxx
+   Pass: xxxxxxxx
+   host(s): 192.168.43.1, …
+   port: NNNNN
+   ```
+3. **On the guest device:** open Wi-Fi settings, find the `AndroidShare_xxxx` SSID, enter the passphrase from the host's screen, and connect. The guest is now on the host's hotspot subnet.
+4. **Launch the sample on the guest device** (if Android) or any JVM CLI on the laptop. Both should auto-discover the host via mDNS over the hotspot subnet (auto-mesh forms the session). Round-trip a message.
+5. **Tap "Stop hotspot"** on the host. The guest loses Wi-Fi (the AP went away). Host's Card returns to "Host a LocalOnlyHotspot …".
+6. **OS-redacted credentials path:** revoke `NEARBY_WIFI_DEVICES` in Settings while the hotspot is running, then restart the kit. The Card should show `Hotspot up, but SSID/passphrase redacted by the OS. Share host:port directly.` with the manual `host:port` still visible.
+
+**OEM quirks worth recording:**
+- **Samsung One UI**: hotspot may refuse to start while the user's Mobile Hotspot setting is on, or on enterprise-managed devices. Card shows `Failed: HotspotStopped — startLocalOnlyHotspot failed (reason code N)`.
+- **Xiaomi MIUI / HyperOS**: aggressive battery saver may kill the hotspot after a few minutes when no client is connected. Card flips to a Failed state via the `onStopped` event; tap **Retry** to start again.
+- **Pre-API 30 devices**: SSID/passphrase come from `WifiConfiguration` (with surrounding quotes stripped) instead of `SoftApConfiguration`.
+
+**Pass criteria:** Hotspot starts within ~2 seconds of tapping the button (after perm grant); SSID + passphrase + host:port appear; a second device on the same hotspot can find and connect via mDNS auto-mesh; tapping Stop releases the reservation cleanly.
+
+**Common failure reasons:**
+- `Failed: PermissionMissingForProvisioning` — the user denied the runtime perm. Re-tap "Grant permission and retry".
+- `Failed: HotspotStopped — startLocalOnlyHotspot failed (reason code 0/1/2/3)` — system rejected. Reason 0 = NO_CHANNEL (band conflict), 1 = GENERIC, 2 = INCOMPATIBLE_MODE, 3 = TETHERING_DISALLOWED. Try toggling Mobile Hotspot off, or rebooting.
+- Card shows credentials but second device can't find the SSID — wait ~5 s after Started, then re-scan on the guest. Android can take a moment to bring up the AP interface.
 
 ---
 
