@@ -72,6 +72,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 // =====================================================================
@@ -152,6 +153,16 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     private val _discovering = MutableStateFlow(false)
     val discovering: StateFlow<Boolean> = _discovering.asStateFlow()
 
+    /**
+     * Auto-mesh: when ON, auto-connects to every discovered peer using
+     * a lexicographic tie-break (only initiate if our [localPeerId] is
+     * less than the peer's) so both sides never race into duplicate
+     * sessions. Default ON — makes the three-device room work without
+     * any manual Connect taps.
+     */
+    private val _autoMesh = MutableStateFlow(true)
+    val autoMesh: StateFlow<Boolean> = _autoMesh.asStateFlow()
+
     // --- room state --------------------------------------------------------
 
     private val _peers = MutableStateFlow<List<Peer>>(emptyList())
@@ -178,6 +189,11 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
 
     fun clearPeerTargets() {
         targetedPeerIds.clear()
+    }
+
+    fun toggleAutoMesh() {
+        _autoMesh.value = !_autoMesh.value
+        System.err.println("[p2pkit] auto-mesh = ${_autoMesh.value}")
     }
 
     fun start() {
@@ -221,6 +237,26 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             runCatching { newKit.startDiscovery() }
                 .onSuccess { _discovering.value = true }
                 .onFailure { System.err.println("[p2pkit WARN] startDiscovery failed: ${it.message}") }
+        }
+
+        // Auto-mesh: react to peer changes and connect to anyone we should
+        // initiate (lexicographic tie-break by peer id).
+        scope.launch {
+            combine(_autoMesh, newKit.peers) { enabled, peers -> enabled to peers }
+                .collect { (enabled, peers) ->
+                    if (!enabled) return@collect
+                    val myId = newKit.localPeerId.value
+                    val connectedIds = connectedSessions.map { it.peer.id.value }.toSet()
+                    for (peer in peers) {
+                        if (peer.id.value in connectedIds) continue
+                        if (myId < peer.id.value) {
+                            System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.name}")
+                            runCatching { newKit.connect(peer) }.onFailure {
+                                System.err.println("[p2pkit WARN] auto-mesh connect to ${peer.name} failed: ${it.message}")
+                            }
+                        }
+                    }
+                }
         }
 
         isRunning = true
@@ -600,6 +636,7 @@ private fun RoomScreen(state: DesktopP2pState) {
     val kitState by state.kitState.collectAsState()
     val advertising by state.advertising.collectAsState()
     val discovering by state.discovering.collectAsState()
+    val autoMesh by state.autoMesh.collectAsState()
     val localPeerId by state.localPeerId.collectAsState()
     var draft by remember { mutableStateOf("") }
 
@@ -613,8 +650,10 @@ private fun RoomScreen(state: DesktopP2pState) {
                 kitState = kitState,
                 advertising = advertising,
                 discovering = discovering,
+                autoMesh = autoMesh,
                 onToggleAdvertising = state::toggleAdvertising,
                 onToggleDiscovery = state::toggleDiscovery,
+                onToggleAutoMesh = state::toggleAutoMesh,
                 onStop = state::stop
             )
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -770,8 +809,10 @@ private fun StatusHeader(
     kitState: P2pState,
     advertising: Boolean,
     discovering: Boolean,
+    autoMesh: Boolean,
     onToggleAdvertising: () -> Unit,
     onToggleDiscovery: () -> Unit,
+    onToggleAutoMesh: () -> Unit,
     onStop: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -794,7 +835,7 @@ private fun StatusHeader(
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -804,6 +845,10 @@ private fun StatusHeader(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Discover", style = MaterialTheme.typography.bodySmall)
                 Switch(checked = discovering, onCheckedChange = { onToggleDiscovery() })
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Auto-mesh", style = MaterialTheme.typography.bodySmall)
+                Switch(checked = autoMesh, onCheckedChange = { onToggleAutoMesh() })
             }
         }
     }

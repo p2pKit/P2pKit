@@ -46,7 +46,7 @@ POSIX:
           :p2p-sample-android:assembleDebug
 ```
 
-**Expected**: `BUILD SUCCESSFUL`, 93 tests completed in `:p2p-core:allTests` / 0 failed, plus the LAN + KMP loopback tests green. APK at `p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk`. Launcher at `p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop[.bat]`.
+**Expected**: `BUILD SUCCESSFUL`, 94 tests completed in `:p2p-core:allTests` / 0 failed, plus the LAN + KMP loopback tests green. APK at `p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk`. Launcher at `p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop[.bat]`.
 
 Install the APK on the test device:
 ```powershell
@@ -87,12 +87,14 @@ Verifies discovery both ways, connect in both directions, send in both direction
 
 Verifies broadcast, targeted send, and that one peer leaving doesn't break the others. There is no fixed SDK cap on peer count — 4, 5, 10+ devices work the same way, only network capacity changes the practical limit.
 
+**Auto-mesh** is ON by default in every sample. When ON, each sample auto-connects to every newly-discovered peer using a lexicographic tie-break on `localPeerId` (only one side per pair initiates, the other accepts). With three samples on the same LAN this means **all three pair-wise sessions form automatically** — no manual Connect taps needed. To verify selective-connect behavior instead, toggle the Auto-mesh switch / `mesh off` first.
+
 **Devices:** three or more endpoints on the same Wi-Fi.
 
 1. Start **Alice** (desktop CLI) and **Charlie** (desktop CLI in a second terminal).
-2. Start **Bob** (Android sample).
-3. Verify each sees the other two: `> peers` on Alice/Charlie should list two; phone shows "Discovered peers (2)".
-4. **Connect Bob → Alice** and **Bob → Charlie** on the phone (tap **Connect** on both). Connected-peer row shows two chips: `Alice · connected` and `Charlie · connected`.
+2. Start **Bob** (Android sample) — Auto-mesh ON.
+3. Within ~5–10 s **all three** samples should show two chips / two sessions: every peer connected to every other peer via auto-mesh. On Alice's CLI: `> sessions` lists `Bob` and `Charlie`. On Bob's phone: chip row shows `Alice · connected` and `Charlie · connected`. On Charlie's CLI: `> sessions` lists `Alice` and `Bob`. Logs show `auto-mesh: initiating connect to <name>` for each pair where the local id was smaller.
+4. (Skip if you used auto-mesh — already done.) If auto-mesh is OFF, **manually** connect each pair: `Connect Bob → Alice` and `Connect Bob → Charlie` on the phone, plus `> connect bob` and `> connect charlie` on Alice. Resulting state should match step 3.
 5. **Broadcast from Bob**: no chip selected, Send button reads `Broadcast (2)`. Type "hello room" → both Alice's terminal and Charlie's terminal print `[Bob] hello room`. Phone logcat shows `room: broadcast → 2 peer(s): hello room`.
 6. **Broadcast from Alice**: `> connect bob` and `> connect charlie` on Alice, then `> send hi all`. Alice prints `[broadcast → 2] hi all`. Bob's phone timeline gains `Alice → hi all`. Charlie prints `[Alice] hi all`.
 7. **Targeted send (Android multi-select)**: on the phone, tap the Alice chip only. Send button reads `Send to 1`. Type "for Alice only", Send. Alice receives, Charlie does **not**. Phone logcat: `room: targeted → 1 peer(s)`.
@@ -100,7 +102,7 @@ Verifies broadcast, targeted send, and that one peer leaving doesn't break the o
 9. **One peer leaves**: Charlie's CLI `> quit`. Alice's terminal shows `[peers]` shrinking and `[state] Charlie → Closed`. Phone's room shrinks to one chip; phone sends another broadcast → reaches Alice only (`Broadcast (1)`).
 10. **Scaling smoke**: start a fourth instance (`p2p-sample-desktop.bat Dave`). Within seconds Bob's phone shows a "Connected (3)" potential count and Alice/Bob list it. Connect to Dave from Bob (tap Connect). Broadcast → reaches both Alice and Dave (and Charlie if re-launched). The N grows; no code changes needed.
 
-**Pass criteria**: broadcast count matches the live connected-peer count at every send. Targeted sends never leak. Closing one peer leaves the others' sessions intact.
+**Pass criteria**: broadcast count matches the live connected-peer count at every send. Targeted sends never leak. Closing one peer leaves the others' sessions intact. With auto-mesh ON, a 3-peer room forms three pair-wise sessions automatically (Alice↔Bob, Alice↔Charlie, Bob↔Charlie). With auto-mesh OFF, only the sessions you manually opened exist.
 
 ---
 

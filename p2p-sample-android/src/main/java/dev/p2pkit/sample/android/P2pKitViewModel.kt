@@ -26,6 +26,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 /**
@@ -72,6 +73,20 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     private val _discovering = MutableStateFlow(false)
     val discovering: StateFlow<Boolean> = _discovering.asStateFlow()
 
+    /**
+     * Auto-mesh: when ON, the sample auto-connects to every newly discovered
+     * peer in the room. To avoid both sides racing each other into duplicate
+     * sessions (the current SDK doesn't arbitrate simultaneous-open), the
+     * caller only initiates when their own `localPeerId` is lexicographically
+     * less than the discovered peer's id. Exactly one side per pair initiates;
+     * the other accepts the incoming session.
+     *
+     * Default ON — this is the behavior that makes a 3-device room work
+     * out-of-the-box. Toggle OFF to test selective connect.
+     */
+    private val _autoMesh = MutableStateFlow(true)
+    val autoMesh: StateFlow<Boolean> = _autoMesh.asStateFlow()
+
     // --- configuration ----------------------------------------------------
 
     var reconnectChoice: ReconnectChoice by mutableStateOf(ReconnectChoice.Disabled)
@@ -117,6 +132,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     fun clearPeerTargets() {
         targetedPeerIds.clear()
+    }
+
+    fun toggleAutoMesh() {
+        _autoMesh.value = !_autoMesh.value
+        Log.i(LOG_TAG, "auto-mesh = ${_autoMesh.value}")
     }
 
     fun start() {
@@ -168,6 +188,27 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             runCatching { newKit.startDiscovery() }
                 .onSuccess { _discovering.value = true }
                 .onFailure { Log.w(LOG_TAG, "startDiscovery failed", it) }
+        }
+
+        // Auto-mesh: react to peer changes and connect to anyone we should
+        // initiate (lexicographic tie-break by peer id). Combining with
+        // [autoMesh] means toggling the flag back ON re-evaluates immediately.
+        scope.launch {
+            combine(_autoMesh, newKit.peers) { enabled, peers -> enabled to peers }
+                .collect { (enabled, peers) ->
+                    if (!enabled) return@collect
+                    val myId = newKit.localPeerId.value
+                    val connectedIds = connectedSessions.map { it.peer.id.value }.toSet()
+                    for (peer in peers) {
+                        if (peer.id.value in connectedIds) continue
+                        if (myId < peer.id.value) {
+                            Log.i(LOG_TAG, "auto-mesh: initiating connect to ${peer.name}")
+                            runCatching { newKit.connect(peer) }.onFailure {
+                                Log.w(LOG_TAG, "auto-mesh connect to ${peer.name} failed", it)
+                            }
+                        }
+                    }
+                }
         }
 
         _isRunning.value = true

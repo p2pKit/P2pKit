@@ -12,6 +12,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -35,9 +37,12 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * - `peers`                       — list currently discovered peers
  * - `sessions`                    — list active sessions with their state
- * - `info` / `state`              — local identity + kit/advertise/discover state + counts
+ * - `info` / `state`              — local identity + kit/advertise/discover/mesh state + counts
  * - `adv on | adv off`            — toggle advertising
  * - `disc on | disc off`          — toggle discovery
+ * - `mesh on | mesh off`          — toggle auto-mesh (auto-connect to all discovered peers,
+ *                                   using a lexicographic tie-break so two peers never race
+ *                                   into duplicate sessions)
  * - `connect <id-or-name>`        — open a session
  * - `send <text>`                 — broadcast to every active session
  * - `to <id-or-name> <text>`      — targeted send to one peer
@@ -63,6 +68,7 @@ fun main(args: Array<String>) {
     }
     val advertising = StateLatch()
     val discovering = StateLatch()
+    val autoMesh = MutableStateFlow(true)
 
     val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     val sessions = ConcurrentHashMap<String, P2pSession>()
@@ -84,6 +90,35 @@ fun main(args: Array<String>) {
         }
         .launchIn(scope)
 
+    // Auto-mesh: when on, initiate connect to every newly-discovered peer
+    // when our local PeerId is lexicographically less than theirs. The
+    // tie-break guarantees exactly one side per pair initiates, avoiding the
+    // simultaneous-open race.
+    scope.launch {
+        combine(autoMesh, p2p.peers) { enabled, peers -> enabled to peers }
+            .collect { (enabled, peers) ->
+                if (!enabled) return@collect
+                val myId = p2p.localPeerId.value
+                for (peer in peers) {
+                    if (sessions.containsKey(peer.id.value)) continue
+                    if (myId >= peer.id.value) continue
+                    System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.name}")
+                    scope.launch {
+                        runCatching {
+                            val s = p2p.connect(peer)
+                            sessions[s.peer.id.value] = s
+                            wireIncoming(s, scope)
+                            launch {
+                                s.state.collect { st -> println("[state] ${s.peer.name} → $st") }
+                            }
+                        }.onFailure {
+                            System.err.println("[p2pkit WARN] auto-mesh connect to ${peer.name} failed: ${it.message}")
+                        }
+                    }
+                }
+            }
+    }
+
     runBlocking {
         try {
             p2p.startAdvertising(); advertising.set(true)
@@ -94,7 +129,7 @@ fun main(args: Array<String>) {
         }
 
         println("Ready. Type 'help' for commands.")
-        repl(p2p, scope, sessions, advertising, discovering)
+        repl(p2p, scope, sessions, advertising, discovering, autoMesh)
 
         println("Stopping…")
         p2p.stop()
@@ -129,7 +164,8 @@ private suspend fun repl(
     scope: CoroutineScope,
     sessions: ConcurrentHashMap<String, P2pSession>,
     advertising: StateLatch,
-    discovering: StateLatch
+    discovering: StateLatch,
+    autoMesh: MutableStateFlow<Boolean>
 ) {
     val reader = System.`in`.bufferedReader()
     while (true) {
@@ -160,7 +196,21 @@ private suspend fun repl(
                 }
             }
 
-            "info", "state" -> printInfo(p2p, sessions, advertising, discovering)
+            "info", "state" -> printInfo(p2p, sessions, advertising, discovering, autoMesh)
+
+            "mesh" -> {
+                when (arg) {
+                    "on" -> {
+                        autoMesh.value = true
+                        println("auto-mesh on")
+                    }
+                    "off" -> {
+                        autoMesh.value = false
+                        println("auto-mesh off")
+                    }
+                    else -> println("usage: mesh on|off  (current: ${if (autoMesh.value) "on" else "off"})")
+                }
+            }
 
             "adv" -> {
                 when (arg) {
@@ -293,7 +343,8 @@ private fun printInfo(
     p2p: P2pKit,
     sessions: ConcurrentHashMap<String, P2pSession>,
     advertising: StateLatch,
-    discovering: StateLatch
+    discovering: StateLatch,
+    autoMesh: MutableStateFlow<Boolean>
 ) {
     println("---")
     println("appId            ${p2p.appId.value}")
@@ -302,6 +353,7 @@ private fun printInfo(
     println("kit state        ${p2p.state.value::class.simpleName}")
     println("advertising      ${advertising.value()}")
     println("discovering      ${discovering.value()}")
+    println("auto-mesh        ${autoMesh.value}")
     println("peers known      ${p2p.peers.value.size}")
     println("active sessions  ${sessions.size}")
     println("---")
@@ -313,9 +365,10 @@ private fun printHelp() {
         Commands:
           peers                       — list discovered peers
           sessions                    — list active sessions
-          info | state                — local identity + kit/adv/disc state + counts
+          info | state                — local identity + kit/adv/disc/mesh state + counts
           adv on | adv off            — toggle advertising
           disc on | disc off          — toggle discovery
+          mesh on | mesh off          — toggle auto-mesh (auto-connect to discovered peers)
           connect <id-or-name>        — open a session
           send <text>                 — broadcast to every active session (room)
           to <id-or-name> <text>      — send to one peer

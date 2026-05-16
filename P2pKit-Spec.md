@@ -513,6 +513,10 @@ sealed class SecurityMode {
 - A failed session emits `Failed` and is removed from `sessions` (after retention or immediately, see below).
 - If `ReconnectPolicy.Enabled` is configured, the session transitions to `Reconnecting` and retries up to `maxAttempts` with `retryDelayMillis` between attempts. On exhaustion it becomes `Failed`.
 - Closed/Failed sessions are removed from `P2pKit.sessions` after they emit their terminal state.
+- **Simultaneous-open arbitration** (v0.2). If both peers `connect()` each other at the same instant, two physical TCP connections form (one in each direction) and each side ends up with two `P2pSession` candidates for the other peer (one outgoing, one incoming). The SDK arbitrates this deterministically inside `SessionManager.registerSession` so `P2pKit.sessions` never contains more than one session per peer:
+  - the **smaller-id peer** keeps its **outgoing** session; closes its incoming;
+  - the **larger-id peer** keeps its **incoming** session; closes its outgoing.
+  Both sides converge on the same physical TCP connection (the one initiated by the smaller-id peer). The other peer that observes the loser's close treats it like a clean session close. App code that observes `P2pKit.sessions` sees the surviving session only. App code that captured the return value of `connect()` may briefly hold the rejected session — `P2pKit.sessions` is the source of truth.
 
 ---
 
