@@ -1,12 +1,16 @@
 package dev.p2pkit.sample.android
 
 import android.Manifest
+import android.content.Intent
+import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -520,10 +524,27 @@ private fun RoomLine(message: RoomMessage) {
     )
 }
 
+/**
+ * Returns true when the device-wide Location toggle is ON. This is a
+ * settings-only toggle, not a runtime permission — apps can read it
+ * but cannot flip it. Required (on most OEMs) for
+ * `WifiManager.startLocalOnlyHotspot()` to succeed.
+ */
+private fun isLocationModeOn(context: android.content.Context): Boolean {
+    val lm = context.getSystemService(android.content.Context.LOCATION_SERVICE) as? LocationManager
+        ?: return true  // unknown → assume OK; avoid false-negative warning
+    return runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) lm.isLocationEnabled
+        else lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) ||
+            lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
+    }.getOrDefault(true)
+}
+
 @Composable
 private fun HotspotCard(vm: P2pKitViewModel) {
     val result by vm.hotspotResult.collectAsState()
     val missing by vm.missingPermissions.collectAsState()
+    val context = LocalContext.current
 
     // Pick the right runtime permission for the device's API level.
     val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -538,6 +559,15 @@ private fun HotspotCard(vm: P2pKitViewModel) {
         // Try starting again — user may have just granted the perm.
         vm.startHotspot()
     }
+    // Device-wide Location toggle is settings-only — no permission API can
+    // flip it. Some OEMs (Huawei, MIUI, older Samsung) require it ON even
+    // when NEARBY_WIFI_DEVICES is granted.
+    val locationOff = !isLocationModeOn(context)
+    val isLocationProblem = (result as? LocalNetworkResult.Failed)
+        ?.error is dev.p2pkit.core.NetworkProvisioningError.PermissionMissingForProvisioning &&
+        (((result as LocalNetworkResult.Failed).error
+            as dev.p2pkit.core.NetworkProvisioningError.PermissionMissingForProvisioning)
+            .permissions.contains(dev.p2pkit.core.permission.P2pPermission.Location))
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -589,18 +619,47 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                     }
                 }
                 r is LocalNetworkResult.Failed -> {
-                    Text(
-                        text = "Failed: ${r.error::class.simpleName} — ${r.error.message ?: ""}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Button(
-                        onClick = {
-                            if (missing.isNotEmpty()) launcher.launch(perm) else vm.startHotspot()
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(if (missing.isNotEmpty()) "Grant permission and retry" else "Retry")
+                    if (isLocationProblem) {
+                        Text(
+                            text = "This device requires system-wide Location services to be ON " +
+                                "for Wi-Fi hotspot hosting, even when NEARBY_WIFI_DEVICES is " +
+                                "granted (Huawei / MIUI / older Samsung behavior). Turn on Location " +
+                                "in system Settings, then Retry.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Button(
+                            onClick = {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Open Location settings")
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Button(
+                            onClick = vm::startHotspot,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Retry")
+                        }
+                    } else {
+                        Text(
+                            text = "Failed: ${r.error::class.simpleName} — ${r.error.message ?: ""}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Button(
+                            onClick = {
+                                if (missing.isNotEmpty()) launcher.launch(perm) else vm.startHotspot()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (missing.isNotEmpty()) "Grant permission and retry" else "Retry")
+                        }
                     }
                 }
                 r is LocalNetworkResult.Unsupported -> {
@@ -615,6 +674,15 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                             "Random SSID + passphrase chosen by Android.",
                         style = MaterialTheme.typography.bodySmall
                     )
+                    if (locationOff) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "Note: this device's system-wide Location toggle is OFF. " +
+                                "Many OEMs require it ON for hotspot hosting. If start fails, " +
+                                "enable Location in Settings.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                     Spacer(Modifier.height(6.dp))
                     Button(
                         onClick = {

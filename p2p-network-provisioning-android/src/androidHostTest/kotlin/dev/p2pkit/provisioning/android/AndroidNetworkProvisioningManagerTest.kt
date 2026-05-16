@@ -66,7 +66,30 @@ class AndroidNetworkProvisioningManagerTest {
         try {
             val result = mgr.startLocalNetwork(LocalNetworkConfig())
             val failed = assertIs<LocalNetworkResult.Failed>(result)
-            assertIs<NetworkProvisioningError.PermissionMissingForProvisioning>(failed.error)
+            val err = assertIs<NetworkProvisioningError.PermissionMissingForProvisioning>(failed.error)
+            assertTrue(err.permissions.contains(dev.p2pkit.core.permission.P2pPermission.NearbyWifiDevices))
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun locationModeOffSecurityExceptionMapsToLocationPermissionMissing() = runBlocking<Unit> {
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.ThrowSecurityWithMessage(
+                message = "Location mode is not enabled."
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        try {
+            val result = mgr.startLocalNetwork(LocalNetworkConfig())
+            val failed = assertIs<LocalNetworkResult.Failed>(result)
+            val err = assertIs<NetworkProvisioningError.PermissionMissingForProvisioning>(failed.error)
+            assertTrue(
+                err.permissions.contains(dev.p2pkit.core.permission.P2pPermission.Location),
+                "Location-mode-off SecurityException must surface as Location permission missing, " +
+                    "got ${err.permissions}"
+            )
         } finally {
             mgr.close()
         }
@@ -220,6 +243,7 @@ private class FakeWifiManagerWrapper(
 
     sealed class Behavior {
         object ThrowSecurity : Behavior()
+        data class ThrowSecurityWithMessage(val message: String) : Behavior()
         data class FailWithReason(val reasonCode: Int) : Behavior()
         data class Start(val credentials: WifiCredentials?, val apHosts: List<String>) : Behavior()
     }
@@ -229,6 +253,7 @@ private class FakeWifiManagerWrapper(
     override suspend fun startLocalOnlyHotspot(): HotspotStartResult {
         return when (val b = behavior) {
             Behavior.ThrowSecurity -> throw SecurityException("simulated perm-missing")
+            is Behavior.ThrowSecurityWithMessage -> throw SecurityException(b.message)
             is Behavior.FailWithReason -> HotspotStartResult.Failed(b.reasonCode)
             is Behavior.Start -> {
                 val h = FakeHotspotHandle(b.credentials, b.apHosts)

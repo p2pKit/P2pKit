@@ -223,15 +223,17 @@ Verifies the new `:p2p-network-provisioning-android` module: a phone can host a 
 6. **OS-redacted credentials path:** revoke `NEARBY_WIFI_DEVICES` in Settings while the hotspot is running, then restart the kit. The Card should show `Hotspot up, but SSID/passphrase redacted by the OS. Share host:port directly.` with the manual `host:port` still visible.
 
 **OEM quirks worth recording:**
-- **Samsung One UI**: hotspot may refuse to start while the user's Mobile Hotspot setting is on, or on enterprise-managed devices. Card shows `Failed: HotspotStopped — startLocalOnlyHotspot failed (reason code N)`.
+- **Huawei (EMUI / HarmonyOS), MIUI, older Samsung**: `startLocalOnlyHotspot` throws `SecurityException: "Location mode is not enabled."` even when `NEARBY_WIFI_DEVICES` is granted. This is the **device-wide** Location toggle (Settings → Location), distinct from the runtime permission. The HotspotCard detects this case and shows an **"Open Location settings"** button; the user must flip the toggle, return to the sample, and tap **Retry**. No app-side workaround exists — this is enforced by the system Wi-Fi service.
+- **Samsung One UI**: hotspot may also refuse while the user's Mobile Hotspot setting is on, or on enterprise-managed devices. Card shows `Failed: HotspotStopped — startLocalOnlyHotspot failed (reason code N: NAME)` with the decoded reason.
 - **Xiaomi MIUI / HyperOS**: aggressive battery saver may kill the hotspot after a few minutes when no client is connected. Card flips to a Failed state via the `onStopped` event; tap **Retry** to start again.
 - **Pre-API 30 devices**: SSID/passphrase come from `WifiConfiguration` (with surrounding quotes stripped) instead of `SoftApConfiguration`.
 
 **Pass criteria:** Hotspot starts within ~2 seconds of tapping the button (after perm grant); SSID + passphrase + host:port appear; a second device on the same hotspot can find and connect via mDNS auto-mesh; tapping Stop releases the reservation cleanly.
 
 **Common failure reasons:**
-- `Failed: PermissionMissingForProvisioning` — the user denied the runtime perm. Re-tap "Grant permission and retry".
-- `Failed: HotspotStopped — startLocalOnlyHotspot failed (reason code 0/1/2/3)` — system rejected. Reason 0 = NO_CHANNEL (band conflict), 1 = GENERIC, 2 = INCOMPATIBLE_MODE, 3 = TETHERING_DISALLOWED. Try toggling Mobile Hotspot off, or rebooting.
+- `Failed: PermissionMissingForProvisioning — Missing permissions: [NearbyWifiDevices]` — the user denied the runtime perm. Re-tap "Grant permission and retry".
+- `Failed: PermissionMissingForProvisioning — Missing permissions: [Location]` *(Huawei / MIUI / older Samsung)* — the device-wide Location toggle is OFF. The HotspotCard shows an "Open Location settings" button; flip the toggle, come back, hit Retry.
+- `Failed: HotspotStopped — startLocalOnlyHotspot failed (reason code 0/1/2/3: NAME)` — system rejected. NO_CHANNEL (band conflict), GENERIC, INCOMPATIBLE_MODE, TETHERING_DISALLOWED. Try toggling Mobile Hotspot off, or rebooting.
 - Card shows credentials but second device can't find the SSID — wait ~5 s after Started, then re-scan on the guest. Android can take a moment to bring up the AP interface.
 
 ---

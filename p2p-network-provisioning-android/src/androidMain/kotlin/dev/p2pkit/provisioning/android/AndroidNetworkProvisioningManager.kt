@@ -225,8 +225,23 @@ public class AndroidNetworkProvisioningManager internal constructor(
     }
 
     private fun mapStartException(e: Throwable): NetworkProvisioningError {
-        // SecurityException → most likely missing runtime permission.
         if (e is SecurityException || e.cause is SecurityException) {
+            val msg = e.message.orEmpty()
+            // Some OEMs (Huawei, older Samsung, MIUI) reject startLocalOnlyHotspot
+            // with a SecurityException carrying "Location mode is not enabled"
+            // even when NEARBY_WIFI_DEVICES is granted. This is the device-wide
+            // Location toggle, not the per-app runtime permission — only the
+            // user can flip it (Settings → Location → Use location). Surface
+            // it as Location-permission-missing so callers can show the right
+            // remediation (open Location settings, not request a permission).
+            if (msg.contains("Location mode", ignoreCase = true) ||
+                msg.contains("location is disabled", ignoreCase = true) ||
+                msg.contains("location services", ignoreCase = true)
+            ) {
+                return NetworkProvisioningError.PermissionMissingForProvisioning(
+                    permissions = listOf(P2pPermission.Location)
+                )
+            }
             return NetworkProvisioningError.PermissionMissingForProvisioning(
                 permissions = listOf(P2pPermission.NearbyWifiDevices)
             )
