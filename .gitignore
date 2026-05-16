@@ -27,3 +27,4 @@ Thumbs.db
 # Kotlin
 *.hotspot.log
 hs_err_pid*
+.kotlin/

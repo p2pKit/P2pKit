@@ -31,7 +31,7 @@ compose.desktop {
             targetFormats(TargetFormat.Exe, TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "P2pKit Sample"
             packageVersion = "1.0.0" // installer version; jpackage requires MAJOR > 0
-            description = "P2pKit v0.1 desktop sample"
+            description = "P2pKit v0.2 desktop sample (room broadcast)"
         }
     }
 }

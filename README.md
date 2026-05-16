@@ -237,33 +237,33 @@ Detailed design lives in [`P2pKit-Spec.md`](./P2pKit-Spec.md).
 - **`:p2p-transport-lan`** — mDNS discovery + TCP data. JmDNS on JVM, `NsdManager` on Android. **iOS targets are not declared on this module yet** (v0.3).
 - **`:p2p-sample-android`** — Compose UI room/broadcast test harness. **Primary visual harness** for v0.2. `./gradlew :p2p-sample-android:assembleDebug`.
 - **`:p2p-sample-desktop`** — JVM CLI test harness. **Canonical desktop harness** for v0.2. `./gradlew :p2p-sample-desktop:installDist` then run the launcher. Type `help` for commands.
-- **`:p2p-sample-desktop-ui`** — **legacy v0.1 single-session Compose demo.** Compiles and shows a banner saying so. Not used for v0.2 testing; the CLI is.
+- **`:p2p-sample-desktop-ui`** — Compose Desktop room/broadcast test harness. Same v0.2 feature parity as the Android sample (status header, peer chips with state + close, broadcast/targeted send, room timeline, log strip, reconnect picker). Run with `./gradlew :p2p-sample-desktop-ui:run`.
 
 Planned modules (not in v0.2): `:p2p-network-provisioning(-android|-desktop|-ios)`, `:p2p-transport-ble`, `:p2p-transport-android-wifidirect`, `:p2p-transport-apple-multipeer`, `:p2p-transport-relay`, `:p2p-sample-ios`.
 
 ## Sample feature coverage (v0.2-dev)
 
-| Feature | Android sample | JVM CLI | Compose UI |
+| Feature | Android sample | JVM CLI | Compose Desktop UI |
 |---|---|---|---|
-| `appId` shown | ✅ status header | ✅ banner + `info` | ✅ setup |
-| `localPeerId` shown | ✅ status header | ✅ `info` | ❌ legacy |
-| `localDeviceName` shown | ✅ header / setup | ✅ banner + `info` | ✅ setup |
-| `state` (kit) | ✅ status header | ✅ `info` | ❌ legacy |
-| `startAdvertising` / `stopAdvertising` | ✅ Advertise switch | ✅ `adv on / off` | ❌ legacy |
-| `startDiscovery` / `stopDiscovery` | ✅ Discover switch | ✅ `disc on / off` | ❌ legacy |
+| `appId` shown | ✅ status header | ✅ banner + `info` | ✅ status header + setup |
+| `localPeerId` shown | ✅ status header | ✅ `info` | ✅ status header |
+| `localDeviceName` shown | ✅ header / setup | ✅ banner + `info` | ✅ status header + setup |
+| `state` (kit) | ✅ status header | ✅ `info` | ✅ status header |
+| `startAdvertising` / `stopAdvertising` | ✅ Advertise switch | ✅ `adv on / off` | ✅ Advertise switch |
+| `startDiscovery` / `stopDiscovery` | ✅ Discover switch | ✅ `disc on / off` | ✅ Discover switch |
 | Peer discovery / lost | ✅ list | ✅ `peers` cmd | ✅ list |
 | `connect(peer)` | ✅ Connect button | ✅ `connect <id>` | ✅ Connect button |
-| Multiple active sessions | ✅ chip row | ✅ `sessions` | ❌ legacy |
-| Broadcast send | ✅ default (no chip selected) | ✅ `send <text>` | ❌ legacy |
-| Targeted send | ✅ chip multi-select | ✅ `to <id> <text>` | ❌ legacy |
-| Incoming from every session | ✅ unified timeline | ✅ per-session print | ❌ legacy |
-| Per-session `ConnectionState` | ✅ chip label | ✅ `[state] N → S` | ✅ title bar |
-| `session.close()` | ✅ chip overflow menu | ✅ `close <id>` | ❌ legacy |
-| `kit.stop()` | ✅ overflow menu | ✅ `quit` / `exit` | ✅ Stop |
-| `ReconnectPolicy.Enabled` configurable | ✅ setup picker | ✅ `reconnect=N,delayMs` arg | ❌ legacy |
-| PeerId persistence verifiable | ✅ visible | ✅ via `info` | ❌ legacy |
+| Multiple active sessions | ✅ chip row | ✅ `sessions` | ✅ chip row |
+| Broadcast send | ✅ default (no chip selected) | ✅ `send <text>` | ✅ default (no chip selected) |
+| Targeted send | ✅ chip multi-select | ✅ `to <id> <text>` | ✅ chip multi-select |
+| Incoming from every session | ✅ unified timeline | ✅ per-session print | ✅ unified timeline |
+| Per-session `ConnectionState` | ✅ chip label | ✅ `[state] N → S` | ✅ chip label |
+| `session.close()` | ✅ chip overflow menu | ✅ `close <id>` | ✅ chip overflow menu |
+| `kit.stop()` | ✅ overflow menu | ✅ `quit` / `exit` | ✅ overflow menu |
+| `ReconnectPolicy.Enabled` configurable | ✅ setup picker | ✅ `reconnect=N,delayMs` arg | ✅ setup picker |
+| PeerId persistence verifiable | ✅ visible in header | ✅ via `info` | ✅ visible in header |
 | MulticastLock | ✅ implicit (active while running) | N/A | N/A |
-| In-app log strip | ✅ tail of TailLogger | ✅ stderr | ❌ |
+| In-app log strip | ✅ tail of TailLogger | ✅ stderr | ✅ tail of TailLogger |
 
 ## Platform testing matrix (v0.2-dev)
 

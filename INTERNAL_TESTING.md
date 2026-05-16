@@ -2,11 +2,12 @@
 
 How to validate v0.2-dev by hand. Read top to bottom on the first run; the checklist at the end is what to re-check before tagging future internal builds.
 
-The two canonical test harnesses are:
-- **`:p2p-sample-android`** — the primary visual harness (room mode, reconnect picker, log strip).
-- **`:p2p-sample-desktop`** — the CLI; the canonical JVM harness.
+The three canonical test harnesses, all at v0.2 feature parity:
+- **`:p2p-sample-android`** — the primary visual harness on mobile (room mode, reconnect picker, log strip, chip state).
+- **`:p2p-sample-desktop`** — the JVM CLI, scriptable from a terminal (`info`, `adv on/off`, `disc on/off`, `connect`, `send`, `to`, `close`).
+- **`:p2p-sample-desktop-ui`** — Compose Desktop GUI mirroring the Android sample. Run with `./gradlew :p2p-sample-desktop-ui:run`.
 
-`:p2p-sample-desktop-ui` (Compose) is a **legacy v0.1 single-session demo** and is not used for v0.2 testing. It still compiles and ships a banner saying so.
+Pick whichever fits the device under test. The same flows (§A–§E below) apply across all three.
 
 ---
 
@@ -246,6 +247,6 @@ Run through this before tagging.
 - [ ] **§F** iOS scaffolding state is unchanged: targets visible in `:p2p-core:tasks --all`, no LAN transport.
 - [ ] Known Limitations in `README.md` reviewed; nothing new has slipped in.
 - [ ] No leftover TODO / FIXME / debug `println` in shipping code (sample `println` is fine).
-- [ ] Compose Desktop UI sample (`:p2p-sample-desktop-ui`) compiles and shows the legacy banner.
+- [ ] Compose Desktop UI sample (`:p2p-sample-desktop-ui`) launches at v0.2 parity — status header shows appId/peerId/state, Advertise/Discover switches work, room chips show state, broadcast and targeted send work the same as the Android sample.
 
 When all boxes tick, **tag the v0.2-internal milestone** and share this guide with the testers.
