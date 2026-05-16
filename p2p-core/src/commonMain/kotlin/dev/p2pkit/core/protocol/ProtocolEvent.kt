@@ -12,6 +12,11 @@ import dev.p2pkit.core.P2pMessage
  *   - [Close], [PeerError] → terminate the session
  *   - [Hello] → only meaningful during the initial handshake; ignored after
  *   - [Ack] → reserved for v0.2 reliability work
+ *   - [FileOffer], [FileAccept], [FileReject], [FileData], [FileDone],
+ *     [FileCancel] → dispatched by file-transfer-id to the session's transfer
+ *     manager (v0.2.2). [FileData] hands over the raw [Frame] so the
+ *     receiver can route by `messageId` and stream the payload to a sink
+ *     without an intermediate copy.
  */
 internal sealed class ProtocolEvent {
     data class Message(val message: P2pMessage) : ProtocolEvent()
@@ -21,4 +26,11 @@ internal sealed class ProtocolEvent {
     data class Ack(val messageId: MessageId, val chunkIndex: Int) : ProtocolEvent()
     data class PeerError(val reason: String) : ProtocolEvent()
     data object Close : ProtocolEvent()
+
+    data class FileOffer(val transferId: MessageId, val payload: FileOfferPayload) : ProtocolEvent()
+    data class FileAccept(val transferId: MessageId) : ProtocolEvent()
+    data class FileReject(val transferId: MessageId, val reason: String?) : ProtocolEvent()
+    data class FileData(val frame: Frame) : ProtocolEvent()
+    data class FileDone(val transferId: MessageId) : ProtocolEvent()
+    data class FileCancel(val transferId: MessageId, val reason: String?) : ProtocolEvent()
 }

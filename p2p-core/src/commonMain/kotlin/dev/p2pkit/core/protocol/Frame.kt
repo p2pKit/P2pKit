@@ -57,7 +57,16 @@ internal enum class PacketType(val code: Byte) {
     PING(0x04),
     PONG(0x05),
     ERROR(0x06),
-    CLOSE(0x07);
+    CLOSE(0x07),
+
+    // File transfer (v0.2.2). All share the same Frame format; messageId carries the
+    // transferId for the lifetime of a single file offer.
+    FILE_OFFER(0x10),
+    FILE_ACCEPT(0x11),
+    FILE_REJECT(0x12),
+    FILE_DATA(0x13),
+    FILE_DONE(0x14),
+    FILE_CANCEL(0x15);
 
     companion object {
         fun fromCode(code: Byte): PacketType? = entries.firstOrNull { it.code == code }

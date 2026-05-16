@@ -359,7 +359,15 @@ The current `v0.2-dev` branch ships **94 unit + integration tests** in `:p2p-cor
 
 - **v0.1**: shipped as `v0.1-internal` tag.
 - **v0.2-dev** → tagged **`v0.2-internal`** at `a9d683d`. v0.2 contents: Tasks 1–8 (`PeerId` persistence, rotation survival, `ReconnectPolicy.Enabled` retry, iOS scaffolding, Android `MulticastLock`, room/broadcast samples, local identity accessors, simultaneous-open arbitration).
-- **v0.2.1-dev** (current branch): Task 10 — JVM Network Provisioning sidecar with manual-IP fallback (`:p2p-network-provisioning-desktop`) — **done**. Task 11 — Android `LocalOnlyHotspot` host — **done**. Task 12 — Android Wi-Fi join via `WifiNetworkSpecifier` (process-wide socket binding so the LAN transport routes through the joined AP) — **done**. Plus the small SDK addition `ProvisioningContext.parentJob` so manager scopes are tied to `kit.stop()` cleanly. Ready to tag `v0.2.1-internal` after real-device manual verification. Deferred to later milestones: Network Provisioning sidecar (Android `LocalOnlyHotspot` + Wi-Fi join helpers; JVM network state + manual IP fallback), file transfer API, instrumented Android tests, process-death recovery via `SavedStateHandle`.
+- **v0.2.1-dev** (current branch, `1465a7a`): Task 10 — JVM Network Provisioning sidecar with manual-IP fallback (`:p2p-network-provisioning-desktop`) — **done**. Task 11 — Android `LocalOnlyHotspot` host — **done (code+tests; pending real-device verification — see backlog)**. Task 12 — Android Wi-Fi join via `WifiNetworkSpecifier` (process-wide socket binding so the LAN transport routes through the joined AP) — **done (code+tests; pending real-device verification — see backlog)**. Plus the small SDK addition `ProvisioningContext.parentJob` so manager scopes are tied to `kit.stop()` cleanly. **Tagging `v0.2.1-internal` is blocked** on the real-device verification milestone below.
 - **v0.3+**: full iOS LAN/TCP transport (`NWBrowser` + `NWListener` + `NWConnection` + iOS sample app), macOS native LAN, BLE, Wi-Fi Direct, Multipeer, Relay, encryption.
+
+### Pending verification backlog
+
+| Milestone | What | Blocks |
+|---|---|---|
+| **Task 11 & 12 real-device manual verification** | Two real Android phones: host runs `LocalOnlyHotspot` via `HotspotCard`, guest joins via `JoinHotspotCard`, verify OS join prompt, `Joined` state, AP-subnet socket routing via `bindProcessToNetwork`, auto-mesh session formation across the AP, and clean teardown on `kit.stop()`. Full recipe in `INTERNAL_TESTING.md` §H + §I. | Tagging `v0.2.1-internal` from `1465a7a`. |
+
+Other carried-forward deferrals (not blocking any tag): file transfer API, instrumented Android tests, process-death recovery via `SavedStateHandle`, per-socket network binding (Option C from Task 12 audit; current impl uses process-wide `bindProcessToNetwork`).
 
 See `P2pKit-Spec.md` for the complete v0.1 and planned v0.2 contracts.

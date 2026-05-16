@@ -216,6 +216,17 @@ internal class P2pSessionImpl(
                         onConnectionLost("peer error: ${event.reason}")
                         return
                     }
+                    is ProtocolEvent.FileOffer,
+                    is ProtocolEvent.FileAccept,
+                    is ProtocolEvent.FileReject,
+                    is ProtocolEvent.FileData,
+                    is ProtocolEvent.FileDone,
+                    is ProtocolEvent.FileCancel -> {
+                        // Wired in Task 14. Until the file-transfer dispatcher is
+                        // attached, these arrive on the protocol event stream but
+                        // have nowhere to go — drop with debug.
+                        logger.debug("Session $id: ignoring file-transfer event $event (dispatcher not wired yet)")
+                    }
                 }
             }
             // Channel completed without explicit close or error frame. This
