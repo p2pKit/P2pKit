@@ -102,31 +102,59 @@ adb -s <serial-B> install -r $apk
 
 ## 4. Desktop ↔ Android
 
-**Same as §2 and §3 above, but the two endpoints must use the same `appId`.** v0.1 samples ship with different defaults:
+Both samples now ship with the **same** `appId` (`p2pkit-desktop-sample`) — no manual alignment needed.
 
 | Sample | Default `appId` |
 |---|---|
 | `p2p-sample-desktop` | `p2pkit-desktop-sample` |
-| `p2p-sample-android` | `dev.p2pkit.sample.android` |
+| `p2p-sample-android` | `p2pkit-desktop-sample` |
 
-Pick one option to align them:
+### Step-by-step
 
-### Option A — pass the Android `appId` to the desktop sample
+1. **Start the JVM desktop sample.** On Windows:
+   ```powershell
+   .\p2p-sample-desktop\build\install\p2p-sample-desktop\bin\p2p-sample-desktop.bat Alice
+   ```
+   POSIX: `./p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop Alice`.
 
-```powershell
-.\p2p-sample-desktop\build\install\p2p-sample-desktop\bin\p2p-sample-desktop.bat Alice dev.p2pkit.sample.android
-```
+2. **Start the Android sample.** Install + launch as in §3. Enter device name `Bob`. Tap **Start**.
 
-### Option B — edit the Android sample to match the desktop
+3. **Confirm both endpoints are on the same Wi-Fi LAN.** Phone hotspot tethering the laptop also works.
 
-```kotlin
-// p2p-sample-android/src/main/java/dev/p2pkit/sample/android/MainActivity.kt
-private const val APP_ID = "p2pkit-desktop-sample"   // was "dev.p2pkit.sample.android"
-```
+4. **Within ~5–10 seconds**, the Android peer list should show `Alice (<id-prefix>)`, and the desktop CLI should print `[peers] 1: Bob(<id-prefix>)`.
 
-Then rebuild + reinstall: `./gradlew :p2p-sample-android:installDebug`.
+5. **Connect from Android → JVM.** Tap **Connect** next to `Alice` on the phone. The session pane appears with `Connected`. The desktop prints `[incoming] from Bob (<id-prefix>)`.
 
-Once the `appId`s match, the rest is the same — start, discover, connect, send. **Expected behavior is identical to §2 and §3.**
+6. **Send Android → JVM.** Type a message on the phone and tap **Send**. Desktop prints `[Bob] <text>`.
+
+7. **Send JVM → Android.** On the desktop CLI:
+   ```
+   > send hello from desktop
+   ```
+   The Android chat list shows `Alice: hello from desktop`.
+
+8. **Reverse direction — connect from JVM → Android.** Tap **Stop** on Android, then **Start** again so the kit re-advertises. On desktop:
+   ```
+   > peers
+   > connect <bob-id-prefix>
+   > send hi from desktop
+   ```
+   The Android side should accept the incoming session and receive the message.
+
+### Logs that confirm each step
+
+- **Android logcat** (`adb logcat -s p2pkit`): the sample wires a `P2pLogger` that writes to logcat under tag `p2pkit`. You should see `kit started: deviceName=Bob appId=p2pkit-desktop-sample` on start.
+- **Desktop stderr**: the sample's `StdErrLogger` writes `[p2pkit]` info lines and `[p2pkit WARN]` / `[p2pkit ERROR]` on failure.
+
+### Common failure reasons
+
+1. **Windows Firewall blocks inbound JVM TCP.** First-run prompt; pick **Allow on Private networks**. See §5.
+2. **Router blocks mDNS / multicast.** Mostly office / guest / hotel Wi-Fi. Symptom: peer list stays empty on both sides. See §6.
+3. **Devices on different networks.** Phone on cellular, laptop on Wi-Fi. Must be on the same SSID.
+4. **Android emulator on a host with strict NAT.** Emulators NAT through the host; not all routers tolerate mDNS from the emulated interface. Use a real device for cross-platform tests.
+5. **VPN active on the laptop.** Some VPN clients (Tailscale, Wireguard, corporate) hijack the LAN routing table. Disable while testing.
+6. **`appId` accidentally diverged.** Verify the Android logcat line `kit started: ... appId=...` against the desktop's startup banner `appId=...`.
+7. **Android Wi-Fi multicast filter.** v0.2 fixed this — `AndroidLanDiscoveryTransport` now acquires a `WifiManager.MulticastLock` while advertising/discovery is active. If you backported the sample to an older library version, this fix won't be present and Android will fail to see JVM peers.
 
 ---
 

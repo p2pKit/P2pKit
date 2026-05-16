@@ -1,6 +1,7 @@
 package dev.p2pkit.sample.android
 
 import android.app.Application
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -10,6 +11,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
@@ -92,8 +94,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             appId = AppId(APP_ID)
             this.deviceName = this@P2pKitViewModel.deviceName
             transports { lan(getApplication<Application>().applicationContext) }
+            logger = LogcatLogger
         }
         kit = newKit
+        Log.i(LOG_TAG, "kit started: deviceName=$deviceName appId=$APP_ID")
 
         val supervisor = SupervisorJob(viewModelScope.coroutineContext[Job])
         val scope = CoroutineScope(viewModelScope.coroutineContext + supervisor)
@@ -176,7 +180,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private companion object {
-        const val APP_ID = "dev.p2pkit.sample.android"
+        const val APP_ID = "p2pkit-desktop-sample"
+        const val LOG_TAG = "p2pkit"
     }
 }
 
@@ -187,4 +192,20 @@ data class ChatLine(val from: String, val message: P2pMessage) {
             is P2pMessage.Text -> message.value
             is P2pMessage.Binary -> "<binary ${message.bytes.size}B>"
         }
+}
+
+private object LogcatLogger : P2pLogger {
+    private const val TAG = "p2pkit"
+    override fun debug(message: String) {
+        Log.d(TAG, message)
+    }
+    override fun info(message: String) {
+        Log.i(TAG, message)
+    }
+    override fun warn(message: String, throwable: Throwable?) {
+        if (throwable != null) Log.w(TAG, message, throwable) else Log.w(TAG, message)
+    }
+    override fun error(message: String, throwable: Throwable?) {
+        if (throwable != null) Log.e(TAG, message, throwable) else Log.e(TAG, message)
+    }
 }
