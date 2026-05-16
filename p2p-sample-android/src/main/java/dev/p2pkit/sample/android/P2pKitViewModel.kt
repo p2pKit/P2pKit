@@ -14,7 +14,9 @@ import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
+import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -27,69 +29,85 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Owns the [P2pKit] instance and the **room** state of the sample.
+ * Owns the [P2pKit] instance and the **room** state of the sample, which
+ * doubles as P2pKit's primary visual test harness on Android.
  *
- * Architecture rule: the SDK exposes one [P2pSession] per peer. There is no
- * "room" type in :p2p-core. This ViewModel implements the room/broadcast UX
- * purely on the sample side by iterating [P2pKit.sessions] and fanning out
- * sends. Incoming messages from every active session are merged into a
- * single [roomMessages] timeline so messages from non-targeted peers are
- * never dropped.
+ * Exposed surface (consumed by [MainActivity]):
+ *  - identity / config: [appId], [localDeviceName], [localPeerId]
+ *  - lifecycle: [isRunning], [kitState], [advertising], [discovering]
+ *  - configuration: [reconnectChoice]
+ *  - discovery: [peers]
+ *  - sessions / messaging: [connectedSessions], [roomMessages], [targetedPeerIds]
+ *  - diagnostics: [logTail]
  *
  * No fixed cap on connected peers: broadcast sends to every entry in the
- * live [connectedSessions] snapshot, and targeted sends use any subset of
- * peer ids stored in [targetedPeerIds]. Practical limits are
- * network-dependent (router multicast, mDNS cache pressure).
+ * live [connectedSessions] snapshot; targeted sends use any subset of
+ * peer ids in [targetedPeerIds]. Practical limits are network-dependent.
  *
  * Lifecycle survives Activity recreation (rotation, dark-mode, locale, …).
- * Process death is out of scope (would require `SavedStateHandle`).
+ * Process death is out of scope.
  */
 class P2pKitViewModel(application: Application) : AndroidViewModel(application) {
 
-    // --- public state for the UI -------------------------------------------
+    // --- identity ----------------------------------------------------------
+
+    val appId: String = APP_ID
+    var deviceName: String by mutableStateOf("Android-${(0..9999).random()}")
+        private set
+
+    private val _localPeerId = MutableStateFlow<String?>(null)
+    val localPeerId: StateFlow<String?> = _localPeerId.asStateFlow()
+
+    // --- lifecycle ---------------------------------------------------------
 
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
-    var deviceName: String by mutableStateOf("Android-${(0..9999).random()}")
+    private val _kitState = MutableStateFlow<P2pState>(P2pState.Idle)
+    val kitState: StateFlow<P2pState> = _kitState.asStateFlow()
+
+    private val _advertising = MutableStateFlow(false)
+    val advertising: StateFlow<Boolean> = _advertising.asStateFlow()
+
+    private val _discovering = MutableStateFlow(false)
+    val discovering: StateFlow<Boolean> = _discovering.asStateFlow()
+
+    // --- configuration ----------------------------------------------------
+
+    var reconnectChoice: ReconnectChoice by mutableStateOf(ReconnectChoice.Disabled)
         private set
+
+    // --- discovery + sessions ---------------------------------------------
 
     private val _peers = MutableStateFlow<List<Peer>>(emptyList())
     val peers: StateFlow<List<Peer>> = _peers.asStateFlow()
 
-    /**
-     * Every currently-connected peer's session, observed from
-     * [P2pKit.sessions]. Used by the UI to render the connected-peers row.
-     */
     val connectedSessions: SnapshotStateList<P2pSession> = mutableStateListOf()
-
-    /**
-     * One merged room timeline. Includes incoming messages from every active
-     * session, outgoing messages the local user sent, and system events
-     * (peer connected / disconnected).
-     */
     val roomMessages: SnapshotStateList<RoomMessage> = mutableStateListOf()
-
-    /**
-     * Peer ids the user has explicitly targeted. Empty = broadcast to every
-     * connected peer.
-     */
     val targetedPeerIds: SnapshotStateList<String> = mutableStateListOf()
 
-    // --- internals ---------------------------------------------------------
+    // --- diagnostics ------------------------------------------------------
+
+    /** Last N lines from the logger; surfaced under the room timeline. */
+    val logTail: SnapshotStateList<String> = mutableStateListOf()
+
+    // --- internals --------------------------------------------------------
 
     private var kit: P2pKit? = null
     private var runScope: CoroutineScope? = null
     private val cleanupScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-
-    /** One incoming-collector job per session id, so we can cancel on session removal. */
     private val sessionJobs: MutableMap<String, Job> = mutableMapOf()
     private var nextMessageId: Long = 1L
 
-    // --- intents from the UI -----------------------------------------------
+    // --- intents from the UI ----------------------------------------------
 
     fun updateDeviceName(name: String) {
         deviceName = name
+    }
+
+    fun updateReconnectChoice(choice: ReconnectChoice) {
+        if (_isRunning.value) return  // locked at kit construction
+        reconnectChoice = choice
     }
 
     fun togglePeerTarget(peerId: String) {
@@ -103,35 +121,53 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     fun start() {
         if (_isRunning.value) return  // idempotent
+        val choice = reconnectChoice
         val newKit = P2pKit.create {
             appId = AppId(APP_ID)
             this.deviceName = this@P2pKitViewModel.deviceName
             transports { lan(getApplication<Application>().applicationContext) }
-            logger = LogcatLogger
+            lifecycle {
+                reconnectPolicy = when (choice) {
+                    ReconnectChoice.Disabled -> ReconnectPolicy.Disabled
+                    is ReconnectChoice.Enabled -> ReconnectPolicy.Enabled(
+                        maxAttempts = choice.maxAttempts,
+                        retryDelayMillis = choice.retryDelayMillis
+                    )
+                }
+            }
+            logger = TailLogger(this@P2pKitViewModel)
         }
         kit = newKit
-        Log.i(LOG_TAG, "kit started: deviceName=$deviceName appId=$APP_ID")
+        _localPeerId.value = newKit.localPeerId.value
+        Log.i(
+            LOG_TAG,
+            "kit started: deviceName=${newKit.localDeviceName} appId=${newKit.appId.value} " +
+                "peerId=${newKit.localPeerId.value} reconnect=$choice"
+        )
 
         val supervisor = SupervisorJob(viewModelScope.coroutineContext[Job])
         val scope = CoroutineScope(viewModelScope.coroutineContext + supervisor)
         runScope = scope
 
         scope.launch {
+            newKit.state.collect { _kitState.value = it }
+        }
+        scope.launch {
             newKit.peers.collect { _peers.value = it }
         }
-
-        // Single source of truth for "which peers do we have a session with":
-        // P2pKit.sessions. This handles incoming AND outgoing uniformly and
-        // also fires when a session terminates so we can clean up.
+        // Single source of truth for "which peers do we have a session with".
         scope.launch {
             newKit.sessions.collect { current ->
                 reconcileSessions(current, scope)
             }
         }
-
         scope.launch {
             runCatching { newKit.startAdvertising() }
+                .onSuccess { _advertising.value = true }
+                .onFailure { Log.w(LOG_TAG, "startAdvertising failed", it) }
             runCatching { newKit.startDiscovery() }
+                .onSuccess { _discovering.value = true }
+                .onFailure { Log.w(LOG_TAG, "startDiscovery failed", it) }
         }
 
         _isRunning.value = true
@@ -141,12 +177,19 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val currentKit = kit ?: return
         val scope = runScope ?: return
         scope.launch {
-            // The session itself is registered into newKit.sessions inside
-            // SessionManager — the reconcile collector above will pick it up
-            // and wire incoming. We only handle the connect-attempt failure.
             runCatching { currentKit.connect(peer) }.onFailure {
                 Log.w(LOG_TAG, "connect to ${peer.name} failed", it)
                 appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
+            }
+        }
+    }
+
+    fun closeSession(peerId: String) {
+        val scope = runScope ?: return
+        val target = connectedSessions.firstOrNull { it.peer.id.value == peerId } ?: return
+        scope.launch {
+            runCatching { target.close() }.onFailure {
+                Log.w(LOG_TAG, "close session to ${target.peer.name} failed", it)
             }
         }
     }
@@ -198,25 +241,58 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun toggleAdvertising() {
+        val currentKit = kit ?: return
+        val scope = runScope ?: return
+        scope.launch {
+            if (_advertising.value) {
+                runCatching { currentKit.stopAdvertising() }
+                    .onSuccess { _advertising.value = false }
+                    .onFailure { Log.w(LOG_TAG, "stopAdvertising failed", it) }
+            } else {
+                runCatching { currentKit.startAdvertising() }
+                    .onSuccess { _advertising.value = true }
+                    .onFailure { Log.w(LOG_TAG, "startAdvertising failed", it) }
+            }
+        }
+    }
+
+    fun toggleDiscovery() {
+        val currentKit = kit ?: return
+        val scope = runScope ?: return
+        scope.launch {
+            if (_discovering.value) {
+                runCatching { currentKit.stopDiscovery() }
+                    .onSuccess { _discovering.value = false }
+                    .onFailure { Log.w(LOG_TAG, "stopDiscovery failed", it) }
+            } else {
+                runCatching { currentKit.startDiscovery() }
+                    .onSuccess { _discovering.value = true }
+                    .onFailure { Log.w(LOG_TAG, "startDiscovery failed", it) }
+            }
+        }
+    }
+
     fun stop() {
         val toStop = kit ?: return
         kit = null
         _isRunning.value = false
+        _advertising.value = false
+        _discovering.value = false
+        _kitState.value = P2pState.Stopped
         runScope?.cancel()
         runScope = null
-        sessionJobs.clear()  // jobs are cancelled by runScope.cancel()
+        sessionJobs.clear()
         _peers.value = emptyList()
         connectedSessions.clear()
         targetedPeerIds.clear()
         roomMessages.clear()
-        // viewModelScope still alive here — let kit.stop() complete cleanly.
+        _localPeerId.value = null
         viewModelScope.launch { runCatching { toStop.stop() } }
     }
 
     override fun onCleared() {
         super.onCleared()
-        // viewModelScope is already cancelled at this point. Finish kit
-        // cleanup on a scope that survives the ViewModel.
         val toStop = kit
         kit = null
         if (toStop != null) {
@@ -229,7 +305,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    // --- helpers -----------------------------------------------------------
+    // --- helpers ----------------------------------------------------------
 
     private fun reconcileSessions(current: List<P2pSession>, scope: CoroutineScope) {
         val currentIds = current.map { it.id }.toSet()
@@ -268,6 +344,12 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
             }
+            // Log session state transitions (Connected / Reconnecting / Failed / Closed).
+            scope.launch {
+                session.state.collect { st ->
+                    Log.i(LOG_TAG, "session ${session.peer.name} → $st")
+                }
+            }
         }
     }
 
@@ -284,17 +366,22 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
+    internal fun recordLog(level: String, message: String) {
+        // Trim to keep the strip bounded.
+        if (logTail.size >= LOG_TAIL_CAPACITY) {
+            logTail.removeAt(0)
+        }
+        logTail.add("$level  $message")
+    }
+
     private companion object {
         const val APP_ID = "p2pkit-desktop-sample"
         const val LOG_TAG = "p2pkit"
+        const val LOG_TAIL_CAPACITY = 30
     }
 }
 
-/**
- * Sample-level message envelope rendered in the room timeline. Carries
- * direction (incoming/outgoing/system), sender info, and the targeting
- * choice the user made for outgoing sends.
- */
+/** Sample-level message envelope rendered in the room timeline. */
 data class RoomMessage(
     val id: Long,
     val senderPeerId: String?,
@@ -319,18 +406,32 @@ sealed class SendTarget {
     data class Specific(val peerIds: Set<String>) : SendTarget()
 }
 
-private object LogcatLogger : P2pLogger {
-    private const val TAG = "p2pkit"
+/** User-facing reconnect policy choice on the Setup screen. */
+sealed class ReconnectChoice {
+    data object Disabled : ReconnectChoice()
+    data class Enabled(val maxAttempts: Int, val retryDelayMillis: Long) : ReconnectChoice()
+}
+
+/**
+ * Logger that mirrors output to logcat AND to the ViewModel's [P2pKitViewModel.logTail]
+ * for in-app diagnostics.
+ */
+private class TailLogger(private val vm: P2pKitViewModel) : P2pLogger {
+    private val tag = "p2pkit"
     override fun debug(message: String) {
-        Log.d(TAG, message)
+        Log.d(tag, message)
+        vm.recordLog("D", message)
     }
     override fun info(message: String) {
-        Log.i(TAG, message)
+        Log.i(tag, message)
+        vm.recordLog("I", message)
     }
     override fun warn(message: String, throwable: Throwable?) {
-        if (throwable != null) Log.w(TAG, message, throwable) else Log.w(TAG, message)
+        if (throwable != null) Log.w(tag, message, throwable) else Log.w(tag, message)
+        vm.recordLog("W", if (throwable != null) "$message — ${throwable.message ?: throwable::class.simpleName}" else message)
     }
     override fun error(message: String, throwable: Throwable?) {
-        if (throwable != null) Log.e(TAG, message, throwable) else Log.e(TAG, message)
+        if (throwable != null) Log.e(tag, message, throwable) else Log.e(tag, message)
+        vm.recordLog("E", if (throwable != null) "$message — ${throwable.message ?: throwable::class.simpleName}" else message)
     }
 }
