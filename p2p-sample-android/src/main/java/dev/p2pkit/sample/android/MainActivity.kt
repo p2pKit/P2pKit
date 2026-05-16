@@ -227,6 +227,7 @@ private fun RoomScreen(
     val kitState by vm.kitState.collectAsState()
     val advertising by vm.advertising.collectAsState()
     val discovering by vm.discovering.collectAsState()
+    val autoMesh by vm.autoMesh.collectAsState()
     val localPeerId by vm.localPeerId.collectAsState()
     var draft by remember { mutableStateOf("") }
 
@@ -245,8 +246,10 @@ private fun RoomScreen(
             kitState = kitState,
             advertising = advertising,
             discovering = discovering,
+            autoMesh = autoMesh,
             onToggleAdvertising = vm::toggleAdvertising,
             onToggleDiscovery = vm::toggleDiscovery,
+            onToggleAutoMesh = vm::toggleAutoMesh,
             onStop = vm::stop
         )
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -385,8 +388,10 @@ private fun StatusHeader(
     kitState: P2pState,
     advertising: Boolean,
     discovering: Boolean,
+    autoMesh: Boolean,
     onToggleAdvertising: () -> Unit,
     onToggleDiscovery: () -> Unit,
+    onToggleAutoMesh: () -> Unit,
     onStop: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -409,7 +414,7 @@ private fun StatusHeader(
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -419,6 +424,10 @@ private fun StatusHeader(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Discover", style = MaterialTheme.typography.bodySmall)
                 Switch(checked = discovering, onCheckedChange = { onToggleDiscovery() })
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Auto-mesh", style = MaterialTheme.typography.bodySmall)
+                Switch(checked = autoMesh, onCheckedChange = { onToggleAutoMesh() })
             }
         }
     }
