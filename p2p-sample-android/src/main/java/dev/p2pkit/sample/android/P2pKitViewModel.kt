@@ -279,7 +279,26 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             _hotspotResult.value = result
-            Log.i(LOG_TAG, "hotspot result: ${result::class.simpleName}")
+            // Log the full result detail so logcat is self-sufficient. The
+            // HotspotCard on-screen already shows error class + message; this
+            // mirrors it for non-UI diagnostics (adb logcat -s p2pkit).
+            when (result) {
+                is LocalNetworkResult.Started ->
+                    Log.i(LOG_TAG, "hotspot Started: ssid=${result.credentials.ssid} " +
+                        "port=${result.manualConnectionInfo?.port} " +
+                        "hosts=${result.manualConnectionInfo?.hostAddresses}")
+                is LocalNetworkResult.StartedWithoutCredentials ->
+                    Log.i(LOG_TAG, "hotspot StartedWithoutCredentials: " +
+                        "port=${result.manualConnectionInfo.port} " +
+                        "hosts=${result.manualConnectionInfo.hostAddresses}")
+                is LocalNetworkResult.Failed ->
+                    Log.w(LOG_TAG, "hotspot Failed: ${result.error::class.simpleName} " +
+                        "— ${result.error.message ?: "(no message)"}")
+                is LocalNetworkResult.Unsupported ->
+                    Log.w(LOG_TAG, "hotspot Unsupported: ${result.reason}")
+                is LocalNetworkResult.RequiresUserAction ->
+                    Log.i(LOG_TAG, "hotspot RequiresUserAction: ${result.instruction}")
+            }
         }
     }
 

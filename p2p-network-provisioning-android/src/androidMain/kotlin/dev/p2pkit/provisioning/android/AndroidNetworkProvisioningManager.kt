@@ -90,6 +90,11 @@ public class AndroidNetworkProvisioningManager internal constructor(
             val startResult = runCatching { wifi.startLocalOnlyHotspot() }
                 .getOrElse { e ->
                     val mapped = mapStartException(e)
+                    ctx.logger.warn(
+                        "provisioning: startLocalOnlyHotspot threw ${e::class.simpleName}: " +
+                            "${e.message ?: "(no message)"} → ${mapped::class.simpleName}",
+                        e
+                    )
                     _state.value = NetworkProvisioningState.Failed(mapped)
                     return@withLock LocalNetworkResult.Failed(mapped)
                 }
@@ -97,8 +102,10 @@ public class AndroidNetworkProvisioningManager internal constructor(
             when (startResult) {
                 is HotspotStartResult.Failed -> {
                     val err = NetworkProvisioningError.HotspotStopped(
-                        "startLocalOnlyHotspot failed (reason code ${startResult.reasonCode})"
+                        "startLocalOnlyHotspot failed (reason code ${startResult.reasonCode}: " +
+                            "${reasonCodeName(startResult.reasonCode)})"
                     )
+                    ctx.logger.warn("provisioning: ${err.message}")
                     _state.value = NetworkProvisioningState.Failed(err)
                     LocalNetworkResult.Failed(err)
                 }
@@ -225,6 +232,19 @@ public class AndroidNetworkProvisioningManager internal constructor(
             )
         }
         return NetworkProvisioningError.PlatformError(e)
+    }
+
+    /**
+     * Decode the AOSP `LocalOnlyHotspotCallback` reason code into a human
+     * label. Codes are stable since API 26.
+     */
+    private fun reasonCodeName(code: Int): String = when (code) {
+        0 -> "NO_CHANNEL"
+        1 -> "GENERIC"
+        2 -> "INCOMPATIBLE_MODE"
+        3 -> "TETHERING_DISALLOWED"
+        -1 -> "STOPPED_BEFORE_START"
+        else -> "UNKNOWN($code)"
     }
 
     private fun collectInterfaceIPs(): List<String> {
