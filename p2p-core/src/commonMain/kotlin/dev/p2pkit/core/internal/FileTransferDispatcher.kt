@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -128,6 +129,15 @@ internal class FileTransferDispatcher(
 
         lock.withLock {
             outgoing[transferId] = OutgoingEntry(handle = handle, timer = timer, sender = null)
+        }
+
+        // Own the source's lifetime: close it whenever this transfer reaches a
+        // terminal state. This is what makes the convenience extensions
+        // (`sendFile(file: File)`, `sendFile(context, uri)`) leak-free — they
+        // open an underlying InputStream and rely on this cleanup.
+        scope.launch {
+            handle.state.first { it.isTerminal() }
+            runCatching { source.close() }
         }
 
         // Send FILE_OFFER. Failure here means the connection is gone — surface
