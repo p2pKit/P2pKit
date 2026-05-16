@@ -228,12 +228,21 @@ internal class SessionManager(
         }
 
         session.start()
-        registerSession(handshake.resolvedPeer.id, session)
+        val outcome = registerSession(handshake.resolvedPeer.id, session, isIncoming = isIncoming)
 
-        if (isIncoming) {
-            _incomingSessions.emit(session)
+        // Outgoing callers receive the winner via performConnect's deferred so
+        // a rejected new session never leaks back to app code as a "live"
+        // session. Incoming subscribers (P2pKit.incomingSessions) only see
+        // sessions we actually kept.
+        val resultSession = when (outcome) {
+            is RegisterOutcome.Accepted -> outcome.session
+            is RegisterOutcome.Replaced -> outcome.winner
+            is RegisterOutcome.Rejected -> outcome.winner
         }
-        return session
+        if (isIncoming && outcome !is RegisterOutcome.Rejected) {
+            _incomingSessions.emit(resultSession)
+        }
+        return resultSession
     }
 
     /**
@@ -362,13 +371,87 @@ internal class SessionManager(
         }
     }
 
-    private suspend fun registerSession(peerId: PeerId, session: P2pSession) {
-        activeLock.withLock {
-            active[peerId] = session
+    /**
+     * Register a freshly-handshaked session, arbitrating simultaneous opens.
+     *
+     * If two peers `connect()` each other at the same instant each side ends
+     * up with two `P2pSession` candidates — one outgoing, one incoming. To
+     * keep the public contract of "one session per peer in
+     * [P2pKit.sessions]" honest, both sides apply the same deterministic
+     * tie-break:
+     *
+     *  - **The smaller-id peer keeps its OUTGOING session** (closes its incoming).
+     *  - **The larger-id peer keeps its INCOMING session** (closes its outgoing).
+     *
+     * Both sides keep the same physical TCP connection (the one initiated by
+     * the smaller-id peer). The other connection is closed on both ends, and
+     * the peer that observes the close treats it like a clean session close.
+     *
+     * Returns the [RegisterOutcome] so [setupSession] can route the winner
+     * back to the caller (outgoing performConnect's deferred, or
+     * [P2pKit.incomingSessions] for accepted inbound sessions).
+     */
+    private suspend fun registerSession(
+        peerId: PeerId,
+        session: P2pSession,
+        isIncoming: Boolean
+    ): RegisterOutcome {
+        val outcome: RegisterOutcome = activeLock.withLock {
+            val existing = active[peerId]
+            if (existing != null && existing.state.value in ACTIVE_STATES) {
+                val newWinsLocally = if (localPeerId.value < peerId.value) {
+                    // We're the smaller-id side — keep our outgoing, reject our incoming.
+                    !isIncoming
+                } else {
+                    // We're the larger-id side (or equal, which is impossible
+                    // by construction) — keep our incoming, reject our outgoing.
+                    isIncoming
+                }
+                if (newWinsLocally) {
+                    active[peerId] = session
+                    _sessions.update { list -> list.filter { it !== existing } + session }
+                    RegisterOutcome.Replaced(winner = session, loser = existing)
+                } else {
+                    RegisterOutcome.Rejected(winner = existing, loser = session)
+                }
+            } else {
+                active[peerId] = session
+                _sessions.update { it + session }
+                RegisterOutcome.Accepted(session = session)
+            }
         }
-        _sessions.update { it + session }
 
-        // When the session terminates, remove it from tracking.
+        when (outcome) {
+            is RegisterOutcome.Accepted -> {
+                watchForTerminal(peerId, outcome.session)
+            }
+            is RegisterOutcome.Replaced -> {
+                logger.info(
+                    "Simultaneous-open for peer ${peerId.value.take(8)}: " +
+                        "promoting new ${if (isIncoming) "incoming" else "outgoing"} session, " +
+                        "closing previous"
+                )
+                watchForTerminal(peerId, outcome.winner)
+                scope.launch { runCatching { outcome.loser.close() } }
+            }
+            is RegisterOutcome.Rejected -> {
+                logger.info(
+                    "Simultaneous-open for peer ${peerId.value.take(8)}: " +
+                        "rejecting new ${if (isIncoming) "incoming" else "outgoing"} session, " +
+                        "existing wins"
+                )
+                scope.launch { runCatching { outcome.loser.close() } }
+            }
+        }
+        return outcome
+    }
+
+    /**
+     * Watch a registered session for its terminal state and clean it out of
+     * [active] and [_sessions]. Extracted so [registerSession] can attach it
+     * to the winner in both the Accepted and Replaced paths.
+     */
+    private fun watchForTerminal(peerId: PeerId, session: P2pSession) {
         scope.launch {
             session.state.first { it == ConnectionState.Closed || it == ConnectionState.Failed }
             activeLock.withLock {
@@ -376,6 +459,13 @@ internal class SessionManager(
             }
             _sessions.update { list -> list.filter { it !== session } }
         }
+    }
+
+    /** Result of a [registerSession] call. Drives the post-registration routing. */
+    internal sealed class RegisterOutcome {
+        data class Accepted(val session: P2pSession) : RegisterOutcome()
+        data class Replaced(val winner: P2pSession, val loser: P2pSession) : RegisterOutcome()
+        data class Rejected(val winner: P2pSession, val loser: P2pSession) : RegisterOutcome()
     }
 
     suspend fun closeAllSessions() {
