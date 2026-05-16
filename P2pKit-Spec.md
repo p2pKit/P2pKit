@@ -98,6 +98,27 @@ iOS LAN/TCP cross-talk with Android/JVM peers ships in **v0.3**, using Apple's `
 
 iOS Network Provisioning is **never planned**. Apple does not allow third-party apps to create Wi-Fi hotspots, and silent Wi-Fi join is not exposed to third-party apps. `P2pKit.networkProvisioning` will continue to throw `Unsupported` on iOS in every future version.
 
+### 5.2 v0.2 local identity accessors (Task 7)
+
+To make the SDK testable and to support diagnostics, support logs, and member-display UIs, `P2pKit` exposes three read-only properties for the identity it was constructed with:
+
+```kotlin
+public interface P2pKit {
+    public val appId: AppId
+    public val localDeviceName: String
+    public val localPeerId: PeerId
+    // …existing surface unchanged
+}
+```
+
+These properties expose existing state — no new behavior:
+
+- `appId` is the value passed into `P2pKit.create { appId = … }`.
+- `localDeviceName` is the value passed into `P2pKit.create { deviceName = … }`.
+- `localPeerId` is the value the kit's internal `PeerIdStorage` returns from `loadOrGenerate()` at construction. The storage stays internal — apps never touch it. The id is stable across process restarts on platforms with default persistence (JVM file, Android `filesDir` after `P2pKitAndroid.initialize`, iOS `NSUserDefaults`).
+
+All three are immutable for the lifetime of the kit. They are pure accessors, not flows — the values do not change once `create` returns. No setter; no way to override `localPeerId` via the public API.
+
 ---
 
 ## 6. Architecture Diagram

@@ -43,10 +43,10 @@ import kotlinx.coroutines.runBlocking
  * [dev.p2pkit.core.dsl.P2pKitBuilder].
  */
 internal class P2pKitImpl(
-    private val appId: AppId,
+    override val appId: AppId,
     private val deviceName: String,
     private val localPlatform: Platform,
-    private val localPeerId: PeerId,
+    override val localPeerId: PeerId,
     private val transportFactories: List<TransportFactory>,
     private val keepAlive: KeepAliveConfig,
     private val reconnectPolicy: ReconnectPolicy,
@@ -63,6 +63,8 @@ internal class P2pKitImpl(
 
     private val internalJob = SupervisorJob(parent = parentJob)
     private val scope = CoroutineScope(Dispatchers.Default + internalJob)
+
+    override val localDeviceName: String get() = deviceName
 
     private val _state = MutableStateFlow<P2pState>(P2pState.Idle)
     override val state: StateFlow<P2pState> = _state.asStateFlow()

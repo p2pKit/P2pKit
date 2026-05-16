@@ -298,7 +298,7 @@ The current `v0.2-dev` branch ships **91 unit + integration tests** (across `:p2
 ## Status
 
 - **v0.1**: shipped as `v0.1-internal` tag.
-- **v0.2-dev** (current branch): Task 1 — `PeerId` persistence — **done**. Task 2 — Android sample `ViewModel` polish (rotation survives) — **done**. Task 3 — `ReconnectPolicy.Enabled` retries for outgoing sessions — **done**. Task 4 — iOS core scaffolding (targets + `Platform.IOS` + `NSUserDefaults`-backed `PeerId`; no LAN transport) — **done**. Still to do: Network Provisioning sidecar (Android `LocalOnlyHotspot` + Wi-Fi join helpers; JVM network state + manual IP fallback), file transfer API, instrumented Android tests, process-death recovery via `SavedStateHandle`.
+- **v0.2-dev** (current branch): Task 1 — `PeerId` persistence — **done**. Task 2 — Android sample `ViewModel` polish (rotation survives) — **done**. Task 3 — `ReconnectPolicy.Enabled` retries for outgoing sessions — **done**. Task 4 — iOS core scaffolding (targets + `Platform.IOS` + `NSUserDefaults`-backed `PeerId`; no LAN transport) — **done**. Task 7 — local identity accessors on `P2pKit` (`appId`, `localDeviceName`, `localPeerId`) — **done**. Still to do: Network Provisioning sidecar (Android `LocalOnlyHotspot` + Wi-Fi join helpers; JVM network state + manual IP fallback), file transfer API, instrumented Android tests, process-death recovery via `SavedStateHandle`.
 - **v0.3+**: full iOS LAN/TCP transport (`NWBrowser` + `NWListener` + `NWConnection` + iOS sample app), macOS native LAN, BLE, Wi-Fi Direct, Multipeer, Relay, encryption.
 
 See `P2pKit-Spec.md` for the complete v0.1 and planned v0.2 contracts.

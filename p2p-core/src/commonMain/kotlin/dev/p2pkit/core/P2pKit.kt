@@ -43,6 +43,32 @@ import kotlinx.coroutines.flow.StateFlow
  */
 public interface P2pKit {
 
+    /**
+     * The [AppId] this kit was constructed with. Apps already know this
+     * because they passed it into [create]; exposed here so a single
+     * [P2pKit] reference is enough to render diagnostics, support logs, or
+     * room-member rows without threading the original config around.
+     */
+    public val appId: AppId
+
+    /**
+     * The local device name this kit was constructed with — same string
+     * advertised over discovery and sent in the HELLO handshake.
+     */
+    public val localDeviceName: String
+
+    /**
+     * Stable identity of this device for the current [appId]. Persists across
+     * process restarts on platforms that ship a default [dev.p2pkit.core.internal.PeerIdStorage]
+     * (JVM, Android with `P2pKitAndroid.initialize(context)`, iOS via
+     * `NSUserDefaults`). Other peers will recognise the same device by this id.
+     *
+     * The id is intentionally exposed read-only — apps should never construct
+     * or override it directly. Test apps display this to verify persistence;
+     * production apps may include it in support logs.
+     */
+    public val localPeerId: PeerId
+
     /** Global lifecycle of this P2pKit instance. */
     public val state: StateFlow<P2pState>
 
