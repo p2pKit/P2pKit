@@ -1,0 +1,33 @@
+package dev.p2pkit.sample.kmp
+
+import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.P2pMessage
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * Self-contained demo flow that exercises every public verb of P2pKit. Useful
+ * as a sanity smoke test from any platform: pass in a fresh [P2pKit] and a
+ * name and the demo will advertise, discover one peer, connect, send a
+ * greeting, and close.
+ *
+ * Returns a short human-readable summary of what happened — easy to assert
+ * against in a host-platform test, or log to the device screen.
+ */
+public suspend fun runDiscoverAndGreet(
+    p2p: P2pKit,
+    greetingFrom: String,
+    discoveryTimeoutMillis: Long = 10_000
+): String {
+    p2p.startAdvertising()
+    p2p.startDiscovery()
+
+    val peer = withTimeoutOrNull(discoveryTimeoutMillis) {
+        p2p.peers.first { it.isNotEmpty() }.first()
+    } ?: return "no peer discovered within ${discoveryTimeoutMillis}ms"
+
+    val session = p2p.connect(peer)
+    session.send(P2pMessage.Text("hello from $greetingFrom"))
+    session.close()
+    return "sent greeting to ${peer.name} (${peer.id.value.take(8)}…)"
+}
