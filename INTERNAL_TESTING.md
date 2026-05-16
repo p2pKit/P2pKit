@@ -192,6 +192,17 @@ If rotation sends you back to the setup screen, the host activity was destroyed 
 
 **Known boundary**: Android may kill the app's process while it's backgrounded under memory pressure. When that happens, the ViewModel is destroyed with the process. Re-launching the app returns to the setup screen. This is documented as v0.3 work (`SavedStateHandle` integration).
 
+### iOS scaffolding (v0.2 Task 4) — out of scope for the Windows release pipeline
+
+v0.2 adds `iosX64`, `iosArm64`, and `iosSimulatorArm64` targets to `:p2p-core` with `iosMain` actuals for `Platform.IOS`, `systemTimeMillis()`, and `PeerId` persistence via `NSUserDefaults`. **No LAN transport is implemented for iOS in v0.2** — Bonjour / `NWBrowser` / `NWListener` / `NWConnection` ship in v0.3.
+
+The release pipeline here is **Windows-host only**. iOS compile / link / test tasks require a macOS host with Xcode and are not exercised. The Windows acceptance criteria are:
+
+1. The four-module command (§7 item 1) still passes — i.e., adding the iOS targets did not regress JVM/Android.
+2. `./gradlew :p2p-core:tasks --all | findstr /i ios` lists iOS-scoped tasks (`compileKotlinIosArm64`, `iosSimulatorArm64MainKlibrary`, etc.) — proving the project model is consistent.
+
+Full iOS verification — Local Network permission prompt, `NSUserDefaults` round-trip on simulator, cross-platform discovery with Android/JVM peers — is **deferred to v0.3** when the LAN transport actually exists. On macOS, future testers should run `./gradlew :p2p-core:iosSimulatorArm64Test` (which exercises the commonTest suite on iOS simulator) and confirm `BUILD SUCCESSFUL`. Until v0.3 lands, iOS targets cannot exchange messages with Android/JVM peers over LAN — they only verify that core types compile and `PeerId` persists.
+
 ### Verifying PeerId persistence manually
 
 **Desktop ↔ Desktop:**

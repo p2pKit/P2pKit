@@ -43,13 +43,23 @@ session.send(P2pMessage.Text("hello"))
 - Does not request runtime permissions on your behalf — that's the app's responsibility.
 - Does not promise to put two devices on the same LAN automatically. **Network provisioning** is a planned v0.2 sidecar.
 
-## v0.1 platform support
+## Platform support
 
-| Platform | Discovery | Data | Provisioning |
-|---|---|---|---|
-| Android (minSdk 24) | `NsdManager` mDNS | TCP via `java.net.Socket` | not in v0.1 (v0.2) |
-| JVM desktop (Windows / Linux / macOS) | JmDNS | TCP via `java.net.Socket` | not in v0.1 (v0.2) |
-| iOS / macOS native | not in v0.1 | not in v0.1 | not in v0.1 |
+| Platform | Core types compile | Discovery | Data | Provisioning |
+|---|---|---|---|---|
+| Android (minSdk 24) | yes | `NsdManager` mDNS | TCP via `java.net.Socket` | not in v0.2 (v0.3+) |
+| JVM desktop (Windows / Linux / macOS) | yes | JmDNS | TCP via `java.net.Socket` | not in v0.2 (v0.3+) |
+| iOS (iosX64 / iosArm64 / iosSimulatorArm64) | **v0.2 scaffolding** | **not implemented** (v0.3) | **not implemented** (v0.3) | **never supported on iOS** — Apple does not allow apps to create hotspots or silently join Wi-Fi |
+| macOS native | not in v0.2 | not in v0.2 | not in v0.2 | not in v0.2 |
+
+**v0.2 iOS scope, explicitly:** `:p2p-core` declares iOS targets and ships `iosMain` actuals for `currentPlatform()`, `systemTimeMillis()`, and `PeerId` persistence (via `NSUserDefaults`). Common code — protocol framing, chunking, keep-alive, `SessionManager`, `ReconnectPolicy`, errors — compiles for iOS. **No LAN transport ships for iOS in v0.2.** `:p2p-transport-lan` remains JVM + Android only. Calling `transports { lan() }` from an iOS-targeting consumer will not link because the `lan()` extension is not declared in `iosMain` of `:p2p-transport-lan`. iOS LAN/TCP (Bonjour discovery via `NWBrowser` + TCP via `NWConnection` / `NWListener`) ships in v0.3.
+
+Cross-platform LAN today:
+- **Android ↔ JVM**: works.
+- **iOS ↔ Android**: not in v0.2 — planned for v0.3.
+- **iOS ↔ JVM**: not in v0.2 — planned for v0.3.
+
+iOS Network Provisioning is **not** planned and will remain `Unsupported` indefinitely. App Store rules forbid third-party apps from creating Wi-Fi hotspots, and silent Wi-Fi join is not exposed to third-party apps. The `networkProvisioning` accessor on `P2pKit` will continue to throw `Unsupported` on iOS.
 
 ## Quick start
 
@@ -283,11 +293,12 @@ The current `v0.2-dev` branch ships **91 unit + integration tests** (across `:p2
 - **No instrumented Android tests.** Android LAN paths (`NsdManager`, `AndroidLanDataTransport`, `AndroidRawConnection`) are validated by code review + manual two-device testing only. The protocol layer that flows over them is JVM-tested.
 - **Android sample survives rotation but not process death.** The kit and its session/peer/chat state live in a `P2pKitViewModel` that survives configuration changes (rotation, dark mode, locale, multi-window). If Android kills the app process while it's backgrounded, the kit is lost and the next launch starts at the setup screen. `SavedStateHandle`-based recovery is a planned v0.3 task.
 - **Sample app doesn't track background/foreground.** v0.2 dropped the `LifecycleEventObserver` from the Android sample — it was firing `notifyAppBackgrounded()` on rotation start, which the kit interpreted via `BackgroundPolicy.CloseActiveSessions`. The sample now keeps the kit running until the user taps **Stop** or the `Activity` is destroyed for real. Apps that want proper background detection should wire `ProcessLifecycleOwner` (from `androidx.lifecycle:lifecycle-process`) themselves.
+- **iOS support is core-only scaffolding in v0.2 (task 4).** `:p2p-core` adds `iosX64()`, `iosArm64()`, and `iosSimulatorArm64()` targets and ships iOS actuals for `Platform.IOS`, `systemTimeMillis()`, and `PeerId` persistence via `NSUserDefaults`. **No iOS LAN/TCP transport is implemented yet** — Bonjour discovery (`NWBrowser`), TCP listener (`NWListener`), and TCP client (`NWConnection`) all land in v0.3. iOS Network Provisioning is unsupported and will stay that way — Apple does not allow third-party apps to create hotspots or join Wi-Fi silently. Until v0.3 ships, iOS targets cannot exchange messages with Android/JVM peers over LAN. Build/test verification of iOS targets requires a macOS host with Xcode and is not exercised on the Windows release pipeline.
 
 ## Status
 
 - **v0.1**: shipped as `v0.1-internal` tag.
-- **v0.2-dev** (current branch): Task 1 — `PeerId` persistence — **done**. Task 2 — Android sample `ViewModel` polish (rotation survives) — **done**. Task 3 — `ReconnectPolicy.Enabled` retries for outgoing sessions — **done**. Still to do: Network Provisioning sidecar (Android `LocalOnlyHotspot` + Wi-Fi join helpers; JVM network state + manual IP fallback), file transfer API, instrumented Android tests, process-death recovery via `SavedStateHandle`.
-- **v0.3+**: iOS / macOS LAN, BLE, Wi-Fi Direct, Multipeer, Relay, encryption.
+- **v0.2-dev** (current branch): Task 1 — `PeerId` persistence — **done**. Task 2 — Android sample `ViewModel` polish (rotation survives) — **done**. Task 3 — `ReconnectPolicy.Enabled` retries for outgoing sessions — **done**. Task 4 — iOS core scaffolding (targets + `Platform.IOS` + `NSUserDefaults`-backed `PeerId`; no LAN transport) — **done**. Still to do: Network Provisioning sidecar (Android `LocalOnlyHotspot` + Wi-Fi join helpers; JVM network state + manual IP fallback), file transfer API, instrumented Android tests, process-death recovery via `SavedStateHandle`.
+- **v0.3+**: full iOS LAN/TCP transport (`NWBrowser` + `NWListener` + `NWConnection` + iOS sample app), macOS native LAN, BLE, Wi-Fi Direct, Multipeer, Relay, encryption.
 
 See `P2pKit-Spec.md` for the complete v0.1 and planned v0.2 contracts.
