@@ -21,8 +21,11 @@ import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -48,6 +51,10 @@ import kotlinx.coroutines.sync.withLock
  *   - Wrap connections with the configured [SecurityManager].
  *   - Publish accepted sessions on [incomingSessions] and track every active
  *     session in [sessions].
+ *   - When [ReconnectPolicy.Enabled] is configured, wire a per-session
+ *     [ReconnectHandler] that re-dials and re-handshakes after connection
+ *     loss, then rearms the same [P2pSessionImpl] in place so the public
+ *     session identity is preserved.
  *   - Close all sessions cleanly on [stop] / [closeAllSessions].
  */
 internal class SessionManager(
@@ -138,7 +145,12 @@ internal class SessionManager(
             } catch (e: Throwable) {
                 throw P2pError.ConnectionFailed("Transport connect failed: ${e.message}")
             }
-            val session = setupSession(rawConnection, expectedPeer = peer, isIncoming = false)
+            val session = setupSession(
+                rawConnection = rawConnection,
+                expectedPeer = peer,
+                isIncoming = false,
+                internalPeerForReconnect = internalPeer
+            )
             deferred.complete(session)
             return session
         } catch (e: Throwable) {
@@ -159,7 +171,12 @@ internal class SessionManager(
     private fun handleIncoming(connection: RawConnection) {
         scope.launch {
             try {
-                setupSession(connection, expectedPeer = null, isIncoming = true)
+                setupSession(
+                    rawConnection = connection,
+                    expectedPeer = null,
+                    isIncoming = true,
+                    internalPeerForReconnect = null
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -169,11 +186,66 @@ internal class SessionManager(
         }
     }
 
+    /**
+     * Common setup path for both outgoing and incoming sessions. Wraps the
+     * raw connection in a HELLO handshake + security wrap, constructs the
+     * [P2pSessionImpl], wires the reconnect handler (outgoing only when
+     * policy is [ReconnectPolicy.Enabled]), and registers the session.
+     */
     private suspend fun setupSession(
         rawConnection: RawConnection,
         expectedPeer: Peer?,
-        isIncoming: Boolean
+        isIncoming: Boolean,
+        internalPeerForReconnect: InternalPeer?
     ): P2pSession {
+        val handshake = runHandshake(rawConnection, expectedPeer)
+
+        val session = P2pSessionImpl(
+            id = "${if (isIncoming) "in" else "out"}-${handshake.resolvedPeer.id.value}-${clock()}",
+            peer = handshake.resolvedPeer,
+            initialConnection = handshake.secureConnection,
+            initialEvents = handshake.events,
+            protocol = protocol,
+            parentScope = scope,
+            keepAlive = keepAlive,
+            clock = clock,
+            logger = logger
+        )
+
+        // Reconnect handler is wired BEFORE start() so the very first
+        // connection-loss event is observed by the handler. Wired only when:
+        //   - this is an outgoing session (we have an InternalPeer to dial)
+        //   - the configured policy is Enabled
+        if (!isIncoming && internalPeerForReconnect != null) {
+            val policy = reconnectPolicy
+            if (policy is ReconnectPolicy.Enabled) {
+                session.reconnectHandler = SessionReconnectHandler(
+                    expectedPeer = handshake.resolvedPeer,
+                    internalPeer = internalPeerForReconnect,
+                    policy = policy
+                )
+            }
+        }
+
+        session.start()
+        registerSession(handshake.resolvedPeer.id, session)
+
+        if (isIncoming) {
+            _incomingSessions.emit(session)
+        }
+        return session
+    }
+
+    /**
+     * Runs the HELLO handshake (and security wrap) on a freshly-dialled or
+     * freshly-accepted [rawConnection]. Returns everything the session needs
+     * to start consuming events. On any failure, closes the connection and
+     * cancels the reader job before propagating.
+     */
+    private suspend fun runHandshake(
+        rawConnection: RawConnection,
+        expectedPeer: Peer?
+    ): HandshakeOutputs {
         val eventChannel = Channel<ProtocolEvent>(capacity = Channel.UNLIMITED)
         val readerJob = scope.launch {
             try {
@@ -204,29 +276,89 @@ internal class SessionManager(
             // passthrough), but keeps the future encryption hook open.
             val resolvedPeer = expectedPeer ?: peerHello.toPeer()
             val secureConnection = security.performHandshake(rawConnection, resolvedPeer)
-
-            val session = P2pSessionImpl(
-                id = "${if (isIncoming) "in" else "out"}-${resolvedPeer.id.value}-${clock()}",
-                peer = resolvedPeer,
-                connection = secureConnection,
+            return HandshakeOutputs(
+                secureConnection = secureConnection,
                 events = eventChannel,
-                protocol = protocol,
-                parentScope = scope,
-                keepAlive = keepAlive,
-                clock = clock,
-                logger = logger
+                readerJob = readerJob,
+                resolvedPeer = resolvedPeer
             )
-            session.start()
-            registerSession(resolvedPeer.id, session)
-
-            if (isIncoming) {
-                _incomingSessions.emit(session)
-            }
-            return session
         } catch (e: Throwable) {
             readerJob.cancel()
             runCatching { rawConnection.close() }
             throw e
+        }
+    }
+
+    private data class HandshakeOutputs(
+        val secureConnection: RawConnection,
+        val events: ReceiveChannel<ProtocolEvent>,
+        val readerJob: Job,
+        val resolvedPeer: Peer
+    )
+
+    /**
+     * Per-outgoing-session reconnect driver. Lives only for sessions whose
+     * policy is [ReconnectPolicy.Enabled]; invoked by [P2pSessionImpl] on
+     * connection loss while the session is in [ConnectionState.Connected].
+     *
+     * Loop checks [P2pSession.state] before each delay and after each dial so
+     * that `session.close()` and `kit.stop()` stop retries promptly. The loop
+     * itself runs on the session's coroutine scope, so cancellation also
+     * propagates structurally.
+     *
+     * Per spec §16.3 we do **not** re-resolve discovery during retry — the
+     * [internalPeer] captured at session creation is reused for every
+     * attempt. If the peer's address has rotated, retries exhaust until the
+     * app re-discovers the peer and reconnects.
+     */
+    private inner class SessionReconnectHandler(
+        private val expectedPeer: Peer,
+        private val internalPeer: InternalPeer,
+        private val policy: ReconnectPolicy.Enabled
+    ) : ReconnectHandler {
+
+        override suspend fun onConnectionLost(session: P2pSessionImpl) {
+            var attempt = 0
+            while (attempt < policy.maxAttempts) {
+                attempt++
+                try {
+                    delay(policy.retryDelayMillis)
+                } catch (e: CancellationException) {
+                    throw e
+                }
+                if (session.state.value != ConnectionState.Reconnecting) return
+
+                val outcome = runCatching {
+                    val transport = transportManager.selectBestTransport(internalPeer)
+                    val raw = transport.connect(internalPeer)
+                    runHandshake(raw, expectedPeer = expectedPeer)
+                }
+
+                val handshake = outcome.getOrElse { e ->
+                    if (e is CancellationException) throw e
+                    logger.warn(
+                        "Reconnect attempt $attempt/${policy.maxAttempts} for " +
+                            "${expectedPeer.name} failed: ${e.message ?: e::class.simpleName}"
+                    )
+                    null
+                } ?: continue
+
+                if (session.state.value != ConnectionState.Reconnecting) {
+                    // Session terminated while we were dialling. Discard the
+                    // fresh connection; the reader's collect will exit when
+                    // we close it.
+                    handshake.readerJob.cancel()
+                    runCatching { handshake.secureConnection.close() }
+                    return
+                }
+
+                session.rearmWith(handshake.secureConnection, handshake.events)
+                logger.debug(
+                    "Session ${session.id}: reconnected to ${expectedPeer.name} on attempt $attempt"
+                )
+                return
+            }
+            session.markFailedAfterExhaustion()
         }
     }
 

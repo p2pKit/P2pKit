@@ -41,7 +41,7 @@ POSIX shell:
           :p2p-sample-android:assembleDebug
 ```
 
-**Expected**: `BUILD SUCCESSFUL`, `69 tests completed, 0 failed`, an APK at `p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk`, and a launcher script at `p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop[.bat]`.
+**Expected**: `BUILD SUCCESSFUL`, `91 tests completed, 0 failed`, an APK at `p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk`, and a launcher script at `p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop[.bat]`.
 
 ---
 
@@ -209,6 +209,22 @@ If rotation sends you back to the setup screen, the host activity was destroyed 
 4. Phone B's peer list should show phone A with the **same** id-prefix.
 5. If you instead see a new id-prefix, the host app did not call `P2pKitAndroid.initialize(applicationContext)` from `Application.onCreate`. Check `adb logcat | grep p2pkit` for the warning `PeerId persistence: P2pKitAndroid.initialize(context) was not called …`.
 
+### Verifying ReconnectPolicy.Enabled manually (v0.2 Task 3)
+
+This exercises the **outgoing-only** reconnect path. The accepting peer doesn't auto-redial — it sees the dropped session as `Failed` and a new incoming session arrives once the dialler retries.
+
+**Desktop ↔ Desktop**, easiest setup:
+
+1. Edit `p2p-sample-desktop/src/jvmMain/kotlin/.../Main.kt` (or your local copy) to wrap the `lifecycle { }` block with `reconnectPolicy = ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000)`. Rebuild with `:p2p-sample-desktop:installDist`.
+2. Start two instances (`Alice` and `Bob`). Wait for `[peers] 1: …` on both, then on Alice run `connect <bob-id>` followed by `send hi`.
+3. With Alice still running, **Ctrl-C Bob**. On Alice you should see a session state change to `Reconnecting`, then attempt logs (`Reconnect attempt 1/5 for Bob failed …`) every second.
+4. Re-launch Bob (same name and `appId`) within the 5-attempt window. Alice's session should flip back to `Connected` and you can `send` again on the same session id.
+5. If you don't re-launch Bob, Alice's session ends in `Failed` after 5 failed dials. Alice should not retry beyond `maxAttempts`.
+
+**Manual close stops retries:** while Alice's session is in `Reconnecting`, type `close <session>` (or `quit`) on Alice. The session should immediately end in `Closed`, never `Failed`, and no further retry attempts should hit the log.
+
+**Stale address note:** if Bob comes back on a *different* IP (e.g., joined a different Wi-Fi), Alice's retries will keep dialling Bob's old IP and exhaust. The app must call `connect(peer)` again after the peer is re-discovered. Reconnect does not re-resolve discovery in v0.2.
+
 ---
 
 ## Release checklist (v0.1-internal)
@@ -223,6 +239,6 @@ Run through this before tagging.
 - [ ] **No new public APIs accidentally added** — public-symbol inventory matches Spec §7. (Quick grep: `grep -r "^public" p2p-core/src/commonMain/kotlin` should match the list in the v0.1 final report.)
 - [ ] **No leftover TODO / FIXME / debug `println`** in shipping code — sample code's `println`s are fine.
 - [ ] **`PeerId` is fresh per launch.** Documented; testers should expect a "new device" with a new id every time the sample app restarts. Persistent `PeerId` is v0.2.
-- [ ] **`ReconnectPolicy.Enabled` does not retry.** If a tester configures this in their own app, they will see a `P2pLogger.warn` at startup and `Failed` sessions on disconnect with no retry. Documented; full retries are v0.2.
+- [ ] **`ReconnectPolicy.Enabled` retries outgoing sessions** (v0.2 task 3). Configuring it causes outgoing sessions to transition through `Reconnecting` and retry the dial up to `maxAttempts` times. Incoming sessions still go directly to `Failed` on connection loss. Verified by the manual recipe under "Verifying ReconnectPolicy.Enabled manually" above.
 
 When all boxes are ticked, **tag `v0.1-internal`** and share this guide with the testers.

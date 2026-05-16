@@ -46,4 +46,19 @@ internal class FakeRawConnection(
         _state.value = ConnectionState.Closed
         send.close()
     }
+
+    /**
+     * Simulate an abrupt wire failure observable on this side.
+     *
+     * Closes the local receive channel with [cause] so the read flow throws
+     * (driving the session's `routeEvents` into the failure branch) and
+     * closes the local send channel so subsequent writes fail. The peer side
+     * sees its read flow end normally (channel close without cause).
+     */
+    fun breakWith(cause: Throwable) {
+        if (_state.value == ConnectionState.Closed) return
+        _state.value = ConnectionState.Closed
+        receive.close(cause)
+        send.close()
+    }
 }

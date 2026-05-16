@@ -55,8 +55,8 @@ class KeepAliveTest {
             val session = P2pSessionImpl(
                 id = "keepalive-test",
                 peer = peer,
-                connection = pair.a,
-                events = events,
+                initialConnection = pair.a,
+                initialEvents = events,
                 protocol = protocol,
                 parentScope = scope,
                 keepAlive = KeepAliveConfig(pingIntervalMillis = 50, timeoutMillis = 150),

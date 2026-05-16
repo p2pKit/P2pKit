@@ -4,8 +4,9 @@ package dev.p2pkit.core
  * Keep-alive (PING/PONG) timings for each [P2pSession].
  *
  * Each side sends a `PING` every [pingIntervalMillis]. If no `PONG` is observed
- * within [timeoutMillis], the session transitions to [ConnectionState.Failed]
- * (or [ConnectionState.Reconnecting] if [ReconnectPolicy.Enabled] is configured).
+ * within [timeoutMillis], the session transitions to [ConnectionState.Failed],
+ * or to [ConnectionState.Reconnecting] for outgoing sessions configured with
+ * [ReconnectPolicy.Enabled].
  */
 public data class KeepAliveConfig(
     val pingIntervalMillis: Long = 10_000,
@@ -26,16 +27,25 @@ public sealed class ReconnectPolicy {
     public data object Disabled : ReconnectPolicy()
 
     /**
-     * Failed sessions should enter [ConnectionState.Reconnecting] and retry up
-     * to [maxAttempts] times with [retryDelayMillis] between attempts.
+     * Failed sessions enter [ConnectionState.Reconnecting] and retry up to
+     * [maxAttempts] times with [retryDelayMillis] between attempts. On
+     * success the session returns to [ConnectionState.Connected] with its
+     * public identity preserved (same [P2pSession] instance, same `incoming`
+     * flow). On exhaustion it transitions to [ConnectionState.Failed].
      *
-     * **v0.1 status: API shape only — retry is _not_ implemented.**
-     * The configuration is accepted and validated, but in v0.1 the kit still
-     * transitions failed sessions directly to [ConnectionState.Failed] without
-     * attempting reconnection. Configuring this policy currently behaves
-     * identically to [Disabled]; the kit emits a warning via [P2pLogger] at
-     * construction so it is not silent. Full retry semantics are planned for
-     * v0.2.
+     * Scope (v0.2): retries fire only on **outgoing** sessions — the ones
+     * opened by [dev.p2pkit.core.P2pKit.connect]. Incoming sessions that
+     * lose their connection still transition directly to
+     * [ConnectionState.Failed]; the remote peer is expected to redial.
+     *
+     * Retries reuse the [dev.p2pkit.core.transport.InternalPeer] captured at
+     * session creation. If the peer's transport address has rotated since
+     * (e.g., Wi-Fi reconnect changed its IP), attempts may exhaust until the
+     * app re-discovers the peer and calls
+     * [dev.p2pkit.core.P2pKit.connect] again.
+     *
+     * Clean closes — both [P2pSession.close] and a `CLOSE` frame from the
+     * peer — never trigger retry.
      */
     public data class Enabled(val maxAttempts: Int, val retryDelayMillis: Long) : ReconnectPolicy() {
         init {
