@@ -66,6 +66,7 @@ import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.provisioning.JoinNetworkResult
 import dev.p2pkit.core.provisioning.LocalNetworkResult
+import dev.p2pkit.core.transfer.FileTransferState
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -290,6 +291,17 @@ private fun RoomScreen(
 
         val connected = vm.connectedSessions.toList()
         Spacer(Modifier.height(12.dp))
+
+        // File picker shared across all per-chip "Send file…" menu items.
+        var pendingSendPeerId by remember { mutableStateOf<String?>(null) }
+        val pickerLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.OpenDocument()
+        ) { uri ->
+            val peerId = pendingSendPeerId
+            pendingSendPeerId = null
+            if (uri != null && peerId != null) vm.sendFile(peerId, uri)
+        }
+
         if (connected.isNotEmpty()) {
             Text(
                 text = "Room (${connected.size} connected)",
@@ -302,7 +314,11 @@ private fun RoomScreen(
                         session = session,
                         isTargeted = vm.targetedPeerIds.contains(session.peer.id.value),
                         onToggleTarget = { vm.togglePeerTarget(session.peer.id.value) },
-                        onCloseSession = { vm.closeSession(session.peer.id.value) }
+                        onCloseSession = { vm.closeSession(session.peer.id.value) },
+                        onSendFile = {
+                            pendingSendPeerId = session.peer.id.value
+                            pickerLauncher.launch(arrayOf("*/*"))
+                        }
                     )
                 }
                 item {
@@ -365,6 +381,23 @@ private fun RoomScreen(
         }
 
         Spacer(Modifier.height(8.dp))
+
+        if (vm.fileTransfers.isNotEmpty()) {
+            Text(
+                text = "File transfers (${vm.fileTransfers.size})",
+                style = MaterialTheme.typography.titleSmall
+            )
+            Spacer(Modifier.height(4.dp))
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().height(160.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(vm.fileTransfers.toList(), key = { it.id }) { row ->
+                    FileTransferRowView(row = row, onCancel = { vm.cancelFileTransfer(row.id) })
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
 
         Text(
             text = "Logs (last ${vm.logTail.size})",
@@ -474,7 +507,8 @@ private fun ConnectedPeerChip(
     session: P2pSession,
     isTargeted: Boolean,
     onToggleTarget: () -> Unit,
-    onCloseSession: () -> Unit
+    onCloseSession: () -> Unit,
+    onSendFile: () -> Unit
 ) {
     val state by session.state.collectAsState()
     var menuExpanded by remember { mutableStateOf(false) }
@@ -494,6 +528,14 @@ private fun ConnectedPeerChip(
         )
         DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
             DropdownMenuItem(
+                text = { Text("Send file…") },
+                enabled = state == ConnectionState.Connected,
+                onClick = {
+                    menuExpanded = false
+                    onSendFile()
+                }
+            )
+            DropdownMenuItem(
                 text = { Text("Close session") },
                 enabled = state == ConnectionState.Connected || state == ConnectionState.Reconnecting,
                 onClick = {
@@ -503,6 +545,64 @@ private fun ConnectedPeerChip(
             )
         }
     }
+}
+
+@Composable
+private fun FileTransferRowView(row: FileTransferRow, onCancel: () -> Unit) {
+    val state = row.state
+    val isActive = state is FileTransferState.Offered ||
+        state is FileTransferState.Accepted ||
+        state is FileTransferState.Sending
+    val arrow = if (row.direction == FileTransferDirection.Outgoing) "↑" else "↓"
+    val sizeKb = row.sizeBytes / 1024
+    val sentKb = row.bytesTransferred / 1024
+    val pct = if (row.sizeBytes > 0) ((row.bytesTransferred * 100) / row.sizeBytes).toInt() else 0
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "$arrow ${row.name}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${row.peerName} · ${state.label()}",
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+            Text(
+                text = "$sentKb / $sizeKb KiB ($pct%)",
+                style = MaterialTheme.typography.labelSmall
+            )
+            if (row.destinationPath != null) {
+                Text(
+                    text = "saved to ${row.destinationPath}",
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (isActive) {
+                Spacer(Modifier.height(4.dp))
+                TextButton(onClick = onCancel) { Text("Cancel") }
+            }
+        }
+    }
+}
+
+private fun FileTransferState.label(): String = when (this) {
+    is FileTransferState.Offered -> "offered"
+    is FileTransferState.Accepted -> "accepted"
+    is FileTransferState.Sending -> "sending ${"%.0f".format(progress * 100)}%"
+    is FileTransferState.Completed -> "completed"
+    is FileTransferState.Rejected -> "rejected" + (reason?.let { " — $it" } ?: "")
+    is FileTransferState.Cancelled -> "cancelled" + (reason?.let { " — $it" } ?: "")
+    is FileTransferState.Failed -> "failed — ${error.message ?: error::class.simpleName}"
 }
 
 @Composable

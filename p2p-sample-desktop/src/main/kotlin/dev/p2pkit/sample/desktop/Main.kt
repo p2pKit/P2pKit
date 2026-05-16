@@ -8,6 +8,8 @@ import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.ReconnectPolicy
+import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.core.transfer.sendFile
 import dev.p2pkit.provisioning.desktop.jvm
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CoroutineScope
@@ -20,6 +22,8 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.io.asSink
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -52,8 +56,13 @@ import java.util.concurrent.ConcurrentHashMap
  * - `manual <host>:<port>`        — connect by IP without mDNS (manual-IP fallback);
  *                                   uses the JVM provisioning module to register
  *                                   a synthetic peer and then dials it
+ * - `sendfile <id-or-name> <path>` — stream a file from disk to one peer
  * - `help`                        — print this list
  * - `quit` / `exit`               — stop the kit and exit
+ *
+ * Incoming file offers are auto-accepted and saved under
+ * `<user.home>/.p2pkit/incoming/<sender-name>/<filename>` so the CLI can be
+ * used unattended; state transitions print as `[file …]` lines.
  */
 fun main(args: Array<String>) {
     val deviceName = args.getOrNull(0) ?: "Desktop-${System.currentTimeMillis() % 10_000}"
@@ -367,6 +376,42 @@ private suspend fun repl(
                 }
             }
 
+            "sendfile" -> {
+                val space = arg.indexOf(' ')
+                if (space <= 0 || space == arg.length - 1) {
+                    println("usage: sendfile <peer-id-prefix-or-name> <path>")
+                    continue
+                }
+                val target = arg.substring(0, space).trim()
+                val rawPath = arg.substring(space + 1).trim().trim('"')
+                if (rawPath.isEmpty()) {
+                    println("usage: sendfile <peer-id-prefix-or-name> <path>")
+                    continue
+                }
+                val file = File(rawPath)
+                if (!file.exists() || !file.isFile) {
+                    println("file not found or not a regular file: ${file.absolutePath}")
+                    continue
+                }
+                val session = sessions.values.firstOrNull { matches(it.peer, target) }
+                if (session == null) {
+                    println("no active session matching '$target'")
+                    continue
+                }
+                println("[file → ${session.peer.name}] sending ${file.name} (${file.length()}B)")
+                scope.launch {
+                    runCatching { session.sendFile(file) }
+                        .onSuccess { transfer ->
+                            scope.launch {
+                                transfer.state.collect { st ->
+                                    println("[file → ${session.peer.name} ${file.name}] $st")
+                                }
+                            }
+                        }
+                        .onFailure { System.err.println("sendfile failed: ${it.message}") }
+                }
+            }
+
             "quit", "exit" -> return
 
             else -> println("unknown command '$cmd' — type `help`")
@@ -405,19 +450,23 @@ private fun printHelp() {
     println(
         """
         Commands:
-          peers                       — list discovered peers
-          sessions                    — list active sessions
-          info | state                — local identity + kit/adv/disc/mesh state + counts
-          adv on | adv off            — toggle advertising
-          disc on | disc off          — toggle discovery
-          mesh on | mesh off          — toggle auto-mesh (auto-connect to discovered peers)
-          connect <id-or-name>        — open a session
-          send <text>                 — broadcast to every active session (room)
-          to <id-or-name> <text>      — send to one peer
-          manual <host>:<port>        — connect by IP, no mDNS needed
-          close <id-or-name>          — close a session
-          help                        — show this list
-          quit | exit                 — stop and exit
+          peers                              — list discovered peers
+          sessions                           — list active sessions
+          info | state                       — local identity + kit/adv/disc/mesh state + counts
+          adv on | adv off                   — toggle advertising
+          disc on | disc off                 — toggle discovery
+          mesh on | mesh off                 — toggle auto-mesh (auto-connect to discovered peers)
+          connect <id-or-name>               — open a session
+          send <text>                        — broadcast to every active session (room)
+          to <id-or-name> <text>             — send to one peer
+          manual <host>:<port>               — connect by IP, no mDNS needed
+          sendfile <id-or-name> <path>       — stream a file from disk to one peer
+          close <id-or-name>                 — close a session
+          help                               — show this list
+          quit | exit                        — stop and exit
+
+        Incoming file offers are auto-accepted to
+          ~/.p2pkit/incoming/<sender-name>/<filename>
         """.trimIndent()
     )
 }
@@ -441,6 +490,43 @@ private fun wireIncoming(session: P2pSession, scope: CoroutineScope) {
             }
         }
         .launchIn(scope)
+    session.incomingFiles
+        .onEach { offer ->
+            val saveDir = File(
+                File(System.getProperty("user.home") ?: ".", ".p2pkit"),
+                "incoming/${sanitizeName(session.peer.name)}"
+            ).also { it.mkdirs() }
+            val saveFile = File(saveDir, sanitizeName(offer.name))
+            println("[file ← ${session.peer.name}] offered ${offer.name} (${offer.sizeBytes}B) → ${saveFile.absolutePath}")
+            scope.launch {
+                val out = saveFile.outputStream()
+                val transfer = runCatching { offer.accept(out.asSink()) }
+                    .getOrElse {
+                        runCatching { out.close() }
+                        System.err.println("[file ← ${session.peer.name}] accept failed: ${it.message}")
+                        return@launch
+                    }
+                scope.launch {
+                    transfer.state.collect { st ->
+                        println("[file ← ${session.peer.name} ${offer.name}] $st")
+                        if (st is FileTransferState.Completed ||
+                            st is FileTransferState.Failed ||
+                            st is FileTransferState.Cancelled
+                        ) {
+                            runCatching { out.close() }
+                        }
+                    }
+                }
+            }
+        }
+        .launchIn(scope)
+}
+
+private fun sanitizeName(raw: String): String {
+    // Strip path separators and the few characters that are illegal on
+    // Windows; everything else (spaces, unicode, dots) is fine for the sample.
+    val cleaned = raw.replace(Regex("""[\\/:*?"<>|]"""), "_").trim()
+    return cleaned.ifEmpty { "untitled" }
 }
 
 private object StdErrLogger : P2pLogger {

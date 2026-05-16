@@ -66,6 +66,9 @@ import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.provisioning.ManualConnectionInfo
+import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.core.transfer.P2pFileTransfer
+import dev.p2pkit.core.transfer.sendFile
 import dev.p2pkit.provisioning.desktop.jvm
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CoroutineScope
@@ -77,6 +80,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.io.asSink
+import java.awt.FileDialog
+import java.awt.Frame
+import java.io.File
 
 // =====================================================================
 // Entry point
@@ -178,6 +185,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     val roomMessages: SnapshotStateList<RoomMessage> = mutableStateListOf()
     val targetedPeerIds: SnapshotStateList<String> = mutableStateListOf()
     val logTail: SnapshotStateList<String> = mutableStateListOf()
+    val fileTransfers: SnapshotStateList<FileTransferRow> = mutableStateListOf()
 
     // --- internals ---------------------------------------------------------
 
@@ -422,8 +430,139 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         connectedSessions.clear()
         targetedPeerIds.clear()
         roomMessages.clear()
+        fileTransfers.clear()
         _localPeerId.value = null
         appScope.launch { runCatching { toStop.stop() } }
+    }
+
+    // --- file transfer (v0.2.2) -------------------------------------------
+
+    fun sendFile(peerId: String, file: File) {
+        val scope = runScope ?: return
+        val session = connectedSessions.firstOrNull { it.peer.id.value == peerId } ?: return
+        scope.launch {
+            val transfer = runCatching { session.sendFile(file) }
+                .getOrElse {
+                    System.err.println("[p2pkit WARN] sendFile failed: ${it.message}")
+                    appendSystemMessage("send file '${file.name}' failed: ${it.message ?: it::class.simpleName}")
+                    return@launch
+                }
+            registerOutgoingTransfer(transfer, session.peer.name, scope)
+        }
+    }
+
+    fun cancelFileTransfer(id: String) {
+        val row = fileTransfers.firstOrNull { it.id == id } ?: return
+        val scope = runScope ?: return
+        scope.launch { runCatching { row.transfer.cancel("user cancelled") } }
+    }
+
+    private fun wireIncomingFiles(session: P2pSession, scope: CoroutineScope) {
+        scope.launch {
+            session.incomingFiles.collect { offer ->
+                val baseDir = File(System.getProperty("user.home") ?: ".", ".p2pkit/incoming")
+                val saveDir = File(baseDir, sanitize(session.peer.name)).also { it.mkdirs() }
+                val saveFile = File(saveDir, sanitize(offer.name))
+                System.err.println(
+                    "[p2pkit] incoming file ${offer.name} (${offer.sizeBytes}B) → ${saveFile.absolutePath}"
+                )
+                val out = runCatching { saveFile.outputStream() }
+                    .getOrElse { e ->
+                        System.err.println("[p2pkit WARN] cannot open $saveFile: ${e.message}")
+                        runCatching { offer.reject("cannot open destination") }
+                        return@collect
+                    }
+                val incoming = runCatching { offer.accept(out.asSink()) }
+                    .getOrElse { e ->
+                        runCatching { out.close() }
+                        System.err.println("[p2pkit WARN] accept ${offer.name} failed: ${e.message}")
+                        return@collect
+                    }
+                registerIncomingTransfer(incoming, session.peer.name, saveFile.absolutePath, scope, out)
+            }
+        }
+    }
+
+    private fun registerOutgoingTransfer(
+        transfer: P2pFileTransfer,
+        peerName: String,
+        scope: CoroutineScope
+    ) {
+        addRow(
+            FileTransferRow(
+                id = transfer.id,
+                direction = FileTransferDirection.Outgoing,
+                name = transfer.name,
+                sizeBytes = transfer.sizeBytes,
+                peerName = peerName,
+                state = transfer.state.value,
+                bytesTransferred = 0L,
+                destinationPath = null,
+                transfer = transfer
+            )
+        )
+        appendSystemMessage("sending file '${transfer.name}' (${transfer.sizeBytes}B) to $peerName")
+        scope.launch { transfer.state.collect { st -> updateRowState(transfer.id, st) } }
+        scope.launch { transfer.bytesTransferred.collect { b -> updateRowBytes(transfer.id, b) } }
+    }
+
+    private fun registerIncomingTransfer(
+        transfer: P2pFileTransfer,
+        peerName: String,
+        destinationPath: String,
+        scope: CoroutineScope,
+        out: java.io.OutputStream
+    ) {
+        addRow(
+            FileTransferRow(
+                id = transfer.id,
+                direction = FileTransferDirection.Incoming,
+                name = transfer.name,
+                sizeBytes = transfer.sizeBytes,
+                peerName = peerName,
+                state = transfer.state.value,
+                bytesTransferred = 0L,
+                destinationPath = destinationPath,
+                transfer = transfer
+            )
+        )
+        appendSystemMessage("receiving file '${transfer.name}' from $peerName → $destinationPath")
+        scope.launch {
+            transfer.state.collect { st ->
+                updateRowState(transfer.id, st)
+                if (st is FileTransferState.Completed ||
+                    st is FileTransferState.Failed ||
+                    st is FileTransferState.Cancelled
+                ) {
+                    runCatching { out.close() }
+                }
+            }
+        }
+        scope.launch { transfer.bytesTransferred.collect { b -> updateRowBytes(transfer.id, b) } }
+    }
+
+    private fun addRow(row: FileTransferRow) {
+        fileTransfers.add(0, row)
+        while (fileTransfers.size > FILE_TRANSFER_HISTORY_CAPACITY) {
+            fileTransfers.removeAt(fileTransfers.size - 1)
+        }
+    }
+
+    private fun updateRowState(id: String, state: FileTransferState) {
+        val idx = fileTransfers.indexOfFirst { it.id == id }
+        if (idx < 0) return
+        fileTransfers[idx] = fileTransfers[idx].copy(state = state)
+    }
+
+    private fun updateRowBytes(id: String, bytes: Long) {
+        val idx = fileTransfers.indexOfFirst { it.id == id }
+        if (idx < 0) return
+        fileTransfers[idx] = fileTransfers[idx].copy(bytesTransferred = bytes)
+    }
+
+    private fun sanitize(raw: String): String {
+        val cleaned = raw.replace(Regex("""[\\/:*?"<>|]"""), "_").trim()
+        return cleaned.ifEmpty { "untitled" }
     }
 
     /** Called when the whole UI composable disposes. */
@@ -473,6 +612,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                     System.err.println("[p2pkit] session ${session.peer.name} → $st")
                 }
             }
+            wireIncomingFiles(session, scope)
         }
     }
 
@@ -497,7 +637,30 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     companion object {
         const val DEFAULT_APP_ID = "p2pkit-desktop-sample"
         const val LOG_TAIL_CAPACITY = 30
+        const val FILE_TRANSFER_HISTORY_CAPACITY = 24
     }
+}
+
+enum class FileTransferDirection { Outgoing, Incoming }
+
+data class FileTransferRow(
+    val id: String,
+    val direction: FileTransferDirection,
+    val name: String,
+    val sizeBytes: Long,
+    val peerName: String,
+    val state: FileTransferState,
+    val bytesTransferred: Long,
+    val destinationPath: String?,
+    val transfer: P2pFileTransfer
+)
+
+private fun pickFile(): File? {
+    val dialog = FileDialog(null as Frame?, "Select file to send", FileDialog.LOAD)
+    dialog.isVisible = true
+    val name = dialog.file ?: return null
+    val dir = dialog.directory ?: return null
+    return File(dir, name)
 }
 
 // =====================================================================
@@ -781,7 +944,10 @@ private fun RoomScreen(state: DesktopP2pState) {
                             session = session,
                             isTargeted = state.targetedPeerIds.contains(session.peer.id.value),
                             onToggleTarget = { state.togglePeerTarget(session.peer.id.value) },
-                            onCloseSession = { state.closeSession(session.peer.id.value) }
+                            onCloseSession = { state.closeSession(session.peer.id.value) },
+                            onSendFile = {
+                                pickFile()?.let { state.sendFile(session.peer.id.value, it) }
+                            }
                         )
                     }
                     item {
@@ -799,6 +965,23 @@ private fun RoomScreen(state: DesktopP2pState) {
                     text = "Tap Connect on a peer to start a room.",
                     style = MaterialTheme.typography.bodyMedium
                 )
+            }
+
+            if (state.fileTransfers.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "File transfers (${state.fileTransfers.size})",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(Modifier.height(4.dp))
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().height(140.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(state.fileTransfers.toList(), key = { it.id }) { row ->
+                        FileTransferRowView(row = row, onCancel = { state.cancelFileTransfer(row.id) })
+                    }
+                }
             }
 
             Spacer(Modifier.height(12.dp))
@@ -933,7 +1116,8 @@ private fun ConnectedPeerChip(
     session: P2pSession,
     isTargeted: Boolean,
     onToggleTarget: () -> Unit,
-    onCloseSession: () -> Unit
+    onCloseSession: () -> Unit,
+    onSendFile: () -> Unit
 ) {
     val state by session.state.collectAsState()
     var menuExpanded by remember { mutableStateOf(false) }
@@ -952,6 +1136,14 @@ private fun ConnectedPeerChip(
         )
         DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
             DropdownMenuItem(
+                text = { Text("Send file…") },
+                enabled = state == ConnectionState.Connected,
+                onClick = {
+                    menuExpanded = false
+                    onSendFile()
+                }
+            )
+            DropdownMenuItem(
                 text = { Text("Close session") },
                 enabled = state == ConnectionState.Connected || state == ConnectionState.Reconnecting,
                 onClick = {
@@ -961,6 +1153,64 @@ private fun ConnectedPeerChip(
             )
         }
     }
+}
+
+@Composable
+private fun FileTransferRowView(row: FileTransferRow, onCancel: () -> Unit) {
+    val state = row.state
+    val isActive = state is FileTransferState.Offered ||
+        state is FileTransferState.Accepted ||
+        state is FileTransferState.Sending
+    val arrow = if (row.direction == FileTransferDirection.Outgoing) "↑" else "↓"
+    val sizeKb = row.sizeBytes / 1024
+    val sentKb = row.bytesTransferred / 1024
+    val pct = if (row.sizeBytes > 0) ((row.bytesTransferred * 100) / row.sizeBytes).toInt() else 0
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "$arrow ${row.name}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${row.peerName} · ${state.label()}",
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+            Text(
+                text = "$sentKb / $sizeKb KiB ($pct%)",
+                style = MaterialTheme.typography.labelSmall
+            )
+            if (row.destinationPath != null) {
+                Text(
+                    text = "saved to ${row.destinationPath}",
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (isActive) {
+                Spacer(Modifier.height(4.dp))
+                TextButton(onClick = onCancel) { Text("Cancel") }
+            }
+        }
+    }
+}
+
+private fun FileTransferState.label(): String = when (this) {
+    is FileTransferState.Offered -> "offered"
+    is FileTransferState.Accepted -> "accepted"
+    is FileTransferState.Sending -> "sending ${"%.0f".format(progress * 100)}%"
+    is FileTransferState.Completed -> "completed"
+    is FileTransferState.Rejected -> "rejected" + (reason?.let { " — $it" } ?: "")
+    is FileTransferState.Cancelled -> "cancelled" + (reason?.let { " — $it" } ?: "")
+    is FileTransferState.Failed -> "failed — ${error.message ?: error::class.simpleName}"
 }
 
 @Composable
