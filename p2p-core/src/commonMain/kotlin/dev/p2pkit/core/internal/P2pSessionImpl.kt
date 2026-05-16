@@ -9,6 +9,9 @@ import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
+import dev.p2pkit.core.transfer.FileTransferConfig
+import dev.p2pkit.core.transfer.P2pFileOffer
+import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableJob
@@ -30,6 +33,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.io.RawSource
+import kotlin.random.Random
 
 /**
  * Hook into [P2pSessionImpl] that drives reconnect attempts when the
@@ -64,7 +69,9 @@ internal class P2pSessionImpl(
     private val parentScope: CoroutineScope,
     private val keepAlive: KeepAliveConfig,
     private val clock: () -> Long,
-    private val logger: P2pLogger
+    private val logger: P2pLogger,
+    private val fileTransferConfig: FileTransferConfig = FileTransferConfig(),
+    private val random: Random = Random.Default
 ) : P2pSession {
 
     private val sessionJob = SupervisorJob(parent = parentScope.coroutineContext[Job])
@@ -107,6 +114,23 @@ internal class P2pSessionImpl(
      */
     internal var reconnectHandler: ReconnectHandler? = null
 
+    private val fileTransferDispatcher: FileTransferDispatcher by lazy {
+        FileTransferDispatcher(
+            sessionId = id,
+            remotePeer = peer,
+            protocol = protocol,
+            getConnection = { connection },
+            sendMutex = sendMutex,
+            config = fileTransferConfig,
+            scope = scope,
+            random = random,
+            logger = logger
+        )
+    }
+
+    override val incomingFiles: SharedFlow<P2pFileOffer>
+        get() = fileTransferDispatcher.incomingFiles
+
     fun start() {
         startEpoch()
     }
@@ -129,6 +153,18 @@ internal class P2pSessionImpl(
         }
     }
 
+    override suspend fun sendFile(
+        name: String,
+        sizeBytes: Long,
+        mimeType: String?,
+        source: RawSource
+    ): P2pFileTransfer {
+        if (_state.value != ConnectionState.Connected) {
+            throw P2pError.ConnectionFailed("Session $id is ${_state.value}; cannot send file")
+        }
+        return fileTransferDispatcher.sendFile(name, sizeBytes, mimeType, source)
+    }
+
     override suspend fun close() {
         val terminalAlready = connectionLock.withLock {
             val s = _state.value
@@ -138,6 +174,10 @@ internal class P2pSessionImpl(
         }
         if (terminalAlready) return
 
+        // Abort in-flight file transfers before we tear the connection down so
+        // their state surfaces a sensible "session closed" cause rather than a
+        // mid-write IOException.
+        runCatching { fileTransferDispatcher.closeAll("session $id closed") }
         // Best-effort CLOSE frame on whatever connection is current.
         runCatching {
             sendMutex.withLock { protocol.sendClose(connection) }
@@ -216,17 +256,12 @@ internal class P2pSessionImpl(
                         onConnectionLost("peer error: ${event.reason}")
                         return
                     }
-                    is ProtocolEvent.FileOffer,
-                    is ProtocolEvent.FileAccept,
-                    is ProtocolEvent.FileReject,
-                    is ProtocolEvent.FileData,
-                    is ProtocolEvent.FileDone,
-                    is ProtocolEvent.FileCancel -> {
-                        // Wired in Task 14. Until the file-transfer dispatcher is
-                        // attached, these arrive on the protocol event stream but
-                        // have nowhere to go — drop with debug.
-                        logger.debug("Session $id: ignoring file-transfer event $event (dispatcher not wired yet)")
-                    }
+                    is ProtocolEvent.FileOffer -> fileTransferDispatcher.onFileOffer(event.transferId, event.payload)
+                    is ProtocolEvent.FileAccept -> fileTransferDispatcher.onFileAccept(event.transferId)
+                    is ProtocolEvent.FileReject -> fileTransferDispatcher.onFileReject(event.transferId, event.reason)
+                    is ProtocolEvent.FileData -> fileTransferDispatcher.onFileData(event.frame)
+                    is ProtocolEvent.FileDone -> fileTransferDispatcher.onFileDone(event.transferId)
+                    is ProtocolEvent.FileCancel -> fileTransferDispatcher.onFileCancel(event.transferId, event.reason)
                 }
             }
             // Channel completed without explicit close or error frame. This

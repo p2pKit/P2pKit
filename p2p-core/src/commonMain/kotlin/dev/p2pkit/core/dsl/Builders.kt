@@ -12,6 +12,7 @@ import dev.p2pkit.core.internal.PeerIdStorage
 import dev.p2pkit.core.internal.newP2pKit
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
 import dev.p2pkit.core.provisioning.NetworkProvisioningFactory
+import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.TransportFactory
 
 /**
@@ -48,6 +49,7 @@ public class P2pKitBuilder internal constructor() {
     internal var securityMode: SecurityMode = SecurityMode.NoneForMvp
     internal var networkProvisioning: NetworkProvisioningConfig = NetworkProvisioningConfig()
     internal var networkProvisioningFactory: NetworkProvisioningFactory? = null
+    internal var fileTransfer: FileTransferConfig = FileTransferConfig()
 
     /**
      * Override the [PeerIdStorage] the kit uses. **Internal** — set from
@@ -85,6 +87,15 @@ public class P2pKitBuilder internal constructor() {
         networkProvisioningFactory = b.factory
     }
 
+    /**
+     * Configure the file-transfer subsystem. See [FileTransferConfig] for
+     * available knobs (max file size, chunk size, offer timeout).
+     */
+    public fun fileTransfer(block: FileTransferConfigBuilder.() -> Unit) {
+        val b = FileTransferConfigBuilder(fileTransfer).apply(block)
+        fileTransfer = b.toConfig()
+    }
+
     internal fun build(): P2pKit {
         val resolvedAppId = appId ?: error("appId must be set on the P2pKit builder")
         val resolvedName = deviceName ?: error("deviceName must be set on the P2pKit builder")
@@ -102,6 +113,7 @@ public class P2pKitBuilder internal constructor() {
             securityMode = securityMode,
             provisioningConfig = networkProvisioning,
             provisioningFactory = networkProvisioningFactory,
+            fileTransferConfig = fileTransfer,
             logger = logger,
             peerIdStorageOverride = peerIdStorage
         )
@@ -136,6 +148,16 @@ public class LifecycleConfigBuilder internal constructor(
 
 @P2pKitDsl
 public class SecurityConfigBuilder internal constructor(public var mode: SecurityMode)
+
+@P2pKitDsl
+public class FileTransferConfigBuilder internal constructor(initial: FileTransferConfig) {
+    public var maxFileSizeBytes: Long = initial.maxFileSizeBytes
+    public var chunkSizeBytes: Int = initial.chunkSizeBytes
+    public var offerTimeoutMillis: Long = initial.offerTimeoutMillis
+
+    internal fun toConfig(): FileTransferConfig =
+        FileTransferConfig(maxFileSizeBytes, chunkSizeBytes, offerTimeoutMillis)
+}
 
 @P2pKitDsl
 public class NetworkProvisioningConfigBuilder internal constructor(initial: NetworkProvisioningConfig) {

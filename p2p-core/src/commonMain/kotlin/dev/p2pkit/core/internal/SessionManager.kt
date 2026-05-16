@@ -15,6 +15,7 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.security.SecurityManager
+import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.RawConnection
@@ -70,7 +71,8 @@ internal class SessionManager(
     private val localPlatform: Platform,
     private val localTransports: Set<TransportKind>,
     private val clock: () -> Long,
-    private val logger: P2pLogger
+    private val logger: P2pLogger,
+    private val fileTransferConfig: FileTransferConfig = FileTransferConfig()
 ) {
 
     private val _sessions = MutableStateFlow<List<P2pSession>>(emptyList())
@@ -209,7 +211,8 @@ internal class SessionManager(
             parentScope = scope,
             keepAlive = keepAlive,
             clock = clock,
-            logger = logger
+            logger = logger,
+            fileTransferConfig = fileTransferConfig
         )
 
         // Reconnect handler is wired BEFORE start() so the very first

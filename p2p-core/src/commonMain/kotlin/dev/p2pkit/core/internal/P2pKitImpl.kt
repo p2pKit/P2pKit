@@ -24,6 +24,7 @@ import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.UnsupportedNetworkProvisioningManager
 import dev.p2pkit.core.security.NoOpSecurityManager
 import dev.p2pkit.core.security.SecurityManager
+import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.HasLocalTcpEndpoint
@@ -59,6 +60,7 @@ internal class P2pKitImpl(
     @Suppress("unused") private val securityMode: SecurityMode,
     private val provisioningConfig: NetworkProvisioningConfig,
     private val provisioningFactory: NetworkProvisioningFactory?,
+    private val fileTransferConfig: FileTransferConfig,
     override val permissions: P2pPermissionManager,
     private val logger: P2pLogger,
     private val clock: () -> Long,
@@ -123,7 +125,8 @@ internal class P2pKitImpl(
             localPlatform = localPlatform,
             localTransports = supportedTransportKinds,
             clock = clock,
-            logger = logger
+            logger = logger,
+            fileTransferConfig = fileTransferConfig
         )
         peerRegistry.start()
         sessionManager.startAcceptingIncoming(dataTransports)
@@ -273,6 +276,7 @@ internal fun newP2pKit(
     securityMode: SecurityMode,
     provisioningConfig: NetworkProvisioningConfig,
     provisioningFactory: NetworkProvisioningFactory?,
+    fileTransferConfig: FileTransferConfig,
     logger: P2pLogger,
     peerIdStorageOverride: PeerIdStorage? = null
 ): P2pKit {
@@ -290,6 +294,7 @@ internal fun newP2pKit(
         securityMode = securityMode,
         provisioningConfig = provisioningConfig,
         provisioningFactory = provisioningFactory,
+        fileTransferConfig = fileTransferConfig,
         permissions = dev.p2pkit.core.permission.NoOpP2pPermissionManager(),
         logger = logger,
         clock = ::systemTimeMillis,
