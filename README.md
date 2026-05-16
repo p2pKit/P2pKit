@@ -43,13 +43,23 @@ session.send(P2pMessage.Text("hello"))
 - Does not request runtime permissions on your behalf — that's the app's responsibility.
 - Does not promise to put two devices on the same LAN automatically. **Network provisioning** is a planned v0.2 sidecar.
 
-## v0.1 platform support
+## Platform support
 
-| Platform | Discovery | Data | Provisioning |
-|---|---|---|---|
-| Android (minSdk 24) | `NsdManager` mDNS | TCP via `java.net.Socket` | not in v0.1 (v0.2) |
-| JVM desktop (Windows / Linux / macOS) | JmDNS | TCP via `java.net.Socket` | not in v0.1 (v0.2) |
-| iOS / macOS native | not in v0.1 | not in v0.1 | not in v0.1 |
+| Platform | Core types compile | Discovery | Data | Provisioning |
+|---|---|---|---|---|
+| Android (minSdk 24) | yes | `NsdManager` mDNS | TCP via `java.net.Socket` | not in v0.2 (v0.3+) |
+| JVM desktop (Windows / Linux / macOS) | yes | JmDNS | TCP via `java.net.Socket` | not in v0.2 (v0.3+) |
+| iOS (iosX64 / iosArm64 / iosSimulatorArm64) | **v0.2 scaffolding** | **not implemented** (v0.3) | **not implemented** (v0.3) | **never supported on iOS** — Apple does not allow apps to create hotspots or silently join Wi-Fi |
+| macOS native | not in v0.2 | not in v0.2 | not in v0.2 | not in v0.2 |
+
+**v0.2 iOS scope, explicitly:** `:p2p-core` declares iOS targets and ships `iosMain` actuals for `currentPlatform()`, `systemTimeMillis()`, and `PeerId` persistence (via `NSUserDefaults`). Common code — protocol framing, chunking, keep-alive, `SessionManager`, `ReconnectPolicy`, errors — compiles for iOS. **No LAN transport ships for iOS in v0.2.** `:p2p-transport-lan` remains JVM + Android only. Calling `transports { lan() }` from an iOS-targeting consumer will not link because the `lan()` extension is not declared in `iosMain` of `:p2p-transport-lan`. iOS LAN/TCP (Bonjour discovery via `NWBrowser` + TCP via `NWConnection` / `NWListener`) ships in v0.3.
+
+Cross-platform LAN today:
+- **Android ↔ JVM**: works.
+- **iOS ↔ Android**: not in v0.2 — planned for v0.3.
+- **iOS ↔ JVM**: not in v0.2 — planned for v0.3.
+
+iOS Network Provisioning is **not** planned and will remain `Unsupported` indefinitely. App Store rules forbid third-party apps from creating Wi-Fi hotspots, and silent Wi-Fi join is not exposed to third-party apps. The `networkProvisioning` accessor on `P2pKit` will continue to throw `Unsupported` on iOS.
 
 ## Quick start
 
@@ -223,12 +233,63 @@ Detailed design lives in [`P2pKit-Spec.md`](./P2pKit-Spec.md).
 
 ## Modules
 
-- **`:p2p-core`** — public API, models, errors, protocol framing, session manager, peer registry. KMP module with `commonMain` / `jvmMain` / `androidMain`.
-- **`:p2p-transport-lan`** — mDNS discovery + TCP data. JmDNS on JVM, `NsdManager` on Android.
-- **`:p2p-sample-desktop`** — JVM CLI sample (`./gradlew :p2p-sample-desktop:run`).
-- **`:p2p-sample-android`** — Compose UI sample. Build with `./gradlew :p2p-sample-android:assembleDebug`.
+- **`:p2p-core`** — public API, models, errors, protocol framing, session manager, peer registry. KMP module with `commonMain` / `jvmMain` / `androidMain` / `iosMain` (core scaffolding only — no LAN).
+- **`:p2p-transport-lan`** — mDNS discovery + TCP data. JmDNS on JVM, `NsdManager` on Android. **iOS targets are not declared on this module yet** (v0.3).
+- **`:p2p-sample-android`** — Compose UI room/broadcast test harness. **Primary visual harness** for v0.2. `./gradlew :p2p-sample-android:assembleDebug`.
+- **`:p2p-sample-desktop`** — JVM CLI test harness. **Canonical desktop harness** for v0.2. `./gradlew :p2p-sample-desktop:installDist` then run the launcher. Type `help` for commands.
+- **`:p2p-sample-desktop-ui`** — Compose Desktop room/broadcast test harness. Same v0.2 feature parity as the Android sample (status header, peer chips with state + close, broadcast/targeted send, room timeline, log strip, reconnect picker). Run with `./gradlew :p2p-sample-desktop-ui:run`.
 
-Planned modules (not in v0.1): `:p2p-network-provisioning(-android|-desktop|-ios)`, `:p2p-transport-ble`, `:p2p-transport-android-wifidirect`, `:p2p-transport-apple-multipeer`, `:p2p-transport-relay`, `:p2p-sample-ios`.
+Planned modules (not in v0.2): `:p2p-network-provisioning(-android|-desktop|-ios)`, `:p2p-transport-ble`, `:p2p-transport-android-wifidirect`, `:p2p-transport-apple-multipeer`, `:p2p-transport-relay`, `:p2p-sample-ios`.
+
+## Sample feature coverage (v0.2-dev)
+
+| Feature | Android sample | JVM CLI | Compose Desktop UI |
+|---|---|---|---|
+| `appId` shown | ✅ status header | ✅ banner + `info` | ✅ status header + setup |
+| `localPeerId` shown | ✅ status header | ✅ `info` | ✅ status header |
+| `localDeviceName` shown | ✅ header / setup | ✅ banner + `info` | ✅ status header + setup |
+| `state` (kit) | ✅ status header | ✅ `info` | ✅ status header |
+| `startAdvertising` / `stopAdvertising` | ✅ Advertise switch | ✅ `adv on / off` | ✅ Advertise switch |
+| `startDiscovery` / `stopDiscovery` | ✅ Discover switch | ✅ `disc on / off` | ✅ Discover switch |
+| Peer discovery / lost | ✅ list | ✅ `peers` cmd | ✅ list |
+| `connect(peer)` | ✅ Connect button | ✅ `connect <id>` | ✅ Connect button |
+| Multiple active sessions | ✅ chip row | ✅ `sessions` | ✅ chip row |
+| Broadcast send | ✅ default (no chip selected) | ✅ `send <text>` | ✅ default (no chip selected) |
+| Targeted send | ✅ chip multi-select | ✅ `to <id> <text>` | ✅ chip multi-select |
+| Incoming from every session | ✅ unified timeline | ✅ per-session print | ✅ unified timeline |
+| Per-session `ConnectionState` | ✅ chip label | ✅ `[state] N → S` | ✅ chip label |
+| `session.close()` | ✅ chip overflow menu | ✅ `close <id>` | ✅ chip overflow menu |
+| `kit.stop()` | ✅ overflow menu | ✅ `quit` / `exit` | ✅ overflow menu |
+| `ReconnectPolicy.Enabled` configurable | ✅ setup picker | ✅ `reconnect=N,delayMs` arg | ✅ setup picker |
+| PeerId persistence verifiable | ✅ visible in header | ✅ via `info` | ✅ visible in header |
+| MulticastLock | ✅ implicit (active while running) | N/A | N/A |
+| In-app log strip | ✅ tail of TailLogger | ✅ stderr | ✅ tail of TailLogger |
+
+## Platform testing matrix (v0.2-dev)
+
+| Combination | Supported now | Notes |
+|---|---|---|
+| Android ↔ JVM Desktop | ✅ | mDNS + TCP across same Wi-Fi; verified by §A in `INTERNAL_TESTING.md`. |
+| JVM ↔ JVM | ✅ | Same machine or two machines on the same LAN. |
+| Android ↔ Android | ✅ | NsdManager ↔ NsdManager on the same Wi-Fi. |
+| Multi-peer room (3+ peers, mixed platforms) | ✅ | No SDK peer cap; verified by §B. |
+| Android ↔ iOS | ❌ | No iOS LAN transport in v0.2. v0.3. |
+| JVM ↔ iOS | ❌ | Same — v0.3. |
+| iOS ↔ iOS | ❌ | Same — v0.3. |
+| Three-way involving iOS | ❌ | Same — v0.3. |
+
+## OS / device testing matrix
+
+| Endpoint | Supported now | What can be tested | What cannot | Limitations |
+|---|---|---|---|---|
+| Android real device (API 24+) | yes | discovery, connect, send, broadcast, targeted, reconnect, MulticastLock | iOS interop | sample doesn't auto-call `notifyAppBackgrounded` |
+| Android emulator | yes-ish | same as real device | host-firewall scenarios | NAT-through-host can break cross-machine mDNS |
+| Windows JVM desktop | yes | full LAN feature set via CLI | iOS interop | Defender Firewall prompt on first run |
+| macOS JVM desktop | yes | full LAN feature set | iOS interop | macOS Firewall must allow incoming |
+| Linux JVM desktop | yes | full LAN feature set | iOS interop | `ufw allow 5353/udp` may be needed |
+| iPhone real device | **scaffolding only** | core types compile (with macOS host) | discovery / connect / send / anything LAN | requires macOS + Xcode just to build; no `:p2p-transport-lan` for iOS |
+| iOS simulator | scaffolding only | same as iPhone real | same | builds only on macOS host |
+| macOS native target | not declared | nothing | everything | target not in any module |
 
 ## Running the samples
 
@@ -253,7 +314,12 @@ In a second terminal, start a second instance with a different device name (e.g.
 > send hello
 ```
 
-Type `help` for the full command list.
+Optional third arg configures reconnect:
+```
+.\p2p-sample-desktop.bat Alice p2pkit-desktop-sample reconnect=5,1000
+```
+
+Type `help` for the full command list (`info`, `sessions`, `adv on|off`, `disc on|off`, `connect`, `send`, `to`, `close`, `quit`).
 
 ### Android
 
@@ -273,21 +339,22 @@ Launch on both devices (same Wi-Fi), enter different names, tap **Start**, then 
 ./gradlew :p2p-core:assemble :p2p-transport-lan:assemble :p2p-sample-desktop:installDist :p2p-sample-android:assembleDebug
 ```
 
-The current `v0.2-dev` branch ships **91 unit + integration tests** (across `:p2p-core`, `:p2p-transport-lan`, and `:sample-kmp-shared`). The loopback integration test in `:p2p-transport-lan` runs two `P2pKit` instances inside one JVM and exchanges a 200 KB binary payload over real TCP + mDNS — exercise the full pipeline end-to-end without external machines.
+The current `v0.2-dev` branch ships **93 unit + integration tests** in `:p2p-core` plus 2 in `:p2p-transport-lan` and 2 in `:sample-kmp-shared`. The loopback integration test in `:p2p-transport-lan` runs two `P2pKit` instances inside one JVM and exchanges a 200 KB binary payload over real TCP + mDNS — exercise the full pipeline end-to-end without external machines.
 
 ## Known limitations (v0.1-internal, partial v0.2)
 
 - **`PeerId` persistence (v0.2 task 1 — implemented).** JVM persists automatically under `<user.home>/.p2pkit/<appId>/peer-id`. Android persists under `<filesDir>/p2pkit/<appId>/peer-id` **after** the host app calls `P2pKitAndroid.initialize(applicationContext)` (typically from `Application.onCreate`). Without the init call, Android falls back to in-memory storage and the kit logs a `P2pLogger.warn` at construction. Apps wanting persistent identity must add the init.
 - **`ReconnectPolicy.Enabled` applies to outgoing sessions only (v0.2 task 3 — implemented).** When an outgoing session loses its connection, the kit transitions it to `Reconnecting` and retries the dial up to `maxAttempts` times with `retryDelayMillis` between attempts. On success the session returns to `Connected` with its public identity preserved (same `P2pSession` instance, same `incoming` flow). On exhaustion it transitions to `Failed`. **Incoming sessions do not auto-reconnect** — they still transition directly to `Failed` on connection loss; the remote peer is expected to redial. Retries reuse the originally-discovered peer transport info; if the peer's address has rotated since (e.g., Wi-Fi reconnect changed its IP), attempts may exhaust until the app re-discovers the peer and calls `connect(...)` again. Clean closes — both `session.close()` and a peer-sent `CLOSE` frame — never trigger retry.
-- **Android sample's `appId` is hardcoded** to `dev.p2pkit.sample.android` while the desktop sample uses `p2pkit-desktop-sample`. For cross-platform demos, edit one to match — or expose the field in each sample's UI.
+- **Sample `appId`** is now `p2pkit-desktop-sample` on **both** the JVM desktop and Android samples — they discover each other out of the box. The desktop sample also accepts a second positional arg (`gradlew :p2p-sample-desktop:run --args="Alice some-other-app-id"`) if you want to align with a different consumer.
 - **No instrumented Android tests.** Android LAN paths (`NsdManager`, `AndroidLanDataTransport`, `AndroidRawConnection`) are validated by code review + manual two-device testing only. The protocol layer that flows over them is JVM-tested.
 - **Android sample survives rotation but not process death.** The kit and its session/peer/chat state live in a `P2pKitViewModel` that survives configuration changes (rotation, dark mode, locale, multi-window). If Android kills the app process while it's backgrounded, the kit is lost and the next launch starts at the setup screen. `SavedStateHandle`-based recovery is a planned v0.3 task.
 - **Sample app doesn't track background/foreground.** v0.2 dropped the `LifecycleEventObserver` from the Android sample — it was firing `notifyAppBackgrounded()` on rotation start, which the kit interpreted via `BackgroundPolicy.CloseActiveSessions`. The sample now keeps the kit running until the user taps **Stop** or the `Activity` is destroyed for real. Apps that want proper background detection should wire `ProcessLifecycleOwner` (from `androidx.lifecycle:lifecycle-process`) themselves.
+- **iOS support is core-only scaffolding in v0.2 (task 4).** `:p2p-core` adds `iosX64()`, `iosArm64()`, and `iosSimulatorArm64()` targets and ships iOS actuals for `Platform.IOS`, `systemTimeMillis()`, and `PeerId` persistence via `NSUserDefaults`. **No iOS LAN/TCP transport is implemented yet** — Bonjour discovery (`NWBrowser`), TCP listener (`NWListener`), and TCP client (`NWConnection`) all land in v0.3. iOS Network Provisioning is unsupported and will stay that way — Apple does not allow third-party apps to create hotspots or join Wi-Fi silently. Until v0.3 ships, iOS targets cannot exchange messages with Android/JVM peers over LAN. Build/test verification of iOS targets requires a macOS host with Xcode and is not exercised on the Windows release pipeline.
 
 ## Status
 
 - **v0.1**: shipped as `v0.1-internal` tag.
-- **v0.2-dev** (current branch): Task 1 — `PeerId` persistence — **done**. Task 2 — Android sample `ViewModel` polish (rotation survives) — **done**. Task 3 — `ReconnectPolicy.Enabled` retries for outgoing sessions — **done**. Still to do: Network Provisioning sidecar (Android `LocalOnlyHotspot` + Wi-Fi join helpers; JVM network state + manual IP fallback), file transfer API, instrumented Android tests, process-death recovery via `SavedStateHandle`.
-- **v0.3+**: iOS / macOS LAN, BLE, Wi-Fi Direct, Multipeer, Relay, encryption.
+- **v0.2-dev** (current branch): Task 1 — `PeerId` persistence — **done**. Task 2 — Android sample `ViewModel` polish (rotation survives) — **done**. Task 3 — `ReconnectPolicy.Enabled` retries for outgoing sessions — **done**. Task 4 — iOS core scaffolding (targets + `Platform.IOS` + `NSUserDefaults`-backed `PeerId`; no LAN transport) — **done**. Task 7 — local identity accessors on `P2pKit` (`appId`, `localDeviceName`, `localPeerId`) — **done**. Still to do: Network Provisioning sidecar (Android `LocalOnlyHotspot` + Wi-Fi join helpers; JVM network state + manual IP fallback), file transfer API, instrumented Android tests, process-death recovery via `SavedStateHandle`.
+- **v0.3+**: full iOS LAN/TCP transport (`NWBrowser` + `NWListener` + `NWConnection` + iOS sample app), macOS native LAN, BLE, Wi-Fi Direct, Multipeer, Relay, encryption.
 
 See `P2pKit-Spec.md` for the complete v0.1 and planned v0.2 contracts.

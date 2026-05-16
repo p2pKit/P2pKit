@@ -37,7 +37,7 @@ class KeepAliveTest {
     fun sessionTransitionsToFailedWhenNoPongArrivesWithinTimeout() {
         runBlocking {
             val pair = FakeConnectionPair()
-            val protocol = DefaultP2pProtocol(clock = { System.currentTimeMillis() })
+            val protocol = DefaultP2pProtocol(clock = { systemTimeMillis() })
             val supervisor = SupervisorJob()
             val scope = CoroutineScope(Dispatchers.Default + supervisor)
 
@@ -60,7 +60,7 @@ class KeepAliveTest {
                 protocol = protocol,
                 parentScope = scope,
                 keepAlive = KeepAliveConfig(pingIntervalMillis = 50, timeoutMillis = 150),
-                clock = { System.currentTimeMillis() },
+                clock = { systemTimeMillis() },
                 logger = P2pLogger.NoOp
             )
             session.start()

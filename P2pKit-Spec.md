@@ -73,10 +73,51 @@ P2pKit is **transport-agnostic by design**. v0.1 ships with a LAN/TCP transport.
 
 - `NetworkProvisioningManager` sidecar with Android `LocalOnlyHotspot` host support and Wi-Fi join helper.
 - JVM desktop network state detection and manual IP fallback.
-- iOS provisioning (join-only via `NEHotspotConfiguration`).
-- Possibly: iOS LAN transport (Bonjour + `Network.framework`).
+- ~~iOS provisioning (join-only via `NEHotspotConfiguration`)~~ — **dropped from v0.2.** iOS provisioning is not implementable under current App Store policy and is removed from the roadmap.
+- ~~Possibly: iOS LAN transport (Bonjour + `Network.framework`)~~ — **deferred to v0.3.** v0.2 ships **iOS core scaffolding only** (see §5.1 below).
 
 The provisioning API shape is locked in this spec under section 20. v0.2 implementation must conform to it.
+
+### 5.1 v0.2 iOS scope (Task 4 — implemented as scaffolding only)
+
+`:p2p-core` declares `iosX64`, `iosArm64`, and `iosSimulatorArm64` targets and provides `iosMain` actuals:
+
+- `currentPlatform()` returns `Platform.IOS`.
+- `systemTimeMillis()` is backed by `NSDate().timeIntervalSince1970`.
+- `defaultPeerIdStorage(appId, logger)` returns a `NSUserDefaultsPeerIdStorage` that persists the `PeerId` under key `dev.p2pkit.peerId.<sanitized-appId>` in `NSUserDefaults.standardUserDefaults`. Survives app restarts and iOS upgrades; cleared on uninstall — same on-uninstall semantics as the Android `filesDir` backing.
+
+Explicitly **not** in v0.2:
+
+- iOS LAN transport (`:p2p-transport-lan` does not declare iOS targets in v0.2).
+- iOS Bonjour discovery (`NWBrowser`).
+- iOS TCP listener (`NWListener`) or client (`NWConnection`).
+- iOS sample app.
+- iOS Network Provisioning.
+
+iOS LAN/TCP cross-talk with Android/JVM peers ships in **v0.3**, using Apple's `Network.framework` (`NWBrowser` + `NWListener` + `NWConnection`) and the same `_p2pkit._tcp` Bonjour service type and v0.1 wire protocol unchanged. Until v0.3 ships, an iOS-targeting consumer can compile core types but cannot exchange messages with Android/JVM peers.
+
+iOS Network Provisioning is **never planned**. Apple does not allow third-party apps to create Wi-Fi hotspots, and silent Wi-Fi join is not exposed to third-party apps. `P2pKit.networkProvisioning` will continue to throw `Unsupported` on iOS in every future version.
+
+### 5.2 v0.2 local identity accessors (Task 7)
+
+To make the SDK testable and to support diagnostics, support logs, and member-display UIs, `P2pKit` exposes three read-only properties for the identity it was constructed with:
+
+```kotlin
+public interface P2pKit {
+    public val appId: AppId
+    public val localDeviceName: String
+    public val localPeerId: PeerId
+    // …existing surface unchanged
+}
+```
+
+These properties expose existing state — no new behavior:
+
+- `appId` is the value passed into `P2pKit.create { appId = … }`.
+- `localDeviceName` is the value passed into `P2pKit.create { deviceName = … }`.
+- `localPeerId` is the value the kit's internal `PeerIdStorage` returns from `loadOrGenerate()` at construction. The storage stays internal — apps never touch it. The id is stable across process restarts on platforms with default persistence (JVM file, Android `filesDir` after `P2pKitAndroid.initialize`, iOS `NSUserDefaults`).
+
+All three are immutable for the lifetime of the kit. They are pure accessors, not flows — the values do not change once `create` returns. No setter; no way to override `localPeerId` via the public API.
 
 ---
 

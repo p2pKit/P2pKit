@@ -3,6 +3,7 @@ package dev.p2pkit.transport.lan
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -26,6 +27,15 @@ import kotlinx.coroutines.sync.withLock
  * NsdManager's API is callback-based; this class wraps it in coroutine-friendly
  * primitives. Resolution of discovered services is sequential because some
  * Android API levels reject concurrent `resolveService` calls.
+ *
+ * Wi-Fi multicast lock: incoming mDNS multicast packets (224.0.0.251:5353) are
+ * dropped by Android's Wi-Fi power-save firmware unless an app explicitly holds
+ * a [WifiManager.MulticastLock]. The `CHANGE_WIFI_MULTICAST_STATE` permission
+ * only **allows** acquiring the lock; the lock itself must also be held. Without
+ * it, this transport can advertise (outgoing multicast works) but cannot
+ * **receive** other peers' advertisements. The lock is acquired on first
+ * start (advertise or discover, whichever comes first) and released when both
+ * have stopped.
  */
 internal class AndroidLanDiscoveryTransport(
     private val context: Context,
@@ -44,12 +54,17 @@ internal class AndroidLanDiscoveryTransport(
     private val lock = Mutex()
     private val nsd: NsdManager =
         context.applicationContext.getSystemService(Context.NSD_SERVICE) as NsdManager
+    private val wifi: WifiManager? =
+        context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
 
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
 
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) = lock.withLock {
         if (registrationListener != null) return@withLock
+
+        acquireMulticastLockIfNeeded()
 
         val info = NsdServiceInfo().apply {
             serviceName = registration.localPeerId.value
@@ -91,10 +106,14 @@ internal class AndroidLanDiscoveryTransport(
         val listener = registrationListener ?: return@withLock
         runCatching { nsd.unregisterService(listener) }
         registrationListener = null
+        releaseMulticastLockIfIdle()
     }
 
     override suspend fun startDiscovery() = lock.withLock {
         if (discoveryListener != null) return@withLock
+
+        acquireMulticastLockIfNeeded()
+
         val listener = object : NsdManager.DiscoveryListener {
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
             override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
@@ -126,6 +145,24 @@ internal class AndroidLanDiscoveryTransport(
         val listener = discoveryListener ?: return@withLock
         runCatching { nsd.stopServiceDiscovery(listener) }
         discoveryListener = null
+        releaseMulticastLockIfIdle()
+    }
+
+    private fun acquireMulticastLockIfNeeded() {
+        if (multicastLock != null) return
+        val wm = wifi ?: return
+        val lock = wm.createMulticastLock("p2pkit-mdns").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+        multicastLock = lock
+    }
+
+    private fun releaseMulticastLockIfIdle() {
+        if (registrationListener != null || discoveryListener != null) return
+        val held = multicastLock ?: return
+        multicastLock = null
+        runCatching { if (held.isHeld) held.release() }
     }
 
     @Suppress("DEPRECATION") // Newer resolveService(Executor, ResolveListener) is API 34+; keep this until minSdk rises.

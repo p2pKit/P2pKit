@@ -1,5 +1,6 @@
 package dev.p2pkit.sample.desktop.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,16 +13,31 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -29,9 +45,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -39,17 +58,31 @@ import androidx.compose.ui.window.rememberWindowState
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
+import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.transport.lan.lan
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+
+// =====================================================================
+// Entry point
+// =====================================================================
 
 fun main() = application {
     Window(
         onCloseRequest = ::exitApplication,
-        state = rememberWindowState(width = 820.dp, height = 640.dp),
-        title = "P2pKit Sample (Desktop)"
+        state = rememberWindowState(width = 980.dp, height = 760.dp),
+        title = "P2pKit Test Harness (Desktop)"
     ) {
         MaterialTheme {
             Surface(modifier = Modifier.fillMaxSize()) {
@@ -61,81 +94,429 @@ fun main() = application {
 
 @Composable
 private fun P2pKitSampleApp() {
-    // Parent-scoped coroutine scope. Survives RunningScreen leaving the
-    // composition, which is critical for running `kit.stop()` to completion
-    // when the user clicks Stop — a child scope would be cancelled mid-cleanup
-    // and the kit's mDNS/TCP listeners would leak.
+    // Parent-scoped coroutine scope. Survives the screen leaving composition,
+    // which is critical for `kit.stop()` cleanup to complete on Stop without
+    // being cancelled mid-flight.
     val appScope = rememberCoroutineScope()
-    var deviceName by remember { mutableStateOf("Desktop-${(1000..9999).random()}") }
-    var appIdInput by remember { mutableStateOf(DEFAULT_APP_ID) }
-    var p2p by remember { mutableStateOf<P2pKit?>(null) }
+    val holder = remember { DesktopP2pState(appScope) }
 
-    val kit = p2p
-    if (kit == null) {
-        SetupScreen(
-            deviceName = deviceName,
-            onDeviceNameChange = { deviceName = it },
-            appId = appIdInput,
-            onAppIdChange = { appIdInput = it },
-            onStart = {
-                p2p = P2pKit.create {
-                    appId = AppId(appIdInput.ifBlank { DEFAULT_APP_ID })
-                    this.deviceName = deviceName
-                    transports { lan() }
-                }
-            }
-        )
+    // Final clean-up when the whole app composable leaves.
+    DisposableEffect(holder) {
+        onDispose { holder.shutdownIfRunning() }
+    }
+
+    if (!holder.isRunning) {
+        SetupScreen(holder)
     } else {
-        RunningScreen(
-            kit = kit,
-            deviceName = deviceName,
-            onStop = {
-                val toStop = kit
-                p2p = null
-                // Run on appScope so the cleanup survives RunningScreen's disposal.
-                appScope.launch { runCatching { toStop.stop() } }
-            }
-        )
+        RoomScreen(holder)
     }
 }
 
-@Composable
-private fun SetupScreen(
-    deviceName: String,
-    onDeviceNameChange: (String) -> Unit,
-    appId: String,
-    onAppIdChange: (String) -> Unit,
-    onStart: () -> Unit
+// =====================================================================
+// State holder — desktop equivalent of P2pKitViewModel
+// =====================================================================
+
+/**
+ * Owns the [P2pKit] instance and all room state for the desktop sample.
+ *
+ * Mirrors `P2pKitViewModel` in the Android sample but as a plain class
+ * since desktop has no ViewModelStore. Lifetime is tied to the parent
+ * Composable scope ([appScope]).
+ *
+ * No fixed cap on connected peers: broadcast sends to every entry in the
+ * live [connectedSessions] snapshot; targeted sends use any subset of
+ * peer ids in [targetedPeerIds].
+ */
+private class DesktopP2pState(private val appScope: CoroutineScope) {
+
+    // --- identity / config -------------------------------------------------
+
+    var deviceName: String by mutableStateOf("Desktop-${(1000..9999).random()}")
+    var appIdInput: String by mutableStateOf(DEFAULT_APP_ID)
+    var reconnectChoice: ReconnectChoice by mutableStateOf(ReconnectChoice.Disabled)
+
+    private val _localPeerId = MutableStateFlow<String?>(null)
+    val localPeerId: StateFlow<String?> = _localPeerId.asStateFlow()
+
+    // --- lifecycle flags ---------------------------------------------------
+
+    var isRunning: Boolean by mutableStateOf(false)
+        private set
+
+    private val _kitState = MutableStateFlow<P2pState>(P2pState.Idle)
+    val kitState: StateFlow<P2pState> = _kitState.asStateFlow()
+
+    private val _advertising = MutableStateFlow(false)
+    val advertising: StateFlow<Boolean> = _advertising.asStateFlow()
+
+    private val _discovering = MutableStateFlow(false)
+    val discovering: StateFlow<Boolean> = _discovering.asStateFlow()
+
+    // --- room state --------------------------------------------------------
+
+    private val _peers = MutableStateFlow<List<Peer>>(emptyList())
+    val peers: StateFlow<List<Peer>> = _peers.asStateFlow()
+
+    val connectedSessions: SnapshotStateList<P2pSession> = mutableStateListOf()
+    val roomMessages: SnapshotStateList<RoomMessage> = mutableStateListOf()
+    val targetedPeerIds: SnapshotStateList<String> = mutableStateListOf()
+    val logTail: SnapshotStateList<String> = mutableStateListOf()
+
+    // --- internals ---------------------------------------------------------
+
+    private var kit: P2pKit? = null
+    private var runScope: CoroutineScope? = null
+    private val sessionJobs: MutableMap<String, Job> = mutableMapOf()
+    private var nextMessageId: Long = 1L
+
+    // --- intents -----------------------------------------------------------
+
+    fun togglePeerTarget(peerId: String) {
+        if (targetedPeerIds.contains(peerId)) targetedPeerIds.remove(peerId)
+        else targetedPeerIds.add(peerId)
+    }
+
+    fun clearPeerTargets() {
+        targetedPeerIds.clear()
+    }
+
+    fun start() {
+        if (isRunning) return
+        val choice = reconnectChoice
+        val effectiveAppId = appIdInput.ifBlank { DEFAULT_APP_ID }
+        val newKit = P2pKit.create {
+            appId = AppId(effectiveAppId)
+            this.deviceName = this@DesktopP2pState.deviceName
+            transports { lan() }
+            lifecycle {
+                reconnectPolicy = when (choice) {
+                    ReconnectChoice.Disabled -> ReconnectPolicy.Disabled
+                    is ReconnectChoice.Enabled -> ReconnectPolicy.Enabled(
+                        maxAttempts = choice.maxAttempts,
+                        retryDelayMillis = choice.retryDelayMillis
+                    )
+                }
+            }
+            logger = TailLogger(this@DesktopP2pState)
+        }
+        kit = newKit
+        _localPeerId.value = newKit.localPeerId.value
+        System.err.println(
+            "[p2pkit] kit started: deviceName=${newKit.localDeviceName} " +
+                "appId=${newKit.appId.value} peerId=${newKit.localPeerId.value} " +
+                "reconnect=${choice.describe()}"
+        )
+
+        val supervisor = SupervisorJob(appScope.coroutineContext[Job])
+        val scope = CoroutineScope(appScope.coroutineContext + supervisor)
+        runScope = scope
+
+        scope.launch { newKit.state.collect { _kitState.value = it } }
+        scope.launch { newKit.peers.collect { _peers.value = it } }
+        scope.launch { newKit.sessions.collect { reconcileSessions(it, scope) } }
+        scope.launch {
+            runCatching { newKit.startAdvertising() }
+                .onSuccess { _advertising.value = true }
+                .onFailure { System.err.println("[p2pkit WARN] startAdvertising failed: ${it.message}") }
+            runCatching { newKit.startDiscovery() }
+                .onSuccess { _discovering.value = true }
+                .onFailure { System.err.println("[p2pkit WARN] startDiscovery failed: ${it.message}") }
+        }
+
+        isRunning = true
+    }
+
+    fun connect(peer: Peer) {
+        val currentKit = kit ?: return
+        val scope = runScope ?: return
+        scope.launch {
+            runCatching { currentKit.connect(peer) }.onFailure {
+                System.err.println("[p2pkit WARN] connect to ${peer.name} failed: ${it.message}")
+                appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
+            }
+        }
+    }
+
+    fun closeSession(peerId: String) {
+        val scope = runScope ?: return
+        val target = connectedSessions.firstOrNull { it.peer.id.value == peerId } ?: return
+        scope.launch {
+            runCatching { target.close() }.onFailure {
+                System.err.println("[p2pkit WARN] close session to ${target.peer.name} failed: ${it.message}")
+            }
+        }
+    }
+
+    fun sendRoomMessage(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        val scope = runScope ?: return
+
+        val sessionsSnapshot = connectedSessions.toList()
+        val targetedSet = targetedPeerIds.toSet()
+        val target: SendTarget = if (targetedSet.isEmpty()) SendTarget.All
+        else SendTarget.Specific(targetedSet)
+
+        val recipients = when (target) {
+            SendTarget.All -> sessionsSnapshot
+            is SendTarget.Specific -> sessionsSnapshot.filter { it.peer.id.value in target.peerIds }
+        }
+        if (recipients.isEmpty()) {
+            appendSystemMessage("nothing sent — no targeted peers are connected")
+            return
+        }
+
+        val body = P2pMessage.Text(trimmed)
+        roomMessages.add(
+            RoomMessage(
+                id = nextMessageId++,
+                senderPeerId = null,
+                senderName = "(me)",
+                body = body,
+                timestamp = System.currentTimeMillis(),
+                direction = RoomMessage.Direction.Outgoing,
+                target = target
+            )
+        )
+        System.err.println(
+            "[p2pkit] room: ${if (target is SendTarget.All) "broadcast" else "targeted"} " +
+                "→ ${recipients.size} peer(s): ${trimmed.take(60)}"
+        )
+
+        for (session in recipients) {
+            scope.launch {
+                runCatching { session.send(body) }.onFailure {
+                    System.err.println("[p2pkit WARN] send to ${session.peer.name} failed: ${it.message}")
+                    appendSystemMessage("send to ${session.peer.name} failed: ${it.message ?: it::class.simpleName}")
+                }
+            }
+        }
+    }
+
+    fun toggleAdvertising() {
+        val currentKit = kit ?: return
+        val scope = runScope ?: return
+        scope.launch {
+            if (_advertising.value) {
+                runCatching { currentKit.stopAdvertising() }
+                    .onSuccess { _advertising.value = false }
+                    .onFailure { System.err.println("[p2pkit WARN] stopAdvertising failed: ${it.message}") }
+            } else {
+                runCatching { currentKit.startAdvertising() }
+                    .onSuccess { _advertising.value = true }
+                    .onFailure { System.err.println("[p2pkit WARN] startAdvertising failed: ${it.message}") }
+            }
+        }
+    }
+
+    fun toggleDiscovery() {
+        val currentKit = kit ?: return
+        val scope = runScope ?: return
+        scope.launch {
+            if (_discovering.value) {
+                runCatching { currentKit.stopDiscovery() }
+                    .onSuccess { _discovering.value = false }
+                    .onFailure { System.err.println("[p2pkit WARN] stopDiscovery failed: ${it.message}") }
+            } else {
+                runCatching { currentKit.startDiscovery() }
+                    .onSuccess { _discovering.value = true }
+                    .onFailure { System.err.println("[p2pkit WARN] startDiscovery failed: ${it.message}") }
+            }
+        }
+    }
+
+    fun stop() {
+        val toStop = kit ?: return
+        kit = null
+        isRunning = false
+        _advertising.value = false
+        _discovering.value = false
+        _kitState.value = P2pState.Stopped
+        runScope?.cancel()
+        runScope = null
+        sessionJobs.clear()
+        _peers.value = emptyList()
+        connectedSessions.clear()
+        targetedPeerIds.clear()
+        roomMessages.clear()
+        _localPeerId.value = null
+        appScope.launch { runCatching { toStop.stop() } }
+    }
+
+    /** Called when the whole UI composable disposes. */
+    fun shutdownIfRunning() {
+        if (isRunning) stop()
+    }
+
+    // --- helpers -----------------------------------------------------------
+
+    private fun reconcileSessions(current: List<P2pSession>, scope: CoroutineScope) {
+        val currentIds = current.map { it.id }.toSet()
+
+        val droppedIds = sessionJobs.keys.toList().filter { it !in currentIds }
+        for (id in droppedIds) {
+            sessionJobs.remove(id)?.cancel()
+            val removed = connectedSessions.firstOrNull { it.id == id }
+            if (removed != null) {
+                connectedSessions.remove(removed)
+                targetedPeerIds.remove(removed.peer.id.value)
+                appendSystemMessage("disconnected from ${removed.peer.name}")
+                System.err.println("[p2pkit] room: session removed ${removed.peer.name}")
+            }
+        }
+
+        for (session in current) {
+            if (sessionJobs.containsKey(session.id)) continue
+            connectedSessions.add(session)
+            appendSystemMessage("connected to ${session.peer.name}")
+            System.err.println("[p2pkit] room: session added ${session.peer.name}")
+            sessionJobs[session.id] = scope.launch {
+                session.incoming.collect { msg ->
+                    System.err.println("[p2pkit] room: incoming from ${session.peer.name}")
+                    roomMessages.add(
+                        RoomMessage(
+                            id = nextMessageId++,
+                            senderPeerId = session.peer.id.value,
+                            senderName = session.peer.name,
+                            body = msg,
+                            timestamp = System.currentTimeMillis(),
+                            direction = RoomMessage.Direction.Incoming
+                        )
+                    )
+                }
+            }
+            scope.launch {
+                session.state.collect { st ->
+                    System.err.println("[p2pkit] session ${session.peer.name} → $st")
+                }
+            }
+        }
+    }
+
+    private fun appendSystemMessage(text: String) {
+        roomMessages.add(
+            RoomMessage(
+                id = nextMessageId++,
+                senderPeerId = null,
+                senderName = "(system)",
+                body = P2pMessage.Text(text),
+                timestamp = System.currentTimeMillis(),
+                direction = RoomMessage.Direction.System
+            )
+        )
+    }
+
+    internal fun recordLog(level: String, message: String) {
+        if (logTail.size >= LOG_TAIL_CAPACITY) logTail.removeAt(0)
+        logTail.add("$level  $message")
+    }
+
+    companion object {
+        const val DEFAULT_APP_ID = "p2pkit-desktop-sample"
+        const val LOG_TAIL_CAPACITY = 30
+    }
+}
+
+// =====================================================================
+// Sample-level types — identical shape to the Android sample
+// =====================================================================
+
+data class RoomMessage(
+    val id: Long,
+    val senderPeerId: String?,
+    val senderName: String,
+    val body: P2pMessage,
+    val timestamp: Long,
+    val direction: Direction,
+    val target: SendTarget = SendTarget.All
 ) {
+    enum class Direction { Incoming, Outgoing, System }
+
+    val displayBody: String
+        get() = when (body) {
+            is P2pMessage.Text -> body.value
+            is P2pMessage.Binary -> "<binary ${body.bytes.size}B>"
+        }
+}
+
+sealed class SendTarget {
+    data object All : SendTarget()
+    data class Specific(val peerIds: Set<String>) : SendTarget()
+}
+
+sealed class ReconnectChoice {
+    data object Disabled : ReconnectChoice()
+    data class Enabled(val maxAttempts: Int, val retryDelayMillis: Long) : ReconnectChoice()
+}
+
+private fun ReconnectChoice.describe(): String = when (this) {
+    is ReconnectChoice.Disabled -> "Disabled"
+    is ReconnectChoice.Enabled -> "Enabled(maxAttempts=$maxAttempts, retryDelayMillis=$retryDelayMillis)"
+}
+
+/**
+ * Logger that mirrors output to stderr AND to the sample's in-app log strip
+ * for visual diagnostics.
+ */
+private class TailLogger(private val state: DesktopP2pState) : P2pLogger {
+    override fun debug(message: String) {
+        // Debug is too chatty for stderr; only echo to the in-app strip.
+        state.recordLog("D", message)
+    }
+    override fun info(message: String) {
+        System.err.println("[p2pkit] $message")
+        state.recordLog("I", message)
+    }
+    override fun warn(message: String, throwable: Throwable?) {
+        val rendered = if (throwable != null) "$message (${throwable.message})" else message
+        System.err.println("[p2pkit WARN] $rendered")
+        state.recordLog("W", rendered)
+    }
+    override fun error(message: String, throwable: Throwable?) {
+        val rendered = if (throwable != null) "$message (${throwable.message})" else message
+        System.err.println("[p2pkit ERROR] $rendered")
+        state.recordLog("E", rendered)
+    }
+}
+
+// =====================================================================
+// Setup screen
+// =====================================================================
+
+@Composable
+private fun SetupScreen(state: DesktopP2pState) {
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
-            text = "P2pKit Sample",
+            text = "P2pKit Test Harness",
             style = MaterialTheme.typography.headlineSmall
         )
         Text(
-            text = "Discover other devices on the local network and exchange text messages.",
+            text = "Discover devices on your Wi-Fi and chat with all of them in a room. " +
+                "Configure reconnect policy and identity before tapping Start.",
             style = MaterialTheme.typography.bodyMedium
         )
         OutlinedTextField(
-            value = deviceName,
-            onValueChange = onDeviceNameChange,
+            value = state.deviceName,
+            onValueChange = { state.deviceName = it },
             label = { Text("Device name") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
-            value = appId,
-            onValueChange = onAppIdChange,
+            value = state.appIdInput,
+            onValueChange = { state.appIdInput = it },
             label = { Text("App ID (must match on every device)") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
+        Text(text = "Reconnect policy", style = MaterialTheme.typography.titleSmall)
+        ReconnectChoicePicker(state)
         Button(
-            onClick = onStart,
-            enabled = deviceName.isNotBlank() && appId.isNotBlank(),
+            onClick = state::start,
+            enabled = state.deviceName.isNotBlank() && state.appIdInput.isNotBlank(),
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Start")
@@ -144,160 +525,375 @@ private fun SetupScreen(
 }
 
 @Composable
-private fun RunningScreen(
-    kit: P2pKit,
-    deviceName: String,
-    onStop: () -> Unit
-) {
-    val scope = rememberCoroutineScope()
-    val peers by kit.peers.collectAsState()
-    val sessions = remember { mutableStateListOf<P2pSession>() }
-    val messages = remember { mutableStateListOf<ChatLine>() }
-    var draft by remember { mutableStateOf("") }
-    var selectedSession by remember { mutableStateOf<P2pSession?>(null) }
-
-    // Start advertising + discovery when this screen enters composition.
-    // Cleanup is owned by the parent via [onStop] — do NOT call kit.stop()
-    // from this composable's scope (it would be cancelled before stop() can
-    // finish).
-    LaunchedEffect(kit) {
-        runCatching { kit.startAdvertising() }
-        runCatching { kit.startDiscovery() }
+private fun ReconnectChoicePicker(state: DesktopP2pState) {
+    var maxAttemptsText by remember {
+        mutableStateOf(
+            (state.reconnectChoice as? ReconnectChoice.Enabled)?.maxAttempts?.toString() ?: "5"
+        )
     }
-
-    LaunchedEffect(kit) {
-        kit.incomingSessions.collect { session ->
-            sessions.add(session)
-            if (selectedSession == null) selectedSession = session
-            scope.launch {
-                session.incoming.collect { msg ->
-                    messages.add(ChatLine(session.peer.name, msg))
+    var retryDelayText by remember {
+        mutableStateOf(
+            (state.reconnectChoice as? ReconnectChoice.Enabled)?.retryDelayMillis?.toString() ?: "1000"
+        )
+    }
+    val choice = state.reconnectChoice
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(
+                selected = choice is ReconnectChoice.Disabled,
+                onClick = { state.reconnectChoice = ReconnectChoice.Disabled }
+            )
+            Text("Disabled")
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(
+                selected = choice is ReconnectChoice.Enabled,
+                onClick = {
+                    val attempts = maxAttemptsText.toIntOrNull()?.coerceAtLeast(1) ?: 5
+                    val delay = retryDelayText.toLongOrNull()?.coerceAtLeast(0L) ?: 1_000L
+                    state.reconnectChoice = ReconnectChoice.Enabled(attempts, delay)
                 }
+            )
+            Text("Enabled")
+        }
+        if (choice is ReconnectChoice.Enabled) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = maxAttemptsText,
+                    onValueChange = { txt ->
+                        maxAttemptsText = txt.filter { it.isDigit() }.take(4)
+                        val attempts = maxAttemptsText.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                        val delay = retryDelayText.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
+                        state.reconnectChoice = ReconnectChoice.Enabled(attempts, delay)
+                    },
+                    label = { Text("maxAttempts") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = retryDelayText,
+                    onValueChange = { txt ->
+                        retryDelayText = txt.filter { it.isDigit() }.take(6)
+                        val attempts = maxAttemptsText.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                        val delay = retryDelayText.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
+                        state.reconnectChoice = ReconnectChoice.Enabled(attempts, delay)
+                    },
+                    label = { Text("retryDelayMillis") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
     }
+}
 
-    Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp)
-    ) {
+// =====================================================================
+// Room screen
+// =====================================================================
+
+@Composable
+private fun RoomScreen(state: DesktopP2pState) {
+    val peers by state.peers.collectAsState()
+    val kitState by state.kitState.collectAsState()
+    val advertising by state.advertising.collectAsState()
+    val discovering by state.discovering.collectAsState()
+    val localPeerId by state.localPeerId.collectAsState()
+    var draft by remember { mutableStateOf("") }
+
+    Row(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        // ---- Left column: header + peers + connected chips + logs ----
+        Column(modifier = Modifier.width(360.dp).fillMaxHeight()) {
+            StatusHeader(
+                appId = state.appIdInput.ifBlank { DesktopP2pState.DEFAULT_APP_ID },
+                deviceName = state.deviceName,
+                peerId = localPeerId,
+                kitState = kitState,
+                advertising = advertising,
+                discovering = discovering,
+                onToggleAdvertising = state::toggleAdvertising,
+                onToggleDiscovery = state::toggleDiscovery,
+                onStop = state::stop
+            )
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text(
+                text = "Discovered peers (${peers.size})",
+                style = MaterialTheme.typography.titleSmall
+            )
+            Spacer(Modifier.height(4.dp))
+            if (peers.isEmpty()) {
+                Text(
+                    text = "Searching… open another sample on the same Wi-Fi.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().height(220.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(peers, key = { it.id.value }) { peer ->
+                        PeerCard(
+                            peer = peer,
+                            isConnected = state.connectedSessions.any { it.peer.id.value == peer.id.value },
+                            onConnect = { state.connect(peer) }
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = "Logs (last ${state.logTail.size})",
+                style = MaterialTheme.typography.labelMedium
+            )
+            Spacer(Modifier.height(4.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(200.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(6.dp)
+            ) {
+                LazyColumn {
+                    items(state.logTail.toList()) { line ->
+                        Text(
+                            text = line,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.width(16.dp))
+
+        // ---- Right column: room chips + timeline + input ----
+        Column(modifier = Modifier.fillMaxSize()) {
+            val connected = state.connectedSessions.toList()
+            if (connected.isNotEmpty()) {
+                Text(
+                    text = "Room (${connected.size} connected)",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(Modifier.height(4.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(connected, key = { it.id }) { session ->
+                        ConnectedPeerChip(
+                            session = session,
+                            isTargeted = state.targetedPeerIds.contains(session.peer.id.value),
+                            onToggleTarget = { state.togglePeerTarget(session.peer.id.value) },
+                            onCloseSession = { state.closeSession(session.peer.id.value) }
+                        )
+                    }
+                    item {
+                        if (state.targetedPeerIds.isNotEmpty()) {
+                            AssistChip(
+                                onClick = state::clearPeerTargets,
+                                label = { Text("Clear targets") },
+                                colors = AssistChipDefaults.assistChipColors()
+                            )
+                        }
+                    }
+                }
+            } else {
+                Text(
+                    text = "Tap Connect on a peer to start a room.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Text(text = "Timeline", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(4.dp))
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(380.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                items(state.roomMessages.toList(), key = { it.id }) { line ->
+                    RoomLine(line)
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                label = { Text("Message") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            val targetCount = state.targetedPeerIds.size
+            val sendLabel = when {
+                connected.isEmpty() -> "No peers connected"
+                targetCount == 0 -> "Broadcast (${connected.size})"
+                else -> "Send to $targetCount"
+            }
+            Button(
+                onClick = {
+                    val text = draft.trim()
+                    if (text.isEmpty()) return@Button
+                    draft = ""
+                    state.sendRoomMessage(text)
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = connected.isNotEmpty() && draft.isNotBlank()
+            ) {
+                Text(sendLabel)
+            }
+        }
+    }
+}
+
+// =====================================================================
+// Pieces
+// =====================================================================
+
+@Composable
+private fun StatusHeader(
+    appId: String,
+    deviceName: String,
+    peerId: String?,
+    kitState: P2pState,
+    advertising: Boolean,
+    discovering: Boolean,
+    onToggleAdvertising: () -> Unit,
+    onToggleDiscovery: () -> Unit,
+    onStop: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column {
-                Text("Logged in as $deviceName", fontWeight = FontWeight.SemiBold)
-                Text("Peers: ${peers.size}", style = MaterialTheme.typography.bodySmall)
-            }
-            TextButton(onClick = onStop) { Text("Stop") }
+            Text(text = deviceName, fontWeight = FontWeight.SemiBold)
+            OverflowMenu(onStop = onStop)
         }
-        Spacer(Modifier.height(12.dp))
-
-        Row(modifier = Modifier.fillMaxSize()) {
-            // Peers column
-            Column(
-                modifier = Modifier.width(280.dp).fillMaxHeight()
-            ) {
-                Text(
-                    text = "Discovered peers",
-                    style = MaterialTheme.typography.titleSmall
-                )
-                Spacer(Modifier.height(8.dp))
-                if (peers.isEmpty()) {
-                    Text(
-                        text = "Searching… open the sample on another machine on the same Wi-Fi.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                } else {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(peers, key = { it.id.value }) { peer ->
-                            PeerCard(
-                                peer = peer,
-                                onConnect = {
-                                    scope.launch {
-                                        val session = runCatching { kit.connect(peer) }.getOrNull()
-                                            ?: return@launch
-                                        if (sessions.none { it.id == session.id }) sessions.add(session)
-                                        selectedSession = session
-                                        scope.launch {
-                                            session.incoming.collect { msg ->
-                                                messages.add(ChatLine(session.peer.name, msg))
-                                            }
-                                        }
-                                    }
-                                }
-                            )
-                        }
-                    }
-                }
+        Text(text = "appId: $appId", style = MaterialTheme.typography.bodySmall)
+        Text(
+            text = "peerId: ${peerId?.take(8) ?: "—"}…",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Text(
+            text = "state: ${kitState::class.simpleName}",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Advertise", style = MaterialTheme.typography.bodySmall)
+                Switch(checked = advertising, onCheckedChange = { onToggleAdvertising() })
             }
-
-            Spacer(Modifier.width(16.dp))
-
-            // Chat column
-            Column(modifier = Modifier.fillMaxSize()) {
-                val active = selectedSession
-                if (active == null) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("Tap Connect on a peer to start chatting.")
-                    }
-                } else {
-                    val sessionState by active.state.collectAsState()
-                    Text(
-                        text = "Session with ${active.peer.name} — ${sessionState.name}",
-                        style = MaterialTheme.typography.titleSmall
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    LazyColumn(
-                        modifier = Modifier.fillMaxWidth().height(380.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        items(messages.toList()) { line ->
-                            Text("${line.from}: ${line.formatted}")
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedTextField(
-                            value = draft,
-                            onValueChange = { draft = it },
-                            label = { Text("Message") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth().padding(end = 8.dp)
-                                .weight(1f)
-                        )
-                        Button(
-                            onClick = {
-                                val text = draft.trim()
-                                if (text.isEmpty()) return@Button
-                                draft = ""
-                                scope.launch {
-                                    runCatching { active.send(P2pMessage.Text(text)) }
-                                }
-                                messages.add(ChatLine("(me)", P2pMessage.Text(text)))
-                            },
-                            enabled = sessionState == ConnectionState.Connected
-                        ) {
-                            Text("Send")
-                        }
-                    }
-                }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Discover", style = MaterialTheme.typography.bodySmall)
+                Switch(checked = discovering, onCheckedChange = { onToggleDiscovery() })
             }
         }
     }
 }
 
 @Composable
-private fun PeerCard(peer: Peer, onConnect: () -> Unit) {
+private fun OverflowMenu(onStop: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(Icons.Default.MoreVert, contentDescription = "More")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Stop kit") },
+                onClick = {
+                    expanded = false
+                    onStop()
+                }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConnectedPeerChip(
+    session: P2pSession,
+    isTargeted: Boolean,
+    onToggleTarget: () -> Unit,
+    onCloseSession: () -> Unit
+) {
+    val state by session.state.collectAsState()
+    var menuExpanded by remember { mutableStateOf(false) }
+    Box {
+        FilterChip(
+            selected = isTargeted,
+            onClick = onToggleTarget,
+            label = {
+                Text("${session.peer.name} · ${state.name.lowercase()}")
+            },
+            trailingIcon = {
+                IconButton(onClick = { menuExpanded = true }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "Session actions")
+                }
+            }
+        )
+        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Close session") },
+                enabled = state == ConnectionState.Connected || state == ConnectionState.Reconnecting,
+                onClick = {
+                    menuExpanded = false
+                    onCloseSession()
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun RoomLine(message: RoomMessage) {
+    val style = MaterialTheme.typography.bodyMedium
+    val prefix = when (message.direction) {
+        RoomMessage.Direction.Incoming -> "${message.senderName} → "
+        RoomMessage.Direction.Outgoing -> {
+            val tgt = message.target
+            val tag = when (tgt) {
+                SendTarget.All -> "broadcast"
+                is SendTarget.Specific -> "→ ${tgt.peerIds.size} peer(s)"
+            }
+            "me [$tag]: "
+        }
+        RoomMessage.Direction.System -> "[system] "
+    }
+    Text(
+        text = "$prefix${message.displayBody}",
+        style = style,
+        maxLines = 3,
+        overflow = TextOverflow.Ellipsis
+    )
+}
+
+@Composable
+private fun PeerCard(peer: Peer, isConnected: Boolean, onConnect: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -308,17 +904,11 @@ private fun PeerCard(peer: Peer, onConnect: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall
                 )
             }
-            TextButton(onClick = onConnect) { Text("Connect") }
+            if (isConnected) {
+                Text(text = "Connected", style = MaterialTheme.typography.labelSmall)
+            } else {
+                TextButton(onClick = onConnect) { Text("Connect") }
+            }
         }
     }
 }
-
-private data class ChatLine(val from: String, val message: P2pMessage) {
-    val formatted: String
-        get() = when (message) {
-            is P2pMessage.Text -> message.value
-            is P2pMessage.Binary -> "<binary ${message.bytes.size}B>"
-        }
-}
-
-private const val DEFAULT_APP_ID = "p2pkit-desktop-sample"
