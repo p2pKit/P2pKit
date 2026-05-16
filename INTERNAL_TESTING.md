@@ -1,6 +1,12 @@
-# P2pKit v0.1 — Internal Testing Guide
+# P2pKit v0.2 — Internal Testing Guide
 
-How to validate the **v0.1-internal** build by hand: two desktops, two phones, or one of each. Read top to bottom on the first run; the checklist at the end is what to re-check before tagging future internal builds.
+How to validate v0.2-dev by hand. Read top to bottom on the first run; the checklist at the end is what to re-check before tagging future internal builds.
+
+The two canonical test harnesses are:
+- **`:p2p-sample-android`** — the primary visual harness (room mode, reconnect picker, log strip).
+- **`:p2p-sample-desktop`** — the CLI; the canonical JVM harness.
+
+`:p2p-sample-desktop-ui` (Compose) is a **legacy v0.1 single-session demo** and is not used for v0.2 testing. It still compiles and ships a banner saying so.
 
 ---
 
@@ -9,152 +15,185 @@ How to validate the **v0.1-internal** build by hand: two desktops, two phones, o
 | Need | What works |
 |---|---|
 | Operating system | Windows 11, recent macOS, recent Linux |
-| JDK | JDK 17 or JDK 21 (the project uses 21 locally; 17+ is enough to run) |
-| Android SDK | API 36 platform installed (Android Studio with SDK platform 36 is the easiest way) |
-| Two endpoints | Two desktops, two phones, or one of each — both on the **same Wi-Fi LAN** |
-| Wi-Fi network | Any home / personal hotspot / co-located LAN. **Corporate, guest, and hotel networks frequently block mDNS multicast** — see §6. |
+| JDK | JDK 17 or JDK 21 (project builds on 21; 17+ is enough to run) |
+| Android SDK | API 36 platform installed |
+| Two endpoints minimum | desktops, phones, or any mix on the **same Wi-Fi LAN** |
+| Wi-Fi network | Home / phone hotspot / co-located LAN. **Corporate, guest, hotel networks frequently block mDNS multicast** — see §E. |
 
-You don't need IntelliJ / Android Studio to run the samples — Gradle is enough. They make Android-side debugging easier though.
+Three endpoints unlock the multi-peer room test (§B). Any further peers work identically — there is no SDK cap.
 
 ---
 
-## 1. One-time build
+## 1. Build the artifacts
 
-From the project root (`D:\shareing lib` in this checkout):
+From the project root:
 
 ```powershell
 .\gradlew.bat :p2p-core:allTests `
               :p2p-transport-lan:jvmTest `
-              :p2p-core:assemble `
-              :p2p-transport-lan:assemble `
+              :sample-kmp-shared:jvmTest `
               :p2p-sample-desktop:installDist `
               :p2p-sample-android:assembleDebug
 ```
 
-POSIX shell:
+POSIX:
 ```bash
 ./gradlew :p2p-core:allTests \
           :p2p-transport-lan:jvmTest \
-          :p2p-core:assemble \
-          :p2p-transport-lan:assemble \
+          :sample-kmp-shared:jvmTest \
           :p2p-sample-desktop:installDist \
           :p2p-sample-android:assembleDebug
 ```
 
-**Expected**: `BUILD SUCCESSFUL`, `91 tests completed, 0 failed`, an APK at `p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk`, and a launcher script at `p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop[.bat]`.
+**Expected**: `BUILD SUCCESSFUL`, 93 tests completed in `:p2p-core:allTests` / 0 failed, plus the LAN + KMP loopback tests green. APK at `p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk`. Launcher at `p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop[.bat]`.
+
+Install the APK on the test device:
+```powershell
+adb install -r .\p2p-sample-android\build\outputs\apk\debug\p2p-sample-android-debug.apk
+```
+
+Keep a logcat terminal open for the duration of the test:
+```powershell
+adb logcat -c
+adb logcat -s p2pkit:*
+```
 
 ---
 
-## 2. Desktop ↔ Desktop
+## A. Android ↔ JVM test
 
-Run two CLI instances on **two terminals on the same machine** *or* on two machines on the same Wi-Fi.
+Verifies discovery both ways, connect in both directions, send in both directions.
 
-**Terminal 1 (Alice):**
-```powershell
-.\p2p-sample-desktop\build\install\p2p-sample-desktop\bin\p2p-sample-desktop.bat Alice
-```
+**Devices:** one Android phone + one JVM desktop on the **same** Wi-Fi.
 
-**Terminal 2 (Bob):**
-```powershell
-.\p2p-sample-desktop\build\install\p2p-sample-desktop\bin\p2p-sample-desktop.bat Bob
-```
+1. Launch the JVM CLI: `p2p-sample-desktop.bat Alice`. Expect banner `[P2pKit CLI] deviceName=Alice  appId=p2pkit-desktop-sample  reconnect=Disabled`.
+2. Launch the Android sample on the phone, name `Bob`, leave reconnect on **Disabled**, tap **Start**. Logcat: `kit started: deviceName=Bob appId=p2pkit-desktop-sample peerId=<uuid> reconnect=Disabled`.
+3. Within ~5–10 s:
+   - **Desktop**: `[peers] 1: Bob(<id>)`.
+   - **Phone**: "Discovered peers (1)" with `Alice` row.
+4. **`info`** on the desktop CLI → prints `appId`, `localDeviceName`, `localPeerId`, kit state Running, advertising true, discovering true, peers known 1, active sessions 0.
+5. **On the phone**: tap **Connect** on Alice's row. Phone timeline: `[system] connected to Alice`. Desktop: `[incoming] from Bob (<id>)` + `[state] Bob → Connected`.
+6. **Phone → JVM**: phone has 1 chip "Alice · connected", no chip selected (broadcast), Send button reads `Broadcast (1)`. Type "hi from Bob" and Send. Desktop: `[Bob] hi from Bob`. Phone timeline: `me [broadcast]: hi from Bob`.
+7. **JVM → Phone**: desktop `> send hi from Alice`. Desktop: `[broadcast → 1] hi from Alice`. Phone timeline: `Alice → hi from Alice`.
+8. **Targeted send (desktop side)**: `> to bob private msg`. Desktop: `[to Bob] private msg`. Phone: `Alice → private msg`. (No other peers, but the codepath is exercised.)
+9. **Reverse connect** — tap **Stop** on the phone, **Start** again. Wait for desktop's `[peers] 1: Bob(<id>)`. On desktop: `> connect bob`. Expect `connected to Bob` + `[state] Bob → Connected`. Then `> send hi again`. Phone receives.
 
-POSIX equivalent: `./p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop Alice` / `Bob`.
-
-**Then in Terminal 1:**
-```
-> peers
-> connect <id-prefix-shown-for-bob>
-> send hello from Alice
-```
-
-**Expected**:
-- Within ~5 seconds of starting the second instance, each terminal prints a `[peers] 1: …` line that lists the other.
-- After `connect`, Terminal 1 prints `connected to Bob (<id-prefix>)`.
-- After `send`, Terminal 2 prints `[Alice] hello from Alice`.
-- Typing `quit` (or Ctrl-D) on either side exits cleanly with `Stopping…`.
+**Pass criteria**: all nine steps complete with the exact log/UI signals shown. Any deviation → §E troubleshooting.
 
 ---
 
-## 3. Android ↔ Android
+## B. Multi-peer room test (3+ devices)
 
-Install the debug APK on two devices on the same Wi-Fi:
+Verifies broadcast, targeted send, and that one peer leaving doesn't break the others. There is no fixed SDK cap on peer count — 4, 5, 10+ devices work the same way, only network capacity changes the practical limit.
 
-```powershell
-$apk = ".\p2p-sample-android\build\outputs\apk\debug\p2p-sample-android-debug.apk"
-adb devices                                    # list connected devices
-adb -s <serial-A> install -r $apk
-adb -s <serial-B> install -r $apk
-```
+**Devices:** three or more endpoints on the same Wi-Fi.
 
-**On each device:**
-1. Launch the **P2pKit Sample** app.
-2. Enter a distinct device name (`Alice` / `Bob`).
-3. Tap **Start**.
+1. Start **Alice** (desktop CLI) and **Charlie** (desktop CLI in a second terminal).
+2. Start **Bob** (Android sample).
+3. Verify each sees the other two: `> peers` on Alice/Charlie should list two; phone shows "Discovered peers (2)".
+4. **Connect Bob → Alice** and **Bob → Charlie** on the phone (tap **Connect** on both). Connected-peer row shows two chips: `Alice · connected` and `Charlie · connected`.
+5. **Broadcast from Bob**: no chip selected, Send button reads `Broadcast (2)`. Type "hello room" → both Alice's terminal and Charlie's terminal print `[Bob] hello room`. Phone logcat shows `room: broadcast → 2 peer(s): hello room`.
+6. **Broadcast from Alice**: `> connect bob` and `> connect charlie` on Alice, then `> send hi all`. Alice prints `[broadcast → 2] hi all`. Bob's phone timeline gains `Alice → hi all`. Charlie prints `[Alice] hi all`.
+7. **Targeted send (Android multi-select)**: on the phone, tap the Alice chip only. Send button reads `Send to 1`. Type "for Alice only", Send. Alice receives, Charlie does **not**. Phone logcat: `room: targeted → 1 peer(s)`.
+8. **Targeted send (desktop)**: Alice's CLI `> to charlie just for Charlie`. Charlie receives, Bob's phone does **not**.
+9. **One peer leaves**: Charlie's CLI `> quit`. Alice's terminal shows `[peers]` shrinking and `[state] Charlie → Closed`. Phone's room shrinks to one chip; phone sends another broadcast → reaches Alice only (`Broadcast (1)`).
+10. **Scaling smoke**: start a fourth instance (`p2p-sample-desktop.bat Dave`). Within seconds Bob's phone shows a "Connected (3)" potential count and Alice/Bob list it. Connect to Dave from Bob (tap Connect). Broadcast → reaches both Alice and Dave (and Charlie if re-launched). The N grows; no code changes needed.
 
-**Expected**:
-- Within ~5 seconds, each device shows the other under `Discovered peers (1)`.
-- Tap **Connect** on the discovered peer. Within a second or two the session pane appears with `Connected`.
-- Type a message in the text field and tap **Send**. The other device shows `<other-name>: hello`.
-- Tap **Stop** to return to setup. The kit cleans up.
+**Pass criteria**: broadcast count matches the live connected-peer count at every send. Targeted sends never leak. Closing one peer leaves the others' sessions intact.
 
 ---
 
-## 4. Desktop ↔ Android
+## C. ReconnectPolicy test
 
-Both samples now ship with the **same** `appId` (`p2pkit-desktop-sample`) — no manual alignment needed.
+Verifies `ReconnectPolicy.Enabled(maxAttempts, retryDelayMillis)` drives a session through `Reconnecting` and back to `Connected` after a transient break, or to `Failed` after exhaustion.
 
-| Sample | Default `appId` |
-|---|---|
-| `p2p-sample-desktop` | `p2pkit-desktop-sample` |
-| `p2p-sample-android` | `p2pkit-desktop-sample` |
+**Devices:** Android phone + JVM CLI on the same Wi-Fi.
 
-### Step-by-step
+1. On the phone Setup screen, switch reconnect to **Enabled** with **maxAttempts = 5** and **retryDelayMillis = 1000**. Tap **Start**. Logcat: `kit started: … reconnect=Enabled(maxAttempts=5, retryDelayMillis=1000)`.
+2. Start the JVM CLI with **matching** reconnect: `p2p-sample-desktop.bat Alice p2pkit-desktop-sample reconnect=5,1000`.
+3. Connect Bob → Alice from the phone. Phone chip shows `Alice · connected`. Desktop `[state] Bob → Connected`.
+4. **Trigger a transient break**: kill Alice's process (Ctrl-C in the terminal).
+5. **Phone observation**:
+   - Chip flips to `Alice · reconnecting` within ~1 s.
+   - Logcat: `session Alice → Reconnecting`.
+   - Logcat continues: `Reconnect attempt 1/5 for Alice failed: …` every second.
+6. **Within the retry window**: relaunch Alice with the same name and appId (`p2p-sample-desktop.bat Alice p2pkit-desktop-sample reconnect=5,1000`).
+7. **Phone observation**: chip flips back to `Alice · connected`. Logcat: `session Alice → Connected` + `Session …: reconnected to Alice on attempt N`.
+8. **Exhaustion path**: kill Alice and don't relaunch. After 5 attempts, phone chip flips to `Alice · failed`. Logcat: `session Alice → Failed`. The phone's connected-peer row clears the Alice chip on the next reconcile pass.
+9. **Manual close beats retry**: connect again, kill Alice, while phone shows `Alice · reconnecting`, long-press the chip → **Close session**. Chip clears; logcat: `session Alice → Closed` (not `Failed`).
 
-1. **Start the JVM desktop sample.** On Windows:
+**Pass criteria**: state machine walks `Connected → Reconnecting → Connected` on success, `→ Failed` after `maxAttempts`, `→ Closed` when user closes mid-retry. No spurious transitions in either direction.
+
+---
+
+## D. PeerId persistence test
+
+Verifies the local PeerId survives a restart of either platform.
+
+**Desktop ↔ Desktop**:
+
+1. Start `Alice`. On `Alice's` terminal run `info`; record the `localPeerId` line.
+2. Start `Bob` in another terminal. On Bob's terminal, `peers` shows Alice with that same id prefix.
+3. Quit Alice (`> quit`). Re-launch with the same args.
+4. On Alice's new session, `info` shows the **same** `localPeerId` as step 1.
+5. Bob's `peers` re-shows Alice with the same id prefix.
+
+**Android ↔ JVM**:
+
+1. Launch the Android sample, note the `peerId` shown in the Room header status block.
+2. Force-stop the Android app (Settings → Apps → P2pKit Sample → Force stop).
+3. Re-launch. The `peerId` in the header is the **same** value.
+4. JVM CLI peers list shows the phone with the same id prefix.
+
+**Negative case (Android without init)**: temporarily revert `P2pKitSampleApplication.onCreate` to not call `P2pKitAndroid.initialize(this)`. On launch, logcat warns `PeerId persistence: P2pKitAndroid.initialize(context) was not called…`. PeerId rotates on every relaunch. Restore the init call.
+
+**Pass criteria**: same `localPeerId` across restarts on JVM (file-backed), on Android with `P2pKitAndroid.initialize` (filesDir-backed), and on iOS (NSUserDefaults — only verifiable on macOS once iOS LAN ships in v0.3).
+
+---
+
+## E. Android mDNS / MulticastLock test
+
+Verifies the Android side actually receives mDNS broadcasts. The v0.2 `AndroidLanDiscoveryTransport` acquires a `WifiManager.MulticastLock` tagged `p2pkit-mdns` on the first of `startAdvertising` / `startDiscovery`, released when both have stopped.
+
+1. **Setup**: phone running the sample, JVM CLI on the same Wi-Fi.
+2. **Asymmetric symptom check**:
+   - Desktop sees the phone in `[peers]`? Yes → outgoing multicast from Android works (lock not needed for *sending*).
+   - Phone shows the desktop in "Discovered peers"? Yes → receiving multicast works → lock is active.
+   - If desktop sees phone but phone shows 0 peers → lock is failing or never acquired.
+3. **Lock diagnostic** (`adb shell` accepts Windows backslash too):
    ```powershell
-   .\p2p-sample-desktop\build\install\p2p-sample-desktop\bin\p2p-sample-desktop.bat Alice
+   adb shell dumpsys wifi | findstr /i "multicast p2pkit-mdns"
    ```
-   POSIX: `./p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop Alice`.
+   Expect a line containing `p2pkit-mdns`. If absent after **Start**, the lock isn't being acquired and v0.2 task 5 isn't taking effect on this device.
+4. **Lifecycle**: toggle the Discover switch off in the Android sample. Wait a moment, re-check the dumpsys output — if advertising is also off, the lock should disappear from the output (it's only held while at least one of adv/disc is on).
+5. **Failure modes to recognise**:
+   - Phone "Discovered peers (0)" + desktop sees phone → multicast filter (lock issue or OEM filtering).
+   - Neither side sees anything → router blocks multicast, VPN active, or different Wi-Fi SSIDs.
+   - Phone sees desktop briefly then loses it → MulticastLock dropped because the kit was stopped/restarted; tap **Stop** then **Start** to re-acquire.
 
-2. **Start the Android sample.** Install + launch as in §3. Enter device name `Bob`. Tap **Start**.
+**Pass criteria**: dumpsys shows the lock during operation, lock disappears after kit stops, discovery works both ways.
 
-3. **Confirm both endpoints are on the same Wi-Fi LAN.** Phone hotspot tethering the laptop also works.
+---
 
-4. **Within ~5–10 seconds**, the Android peer list should show `Alice (<id-prefix>)`, and the desktop CLI should print `[peers] 1: Bob(<id-prefix>)`.
+## F. Unsupported iOS status
 
-5. **Connect from Android → JVM.** Tap **Connect** next to `Alice` on the phone. The session pane appears with `Connected`. The desktop prints `[incoming] from Bob (<id-prefix>)`.
+iOS in v0.2 is **core scaffolding only**:
 
-6. **Send Android → JVM.** Type a message on the phone and tap **Send**. Desktop prints `[Bob] <text>`.
+- `:p2p-core` declares `iosX64`, `iosArm64`, `iosSimulatorArm64` targets.
+- `iosMain` ships `Platform.IOS`, `systemTimeMillis()`, and `NSUserDefaults`-backed `PeerIdStorage`.
+- **No iOS LAN transport** in `:p2p-transport-lan`. No `NWBrowser`, no `NWListener`, no `NWConnection`, no iOS sample app.
+- iOS targets cannot exchange LAN messages with Android/JVM peers in v0.2.
+- iOS Network Provisioning is **never planned** — Apple does not allow third-party apps to create hotspots or join Wi-Fi silently.
 
-7. **Send JVM → Android.** On the desktop CLI:
-   ```
-   > send hello from desktop
-   ```
-   The Android chat list shows `Alice: hello from desktop`.
+Verification on this Windows release pipeline is limited to:
 
-8. **Reverse direction — connect from JVM → Android.** Tap **Stop** on Android, then **Start** again so the kit re-advertises. On desktop:
-   ```
-   > peers
-   > connect <bob-id-prefix>
-   > send hi from desktop
-   ```
-   The Android side should accept the incoming session and receive the message.
+```powershell
+.\gradlew.bat :p2p-core:tasks --all | findstr /i ios
+```
 
-### Logs that confirm each step
+— which should list `compileKotlinIosArm64`, `iosSimulatorArm64MainKlibrary`, etc., proving the project model is consistent. Actually running iOS compile / link / test tasks requires a macOS host with Xcode. Cross-platform iOS verification waits for v0.3.
 
-- **Android logcat** (`adb logcat -s p2pkit`): the sample wires a `P2pLogger` that writes to logcat under tag `p2pkit`. You should see `kit started: deviceName=Bob appId=p2pkit-desktop-sample` on start.
-- **Desktop stderr**: the sample's `StdErrLogger` writes `[p2pkit]` info lines and `[p2pkit WARN]` / `[p2pkit ERROR]` on failure.
-
-### Common failure reasons
-
-1. **Windows Firewall blocks inbound JVM TCP.** First-run prompt; pick **Allow on Private networks**. See §5.
-2. **Router blocks mDNS / multicast.** Mostly office / guest / hotel Wi-Fi. Symptom: peer list stays empty on both sides. See §6.
-3. **Devices on different networks.** Phone on cellular, laptop on Wi-Fi. Must be on the same SSID.
-4. **Android emulator on a host with strict NAT.** Emulators NAT through the host; not all routers tolerate mDNS from the emulated interface. Use a real device for cross-platform tests.
-5. **VPN active on the laptop.** Some VPN clients (Tailscale, Wireguard, corporate) hijack the LAN routing table. Disable while testing.
-6. **`appId` accidentally diverged.** Verify the Android logcat line `kit started: ... appId=...` against the desktop's startup banner `appId=...`.
-7. **Android Wi-Fi multicast filter.** v0.2 fixed this — `AndroidLanDiscoveryTransport` now acquires a `WifiManager.MulticastLock` while advertising/discovery is active. If you backported the sample to an older library version, this fix won't be present and Android will fail to see JVM peers.
+When v0.3 ships iOS LAN, the test sections will gain an iOS device matching steps A/B/C with `_p2pkit._tcp` Bonjour interop.
 
 ---
 
@@ -162,20 +201,20 @@ Both samples now ship with the **same** `appId` (`p2pkit-desktop-sample`) — no
 
 On Windows, the **first** time you run the desktop sample, Defender prompts to allow inbound TCP for the Java runtime.
 
-- **Allow on Private networks.** Public networks are usually fine for outbound, but inbound (i.e., accepting a connection from another instance) needs the rule.
-- If you accidentally clicked "Block", clear the rule:
+- **Allow on Private networks.**
+- If you accidentally clicked "Block":
   ```powershell
   Get-NetFirewallRule -DisplayName "*OpenJDK*","*Java*","*p2pkit*" | Remove-NetFirewallRule
   ```
   Re-run the sample to get the prompt again.
 
-mDNS (UDP 5353) is normally permitted on private profiles by default. If discovery doesn't work even after allowing TCP, double-check the firewall profile (private vs public).
+mDNS (UDP 5353) is normally permitted on private profiles by default.
 
 ---
 
 ## 6. Wi-Fi / mDNS multicast — common failure mode
 
-P2pKit v0.1 uses **mDNS** (UDP multicast on 224.0.0.251 : 5353) for peer discovery. Many networks block multicast:
+P2pKit v0.2 uses **mDNS** (UDP multicast on 224.0.0.251 : 5353) for peer discovery. Many networks block multicast:
 
 | Network type | Multicast support |
 |---|---|
@@ -184,155 +223,29 @@ P2pKit v0.1 uses **mDNS** (UDP multicast on 224.0.0.251 : 5353) for peer discove
 | Personal ethernet LAN | fine |
 | Office / guest / hotel Wi-Fi | **usually blocked** |
 | University residential Wi-Fi | mixed; often blocked |
-| Some VPNs | mDNS doesn't traverse them |
+| Some VPNs | mDNS doesn't traverse |
 
-**Symptom**: both endpoints start cleanly and stay on `Discovered peers (0)` indefinitely.
+**Symptom**: both endpoints start cleanly and stay on "Discovered peers (0)" indefinitely.
 
-**Workaround for testing**: use a phone hotspot or home Wi-Fi. v0.2 will add a manual-IP fallback so testers can paste a host:port pair when discovery fails.
+**Workaround for testing**: use a phone hotspot or home Wi-Fi.
 
 Also: **Android on mobile data only** cannot discover LAN peers — both endpoints must be on Wi-Fi.
 
 ---
 
-## 7. Success criteria
-
-A v0.1-internal / v0.2-dev release passes when **all six** are true:
-
-1. `./gradlew :p2p-core:allTests :p2p-transport-lan:jvmTest :sample-kmp-shared:jvmTest` reports **all tests passing, 0 failures**.
-2. Two desktop CLIs on the same machine **discover each other within 10 s** and exchange a text message both ways.
-3. Two Android devices on the same Wi-Fi **discover each other within 10 s** and exchange a text message both ways.
-4. One desktop + one Android (with `appId` aligned per §4) discover each other and exchange a text message both ways.
-5. **`PeerId` persists across restarts** on both platforms — see "Verifying PeerId persistence manually" below.
-6. The items under **"Known limitations"** in [README.md](./README.md) have been reviewed and accepted by the tester.
-
-If any of these fails, file a bug. If discovery hangs on a network you suspect blocks multicast, **first** retry on a phone hotspot before filing.
-
-### Verifying Android rotation manually (v0.2 Task 2)
-
-1. Install the sample APK on one Android device and another peer (desktop or second Android).
-2. Tap **Start** on the Android side. Wait for the other peer to appear in the list. Optionally tap **Connect** and exchange a message.
-3. Rotate the phone (portrait ↔ landscape).
-4. The running screen should **stay on screen** — no flip back to setup, no flicker. The discovered-peers count, active session, and chat log should all be preserved.
-5. Tap **Stop** to confirm the explicit teardown still works.
-6. Swipe the app away from recents to confirm process-level cleanup runs `kit.stop()` in `ViewModel.onCleared()`.
-
-If rotation sends you back to the setup screen, the host activity was destroyed without preserving the ViewModel — check that `MainActivity` is using `viewModel()` (not `remember`) for the `P2pKitViewModel`.
-
-**Known boundary**: Android may kill the app's process while it's backgrounded under memory pressure. When that happens, the ViewModel is destroyed with the process. Re-launching the app returns to the setup screen. This is documented as v0.3 work (`SavedStateHandle` integration).
-
-### iOS scaffolding (v0.2 Task 4) — out of scope for the Windows release pipeline
-
-v0.2 adds `iosX64`, `iosArm64`, and `iosSimulatorArm64` targets to `:p2p-core` with `iosMain` actuals for `Platform.IOS`, `systemTimeMillis()`, and `PeerId` persistence via `NSUserDefaults`. **No LAN transport is implemented for iOS in v0.2** — Bonjour / `NWBrowser` / `NWListener` / `NWConnection` ship in v0.3.
-
-The release pipeline here is **Windows-host only**. iOS compile / link / test tasks require a macOS host with Xcode and are not exercised. The Windows acceptance criteria are:
-
-1. The four-module command (§7 item 1) still passes — i.e., adding the iOS targets did not regress JVM/Android.
-2. `./gradlew :p2p-core:tasks --all | findstr /i ios` lists iOS-scoped tasks (`compileKotlinIosArm64`, `iosSimulatorArm64MainKlibrary`, etc.) — proving the project model is consistent.
-
-Full iOS verification — Local Network permission prompt, `NSUserDefaults` round-trip on simulator, cross-platform discovery with Android/JVM peers — is **deferred to v0.3** when the LAN transport actually exists. On macOS, future testers should run `./gradlew :p2p-core:iosSimulatorArm64Test` (which exercises the commonTest suite on iOS simulator) and confirm `BUILD SUCCESSFUL`. Until v0.3 lands, iOS targets cannot exchange messages with Android/JVM peers over LAN — they only verify that core types compile and `PeerId` persists.
-
-### Verifying PeerId persistence manually
-
-**Desktop ↔ Desktop:**
-
-1. Start one CLI (`Alice`). Note the `id-prefix` shown for Alice in another machine's peer list (or another desktop UI window on the same machine).
-2. `quit` Alice.
-3. Re-launch Alice with the same args.
-4. The other side's peers list should show Alice with the **same** id-prefix as before — confirming the JVM persisted `peer-id` under `<user.home>/.p2pkit/<appId>/peer-id`.
-
-**Android ↔ Android:**
-
-1. Launch the sample on phone A. Note the id-prefix shown for phone A in phone B's peer list.
-2. Force-stop phone A's app (Settings → Apps → P2pKit Sample → Force stop).
-3. Re-launch phone A's app.
-4. Phone B's peer list should show phone A with the **same** id-prefix.
-5. If you instead see a new id-prefix, the host app did not call `P2pKitAndroid.initialize(applicationContext)` from `Application.onCreate`. Check `adb logcat | grep p2pkit` for the warning `PeerId persistence: P2pKitAndroid.initialize(context) was not called …`.
-
-### Multi-peer room test (three-device minimum)
-
-Verifies that **N** devices on the same LAN can form a "room" where any peer's broadcast reaches every other connected peer. The SDK exposes one `P2pSession` per peer; the sample layer iterates the live session list and fans out sends — there is no peer-count constant in the code. Three devices is the **minimum** that distinguishes "broadcast" from "single-peer send"; the same flow works at 4, 5, 10, or more peers with no code changes.
-
-There is no fixed SDK or sample limit on peer count. Practical limits are **network-dependent** — they come from Wi-Fi router multicast-storm filtering, mDNS service-cache pressure on the local mDNSResponder, Android's per-app file-descriptor budget, and host CPU/RAM. A typical home Wi-Fi handles a dozen peers comfortably; corporate networks may rate-limit mDNS earlier.
-
-Setup: three or more endpoints on the same Wi-Fi, all using `appId = p2pkit-desktop-sample`. Any mix of Android and JVM. The recipe below uses A = JVM CLI (`Alice`), B = JVM CLI (`Bob`), C = Android (`Carol`) — extend to D, E, F by starting more instances; every step that says "broadcast" naturally reaches them all.
-
-1. **Start device A** (`Alice`):
-   ```powershell
-   .\p2p-sample-desktop\build\install\p2p-sample-desktop\bin\p2p-sample-desktop.bat Alice
-   ```
-2. **Start device B** (`Bob`) — second terminal:
-   ```powershell
-   .\p2p-sample-desktop\build\install\p2p-sample-desktop\bin\p2p-sample-desktop.bat Bob
-   ```
-3. **Start device C** (`Carol`) — Android sample: install, set name `Carol`, tap **Start**.
-4. **Confirm same appId.** Desktop banners say `appId=p2pkit-desktop-sample`. Android logcat (`adb logcat -s p2pkit`) prints `kit started: deviceName=Carol appId=p2pkit-desktop-sample`. All three must match.
-5. **Confirm discovery.** After ~5–10 s:
-   - A's `> peers` lists Bob and Carol.
-   - B's `> peers` lists Alice and Carol.
-   - C's "Discovered peers" panel shows Alice and Carol.
-6. **Connect A → B**, **A → C** (run on Alice's terminal):
-   ```
-   > connect bob
-   > connect carol
-   ```
-   Each prints `connected to <name> (<id-prefix>)`. Optionally `> connect carol` on Bob and tap **Connect** on Carol for Alice, depending on whether you want a full mesh.
-7. **Broadcast from A**:
-   ```
-   > send hello room from Alice
-   ```
-   A prints `[broadcast → 2] hello room from Alice`. B prints `[Alice] hello room from Alice`. C's room timeline gains `Alice → hello room from Alice`.
-8. **Broadcast from B**:
-   ```
-   > send hi from Bob
-   ```
-   A prints `[Bob] hi from Bob`. C's timeline gains `Bob → hi from Bob` (only if Bob is connected to Carol — connect first if not).
-9. **Broadcast from C** (Android): type "hi from Carol" with no peer chips selected (chips row shows nothing selected = broadcast). Tap **Broadcast (N)** button. A and B both receive `[Carol] hi from Carol`.
-10. **Targeted send A → B only**:
-    ```
-    > to bob private message
-    ```
-    A prints `[to Bob] private message`. B prints `[Alice] private message`. C does **not** receive it.
-11. **Targeted send from Android C → Alice only**: on Android, tap the Alice chip in the connected-peers row (chip becomes selected). Send button label changes to `Send to 1`. Send a message. Alice receives it; Bob does not.
-12. **Disconnect one peer, verify the rest still work**. On Alice: `> close bob`. Alice's session to Bob ends. Carol's session and any A↔C messages still flow.
-
-**Scaling beyond three peers.** Start additional desktop CLIs (`p2p-sample-desktop Dave`, `Eve`, …) or Android instances. Each new peer will appear in every other peer's discovery list. Connect any subset; broadcasts go to every connected peer; targeted sends use the chip selection (Android) or `to <name> <text>` (desktop), and the same `to` syntax can be used repeatedly to address different individual peers within the same room.
-
-If any step fails, the most common causes are:
-- different `appId` between endpoints (check log lines in step 4);
-- Wi-Fi router blocking multicast (test on a phone hotspot);
-- Windows Firewall blocking inbound TCP on the JVM ports;
-- Android Wi-Fi multicast filter — fixed in v0.2 task 5; if backporting the sample, confirm `AndroidLanDiscoveryTransport` holds a `WifiManager.MulticastLock`.
-
-### Verifying ReconnectPolicy.Enabled manually (v0.2 Task 3)
-
-This exercises the **outgoing-only** reconnect path. The accepting peer doesn't auto-redial — it sees the dropped session as `Failed` and a new incoming session arrives once the dialler retries.
-
-**Desktop ↔ Desktop**, easiest setup:
-
-1. Edit `p2p-sample-desktop/src/jvmMain/kotlin/.../Main.kt` (or your local copy) to wrap the `lifecycle { }` block with `reconnectPolicy = ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000)`. Rebuild with `:p2p-sample-desktop:installDist`.
-2. Start two instances (`Alice` and `Bob`). Wait for `[peers] 1: …` on both, then on Alice run `connect <bob-id>` followed by `send hi`.
-3. With Alice still running, **Ctrl-C Bob**. On Alice you should see a session state change to `Reconnecting`, then attempt logs (`Reconnect attempt 1/5 for Bob failed …`) every second.
-4. Re-launch Bob (same name and `appId`) within the 5-attempt window. Alice's session should flip back to `Connected` and you can `send` again on the same session id.
-5. If you don't re-launch Bob, Alice's session ends in `Failed` after 5 failed dials. Alice should not retry beyond `maxAttempts`.
-
-**Manual close stops retries:** while Alice's session is in `Reconnecting`, type `close <session>` (or `quit`) on Alice. The session should immediately end in `Closed`, never `Failed`, and no further retry attempts should hit the log.
-
-**Stale address note:** if Bob comes back on a *different* IP (e.g., joined a different Wi-Fi), Alice's retries will keep dialling Bob's old IP and exhaust. The app must call `connect(peer)` again after the peer is re-discovered. Reconnect does not re-resolve discovery in v0.2.
-
----
-
-## Release checklist (v0.1-internal)
+## 7. Release checklist (v0.2-dev)
 
 Run through this before tagging.
 
-- [ ] **All tests pass** — `./gradlew :p2p-core:allTests :p2p-transport-lan:jvmTest :sample-kmp-shared:jvmTest` → all green.
-- [ ] **Desktop sample runs** — `:p2p-sample-desktop:installDist` succeeds; two instances on one machine reach `connect` + `send` (§2).
-- [ ] **Android sample builds** — `:p2p-sample-android:assembleDebug` produces an APK; smoke-installs on one device and launches to the setup screen.
-- [ ] **Known limitations reviewed** — the seven items in `README.md` § "Known limitations (v0.1)" are still accurate; nothing new has slipped in.
-- [ ] **`appId` aligned for the cross-platform test** — confirmed via §4 by running one desktop ↔ one Android session end-to-end, or by code review of `Main.kt` / `MainActivity.kt`.
-- [ ] **No new public APIs accidentally added** — public-symbol inventory matches Spec §7. (Quick grep: `grep -r "^public" p2p-core/src/commonMain/kotlin` should match the list in the v0.1 final report.)
-- [ ] **No leftover TODO / FIXME / debug `println`** in shipping code — sample code's `println`s are fine.
-- [ ] **`PeerId` is fresh per launch.** Documented; testers should expect a "new device" with a new id every time the sample app restarts. Persistent `PeerId` is v0.2.
-- [ ] **`ReconnectPolicy.Enabled` retries outgoing sessions** (v0.2 task 3). Configuring it causes outgoing sessions to transition through `Reconnecting` and retry the dial up to `maxAttempts` times. Incoming sessions still go directly to `Failed` on connection loss. Verified by the manual recipe under "Verifying ReconnectPolicy.Enabled manually" above.
+- [ ] `./gradlew :p2p-core:allTests :p2p-transport-lan:jvmTest :sample-kmp-shared:jvmTest :p2p-sample-android:assembleDebug :p2p-sample-desktop:installDist :p2p-sample-desktop-ui:assemble` → all green.
+- [ ] **§A** Android ↔ JVM walkthrough passes nine-of-nine.
+- [ ] **§B** Three-device room broadcast verified at N ≥ 3 (4+ ideally).
+- [ ] **§C** ReconnectPolicy roundtrip verified: Connected → Reconnecting → Connected, and exhaustion → Failed.
+- [ ] **§D** PeerId persistence verified on both JVM and Android.
+- [ ] **§E** MulticastLock dumpsys diagnostic shows `p2pkit-mdns` during operation.
+- [ ] **§F** iOS scaffolding state is unchanged: targets visible in `:p2p-core:tasks --all`, no LAN transport.
+- [ ] Known Limitations in `README.md` reviewed; nothing new has slipped in.
+- [ ] No leftover TODO / FIXME / debug `println` in shipping code (sample `println` is fine).
+- [ ] Compose Desktop UI sample (`:p2p-sample-desktop-ui`) compiles and shows the legacy banner.
 
-When all boxes are ticked, **tag `v0.1-internal`** and share this guide with the testers.
+When all boxes tick, **tag the v0.2-internal milestone** and share this guide with the testers.

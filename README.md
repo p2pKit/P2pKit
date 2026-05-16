@@ -233,12 +233,63 @@ Detailed design lives in [`P2pKit-Spec.md`](./P2pKit-Spec.md).
 
 ## Modules
 
-- **`:p2p-core`** — public API, models, errors, protocol framing, session manager, peer registry. KMP module with `commonMain` / `jvmMain` / `androidMain`.
-- **`:p2p-transport-lan`** — mDNS discovery + TCP data. JmDNS on JVM, `NsdManager` on Android.
-- **`:p2p-sample-desktop`** — JVM CLI sample (`./gradlew :p2p-sample-desktop:run`).
-- **`:p2p-sample-android`** — Compose UI sample. Build with `./gradlew :p2p-sample-android:assembleDebug`.
+- **`:p2p-core`** — public API, models, errors, protocol framing, session manager, peer registry. KMP module with `commonMain` / `jvmMain` / `androidMain` / `iosMain` (core scaffolding only — no LAN).
+- **`:p2p-transport-lan`** — mDNS discovery + TCP data. JmDNS on JVM, `NsdManager` on Android. **iOS targets are not declared on this module yet** (v0.3).
+- **`:p2p-sample-android`** — Compose UI room/broadcast test harness. **Primary visual harness** for v0.2. `./gradlew :p2p-sample-android:assembleDebug`.
+- **`:p2p-sample-desktop`** — JVM CLI test harness. **Canonical desktop harness** for v0.2. `./gradlew :p2p-sample-desktop:installDist` then run the launcher. Type `help` for commands.
+- **`:p2p-sample-desktop-ui`** — **legacy v0.1 single-session Compose demo.** Compiles and shows a banner saying so. Not used for v0.2 testing; the CLI is.
 
-Planned modules (not in v0.1): `:p2p-network-provisioning(-android|-desktop|-ios)`, `:p2p-transport-ble`, `:p2p-transport-android-wifidirect`, `:p2p-transport-apple-multipeer`, `:p2p-transport-relay`, `:p2p-sample-ios`.
+Planned modules (not in v0.2): `:p2p-network-provisioning(-android|-desktop|-ios)`, `:p2p-transport-ble`, `:p2p-transport-android-wifidirect`, `:p2p-transport-apple-multipeer`, `:p2p-transport-relay`, `:p2p-sample-ios`.
+
+## Sample feature coverage (v0.2-dev)
+
+| Feature | Android sample | JVM CLI | Compose UI |
+|---|---|---|---|
+| `appId` shown | ✅ status header | ✅ banner + `info` | ✅ setup |
+| `localPeerId` shown | ✅ status header | ✅ `info` | ❌ legacy |
+| `localDeviceName` shown | ✅ header / setup | ✅ banner + `info` | ✅ setup |
+| `state` (kit) | ✅ status header | ✅ `info` | ❌ legacy |
+| `startAdvertising` / `stopAdvertising` | ✅ Advertise switch | ✅ `adv on / off` | ❌ legacy |
+| `startDiscovery` / `stopDiscovery` | ✅ Discover switch | ✅ `disc on / off` | ❌ legacy |
+| Peer discovery / lost | ✅ list | ✅ `peers` cmd | ✅ list |
+| `connect(peer)` | ✅ Connect button | ✅ `connect <id>` | ✅ Connect button |
+| Multiple active sessions | ✅ chip row | ✅ `sessions` | ❌ legacy |
+| Broadcast send | ✅ default (no chip selected) | ✅ `send <text>` | ❌ legacy |
+| Targeted send | ✅ chip multi-select | ✅ `to <id> <text>` | ❌ legacy |
+| Incoming from every session | ✅ unified timeline | ✅ per-session print | ❌ legacy |
+| Per-session `ConnectionState` | ✅ chip label | ✅ `[state] N → S` | ✅ title bar |
+| `session.close()` | ✅ chip overflow menu | ✅ `close <id>` | ❌ legacy |
+| `kit.stop()` | ✅ overflow menu | ✅ `quit` / `exit` | ✅ Stop |
+| `ReconnectPolicy.Enabled` configurable | ✅ setup picker | ✅ `reconnect=N,delayMs` arg | ❌ legacy |
+| PeerId persistence verifiable | ✅ visible | ✅ via `info` | ❌ legacy |
+| MulticastLock | ✅ implicit (active while running) | N/A | N/A |
+| In-app log strip | ✅ tail of TailLogger | ✅ stderr | ❌ |
+
+## Platform testing matrix (v0.2-dev)
+
+| Combination | Supported now | Notes |
+|---|---|---|
+| Android ↔ JVM Desktop | ✅ | mDNS + TCP across same Wi-Fi; verified by §A in `INTERNAL_TESTING.md`. |
+| JVM ↔ JVM | ✅ | Same machine or two machines on the same LAN. |
+| Android ↔ Android | ✅ | NsdManager ↔ NsdManager on the same Wi-Fi. |
+| Multi-peer room (3+ peers, mixed platforms) | ✅ | No SDK peer cap; verified by §B. |
+| Android ↔ iOS | ❌ | No iOS LAN transport in v0.2. v0.3. |
+| JVM ↔ iOS | ❌ | Same — v0.3. |
+| iOS ↔ iOS | ❌ | Same — v0.3. |
+| Three-way involving iOS | ❌ | Same — v0.3. |
+
+## OS / device testing matrix
+
+| Endpoint | Supported now | What can be tested | What cannot | Limitations |
+|---|---|---|---|---|
+| Android real device (API 24+) | yes | discovery, connect, send, broadcast, targeted, reconnect, MulticastLock | iOS interop | sample doesn't auto-call `notifyAppBackgrounded` |
+| Android emulator | yes-ish | same as real device | host-firewall scenarios | NAT-through-host can break cross-machine mDNS |
+| Windows JVM desktop | yes | full LAN feature set via CLI | iOS interop | Defender Firewall prompt on first run |
+| macOS JVM desktop | yes | full LAN feature set | iOS interop | macOS Firewall must allow incoming |
+| Linux JVM desktop | yes | full LAN feature set | iOS interop | `ufw allow 5353/udp` may be needed |
+| iPhone real device | **scaffolding only** | core types compile (with macOS host) | discovery / connect / send / anything LAN | requires macOS + Xcode just to build; no `:p2p-transport-lan` for iOS |
+| iOS simulator | scaffolding only | same as iPhone real | same | builds only on macOS host |
+| macOS native target | not declared | nothing | everything | target not in any module |
 
 ## Running the samples
 
@@ -263,7 +314,12 @@ In a second terminal, start a second instance with a different device name (e.g.
 > send hello
 ```
 
-Type `help` for the full command list.
+Optional third arg configures reconnect:
+```
+.\p2p-sample-desktop.bat Alice p2pkit-desktop-sample reconnect=5,1000
+```
+
+Type `help` for the full command list (`info`, `sessions`, `adv on|off`, `disc on|off`, `connect`, `send`, `to`, `close`, `quit`).
 
 ### Android
 
@@ -283,7 +339,7 @@ Launch on both devices (same Wi-Fi), enter different names, tap **Start**, then 
 ./gradlew :p2p-core:assemble :p2p-transport-lan:assemble :p2p-sample-desktop:installDist :p2p-sample-android:assembleDebug
 ```
 
-The current `v0.2-dev` branch ships **91 unit + integration tests** (across `:p2p-core`, `:p2p-transport-lan`, and `:sample-kmp-shared`). The loopback integration test in `:p2p-transport-lan` runs two `P2pKit` instances inside one JVM and exchanges a 200 KB binary payload over real TCP + mDNS — exercise the full pipeline end-to-end without external machines.
+The current `v0.2-dev` branch ships **93 unit + integration tests** in `:p2p-core` plus 2 in `:p2p-transport-lan` and 2 in `:sample-kmp-shared`. The loopback integration test in `:p2p-transport-lan` runs two `P2pKit` instances inside one JVM and exchanges a 200 KB binary payload over real TCP + mDNS — exercise the full pipeline end-to-end without external machines.
 
 ## Known limitations (v0.1-internal, partial v0.2)
 

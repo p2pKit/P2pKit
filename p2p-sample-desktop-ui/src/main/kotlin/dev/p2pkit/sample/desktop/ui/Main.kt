@@ -116,6 +116,16 @@ private fun SetupScreen(
             style = MaterialTheme.typography.headlineSmall
         )
         Text(
+            text = "Legacy v0.1 single-session demo. Does NOT expose broadcast, " +
+                "targeted send, per-session state, reconnect policy, or the " +
+                "v0.2 identity accessors. Use the JVM CLI (:p2p-sample-desktop) " +
+                "as the canonical desktop test harness for v0.2. A room-mode " +
+                "Compose UI refresh is a v0.3 candidate.",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.error
+        )
+        Text(
             text = "Discover other devices on the local network and exchange text messages.",
             style = MaterialTheme.typography.bodyMedium
         )
