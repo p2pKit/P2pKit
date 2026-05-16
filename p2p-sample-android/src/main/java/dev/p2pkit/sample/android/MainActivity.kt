@@ -64,6 +64,7 @@ import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.provisioning.JoinNetworkResult
 import dev.p2pkit.core.provisioning.LocalNetworkResult
 
 class MainActivity : ComponentActivity() {
@@ -283,6 +284,9 @@ private fun RoomScreen(
 
         Spacer(Modifier.height(12.dp))
         HotspotCard(vm = vm)
+
+        Spacer(Modifier.height(8.dp))
+        JoinHotspotCard(vm = vm)
 
         val connected = vm.connectedSessions.toList()
         Spacer(Modifier.height(12.dp))
@@ -699,6 +703,181 @@ private fun HotspotCard(vm: P2pKitViewModel) {
             }
         }
     }
+}
+
+@Composable
+private fun JoinHotspotCard(vm: P2pKitViewModel) {
+    val joinResult by vm.joinResult.collectAsState()
+    val missing by vm.missingPermissions.collectAsState()
+    val context = LocalContext.current
+
+    // Pick the right runtime permission for the device's API level.
+    val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.NEARBY_WIFI_DEVICES
+    } else {
+        Manifest.permission.ACCESS_FINE_LOCATION
+    }
+    val permLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { vm.refreshMissingPermissions() }
+
+    var ssidInput by remember { mutableStateOf("") }
+    var passInput by remember { mutableStateOf("") }
+
+    val isLocationProblem = (joinResult as? JoinNetworkResult.Failed)
+        ?.error is dev.p2pkit.core.NetworkProvisioningError.PermissionMissingForProvisioning &&
+        ((joinResult as JoinNetworkResult.Failed).error
+            as dev.p2pkit.core.NetworkProvisioningError.PermissionMissingForProvisioning)
+            .permissions.contains(dev.p2pkit.core.permission.P2pPermission.Location)
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = "Join hotspot (WifiNetworkSpecifier)",
+                style = MaterialTheme.typography.titleSmall
+            )
+            Spacer(Modifier.height(4.dp))
+            val r = joinResult
+            when {
+                r is JoinNetworkResult.Joined -> {
+                    Text(
+                        text = "Joined. Routing this app's traffic through the joined network. " +
+                            "Internet may be unavailable while joined.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    val state = r.networkState
+                    if (state is dev.p2pkit.core.provisioning.NetworkState.ConnectedToWifi) {
+                        Text(
+                            text = "ip(s): ${state.localIpAddresses.joinToString(", ")}",
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Button(
+                        onClick = vm::clearJoinResult,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Clear status")
+                    }
+                }
+                r is JoinNetworkResult.Failed -> {
+                    if (isLocationProblem) {
+                        Text(
+                            text = "This device requires system-wide Location services to be ON " +
+                                "for joining a peer's Wi-Fi network, even when NEARBY_WIFI_DEVICES " +
+                                "is granted (Huawei / MIUI / older Samsung behavior).",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Button(
+                            onClick = {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Open Location settings")
+                        }
+                    } else {
+                        Text(
+                            text = "Failed: ${r.error::class.simpleName} — ${r.error.message ?: ""}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    JoinInputs(
+                        ssid = ssidInput,
+                        onSsidChange = { ssidInput = it },
+                        pass = passInput,
+                        onPassChange = { passInput = it }
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Button(
+                        onClick = {
+                            if (missing.isNotEmpty()) permLauncher.launch(perm)
+                            else vm.joinHotspot(ssidInput, passInput)
+                        },
+                        enabled = ssidInput.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            if (missing.isNotEmpty()) "Grant permission and retry"
+                            else "Retry join"
+                        )
+                    }
+                }
+                r is JoinNetworkResult.Unsupported -> {
+                    Text(
+                        text = "Unsupported: ${r.reason}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                r is JoinNetworkResult.RequiresUserAction -> {
+                    Text(
+                        text = r.instruction,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                else -> {
+                    Text(
+                        text = "Connect this device to a peer's LocalOnlyHotspot. Enter the SSID + " +
+                            "passphrase shown on the host phone's Hotspot card. The OS will prompt " +
+                            "you to approve the join.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    JoinInputs(
+                        ssid = ssidInput,
+                        onSsidChange = { ssidInput = it },
+                        pass = passInput,
+                        onPassChange = { passInput = it }
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Button(
+                        onClick = {
+                            if (missing.isNotEmpty()) permLauncher.launch(perm)
+                            else vm.joinHotspot(ssidInput, passInput)
+                        },
+                        enabled = ssidInput.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            if (missing.isNotEmpty()) "Grant permission and join"
+                            else "Join hotspot"
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun JoinInputs(
+    ssid: String,
+    onSsidChange: (String) -> Unit,
+    pass: String,
+    onPassChange: (String) -> Unit
+) {
+    OutlinedTextField(
+        value = ssid,
+        onValueChange = onSsidChange,
+        label = { Text("SSID") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+    Spacer(Modifier.height(4.dp))
+    OutlinedTextField(
+        value = pass,
+        onValueChange = onPassChange,
+        label = { Text("Passphrase (blank = open network)") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
 }
 
 @Composable

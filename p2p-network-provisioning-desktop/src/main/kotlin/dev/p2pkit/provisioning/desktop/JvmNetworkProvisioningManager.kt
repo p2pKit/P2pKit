@@ -19,7 +19,6 @@ import java.net.Inet6Address
 import java.net.NetworkInterface
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
@@ -55,11 +54,10 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalP2pApi::class)
 public class JvmNetworkProvisioningManager(
     private val ctx: ProvisioningContext,
-    parentJob: Job? = null,
     private val pollIntervalMillis: Long = DEFAULT_POLL_INTERVAL_MS
 ) : NetworkProvisioningManager {
 
-    private val scopeJob = SupervisorJob(parent = parentJob)
+    private val scopeJob = SupervisorJob(parent = ctx.parentJob)
     private val scope = CoroutineScope(Dispatchers.IO + scopeJob)
 
     private val _state = MutableStateFlow<NetworkProvisioningState>(NetworkProvisioningState.Idle)

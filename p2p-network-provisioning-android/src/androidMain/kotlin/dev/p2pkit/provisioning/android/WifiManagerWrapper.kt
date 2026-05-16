@@ -1,5 +1,6 @@
 package dev.p2pkit.provisioning.android
 
+import dev.p2pkit.core.provisioning.NetworkState
 import dev.p2pkit.core.provisioning.WifiCredentials
 import kotlinx.coroutines.flow.SharedFlow
 
@@ -22,6 +23,22 @@ internal interface WifiManagerWrapper {
      * propagated to the caller, not wrapped here.
      */
     suspend fun startLocalOnlyHotspot(): HotspotStartResult
+
+    /**
+     * Join a specific Wi-Fi network using `WifiNetworkSpecifier` +
+     * `ConnectivityManager.requestNetwork`. The system always shows a
+     * user-approval prompt. Suspends until either `onAvailable`
+     * (Joined) or `onUnavailable` (Failed) terminates the request.
+     *
+     * On success the wrapper has already called
+     * `ConnectivityManager.bindProcessToNetwork(network)` so the kit's
+     * outgoing TCP sockets route through the joined network. The handle's
+     * `close()` clears the process binding and unregisters the callback.
+     *
+     * SecurityException (permission missing, Location-mode-off) is
+     * propagated to the caller.
+     */
+    suspend fun joinWifiNetwork(credentials: WifiCredentials): JoinResult
 }
 
 internal sealed class HotspotStartResult {
@@ -64,3 +81,28 @@ internal interface HotspotHandle {
 }
 
 internal data class HotspotStopReason(val source: String)
+
+/** Result of [WifiManagerWrapper.joinWifiNetwork]. */
+internal sealed class JoinResult {
+    data class Joined(val handle: JoinHandle) : JoinResult()
+    /** User declined the prompt, SSID not found, wrong passphrase, etc. */
+    data class Failed(val reason: String) : JoinResult()
+}
+
+/**
+ * Live handle to a successful Specifier join. Closing releases the
+ * `NetworkCallback` and clears the process-wide network binding.
+ */
+internal interface JoinHandle {
+    /** Snapshot of the joined network for `NetworkProvisioningManager.networkState`. */
+    fun snapshotNetworkState(): NetworkState
+
+    /**
+     * Fires when the OS releases the join — user toggled Wi-Fi off,
+     * battery saver dropped it, the AP went away, app was backgrounded
+     * too long on MIUI, etc. Carries a human-readable reason.
+     */
+    val released: SharedFlow<String>
+
+    fun close()
+}

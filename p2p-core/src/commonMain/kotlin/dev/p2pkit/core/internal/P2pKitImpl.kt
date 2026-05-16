@@ -146,7 +146,8 @@ internal class P2pKitImpl(
                     config = provisioningConfig,
                     logger = logger,
                     lanTcpPort = lanPort,
-                    manualPeerRegistrar = peerRegistry
+                    manualPeerRegistrar = peerRegistry,
+                    parentJob = internalJob
                 )
                 runCatching { factory.build(ctx) }.getOrElse { e ->
                     logger.warn(

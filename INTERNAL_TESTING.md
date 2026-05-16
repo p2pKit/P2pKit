@@ -46,7 +46,7 @@ POSIX:
           :p2p-sample-android:assembleDebug
 ```
 
-**Expected**: `BUILD SUCCESSFUL`, 94 tests completed in `:p2p-core:allTests` / 0 failed, 6 tests in `:p2p-network-provisioning-desktop:test` / 0 failed, 9 tests in `:p2p-network-provisioning-android:testAndroidHostTest` / 0 failed, plus the LAN + KMP loopback tests green. APK at `p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk`. Launcher at `p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop[.bat]`.
+**Expected**: `BUILD SUCCESSFUL`, 94 tests completed in `:p2p-core:allTests` / 0 failed, 6 tests in `:p2p-network-provisioning-desktop:test` / 0 failed, 15 tests in `:p2p-network-provisioning-android:testAndroidHostTest` / 0 failed, plus the LAN + KMP loopback tests green. APK at `p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk`. Launcher at `p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop[.bat]`.
 
 Install the APK on the test device:
 ```powershell
@@ -235,6 +235,38 @@ Verifies the new `:p2p-network-provisioning-android` module: a phone can host a 
 - `Failed: PermissionMissingForProvisioning — Missing permissions: [Location]` *(Huawei / MIUI / older Samsung)* — the device-wide Location toggle is OFF. The HotspotCard shows an "Open Location settings" button; flip the toggle, come back, hit Retry.
 - `Failed: HotspotStopped — startLocalOnlyHotspot failed (reason code 0/1/2/3: NAME)` — system rejected. NO_CHANNEL (band conflict), GENERIC, INCOMPATIBLE_MODE, TETHERING_DISALLOWED. Try toggling Mobile Hotspot off, or rebooting.
 - Card shows credentials but second device can't find the SSID — wait ~5 s after Started, then re-scan on the guest. Android can take a moment to bring up the AP interface.
+
+---
+
+## I. Android hotspot join (v0.2.1 task 12)
+
+Verifies `WifiNetworkSpecifier`-based Wi-Fi join: the guest device joins the host device's `LocalOnlyHotspot` from inside our sample (no system Wi-Fi settings detour), the OS shows the per-app approval prompt, and once joined, our LAN transport's outgoing sockets route through the joined network so mDNS finds the host and auto-mesh forms.
+
+**Devices:** the same two phones as §H — a host device running task 11's hotspot, and a guest device that will join via task 12.
+
+1. **Host:** complete §H steps 1–2 so a `LocalOnlyHotspot` is up with visible `SSID: AndroidShare_xxxx` + `Pass: xxxxxxxx`.
+2. **Guest:** launch the sample, tap **Start**, scroll to the **"Join hotspot (WifiNetworkSpecifier)"** Card directly below the **Hotspot host** Card.
+3. **Guest:** type the SSID + passphrase from step 1 into the text fields. Tap **Join hotspot**. Grant `NEARBY_WIFI_DEVICES` (or `ACCESS_FINE_LOCATION` on API ≤ 32) if prompted.
+4. **OS prompt:** Android shows its own "Use device's Wi-Fi to connect to '<SSID>'?" sheet. Tap **Connect**.
+5. Within ~3 seconds the guest's Card flips to `Joined.` + the AP-subnet IP(s) (typically `192.168.43.x`). Logcat: `join Joined: state=ConnectedToWifi`.
+6. Both phones' main rooms should now find each other via mDNS over the hotspot subnet — discovered-peers list populates, auto-mesh opens a session, broadcast/targeted send work the same as on home Wi-Fi.
+7. **Guest:** tap **Clear status** to remove the joined-state Card text (does not release the join — `kit.stop()` releases it).
+8. **Tear down**: guest taps **Stop**. The kit's `internalJob.cancel()` cascades through `ProvisioningContext.parentJob` and the manager's `close()` runs, which calls `connectivity.bindProcessToNetwork(null)` and `unregisterNetworkCallback`. The OS drops the join. Host's Card shows the guest disappear from its mesh.
+
+**OEM quirks already handled:**
+- Huawei / MIUI / older Samsung: same `Location mode is not enabled` SecurityException → mapped to `PermissionMissingForProvisioning([Location])`, and the JoinHotspotCard renders the same "Open Location settings" branch as the Hotspot card.
+- MIUI / HyperOS backgrounding: the kit's manager subscribes to `JoinHandle.released`; system-released joins fire `NetworkProvisioningEvent.Failed(JoinFailed("system released …"))` and the Card returns to its idle state.
+
+**Pass criteria:** Guest joins within ~5 seconds of OS approval; logcat shows `join Joined`; the guest's outgoing socket traffic routes through the joined network (auto-mesh confirms it by reaching the host). Tapping Stop on the guest cleanly releases the join.
+
+**Common failure reasons:**
+- `Failed: PermissionMissingForProvisioning — Missing permissions: [NearbyWifiDevices]` — user denied the perm. Re-tap.
+- `Failed: PermissionMissingForProvisioning — Missing permissions: [Location]` — device-wide Location toggle is OFF. Card offers "Open Location settings".
+- `Failed: JoinFailed — network unavailable — user declined, SSID not found, or wrong passphrase` — the OS callback fired `onUnavailable`. Common causes: user tapped Cancel on the prompt; SSID typo; passphrase typo; host phone moved out of range; host phone toggled the hotspot off.
+- `Failed: JoinFailed — join released: ...` — the OS released a successful join. Battery saver (MIUI), user toggled Wi-Fi off, host AP went away. Tap Retry.
+- `Failed: JoinFailed — a join is already in progress` — the manager allows only one active join per kit lifetime. Tap Stop and Start again to reset.
+
+**Architectural note (visible from app code):** while the join is active, **all** the guest app's network traffic routes through the joined network. The local-only AP has no internet, so HTTP calls to anywhere except the host phone will fail until `kit.stop()` releases the binding. This is the v0.2.1 design choice (Option A — `bindProcessToNetwork`); per-socket binding (Option C) is a v0.3 candidate if any consumer needs internet-while-joined.
 
 ---
 

@@ -19,8 +19,12 @@ import dev.p2pkit.core.Peer
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.permission.P2pPermission
+import dev.p2pkit.core.provisioning.JoinNetworkResult
 import dev.p2pkit.core.provisioning.LocalNetworkConfig
 import dev.p2pkit.core.provisioning.LocalNetworkResult
+import dev.p2pkit.core.provisioning.WifiCredentials
+import dev.p2pkit.core.provisioning.WifiPassword
+import dev.p2pkit.core.provisioning.WifiSecurityType
 import dev.p2pkit.provisioning.android.AndroidP2pPermissionManager
 import dev.p2pkit.provisioning.android.android
 import dev.p2pkit.transport.lan.lan
@@ -125,6 +129,15 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     /** Missing perms reported by [AndroidP2pPermissionManager]; sample requests them. */
     private val _missingPermissions = MutableStateFlow<List<P2pPermission>>(emptyList())
     val missingPermissions: StateFlow<List<P2pPermission>> = _missingPermissions.asStateFlow()
+
+    /**
+     * Latest hotspot-join result. `null` when no join attempt has been
+     * made. `Joined` while the device is connected to a peer's hotspot;
+     * `Failed` when the user declined, the network couldn't be reached,
+     * or the system released the join.
+     */
+    private val _joinResult = MutableStateFlow<JoinNetworkResult?>(null)
+    val joinResult: StateFlow<JoinNetworkResult?> = _joinResult.asStateFlow()
 
     // --- internals --------------------------------------------------------
 
@@ -312,6 +325,52 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    @OptIn(ExperimentalP2pApi::class)
+    fun joinHotspot(ssid: String, passphrase: String) {
+        val currentKit = kit ?: return
+        val scope = runScope ?: return
+        refreshMissingPermissions()
+        val trimmedSsid = ssid.trim()
+        val pass = passphrase.takeIf { it.isNotEmpty() }
+        if (trimmedSsid.isEmpty()) {
+            Log.w(LOG_TAG, "joinHotspot: SSID is blank")
+            return
+        }
+        val creds = WifiCredentials(
+            ssid = trimmedSsid,
+            password = pass?.let { WifiPassword(it) },
+            securityType = if (pass != null) WifiSecurityType.WPA2 else WifiSecurityType.OPEN
+        )
+        scope.launch {
+            val result = runCatching {
+                currentKit.networkProvisioning.joinLocalNetwork(creds)
+            }.getOrElse { e ->
+                Log.w(LOG_TAG, "joinHotspot threw", e)
+                JoinNetworkResult.Failed(
+                    dev.p2pkit.core.NetworkProvisioningError.PlatformError(e)
+                )
+            }
+            _joinResult.value = result
+            when (result) {
+                is JoinNetworkResult.Joined ->
+                    Log.i(LOG_TAG, "join Joined: state=${result.networkState::class.simpleName}")
+                is JoinNetworkResult.Failed ->
+                    Log.w(LOG_TAG, "join Failed: ${result.error::class.simpleName} " +
+                        "— ${result.error.message ?: "(no message)"}")
+                is JoinNetworkResult.Unsupported ->
+                    Log.w(LOG_TAG, "join Unsupported: ${result.reason}")
+                is JoinNetworkResult.RequiresUserAction ->
+                    Log.i(LOG_TAG, "join RequiresUserAction: ${result.instruction}")
+                JoinNetworkResult.Pending ->
+                    Log.i(LOG_TAG, "join Pending")
+            }
+        }
+    }
+
+    fun clearJoinResult() {
+        _joinResult.value = null
+    }
+
     fun closeSession(peerId: String) {
         val scope = runScope ?: return
         val target = connectedSessions.firstOrNull { it.peer.id.value == peerId } ?: return
@@ -417,6 +476,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         roomMessages.clear()
         _localPeerId.value = null
         _hotspotResult.value = null
+        _joinResult.value = null
         _missingPermissions.value = emptyList()
         // Best-effort tear down the hotspot too.
         viewModelScope.launch {

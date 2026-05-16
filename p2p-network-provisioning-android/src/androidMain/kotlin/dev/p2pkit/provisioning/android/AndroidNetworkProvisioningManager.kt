@@ -53,11 +53,10 @@ import kotlinx.coroutines.sync.withLock
 @OptIn(ExperimentalP2pApi::class)
 public class AndroidNetworkProvisioningManager internal constructor(
     private val ctx: ProvisioningContext,
-    private val wifi: WifiManagerWrapper,
-    parentJob: Job? = null
+    private val wifi: WifiManagerWrapper
 ) : NetworkProvisioningManager {
 
-    private val scopeJob = SupervisorJob(parent = parentJob)
+    private val scopeJob = SupervisorJob(parent = ctx.parentJob)
     private val scope = CoroutineScope(Dispatchers.Default + scopeJob)
 
     private val _state = MutableStateFlow<NetworkProvisioningState>(NetworkProvisioningState.Idle)
@@ -76,6 +75,8 @@ public class AndroidNetworkProvisioningManager internal constructor(
     private val lifecycleLock = Mutex()
     private var handle: HotspotHandle? = null
     private var stopWatch: Job? = null
+    private var joinHandle: JoinHandle? = null
+    private var joinReleaseWatch: Job? = null
 
     // --- NetworkProvisioningManager surface -------------------------------
 
@@ -141,9 +142,70 @@ public class AndroidNetworkProvisioningManager internal constructor(
     }
 
     override suspend fun joinLocalNetwork(credentials: WifiCredentials): JoinNetworkResult =
-        JoinNetworkResult.Unsupported(
-            "Wi-Fi join via WifiNetworkSpecifier is planned for v0.2.1 task 12."
-        )
+        lifecycleLock.withLock {
+            if (joinHandle != null) {
+                return@withLock JoinNetworkResult.Failed(
+                    NetworkProvisioningError.JoinFailed(
+                        "a join is already in progress; close the kit before retrying"
+                    )
+                )
+            }
+            val ssid = credentials.ssid?.takeIf { it.isNotBlank() }
+                ?: return@withLock JoinNetworkResult.Failed(
+                    NetworkProvisioningError.JoinFailed("SSID must not be blank")
+                )
+
+            _state.value = NetworkProvisioningState.JoiningNetwork
+            _events.tryEmit(
+                NetworkProvisioningEvent.UserActionRequired(
+                    "Approve the Wi-Fi join prompt for \"$ssid\"."
+                )
+            )
+
+            val joinResult = runCatching { wifi.joinWifiNetwork(credentials) }
+                .getOrElse { e ->
+                    val mapped = mapStartException(e)
+                    ctx.logger.warn(
+                        "provisioning: joinWifiNetwork threw ${e::class.simpleName}: " +
+                            "${e.message ?: "(no message)"} → ${mapped::class.simpleName}",
+                        e
+                    )
+                    _state.value = NetworkProvisioningState.Failed(mapped)
+                    return@withLock JoinNetworkResult.Failed(mapped)
+                }
+
+            when (joinResult) {
+                is JoinResult.Failed -> {
+                    val err = NetworkProvisioningError.JoinFailed(joinResult.reason)
+                    ctx.logger.warn("provisioning: join failed: ${joinResult.reason}")
+                    _state.value = NetworkProvisioningState.Failed(err)
+                    JoinNetworkResult.Failed(err)
+                }
+                is JoinResult.Joined -> {
+                    val h = joinResult.handle
+                    joinHandle = h
+                    joinReleaseWatch = scope.launch {
+                        h.released.collect { reason -> handleJoinReleased(reason) }
+                    }
+                    val nstate = h.snapshotNetworkState()
+                    _networkState.value = nstate
+                    _state.value = NetworkProvisioningState.JoinedNetwork
+                    _events.tryEmit(NetworkProvisioningEvent.NetworkJoined(nstate))
+                    ctx.logger.info("provisioning: joined Wi-Fi network \"$ssid\"")
+                    JoinNetworkResult.Joined(nstate)
+                }
+            }
+        }
+
+    private fun handleJoinReleased(reason: String) {
+        val err = NetworkProvisioningError.JoinFailed("join released: $reason")
+        joinHandle = null
+        joinReleaseWatch = null
+        _state.value = NetworkProvisioningState.Failed(err)
+        _networkState.value = NetworkState.Unknown
+        _events.tryEmit(NetworkProvisioningEvent.Failed(err))
+        ctx.logger.warn("provisioning: join released — $reason")
+    }
 
     override suspend fun getManualConnectionInfo(): ManualConnectionInfo? {
         val port = ctx.lanTcpPort ?: return null
@@ -165,11 +227,18 @@ public class AndroidNetworkProvisioningManager internal constructor(
         return ctx.manualPeerRegistrar.registerManualPeer(host = host, port = port)
     }
 
-    /** Cancels the background scope. Apps may call this from their kit-teardown path. */
+    /**
+     * Cancels the background scope and releases any active hotspot or
+     * Wi-Fi join. Called automatically when the kit's parent job is
+     * cancelled (via [ProvisioningContext.parentJob]); apps may also call
+     * it directly for explicit teardown.
+     */
     public fun close() {
         scopeJob.cancel()
         runCatching { handle?.close() }
         handle = null
+        runCatching { joinHandle?.close() }
+        joinHandle = null
     }
 
     // --- internals --------------------------------------------------------

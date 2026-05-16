@@ -194,13 +194,130 @@ class AndroidNetworkProvisioningManagerTest {
         }
     }
 
+    // --- join paths (v0.2.1 task 12) -----------------------------------------
+
     @Test
-    fun joinReturnsUnsupportedUntilTask12() = runBlocking<Unit> {
-        val wifi = FakeWifiManagerWrapper(behavior = FakeWifiManagerWrapper.Behavior.ThrowSecurity)
+    fun joinSuccessReturnsJoinedWithNetworkStateAndEmitsNetworkJoinedEvent() = runBlocking<Unit> {
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.JoinSucceeds(
+                networkState = dev.p2pkit.core.provisioning.NetworkState.ConnectedToWifi(
+                    ssid = null,
+                    localIpAddresses = listOf("192.168.43.55")
+                )
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        try {
+            val joinedEventDeferred = async {
+                mgr.events.filterIsInstance<NetworkProvisioningEvent.NetworkJoined>().first()
+            }
+            // Subscriber attached.
+            delay(50)
+            val result = mgr.joinLocalNetwork(testCreds)
+            val joined = assertIs<JoinNetworkResult.Joined>(result)
+            assertEquals(NetworkProvisioningState.JoinedNetwork, mgr.state.value)
+            assertIs<dev.p2pkit.core.provisioning.NetworkState.ConnectedToWifi>(joined.networkState)
+            withTimeout(2_000) { joinedEventDeferred.await() }
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun joinFailureFromWrapperReturnsJoinFailed() = runBlocking<Unit> {
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.JoinFails(reason = "user declined")
+        )
         val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
         try {
             val result = mgr.joinLocalNetwork(testCreds)
-            assertIs<JoinNetworkResult.Unsupported>(result)
+            val failed = assertIs<JoinNetworkResult.Failed>(result)
+            val err = assertIs<NetworkProvisioningError.JoinFailed>(failed.error)
+            assertTrue(err.reason.contains("user declined"))
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun joinSecurityExceptionMapsToPermissionMissing() = runBlocking<Unit> {
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.JoinThrowsSecurity(
+                message = "Missing NEARBY_WIFI_DEVICES"
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        try {
+            val result = mgr.joinLocalNetwork(testCreds)
+            val failed = assertIs<JoinNetworkResult.Failed>(result)
+            val err = assertIs<NetworkProvisioningError.PermissionMissingForProvisioning>(failed.error)
+            assertTrue(err.permissions.contains(dev.p2pkit.core.permission.P2pPermission.NearbyWifiDevices))
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun joinLocationModeOffMapsToLocationPermissionMissing() = runBlocking<Unit> {
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.JoinThrowsSecurity(
+                message = "Location mode is not enabled."
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        try {
+            val result = mgr.joinLocalNetwork(testCreds)
+            val failed = assertIs<JoinNetworkResult.Failed>(result)
+            val err = assertIs<NetworkProvisioningError.PermissionMissingForProvisioning>(failed.error)
+            assertTrue(err.permissions.contains(dev.p2pkit.core.permission.P2pPermission.Location))
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun secondJoinWhileFirstActiveReturnsJoinFailed() = runBlocking<Unit> {
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.JoinSucceeds(
+                networkState = dev.p2pkit.core.provisioning.NetworkState.ConnectedToWifi(
+                    ssid = null,
+                    localIpAddresses = listOf("192.168.43.55")
+                )
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        try {
+            mgr.joinLocalNetwork(testCreds)
+            val result = mgr.joinLocalNetwork(testCreds)
+            val failed = assertIs<JoinNetworkResult.Failed>(result)
+            val err = assertIs<NetworkProvisioningError.JoinFailed>(failed.error)
+            assertTrue(err.reason.contains("already in progress"))
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun systemInitiatedJoinReleaseEmitsFailedEventAndClearsHandle() = runBlocking<Unit> {
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.JoinSucceeds(
+                networkState = dev.p2pkit.core.provisioning.NetworkState.ConnectedToWifi(
+                    ssid = null,
+                    localIpAddresses = listOf("192.168.43.55")
+                )
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        try {
+            val failedEventDeferred = async {
+                mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().first()
+            }
+            mgr.joinLocalNetwork(testCreds)
+            delay(50)
+            wifi.lastJoinHandle?.simulateRelease("MIUI battery policy")
+            val ev = withTimeout(2_000) { failedEventDeferred.await() }
+            val err = assertIs<NetworkProvisioningError.JoinFailed>(ev.error)
+            assertTrue(err.reason.contains("MIUI battery policy"))
         } finally {
             mgr.close()
         }
@@ -240,12 +357,16 @@ private class FakeWifiManagerWrapper(
 ) : WifiManagerWrapper {
 
     var lastHandle: FakeHotspotHandle? = null
+    var lastJoinHandle: FakeJoinHandle? = null
 
     sealed class Behavior {
         object ThrowSecurity : Behavior()
         data class ThrowSecurityWithMessage(val message: String) : Behavior()
         data class FailWithReason(val reasonCode: Int) : Behavior()
         data class Start(val credentials: WifiCredentials?, val apHosts: List<String>) : Behavior()
+        data class JoinSucceeds(val networkState: dev.p2pkit.core.provisioning.NetworkState) : Behavior()
+        data class JoinFails(val reason: String) : Behavior()
+        data class JoinThrowsSecurity(val message: String) : Behavior()
     }
 
     override fun isWifiEnabled(): Boolean = true
@@ -260,6 +381,25 @@ private class FakeWifiManagerWrapper(
                 lastHandle = h
                 HotspotStartResult.Started(h)
             }
+            // join-only behaviors → not a valid start call in our tests
+            is Behavior.JoinSucceeds, is Behavior.JoinFails, is Behavior.JoinThrowsSecurity ->
+                throw IllegalStateException("test misconfigured: join behavior used for startLocalOnlyHotspot")
+        }
+    }
+
+    override suspend fun joinWifiNetwork(credentials: WifiCredentials): JoinResult {
+        return when (val b = behavior) {
+            is Behavior.JoinSucceeds -> {
+                val h = FakeJoinHandle(b.networkState)
+                lastJoinHandle = h
+                JoinResult.Joined(h)
+            }
+            is Behavior.JoinFails -> JoinResult.Failed(b.reason)
+            is Behavior.JoinThrowsSecurity -> throw SecurityException(b.message)
+            // start-only behaviors → not a valid join call in our tests
+            Behavior.ThrowSecurity, is Behavior.ThrowSecurityWithMessage,
+            is Behavior.FailWithReason, is Behavior.Start ->
+                throw IllegalStateException("test misconfigured: start behavior used for joinWifiNetwork")
         }
     }
 }
@@ -287,6 +427,27 @@ private class FakeHotspotHandle(
 
     fun simulateSystemStop(reason: String) {
         _stopped.tryEmit(HotspotStopReason(reason))
+    }
+}
+
+private class FakeJoinHandle(
+    private val state: dev.p2pkit.core.provisioning.NetworkState
+) : JoinHandle {
+
+    private val _released: MutableSharedFlow<String> = MutableSharedFlow(
+        replay = 0,
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    override val released: SharedFlow<String> = _released.asSharedFlow()
+    var isClosed: Boolean = false
+        private set
+
+    override fun snapshotNetworkState(): dev.p2pkit.core.provisioning.NetworkState = state
+    override fun close() { isClosed = true }
+
+    fun simulateRelease(reason: String) {
+        _released.tryEmit(reason)
     }
 }
 

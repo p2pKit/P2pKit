@@ -4,6 +4,7 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.PeerId
+import kotlinx.coroutines.Job
 
 /**
  * Constructs a platform-specific [NetworkProvisioningManager] when the
@@ -52,5 +53,14 @@ public class ProvisioningContext public constructor(
     public val config: NetworkProvisioningConfig,
     public val logger: P2pLogger,
     public val lanTcpPort: Int?,
-    public val manualPeerRegistrar: ManualPeerRegistrar
+    public val manualPeerRegistrar: ManualPeerRegistrar,
+    /**
+     * Parent [Job] the manager should attach its scope to so the kit's
+     * `stop()` automatically tears the manager down (cancels callbacks,
+     * releases hotspot reservations, unbinds [android.net.ConnectivityManager.bindProcessToNetwork]
+     * on Android, etc.). `null` if no parent is available — managers fall
+     * back to a free-standing scope, in which case the host is responsible
+     * for explicit cleanup.
+     */
+    public val parentJob: Job? = null
 )
