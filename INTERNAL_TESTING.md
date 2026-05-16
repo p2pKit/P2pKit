@@ -179,6 +179,19 @@ A v0.1-internal / v0.2-dev release passes when **all six** are true:
 
 If any of these fails, file a bug. If discovery hangs on a network you suspect blocks multicast, **first** retry on a phone hotspot before filing.
 
+### Verifying Android rotation manually (v0.2 Task 2)
+
+1. Install the sample APK on one Android device and another peer (desktop or second Android).
+2. Tap **Start** on the Android side. Wait for the other peer to appear in the list. Optionally tap **Connect** and exchange a message.
+3. Rotate the phone (portrait ↔ landscape).
+4. The running screen should **stay on screen** — no flip back to setup, no flicker. The discovered-peers count, active session, and chat log should all be preserved.
+5. Tap **Stop** to confirm the explicit teardown still works.
+6. Swipe the app away from recents to confirm process-level cleanup runs `kit.stop()` in `ViewModel.onCleared()`.
+
+If rotation sends you back to the setup screen, the host activity was destroyed without preserving the ViewModel — check that `MainActivity` is using `viewModel()` (not `remember`) for the `P2pKitViewModel`.
+
+**Known boundary**: Android may kill the app's process while it's backgrounded under memory pressure. When that happens, the ViewModel is destroyed with the process. Re-launching the app returns to the setup screen. This is documented as v0.3 work (`SavedStateHandle` integration).
+
 ### Verifying PeerId persistence manually
 
 **Desktop ↔ Desktop:**

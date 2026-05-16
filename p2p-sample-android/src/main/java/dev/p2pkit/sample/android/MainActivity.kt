@@ -25,32 +25,17 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import dev.p2pkit.core.AppId
+import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.p2pkit.core.ConnectionState
-import dev.p2pkit.core.P2pKit
-import dev.p2pkit.core.P2pMessage
-import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
-import dev.p2pkit.transport.lan.lan
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.onSubscription
-import kotlinx.coroutines.launch
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -58,7 +43,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    P2pKitSampleApp()
+                    val vm: P2pKitViewModel = viewModel()
+                    P2pKitSampleApp(vm)
                 }
             }
         }
@@ -67,15 +53,8 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun P2pKitSampleApp() {
-    // Parent-scoped coroutine scope. Survives RunningScreen leaving the
-    // composition, which is critical for running `kit.stop()` to completion
-    // when the user clicks Stop — a child scope would be cancelled mid-cleanup
-    // and the kit's mDNS/TCP listeners would leak.
-    val appScope = rememberCoroutineScope()
-    var deviceName by remember { mutableStateOf("Android-${(0..9999).random()}") }
-    var p2p by remember { mutableStateOf<P2pKit?>(null) }
-    val appContext = LocalContext.current.applicationContext
+private fun P2pKitSampleApp(vm: P2pKitViewModel) {
+    val isRunning by vm.isRunning.collectAsState()
 
     Scaffold(
         topBar = {
@@ -84,30 +63,17 @@ private fun P2pKitSampleApp() {
             )
         }
     ) { padding ->
-        if (p2p == null) {
+        if (!isRunning) {
             SetupScreen(
                 paddingValues = padding,
-                deviceName = deviceName,
-                onDeviceNameChange = { deviceName = it },
-                onStart = {
-                    p2p = P2pKit.create {
-                        appId = AppId(APP_ID)
-                        this.deviceName = deviceName
-                        transports { lan(appContext) }
-                    }
-                }
+                deviceName = vm.deviceName,
+                onDeviceNameChange = vm::updateDeviceName,
+                onStart = vm::start
             )
         } else {
-            val kit = p2p!!
             RunningScreen(
                 paddingValues = padding,
-                kit = kit,
-                onStop = {
-                    val toStop = kit
-                    p2p = null
-                    // Run on appScope so the cleanup survives RunningScreen's disposal.
-                    appScope.launch { runCatching { toStop.stop() } }
-                }
+                vm = vm
             )
         }
     }
@@ -151,51 +117,10 @@ private fun SetupScreen(
 @Composable
 private fun RunningScreen(
     paddingValues: PaddingValues,
-    kit: P2pKit,
-    onStop: () -> Unit
+    vm: P2pKitViewModel
 ) {
-    val scope = rememberCoroutineScope()
-    val lifecycleOwner = LocalLifecycleOwner.current
-
-    val peers by kit.peers.collectAsState()
-    val sessions = remember { mutableStateListOf<P2pSession>() }
-    val messages = remember { mutableStateListOf<ChatLine>() }
+    val peers by vm.peers.collectAsState()
     var draft by remember { mutableStateOf("") }
-    var selectedSession by remember { mutableStateOf<P2pSession?>(null) }
-
-    // Start advertising + discovery when entering this screen. Cleanup is
-    // owned by the parent via [onStop] — do NOT call kit.stop() from this
-    // composable's scope (it would be cancelled before stop() can finish).
-    LaunchedEffect(kit) {
-        runCatching { kit.startAdvertising() }
-        runCatching { kit.startDiscovery() }
-    }
-
-    // Bridge Android lifecycle to P2pKit's notifyApp* hooks.
-    DisposableEffect(lifecycleOwner, kit) {
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_PAUSE -> kit.notifyAppBackgrounded()
-                Lifecycle.Event.ON_RESUME -> kit.notifyAppForegrounded()
-                else -> Unit
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-
-    // Wire up incoming sessions.
-    LaunchedEffect(kit) {
-        kit.incomingSessions.collect { session ->
-            sessions.add(session)
-            if (selectedSession == null) selectedSession = session
-            scope.launch {
-                session.incoming.collect { msg ->
-                    messages.add(ChatLine(session.peer.name, msg))
-                }
-            }
-        }
-    }
 
     Column(
         modifier = Modifier
@@ -212,7 +137,7 @@ private fun RunningScreen(
                 text = "Discovered peers (${peers.size})",
                 style = MaterialTheme.typography.titleMedium
             )
-            TextButton(onClick = onStop) { Text("Stop") }
+            TextButton(onClick = vm::stop) { Text("Stop") }
         }
         Spacer(Modifier.height(8.dp))
 
@@ -223,25 +148,14 @@ private fun RunningScreen(
             items(peers, key = { it.id.value }) { peer ->
                 PeerCard(
                     peer = peer,
-                    onConnect = {
-                        scope.launch {
-                            val session = runCatching { kit.connect(peer) }.getOrNull() ?: return@launch
-                            if (sessions.none { it.id == session.id }) sessions.add(session)
-                            selectedSession = session
-                            scope.launch {
-                                session.incoming.collect { msg ->
-                                    messages.add(ChatLine(session.peer.name, msg))
-                                }
-                            }
-                        }
-                    }
+                    onConnect = { vm.connect(peer) }
                 )
             }
         }
 
         Spacer(Modifier.height(16.dp))
 
-        val active = selectedSession
+        val active = vm.selectedSession
         if (active != null) {
             val sessionState by active.state.collectAsState()
             Text(
@@ -253,7 +167,7 @@ private fun RunningScreen(
                 modifier = Modifier.fillMaxWidth().height(220.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                items(messages.toList()) { line ->
+                items(vm.messages.toList()) { line ->
                     Text(
                         text = "${line.from}: ${line.formatted}",
                         maxLines = 4,
@@ -275,10 +189,7 @@ private fun RunningScreen(
                     val text = draft.trim()
                     if (text.isEmpty()) return@Button
                     draft = ""
-                    scope.launch {
-                        runCatching { active.send(P2pMessage.Text(text)) }
-                    }
-                    messages.add(ChatLine("(me)", P2pMessage.Text(text)))
+                    vm.sendText(text)
                 },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = sessionState == ConnectionState.Connected
@@ -315,13 +226,3 @@ private fun PeerCard(peer: Peer, onConnect: () -> Unit) {
         }
     }
 }
-
-private data class ChatLine(val from: String, val message: P2pMessage) {
-    val formatted: String
-        get() = when (message) {
-            is P2pMessage.Text -> message.value
-            is P2pMessage.Binary -> "<binary ${message.bytes.size}B>"
-        }
-}
-
-private const val APP_ID = "dev.p2pkit.sample.android"

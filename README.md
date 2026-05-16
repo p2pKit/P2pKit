@@ -281,12 +281,13 @@ The current `v0.2-dev` branch ships **80 unit + integration tests** (across `:p2
 - **`ReconnectPolicy.Enabled` is accepted but does not retry yet.** The configuration is validated, but v0.1 sessions still transition to `Failed` on disconnect — equivalent to `Disabled`. The kit emits a `P2pLogger.warn` at construction so this isn't silent, and the KDoc on `ReconnectPolicy.Enabled` says so. Real retry semantics with `maxAttempts` / `retryDelayMillis` land in a later v0.2 task.
 - **Android sample's `appId` is hardcoded** to `dev.p2pkit.sample.android` while the desktop sample uses `p2pkit-desktop-sample`. For cross-platform demos, edit one to match — or expose the field in each sample's UI.
 - **No instrumented Android tests.** Android LAN paths (`NsdManager`, `AndroidLanDataTransport`, `AndroidRawConnection`) are validated by code review + manual two-device testing only. The protocol layer that flows over them is JVM-tested.
-- **Android sample loses session on screen rotation.** The kit lives inside the composable, so rotation tears it down. Moving state to a `ViewModel` is a planned v0.2 sample polish.
+- **Android sample survives rotation but not process death.** The kit and its session/peer/chat state live in a `P2pKitViewModel` that survives configuration changes (rotation, dark mode, locale, multi-window). If Android kills the app process while it's backgrounded, the kit is lost and the next launch starts at the setup screen. `SavedStateHandle`-based recovery is a planned v0.3 task.
+- **Sample app doesn't track background/foreground.** v0.2 dropped the `LifecycleEventObserver` from the Android sample — it was firing `notifyAppBackgrounded()` on rotation start, which the kit interpreted via `BackgroundPolicy.CloseActiveSessions`. The sample now keeps the kit running until the user taps **Stop** or the `Activity` is destroyed for real. Apps that want proper background detection should wire `ProcessLifecycleOwner` (from `androidx.lifecycle:lifecycle-process`) themselves.
 
 ## Status
 
 - **v0.1**: shipped as `v0.1-internal` tag.
-- **v0.2-dev** (current branch): Task 1 — `PeerId` persistence — **done**. Still to do: Network Provisioning sidecar (Android `LocalOnlyHotspot` + Wi-Fi join helpers; JVM network state + manual IP fallback), `ReconnectPolicy.Enabled` retries, file transfer API, instrumented Android tests, sample-app `ViewModel` polish.
+- **v0.2-dev** (current branch): Task 1 — `PeerId` persistence — **done**. Task 2 — Android sample `ViewModel` polish (rotation survives) — **done**. Still to do: Network Provisioning sidecar (Android `LocalOnlyHotspot` + Wi-Fi join helpers; JVM network state + manual IP fallback), `ReconnectPolicy.Enabled` retries, file transfer API, instrumented Android tests, process-death recovery via `SavedStateHandle`.
 - **v0.3+**: iOS / macOS LAN, BLE, Wi-Fi Direct, Multipeer, Relay, encryption.
 
 See `P2pKit-Spec.md` for the complete v0.1 and planned v0.2 contracts.
