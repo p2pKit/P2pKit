@@ -11,6 +11,7 @@ import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.internal.PeerIdStorage
 import dev.p2pkit.core.internal.newP2pKit
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
+import dev.p2pkit.core.provisioning.NetworkProvisioningFactory
 import dev.p2pkit.core.transport.TransportFactory
 
 /**
@@ -46,6 +47,7 @@ public class P2pKitBuilder internal constructor() {
     internal var appKilledPolicy: AppKilledPolicy = AppKilledPolicy.NoPersistenceForMvp
     internal var securityMode: SecurityMode = SecurityMode.NoneForMvp
     internal var networkProvisioning: NetworkProvisioningConfig = NetworkProvisioningConfig()
+    internal var networkProvisioningFactory: NetworkProvisioningFactory? = null
 
     /**
      * Override the [PeerIdStorage] the kit uses. **Internal** — set from
@@ -80,6 +82,7 @@ public class P2pKitBuilder internal constructor() {
     public fun networkProvisioning(block: NetworkProvisioningConfigBuilder.() -> Unit) {
         val b = NetworkProvisioningConfigBuilder(networkProvisioning).apply(block)
         networkProvisioning = b.toConfig()
+        networkProvisioningFactory = b.factory
     }
 
     internal fun build(): P2pKit {
@@ -98,6 +101,7 @@ public class P2pKitBuilder internal constructor() {
             appKilledPolicy = appKilledPolicy,
             securityMode = securityMode,
             provisioningConfig = networkProvisioning,
+            provisioningFactory = networkProvisioningFactory,
             logger = logger,
             peerIdStorageOverride = peerIdStorage
         )
@@ -138,6 +142,18 @@ public class NetworkProvisioningConfigBuilder internal constructor(initial: Netw
     public var enableLocalHotspot: Boolean = initial.enableLocalHotspot
     public var enableWifiJoin: Boolean = initial.enableWifiJoin
     public var enableManualIpFallback: Boolean = initial.enableManualIpFallback
+
+    /**
+     * Platform-module hook. Provisioning modules expose extension helpers
+     * (e.g. `jvm()`, `android(context)`) that call this. When no factory is
+     * registered, the kit uses
+     * [dev.p2pkit.core.provisioning.UnsupportedNetworkProvisioningManager].
+     */
+    public fun register(factory: NetworkProvisioningFactory) {
+        this.factory = factory
+    }
+
+    internal var factory: NetworkProvisioningFactory? = null
 
     internal fun toConfig(): NetworkProvisioningConfig =
         NetworkProvisioningConfig(enableLocalHotspot, enableWifiJoin, enableManualIpFallback)

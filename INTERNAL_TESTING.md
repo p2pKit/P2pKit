@@ -46,7 +46,7 @@ POSIX:
           :p2p-sample-android:assembleDebug
 ```
 
-**Expected**: `BUILD SUCCESSFUL`, 94 tests completed in `:p2p-core:allTests` / 0 failed, plus the LAN + KMP loopback tests green. APK at `p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk`. Launcher at `p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop[.bat]`.
+**Expected**: `BUILD SUCCESSFUL`, 94 tests completed in `:p2p-core:allTests` / 0 failed, 6 tests in `:p2p-network-provisioning-desktop:test` / 0 failed, plus the LAN + KMP loopback tests green. APK at `p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk`. Launcher at `p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop[.bat]`.
 
 Install the APK on the test device:
 ```powershell
@@ -175,6 +175,31 @@ Verifies the Android side actually receives mDNS broadcasts. The v0.2 `AndroidLa
    - Phone sees desktop briefly then loses it → MulticastLock dropped because the kit was stopped/restarted; tap **Stop** then **Start** to re-acquire.
 
 **Pass criteria**: dumpsys shows the lock during operation, lock disappears after kit stops, discovery works both ways.
+
+---
+
+## G. JVM manual-IP fallback (v0.2.1 task 10)
+
+Verifies the new `:p2p-network-provisioning-desktop` module: `getManualConnectionInfo()` surfaces local IP + port, and `createManualPeer(host, port)` lets you dial a peer without mDNS. Use when the router blocks multicast (corporate / guest / hotel Wi-Fi) or to bypass discovery entirely.
+
+**Devices:** two JVM CLI samples, ideally on a network that blocks mDNS or with mDNS disabled (you can also just run two CLIs on `localhost` and skip discovery — call `manual` directly).
+
+1. Start **Alice** and **Bob** (two JVM CLIs).
+2. On each, run `> info` and read the `manual host(s)` and `manual port` lines. These come from `kit.networkProvisioning.getManualConnectionInfo()`. Expect one or more non-loopback IPv4 addresses and the LAN transport's TCP port.
+3. From Alice's terminal, dial Bob by IP:
+   ```
+   > manual 192.168.x.y:NNNN
+   ```
+   Use one of the values from Bob's `info` output. Expect `connected manual peer …` plus a `[state] Bob → Connected` line and `[incoming] from Alice` on Bob's terminal.
+4. Round-trip a message: `> send hello from Alice` — Bob's terminal prints `[Alice] hello from Alice`.
+5. Repeat in reverse direction from Bob to confirm both sides can initiate.
+
+**Pass criteria:** `info` shows non-empty manual info; `manual <host>:<port>` opens a session without any mDNS discovery; messages round-trip. Same Compose Desktop UI flow exists in the "Manual peer (mDNS fallback)" panel under the discovered-peers list.
+
+**Common failure modes:**
+- `manual info  (none — provisioning not configured or no LAN port)` — ensure the kit was built with `networkProvisioning { jvm() }` (both desktop samples ship this by default).
+- `manual createManualPeer failed: host must not be blank` / `port out of range` — bad `host:port` syntax.
+- Connect-then-immediate-close — the address you typed isn't reachable, or the other peer's TCP server isn't bound on that interface (try a different host address from `info`).
 
 ---
 

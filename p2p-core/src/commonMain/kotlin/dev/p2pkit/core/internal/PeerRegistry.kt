@@ -1,10 +1,17 @@
 package dev.p2pkit.core.internal
 
+import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
+import dev.p2pkit.core.Platform
+import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.provisioning.ManualPeerRegistrar
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.PeerEvent
+import dev.p2pkit.core.transport.TransportHint
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,13 +38,22 @@ import kotlinx.coroutines.launch
  *   explicitly because `System.currentTimeMillis` is not available in
  *   commonMain. P2pKitImpl wires up the platform clock; tests inject a fake.
  */
+@OptIn(ExperimentalP2pApi::class)
 internal class PeerRegistry(
     private val discoveryTransports: List<DiscoveryTransport>,
     private val scope: CoroutineScope,
     private val clock: () -> Long,
     private val staleTimeoutMillis: Long = DEFAULT_STALE_TIMEOUT_MS,
     private val evictionPollMillis: Long = DEFAULT_EVICTION_POLL_MS
-) {
+) : ManualPeerRegistrar {
+
+    /**
+     * Peer ids whose [TrackedPeer] entry was created by
+     * [registerManualPeer], not by a discovery `Found` event. These are
+     * skipped by the staleness sweeper since no transport sends heartbeats
+     * for them.
+     */
+    private val manualPeerIds: MutableSet<PeerId> = mutableSetOf()
 
     private val tracked: MutableStateFlow<Map<PeerId, TrackedPeer>> = MutableStateFlow(emptyMap())
     private val _peers: MutableStateFlow<List<Peer>> = MutableStateFlow(emptyList())
@@ -86,9 +102,39 @@ internal class PeerRegistry(
     internal fun evictStalePeers() {
         val now = clock()
         tracked.update { current ->
-            current.filterValues { now - it.lastSeenAtMillis <= staleTimeoutMillis }
+            current.filterValues { tracked ->
+                tracked.internalPeer.publicPeer.id in manualPeerIds ||
+                    now - tracked.lastSeenAtMillis <= staleTimeoutMillis
+            }
         }
         publishPeers()
+    }
+
+    @OptIn(ExperimentalUuidApi::class)
+    override fun registerManualPeer(
+        host: String,
+        port: Int,
+        kind: TransportKind,
+        deviceName: String?
+    ): Peer {
+        require(host.isNotBlank()) { "host must not be blank" }
+        require(port in 1..65_535) { "port out of range: $port" }
+        val syntheticId = PeerId("manual-${Uuid.random()}")
+        val displayName = deviceName?.takeIf { it.isNotBlank() } ?: "manual:$host:$port"
+        val publicPeer = Peer(
+            id = syntheticId,
+            name = displayName,
+            platform = Platform.UNKNOWN,
+            supportedTransports = setOf(kind)
+        )
+        val internal = InternalPeer(
+            publicPeer = publicPeer,
+            transportHints = listOf(TransportHint(type = kind, host = host, port = port))
+        )
+        tracked.update { current -> current + (syntheticId to TrackedPeer(internal, clock())) }
+        manualPeerIds.add(syntheticId)
+        publishPeers()
+        return publicPeer
     }
 
     private suspend fun evictLoop() {

@@ -13,6 +13,7 @@ kotlin {
 dependencies {
     implementation(project(":p2p-core"))
     implementation(project(":p2p-transport-lan"))
+    implementation(project(":p2p-network-provisioning-desktop"))
     implementation(libs.kotlinx.coroutines.core)
 
     implementation(compose.desktop.currentOs)

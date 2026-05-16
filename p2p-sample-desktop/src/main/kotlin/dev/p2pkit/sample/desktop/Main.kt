@@ -6,7 +6,9 @@ import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.ReconnectPolicy
+import dev.p2pkit.provisioning.desktop.jvm
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +49,9 @@ import java.util.concurrent.ConcurrentHashMap
  * - `send <text>`                 — broadcast to every active session
  * - `to <id-or-name> <text>`      — targeted send to one peer
  * - `close <id-or-name>`          — close one session
+ * - `manual <host>:<port>`        — connect by IP without mDNS (manual-IP fallback);
+ *                                   uses the JVM provisioning module to register
+ *                                   a synthetic peer and then dials it
  * - `help`                        — print this list
  * - `quit` / `exit`               — stop the kit and exit
  */
@@ -64,6 +69,7 @@ fun main(args: Array<String>) {
         this.deviceName = deviceName
         transports { lan() }
         lifecycle { reconnectPolicy = reconnect }
+        networkProvisioning { jvm() }
         logger = StdErrLogger
     }
     val advertising = StateLatch()
@@ -197,6 +203,35 @@ private suspend fun repl(
             }
 
             "info", "state" -> printInfo(p2p, sessions, advertising, discovering, autoMesh)
+
+            "manual" -> {
+                val parts = arg.split(':', limit = 2)
+                val host = parts.getOrNull(0)?.trim().orEmpty()
+                val port = parts.getOrNull(1)?.trim()?.toIntOrNull()
+                if (host.isEmpty() || port == null || port !in 1..65_535) {
+                    println("usage: manual <host>:<port>")
+                    continue
+                }
+                scope.launch {
+                    @OptIn(ExperimentalP2pApi::class)
+                    val synthetic = runCatching { p2p.networkProvisioning.createManualPeer(host, port) }
+                        .getOrElse {
+                            System.err.println("manual createManualPeer failed: ${it.message}")
+                            return@launch
+                        }
+                    runCatching {
+                        val session = p2p.connect(synthetic)
+                        sessions[session.peer.id.value] = session
+                        wireIncoming(session, scope)
+                        launch {
+                            session.state.collect { st -> println("[state] ${session.peer.name} → $st") }
+                        }
+                        println("connected manual peer ${session.peer.name}")
+                    }.onFailure {
+                        System.err.println("manual connect failed: ${it.message}")
+                    }
+                }
+            }
 
             "mesh" -> {
                 when (arg) {
@@ -356,6 +391,13 @@ private fun printInfo(
     println("auto-mesh        ${autoMesh.value}")
     println("peers known      ${p2p.peers.value.size}")
     println("active sessions  ${sessions.size}")
+    val info = runBlocking { p2p.networkProvisioning.getManualConnectionInfo() }
+    if (info != null) {
+        println("manual host(s)   ${info.hostAddresses.joinToString(", ")}")
+        println("manual port      ${info.port}")
+    } else {
+        println("manual info      (none — provisioning not configured or no LAN port)")
+    }
     println("---")
 }
 
@@ -372,6 +414,7 @@ private fun printHelp() {
           connect <id-or-name>        — open a session
           send <text>                 — broadcast to every active session (room)
           to <id-or-name> <text>      — send to one peer
+          manual <host>:<port>        — connect by IP, no mDNS needed
           close <id-or-name>          — close a session
           help                        — show this list
           quit | exit                 — stop and exit

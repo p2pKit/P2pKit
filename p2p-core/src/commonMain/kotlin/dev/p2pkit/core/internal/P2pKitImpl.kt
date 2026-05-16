@@ -18,12 +18,15 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.core.protocol.DefaultP2pProtocol
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
+import dev.p2pkit.core.provisioning.NetworkProvisioningFactory
 import dev.p2pkit.core.provisioning.NetworkProvisioningManager
+import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.UnsupportedNetworkProvisioningManager
 import dev.p2pkit.core.security.NoOpSecurityManager
 import dev.p2pkit.core.security.SecurityManager
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.DiscoveryTransport
+import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -42,6 +45,7 @@ import kotlinx.coroutines.runBlocking
  * Production [P2pKit] implementation. Wired up by
  * [dev.p2pkit.core.dsl.P2pKitBuilder].
  */
+@OptIn(dev.p2pkit.core.ExperimentalP2pApi::class)
 internal class P2pKitImpl(
     override val appId: AppId,
     private val deviceName: String,
@@ -53,9 +57,9 @@ internal class P2pKitImpl(
     private val backgroundPolicy: BackgroundPolicy,
     @Suppress("unused") private val appKilledPolicy: AppKilledPolicy,
     @Suppress("unused") private val securityMode: SecurityMode,
-    @Suppress("unused") private val provisioningConfig: NetworkProvisioningConfig,
+    private val provisioningConfig: NetworkProvisioningConfig,
+    private val provisioningFactory: NetworkProvisioningFactory?,
     override val permissions: P2pPermissionManager,
-    override val networkProvisioning: NetworkProvisioningManager,
     private val logger: P2pLogger,
     private val clock: () -> Long,
     parentJob: Job?
@@ -63,6 +67,8 @@ internal class P2pKitImpl(
 
     private val internalJob = SupervisorJob(parent = parentJob)
     private val scope = CoroutineScope(Dispatchers.Default + internalJob)
+
+    override val networkProvisioning: NetworkProvisioningManager
 
     override val localDeviceName: String get() = deviceName
 
@@ -121,6 +127,36 @@ internal class P2pKitImpl(
         )
         peerRegistry.start()
         sessionManager.startAcceptingIncoming(dataTransports)
+
+        // Build the provisioning manager from the registered factory, or fall
+        // back to Unsupported if none was registered. Done last in init so the
+        // factory sees a fully-wired peerRegistry and the LAN transport's
+        // bound TCP port (when present).
+        networkProvisioning = run {
+            val factory = provisioningFactory
+            if (factory == null) {
+                UnsupportedNetworkProvisioningManager()
+            } else {
+                val lanPort = dataTransports.filterIsInstance<HasLocalTcpEndpoint>()
+                    .firstOrNull()?.tcpPort
+                val ctx = ProvisioningContext(
+                    appId = appId,
+                    localPeerId = localPeerId,
+                    localDeviceName = deviceName,
+                    config = provisioningConfig,
+                    logger = logger,
+                    lanTcpPort = lanPort,
+                    manualPeerRegistrar = peerRegistry
+                )
+                runCatching { factory.build(ctx) }.getOrElse { e ->
+                    logger.warn(
+                        "Network provisioning factory threw during build; falling back to Unsupported",
+                        e
+                    )
+                    UnsupportedNetworkProvisioningManager()
+                }
+            }
+        }
 
         if (reconnectPolicy is ReconnectPolicy.Enabled) {
             logger.debug(
@@ -235,6 +271,7 @@ internal fun newP2pKit(
     appKilledPolicy: AppKilledPolicy,
     securityMode: SecurityMode,
     provisioningConfig: NetworkProvisioningConfig,
+    provisioningFactory: NetworkProvisioningFactory?,
     logger: P2pLogger,
     peerIdStorageOverride: PeerIdStorage? = null
 ): P2pKit {
@@ -251,8 +288,8 @@ internal fun newP2pKit(
         appKilledPolicy = appKilledPolicy,
         securityMode = securityMode,
         provisioningConfig = provisioningConfig,
+        provisioningFactory = provisioningFactory,
         permissions = dev.p2pkit.core.permission.NoOpP2pPermissionManager(),
-        networkProvisioning = UnsupportedNetworkProvisioningManager(),
         logger = logger,
         clock = ::systemTimeMillis,
         parentJob = null

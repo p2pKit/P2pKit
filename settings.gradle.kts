@@ -24,6 +24,7 @@ rootProject.name = "p2pkit"
 
 include(":p2p-core")
 include(":p2p-transport-lan")
+include(":p2p-network-provisioning-desktop")
 include(":p2p-sample-desktop")
 include(":p2p-sample-desktop-ui")
 include(":p2p-sample-android")

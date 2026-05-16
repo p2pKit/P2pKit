@@ -237,9 +237,10 @@ Detailed design lives in [`P2pKit-Spec.md`](./P2pKit-Spec.md).
 - **`:p2p-transport-lan`** — mDNS discovery + TCP data. JmDNS on JVM, `NsdManager` on Android. **iOS targets are not declared on this module yet** (v0.3).
 - **`:p2p-sample-android`** — Compose UI room/broadcast test harness. **Primary visual harness** for v0.2. `./gradlew :p2p-sample-android:assembleDebug`.
 - **`:p2p-sample-desktop`** — JVM CLI test harness. **Canonical desktop harness** for v0.2. `./gradlew :p2p-sample-desktop:installDist` then run the launcher. Type `help` for commands.
-- **`:p2p-sample-desktop-ui`** — Compose Desktop room/broadcast test harness. Same v0.2 feature parity as the Android sample (status header, peer chips with state + close, broadcast/targeted send, room timeline, log strip, reconnect picker). Run with `./gradlew :p2p-sample-desktop-ui:run`.
+- **`:p2p-sample-desktop-ui`** — Compose Desktop room/broadcast test harness. Same v0.2 feature parity as the Android sample (status header, peer chips with state + close, broadcast/targeted send, room timeline, log strip, reconnect picker, manual-IP fallback). Run with `./gradlew :p2p-sample-desktop-ui:run`.
+- **`:p2p-network-provisioning-desktop`** *(v0.2.1)* — JVM Network Provisioning sidecar. Implements `getManualConnectionInfo()` + `createManualPeer(host, port)` for the manual-IP fallback when mDNS is blocked. Hotspot hosting and Wi-Fi join return `Unsupported` (Android-only capabilities). Wire into a JVM kit via `networkProvisioning { jvm() }`.
 
-Planned modules (not in v0.2): `:p2p-network-provisioning(-android|-desktop|-ios)`, `:p2p-transport-ble`, `:p2p-transport-android-wifidirect`, `:p2p-transport-apple-multipeer`, `:p2p-transport-relay`, `:p2p-sample-ios`.
+Planned modules (not in v0.2.1): `:p2p-network-provisioning-android` (v0.2.1 task 11–12), `:p2p-transport-ble`, `:p2p-transport-android-wifidirect`, `:p2p-transport-apple-multipeer`, `:p2p-transport-relay`, `:p2p-sample-ios`.
 
 ## Sample feature coverage (v0.2-dev)
 
@@ -356,7 +357,8 @@ The current `v0.2-dev` branch ships **94 unit + integration tests** in `:p2p-cor
 ## Status
 
 - **v0.1**: shipped as `v0.1-internal` tag.
-- **v0.2-dev** (current branch): Task 1 — `PeerId` persistence — **done**. Task 2 — Android sample `ViewModel` polish (rotation survives) — **done**. Task 3 — `ReconnectPolicy.Enabled` retries for outgoing sessions — **done**. Task 4 — iOS core scaffolding (targets + `Platform.IOS` + `NSUserDefaults`-backed `PeerId`; no LAN transport) — **done**. Task 7 — local identity accessors on `P2pKit` (`appId`, `localDeviceName`, `localPeerId`) — **done**. Task 8 — simultaneous-open arbitration in `SessionManager` (deterministic tie-break so `P2pKit.sessions` never holds more than one session per peer) — **done**. Still to do: Network Provisioning sidecar (Android `LocalOnlyHotspot` + Wi-Fi join helpers; JVM network state + manual IP fallback), file transfer API, instrumented Android tests, process-death recovery via `SavedStateHandle`.
+- **v0.2-dev** → tagged **`v0.2-internal`** at `a9d683d`. v0.2 contents: Tasks 1–8 (`PeerId` persistence, rotation survival, `ReconnectPolicy.Enabled` retry, iOS scaffolding, Android `MulticastLock`, room/broadcast samples, local identity accessors, simultaneous-open arbitration).
+- **v0.2.1-dev** (current branch): Task 10 — JVM Network Provisioning sidecar with manual-IP fallback (`:p2p-network-provisioning-desktop`) — **done**. Still to do: Task 11 (Android `LocalOnlyHotspot` host), Task 12 (Android Wi-Fi join via `WifiNetworkSpecifier`). Then tag v0.2.1-internal. Deferred to later milestones: Network Provisioning sidecar (Android `LocalOnlyHotspot` + Wi-Fi join helpers; JVM network state + manual IP fallback), file transfer API, instrumented Android tests, process-death recovery via `SavedStateHandle`.
 - **v0.3+**: full iOS LAN/TCP transport (`NWBrowser` + `NWListener` + `NWConnection` + iOS sample app), macOS native LAN, BLE, Wi-Fi Direct, Multipeer, Relay, encryption.
 
 See `P2pKit-Spec.md` for the complete v0.1 and planned v0.2 contracts.

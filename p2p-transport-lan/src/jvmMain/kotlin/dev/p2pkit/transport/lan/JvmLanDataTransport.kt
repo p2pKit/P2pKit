@@ -3,6 +3,7 @@ package dev.p2pkit.transport.lan
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DataTransport
+import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
@@ -20,12 +21,14 @@ import java.net.Socket
 internal class JvmLanDataTransport(
     private val registration: LanServiceRegistration,
     private val serverSocket: ServerSocket
-) : DataTransport {
+) : DataTransport, HasLocalTcpEndpoint {
 
     override val type: TransportKind = TransportKind.LAN
 
     /** LAN is the only v0.1 transport; priority just needs to be positive. */
     override val priority: Int = 100
+
+    override val tcpPort: Int get() = registration.tcpPort
 
     @Volatile
     private var closed: Boolean = false
@@ -75,9 +78,6 @@ internal class JvmLanDataTransport(
             runCatching { serverSocket.close() }
         }
     }
-
-    /** Local TCP port the server is listening on. */
-    internal val tcpPort: Int get() = registration.tcpPort
 
     override suspend fun close() {
         if (closed) return

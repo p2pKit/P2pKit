@@ -57,6 +57,7 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
@@ -64,6 +65,8 @@ import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.ReconnectPolicy
+import dev.p2pkit.core.provisioning.ManualConnectionInfo
+import dev.p2pkit.provisioning.desktop.jvm
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -163,6 +166,9 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     private val _autoMesh = MutableStateFlow(true)
     val autoMesh: StateFlow<Boolean> = _autoMesh.asStateFlow()
 
+    private val _manualConnectionInfo = MutableStateFlow<ManualConnectionInfo?>(null)
+    val manualConnectionInfo: StateFlow<ManualConnectionInfo?> = _manualConnectionInfo.asStateFlow()
+
     // --- room state --------------------------------------------------------
 
     private val _peers = MutableStateFlow<List<Peer>>(emptyList())
@@ -204,6 +210,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             appId = AppId(effectiveAppId)
             this.deviceName = this@DesktopP2pState.deviceName
             transports { lan() }
+            networkProvisioning { jvm() }
             lifecycle {
                 reconnectPolicy = when (choice) {
                     ReconnectChoice.Disabled -> ReconnectPolicy.Disabled
@@ -230,6 +237,16 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         scope.launch { newKit.state.collect { _kitState.value = it } }
         scope.launch { newKit.peers.collect { _peers.value = it } }
         scope.launch { newKit.sessions.collect { reconcileSessions(it, scope) } }
+        scope.launch {
+            // Refresh manual connection info on a slow cadence so the UI shows
+            // the latest local host(s) without spamming the provisioning impl.
+            while (true) {
+                _manualConnectionInfo.value = runCatching {
+                    newKit.networkProvisioning.getManualConnectionInfo()
+                }.getOrNull()
+                kotlinx.coroutines.delay(5_000)
+            }
+        }
         scope.launch {
             runCatching { newKit.startAdvertising() }
                 .onSuccess { _advertising.value = true }
@@ -269,6 +286,36 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             runCatching { currentKit.connect(peer) }.onFailure {
                 System.err.println("[p2pkit WARN] connect to ${peer.name} failed: ${it.message}")
                 appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
+            }
+        }
+    }
+
+    /**
+     * Manual-IP fallback: parses "host:port" and dials it via the
+     * provisioning module's [createManualPeer]. Used when mDNS is blocked.
+     */
+    @OptIn(ExperimentalP2pApi::class)
+    fun connectManual(input: String) {
+        val currentKit = kit ?: return
+        val scope = runScope ?: return
+        val parts = input.trim().split(':', limit = 2)
+        val host = parts.getOrNull(0)?.trim().orEmpty()
+        val port = parts.getOrNull(1)?.trim()?.toIntOrNull()
+        if (host.isEmpty() || port == null || port !in 1..65_535) {
+            appendSystemMessage("manual: expected host:port, got \"$input\"")
+            return
+        }
+        scope.launch {
+            val synthetic = runCatching {
+                currentKit.networkProvisioning.createManualPeer(host, port)
+            }.getOrElse {
+                System.err.println("[p2pkit WARN] manual createManualPeer failed: ${it.message}")
+                appendSystemMessage("manual: createManualPeer failed: ${it.message ?: it::class.simpleName}")
+                return@launch
+            }
+            runCatching { currentKit.connect(synthetic) }.onFailure {
+                System.err.println("[p2pkit WARN] manual connect failed: ${it.message}")
+                appendSystemMessage("manual: connect to $host:$port failed: ${it.message ?: it::class.simpleName}")
             }
         }
     }
@@ -638,6 +685,7 @@ private fun RoomScreen(state: DesktopP2pState) {
     val discovering by state.discovering.collectAsState()
     val autoMesh by state.autoMesh.collectAsState()
     val localPeerId by state.localPeerId.collectAsState()
+    val manualInfo by state.manualConnectionInfo.collectAsState()
     var draft by remember { mutableStateOf("") }
 
     Row(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -682,6 +730,12 @@ private fun RoomScreen(state: DesktopP2pState) {
                     }
                 }
             }
+
+            Spacer(Modifier.height(12.dp))
+            ManualPeerSection(
+                manualInfo = manualInfo,
+                onConnectManual = state::connectManual
+            )
 
             Spacer(Modifier.height(12.dp))
             Text(
@@ -930,6 +984,51 @@ private fun RoomLine(message: RoomMessage) {
         maxLines = 3,
         overflow = TextOverflow.Ellipsis
     )
+}
+
+@Composable
+private fun ManualPeerSection(
+    manualInfo: ManualConnectionInfo?,
+    onConnectManual: (String) -> Unit
+) {
+    Text(text = "Manual peer (mDNS fallback)", style = MaterialTheme.typography.titleSmall)
+    Spacer(Modifier.height(4.dp))
+    if (manualInfo != null) {
+        val hosts = manualInfo.hostAddresses.joinToString(", ")
+        Text(
+            text = "Local: $hosts : ${manualInfo.port}",
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    } else {
+        Text(
+            text = "Local: (no LAN port bound yet)",
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+    Spacer(Modifier.height(4.dp))
+    var input by remember { mutableStateOf("") }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = input,
+            onValueChange = { input = it },
+            label = { Text("Connect host:port") },
+            singleLine = true,
+            modifier = Modifier.weight(1f).padding(end = 8.dp)
+        )
+        Button(
+            onClick = {
+                val typed = input.trim()
+                if (typed.isEmpty()) return@Button
+                input = ""
+                onConnectManual(typed)
+            },
+            enabled = input.isNotBlank()
+        ) {
+            Text("Connect by IP")
+        }
+    }
 }
 
 @Composable
