@@ -4,6 +4,7 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.BackgroundPolicy
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.KeepAliveConfig
+import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pSession
@@ -40,6 +41,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Owns the lifecycle of every active [P2pSession].
@@ -97,6 +99,26 @@ internal class SessionManager(
 
     /** Protects [active] and [pending] across concurrent connect/incoming/close calls. */
     private val activeLock = Mutex()
+
+    /**
+     * Path-recovered signal consumed by every [SessionReconnectHandler]
+     * currently in its retry loop. When the host's network path
+     * transitions to [NetworkPathStatus.Satisfied], [applyPathChange]
+     * emits to this flow and any handler currently parked in its
+     * `retryDelayMillis` wait will wake immediately and attempt a dial
+     * instead of waiting out the rest of the delay.
+     *
+     * `extraBufferCapacity = 1` + `DROP_OLDEST` means: if Satisfied fires
+     * while no handler is parked (e.g., all handlers are mid-dial), the
+     * latest signal is cached. The first handler to enter `.first()` next
+     * picks it up — subsequent handlers see no buffered value (replay=0)
+     * and wait for the next emit or for their delay to expire.
+     */
+    private val pathSatisfiedSignal = MutableSharedFlow<Unit>(
+        replay = 0,
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
 
     fun startAcceptingIncoming(transports: List<DataTransport>) {
         for (transport in transports) {
@@ -334,7 +356,15 @@ internal class SessionManager(
             while (attempt < policy.maxAttempts) {
                 attempt++
                 try {
-                    delay(policy.retryDelayMillis)
+                    // Wait either for the retry delay OR for a path-satisfied
+                    // signal, whichever fires first. The signal accelerates
+                    // recovery on Wi-Fi handovers: an `Unsatisfied → Satisfied`
+                    // transition wakes parked handlers immediately so the next
+                    // dial happens within milliseconds of the network coming
+                    // back instead of after the full `retryDelayMillis`.
+                    withTimeoutOrNull(policy.retryDelayMillis) {
+                        pathSatisfiedSignal.first()
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 }
@@ -475,6 +505,41 @@ internal class SessionManager(
         val snapshot = activeLock.withLock { active.values.toList() }
         for (session in snapshot) {
             runCatching { session.close() }
+        }
+    }
+
+    /**
+     * Handle a host-network path-status change. Called by [P2pKitImpl] which
+     * subscribes to the kit's [NetworkPathObserver] once at startup.
+     *
+     * - [NetworkPathStatus.Unsatisfied]: route every active session through
+     *   [P2pSessionImpl.notifyPathLost], which calls `onConnectionLost`. The
+     *   session's existing decision tree handles the rest — sessions wired
+     *   with a reconnect handler go to `Reconnecting`; sessions without one
+     *   go straight to `Failed`. Concurrent triggers from PING failure or
+     *   raw-state observers are de-duped by the connection lock in
+     *   `onConnectionLost`.
+     * - [NetworkPathStatus.Satisfied]: emit to [pathSatisfiedSignal] so any
+     *   reconnect handler currently parked in `retryDelayMillis` wakes and
+     *   attempts immediately.
+     * - [NetworkPathStatus.Unknown]: no-op. Treated as "no information",
+     *   not "no network" — matches the [NoOpNetworkPathObserver] default
+     *   on platforms with no observer wired up.
+     */
+    fun applyPathChange(status: NetworkPathStatus) {
+        when (status) {
+            NetworkPathStatus.Unsatisfied -> {
+                scope.launch {
+                    val toNotify = activeLock.withLock { active.values.toList() }
+                    for (s in toNotify) {
+                        (s as? P2pSessionImpl)?.notifyPathLost()
+                    }
+                }
+            }
+            NetworkPathStatus.Satisfied -> {
+                pathSatisfiedSignal.tryEmit(Unit)
+            }
+            NetworkPathStatus.Unknown -> { /* no action */ }
         }
     }
 

@@ -4,6 +4,7 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.AppKilledPolicy
 import dev.p2pkit.core.BackgroundPolicy
 import dev.p2pkit.core.KeepAliveConfig
+import dev.p2pkit.core.NetworkPathObserver
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.ReconnectPolicy
@@ -50,6 +51,14 @@ public class P2pKitBuilder internal constructor() {
     internal var networkProvisioning: NetworkProvisioningConfig = NetworkProvisioningConfig()
     internal var networkProvisioningFactory: NetworkProvisioningFactory? = null
     internal var fileTransfer: FileTransferConfig = FileTransferConfig()
+    /**
+     * Optional host-provided network path observer. When `null`, the kit
+     * uses the platform default (iOS: real `nw_path_monitor`; JVM and
+     * Android: no-op). Host apps that want path-change recovery on
+     * Android construct `AndroidNetworkPathObserver(applicationContext)`
+     * inside `lifecycle { … }`.
+     */
+    internal var networkPathObserver: NetworkPathObserver? = null
 
     /**
      * Override the [PeerIdStorage] the kit uses. **Internal** — set from
@@ -70,10 +79,16 @@ public class P2pKitBuilder internal constructor() {
     }
 
     public fun lifecycle(block: LifecycleConfigBuilder.() -> Unit) {
-        val b = LifecycleConfigBuilder(reconnectPolicy, backgroundPolicy, appKilledPolicy).apply(block)
+        val b = LifecycleConfigBuilder(
+            reconnectPolicy,
+            backgroundPolicy,
+            appKilledPolicy,
+            networkPathObserver
+        ).apply(block)
         reconnectPolicy = b.reconnectPolicy
         backgroundPolicy = b.onBackground
         appKilledPolicy = b.onAppKilled
+        networkPathObserver = b.networkPathObserver
     }
 
     public fun security(block: SecurityConfigBuilder.() -> Unit) {
@@ -115,7 +130,8 @@ public class P2pKitBuilder internal constructor() {
             provisioningFactory = networkProvisioningFactory,
             fileTransferConfig = fileTransfer,
             logger = logger,
-            peerIdStorageOverride = peerIdStorage
+            peerIdStorageOverride = peerIdStorage,
+            networkPathObserverOverride = networkPathObserver
         )
     }
 }
@@ -143,7 +159,23 @@ public class KeepAliveConfigBuilder internal constructor(initial: KeepAliveConfi
 public class LifecycleConfigBuilder internal constructor(
     public var reconnectPolicy: ReconnectPolicy,
     public var onBackground: BackgroundPolicy,
-    public var onAppKilled: AppKilledPolicy
+    public var onAppKilled: AppKilledPolicy,
+    /**
+     * Host-provided override for the network path observer. When `null`,
+     * the kit uses the platform default — iOS gets a real `nw_path_monitor`
+     * observer; JVM and Android default to no-op.
+     *
+     * On Android, host apps that want network-recovery behavior construct
+     * `AndroidNetworkPathObserver(applicationContext)` here:
+     *
+     * ```kotlin
+     * lifecycle {
+     *     reconnectPolicy = ReconnectPolicy.Enabled(maxAttempts = 8, retryDelayMillis = 500)
+     *     networkPathObserver = AndroidNetworkPathObserver(applicationContext)
+     * }
+     * ```
+     */
+    public var networkPathObserver: NetworkPathObserver?
 )
 
 @P2pKitDsl

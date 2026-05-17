@@ -360,6 +360,19 @@ internal class P2pSessionImpl(
      * retry coroutine, which itself takes the lock inside [rearmWith], does
      * not deadlock.
      */
+    /**
+     * Called by [SessionManager.applyPathChange] when the host device's
+     * network path transitions to [dev.p2pkit.core.NetworkPathStatus.Unsatisfied].
+     * Routes through [onConnectionLost] so the existing
+     * Connected→Reconnecting (or Connected→Failed when no reconnect
+     * handler is wired) gate runs untouched. The mutex inside
+     * [onConnectionLost] makes this safe to call concurrently with PING
+     * failures or with [observeRawState] reacting to the same network drop.
+     */
+    internal suspend fun notifyPathLost() {
+        onConnectionLost("network path unsatisfied")
+    }
+
     private suspend fun onConnectionLost(cause: String) {
         val handler: ReconnectHandler? = connectionLock.withLock {
             when (_state.value) {

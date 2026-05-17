@@ -100,6 +100,23 @@ public interface P2pKit {
     public val networkProvisioning: NetworkProvisioningManager
 
     /**
+     * Host device's default network path status. Driven by the configured
+     * [NetworkPathObserver]:
+     *   - iOS: real `nw_path_monitor` events (Wi-Fi / cellular / VPN
+     *     transitions).
+     *   - Android: host-provided `AndroidNetworkPathObserver(ctx)`, which
+     *     listens to `ConnectivityManager.NetworkCallback`. Without that
+     *     override the value stays [NetworkPathStatus.Unknown].
+     *   - JVM desktop: defaults to [NetworkPathStatus.Unknown] unless the
+     *     host app supplies a custom observer.
+     *
+     * Useful for the host app's UI ("offline" banner). Internally the SDK
+     * uses the same flow to drive reconnect on path-recovered (see
+     * [dev.p2pkit.core.internal.SessionManager.applyPathChange]).
+     */
+    public val networkPathStatus: StateFlow<NetworkPathStatus>
+
+    /**
      * Bring up all registered transports and provisioning sidecar. Optional
      * to call — if the host app skips it, [startAdvertising], [startDiscovery],
      * and [connect] each lazily ensure the kit is started on their first

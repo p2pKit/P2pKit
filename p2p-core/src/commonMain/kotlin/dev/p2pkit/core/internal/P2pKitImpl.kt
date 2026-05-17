@@ -4,6 +4,8 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.AppKilledPolicy
 import dev.p2pkit.core.BackgroundPolicy
 import dev.p2pkit.core.KeepAliveConfig
+import dev.p2pkit.core.NetworkPathObserver
+import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
@@ -66,7 +68,8 @@ internal class P2pKitImpl(
     override val permissions: P2pPermissionManager,
     private val logger: P2pLogger,
     private val clock: () -> Long,
-    parentJob: Job?
+    parentJob: Job?,
+    private val pathObserver: NetworkPathObserver
 ) : P2pKit {
 
     private val internalJob = SupervisorJob(parent = parentJob)
@@ -75,6 +78,9 @@ internal class P2pKitImpl(
     override val networkProvisioning: NetworkProvisioningManager
 
     override val localDeviceName: String get() = deviceName
+
+    override val networkPathStatus: StateFlow<NetworkPathStatus>
+        get() = pathObserver.status
 
     private val _state = MutableStateFlow<P2pState>(P2pState.Idle)
     override val state: StateFlow<P2pState> = _state.asStateFlow()
@@ -226,6 +232,22 @@ internal class P2pKitImpl(
                     throw failed
                 }
             }
+            // Best-effort path observer startup. A failure here is logged
+            // but never propagates — `networkPathStatus` simply stays at
+            // [NetworkPathStatus.Unknown] and the SDK behaves as if no
+            // observer is wired up.
+            runCatching { pathObserver.start() }.onFailure {
+                logger.warn("NetworkPathObserver.start() failed; path-change recovery disabled for this session", it)
+            }
+            // Subscribe SessionManager to path changes. Done after the
+            // observer starts so [SessionManager.applyPathChange] sees the
+            // observer's initial emission. We launch on the kit's internal
+            // scope so the subscription tears down with kit.stop().
+            scope.launch {
+                pathObserver.status.collect { status ->
+                    sessionManager.applyPathChange(status)
+                }
+            }
             startResult = Result.success(Unit)
         }
     }
@@ -308,6 +330,7 @@ internal class P2pKitImpl(
         for (transport in dataTransports) {
             runCatching { transport.close() }
         }
+        runCatching { pathObserver.close() }
         internalJob.cancel()
         _state.value = P2pState.Stopped
     }
@@ -336,9 +359,11 @@ internal fun newP2pKit(
     provisioningFactory: NetworkProvisioningFactory?,
     fileTransferConfig: FileTransferConfig,
     logger: P2pLogger,
-    peerIdStorageOverride: PeerIdStorage? = null
+    peerIdStorageOverride: PeerIdStorage? = null,
+    networkPathObserverOverride: NetworkPathObserver? = null
 ): P2pKit {
     val peerIdStorage = peerIdStorageOverride ?: defaultPeerIdStorage(appId, logger)
+    val pathObserver = networkPathObserverOverride ?: defaultNetworkPathObserver(logger)
     return P2pKitImpl(
         appId = appId,
         deviceName = deviceName,
@@ -356,6 +381,7 @@ internal fun newP2pKit(
         permissions = dev.p2pkit.core.permission.NoOpP2pPermissionManager(),
         logger = logger,
         clock = ::systemTimeMillis,
-        parentJob = null
+        parentJob = null,
+        pathObserver = pathObserver
     )
 }
