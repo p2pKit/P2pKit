@@ -45,9 +45,20 @@ public object IosLanDebug {
      * events and UI-side events interleaved in time order, which is the
      * only way to tell whether a stuck button or a stuck send is the
      * upstream problem.
+     *
+     * Side effect: also `println`s the line with a `p2pkit:` prefix.
+     * `println()` from Kotlin/Native on iOS goes through the unified
+     * logging system, so the line appears in Xcode's debug console
+     * (running from Xcode) and in Console.app (any device, filter on
+     * "p2pkit"). That's the "logcat-like" surface for iOS — the
+     * on-screen log inside the app is still the primary diagnostic, but
+     * the stdout mirror means the same data is visible from the Mac
+     * without screenshotting the phone.
      */
     public fun log(tag: String, message: String) {
         val ts = ((NSDate().timeIntervalSince1970 * 1000).toLong()) % 1_000_000
-        _events.tryEmit("[$ts][$tag] $message")
+        val line = "[$ts][$tag] $message"
+        _events.tryEmit(line)
+        println("p2pkit: $line")
     }
 }
