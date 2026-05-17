@@ -1,0 +1,52 @@
+name: p2pkit-sample
+options:
+  bundleIdPrefix: dev.p2pkit
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+  groupSortPosition: bottom
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+
+targets:
+  p2pkit-sample:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - P2pKitSampleApp.swift
+      - ContentView.swift
+    info:
+      path: Info.plist
+      properties:
+        UILaunchScreen: {}
+        # iOS 14+ silently zeroes out NWListener/NWBrowser unless these two
+        # keys are present. Defining them here makes them survive
+        # `xcodegen generate` re-runs.
+        NSLocalNetworkUsageDescription: "P2pKit needs local network access to discover nearby devices over Bonjour and exchange messages over TCP."
+        NSBonjourServices:
+          - "_p2pkit._tcp"
+        LSRequiresIPhoneOS: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.p2pkit.sample
+        INFOPLIST_FILE: Info.plist
+        # XCFramework path is relative to the Xcode project root (iosApp/).
+        # `..` walks up to the repo root.
+        FRAMEWORK_SEARCH_PATHS: "$(SRCROOT)/../p2p-transport-lan/build/XCFrameworks/release"
+        # Default to manual signing; switch to ON for device builds once
+        # you've logged into your Apple ID in Xcode (one-time, see README).
+        CODE_SIGN_STYLE: Automatic
+        # Tell Xcode to expect the XCFramework here:
+        OTHER_LDFLAGS:
+          - "-framework"
+          - "P2pKitShared"
+    dependencies:
+      - framework: ../p2p-transport-lan/build/XCFrameworks/release/P2pKitShared.xcframework
+        embed: true
+        codeSign: true
