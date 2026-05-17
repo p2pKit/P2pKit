@@ -7,6 +7,13 @@ application {
     mainClass.set("dev.p2pkit.sample.desktop.MainKt")
 }
 
+// Forward Android Studio's Run console stdin into the CLI's `readLine()`
+// loop. Without this, running `:p2p-sample-desktop:run` from the IDE hangs
+// at the first prompt because the spawned JVM gets a closed System.in.
+tasks.named<JavaExec>("run") {
+    standardInput = System.`in`
+}
+
 kotlin {
     jvmToolchain(17)
 }
