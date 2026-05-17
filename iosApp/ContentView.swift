@@ -59,14 +59,37 @@ struct ContentView: View {
     }
 
     struct SessionRow: Identifiable, Equatable {
-        let id: String
-        let peerName: String
-        let state: String
+        let id: String          // session.id — unique per session epoch
+        let peerId: String      // session.peer.id.value — used to match to PeerRow
+        let peerName: String    // session.peer.name — display only
+        let state: String       // ConnectionState textual value
         let session: P2pSession
         var isConnected: Bool { state == "Connected" }
-        var isConnecting: Bool { state == "Connecting" }
+        /// Any state where the session is still potentially recoverable —
+        /// the kit considers the peer "owned" by this session and the
+        /// Connect button should NOT offer a second attempt. Includes
+        /// `Idle`, `Connecting`, `Handshaking`, `Connected`, `Reconnecting`.
+        /// Excludes `Closing`, `Closed`, `Failed` — terminal states, so a
+        /// fresh Connect should be allowed.
+        var isLive: Bool {
+            switch state {
+            case "Idle", "Connecting", "Handshaking", "Connected", "Reconnecting":
+                return true
+            default:
+                return false
+            }
+        }
+        var isTerminal: Bool {
+            switch state {
+            case "Closing", "Closed", "Failed":
+                return true
+            default:
+                return false
+            }
+        }
         static func == (lhs: SessionRow, rhs: SessionRow) -> Bool {
-            lhs.id == rhs.id && lhs.state == rhs.state && lhs.peerName == rhs.peerName
+            lhs.id == rhs.id && lhs.state == rhs.state &&
+                lhs.peerId == rhs.peerId && lhs.peerName == rhs.peerName
         }
     }
 
@@ -164,14 +187,21 @@ struct ContentView: View {
                                 .font(.caption2).foregroundColor(.secondary)
                         }
                         Spacer()
+                        // Match by peer.id, NOT peer.name. Two devices on the
+                        // same Wi-Fi can share a name; peer.id is the
+                        // SDK-generated UUID that's guaranteed unique.
                         let pending = pendingConnectPeerIds.contains(row.id)
-                        let alreadyConnected = sessions.contains { $0.peerName == row.name && $0.isConnected }
-                        let connecting = sessions.contains { $0.peerName == row.name && $0.isConnecting }
-                        Button(buttonLabel(pending: pending, connecting: connecting, alreadyConnected: alreadyConnected)) {
+                        let sessionForPeer = sessions.first { $0.peerId == row.id && $0.isLive }
+                        let alreadyConnected = sessionForPeer?.isConnected ?? false
+                        let inFlight = sessionForPeer != nil && !alreadyConnected
+                        Button(connectButtonLabel(
+                            pending: pending,
+                            sessionForPeer: sessionForPeer
+                        )) {
                             Task { await connect(row) }
                         }
                         .buttonStyle(.bordered)
-                        .disabled(alreadyConnected || pending || connecting || kit == nil || isStopping)
+                        .disabled(alreadyConnected || inFlight || pending || kit == nil || isStopping)
                     }
                     .padding(.vertical, 4)
                 }
@@ -209,20 +239,30 @@ struct ContentView: View {
 
                 // MARK: Sessions
 
-                Text("Sessions (\(sessions.count))").font(.headline)
+                let connectedCount = sessions.filter { $0.isConnected }.count
+                Text("Sessions (\(sessions.count), \(connectedCount) connected)").font(.headline)
                 ForEach(sessions) { row in
-                    HStack {
-                        Circle()
-                            .fill(sessionDotColor(for: row))
-                            .frame(width: 8, height: 8)
-                        Text("\(row.peerName) — \(row.state)").font(.callout)
-                        Spacer()
-                        Button("Close") {
-                            Task { await closeSession(row) }
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Circle()
+                                .fill(sessionDotColor(for: row))
+                                .frame(width: 8, height: 8)
+                            Text("\(row.peerName) — \(row.state)").font(.callout)
+                            Spacer()
+                            Button("Close") {
+                                Task { await closeSession(row) }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(row.isTerminal || isStopping)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(row.state == "Closed" || isStopping)
+                        // Surface session-id + peer-id so we can verify the
+                        // session matches the peer row above. Mismatched ids
+                        // here would mean the SDK created a session against a
+                        // different peer than the one in the discovery list.
+                        Text("session=\(row.id.prefix(12))  peer=\(row.peerId.prefix(8))")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(.secondary)
                     }
                     .padding(.vertical, 2)
                 }
@@ -231,11 +271,11 @@ struct ContentView: View {
                         TextField("message", text: $draft)
                             .textFieldStyle(.roundedBorder)
                             .autocorrectionDisabled()
-                        Button("Send all") { Task { await sendAll() } }
+                        Button("Send all (\(connectedCount))") { Task { await sendAll() } }
                             .buttonStyle(.bordered)
                             .disabled(
                                 draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                                !sessions.contains(where: { $0.isConnected }) ||
+                                connectedCount == 0 ||
                                 isStopping
                             )
                     }
@@ -272,17 +312,25 @@ struct ContentView: View {
         }
     }
 
-    private func buttonLabel(pending: Bool, connecting: Bool, alreadyConnected: Bool) -> String {
-        if alreadyConnected { return "Connected" }
+    /// Label for the per-peer Connect button. Reflects the *actual* session
+    /// state on this peer, so an auto-mesh peer mid-handshake shows
+    /// "Handshaking…" rather than the previously misleading "Connect".
+    private func connectButtonLabel(
+        pending: Bool,
+        sessionForPeer: SessionRow?
+    ) -> String {
+        if let s = sessionForPeer {
+            if s.isConnected { return "Connected" }
+            return "\(s.state)…"      // Connecting / Handshaking / Reconnecting / Idle
+        }
         if pending { return "Connecting…" }
-        if connecting { return "Connecting…" }
         return "Connect"
     }
 
     private func sessionDotColor(for row: SessionRow) -> Color {
         if row.isConnected { return .green }
-        if row.isConnecting { return .orange }
-        return .red
+        if row.isLive { return .orange }    // Connecting / Handshaking / Reconnecting / Idle
+        return .red                          // Closing / Closed / Failed
     }
 
     // MARK: - Actions
@@ -407,8 +455,40 @@ struct ContentView: View {
         if peerRows != self.peers { self.peers = peerRows }
 
         let sessionRows = sessionArray.map { s in
-            SessionRow(id: s.id, peerName: s.peer.name, state: "\(s.state.value)", session: s)
+            SessionRow(
+                id: s.id,
+                peerId: "\(s.peer.id)",
+                peerName: s.peer.name,
+                state: "\(s.state.value)",
+                session: s
+            )
         }.sorted { $0.peerName < $1.peerName }
+
+        // Surface state transitions in the message log so we can see when
+        // an auto-mesh session enters Handshaking → Connected, or flips to
+        // Reconnecting after a network blip. Diff against the previous
+        // snapshot keyed by session.id.
+        // `merging:` rather than `uniqueKeysWithValues:` — the latter
+        // crashes on duplicate keys, and even though `session.id` is
+        // supposed to be unique we don't want a corner-case crash here.
+        let previousById: [String: SessionRow] = Dictionary(
+            self.sessions.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        for row in sessionRows {
+            if let prev = previousById[row.id], prev.state != row.state {
+                appendMessage(
+                    "[session] \(row.peerName) (\(row.peerId.prefix(8))) → \(row.state)",
+                    kind: .info
+                )
+            } else if previousById[row.id] == nil {
+                appendMessage(
+                    "[session] new \(row.peerName) (\(row.peerId.prefix(8))) state=\(row.state)",
+                    kind: .info
+                )
+            }
+        }
+
         if sessionRows != self.sessions { self.sessions = sessionRows }
 
         for row in sessionRows where !collectedSessionIds.contains(row.id) {
@@ -451,8 +531,13 @@ struct ContentView: View {
             appendMessage("connect already in progress for \(row.name)", kind: .info)
             return
         }
-        if sessions.contains(where: { $0.peerName == row.name && ($0.isConnected || $0.isConnecting) }) {
-            appendMessage("already \(sessions.first(where: { $0.peerName == row.name })?.state.lowercased() ?? "connected") to \(row.name)", kind: .info)
+        // Match by peer.id — peer.name is for display only and isn't
+        // guaranteed unique across devices on the same Wi-Fi.
+        if let existing = sessions.first(where: { $0.peerId == pid && $0.isLive }) {
+            appendMessage(
+                "already \(existing.state.lowercased()) with \(row.name); skipping duplicate connect",
+                kind: .info
+            )
             return
         }
         pendingConnectPeerIds.insert(pid)
@@ -524,18 +609,55 @@ struct ContentView: View {
             errorBanner = "Cannot send an empty message."
             return
         }
-        let live = sessions.filter { $0.isConnected }
-        guard !live.isEmpty else {
-            errorBanner = "No connected sessions to send to."
+        // Re-read the sessions snapshot now — the UI's [sessions] list is
+        // updated once per second by [refreshPeersAndSessions], so it could
+        // be up to a second stale when the user taps Send. The live read
+        // catches sessions that just transitioned to Connected or just left.
+        let liveSessions: [SessionRow]
+        if let k = kit {
+            let snapshot: [P2pSession] = IosSwiftHelpersKt.sessionsSnapshot(k)
+            liveSessions = snapshot.compactMap { s in
+                let st = "\(s.state.value)"
+                guard st == "Connected" else { return nil }
+                return SessionRow(
+                    id: s.id,
+                    peerId: "\(s.peer.id)",
+                    peerName: s.peer.name,
+                    state: st,
+                    session: s
+                )
+            }
+        } else {
+            errorBanner = "Kit not started."
             return
         }
-        for row in live {
+        guard !liveSessions.isEmpty else {
+            errorBanner = "No Connected sessions right now. Sessions exist " +
+                "(\(sessions.count)) but none are in the Connected state."
+            return
+        }
+
+        var failures: [String] = []
+        for row in liveSessions {
             do {
                 try await row.session.send(message: P2pMessage.Text(value: text, metadata: [:]))
                 appendMessage("me -> \(row.peerName): \(text)", kind: .sent)
             } catch {
-                appendMessage("send failed (\(row.peerName)): \(error.localizedDescription)", kind: .error)
+                let msg = error.localizedDescription
+                appendMessage(
+                    "send failed (\(row.peerName) state=\(row.state)): \(msg)",
+                    kind: .error
+                )
+                failures.append("\(row.peerName): \(msg)")
             }
+        }
+        // Promote send failures to the top-of-screen banner so they don't
+        // get lost in the message timeline. Common cause is a session
+        // that's Connected at session.state.value but whose underlying
+        // NWConnection has already entered Closed — that surfaces as
+        // P2pError.ConnectionFailed thrown from session.send().
+        if !failures.isEmpty {
+            errorBanner = "send failed: " + failures.joined(separator: "; ")
         }
         let skipped = sessions.filter { !$0.isConnected }
         for row in skipped {
