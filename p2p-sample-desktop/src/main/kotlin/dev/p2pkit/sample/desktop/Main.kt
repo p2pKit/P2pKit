@@ -90,6 +90,13 @@ fun main(args: Array<String>) {
 
     val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     val sessions = ConcurrentHashMap<String, P2pSession>()
+    // Peers with an in-flight `kit.connect` initiated by either auto-mesh
+    // or the user-typed `connect <name>` command. Both paths consult this
+    // set before launching their own coroutine, so a manual tap during
+    // auto-mesh's in-flight window doesn't kick off a second concurrent
+    // connect attempt for the same peer. The SDK still dedupes either way,
+    // but the local guard keeps the CLI output one-clean per session.
+    val pendingConnects: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     p2p.peers
         .onEach { peers ->
@@ -120,17 +127,22 @@ fun main(args: Array<String>) {
                 for (peer in peers) {
                     if (sessions.containsKey(peer.id.value)) continue
                     if (myId >= peer.id.value) continue
+                    if (!pendingConnects.add(peer.id.value)) continue
                     System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.name}")
                     scope.launch {
-                        runCatching {
-                            val s = p2p.connect(peer)
-                            sessions[s.peer.id.value] = s
-                            wireIncoming(s, scope)
-                            launch {
-                                s.state.collect { st -> println("[state] ${s.peer.name} → $st") }
+                        try {
+                            runCatching {
+                                val s = p2p.connect(peer)
+                                sessions[s.peer.id.value] = s
+                                wireIncoming(s, scope)
+                                launch {
+                                    s.state.collect { st -> println("[state] ${s.peer.name} → $st") }
+                                }
+                            }.onFailure {
+                                System.err.println("[p2pkit WARN] auto-mesh connect to ${peer.name} failed: ${it.message}")
                             }
-                        }.onFailure {
-                            System.err.println("[p2pkit WARN] auto-mesh connect to ${peer.name} failed: ${it.message}")
+                        } finally {
+                            pendingConnects.remove(peer.id.value)
                         }
                     }
                 }
@@ -149,7 +161,7 @@ fun main(args: Array<String>) {
         }
 
         println("Ready. Type 'help' for commands.")
-        repl(p2p, scope, sessions, advertising, discovering, autoMesh)
+        repl(p2p, scope, sessions, pendingConnects, advertising, discovering, autoMesh)
 
         println("Stopping…")
         runCatching { p2p.stop() }.onFailure {
@@ -185,16 +197,15 @@ private suspend fun repl(
     p2p: P2pKit,
     scope: CoroutineScope,
     sessions: ConcurrentHashMap<String, P2pSession>,
+    // Shared with the auto-mesh loop in main() so both paths consult the
+    // same in-flight-connect set. The SDK dedupes either way, but routing
+    // both through the same gate keeps the CLI output clean.
+    pendingConnects: MutableSet<String>,
     advertising: StateLatch,
     discovering: StateLatch,
     autoMesh: MutableStateFlow<Boolean>
 ) {
     val reader = System.`in`.bufferedReader()
-    // Peers we have an in-flight `connect` for. Used to dedupe rapid
-    // `connect <name>` repeats from the user typing too fast — the SDK
-    // itself dedupes by peer id, but the CLI would otherwise log two
-    // "connected to X" lines per duplicate attempt.
-    val pendingConnects: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     while (true) {
         print("> ")
         System.out.flush()

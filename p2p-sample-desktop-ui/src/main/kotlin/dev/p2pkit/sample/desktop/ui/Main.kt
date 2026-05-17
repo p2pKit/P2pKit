@@ -296,8 +296,11 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 }
         }
 
-        // Auto-mesh: react to peer changes and connect to anyone we should
-        // initiate (lexicographic tie-break by peer id).
+        // Auto-mesh: route through [connect] (which holds the pendingConnect
+        // guard) instead of calling `kit.connect` directly, so a manual
+        // Connect tap during the in-flight window doesn't race onto a
+        // second `kit.connect` invocation. See the Android sample's
+        // equivalent block for the full rationale.
         scope.launch {
             combine(_autoMesh, newKit.peers) { enabled, peers -> enabled to peers }
                 .collect { (enabled, peers) ->
@@ -306,11 +309,10 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                     val connectedIds = connectedSessions.map { it.peer.id.value }.toSet()
                     for (peer in peers) {
                         if (peer.id.value in connectedIds) continue
+                        if (pendingConnectPeerIds.contains(peer.id.value)) continue
                         if (myId < peer.id.value) {
                             System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.name}")
-                            runCatching { newKit.connect(peer) }.onFailure {
-                                System.err.println("[p2pkit WARN] auto-mesh connect to ${peer.name} failed: ${it.message}")
-                            }
+                            connect(peer)
                         }
                     }
                 }

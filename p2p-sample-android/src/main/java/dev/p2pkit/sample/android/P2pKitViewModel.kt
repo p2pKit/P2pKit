@@ -276,6 +276,14 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // Auto-mesh: react to peer changes and connect to anyone we should
         // initiate (lexicographic tie-break by peer id). Combining with
         // [autoMesh] means toggling the flag back ON re-evaluates immediately.
+        //
+        // We route through [connect] (not `newKit.connect` directly) so the
+        // auto-mesh path shares [pendingConnectPeerIds] with the user-tap
+        // path. Otherwise a user tap during the brief window where auto-mesh
+        // has called `kit.connect` but the session hasn't shown up in
+        // `connectedSessions` yet would slip past both guards — they'd then
+        // race onto the SDK's dedup mutex and the UI would briefly show two
+        // "Connecting…" states for the same peer.
         scope.launch {
             combine(_autoMesh, newKit.peers) { enabled, peers -> enabled to peers }
                 .collect { (enabled, peers) ->
@@ -284,11 +292,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     val connectedIds = connectedSessions.map { it.peer.id.value }.toSet()
                     for (peer in peers) {
                         if (peer.id.value in connectedIds) continue
+                        if (pendingConnectPeerIds.contains(peer.id.value)) continue
                         if (myId < peer.id.value) {
                             Log.i(LOG_TAG, "auto-mesh: initiating connect to ${peer.name}")
-                            runCatching { newKit.connect(peer) }.onFailure {
-                                Log.w(LOG_TAG, "auto-mesh connect to ${peer.name} failed", it)
-                            }
+                            connect(peer)
                         }
                     }
                 }
