@@ -154,35 +154,24 @@ struct ContentView: View {
 
     @MainActor
     private func refreshPeersAndSessions(from kit: P2pKit) {
-        let peersValue: Any? = kit.peers.value
-        let sessionsValue: Any? = kit.sessions.value
+        // peersSnapshot() / sessionsSnapshot() are Kotlin extensions
+        // declared in IosSwiftHelpers.kt — they return `List<T>` which
+        // Kotlin/Native bridges as `NSArray<T *>`, sidestepping the
+        // generic-erasure trap that `StateFlow<Set<T>>.value` hits.
+        let peerArray: [Peer] = IosSwiftHelpersKt.peersSnapshot(kit)
+        let sessionArray: [P2pSession] = IosSwiftHelpersKt.sessionsSnapshot(kit)
 
-        let peersNs = peersValue as? NSSet
-        let sessionsNs = sessionsValue as? NSSet
+        self.debug = "peers=\(peerArray.count) sessions=\(sessionArray.count)"
 
-        // Diagnostic line — type names + raw counts so we can see whether
-        // the SDK has populated the flows but our cast is wrong, vs. the
-        // SDK genuinely seeing no peers.
-        let peersType = String(describing: type(of: peersValue as Any))
-        let sessionsType = String(describing: type(of: sessionsValue as Any))
-        self.debug = "peers(\(peersType))=\(peersNs?.count ?? -1) sessions(\(sessionsType))=\(sessionsNs?.count ?? -1)"
+        let peerRows = peerArray.map { p in
+            PeerRow(id: "\(p.id)", name: p.name, peer: p)
+        }.sorted { $0.name < $1.name }
+        if peerRows != self.peers { self.peers = peerRows }
 
-        if let ns = peersNs {
-            let rows: [PeerRow] = ns.allObjects.compactMap { obj in
-                guard let p = obj as? Peer else { return nil }
-                return PeerRow(id: "\(p.id)", name: p.name, peer: p)
-            }.sorted { $0.name < $1.name }
-            if rows != self.peers { self.peers = rows }
-        }
-
-        if let ns = sessionsNs {
-            let rows: [SessionRow] = ns.allObjects.compactMap { obj in
-                guard let s = obj as? P2pSession else { return nil }
-                let st: Any = s.state.value
-                return SessionRow(id: s.id, peerName: s.peer.name, state: "\(st)", session: s)
-            }.sorted { $0.peerName < $1.peerName }
-            if rows != self.sessions { self.sessions = rows }
-        }
+        let sessionRows = sessionArray.map { s in
+            SessionRow(id: s.id, peerName: s.peer.name, state: "\(s.state.value)", session: s)
+        }.sorted { $0.peerName < $1.peerName }
+        if sessionRows != self.sessions { self.sessions = sessionRows }
     }
 
     private func attachMessageCollector(to session: P2pSession, label: String) async {

@@ -43,6 +43,8 @@ import platform.Network.nw_browser_state_cancelled
 import platform.Network.nw_browser_state_failed
 import platform.Network.nw_browser_t
 import platform.Network.nw_listener_set_advertise_descriptor
+import platform.Network.nw_parameters_create
+import platform.Network.nw_parameters_set_include_peer_to_peer
 
 /**
  * iOS LAN [DiscoveryTransport].
@@ -106,7 +108,16 @@ internal class IosLanDiscoveryTransport(
         )
         nw_browse_descriptor_set_include_txt_record(descriptor, true)
 
-        val b = nw_browser_create(descriptor, null)
+        // Enable peer-to-peer browsing so NWBrowser also searches over the
+        // AWDL / non-Wi-Fi interfaces iOS exposes for Bonjour. Without this,
+        // some simulator and constrained-network configurations only see
+        // services advertised from inside the same process. On a real
+        // iPhone with Wi-Fi this is a free win; in the simulator it may
+        // help bridge to mDNS coming in through the host's vmnet.
+        val browserParams = nw_parameters_create()
+        nw_parameters_set_include_peer_to_peer(browserParams, true)
+
+        val b = nw_browser_create(descriptor, browserParams)
             ?: error("nw_browser_create returned null")
         browser = b
 
