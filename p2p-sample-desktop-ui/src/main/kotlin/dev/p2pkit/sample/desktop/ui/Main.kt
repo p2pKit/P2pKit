@@ -176,6 +176,24 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     private val _manualConnectionInfo = MutableStateFlow<ManualConnectionInfo?>(null)
     val manualConnectionInfo: StateFlow<ManualConnectionInfo?> = _manualConnectionInfo.asStateFlow()
 
+    /** True for the brief duration of [start] (setting up flow collectors). */
+    private val _isStarting = MutableStateFlow(false)
+    val isStarting: StateFlow<Boolean> = _isStarting.asStateFlow()
+
+    /** True from [stop] until the in-flight kit.stop() coroutine returns. */
+    private val _isStopping = MutableStateFlow(false)
+    val isStopping: StateFlow<Boolean> = _isStopping.asStateFlow()
+
+    /** True while a [connectManual] call is in-flight. */
+    private val _isManualDialing = MutableStateFlow(false)
+    val isManualDialing: StateFlow<Boolean> = _isManualDialing.asStateFlow()
+
+    /**
+     * Peers whose [connect] coroutine is in-flight. Used to disable their
+     * Connect button and show "Connecting…" while waiting on the SDK.
+     */
+    val pendingConnectPeerIds: SnapshotStateList<String> = mutableStateListOf()
+
     // --- room state --------------------------------------------------------
 
     private val _peers = MutableStateFlow<List<Peer>>(emptyList())
@@ -211,9 +229,17 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     }
 
     fun start() {
-        if (isRunning) return
+        if (isRunning || _isStarting.value) return  // idempotent + re-entry safe
+        val trimmedName = deviceName.trim()
+        if (trimmedName.isEmpty()) {
+            System.err.println("[p2pkit WARN] start aborted: deviceName is blank")
+            return
+        }
+        deviceName = trimmedName
+        _isStarting.value = true
         val choice = reconnectChoice
-        val effectiveAppId = appIdInput.ifBlank { DEFAULT_APP_ID }
+        val effectiveAppId = appIdInput.trim().ifEmpty { DEFAULT_APP_ID }
+        appIdInput = effectiveAppId
         val newKit = P2pKit.create {
             appId = AppId(effectiveAppId)
             this.deviceName = this@DesktopP2pState.deviceName
@@ -258,10 +284,16 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         scope.launch {
             runCatching { newKit.startAdvertising() }
                 .onSuccess { _advertising.value = true }
-                .onFailure { System.err.println("[p2pkit WARN] startAdvertising failed: ${it.message}") }
+                .onFailure {
+                    System.err.println("[p2pkit WARN] startAdvertising failed: ${it.message}")
+                    appendSystemMessage("advertise failed: ${it.message ?: it::class.simpleName}")
+                }
             runCatching { newKit.startDiscovery() }
                 .onSuccess { _discovering.value = true }
-                .onFailure { System.err.println("[p2pkit WARN] startDiscovery failed: ${it.message}") }
+                .onFailure {
+                    System.err.println("[p2pkit WARN] startDiscovery failed: ${it.message}")
+                    appendSystemMessage("discovery failed: ${it.message ?: it::class.simpleName}")
+                }
         }
 
         // Auto-mesh: react to peer changes and connect to anyone we should
@@ -285,15 +317,31 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         }
 
         isRunning = true
+        _isStarting.value = false
     }
 
     fun connect(peer: Peer) {
         val currentKit = kit ?: return
         val scope = runScope ?: return
+        val peerId = peer.id.value
+        if (pendingConnectPeerIds.contains(peerId)) {
+            appendSystemMessage("already connecting to ${peer.name}")
+            return
+        }
+        val existing = connectedSessions.firstOrNull { it.peer.id.value == peerId }
+        if (existing != null && existing.state.value == ConnectionState.Connected) {
+            appendSystemMessage("already connected to ${peer.name}")
+            return
+        }
+        pendingConnectPeerIds.add(peerId)
         scope.launch {
-            runCatching { currentKit.connect(peer) }.onFailure {
-                System.err.println("[p2pkit WARN] connect to ${peer.name} failed: ${it.message}")
-                appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
+            try {
+                runCatching { currentKit.connect(peer) }.onFailure {
+                    System.err.println("[p2pkit WARN] connect to ${peer.name} failed: ${it.message}")
+                    appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
+                }
+            } finally {
+                pendingConnectPeerIds.remove(peerId)
             }
         }
     }
@@ -304,43 +352,74 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
      */
     @OptIn(ExperimentalP2pApi::class)
     fun connectManual(input: String) {
-        val currentKit = kit ?: return
-        val scope = runScope ?: return
-        val parts = input.trim().split(':', limit = 2)
-        val host = parts.getOrNull(0)?.trim().orEmpty()
-        val port = parts.getOrNull(1)?.trim()?.toIntOrNull()
-        if (host.isEmpty() || port == null || port !in 1..65_535) {
-            appendSystemMessage("manual: expected host:port, got \"$input\"")
+        val currentKit = kit ?: run {
+            appendSystemMessage("manual: kit not started")
             return
         }
+        val scope = runScope ?: return
+        if (_isManualDialing.value) {
+            appendSystemMessage("manual: dial already in progress")
+            return
+        }
+        val parts = input.trim().split(':', limit = 2)
+        val host = parts.getOrNull(0)?.trim().orEmpty()
+        val portStr = parts.getOrNull(1)?.trim().orEmpty()
+        if (host.isEmpty()) {
+            appendSystemMessage("manual: host cannot be empty (expected host:port)")
+            return
+        }
+        val port = portStr.toIntOrNull()
+        if (port == null || port !in 1..65_535) {
+            appendSystemMessage("manual: port must be 1..65535 (got '$portStr')")
+            return
+        }
+        // Reject obvious garbage in host so the user sees a useful message
+        // instead of waiting for the OS connect to fail.
+        if (!host.all { it.isLetterOrDigit() || it in ".:_-" }) {
+            appendSystemMessage("manual: host contains invalid characters: '$host'")
+            return
+        }
+        _isManualDialing.value = true
         scope.launch {
-            val synthetic = runCatching {
-                currentKit.networkProvisioning.createManualPeer(host, port)
-            }.getOrElse {
-                System.err.println("[p2pkit WARN] manual createManualPeer failed: ${it.message}")
-                appendSystemMessage("manual: createManualPeer failed: ${it.message ?: it::class.simpleName}")
-                return@launch
-            }
-            runCatching { currentKit.connect(synthetic) }.onFailure {
-                System.err.println("[p2pkit WARN] manual connect failed: ${it.message}")
-                appendSystemMessage("manual: connect to $host:$port failed: ${it.message ?: it::class.simpleName}")
+            try {
+                val synthetic = runCatching {
+                    currentKit.networkProvisioning.createManualPeer(host, port)
+                }.getOrElse {
+                    System.err.println("[p2pkit WARN] manual createManualPeer failed: ${it.message}")
+                    appendSystemMessage("manual: createManualPeer failed: ${it.message ?: it::class.simpleName}")
+                    return@launch
+                }
+                runCatching { currentKit.connect(synthetic) }.onFailure {
+                    System.err.println("[p2pkit WARN] manual connect failed: ${it.message}")
+                    appendSystemMessage("manual: connect to $host:$port failed: ${it.message ?: it::class.simpleName}")
+                }
+            } finally {
+                _isManualDialing.value = false
             }
         }
     }
 
     fun closeSession(peerId: String) {
         val scope = runScope ?: return
-        val target = connectedSessions.firstOrNull { it.peer.id.value == peerId } ?: return
+        val target = connectedSessions.firstOrNull { it.peer.id.value == peerId }
+        if (target == null) {
+            appendSystemMessage("close failed: peer not in session list")
+            return
+        }
         scope.launch {
             runCatching { target.close() }.onFailure {
                 System.err.println("[p2pkit WARN] close session to ${target.peer.name} failed: ${it.message}")
+                appendSystemMessage("close ${target.peer.name} failed: ${it.message ?: it::class.simpleName}")
             }
         }
     }
 
     fun sendRoomMessage(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return
+        if (trimmed.isEmpty()) {
+            appendSystemMessage("nothing sent — message was empty")
+            return
+        }
         val scope = runScope ?: return
 
         val sessionsSnapshot = connectedSessions.toList()
@@ -348,13 +427,28 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         val target: SendTarget = if (targetedSet.isEmpty()) SendTarget.All
         else SendTarget.Specific(targetedSet)
 
+        // Only Connected sessions can actually receive — Connecting /
+        // Reconnecting / Closing / Closed all silently drop at the SDK
+        // level. Filter here so the UI accurately reports who got the send.
         val recipients = when (target) {
-            SendTarget.All -> sessionsSnapshot
-            is SendTarget.Specific -> sessionsSnapshot.filter { it.peer.id.value in target.peerIds }
+            SendTarget.All -> sessionsSnapshot.filter { it.state.value == ConnectionState.Connected }
+            is SendTarget.Specific -> sessionsSnapshot.filter {
+                it.peer.id.value in target.peerIds && it.state.value == ConnectionState.Connected
+            }
         }
         if (recipients.isEmpty()) {
-            appendSystemMessage("nothing sent — no targeted peers are connected")
+            val why = if (sessionsSnapshot.isEmpty()) "no sessions"
+            else "no peers are Connected (have ${sessionsSnapshot.size} session(s) in non-Connected states)"
+            appendSystemMessage("nothing sent — $why")
             return
+        }
+        val skipped = sessionsSnapshot - recipients.toSet()
+        for (s in skipped) {
+            val inTarget = target is SendTarget.Specific && s.peer.id.value in target.peerIds
+            val isTargeted = target is SendTarget.All || inTarget
+            if (isTargeted) {
+                appendSystemMessage("skipped ${s.peer.name} (state=${s.state.value})")
+            }
         }
 
         val body = P2pMessage.Text(trimmed)
@@ -418,6 +512,8 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
 
     fun stop() {
         val toStop = kit ?: return
+        if (_isStopping.value) return
+        _isStopping.value = true
         kit = null
         isRunning = false
         _advertising.value = false
@@ -428,18 +524,48 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         sessionJobs.clear()
         _peers.value = emptyList()
         connectedSessions.clear()
+        pendingConnectPeerIds.clear()
         targetedPeerIds.clear()
         roomMessages.clear()
         fileTransfers.clear()
         _localPeerId.value = null
-        appScope.launch { runCatching { toStop.stop() } }
+        _manualConnectionInfo.value = null
+        _isManualDialing.value = false
+        // appScope (not runScope) so the stop coroutine survives our
+        // runScope.cancel() above.
+        appScope.launch {
+            runCatching { toStop.stop() }
+            _isStopping.value = false
+        }
     }
 
     // --- file transfer (v0.2.2) -------------------------------------------
 
     fun sendFile(peerId: String, file: File) {
         val scope = runScope ?: return
-        val session = connectedSessions.firstOrNull { it.peer.id.value == peerId } ?: return
+        val session = connectedSessions.firstOrNull { it.peer.id.value == peerId }
+        if (session == null) {
+            appendSystemMessage("send file '${file.name}' failed: peer not in session list")
+            return
+        }
+        if (session.state.value != ConnectionState.Connected) {
+            appendSystemMessage(
+                "send file to ${session.peer.name} failed: session not Connected (state=${session.state.value})"
+            )
+            return
+        }
+        if (!file.exists() || !file.isFile) {
+            appendSystemMessage("send file failed: '${file.absolutePath}' is missing or not a regular file")
+            return
+        }
+        if (!file.canRead()) {
+            appendSystemMessage("send file failed: '${file.absolutePath}' is not readable (check permissions)")
+            return
+        }
+        if (file.length() == 0L) {
+            appendSystemMessage("send file failed: '${file.name}' is empty (0 bytes)")
+            return
+        }
         scope.launch {
             val transfer = runCatching { session.sendFile(file) }
                 .getOrElse {
@@ -449,6 +575,17 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 }
             registerOutgoingTransfer(transfer, session.peer.name, scope)
         }
+    }
+
+    /**
+     * Called by the UI when the native file picker is dismissed without a
+     * selection. Surfaces a system-message line so the user knows the
+     * "Send file…" path silently terminated.
+     */
+    fun notifyFilePickerCancelled(peerId: String) {
+        val peerName = connectedSessions.firstOrNull { it.peer.id.value == peerId }?.peer?.name
+            ?: peerId.take(8)
+        appendSystemMessage("file send to $peerName cancelled (no file chosen)")
     }
 
     fun cancelFileTransfer(id: String) {
@@ -731,6 +868,7 @@ private class TailLogger(private val state: DesktopP2pState) : P2pLogger {
 
 @Composable
 private fun SetupScreen(state: DesktopP2pState) {
+    val isStarting by state.isStarting.collectAsState()
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -749,6 +887,7 @@ private fun SetupScreen(state: DesktopP2pState) {
             onValueChange = { state.deviceName = it },
             label = { Text("Device name") },
             singleLine = true,
+            enabled = !isStarting,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
@@ -756,16 +895,19 @@ private fun SetupScreen(state: DesktopP2pState) {
             onValueChange = { state.appIdInput = it },
             label = { Text("App ID (must match on every device)") },
             singleLine = true,
+            enabled = !isStarting,
             modifier = Modifier.fillMaxWidth()
         )
         Text(text = "Reconnect policy", style = MaterialTheme.typography.titleSmall)
         ReconnectChoicePicker(state)
         Button(
             onClick = state::start,
-            enabled = state.deviceName.isNotBlank() && state.appIdInput.isNotBlank(),
+            enabled = state.deviceName.trim().isNotEmpty() &&
+                state.appIdInput.trim().isNotEmpty() &&
+                !isStarting,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Start")
+            Text(if (isStarting) "Starting…" else "Start")
         }
     }
 }
@@ -849,6 +991,8 @@ private fun RoomScreen(state: DesktopP2pState) {
     val autoMesh by state.autoMesh.collectAsState()
     val localPeerId by state.localPeerId.collectAsState()
     val manualInfo by state.manualConnectionInfo.collectAsState()
+    val isStopping by state.isStopping.collectAsState()
+    val isManualDialing by state.isManualDialing.collectAsState()
     var draft by remember { mutableStateOf("") }
 
     Row(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -862,6 +1006,7 @@ private fun RoomScreen(state: DesktopP2pState) {
                 advertising = advertising,
                 discovering = discovering,
                 autoMesh = autoMesh,
+                isStopping = isStopping,
                 onToggleAdvertising = state::toggleAdvertising,
                 onToggleDiscovery = state::toggleDiscovery,
                 onToggleAutoMesh = state::toggleAutoMesh,
@@ -888,6 +1033,7 @@ private fun RoomScreen(state: DesktopP2pState) {
                         PeerCard(
                             peer = peer,
                             isConnected = state.connectedSessions.any { it.peer.id.value == peer.id.value },
+                            isConnecting = state.pendingConnectPeerIds.contains(peer.id.value),
                             onConnect = { state.connect(peer) }
                         )
                     }
@@ -897,6 +1043,7 @@ private fun RoomScreen(state: DesktopP2pState) {
             Spacer(Modifier.height(12.dp))
             ManualPeerSection(
                 manualInfo = manualInfo,
+                isManualDialing = isManualDialing,
                 onConnectManual = state::connectManual
             )
 
@@ -946,7 +1093,9 @@ private fun RoomScreen(state: DesktopP2pState) {
                             onToggleTarget = { state.togglePeerTarget(session.peer.id.value) },
                             onCloseSession = { state.closeSession(session.peer.id.value) },
                             onSendFile = {
-                                pickFile()?.let { state.sendFile(session.peer.id.value, it) }
+                                val file = pickFile()
+                                if (file != null) state.sendFile(session.peer.id.value, file)
+                                else state.notifyFilePickerCancelled(session.peer.id.value)
                             }
                         )
                     }
@@ -1018,6 +1167,10 @@ private fun RoomScreen(state: DesktopP2pState) {
                 targetCount == 0 -> "Broadcast (${connected.size})"
                 else -> "Send to $targetCount"
             }
+            // Only enable Send when at least one session is actually in
+            // ConnectionState.Connected — Connecting/Reconnecting peers
+            // would silently drop the send at the SDK level.
+            val hasConnectedSession = connected.any { it.state.collectAsState().value == ConnectionState.Connected }
             Button(
                 onClick = {
                     val text = draft.trim()
@@ -1026,7 +1179,7 @@ private fun RoomScreen(state: DesktopP2pState) {
                     state.sendRoomMessage(text)
                 },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = connected.isNotEmpty() && draft.isNotBlank()
+                enabled = hasConnectedSession && draft.trim().isNotEmpty() && !isStopping
             ) {
                 Text(sendLabel)
             }
@@ -1047,6 +1200,7 @@ private fun StatusHeader(
     advertising: Boolean,
     discovering: Boolean,
     autoMesh: Boolean,
+    isStopping: Boolean,
     onToggleAdvertising: () -> Unit,
     onToggleDiscovery: () -> Unit,
     onToggleAutoMesh: () -> Unit,
@@ -1059,7 +1213,7 @@ private fun StatusHeader(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(text = deviceName, fontWeight = FontWeight.SemiBold)
-            OverflowMenu(onStop = onStop)
+            OverflowMenu(onStop = onStop, isStopping = isStopping)
         }
         Text(text = "appId: $appId", style = MaterialTheme.typography.bodySmall)
         Text(
@@ -1092,7 +1246,7 @@ private fun StatusHeader(
 }
 
 @Composable
-private fun OverflowMenu(onStop: () -> Unit) {
+private fun OverflowMenu(onStop: () -> Unit, isStopping: Boolean) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
@@ -1100,7 +1254,8 @@ private fun OverflowMenu(onStop: () -> Unit) {
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
-                text = { Text("Stop kit") },
+                text = { Text(if (isStopping) "Stopping…" else "Stop kit") },
+                enabled = !isStopping,
                 onClick = {
                     expanded = false
                     onStop()
@@ -1239,6 +1394,7 @@ private fun RoomLine(message: RoomMessage) {
 @Composable
 private fun ManualPeerSection(
     manualInfo: ManualConnectionInfo?,
+    isManualDialing: Boolean,
     onConnectManual: (String) -> Unit
 ) {
     Text(text = "Manual peer (mDNS fallback)", style = MaterialTheme.typography.titleSmall)
@@ -1265,6 +1421,7 @@ private fun ManualPeerSection(
             onValueChange = { input = it },
             label = { Text("Connect host:port") },
             singleLine = true,
+            enabled = !isManualDialing,
             modifier = Modifier.weight(1f).padding(end = 8.dp)
         )
         Button(
@@ -1274,15 +1431,20 @@ private fun ManualPeerSection(
                 input = ""
                 onConnectManual(typed)
             },
-            enabled = input.isNotBlank()
+            enabled = input.trim().isNotEmpty() && !isManualDialing
         ) {
-            Text("Connect by IP")
+            Text(if (isManualDialing) "Dialing…" else "Connect by IP")
         }
     }
 }
 
 @Composable
-private fun PeerCard(peer: Peer, isConnected: Boolean, onConnect: () -> Unit) {
+private fun PeerCard(
+    peer: Peer,
+    isConnected: Boolean,
+    isConnecting: Boolean,
+    onConnect: () -> Unit
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -1298,10 +1460,10 @@ private fun PeerCard(peer: Peer, isConnected: Boolean, onConnect: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall
                 )
             }
-            if (isConnected) {
-                Text(text = "Connected", style = MaterialTheme.typography.labelSmall)
-            } else {
-                TextButton(onClick = onConnect) { Text("Connect") }
+            when {
+                isConnected -> Text(text = "Connected", style = MaterialTheme.typography.labelSmall)
+                isConnecting -> Text(text = "Connecting…", style = MaterialTheme.typography.labelSmall)
+                else -> TextButton(onClick = onConnect) { Text("Connect") }
             }
         }
     }
