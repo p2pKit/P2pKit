@@ -322,25 +322,73 @@ Apart from the device recipes above, the file transfer pipeline is also exercise
 
 ---
 
-## F. Unsupported iOS status
+## F. iOS support status (v0.3)
 
-iOS in v0.2 is **core scaffolding only**:
+iOS LAN ships in v0.3 — the same `transports { lan() }` API, the same `_p2pkit._tcp` service type, the same TXT record keys. Backed by `nw_listener_t` + `nw_connection_t` + `nw_browser_t` from `Network.framework`.
 
-- `:p2p-core` declares `iosX64`, `iosArm64`, `iosSimulatorArm64` targets.
-- `iosMain` ships `Platform.IOS`, `systemTimeMillis()`, and `NSUserDefaults`-backed `PeerIdStorage`.
-- **No iOS LAN transport** in `:p2p-transport-lan`. No `NWBrowser`, no `NWListener`, no `NWConnection`, no iOS sample app.
-- iOS targets cannot exchange LAN messages with Android/JVM peers in v0.2.
-- iOS Network Provisioning is **never planned** — Apple does not allow third-party apps to create hotspots or join Wi-Fi silently.
+What works:
+- Discovery via `NWBrowser` against the `_p2pkit._tcp` Bonjour service.
+- Advertise via `nw_listener_set_advertise_descriptor` on the inbound listener.
+- TCP data via `NWConnection` (non-TLS, matching `SecurityMode.NoneForMvp` on JVM/Android).
+- File transfer, ReconnectPolicy, keep-alive — all the common-code features, since they're transport-agnostic.
 
-Verification on this Windows release pipeline is limited to:
+What's still missing in v0.3:
+- **iOS sample app.** No Xcode project, no SwiftUI/Compose-Multiplatform UI, no provisioning profile. The SDK is callable from Kotlin code in an iOS target, but consuming apps need to wire their own UI and Info.plist entries — see §K below.
+- **iOS Network Provisioning** is **never planned** — Apple does not allow third-party apps to create hotspots or join Wi-Fi silently.
 
-```powershell
-.\gradlew.bat :p2p-core:tasks --all | findstr /i ios
+Quick code-only verification on macOS:
+
+```bash
+./gradlew :p2p-transport-lan:iosSimulatorArm64Test
 ```
 
-— which should list `compileKotlinIosArm64`, `iosSimulatorArm64MainKlibrary`, etc., proving the project model is consistent. Actually running iOS compile / link / test tasks requires a macOS host with Xcode. Cross-platform iOS verification waits for v0.3.
+— two `P2pKit` instances run inside the simulator process, advertise + discover over real Bonjour, and exchange text / 200 KB binary / 5 MiB file. Expected: `3 tests completed, 0 failed`.
 
-When v0.3 ships iOS LAN, the test sections will gain an iOS device matching steps A/B/C with `_p2pkit._tcp` Bonjour interop.
+To see all iOS-related tasks: `./gradlew :p2p-transport-lan:tasks --all | grep -i ios`.
+
+---
+
+## K. iOS Simulator ↔ JVM CLI cross-process LAN test (v0.3)
+
+Verifies the iOS LAN transport against a real-network JVM peer using the standard `:p2p-sample-desktop` CLI. The Mac's loopback + the simulator's shared host network are enough — no real iPhone needed for the smoke test.
+
+**Devices:** macOS host with Xcode + iOS Simulator runtime installed.
+
+**Prereqs:** running a Kotlin/Native iOS test that doubles as a peer requires either (a) an `iosSimulatorArm64Test` that doesn't `stop()` immediately, or (b) embedding the SDK in a small Swift/Kotlin Multiplatform app shell. Until the iOS sample app ships, the in-process `:p2p-transport-lan:iosSimulatorArm64Test` IS the canonical smoke test for the iOS transport — it exercises everything `transports { lan() }` does. The CLI ↔ Simulator pair below is the "real network" recipe to keep handy once the sample app lands.
+
+### K.1 — In-process loopback (canonical for v0.3)
+
+```bash
+./gradlew :p2p-transport-lan:iosSimulatorArm64Test
+```
+
+**Expected output:** three test cases pass.
+- `twoKitsDiscoverEachOtherAndExchangeText` — two kits with shared `appId`, mutual discovery, text message round-trip.
+- `largeBinaryPayloadRoundTripsOverTcp` — 200 KB binary chunk through `NWConnection` framing.
+- `fileTransferRoundTripsOverTcp` — 5 MiB deterministic file via `kotlinx-io` `Buffer`, `assertContentEquals` on the received bytes.
+
+If the test stalls on discovery, check the simulator runtime is actually installed (`xcrun simctl list devices available`) and that `mDNSResponder` is reachable inside it (it always is on stock simulators; failures here are usually misconfiguration, not Bonjour).
+
+### K.2 — iOS Simulator ↔ JVM CLI (deferred until iOS sample app ships)
+
+The Compose-Multiplatform / SwiftUI app will register itself for `_p2pkit._tcp` and run a long-lived kit. From a Terminal on the same Mac:
+
+```bash
+./gradlew :p2p-sample-desktop:installDist
+./p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop Mac
+```
+
+With the iOS sample running in the simulator and the JVM CLI in a terminal:
+- The CLI's `peers` command should list the simulator within ~5 s.
+- `connect <iosPeerId>` opens a session through `nw_connection_t` on the iOS side and `Socket` on the JVM side.
+- `send hello iphone` round-trips through the same `_p2pkit._tcp` Bonjour service as Android peers use.
+
+Until the sample app ships, K.2 is a placeholder. The wire format is verified by §K.1 plus the existing §A Android ↔ JVM recipe — an iOS peer is wire-indistinguishable from an Android peer because both use the same protocol version (`pv=1`), same TXT keys, same service type.
+
+**Common failure reasons:**
+- `iosSimulatorArm64Test` task missing: install the iOS simulator runtime through Xcode → Settings → Platforms.
+- Compile-time crash mentioning `Kotlin_Interop_refFromObjC` on a void block: a new `nw_*` block macro slipped into the iOS code path. Wrap it in a static-inline helper in `src/nativeInterop/cinterop/p2pkit_nw.h` so the void-block global never round-trips through Kotlin/Native (rationale documented in that file's header comment).
+- Discovery never resolves: Bonjour on the simulator can be flaky on some macOS versions when the host firewall is strict. `sudo lsof -nP -i UDP:5353` should show `mDNSResponder` listening; `dns-sd -B _p2pkit._tcp local.` should list every peer.
 
 ---
 
@@ -380,23 +428,24 @@ Also: **Android on mobile data only** cannot discover LAN peers — both endpoin
 
 ---
 
-## 7. Release checklist (v0.2.2-dev)
+## 7. Release checklist (v0.3.0-dev)
 
 Run through this before tagging.
 
-- [ ] `./gradlew :p2p-core:allTests :p2p-transport-lan:jvmTest :p2p-network-provisioning-desktop:test :p2p-network-provisioning-android:testAndroidHostTest :p2p-sample-android:assembleDebug :p2p-sample-desktop:installDist :p2p-sample-desktop-ui:assemble` → all green. Expected counts: `:p2p-core:allTests` 123/0, `:p2p-transport-lan:jvmTest` 3/0 (includes the 5 MiB SHA-256 file-transfer round-trip).
+- [ ] `./gradlew :p2p-core:allTests :p2p-transport-lan:jvmTest :p2p-transport-lan:iosSimulatorArm64Test :p2p-network-provisioning-desktop:test :p2p-network-provisioning-android:testAndroidHostTest :p2p-sample-android:assembleDebug :p2p-sample-desktop:installDist :p2p-sample-desktop-ui:assemble` → all green. Expected counts: `:p2p-core:allTests` 123/0, `:p2p-transport-lan:jvmTest` 3/0 (includes the 5 MiB SHA-256 file-transfer round-trip), `:p2p-transport-lan:iosSimulatorArm64Test` 3/0 (text + 200 KB binary + 5 MiB file via real Bonjour and NWConnection).
 - [ ] **§A** Android ↔ JVM walkthrough passes nine-of-nine.
 - [ ] **§B** Three-device room broadcast verified at N ≥ 3 (4+ ideally).
 - [ ] **§C** ReconnectPolicy roundtrip verified: Connected → Reconnecting → Connected, and exhaustion → Failed.
 - [ ] **§D** PeerId persistence verified on both JVM and Android.
 - [ ] **§E** MulticastLock dumpsys diagnostic shows `p2pkit-mdns` during operation.
-- [ ] **§F** iOS scaffolding state is unchanged: targets visible in `:p2p-core:tasks --all`, no LAN transport.
+- [ ] **§F** iOS LAN smoke test (`./gradlew :p2p-transport-lan:iosSimulatorArm64Test`) passes — three cases green.
 - [ ] **§G** JVM manual-IP fallback verified (two CLIs, `manual host:port`).
 - [ ] **§H** Android `LocalOnlyHotspot` host verified on two phones — *device verification pending; tracks the same backlog row as §I*.
 - [ ] **§I** Android Wi-Fi join via `WifiNetworkSpecifier` verified on two phones — *device verification pending*.
 - [ ] **§J** Cross-device file transfer verified (any one of J.1 / J.2 / J.3) — *device verification optional; the automated 5 MiB SHA-256 LAN loopback already covers the protocol layer*.
+- [ ] **§K** In-process iOS Simulator loopback green (§K.1). Real cross-machine Simulator ↔ JVM CLI (§K.2) deferred until the iOS sample app ships.
 - [ ] Known Limitations in `README.md` reviewed; nothing new has slipped in.
 - [ ] No leftover TODO / FIXME / debug `println` in shipping code (sample `println` is fine).
 - [ ] Compose Desktop UI sample (`:p2p-sample-desktop-ui`) launches at v0.2.2 parity — status header shows appId/peerId/state, Advertise/Discover switches work, room chips show state, broadcast and targeted send work, **Send file…** menu picks via AWT and surfaces the live progress row.
 
-When all boxes tick, **tag the v0.2.2-internal milestone** (which also subsumes v0.2.1's provisioning work) and share this guide with the testers.
+When all boxes tick, **tag the v0.3-internal milestone** (which subsumes v0.2.2's file transfer and v0.2.1's provisioning) and share this guide with the testers.

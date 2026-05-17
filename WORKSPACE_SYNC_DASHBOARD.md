@@ -1,8 +1,8 @@
 # Workspace Sync Dashboard
 
-**Last updated:** 2026-05-16
-**Current branch:** `v0.2.2-dev` @ `d9edb7f` (about to cut `v0.3.0-dev`)
-**Host context:** migrating from Windows → macOS for iOS work.
+**Last updated:** 2026-05-17
+**Current branch:** `v0.3.0-dev` (Tasks 18–22 shipped — iOS LAN/TCP).
+**Host context:** macOS, post-Windows-migration. iOS Simulator loopback tests green.
 
 This file is the running scratchpad for state that isn't otherwise captured in
 README / INTERNAL_TESTING / git. Update freely as work moves; don't treat it
@@ -182,20 +182,19 @@ dns-sd -L "<instance-name>" _p2pkit._tcp local.
 
 ---
 
-## 3. Current Active Roadmap (v0.3.0-dev Track)
+## 3. v0.3.0-dev Roadmap (shipped)
 
-iOS LAN/TCP via Bonjour + `Network.framework`. Cut a fresh `v0.3.0-dev`
-branch from `v0.2.2-dev @ d9edb7f` before Task 18.
+iOS LAN/TCP via Bonjour + `Network.framework`. Cut from `v0.2.2-dev @ 0d99695`.
 
 Status legend: `[ ]` = unstarted, `[~]` = in progress, `[x]` = done.
 
 | Task | Title | Status | Output / verification gate |
 |---|---|---|---|
-| **18** | Build setup + iOS source set skeleton | `[ ]` | `./gradlew :p2p-transport-lan:compileKotlinIosSimulatorArm64` succeeds. New `appleMain` source set, empty `IosLan*.kt` stubs, `lan()` extension on `TransportsBuilder` for iOS that registers an as-yet-unimplemented factory. |
-| **19** | `IosRawConnection` + `IosLanDataTransport` | `[ ]` | NWConnection wrapper with `state` StateFlow, `write(bytes)`, `read(): Flow<ByteArray>`, `close()`. Data transport's `incomingConnections()` flow from `NWListener.newConnectionHandler`; `connect(peer)` builds NWConnection from the endpoint registry. |
-| **20** | `IosLanDiscoveryTransport` + TXT helpers | `[ ]` | `NWBrowser` for browse, `NWListener.Service` for advertise. `IosBonjour.kt` round-trips `NWTXTRecord` ↔ `Map<String,String>` against `LanConstants` keys. Endpoint registry shared with the data transport. |
-| **21** | iosSimulatorArm64Test loopback | `[ ]` | Three new tests mirror `JvmLanLoopbackTest` — text round-trip, 200 KB binary, 5 MiB SHA-256 file. All run on the iOS Simulator via `./gradlew :p2p-transport-lan:iosSimulatorArm64Test`. |
-| **22** | Docs + cross-platform recipe + commit/push | `[ ]` | README platform tables flip iOS rows to ✅; status section gains v0.3.0-dev. `INTERNAL_TESTING.md` §K with CLI ↔ iOS Simulator recipe. Final pipeline, commit, push to `origin v0.3.0-dev`. |
+| **18** | Build setup + iOS source set skeleton | `[x]` | `appleMain` source set on `:p2p-transport-lan` with `IosLan*.kt` stubs and a `lan()` extension that registers an iOS factory. `./gradlew :p2p-transport-lan:compileKotlinIosSimulatorArm64` green. |
+| **19** | `IosRawConnection` + `IosLanDataTransport` | `[x]` | `nw_connection_t` wrapper with `state` StateFlow, suspending `write(bytes)`, cold `read(): Flow<ByteArray>` via `suspendCancellableCoroutine` per receive. Data transport owns one `nw_listener_t`, blocks init on `dispatch_semaphore` until `.ready` so `tcpPort` is synchronous. |
+| **20** | `IosLanDiscoveryTransport` + TXT helpers | `[x]` | `nw_browser_t` for browse, `nw_listener_set_advertise_descriptor` for advertise. `IosBonjour.kt` round-trips `nw_txt_record_t` ↔ `Map<String,String>` against `LanConstants.TXT_*`. Resolved `nw_endpoint_t` stashed in `IosEndpointRegistry` keyed by peer id. |
+| **21** | iosSimulatorArm64Test loopback | `[x]` | Three tests mirror `JvmLanLoopbackTest` (text, 200 KB binary, 5 MiB file) — `./gradlew :p2p-transport-lan:iosSimulatorArm64Test` reports 3/0. Cinterop helper `src/nativeInterop/cinterop/p2pkit_nw.h` wraps the void-returning block macros (`NW_PARAMETERS_DISABLE_PROTOCOL` etc.) plus `dispatch_data_create` + `nw_connection_send` / `_receive` so Kotlin never has to box `dispatch_data_t` / `nw_content_context_t`. |
+| **22** | Docs + cross-platform recipe + commit/push | `[x]` | README platform tables flipped, status section adds v0.3.0-dev row, `INTERNAL_TESTING.md` §K covers in-process simulator loopback + the placeholder Simulator-↔-CLI recipe (deferred until the iOS sample app ships). Final pipeline + push. |
 
 ### Out of scope for v0.3.0-dev (will become backlog rows when shipped)
 
@@ -205,8 +204,26 @@ Status legend: `[ ]` = unstarted, `[~]` = in progress, `[x]` = done.
 
 ### Definition of done for v0.3.0-dev
 
-All five tasks committed, `:p2p-transport-lan:iosSimulatorArm64Test` green on
-the macOS host, `v0.3.0-dev` branch pushed to origin. Tagging
-`v0.3-internal` still depends on the same Task 11/12 device verification
-backlog rows above (since v0.3 transitively includes v0.2.1's provisioning) —
-that's tracked in §1 here and in the README backlog table.
+✅ Done as of 2026-05-17: all five tasks committed on `v0.3.0-dev`,
+`:p2p-transport-lan:iosSimulatorArm64Test` reports 3/0 on the macOS host,
+JVM + Android + all three iOS targets compile clean, branch pushed to
+`origin/v0.3.0-dev`. Tagging `v0.3-internal` still depends on the same
+Task 11/12 device verification backlog rows above (since v0.3 transitively
+includes v0.2.1's provisioning) — that's tracked in §1 here and in the
+README backlog table.
+
+### Notable lessons captured in code/comments
+- **Kotlin/Native cannot read void-returning ObjC block globals as
+  `kotlin.Any`.** `NW_PARAMETERS_DISABLE_PROTOCOL`,
+  `NW_PARAMETERS_DEFAULT_CONFIGURATION`,
+  `NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT` all expand to such globals; reading
+  them from Kotlin crashes inside `Kotlin_Interop_refFromObjC`. Workaround
+  is static-inline C helpers — see `src/nativeInterop/cinterop/p2pkit_nw.h`.
+- **Kotlin lambda → ObjC block conversion is sensitive to inferred return
+  type.** `if (cond) { trySend(x) }` inside a callback lambda makes the
+  lambda return `Any` (LUB of `ChannelResult` and the implicit-else `Unit`),
+  which Kotlin/Native bridges as an id-returning block. libdispatch then
+  crashes calling it. Fix: explicit `Unit` after each Unit-returning
+  callback body.
+- **Kotlin's `if (cond) something()` without `else` has type `Any` when
+  `something()` is non-Unit.** Surfaces same bridging trap.

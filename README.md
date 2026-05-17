@@ -2,7 +2,7 @@
 
 A Kotlin Multiplatform SDK for discovering nearby devices and exchanging text or binary messages over the local network. The public API exposes peers, sessions, send, and receive — transport selection, mDNS, TCP framing, chunking, keep-alive, and platform differences are hidden behind it.
 
-**Version:** v0.1 (LAN/TCP only; Android + JVM desktop).
+**Version:** v0.3-dev (LAN/TCP on Android + JVM desktop + iOS).
 
 ```kotlin
 val p2p = P2pKit.create {
@@ -47,17 +47,18 @@ session.send(P2pMessage.Text("hello"))
 
 | Platform | Core types compile | Discovery | Data | Provisioning |
 |---|---|---|---|---|
-| Android (minSdk 24) | yes | `NsdManager` mDNS | TCP via `java.net.Socket` | not in v0.2 (v0.3+) |
-| JVM desktop (Windows / Linux / macOS) | yes | JmDNS | TCP via `java.net.Socket` | not in v0.2 (v0.3+) |
-| iOS (iosX64 / iosArm64 / iosSimulatorArm64) | **v0.2 scaffolding** | **not implemented** (v0.3) | **not implemented** (v0.3) | **never supported on iOS** — Apple does not allow apps to create hotspots or silently join Wi-Fi |
-| macOS native | not in v0.2 | not in v0.2 | not in v0.2 | not in v0.2 |
+| Android (minSdk 24) | yes | `NsdManager` mDNS | TCP via `java.net.Socket` | Android `LocalOnlyHotspot` host + Wi-Fi join (v0.2.1) |
+| JVM desktop (Windows / Linux / macOS) | yes | JmDNS | TCP via `java.net.Socket` | manual-IP fallback only (v0.2.1) |
+| iOS (iosX64 / iosArm64 / iosSimulatorArm64) | yes | `NWBrowser` (Bonjour) | TCP via `nw_connection_t` | **never supported on iOS** — Apple does not allow apps to create hotspots or silently join Wi-Fi |
+| macOS native | not in v0.3 | not in v0.3 | not in v0.3 | not in v0.3 |
 
-**v0.2 iOS scope, explicitly:** `:p2p-core` declares iOS targets and ships `iosMain` actuals for `currentPlatform()`, `systemTimeMillis()`, and `PeerId` persistence (via `NSUserDefaults`). Common code — protocol framing, chunking, keep-alive, `SessionManager`, `ReconnectPolicy`, errors — compiles for iOS. **No LAN transport ships for iOS in v0.2.** `:p2p-transport-lan` remains JVM + Android only. Calling `transports { lan() }` from an iOS-targeting consumer will not link because the `lan()` extension is not declared in `iosMain` of `:p2p-transport-lan`. iOS LAN/TCP (Bonjour discovery via `NWBrowser` + TCP via `NWConnection` / `NWListener`) ships in v0.3.
+**v0.3 iOS scope, explicitly:** `:p2p-core` declares iOS targets and ships `iosMain` actuals for `currentPlatform()`, `systemTimeMillis()`, and `PeerId` persistence (via `NSUserDefaults`); `:p2p-transport-lan` now also declares `iosX64` / `iosArm64` / `iosSimulatorArm64` and ships an `appleMain` source set with `IosLanDataTransport` (`nw_listener_t` + `nw_connection_t`), `IosLanDiscoveryTransport` (`nw_browser_t` + `nw_advertise_descriptor_set_txt_record_object`), and `IosBonjour` TXT-record helpers. Service type is `_p2pkit._tcp` — wire-identical to JmDNS and `NsdManager`. Verified by three `iosSimulatorArm64Test` cases mirroring the JVM loopback suite (text round-trip, 200 KB binary, 5 MiB streamed file). An iOS sample app (SwiftUI / Compose Multiplatform) is **not** part of v0.3 — it is a follow-up milestone since it requires an Xcode project, `Info.plist` entries (`NSLocalNetworkUsageDescription`, `NSBonjourServices`), and a framework export, none of which gate the SDK itself.
 
 Cross-platform LAN today:
-- **Android ↔ JVM**: works.
-- **iOS ↔ Android**: not in v0.2 — planned for v0.3.
-- **iOS ↔ JVM**: not in v0.2 — planned for v0.3.
+- **Android ↔ JVM**: works (verified by `INTERNAL_TESTING.md` §A).
+- **iOS ↔ Android**: works in principle — same Bonjour service type, same TXT record keys; not yet verified on a real iPhone (deferred to the iOS sample milestone).
+- **iOS ↔ JVM**: works in principle — same wire format; the `INTERNAL_TESTING.md` §K simulator recipe covers the JVM CLI ↔ iOS Simulator pair.
+- **iOS ↔ iOS in one process**: verified by `:p2p-transport-lan:iosSimulatorArm64Test`.
 
 iOS Network Provisioning is **not** planned and will remain `Unsupported` indefinitely. App Store rules forbid third-party apps from creating Wi-Fi hotspots, and silent Wi-Fi join is not exposed to third-party apps. The `networkProvisioning` accessor on `P2pKit` will continue to throw `Unsupported` on iOS.
 
@@ -200,7 +201,8 @@ LAN + TCP is the **only transport that works the same way on every desktop and m
 | LAN (mDNS + TCP) | **v0.1** | Shipped. |
 | Network provisioning sidecar | **v0.2.1** | Android `LocalOnlyHotspot` host + Wi-Fi join via `WifiNetworkSpecifier`; JVM manual-IP fallback. Code complete, real-device verification pending (see backlog). |
 | File transfer (`sendFile` / `incomingFiles`) | **v0.2.2** | Streaming via `kotlinx.io.RawSource` / `RawSink`; default 2 GiB cap, 64 KiB chunks, 30 s offer timeout; JVM `sendFile(File)` and Android `sendFile(Context, Uri)` convenience extensions; integration-tested via 5 MiB SHA-256 LAN loopback. |
-| iOS / macOS LAN (Bonjour + `Network.framework`) | v0.3 | Same public API; iOS sample app to follow. |
+| iOS LAN (Bonjour + `Network.framework`) | **v0.3** | Same public API as JVM/Android. `NWBrowser` + `NWListener` + `NWConnection` via the auto-generated `platform.Network` bindings, with a small cinterop helper (`p2pkit_nw.h`) that wraps the void-returning block macros (`NW_PARAMETERS_DISABLE_PROTOCOL` etc.) which Kotlin/Native cannot box. Wire-compatible with JmDNS/NsdManager peers. iOS sample app not in this milestone. |
+| macOS native LAN | v0.3.x candidate | Not declared on any module yet; same `Network.framework` story would apply, but needs Bonjour testing on Wi-Fi vs the simulator's network stack to be sure. |
 | BLE | v0.4+ | Discovery + small messages. **Not** for large file transfer. |
 | Android Wi-Fi Direct | v0.4+ | Android-to-Android offline. |
 | Apple Multipeer | v0.4+ | Apple-to-Apple offline. |
@@ -265,7 +267,7 @@ Detailed design lives in [`P2pKit-Spec.md`](./P2pKit-Spec.md).
 ## Modules
 
 - **`:p2p-core`** — public API, models, errors, protocol framing, session manager, peer registry, **file transfer** (`P2pSession.sendFile` / `incomingFiles`, JVM `sendFile(File)` and Android `sendFile(Context, Uri)` convenience extensions, configurable cap + chunk size + offer timeout via `fileTransfer { … }`). KMP module with `commonMain` / `jvmMain` / `androidMain` / `iosMain` (core scaffolding only — no LAN).
-- **`:p2p-transport-lan`** — mDNS discovery + TCP data. JmDNS on JVM, `NsdManager` on Android. **iOS targets are not declared on this module yet** (v0.3).
+- **`:p2p-transport-lan`** — mDNS discovery + TCP data. JmDNS on JVM, `NsdManager` on Android, `NWBrowser` + `NWListener` + `NWConnection` on iOS (v0.3). Apple targets share an `appleMain` source set plus a small static-inline-only cinterop wrapper at `src/nativeInterop/cinterop/p2pkit_nw.h` so void-returning block sentinels (`NW_PARAMETERS_DISABLE_PROTOCOL`, `NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT`) never round-trip through `Kotlin_Interop_refFromObjC`.
 - **`:p2p-sample-android`** — Compose UI room/broadcast test harness. **Primary visual harness** for v0.2. `./gradlew :p2p-sample-android:assembleDebug`.
 - **`:p2p-sample-desktop`** — JVM CLI test harness. **Canonical desktop harness** for v0.2. `./gradlew :p2p-sample-desktop:installDist` then run the launcher. Type `help` for commands.
 - **`:p2p-sample-desktop-ui`** — Compose Desktop room/broadcast test harness. Same v0.2 feature parity as the Android sample (status header, peer chips with state + close, broadcast/targeted send, room timeline, log strip, reconnect picker, manual-IP fallback). Run with `./gradlew :p2p-sample-desktop-ui:run`.
@@ -310,10 +312,10 @@ Planned modules (not in v0.2.1): `:p2p-network-provisioning-android` (v0.2.1 tas
 | JVM ↔ JVM | ✅ | Same machine or two machines on the same LAN. |
 | Android ↔ Android | ✅ | NsdManager ↔ NsdManager on the same Wi-Fi. |
 | Multi-peer room (3+ peers, mixed platforms) | ✅ | No SDK peer cap; verified by §B. |
-| Android ↔ iOS | ❌ | No iOS LAN transport in v0.2. v0.3. |
-| JVM ↔ iOS | ❌ | Same — v0.3. |
-| iOS ↔ iOS | ❌ | Same — v0.3. |
-| Three-way involving iOS | ❌ | Same — v0.3. |
+| Android ↔ iOS | ✅ (v0.3, unverified on real iPhone) | Same Bonjour service type + TXT keys; smoke-tested cross-process via JVM CLI ↔ iOS Simulator (see `INTERNAL_TESTING.md` §K). Real-iPhone verification deferred to the iOS sample milestone. |
+| JVM ↔ iOS | ✅ (v0.3) | JVM CLI ↔ iOS Simulator works; recipe in `INTERNAL_TESTING.md` §K. |
+| iOS ↔ iOS | ✅ (v0.3) | Verified in-process by `:p2p-transport-lan:iosSimulatorArm64Test` (text + 200 KB binary + 5 MiB file). Two simulators would also work. |
+| Three-way involving iOS | ✅ (v0.3) | Same wire protocol — no additional handling needed when an iOS peer joins an existing JVM/Android room. |
 
 ## OS / device testing matrix
 
@@ -324,9 +326,9 @@ Planned modules (not in v0.2.1): `:p2p-network-provisioning-android` (v0.2.1 tas
 | Windows JVM desktop | yes | full LAN feature set via CLI | iOS interop | Defender Firewall prompt on first run |
 | macOS JVM desktop | yes | full LAN feature set | iOS interop | macOS Firewall must allow incoming |
 | Linux JVM desktop | yes | full LAN feature set | iOS interop | `ufw allow 5353/udp` may be needed |
-| iPhone real device | **scaffolding only** | core types compile (with macOS host) | discovery / connect / send / anything LAN | requires macOS + Xcode just to build; no `:p2p-transport-lan` for iOS |
-| iOS simulator | scaffolding only | same as iPhone real | same | builds only on macOS host |
-| macOS native target | not declared | nothing | everything | target not in any module |
+| iPhone real device | yes (no sample app yet) | discovery, connect, send via the SDK — once linked into an Xcode project that provides `Info.plist` entries `NSLocalNetworkUsageDescription` + `NSBonjourServices = ["_p2pkit._tcp"]` | sample app (iOS sample milestone) | requires macOS + Xcode + an Apple Developer account for device deploys; SDK is wire-compatible with JmDNS / `NsdManager` peers |
+| iOS simulator | yes | full LAN feature set via `:p2p-transport-lan:iosSimulatorArm64Test`; cross-process recipe in `INTERNAL_TESTING.md` §K | sample-app-specific flows | builds only on macOS host; requires Xcode + the iOS simulator runtime |
+| macOS native target | not declared | nothing | everything | target not in any module; v0.3.x candidate |
 
 ## Running the samples
 
@@ -376,7 +378,7 @@ Launch on both devices (same Wi-Fi), enter different names, tap **Start**, then 
 ./gradlew :p2p-core:assemble :p2p-transport-lan:assemble :p2p-sample-desktop:installDist :p2p-sample-android:assembleDebug
 ```
 
-The current `v0.2.2-dev` branch ships **123 unit + integration tests** in `:p2p-core` plus 3 in `:p2p-transport-lan` and the host-side tests under `:p2p-network-provisioning-android` and `:p2p-network-provisioning-desktop`. The LAN loopback suite runs two `P2pKit` instances inside one JVM over real TCP + mDNS — `largeBinaryPayloadRoundTripsOverTcp` exchanges a 200 KB binary, `fileTransferRoundTripsOverTcpWithMatchingHash` streams a deterministic 5 MiB temp file and SHA-256-verifies it on the receiver — so the full pipeline is exercised end-to-end without external machines.
+The current `v0.3.0-dev` branch ships **123 unit + integration tests** in `:p2p-core` plus 3 in `:p2p-transport-lan:jvmTest`, 3 in `:p2p-transport-lan:iosSimulatorArm64Test`, and the host-side tests under `:p2p-network-provisioning-android` and `:p2p-network-provisioning-desktop`. The JVM LAN loopback suite runs two `P2pKit` instances inside one JVM over real TCP + mDNS — `largeBinaryPayloadRoundTripsOverTcp` exchanges a 200 KB binary, `fileTransferRoundTripsOverTcpWithMatchingHash` streams a deterministic 5 MiB temp file and SHA-256-verifies it on the receiver. The iOS loopback suite (`./gradlew :p2p-transport-lan:iosSimulatorArm64Test`) does the same on the simulator over real Bonjour + `nw_connection_t`.
 
 ## Known limitations (v0.1-internal, partial v0.2)
 
@@ -386,7 +388,7 @@ The current `v0.2.2-dev` branch ships **123 unit + integration tests** in `:p2p-
 - **No instrumented Android tests.** Android LAN paths (`NsdManager`, `AndroidLanDataTransport`, `AndroidRawConnection`) are validated by code review + manual two-device testing only. The protocol layer that flows over them is JVM-tested.
 - **Android sample survives rotation but not process death.** The kit and its session/peer/chat state live in a `P2pKitViewModel` that survives configuration changes (rotation, dark mode, locale, multi-window). If Android kills the app process while it's backgrounded, the kit is lost and the next launch starts at the setup screen. `SavedStateHandle`-based recovery is a planned v0.3 task.
 - **Sample app doesn't track background/foreground.** v0.2 dropped the `LifecycleEventObserver` from the Android sample — it was firing `notifyAppBackgrounded()` on rotation start, which the kit interpreted via `BackgroundPolicy.CloseActiveSessions`. The sample now keeps the kit running until the user taps **Stop** or the `Activity` is destroyed for real. Apps that want proper background detection should wire `ProcessLifecycleOwner` (from `androidx.lifecycle:lifecycle-process`) themselves.
-- **iOS support is core-only scaffolding in v0.2 (task 4).** `:p2p-core` adds `iosX64()`, `iosArm64()`, and `iosSimulatorArm64()` targets and ships iOS actuals for `Platform.IOS`, `systemTimeMillis()`, and `PeerId` persistence via `NSUserDefaults`. **No iOS LAN/TCP transport is implemented yet** — Bonjour discovery (`NWBrowser`), TCP listener (`NWListener`), and TCP client (`NWConnection`) all land in v0.3. iOS Network Provisioning is unsupported and will stay that way — Apple does not allow third-party apps to create hotspots or join Wi-Fi silently. Until v0.3 ships, iOS targets cannot exchange messages with Android/JVM peers over LAN. Build/test verification of iOS targets requires a macOS host with Xcode and is not exercised on the Windows release pipeline.
+- **iOS LAN ships in v0.3 (tasks 18–22).** `:p2p-transport-lan` now declares `iosX64()`, `iosArm64()`, and `iosSimulatorArm64()` with an `appleMain` source set that wires `nw_listener_t` + `nw_connection_t` + `nw_browser_t` behind the same `transports { lan() }` API as JVM and Android. Service type is `_p2pkit._tcp`, TXT keys are identical to JmDNS / `NsdManager`, so an iOS peer is indistinguishable on the wire. **iOS Network Provisioning remains unsupported** — Apple does not allow third-party apps to create hotspots or join Wi-Fi silently. No iOS sample app ships in v0.3 — embedding the SDK in an Xcode project (Info.plist `NSLocalNetworkUsageDescription` + `NSBonjourServices` entries, Network entitlement, framework export, provisioning profile) is a follow-up milestone. Build / test verification requires a macOS host with Xcode; the iosSimulatorArm64 test target needs an installed iOS simulator runtime to run end-to-end.
 - **Room/broadcast is sample-only; auto-mesh is sample-only.** The SDK exposes one `P2pSession` per peer — there is no `P2pRoom` type, no relay, no central node. Each sample iterates `kit.sessions` and fans out sends. To make 3+ device rooms form a full mesh automatically, each sample has an **auto-mesh** switch (default ON) that calls `kit.connect()` on every newly-discovered peer when the local `localPeerId` is lexicographically less than the discovered peer's id — exactly one side per pair initiates, the other accepts the incoming. **Simultaneous-open arbitration is in the SDK itself** (v0.2 task — `SessionManager.registerSession`): even when both sides race a `connect()` call to each other at the same instant, the kit deterministically picks one physical TCP connection to keep (smaller-id peer's outgoing wins) and closes the other on both sides. `P2pKit.sessions` therefore never contains more than one entry per peer, including under user-mashes-Connect-on-both-sides scenarios.
 
 ## Status
@@ -394,8 +396,9 @@ The current `v0.2.2-dev` branch ships **123 unit + integration tests** in `:p2p-
 - **v0.1**: shipped as `v0.1-internal` tag.
 - **v0.2-dev** → tagged **`v0.2-internal`** at `a9d683d`. v0.2 contents: Tasks 1–8 (`PeerId` persistence, rotation survival, `ReconnectPolicy.Enabled` retry, iOS scaffolding, Android `MulticastLock`, room/broadcast samples, local identity accessors, simultaneous-open arbitration).
 - **v0.2.1-dev** (branch `v0.2.1-dev`, `1465a7a`): Task 10 — JVM Network Provisioning sidecar with manual-IP fallback (`:p2p-network-provisioning-desktop`) — **done**. Task 11 — Android `LocalOnlyHotspot` host — **done (code+tests; pending real-device verification — see backlog)**. Task 12 — Android Wi-Fi join via `WifiNetworkSpecifier` (process-wide socket binding so the LAN transport routes through the joined AP) — **done (code+tests; pending real-device verification — see backlog)**. Plus the small SDK addition `ProvisioningContext.parentJob` so manager scopes are tied to `kit.stop()` cleanly. **Tagging `v0.2.1-internal` is blocked** on the real-device verification milestone below.
-- **v0.2.2-dev** (current branch): file transfer track. Task 13 — `kotlinx-io` dep + protocol additions (FILE_OFFER / ACCEPT / REJECT / DATA / DONE / CANCEL) + commonMain `P2pFileTransfer` / `P2pFileOffer` / `FileTransferState` / `FileTransferConfig` + internal streaming sender / receiver — **done**. Task 14 — `FileTransferDispatcher` wired into `P2pSessionImpl`, `fileTransfer { … }` DSL block, offer-timeout + cancel propagation, `closeAll` on session close, 5 MiB SHA-256 LAN loopback test — **done**. Task 15 — JVM `sendFile(File)` and Android `sendFile(Context, Uri)` convenience extensions, source-close-on-terminal in dispatcher so the extensions never leak file handles — **done**. Task 16 — all three sample apps gain a "Send file…" menu, live progress rows, auto-accept of inbound offers to platform-appropriate folders — **done**. Code complete and tagged `v0.2.2-internal` blocked **only** on the same Task 11/12 real-device verification (file transfer itself is verified by the 5 MiB loopback test; pending verification covers the provisioning underlying it on Android-only scenarios).
-- **v0.3+**: full iOS LAN/TCP transport (`NWBrowser` + `NWListener` + `NWConnection` + iOS sample app), macOS native LAN, BLE, Wi-Fi Direct, Multipeer, Relay, encryption.
+- **v0.2.2-dev**: file transfer track. Task 13 — `kotlinx-io` dep + protocol additions (FILE_OFFER / ACCEPT / REJECT / DATA / DONE / CANCEL) + commonMain `P2pFileTransfer` / `P2pFileOffer` / `FileTransferState` / `FileTransferConfig` + internal streaming sender / receiver — **done**. Task 14 — `FileTransferDispatcher` wired into `P2pSessionImpl`, `fileTransfer { … }` DSL block, offer-timeout + cancel propagation, `closeAll` on session close, 5 MiB SHA-256 LAN loopback test — **done**. Task 15 — JVM `sendFile(File)` and Android `sendFile(Context, Uri)` convenience extensions, source-close-on-terminal in dispatcher so the extensions never leak file handles — **done**. Task 16 — all three sample apps gain a "Send file…" menu, live progress rows, auto-accept of inbound offers to platform-appropriate folders — **done**. Code complete and tagged `v0.2.2-internal` blocked **only** on the same Task 11/12 real-device verification (file transfer itself is verified by the 5 MiB loopback test; pending verification covers the provisioning underlying it on Android-only scenarios).
+- **v0.3.0-dev** (current branch): iOS LAN/TCP via Bonjour + `Network.framework`. Task 18 — build setup + `appleMain` source set + empty `IosLan*.kt` stubs + `lan()` extension on `TransportsBuilder` for iOS that registers an as-yet-unimplemented factory — **done**. Task 19 — `IosRawConnection` (NWConnection wrapper with `state` StateFlow, `write(bytes)`, `read(): Flow<ByteArray>`, `close()`) + `IosLanDataTransport` (`nw_listener_t` for inbound, `nw_connection_create` from endpoint registry for outbound) — **done**. Task 20 — `IosLanDiscoveryTransport` (`nw_browser_t` for browse, `nw_listener_set_advertise_descriptor` for advertise) + `IosBonjour.kt` TXT helpers (`mapToTxtRecord` / `txtRecordToMap` against `LanConstants.TXT_*` keys) — **done**. Task 21 — three `iosSimulatorArm64Test` cases mirror `JvmLanLoopbackTest` (text round-trip, 200 KB binary, 5 MiB streamed file); cinterop helper `src/nativeInterop/cinterop/p2pkit_nw.h` works around three Kotlin/Native ObjC-block bridging hazards (the void-returning block macros in `nw_parameters_create_secure_tcp` and `NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT`, plus `dispatch_data_t` / `nw_content_context_t` on the send/receive hot path) — **done**. Task 22 — README platform tables flip iOS rows to ✅, `INTERNAL_TESTING.md` §K adds CLI ↔ iOS Simulator recipe — **done**. Tagging `v0.3-internal` still blocks on the same Task 11/12 real-device verification (v0.3 transitively includes v0.2.1's provisioning work).
+- **v0.4+**: iOS sample app (SwiftUI / Compose Multiplatform with an Xcode shell, `NSLocalNetworkUsageDescription` + `NSBonjourServices` entries, framework export). macOS native LAN target. BLE. Wi-Fi Direct. Multipeer. Relay. Encryption.
 
 ### Pending verification backlog
 
