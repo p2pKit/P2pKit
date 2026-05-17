@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -61,12 +62,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.provisioning.JoinNetworkResult
 import dev.p2pkit.core.provisioning.LocalNetworkResult
 import dev.p2pkit.core.transfer.FileTransferState
+import androidx.compose.ui.graphics.Color
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -243,6 +246,7 @@ private fun RoomScreen(
     val autoMesh by vm.autoMesh.collectAsState()
     val localPeerId by vm.localPeerId.collectAsState()
     val isStopping by vm.isStopping.collectAsState()
+    val networkPathStatus by vm.networkPathStatus.collectAsState()
     var draft by remember { mutableStateOf("") }
 
     Column(
@@ -262,6 +266,7 @@ private fun RoomScreen(
             discovering = discovering,
             autoMesh = autoMesh,
             isStopping = isStopping,
+            networkPathStatus = networkPathStatus,
             onToggleAdvertising = vm::toggleAdvertising,
             onToggleDiscovery = vm::toggleDiscovery,
             onToggleAutoMesh = vm::toggleAutoMesh,
@@ -452,6 +457,7 @@ private fun StatusHeader(
     discovering: Boolean,
     autoMesh: Boolean,
     isStopping: Boolean,
+    networkPathStatus: NetworkPathStatus,
     onToggleAdvertising: () -> Unit,
     onToggleDiscovery: () -> Unit,
     onToggleAutoMesh: () -> Unit,
@@ -471,10 +477,14 @@ private fun StatusHeader(
             text = "peerId: ${peerId?.take(8) ?: "—"}…",
             style = MaterialTheme.typography.bodySmall
         )
-        Text(
-            text = "state: ${kitState::class.simpleName}",
-            style = MaterialTheme.typography.bodySmall
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "state: ${kitState::class.simpleName}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.width(8.dp))
+            NetworkPathChip(networkPathStatus)
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -494,6 +504,30 @@ private fun StatusHeader(
             }
         }
     }
+}
+
+/**
+ * Tiny coloured chip showing the current [NetworkPathStatus]. Green for
+ * Satisfied, red for Unsatisfied, grey for Unknown. Sized to fit on the
+ * same row as the kit-state text so testers can watch path transitions
+ * during Wi-Fi toggle tests without scrolling.
+ */
+@Composable
+private fun NetworkPathChip(status: NetworkPathStatus) {
+    val (label, color) = when (status) {
+        NetworkPathStatus.Satisfied -> "online" to Color(0xFF2E7D32)
+        NetworkPathStatus.Unsatisfied -> "offline" to Color(0xFFC62828)
+        NetworkPathStatus.Unknown -> "path: unknown" to Color(0xFF757575)
+    }
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelSmall,
+        color = Color.White,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(color)
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    )
 }
 
 @Composable

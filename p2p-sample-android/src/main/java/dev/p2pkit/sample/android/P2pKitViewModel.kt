@@ -10,8 +10,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.p2pkit.core.AndroidNetworkPathObserver
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
@@ -96,6 +98,18 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      */
     private val _provisioningBusy = MutableStateFlow(false)
     val provisioningBusy: StateFlow<Boolean> = _provisioningBusy.asStateFlow()
+
+    /**
+     * Mirror of [P2pKit.networkPathStatus]. Surfaced in the room screen as
+     * a colored chip so manual hardware testing can see "online / offline /
+     * recovering" while toggling Wi-Fi during a §4 recovery test.
+     *
+     * Defaults to [NetworkPathStatus.Unknown] before the kit is running.
+     * The collector is launched inside [start] so it tears down with the
+     * run scope.
+     */
+    private val _networkPathStatus = MutableStateFlow<NetworkPathStatus>(NetworkPathStatus.Unknown)
+    val networkPathStatus: StateFlow<NetworkPathStatus> = _networkPathStatus.asStateFlow()
 
     /**
      * Peers whose [connect] coroutine is in-flight. Used to disable their
@@ -230,6 +244,13 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         retryDelayMillis = choice.retryDelayMillis
                     )
                 }
+                // §4 wire-up. Without this the Android sample would fall
+                // back to NoOpNetworkPathObserver and miss Wi-Fi off/on
+                // events — the kit would still recover via PING timeout
+                // but several seconds slower. ApplicationContext is safe;
+                // AndroidNetworkPathObserver does not hold onto the
+                // calling Activity.
+                networkPathObserver = AndroidNetworkPathObserver(ctx)
             }
             logger = TailLogger(this@P2pKitViewModel)
         }
@@ -251,6 +272,9 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
         scope.launch {
             newKit.peers.collect { _peers.value = it }
+        }
+        scope.launch {
+            newKit.networkPathStatus.collect { _networkPathStatus.value = it }
         }
         // Single source of truth for "which peers do we have a session with".
         scope.launch {
@@ -773,6 +797,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         _joinResult.value = null
         _missingPermissions.value = emptyList()
         _provisioningBusy.value = false
+        _networkPathStatus.value = NetworkPathStatus.Unknown
         // Best-effort tear down the hotspot too. Cleared via cleanupScope
         // (not runScope, which we just cancelled) so the stop call survives.
         cleanupScope.launch {
