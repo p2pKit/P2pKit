@@ -16,8 +16,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.flow.first
-import platform.Network.NW_PARAMETERS_DEFAULT_CONFIGURATION
-import platform.Network.NW_PARAMETERS_DISABLE_PROTOCOL
+import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
 import platform.Network.nw_connection_create
 import platform.Network.nw_listener_cancel
 import platform.Network.nw_listener_create
@@ -30,7 +29,6 @@ import platform.Network.nw_listener_state_cancelled
 import platform.Network.nw_listener_state_failed
 import platform.Network.nw_listener_state_ready
 import platform.Network.nw_listener_t
-import platform.Network.nw_parameters_create_secure_tcp
 import platform.Network.nw_parameters_t
 import platform.darwin.DISPATCH_TIME_NOW
 import platform.darwin.NSEC_PER_SEC
@@ -70,12 +68,15 @@ internal class IosLanDataTransport(
      * Non-TLS TCP parameters, matching the JVM/Android `Socket` wire format.
      * `SecurityMode.NoneForMvp` parity. Shared between listener and outbound
      * connections.
+     *
+     * Constructed entirely in ObjC via the
+     * [p2pkit_nw_create_plain_tcp_parameters] cinterop helper — see
+     * `src/nativeInterop/cinterop/p2pkit_nw.h` for why we can't call the
+     * `nw_parameters_create_secure_tcp` macro pair from Kotlin directly.
      */
     internal val parameters: nw_parameters_t =
-        nw_parameters_create_secure_tcp(
-            configure_tls = NW_PARAMETERS_DISABLE_PROTOCOL,
-            configure_tcp = NW_PARAMETERS_DEFAULT_CONFIGURATION
-        )
+        p2pkit_nw_create_plain_tcp_parameters()
+            ?: error("p2pkit_nw_create_plain_tcp_parameters returned null")
 
     internal val listener: nw_listener_t
     private val incomingChannel = Channel<RawConnection>(Channel.UNLIMITED)
@@ -97,6 +98,10 @@ internal class IosLanDataTransport(
                 val raw = IosRawConnection.wrap(conn, queue)
                 incomingChannel.trySend(raw)
             }
+            // Force Unit return — without this, Kotlin/Native infers the
+            // lambda type from trySend()'s ChannelResult and bridges it to an
+            // id-returning ObjC block, which libdispatch then crashes on.
+            Unit
         }
 
         val ready = dispatch_semaphore_create(0)
@@ -108,6 +113,7 @@ internal class IosLanDataTransport(
                     dispatch_semaphore_signal(ready)
                 }
             }
+            Unit
         }
 
         nw_listener_start(listener)

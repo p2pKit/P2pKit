@@ -17,9 +17,18 @@ kotlin {
     // as JVM/Android (`transports { lan() }`), backed by NWBrowser / NWListener
     // / NWConnection. Requires iOS 13+; minimum is enforced by the Network
     // framework symbols themselves.
-    iosX64()
-    iosArm64()
-    iosSimulatorArm64()
+    val iosTargets = listOf(iosX64(), iosArm64(), iosSimulatorArm64())
+    iosTargets.forEach { target ->
+        // Wraps NW_PARAMETERS_DISABLE_PROTOCOL / NW_PARAMETERS_DEFAULT_CONFIGURATION
+        // in a static-inline C helper so Kotlin never has to box those
+        // void-returning block globals as kotlin.Any. See
+        // src/nativeInterop/cinterop/p2pkit_nw.h for the rationale.
+        target.compilations.getByName("main") {
+            cinterops.create("p2pkit_nw") {
+                defFile = project.file("src/nativeInterop/cinterop/p2pkit_nw.def")
+            }
+        }
+    }
 
     sourceSets {
         commonMain.dependencies {

@@ -116,9 +116,11 @@ internal class IosLanDiscoveryTransport(
                 nw_browser_state_failed,
                 nw_browser_state_cancelled -> browser = null
             }
+            Unit
         }
         nw_browser_set_browse_results_changed_handler(b) { old, new, _ ->
             handleBrowseResultChange(old, new)
+            Unit
         }
         nw_browser_start(b)
     }

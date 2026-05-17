@@ -1,0 +1,7 @@
+headers = p2pkit_nw.h
+headerFilter = p2pkit_nw.h
+package = dev.p2pkit.transport.lan.interop
+language = Objective-C
+
+compilerOpts = -I./src/nativeInterop/cinterop -framework Network
+linkerOpts = -framework Network

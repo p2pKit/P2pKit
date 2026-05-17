@@ -4,22 +4,18 @@ package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.transport.RawConnection
+import dev.p2pkit.transport.lan.interop.p2pkit_nw_connection_receive_default
+import dev.p2pkit.transport.lan.interop.p2pkit_nw_connection_send_default
 import kotlin.concurrent.Volatile
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.cinterop.BetaInteropApi
-import kotlinx.cinterop.COpaquePointerVar
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
-import kotlinx.cinterop.alloc
 import kotlinx.cinterop.convert
-import kotlinx.cinterop.get
-import kotlinx.cinterop.memScoped
-import kotlinx.cinterop.ptr
+import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.usePinned
-import kotlinx.cinterop.value
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,10 +25,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import platform.Network.NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT
 import platform.Network.nw_connection_cancel
-import platform.Network.nw_connection_receive
-import platform.Network.nw_connection_send
 import platform.Network.nw_connection_set_queue
 import platform.Network.nw_connection_set_state_changed_handler
 import platform.Network.nw_connection_start
@@ -40,11 +33,7 @@ import platform.Network.nw_connection_state_cancelled
 import platform.Network.nw_connection_state_failed
 import platform.Network.nw_connection_state_ready
 import platform.Network.nw_connection_t
-import platform.darwin.dispatch_data_create
-import platform.darwin.dispatch_data_get_size
-import platform.darwin.dispatch_data_t
 import platform.darwin.dispatch_queue_t
-import platform.posix.size_tVar
 import platform.posix.uint8_tVar
 
 /**
@@ -101,6 +90,7 @@ internal class IosRawConnection private constructor(
                     // .invalid / .waiting / .preparing — keep as Connecting.
                 }
             }
+            Unit
         }
         nw_connection_start(connection)
     }
@@ -115,32 +105,28 @@ internal class IosRawConnection private constructor(
         if (bytes.isEmpty()) return
         writeLock.withLock {
             suspendCancellableCoroutine { cont ->
-                val data: dispatch_data_t = bytes.usePinned { pinned ->
-                    // DISPATCH_DATA_DESTRUCTOR_DEFAULT (null) makes an internal
-                    // copy, so it's safe for usePinned to release the pin as
-                    // soon as dispatch_data_create returns.
-                    dispatch_data_create(
+                bytes.usePinned { pinned ->
+                    // C helper performs dispatch_data_create (which copies)
+                    // and nw_connection_send with the default-message context
+                    // entirely on the ObjC side, so Kotlin never has to box
+                    // dispatch_data_t or nw_content_context_t.
+                    p2pkit_nw_connection_send_default(
+                        connection = connection,
                         buffer = pinned.addressOf(0),
                         size = bytes.size.convert(),
-                        queue = queue,
-                        destructor = null
+                        is_complete = false,
+                        completion = { error ->
+                            if (error != null) {
+                                cont.resumeWithException(
+                                    NetworkException("nw_connection_send failed")
+                                )
+                            } else {
+                                cont.resume(Unit)
+                            }
+                            Unit
+                        }
                     )
                 }
-                nw_connection_send(
-                    connection = connection,
-                    content = data,
-                    context = NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT,
-                    is_complete = false,
-                    completion = { error ->
-                        if (error != null) {
-                            cont.resumeWithException(
-                                NetworkException("nw_connection_send failed")
-                            )
-                        } else {
-                            cont.resume(Unit)
-                        }
-                    }
-                )
             }
         }
     }
@@ -148,18 +134,25 @@ internal class IosRawConnection private constructor(
     override fun read(): Flow<ByteArray> = flow {
         while (!closed) {
             val chunk: ByteArray? = suspendCancellableCoroutine { cont ->
-                nw_connection_receive(
+                // C helper wraps nw_connection_receive and maps the resulting
+                // dispatch_data_t to a contiguous (buffer, size) pair before
+                // calling our completion. Keeps dispatch_data_t off the
+                // Kotlin side entirely.
+                p2pkit_nw_connection_receive_default(
                     connection = connection,
-                    minimum_incomplete_length = 1u,
-                    maximum_length = RECEIVE_MAX_LENGTH,
-                    completion = { content, _, isComplete, error ->
-                        val out = if (content != null) dispatchDataToByteArray(content) else null
+                    min_incomplete_length = 1u,
+                    max_length = RECEIVE_MAX_LENGTH,
+                    completion = { buffer, size, isComplete, error ->
+                        val out: ByteArray? = if (buffer != null && size.toInt() > 0) {
+                            buffer.reinterpret<uint8_tVar>().readBytes(size.toInt())
+                        } else {
+                            null
+                        }
                         if (error != null) {
                             closed = true
                             _state.value = ConnectionState.Closed
                             cont.resume(null)
                         } else if (isComplete && (out == null || out.isEmpty())) {
-                            // Remote completed cleanly.
                             closed = true
                             _state.value = ConnectionState.Closed
                             cont.resume(null)
@@ -170,6 +163,7 @@ internal class IosRawConnection private constructor(
                                 _state.value = ConnectionState.Closed
                             }
                         }
+                        Unit
                     }
                 )
             }
@@ -196,24 +190,3 @@ internal class IosRawConnection private constructor(
     }
 }
 
-@OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
-private fun dispatchDataToByteArray(data: dispatch_data_t): ByteArray {
-    val totalSize = dispatch_data_get_size(data).toInt()
-    if (totalSize == 0) return ByteArray(0)
-    val result = ByteArray(totalSize)
-    memScoped {
-        val bufferPtr = alloc<COpaquePointerVar>()
-        val mappedSize = alloc<size_tVar>()
-        // dispatch_data_create_map returns a NEW dispatch_data_t that owns a
-        // contiguous buffer covering all regions of `data`. The buffer pointer
-        // is valid until the mapped reference is released; we copy out within
-        // this memScoped block so the mapped object stays alive.
-        @Suppress("UNUSED_VARIABLE")
-        val mapped = platform.darwin.dispatch_data_create_map(data, bufferPtr.ptr, mappedSize.ptr)
-        val src = bufferPtr.value!!.reinterpret<uint8_tVar>()
-        for (i in 0 until totalSize) {
-            result[i] = src[i].toByte()
-        }
-    }
-    return result
-}
