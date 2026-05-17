@@ -37,7 +37,16 @@ public object IosLanDebug {
     )
     public val events: SharedFlow<String> = _events.asSharedFlow()
 
-    internal fun log(tag: String, message: String) {
+    /**
+     * Push a single diagnostic line into the shared sink. Public so the
+     * Swift sample can append UI-action lines (button taps, lifecycle
+     * events, send results) to the same timeline that the LAN transport
+     * emits its own events on — that way the on-screen log shows kit-side
+     * events and UI-side events interleaved in time order, which is the
+     * only way to tell whether a stuck button or a stuck send is the
+     * upstream problem.
+     */
+    public fun log(tag: String, message: String) {
         val ts = ((NSDate().timeIntervalSince1970 * 1000).toLong()) % 1_000_000
         _events.tryEmit("[$ts][$tag] $message")
     }

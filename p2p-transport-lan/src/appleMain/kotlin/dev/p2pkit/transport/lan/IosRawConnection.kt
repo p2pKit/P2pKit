@@ -77,6 +77,13 @@ internal class IosRawConnection private constructor(
     init {
         nw_connection_set_queue(connection, queue)
         nw_connection_set_state_changed_handler(connection) { st, _ ->
+            val label = when (st) {
+                nw_connection_state_ready -> "ready"
+                nw_connection_state_failed -> "failed"
+                nw_connection_state_cancelled -> "cancelled"
+                else -> "raw=$st"
+            }
+            IosLanDebug.log("conn", "state-changed -> $label")
             when (st) {
                 nw_connection_state_ready -> {
                     if (!closed) _state.value = ConnectionState.Connected
@@ -95,36 +102,44 @@ internal class IosRawConnection private constructor(
             Unit
         }
         nw_connection_start(connection)
+        IosLanDebug.log("conn", "wrapped + nw_connection_start invoked")
     }
 
     override suspend fun write(bytes: ByteArray) {
-        if (closed) throw IllegalStateException("connection closed")
+        if (closed) {
+            IosLanDebug.log("conn", "write(${bytes.size}): REFUSED (already closed)")
+            throw IllegalStateException("connection closed")
+        }
         if (_state.value == ConnectionState.Connecting) {
-            // SessionManager normally only writes after Connected, but be
-            // defensive. Bounded so a wedged Connecting state doesn't hang the
-            // sender forever — the keep-alive would eventually notice, but
-            // that takes a full pingInterval round-trip; surfacing fast is
-            // better. 10 s matches IosLanDataTransport.CONNECT_TIMEOUT_MILLIS.
+            IosLanDebug.log("conn", "write(${bytes.size}): state=Connecting, awaiting transition (<=${WRITE_READY_TIMEOUT_MILLIS}ms)")
             try {
                 withTimeout(WRITE_READY_TIMEOUT_MILLIS) {
                     _state.first { it != ConnectionState.Connecting }
                 }
             } catch (e: TimeoutCancellationException) {
+                IosLanDebug.log("conn", "write(${bytes.size}): TIMEOUT — connection wedged in Connecting")
                 throw IllegalStateException(
                     "write timed out waiting for connection to leave Connecting state " +
                         "after ${WRITE_READY_TIMEOUT_MILLIS}ms"
                 )
             }
         }
-        if (closed) throw IllegalStateException("connection closed")
-        if (bytes.isEmpty()) return
+        if (closed) {
+            IosLanDebug.log("conn", "write(${bytes.size}): REFUSED (closed during await)")
+            throw IllegalStateException("connection closed")
+        }
+        if (bytes.isEmpty()) {
+            IosLanDebug.log("conn", "write(0): empty payload — no-op")
+            return
+        }
         writeLock.withLock {
+            // Log the attempt up-front so the timeline shows the send was
+            // dispatched; we only log the completion on error (a noisy
+            // "completion OK" per packet would drown out the lines that
+            // matter when something goes wrong).
+            IosLanDebug.log("conn", "write(${bytes.size}): nw_connection_send")
             suspendCancellableCoroutine { cont ->
                 bytes.usePinned { pinned ->
-                    // C helper performs dispatch_data_create (which copies)
-                    // and nw_connection_send with the default-message context
-                    // entirely on the ObjC side, so Kotlin never has to box
-                    // dispatch_data_t or nw_content_context_t.
                     p2pkit_nw_connection_send_default(
                         connection = connection,
                         buffer = pinned.addressOf(0),
@@ -132,17 +147,13 @@ internal class IosRawConnection private constructor(
                         is_complete = false,
                         completion = { error ->
                             if (error != null) {
+                                IosLanDebug.log("conn", "write(${bytes.size}): completion ERROR — flipping state to Closed")
                                 // Flip state to Closed AND latch closed=true
-                                // before resuming with the exception, mirroring
-                                // the receive-error path (line ~167). Without
+                                // before resuming with the exception. Without
                                 // this the session-level keep-alive only learns
                                 // the connection is dead one ping interval
-                                // later, and the consuming app would keep
-                                // dispatching `send()` calls into a wedged
-                                // socket until the read side eventually
-                                // surfaces the error. Symptom on iOS:
-                                // messages silently stop being delivered while
-                                // session.state stays Connected.
+                                // later. Symptom: messages silently stop being
+                                // delivered while session.state stays Connected.
                                 closed = true
                                 _state.value = ConnectionState.Closed
                                 cont.resumeWithException(
@@ -160,12 +171,9 @@ internal class IosRawConnection private constructor(
     }
 
     override fun read(): Flow<ByteArray> = flow {
+        IosLanDebug.log("conn", "read: flow collector started")
         while (!closed) {
             val chunk: ByteArray? = suspendCancellableCoroutine { cont ->
-                // C helper wraps nw_connection_receive and maps the resulting
-                // dispatch_data_t to a contiguous (buffer, size) pair before
-                // calling our completion. Keeps dispatch_data_t off the
-                // Kotlin side entirely.
                 p2pkit_nw_connection_receive_default(
                     connection = connection,
                     min_incomplete_length = 1u,
@@ -177,16 +185,24 @@ internal class IosRawConnection private constructor(
                             null
                         }
                         if (error != null) {
+                            IosLanDebug.log("conn", "read: completion ERROR — closing")
                             closed = true
                             _state.value = ConnectionState.Closed
                             cont.resume(null)
                         } else if (isComplete && (out == null || out.isEmpty())) {
+                            IosLanDebug.log("conn", "read: EOF (isComplete + empty) — closing")
                             closed = true
                             _state.value = ConnectionState.Closed
                             cont.resume(null)
                         } else {
+                            // Successful chunk — intentionally silent. With
+                            // a chatty session every receive would spam the
+                            // log; we only surface anomalies (error, EOF, or
+                            // a half-close via isComplete on a non-empty
+                            // chunk, logged below).
                             cont.resume(out ?: ByteArray(0))
                             if (isComplete) {
+                                IosLanDebug.log("conn", "read: half-close (isComplete on non-empty chunk) — closing")
                                 closed = true
                                 _state.value = ConnectionState.Closed
                             }
@@ -198,10 +214,12 @@ internal class IosRawConnection private constructor(
             if (chunk == null) break
             if (chunk.isNotEmpty()) emit(chunk)
         }
+        IosLanDebug.log("conn", "read: flow collector ending (closed=$closed)")
     }
 
     override suspend fun close() {
         if (closed) return
+        IosLanDebug.log("conn", "close: nw_connection_cancel")
         closed = true
         _state.value = ConnectionState.Closed
         nw_connection_cancel(connection)

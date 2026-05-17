@@ -295,9 +295,19 @@ struct ContentView: View {
 
                 Divider()
 
-                // MARK: NWBrowser log
+                // MARK: Diagnostic log
+                //
+                // Every iOS LAN transport event (listener bind, raw
+                // connection state transitions, every nw_connection_send /
+                // _receive completion, NWBrowser events, manual-IP dial)
+                // AND every iOS-sample UI action (Start tap, Connect tap,
+                // Send tap, picker dismissal, lifecycle) is pushed into the
+                // same `IosLanDebug` SharedFlow and rendered here in time
+                // order. The single timeline is the easiest way to see
+                // whether the UI thinks it's done one thing but the SDK is
+                // doing something else.
 
-                Toggle("Show NWBrowser log (\(logLines.count))", isOn: $showLog)
+                Toggle("Diagnostic log (\(logLines.count))", isOn: $showLog)
                     .font(.headline)
                 if showLog {
                     ForEach(Array(logLines.enumerated()), id: \.offset) { _, l in
@@ -337,11 +347,19 @@ struct ContentView: View {
 
     @MainActor
     private func start() async {
+        diag("ui", "Start tapped (deviceName='\(localDeviceName)')")
         // Re-entry / preconditions.
-        guard !isStarting else { return }
-        guard kit == nil else { return }
+        guard !isStarting else {
+            diag("ui", "Start ignored — isStarting already true")
+            return
+        }
+        guard kit == nil else {
+            diag("ui", "Start ignored — kit already set")
+            return
+        }
         let name = trimmedDeviceName
         guard !name.isEmpty else {
+            diag("ui", "Start ABORT — device name empty")
             errorBanner = "Device name cannot be empty."
             return
         }
@@ -356,6 +374,7 @@ struct ContentView: View {
         collectedSessionIds = []
         pendingConnectPeerIds = []
         browserEverReady = false
+        diag("ui", "Start: cleared local state, building kit")
 
         // Subscribe to IosLanDebug BEFORE startAdvertising/Discovery so
         // we capture every browser-state and result-change from t=0.
@@ -391,12 +410,18 @@ struct ContentView: View {
         }
         self.kit = built
         self.localPeerId = "\(built.localPeerId)"
+        diag("kit", "P2pKit constructed (peerId=\(localPeerId.prefix(8)) name='\(name)')")
 
         do {
+            diag("kit", "calling startAdvertising")
             try await built.startAdvertising()
+            diag("kit", "startAdvertising returned OK")
+            diag("kit", "calling startDiscovery")
             try await built.startDiscovery()
+            diag("kit", "startDiscovery returned OK")
             status = "Running"
         } catch {
+            diag("kit", "start FAILED: \(error.localizedDescription)")
             status = "Start failed: \(error.localizedDescription)"
             errorBanner = "Failed to start: \(error.localizedDescription)"
             try? await built.stop()
@@ -409,13 +434,18 @@ struct ContentView: View {
         do {
             if let info = try await built.networkProvisioning.getManualConnectionInfo() {
                 self.localTcpPort = Int(info.port)
+                diag("kit", "manual connection info: port=\(info.port)")
             }
         } catch {
-            // Non-fatal — we just won't display the port.
+            diag("kit", "getManualConnectionInfo failed: \(error.localizedDescription)")
         }
 
         self.incomingSessionsTask = Task.detached { [weak built] in
             let collector = SessionCollector { session in
+                IosLanDebug.shared.log(
+                    tag: "ui",
+                    message: "incomingSessions emitted: peer=\(session.peer.id) name=\(session.peer.name) id=\(session.id)"
+                )
                 await self.attachMessageCollector(to: session, label: "incoming")
             }
             _ = try? await built?.incomingSessions.collect(collector: collector)
@@ -481,12 +511,29 @@ struct ContentView: View {
                     "[session] \(row.peerName) (\(row.peerId.prefix(8))) → \(row.state)",
                     kind: .info
                 )
+                diag(
+                    "session",
+                    "\(row.peerName) (\(row.peerId.prefix(8))) \(prev.state) → \(row.state)"
+                )
             } else if previousById[row.id] == nil {
                 appendMessage(
                     "[session] new \(row.peerName) (\(row.peerId.prefix(8))) state=\(row.state)",
                     kind: .info
                 )
+                diag(
+                    "session",
+                    "new id=\(row.id.prefix(12)) peer=\(row.peerId.prefix(8)) name=\(row.peerName) state=\(row.state)"
+                )
             }
+        }
+        // Detect session disappearances (removed from kit.sessions, typically
+        // because watchForTerminal cleaned them out after Closed/Failed).
+        let currentIds = Set(sessionRows.map { $0.id })
+        for prev in self.sessions where !currentIds.contains(prev.id) {
+            diag(
+                "session",
+                "removed id=\(prev.id.prefix(12)) peer=\(prev.peerId.prefix(8)) lastState=\(prev.state)"
+            )
         }
 
         if sessionRows != self.sessions { self.sessions = sessionRows }
@@ -521,19 +568,24 @@ struct ContentView: View {
 
     @MainActor
     private func connect(_ row: PeerRow) async {
+        diag("ui", "Connect tapped: peer=\(row.id.prefix(8)) name=\(row.name)")
         guard let k = kit else {
+            diag("ui", "Connect ABORT — kit not started")
             errorBanner = "Kit not started."
             return
         }
-        guard !isStopping else { return }
+        guard !isStopping else {
+            diag("ui", "Connect ignored — kit is stopping")
+            return
+        }
         let pid = row.id
         guard !pendingConnectPeerIds.contains(pid) else {
+            diag("ui", "Connect dedup — pendingConnectPeerIds already has \(pid.prefix(8))")
             appendMessage("connect already in progress for \(row.name)", kind: .info)
             return
         }
-        // Match by peer.id — peer.name is for display only and isn't
-        // guaranteed unique across devices on the same Wi-Fi.
         if let existing = sessions.first(where: { $0.peerId == pid && $0.isLive }) {
+            diag("ui", "Connect dedup — session already \(existing.state) for \(pid.prefix(8))")
             appendMessage(
                 "already \(existing.state.lowercased()) with \(row.name); skipping duplicate connect",
                 kind: .info
@@ -543,11 +595,17 @@ struct ContentView: View {
         pendingConnectPeerIds.insert(pid)
         defer { pendingConnectPeerIds.remove(pid) }
 
+        diag("ui", "calling kit.connect(\(pid.prefix(8)))")
         appendMessage("connect -> \(row.name)", kind: .info)
         do {
             let session = try await k.connect(peer: row.peer)
+            diag(
+                "ui",
+                "kit.connect returned session id=\(session.id) peer=\(session.peer.id) state=\(session.state.value)"
+            )
             await attachMessageCollector(to: session, label: "outgoing")
         } catch {
+            diag("ui", "kit.connect THREW: \(error.localizedDescription)")
             appendMessage("connect failed (\(row.name)): \(error.localizedDescription)", kind: .error)
             errorBanner = "Connect to \(row.name) failed: \(error.localizedDescription)"
         }
@@ -555,34 +613,38 @@ struct ContentView: View {
 
     @MainActor
     private func dialManual() async {
+        diag("ui", "Dial manual tapped: host='\(manualHost)' port='\(manualPort)'")
         guard let k = kit else {
+            diag("ui", "Dial ABORT — kit not started")
             errorBanner = "Kit not started."
             return
         }
-        guard !isStopping else { return }
-        guard !isManualDialing else { return }
+        guard !isStopping else { diag("ui", "Dial ignored — stopping"); return }
+        guard !isManualDialing else { diag("ui", "Dial dedup — already dialing"); return }
 
         let host = manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
         let portStr = manualPort.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !host.isEmpty else {
+            diag("ui", "Dial ABORT — empty host")
             errorBanner = "Manual host cannot be empty."
             return
         }
         guard let portInt = Int32(portStr) else {
+            diag("ui", "Dial ABORT — port not int: '\(portStr)'")
             errorBanner = "Port must be a positive integer (got '\(portStr)')."
             return
         }
         guard (1...65535).contains(portInt) else {
+            diag("ui", "Dial ABORT — port out of range: \(portInt)")
             errorBanner = "Port must be between 1 and 65535 (got \(portInt))."
             return
         }
-        // Light host-form check — reject obvious garbage so the user sees
-        // a useful message instead of waiting on NWConnection to fail.
         let allowed = CharacterSet(charactersIn:
             "0123456789.:-_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
         )
         guard host.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
+            diag("ui", "Dial ABORT — invalid chars in host: '\(host)'")
             errorBanner = "Host contains invalid characters."
             return
         }
@@ -591,12 +653,17 @@ struct ContentView: View {
         defer { isManualDialing = false }
         errorBanner = nil
         appendMessage("manual: createManualPeer host=\(host) port=\(portInt)", kind: .info)
+        diag("ui", "calling networkProvisioning.createManualPeer(\(host):\(portInt))")
         do {
             let peer = try await k.networkProvisioning.createManualPeer(host: host, port: portInt)
+            diag("ui", "createManualPeer returned: id=\(peer.id) name=\(peer.name)")
             appendMessage("manual: created \(peer.name) (\(peer.id))", kind: .info)
+            diag("ui", "calling kit.connect on synthetic peer \(peer.id)")
             let session = try await k.connect(peer: peer)
+            diag("ui", "kit.connect (manual) returned session id=\(session.id) state=\(session.state.value)")
             await attachMessageCollector(to: session, label: "manual")
         } catch {
+            diag("ui", "manual dial THREW: \(error.localizedDescription)")
             appendMessage("manual: failed - \(error.localizedDescription)", kind: .error)
             errorBanner = "Manual connect failed: \(error.localizedDescription)"
         }
@@ -604,8 +671,10 @@ struct ContentView: View {
 
     @MainActor
     private func sendAll() async {
+        diag("ui", "Send All tapped: draft=\(draft.count) chars uiSessions=\(sessions.count)")
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
+            diag("ui", "Send ABORT — message empty after trim")
             errorBanner = "Cannot send an empty message."
             return
         }
@@ -631,7 +700,9 @@ struct ContentView: View {
             errorBanner = "Kit not started."
             return
         }
+        diag("ui", "Send live snapshot: \(liveSessions.count) Connected session(s)")
         guard !liveSessions.isEmpty else {
+            diag("ui", "Send ABORT — no Connected sessions (uiSessions=\(sessions.count))")
             errorBanner = "No Connected sessions right now. Sessions exist " +
                 "(\(sessions.count)) but none are in the Connected state."
             return
@@ -639,11 +710,14 @@ struct ContentView: View {
 
         var failures: [String] = []
         for row in liveSessions {
+            diag("ui", "Send → session=\(row.id.prefix(12)) peer=\(row.peerId.prefix(8)) (\(text.count) chars)")
             do {
                 try await row.session.send(message: P2pMessage.Text(value: text, metadata: [:]))
+                diag("ui", "session.send OK for \(row.peerId.prefix(8))")
                 appendMessage("me -> \(row.peerName): \(text)", kind: .sent)
             } catch {
                 let msg = error.localizedDescription
+                diag("ui", "session.send THREW for \(row.peerId.prefix(8)): \(msg)")
                 appendMessage(
                     "send failed (\(row.peerName) state=\(row.state)): \(msg)",
                     kind: .error
@@ -668,17 +742,24 @@ struct ContentView: View {
 
     @MainActor
     private func closeSession(_ row: SessionRow) async {
+        diag("ui", "Close tapped: session=\(row.id.prefix(12)) peer=\(row.peerId.prefix(8))")
         do {
             try await row.session.close()
+            diag("ui", "session.close OK for \(row.peerId.prefix(8))")
             appendMessage("closed session with \(row.peerName)", kind: .info)
         } catch {
+            diag("ui", "session.close THREW for \(row.peerId.prefix(8)): \(error.localizedDescription)")
             appendMessage("close failed (\(row.peerName)): \(error.localizedDescription)", kind: .error)
         }
     }
 
     @MainActor
     private func stop() async {
-        guard let k = kit, !isStopping else { return }
+        diag("ui", "Stop tapped")
+        guard let k = kit, !isStopping else {
+            diag("ui", "Stop ignored — kit=\(kit != nil) isStopping=\(isStopping)")
+            return
+        }
         isStopping = true
         defer { isStopping = false }
         status = "Stopping..."
@@ -712,6 +793,14 @@ struct ContentView: View {
         if messages.count > 200 {
             messages.removeFirst(messages.count - 200)
         }
+    }
+
+    /// Push a Swift-side diagnostic line into the same `IosLanDebug`
+    /// timeline that the Kotlin LAN transport writes to. Lets the on-screen
+    /// log show "user tapped Send" interleaved with "nw_connection_send
+    /// completed OK" so we can confirm UI ↔ SDK alignment.
+    private func diag(_ tag: String, _ message: String) {
+        IosLanDebug.shared.log(tag: tag, message: message)
     }
 }
 
