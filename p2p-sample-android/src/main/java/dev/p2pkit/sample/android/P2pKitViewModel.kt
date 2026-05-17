@@ -11,6 +11,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
@@ -79,6 +80,28 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+
+    /** True for the brief duration of [start] (setting up flow collectors). */
+    private val _isStarting = MutableStateFlow(false)
+    val isStarting: StateFlow<Boolean> = _isStarting.asStateFlow()
+
+    /** True from [stop] until the in-flight kit.stop() coroutine returns. */
+    private val _isStopping = MutableStateFlow(false)
+    val isStopping: StateFlow<Boolean> = _isStopping.asStateFlow()
+
+    /**
+     * True while a [startHotspot] / [joinHotspot] / [stopHotspot] call is
+     * in-flight, so the UI can disable the relevant buttons and prevent the
+     * user from spawning parallel provisioning attempts via rapid taps.
+     */
+    private val _provisioningBusy = MutableStateFlow(false)
+    val provisioningBusy: StateFlow<Boolean> = _provisioningBusy.asStateFlow()
+
+    /**
+     * Peers whose [connect] coroutine is in-flight. Used to disable their
+     * Connect button and surface "Connecting…" while waiting on the SDK.
+     */
+    val pendingConnectPeerIds: SnapshotStateList<String> = mutableStateListOf()
 
     private val _kitState = MutableStateFlow<P2pState>(P2pState.Idle)
     val kitState: StateFlow<P2pState> = _kitState.asStateFlow()
@@ -180,7 +203,14 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun start() {
-        if (_isRunning.value) return  // idempotent
+        if (_isRunning.value || _isStarting.value) return  // idempotent + re-entry safe
+        val trimmedName = deviceName.trim()
+        if (trimmedName.isEmpty()) {
+            Log.w(LOG_TAG, "start aborted: deviceName is blank")
+            return
+        }
+        deviceName = trimmedName
+        _isStarting.value = true
         val choice = reconnectChoice
         val ctx = getApplication<Application>().applicationContext
         val newKit = P2pKit.create {
@@ -231,10 +261,16 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         scope.launch {
             runCatching { newKit.startAdvertising() }
                 .onSuccess { _advertising.value = true }
-                .onFailure { Log.w(LOG_TAG, "startAdvertising failed", it) }
+                .onFailure {
+                    Log.w(LOG_TAG, "startAdvertising failed", it)
+                    appendSystemMessage("advertise failed: ${it.message ?: it::class.simpleName}")
+                }
             runCatching { newKit.startDiscovery() }
                 .onSuccess { _discovering.value = true }
-                .onFailure { Log.w(LOG_TAG, "startDiscovery failed", it) }
+                .onFailure {
+                    Log.w(LOG_TAG, "startDiscovery failed", it)
+                    appendSystemMessage("discovery failed: ${it.message ?: it::class.simpleName}")
+                }
         }
 
         // Auto-mesh: react to peer changes and connect to anyone we should
@@ -259,15 +295,31 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         _isRunning.value = true
+        _isStarting.value = false
     }
 
     fun connect(peer: Peer) {
         val currentKit = kit ?: return
         val scope = runScope ?: return
+        val peerId = peer.id.value
+        if (pendingConnectPeerIds.contains(peerId)) {
+            appendSystemMessage("already connecting to ${peer.name}")
+            return
+        }
+        val existing = connectedSessions.firstOrNull { it.peer.id.value == peerId }
+        if (existing != null && existing.state.value == ConnectionState.Connected) {
+            appendSystemMessage("already connected to ${peer.name}")
+            return
+        }
+        pendingConnectPeerIds.add(peerId)
         scope.launch {
-            runCatching { currentKit.connect(peer) }.onFailure {
-                Log.w(LOG_TAG, "connect to ${peer.name} failed", it)
-                appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
+            try {
+                runCatching { currentKit.connect(peer) }.onFailure {
+                    Log.w(LOG_TAG, "connect to ${peer.name} failed", it)
+                    appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
+                }
+            } finally {
+                pendingConnectPeerIds.remove(peerId)
             }
         }
     }
@@ -288,7 +340,12 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     fun startHotspot() {
         val currentKit = kit ?: return
         val scope = runScope ?: return
+        if (_provisioningBusy.value) {
+            Log.i(LOG_TAG, "startHotspot ignored: provisioning busy")
+            return
+        }
         refreshMissingPermissions()
+        _provisioningBusy.value = true
         scope.launch {
             val result = runCatching {
                 currentKit.networkProvisioning.startLocalNetwork(LocalNetworkConfig())
@@ -319,16 +376,20 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 is LocalNetworkResult.RequiresUserAction ->
                     Log.i(LOG_TAG, "hotspot RequiresUserAction: ${result.instruction}")
             }
+            _provisioningBusy.value = false
         }
     }
 
     fun stopHotspot() {
         val currentKit = kit ?: return
         val scope = runScope ?: return
+        if (_provisioningBusy.value) return
+        _provisioningBusy.value = true
         scope.launch {
             runCatching { currentKit.networkProvisioning.stopLocalNetwork() }
             _hotspotResult.value = null
             Log.i(LOG_TAG, "hotspot stopped")
+            _provisioningBusy.value = false
         }
     }
 
@@ -336,13 +397,25 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     fun joinHotspot(ssid: String, passphrase: String) {
         val currentKit = kit ?: return
         val scope = runScope ?: return
+        if (_provisioningBusy.value) {
+            Log.i(LOG_TAG, "joinHotspot ignored: provisioning busy")
+            return
+        }
         refreshMissingPermissions()
         val trimmedSsid = ssid.trim()
         val pass = passphrase.takeIf { it.isNotEmpty() }
         if (trimmedSsid.isEmpty()) {
             Log.w(LOG_TAG, "joinHotspot: SSID is blank")
+            appendSystemMessage("join failed: SSID cannot be blank")
             return
         }
+        // WPA2/WPA3 minimum passphrase is 8 chars; surface early instead of
+        // letting the OS bounce the request silently.
+        if (pass != null && pass.length < 8) {
+            appendSystemMessage("join failed: passphrase must be 8+ chars (got ${pass.length})")
+            return
+        }
+        _provisioningBusy.value = true
         val creds = WifiCredentials(
             ssid = trimmedSsid,
             password = pass?.let { WifiPassword(it) },
@@ -371,6 +444,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 JoinNetworkResult.Pending ->
                     Log.i(LOG_TAG, "join Pending")
             }
+            _provisioningBusy.value = false
         }
     }
 
@@ -387,7 +461,16 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun sendFile(peerId: String, uri: Uri) {
         val scope = runScope ?: return
-        val session = connectedSessions.firstOrNull { it.peer.id.value == peerId } ?: return
+        val session = connectedSessions.firstOrNull { it.peer.id.value == peerId }
+        if (session == null) {
+            appendSystemMessage("send file failed: peer not in session list")
+            return
+        }
+        val state = session.state.value
+        if (state != ConnectionState.Connected) {
+            appendSystemMessage("send file to ${session.peer.name} failed: session not Connected (state=$state)")
+            return
+        }
         val ctx = getApplication<Application>().applicationContext
         scope.launch {
             val transfer = runCatching { session.sendFile(ctx, uri) }
@@ -398,6 +481,30 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 }
             registerOutgoingTransfer(transfer, session.peer.name, scope)
         }
+    }
+
+    /**
+     * Called by the UI when the SAF file picker is dismissed without a
+     * selection. Surfaces a system-message line so the user knows the
+     * "Send file…" path silently terminated.
+     */
+    fun notifyFilePickerCancelled(peerId: String?) {
+        val peerName = connectedSessions.firstOrNull { it.peer.id.value == peerId }?.peer?.name
+            ?: peerId?.take(8)
+            ?: "peer"
+        appendSystemMessage("file send to $peerName cancelled (no file chosen)")
+    }
+
+    /**
+     * Called by the UI when the user denies (or has permanently denied) a
+     * runtime permission needed for hotspot / join flows. Distinct from the
+     * "Grant permission and retry" affordance because the system-permission
+     * launcher won't re-prompt if the user has set "Don't ask again".
+     */
+    fun notifyPermissionDenied(operation: String) {
+        appendSystemMessage(
+            "$operation: permission denied. Open Settings → App info → Permissions to enable it manually."
+        )
     }
 
     private fun wireIncomingFiles(session: P2pSession, scope: CoroutineScope) {
@@ -523,17 +630,25 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     fun closeSession(peerId: String) {
         val scope = runScope ?: return
-        val target = connectedSessions.firstOrNull { it.peer.id.value == peerId } ?: return
+        val target = connectedSessions.firstOrNull { it.peer.id.value == peerId }
+        if (target == null) {
+            appendSystemMessage("close failed: peer not in session list")
+            return
+        }
         scope.launch {
             runCatching { target.close() }.onFailure {
                 Log.w(LOG_TAG, "close session to ${target.peer.name} failed", it)
+                appendSystemMessage("close ${target.peer.name} failed: ${it.message ?: it::class.simpleName}")
             }
         }
     }
 
     fun sendRoomMessage(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return
+        if (trimmed.isEmpty()) {
+            appendSystemMessage("nothing sent — message was empty")
+            return
+        }
         val scope = runScope ?: return
 
         val sessionsSnapshot = connectedSessions.toList()
@@ -541,14 +656,32 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val target: SendTarget = if (targetedSet.isEmpty()) SendTarget.All
         else SendTarget.Specific(targetedSet)
 
+        // Only Connected sessions can actually receive — Connecting /
+        // Reconnecting / Closing / Closed all silently drop the send at the
+        // SDK level. Filter here so the UI accurately reports who got it.
         val recipients = when (target) {
-            SendTarget.All -> sessionsSnapshot
-            is SendTarget.Specific -> sessionsSnapshot.filter { it.peer.id.value in target.peerIds }
+            SendTarget.All -> sessionsSnapshot.filter { it.state.value == ConnectionState.Connected }
+            is SendTarget.Specific -> sessionsSnapshot.filter {
+                it.peer.id.value in target.peerIds && it.state.value == ConnectionState.Connected
+            }
         }
         if (recipients.isEmpty()) {
-            Log.i(LOG_TAG, "room: send skipped (no recipients)")
-            appendSystemMessage("nothing sent — no targeted peers are connected")
+            Log.i(LOG_TAG, "room: send skipped (no Connected recipients)")
+            val why = if (sessionsSnapshot.isEmpty()) "no sessions"
+            else "no peers are Connected (have ${sessionsSnapshot.size} session(s) in non-Connected states)"
+            appendSystemMessage("nothing sent — $why")
             return
+        }
+        val skipped = sessionsSnapshot - recipients.toSet()
+        for (s in skipped) {
+            // Surface only the peers in the user's target set that we
+            // skipped — skipping a Reconnecting peer outside their target
+            // is not interesting noise.
+            val inTarget = target is SendTarget.Specific && s.peer.id.value in target.peerIds
+            val isTargeted = target is SendTarget.All || inTarget
+            if (isTargeted) {
+                appendSystemMessage("skipped ${s.peer.name} (state=${s.state.value})")
+            }
         }
 
         val body = P2pMessage.Text(trimmed)
@@ -612,6 +745,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     fun stop() {
         val toStop = kit ?: return
+        if (_isStopping.value) return
+        _isStopping.value = true
         kit = null
         _isRunning.value = false
         _advertising.value = false
@@ -622,6 +757,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         sessionJobs.clear()
         _peers.value = emptyList()
         connectedSessions.clear()
+        pendingConnectPeerIds.clear()
         targetedPeerIds.clear()
         roomMessages.clear()
         fileTransfers.clear()
@@ -629,10 +765,13 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         _hotspotResult.value = null
         _joinResult.value = null
         _missingPermissions.value = emptyList()
-        // Best-effort tear down the hotspot too.
-        viewModelScope.launch {
+        _provisioningBusy.value = false
+        // Best-effort tear down the hotspot too. Cleared via cleanupScope
+        // (not runScope, which we just cancelled) so the stop call survives.
+        cleanupScope.launch {
             runCatching { toStop.networkProvisioning.stopLocalNetwork() }
             runCatching { toStop.stop() }
+            _isStopping.value = false
         }
     }
 

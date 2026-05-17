@@ -117,6 +117,7 @@ private fun SetupScreen(
     paddingValues: PaddingValues,
     vm: P2pKitViewModel
 ) {
+    val isStarting by vm.isStarting.collectAsState()
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -133,6 +134,7 @@ private fun SetupScreen(
             onValueChange = vm::updateDeviceName,
             label = { Text("Device name") },
             singleLine = true,
+            enabled = !isStarting,
             modifier = Modifier.fillMaxWidth()
         )
         Text(
@@ -150,10 +152,10 @@ private fun SetupScreen(
         Spacer(Modifier.height(8.dp))
         Button(
             onClick = vm::start,
-            enabled = vm.deviceName.isNotBlank(),
+            enabled = vm.deviceName.trim().isNotEmpty() && !isStarting,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Start")
+            Text(if (isStarting) "Starting…" else "Start")
         }
     }
 }
@@ -240,6 +242,7 @@ private fun RoomScreen(
     val discovering by vm.discovering.collectAsState()
     val autoMesh by vm.autoMesh.collectAsState()
     val localPeerId by vm.localPeerId.collectAsState()
+    val isStopping by vm.isStopping.collectAsState()
     var draft by remember { mutableStateOf("") }
 
     Column(
@@ -258,6 +261,7 @@ private fun RoomScreen(
             advertising = advertising,
             discovering = discovering,
             autoMesh = autoMesh,
+            isStopping = isStopping,
             onToggleAdvertising = vm::toggleAdvertising,
             onToggleDiscovery = vm::toggleDiscovery,
             onToggleAutoMesh = vm::toggleAutoMesh,
@@ -278,6 +282,7 @@ private fun RoomScreen(
                 PeerCard(
                     peer = peer,
                     isConnected = vm.connectedSessions.any { it.peer.id.value == peer.id.value },
+                    isConnecting = vm.pendingConnectPeerIds.contains(peer.id.value),
                     onConnect = { vm.connect(peer) }
                 )
             }
@@ -299,7 +304,10 @@ private fun RoomScreen(
         ) { uri ->
             val peerId = pendingSendPeerId
             pendingSendPeerId = null
-            if (uri != null && peerId != null) vm.sendFile(peerId, uri)
+            when {
+                uri != null && peerId != null -> vm.sendFile(peerId, uri)
+                uri == null && peerId != null -> vm.notifyFilePickerCancelled(peerId)
+            }
         }
 
         if (connected.isNotEmpty()) {
@@ -367,6 +375,11 @@ private fun RoomScreen(
             targetCount == 0 -> "Broadcast (${connected.size})"
             else -> "Send to $targetCount"
         }
+        // Filter to sessions whose state is Connected — the ViewModel
+        // does the same on send, but reflecting it here lets the Send
+        // button visually convey "no Connected peers" without needing a
+        // click to learn that.
+        val hasConnectedSession = connected.any { it.state.collectAsState().value == ConnectionState.Connected }
         Button(
             onClick = {
                 val text = draft.trim()
@@ -375,7 +388,7 @@ private fun RoomScreen(
                 vm.sendRoomMessage(text)
             },
             modifier = Modifier.fillMaxWidth(),
-            enabled = connected.isNotEmpty() && draft.isNotBlank()
+            enabled = hasConnectedSession && draft.trim().isNotEmpty() && !isStopping
         ) {
             Text(sendLabel)
         }
@@ -438,6 +451,7 @@ private fun StatusHeader(
     advertising: Boolean,
     discovering: Boolean,
     autoMesh: Boolean,
+    isStopping: Boolean,
     onToggleAdvertising: () -> Unit,
     onToggleDiscovery: () -> Unit,
     onToggleAutoMesh: () -> Unit,
@@ -450,7 +464,7 @@ private fun StatusHeader(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(text = deviceName, style = MaterialTheme.typography.titleMedium)
-            OverflowMenu(onStop = onStop)
+            OverflowMenu(onStop = onStop, isStopping = isStopping)
         }
         Text(text = "appId: $appId", style = MaterialTheme.typography.bodySmall)
         Text(
@@ -483,7 +497,7 @@ private fun StatusHeader(
 }
 
 @Composable
-private fun OverflowMenu(onStop: () -> Unit) {
+private fun OverflowMenu(onStop: () -> Unit, isStopping: Boolean) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
@@ -491,7 +505,8 @@ private fun OverflowMenu(onStop: () -> Unit) {
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
-                text = { Text("Stop kit") },
+                text = { Text(if (isStopping) "Stopping…" else "Stop kit") },
+                enabled = !isStopping,
                 onClick = {
                     expanded = false
                     onStop()
@@ -648,6 +663,7 @@ private fun isLocationModeOn(context: android.content.Context): Boolean {
 private fun HotspotCard(vm: P2pKitViewModel) {
     val result by vm.hotspotResult.collectAsState()
     val missing by vm.missingPermissions.collectAsState()
+    val busy by vm.provisioningBusy.collectAsState()
     val context = LocalContext.current
 
     // Pick the right runtime permission for the device's API level.
@@ -658,10 +674,16 @@ private fun HotspotCard(vm: P2pKitViewModel) {
     }
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { _ ->
+    ) { granted ->
         vm.refreshMissingPermissions()
-        // Try starting again — user may have just granted the perm.
-        vm.startHotspot()
+        if (granted) {
+            vm.startHotspot()
+        } else {
+            // User denied. Either temporarily (will get the prompt next time)
+            // or permanently (system silently returned false). Surface a
+            // hint either way so the user understands why the retry didn't.
+            vm.notifyPermissionDenied("hotspot host")
+        }
     }
     // Device-wide Location toggle is settings-only — no permission API can
     // flip it. Some OEMs (Huawei, MIUI, older Samsung) require it ON even
@@ -699,8 +721,12 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                         Text("port: ${info.port}", style = MaterialTheme.typography.bodySmall)
                     }
                     Spacer(Modifier.height(6.dp))
-                    Button(onClick = vm::stopHotspot, modifier = Modifier.fillMaxWidth()) {
-                        Text("Stop hotspot")
+                    Button(
+                        onClick = vm::stopHotspot,
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (busy) "Working…" else "Stop hotspot")
                     }
                 }
                 r is LocalNetworkResult.StartedWithoutCredentials -> {
@@ -718,8 +744,12 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                     )
                     Text("port: ${info.port}", style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(6.dp))
-                    Button(onClick = vm::stopHotspot, modifier = Modifier.fillMaxWidth()) {
-                        Text("Stop hotspot")
+                    Button(
+                        onClick = vm::stopHotspot,
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (busy) "Working…" else "Stop hotspot")
                     }
                 }
                 r is LocalNetworkResult.Failed -> {
@@ -746,9 +776,10 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                         Spacer(Modifier.height(4.dp))
                         Button(
                             onClick = vm::startHotspot,
+                            enabled = !busy,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Retry")
+                            Text(if (busy) "Working…" else "Retry")
                         }
                     } else {
                         Text(
@@ -760,9 +791,16 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                             onClick = {
                                 if (missing.isNotEmpty()) launcher.launch(perm) else vm.startHotspot()
                             },
+                            enabled = !busy,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(if (missing.isNotEmpty()) "Grant permission and retry" else "Retry")
+                            Text(
+                                when {
+                                    busy -> "Working…"
+                                    missing.isNotEmpty() -> "Grant permission and retry"
+                                    else -> "Retry"
+                                }
+                            )
                         }
                     }
                 }
@@ -792,11 +830,15 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                         onClick = {
                             if (missing.isNotEmpty()) launcher.launch(perm) else vm.startHotspot()
                         },
+                        enabled = !busy,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            if (missing.isNotEmpty()) "Grant permission and host hotspot"
-                            else "Host hotspot"
+                            when {
+                                busy -> "Working…"
+                                missing.isNotEmpty() -> "Grant permission and host hotspot"
+                                else -> "Host hotspot"
+                            }
                         )
                     }
                 }
@@ -809,6 +851,7 @@ private fun HotspotCard(vm: P2pKitViewModel) {
 private fun JoinHotspotCard(vm: P2pKitViewModel) {
     val joinResult by vm.joinResult.collectAsState()
     val missing by vm.missingPermissions.collectAsState()
+    val busy by vm.provisioningBusy.collectAsState()
     val context = LocalContext.current
 
     // Pick the right runtime permission for the device's API level.
@@ -819,7 +862,10 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
     }
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { vm.refreshMissingPermissions() }
+    ) { granted ->
+        vm.refreshMissingPermissions()
+        if (!granted) vm.notifyPermissionDenied("hotspot join")
+    }
 
     var ssidInput by remember { mutableStateOf("") }
     var passInput by remember { mutableStateOf("") }
@@ -901,12 +947,15 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
                             if (missing.isNotEmpty()) permLauncher.launch(perm)
                             else vm.joinHotspot(ssidInput, passInput)
                         },
-                        enabled = ssidInput.isNotBlank(),
+                        enabled = ssidInput.trim().isNotEmpty() && !busy,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            if (missing.isNotEmpty()) "Grant permission and retry"
-                            else "Retry join"
+                            when {
+                                busy -> "Working…"
+                                missing.isNotEmpty() -> "Grant permission and retry"
+                                else -> "Retry join"
+                            }
                         )
                     }
                 }
@@ -942,12 +991,15 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
                             if (missing.isNotEmpty()) permLauncher.launch(perm)
                             else vm.joinHotspot(ssidInput, passInput)
                         },
-                        enabled = ssidInput.isNotBlank(),
+                        enabled = ssidInput.trim().isNotEmpty() && !busy,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            if (missing.isNotEmpty()) "Grant permission and join"
-                            else "Join hotspot"
+                            when {
+                                busy -> "Working…"
+                                missing.isNotEmpty() -> "Grant permission and join"
+                                else -> "Join hotspot"
+                            }
                         )
                     }
                 }
@@ -981,7 +1033,12 @@ private fun JoinInputs(
 }
 
 @Composable
-private fun PeerCard(peer: Peer, isConnected: Boolean, onConnect: () -> Unit) {
+private fun PeerCard(
+    peer: Peer,
+    isConnected: Boolean,
+    isConnecting: Boolean,
+    onConnect: () -> Unit
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -997,10 +1054,10 @@ private fun PeerCard(peer: Peer, isConnected: Boolean, onConnect: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall
                 )
             }
-            if (isConnected) {
-                Text(text = "Connected", style = MaterialTheme.typography.labelSmall)
-            } else {
-                TextButton(onClick = onConnect) { Text("Connect") }
+            when {
+                isConnected -> Text(text = "Connected", style = MaterialTheme.typography.labelSmall)
+                isConnecting -> Text(text = "Connecting…", style = MaterialTheme.typography.labelSmall)
+                else -> TextButton(onClick = onConnect) { Text("Connect") }
             }
         }
     }

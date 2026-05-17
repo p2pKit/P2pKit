@@ -1,6 +1,7 @@
 package dev.p2pkit.sample.desktop
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
@@ -65,8 +66,10 @@ import java.util.concurrent.ConcurrentHashMap
  * used unattended; state transitions print as `[file …]` lines.
  */
 fun main(args: Array<String>) {
-    val deviceName = args.getOrNull(0) ?: "Desktop-${System.currentTimeMillis() % 10_000}"
-    val rawAppId = args.getOrNull(1)?.takeUnless { it.startsWith("reconnect=") } ?: "p2pkit-desktop-sample"
+    val rawName = args.getOrNull(0)?.trim().orEmpty()
+    val deviceName = rawName.ifEmpty { "Desktop-${System.currentTimeMillis() % 10_000}" }
+    val rawAppId = args.getOrNull(1)?.trim()?.takeUnless { it.startsWith("reconnect=") || it.isEmpty() }
+        ?: "p2pkit-desktop-sample"
     val appId = AppId(rawAppId)
     val reconnectArg = args.firstOrNull { it.startsWith("reconnect=") }
     val reconnect = parseReconnect(reconnectArg)
@@ -140,6 +143,8 @@ fun main(args: Array<String>) {
             p2p.startDiscovery();   discovering.set(true)
         } catch (e: Throwable) {
             System.err.println("Failed to start: ${e.message}")
+            runCatching { p2p.stop() }
+            scope.cancel()
             return@runBlocking
         }
 
@@ -147,7 +152,9 @@ fun main(args: Array<String>) {
         repl(p2p, scope, sessions, advertising, discovering, autoMesh)
 
         println("Stopping…")
-        p2p.stop()
+        runCatching { p2p.stop() }.onFailure {
+            System.err.println("kit.stop() failed: ${it.message}")
+        }
         scope.cancel()
     }
 }
@@ -183,10 +190,23 @@ private suspend fun repl(
     autoMesh: MutableStateFlow<Boolean>
 ) {
     val reader = System.`in`.bufferedReader()
+    // Peers we have an in-flight `connect` for. Used to dedupe rapid
+    // `connect <name>` repeats from the user typing too fast — the SDK
+    // itself dedupes by peer id, but the CLI would otherwise log two
+    // "connected to X" lines per duplicate attempt.
+    val pendingConnects: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     while (true) {
         print("> ")
         System.out.flush()
-        val line = reader.readLine()?.trim() ?: break
+        val rawLine = reader.readLine()
+        if (rawLine == null) {
+            // EOF — Ctrl+D, pipe closed, or stdin redirected from a finished
+            // file. Treat as graceful exit so the kit teardown still runs.
+            println()
+            println("(stdin closed — exiting)")
+            return
+        }
+        val line = rawLine.trim()
         if (line.isEmpty()) continue
 
         val (cmd, arg) = line.split(' ', limit = 2).let {
@@ -217,8 +237,19 @@ private suspend fun repl(
                 val parts = arg.split(':', limit = 2)
                 val host = parts.getOrNull(0)?.trim().orEmpty()
                 val port = parts.getOrNull(1)?.trim()?.toIntOrNull()
-                if (host.isEmpty() || port == null || port !in 1..65_535) {
-                    println("usage: manual <host>:<port>")
+                if (host.isEmpty()) {
+                    println("usage: manual <host>:<port>  (host is empty)")
+                    continue
+                }
+                if (port == null || port !in 1..65_535) {
+                    println("usage: manual <host>:<port>  (port must be 1..65535, got '${parts.getOrNull(1)}')")
+                    continue
+                }
+                // Light host-form sanity check — reject obvious garbage so the
+                // user sees a useful message instead of waiting on a connect
+                // timeout. Allows IPv4/IPv6 numerics and DNS hostnames.
+                if (!host.all { it.isLetterOrDigit() || it in ".:_-" }) {
+                    println("manual: host contains invalid characters: '$host'")
                     continue
                 }
                 scope.launch {
@@ -298,6 +329,16 @@ private suspend fun repl(
                     println("no peer matching '$arg'")
                     continue
                 }
+                val peerId = match.id.value
+                val existing = sessions[peerId]
+                if (existing != null && existing.state.value == ConnectionState.Connected) {
+                    println("already connected to ${match.name}")
+                    continue
+                }
+                if (!pendingConnects.add(peerId)) {
+                    println("already connecting to ${match.name}")
+                    continue
+                }
                 scope.launch {
                     try {
                         val session = p2p.connect(match)
@@ -309,6 +350,8 @@ private suspend fun repl(
                         println("connected to ${session.peer.name} (${session.peer.id.value.take(8)})")
                     } catch (e: Throwable) {
                         System.err.println("connect failed: ${e.message}")
+                    } finally {
+                        pendingConnects.remove(peerId)
                     }
                 }
             }
@@ -323,9 +366,19 @@ private suspend fun repl(
                     println("no active session; run `connect` first")
                     continue
                 }
+                val live = snapshot.filter { it.state.value == ConnectionState.Connected }
+                if (live.isEmpty()) {
+                    println("no Connected sessions (have ${snapshot.size} session(s) in " +
+                        "non-Connected states: ${snapshot.joinToString { "${it.peer.name}=${it.state.value}" }})")
+                    continue
+                }
+                val skipped = snapshot - live.toSet()
+                if (skipped.isNotEmpty()) {
+                    println("skipping non-Connected: ${skipped.joinToString { "${it.peer.name}(${it.state.value})" }}")
+                }
                 val msg = P2pMessage.Text(arg)
-                println("[broadcast → ${snapshot.size}] $arg")
-                for (session in snapshot) {
+                println("[broadcast → ${live.size}] $arg")
+                for (session in live) {
                     scope.launch {
                         runCatching { session.send(msg) }.onFailure {
                             System.err.println("send to ${session.peer.name} failed: ${it.message}")
@@ -351,6 +404,10 @@ private suspend fun repl(
                     println("no active session matching '$target'")
                     continue
                 }
+                if (session.state.value != ConnectionState.Connected) {
+                    println("session with ${session.peer.name} is not Connected (state=${session.state.value}) — send skipped")
+                    continue
+                }
                 println("[to ${session.peer.name}] $text")
                 scope.launch {
                     runCatching { session.send(P2pMessage.Text(text)) }.onFailure {
@@ -370,7 +427,9 @@ private suspend fun repl(
                     continue
                 }
                 scope.launch {
-                    runCatching { session.close() }
+                    runCatching { session.close() }.onFailure {
+                        System.err.println("close ${session.peer.name} failed: ${it.message}")
+                    }
                     sessions.remove(session.peer.id.value)
                     println("closed session with ${session.peer.name}")
                 }
@@ -393,9 +452,21 @@ private suspend fun repl(
                     println("file not found or not a regular file: ${file.absolutePath}")
                     continue
                 }
+                if (!file.canRead()) {
+                    println("file is not readable (check permissions): ${file.absolutePath}")
+                    continue
+                }
+                if (file.length() == 0L) {
+                    println("file is empty (0 bytes), nothing to send: ${file.absolutePath}")
+                    continue
+                }
                 val session = sessions.values.firstOrNull { matches(it.peer, target) }
                 if (session == null) {
                     println("no active session matching '$target'")
+                    continue
+                }
+                if (session.state.value != ConnectionState.Connected) {
+                    println("session with ${session.peer.name} is not Connected (state=${session.state.value}) — sendfile skipped")
                     continue
                 }
                 println("[file → ${session.peer.name}] sending ${file.name} (${file.length()}B)")
