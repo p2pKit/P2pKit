@@ -77,7 +77,7 @@ internal class IosLanDataTransport(
             configure_tcp = NW_PARAMETERS_DEFAULT_CONFIGURATION
         )
 
-    private val listener: nw_listener_t
+    internal val listener: nw_listener_t
     private val incomingChannel = Channel<RawConnection>(Channel.UNLIMITED)
 
     @Volatile

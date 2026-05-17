@@ -28,6 +28,13 @@ internal object LanConstants {
      */
     const val SERVICE_TYPE_NSD: String = "_p2pkit._tcp."
 
+    /**
+     * Bonjour service type for iOS `nw_advertise_descriptor` and
+     * `nw_browse_descriptor`. No trailing dot — Apple's API expects the
+     * canonical form. Wire-identical to the JMDNS/NSD strings above.
+     */
+    const val SERVICE_TYPE_BONJOUR: String = "_p2pkit._tcp"
+
     // TXT record keys. Both platforms must use the same keys.
     const val TXT_PEER_ID: String = "pid"
     const val TXT_APP_ID: String = "app"
