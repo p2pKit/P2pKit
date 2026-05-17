@@ -12,10 +12,12 @@ import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import kotlin.concurrent.Volatile
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
 import platform.Network.nw_connection_create
 import platform.Network.nw_listener_cancel
@@ -119,10 +121,21 @@ internal class IosLanDataTransport(
         nw_listener_start(listener)
         val deadline = dispatch_time(DISPATCH_TIME_NOW, (5L * NSEC_PER_SEC.toLong()))
         dispatch_semaphore_wait(ready, deadline)
-        // Even on failure path, nw_listener_get_port returns 0; downstream
-        // callers (Bonjour advertise on the discovery side) will then surface
-        // a clean error. We don't throw from init so the kit can still load.
-        tcpPort = nw_listener_get_port(listener).toInt()
+        val port = nw_listener_get_port(listener).toInt()
+        if (port == 0) {
+            // Either the listener never reached .ready within the timeout
+            // window, or it transitioned to .failed / .cancelled. Either way,
+            // returning a "transport" with port 0 silently breaks Bonjour
+            // advertise + every later connect attempt. Surface the failure
+            // loudly so the kit factory throws — matches how ServerSocket(0)
+            // throws on the JVM/Android side when bind fails.
+            nw_listener_cancel(listener)
+            throw IllegalStateException(
+                "iOS LAN listener failed to bind a TCP port within 5 s " +
+                    "(tcpPort=0 after nw_listener_start)"
+            )
+        }
+        tcpPort = port
     }
 
     override fun canConnect(peer: InternalPeer): Boolean =
@@ -137,8 +150,18 @@ internal class IosLanDataTransport(
         // Wait until it transitions out of Connecting. IosRawConnection's
         // state-changed handler flips Connected on .ready or Closed on .failed
         // / .cancelled, mirroring how JvmRawConnection's Socket constructor
-        // throws on connect failure.
-        val terminal = raw.state.first { it != ConnectionState.Connecting }
+        // throws on connect failure. Bounded so a stale endpoint (peer
+        // disappeared between discovery and dial) doesn't hang the caller —
+        // 10 s comfortably exceeds NW's typical Bonjour resolve + TCP SYN
+        // window on a LAN.
+        val terminal = try {
+            withTimeout(CONNECT_TIMEOUT_MILLIS) {
+                raw.state.first { it != ConnectionState.Connecting }
+            }
+        } catch (e: TimeoutCancellationException) {
+            runCatching { raw.close() }
+            throw P2pError.ConnectionFailed("iOS LAN connect timed out after ${CONNECT_TIMEOUT_MILLIS}ms")
+        }
         if (terminal != ConnectionState.Connected) {
             throw P2pError.ConnectionFailed("iOS LAN connect failed (state=$terminal)")
         }
@@ -153,5 +176,10 @@ internal class IosLanDataTransport(
         nw_listener_cancel(listener)
         incomingChannel.close()
         endpointRegistry.clear()
+    }
+
+    internal companion object {
+        /** Bounded outbound connect; LAN should resolve + handshake in << 10 s. */
+        const val CONNECT_TIMEOUT_MILLIS: Long = 10_000
     }
 }

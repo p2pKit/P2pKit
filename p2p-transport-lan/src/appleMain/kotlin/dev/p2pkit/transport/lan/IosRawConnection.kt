@@ -16,6 +16,7 @@ import kotlinx.cinterop.convert
 import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.usePinned
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 import platform.Network.nw_connection_cancel
 import platform.Network.nw_connection_set_queue
 import platform.Network.nw_connection_set_state_changed_handler
@@ -98,8 +100,21 @@ internal class IosRawConnection private constructor(
     override suspend fun write(bytes: ByteArray) {
         if (closed) throw IllegalStateException("connection closed")
         if (_state.value == ConnectionState.Connecting) {
-            // SessionManager normally only writes after Connected, but be defensive.
-            _state.first { it != ConnectionState.Connecting }
+            // SessionManager normally only writes after Connected, but be
+            // defensive. Bounded so a wedged Connecting state doesn't hang the
+            // sender forever — the keep-alive would eventually notice, but
+            // that takes a full pingInterval round-trip; surfacing fast is
+            // better. 10 s matches IosLanDataTransport.CONNECT_TIMEOUT_MILLIS.
+            try {
+                withTimeout(WRITE_READY_TIMEOUT_MILLIS) {
+                    _state.first { it != ConnectionState.Connecting }
+                }
+            } catch (e: TimeoutCancellationException) {
+                throw IllegalStateException(
+                    "write timed out waiting for connection to leave Connecting state " +
+                        "after ${WRITE_READY_TIMEOUT_MILLIS}ms"
+                )
+            }
         }
         if (closed) throw IllegalStateException("connection closed")
         if (bytes.isEmpty()) return
@@ -184,6 +199,9 @@ internal class IosRawConnection private constructor(
     internal companion object {
         /** 64 KiB matches JvmRawConnection's BUFFER_SIZE. */
         private val RECEIVE_MAX_LENGTH: UInt = 64u * 1024u
+
+        /** Bounded wait for a wedged Connecting state on write entry. */
+        const val WRITE_READY_TIMEOUT_MILLIS: Long = 10_000
 
         fun wrap(connection: nw_connection_t, queue: dispatch_queue_t): IosRawConnection =
             IosRawConnection(connection, queue)
