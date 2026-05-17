@@ -131,12 +131,23 @@ public interface P2pKit {
      *   `start()` returned a failure (port exhaustion, missing entitlement,
      *   listener bind timeout, etc.).
      */
+    /**
+     * @throws [Exception] bridged to Swift as `NSError`. Without `@Throws`
+     * Kotlin/Native terminates the process on any thrown error rather than
+     * bridging it to a catchable NSError. Same reasoning applies to every
+     * other public suspend method below.
+     */
+    @Throws(Exception::class)
     public suspend fun start()
 
+    @Throws(Exception::class)
     public suspend fun startAdvertising()
+    @Throws(Exception::class)
     public suspend fun stopAdvertising()
 
+    @Throws(Exception::class)
     public suspend fun startDiscovery()
+    @Throws(Exception::class)
     public suspend fun stopDiscovery()
 
     /**
@@ -147,6 +158,7 @@ public interface P2pKit {
      * @throws P2pError.ConnectionFailed if the underlying connection fails
      * @throws P2pError.PermissionMissing if required runtime permissions are not granted
      */
+    @Throws(Exception::class)
     public suspend fun connect(peer: Peer): P2pSession
 
     /** Last time the peer with [peerId] was observed by discovery, in epoch milliseconds. */
@@ -158,6 +170,7 @@ public interface P2pKit {
     /** Notify the SDK that the host app returned to the foreground. */
     public fun notifyAppForegrounded()
 
+    @Throws(Exception::class)
     public suspend fun stop()
 
     public companion object {

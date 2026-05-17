@@ -489,7 +489,11 @@ struct ContentView: View {
                 id: s.id,
                 peerId: "\(s.peer.id)",
                 peerName: s.peer.name,
-                state: "\(s.state.value)",
+                // Use the Kotlin helper rather than "\(s.state.value)" —
+                // the latter returns "Optional(Connected)" because
+                // StateFlow<T>.value generic-erases to Any? in the Swift
+                // bridge. See IosSwiftHelpers.kt.
+                state: IosSwiftHelpersKt.stateName(s),
                 session: s
             )
         }.sorted { $0.peerName < $1.peerName }
@@ -601,7 +605,7 @@ struct ContentView: View {
             let session = try await k.connect(peer: row.peer)
             diag(
                 "ui",
-                "kit.connect returned session id=\(session.id) peer=\(session.peer.id) state=\(session.state.value)"
+                "kit.connect returned session id=\(session.id) peer=\(session.peer.id) state=\(IosSwiftHelpersKt.stateName(session))"
             )
             await attachMessageCollector(to: session, label: "outgoing")
         } catch {
@@ -660,7 +664,7 @@ struct ContentView: View {
             appendMessage("manual: created \(peer.name) (\(peer.id))", kind: .info)
             diag("ui", "calling kit.connect on synthetic peer \(peer.id)")
             let session = try await k.connect(peer: peer)
-            diag("ui", "kit.connect (manual) returned session id=\(session.id) state=\(session.state.value)")
+            diag("ui", "kit.connect (manual) returned session id=\(session.id) state=\(IosSwiftHelpersKt.stateName(session))")
             await attachMessageCollector(to: session, label: "manual")
         } catch {
             diag("ui", "manual dial THREW: \(error.localizedDescription)")
@@ -686,7 +690,7 @@ struct ContentView: View {
         if let k = kit {
             let snapshot: [P2pSession] = IosSwiftHelpersKt.sessionsSnapshot(k)
             liveSessions = snapshot.compactMap { s in
-                let st = "\(s.state.value)"
+                let st = IosSwiftHelpersKt.stateName(s)
                 guard st == "Connected" else { return nil }
                 return SessionRow(
                     id: s.id,

@@ -48,6 +48,7 @@ public interface P2pSession {
      * configured maximum (default 4 MiB in v0.1). Throws
      * [P2pError.ConnectionFailed] if the connection has dropped.
      */
+    @Throws(Exception::class)
     public suspend fun send(message: P2pMessage)
 
     /**
@@ -77,6 +78,7 @@ public interface P2pSession {
      * @throws P2pError.ConnectionFailed if the session is not in
      *   [ConnectionState.Connected].
      */
+    @Throws(Exception::class)
     public suspend fun sendFile(
         name: String,
         sizeBytes: Long,
@@ -84,5 +86,6 @@ public interface P2pSession {
         source: RawSource
     ): P2pFileTransfer
 
+    @Throws(Exception::class)
     public suspend fun close()
 }

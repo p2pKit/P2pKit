@@ -1,5 +1,6 @@
 package dev.p2pkit.transport.lan
 
+import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
@@ -32,3 +33,18 @@ import dev.p2pkit.core.Peer
 public fun P2pKit.peersSnapshot(): List<Peer> = peers.value.toList()
 
 public fun P2pKit.sessionsSnapshot(): List<P2pSession> = sessions.value.toList()
+
+/**
+ * Swift-friendly `ConnectionState.name`. Same generic-erasure trap as
+ * [peersSnapshot]: `session.state` is `StateFlow<ConnectionState>`, and
+ * reading `.value` from Swift returns `Any?` because the generic
+ * argument erases to `id`. Swift then renders `"\(s.state.value)"` as
+ * `"Optional(Connected)"` — the trailing `Optional(...)` wrapper makes
+ * every `== "Connected"` filter in the sample fail silently, so a
+ * healthy session is invisible to the Send button.
+ *
+ * Returning a non-nullable `String` direct from a Kotlin extension
+ * function bypasses the bridge erasure entirely: Swift sees a plain
+ * `String`, no Optional wrapper, no cast needed.
+ */
+public fun P2pSession.stateName(): String = state.value.name
