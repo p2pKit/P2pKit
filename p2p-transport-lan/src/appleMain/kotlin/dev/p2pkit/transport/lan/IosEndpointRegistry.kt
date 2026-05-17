@@ -1,38 +1,42 @@
+@file:OptIn(ExperimentalForeignApi::class)
+
 package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.PeerId
-import kotlinx.coroutines.sync.Mutex
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+import platform.Network.nw_endpoint_t
 
 /**
  * Bridge from discovery to data transport on iOS.
  *
- * `Network.framework`'s `NWBrowser` yields `NWBrowser.Result` values whose
- * underlying `NWEndpoint` is opaque — there's no public host/port to encode
- * into a [dev.p2pkit.core.transport.TransportHint] the way JmDNS/NsdManager
- * surface them. Instead, the discovery transport stashes the resolved
- * `NWEndpoint` (or its identifying tuple) here, keyed by [PeerId], so
- * `connect(peer)` on the data transport can open an `NWConnection` directly
- * to it.
+ * `NWBrowser` yields `NWBrowser.Result` values whose underlying
+ * `nw_endpoint_t` is opaque — there's no public host/port to encode into a
+ * [dev.p2pkit.core.transport.TransportHint] the way JmDNS/NsdManager do.
+ * Instead, the discovery transport stashes the endpoint here keyed by
+ * [PeerId], and [IosLanDataTransport.connect] dials it directly via
+ * `nw_connection_create(endpoint, parameters)`.
  *
- * Populated in [IosLanDiscoveryTransport] on every `serviceResolved` event;
- * read in [IosLanDataTransport.connect]. Filled in by Tasks 19 and 20.
+ * Reads and writes are non-suspending so [IosLanDataTransport.canConnect]
+ * — which the [dev.p2pkit.core.internal.TransportManager] calls synchronously
+ * — can consult the registry without taking a lock.
  */
 internal class IosEndpointRegistry {
-    private val lock = Mutex()
-    private val entries: MutableMap<PeerId, Any> = mutableMapOf()
 
-    @Suppress("unused")
-    suspend fun put(peerId: PeerId, endpoint: Any) {
-        TODO("Task 20 of v0.3.0-dev — populate from NWBrowser.Result")
+    private val entries = MutableStateFlow<Map<PeerId, nw_endpoint_t>>(emptyMap())
+
+    fun put(peerId: PeerId, endpoint: nw_endpoint_t) {
+        entries.update { it + (peerId to endpoint) }
     }
 
-    @Suppress("unused")
-    suspend fun get(peerId: PeerId): Any? {
-        TODO("Task 20 of v0.3.0-dev — read by IosLanDataTransport.connect")
+    fun get(peerId: PeerId): nw_endpoint_t = entries.value[peerId]
+
+    fun remove(peerId: PeerId) {
+        entries.update { it - peerId }
     }
 
-    @Suppress("unused")
-    suspend fun remove(peerId: PeerId) {
-        TODO("Task 20 of v0.3.0-dev — clear on PeerEvent.Lost")
+    fun clear() {
+        entries.value = emptyMap()
     }
 }
