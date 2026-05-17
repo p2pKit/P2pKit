@@ -92,7 +92,7 @@ public class JvmNetworkProvisioningManager(
         )
 
     override suspend fun getManualConnectionInfo(): ManualConnectionInfo? {
-        val port = ctx.lanTcpPort ?: return null
+        val port = ctx.lanTcpPort() ?: return null
         val ips = withContext(Dispatchers.IO) { collectNonLoopbackAddresses() }
         if (ips.isEmpty()) return null
         return ManualConnectionInfo(

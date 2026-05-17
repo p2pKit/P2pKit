@@ -99,6 +99,23 @@ public interface P2pKit {
      */
     public val networkProvisioning: NetworkProvisioningManager
 
+    /**
+     * Bring up all registered transports and provisioning sidecar. Optional
+     * to call — if the host app skips it, [startAdvertising], [startDiscovery],
+     * and [connect] each lazily ensure the kit is started on their first
+     * invocation. Calling `start()` explicitly is preferable because it
+     * surfaces a typed [P2pError.TransportStartFailed] at a single,
+     * predictable call site instead of inside the first lifecycle method.
+     *
+     * Idempotent: subsequent calls after a successful start return without
+     * re-binding. After a failed start, the next call retries.
+     *
+     * @throws P2pError.TransportStartFailed if any registered transport's
+     *   `start()` returned a failure (port exhaustion, missing entitlement,
+     *   listener bind timeout, etc.).
+     */
+    public suspend fun start()
+
     public suspend fun startAdvertising()
     public suspend fun stopAdvertising()
 

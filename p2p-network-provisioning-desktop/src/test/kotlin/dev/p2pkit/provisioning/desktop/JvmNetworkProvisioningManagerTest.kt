@@ -37,7 +37,7 @@ class JvmNetworkProvisioningManagerTest {
         localDeviceName = "Tester",
         config = NetworkProvisioningConfig(),
         logger = P2pLogger.NoOp,
-        lanTcpPort = lanTcpPort,
+        lanTcpPort = { lanTcpPort },
         manualPeerRegistrar = registrar
     )
 

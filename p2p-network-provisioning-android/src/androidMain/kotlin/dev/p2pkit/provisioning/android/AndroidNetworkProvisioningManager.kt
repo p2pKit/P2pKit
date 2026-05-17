@@ -208,7 +208,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
     }
 
     override suspend fun getManualConnectionInfo(): ManualConnectionInfo? {
-        val port = ctx.lanTcpPort ?: return null
+        val port = ctx.lanTcpPort() ?: return null
         val hosts = collectInterfaceIPs() + (handle?.apHostAddresses() ?: emptyList())
         val distinct = hosts.distinct()
         if (distinct.isEmpty()) return null
@@ -264,7 +264,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
     }
 
     private fun buildManualInfoFromHandle(h: HotspotHandle): ManualConnectionInfo? {
-        val port = ctx.lanTcpPort ?: return null
+        val port = ctx.lanTcpPort() ?: return null
         val hosts = (collectInterfaceIPs() + h.apHostAddresses()).distinct()
         if (hosts.isEmpty()) return null
         return ManualConnectionInfo(

@@ -33,10 +33,13 @@ public interface NetworkProvisioningFactory {
  *   semantics to the platform.
  * - [logger] is the kit's logger; managers should route their own diagnostics
  *   through it.
- * - [lanTcpPort] is the bound TCP port of the LAN data transport when one is
- *   registered (the only v0.2 transport with a server socket). `null` when
- *   the kit has no LAN transport, so [NetworkProvisioningManager.getManualConnectionInfo]
- *   has nothing to advertise.
+ * - [lanTcpPort] is a provider lambda that returns the **current** bound
+ *   TCP port of the LAN data transport, or `null` when the transport hasn't
+ *   bound yet (before [dev.p2pkit.core.P2pKit.start]) or no LAN transport
+ *   is registered. Implementations should call it each time they need the
+ *   port, not capture the value at construction — since the v0.3 transport
+ *   lifecycle refactor the bind happens lazily, so the captured value at
+ *   factory-build time would be `null` even when the bind succeeds later.
  * - [manualPeerRegistrar] is the hook a manager uses inside
  *   [NetworkProvisioningManager.createManualPeer] to inject a synthetic
  *   peer into the kit's `PeerRegistry`.
@@ -52,7 +55,7 @@ public class ProvisioningContext public constructor(
     public val localDeviceName: String,
     public val config: NetworkProvisioningConfig,
     public val logger: P2pLogger,
-    public val lanTcpPort: Int?,
+    public val lanTcpPort: () -> Int?,
     public val manualPeerRegistrar: ManualPeerRegistrar,
     /**
      * Parent [Job] the manager should attach its scope to so the kit's

@@ -52,8 +52,15 @@ class ManualIpLoopbackTest {
         val alice = newKit("Alice")
         val bob = newKit("Bob")
 
-        // Both bind their LAN TCP servers. We don't call start{Advertising,Discovery}
-        // — manual-IP must work without discovery.
+        // Since the v0.3 transport-lifecycle refactor, the LAN data transport
+        // binds its server socket in `start()` rather than the factory. Manual
+        // IP must work *without discovery* — so we call `start()` directly
+        // instead of `startAdvertising()`/`startDiscovery()`, which is the
+        // whole point of this test: both ports are bound and reachable, but
+        // no mDNS traffic is exchanged.
+        alice.start()
+        bob.start()
+
         val aliceInfo = alice.networkProvisioning.getManualConnectionInfo()
         assertNotNull(aliceInfo, "Alice should have a ManualConnectionInfo from JVM provisioning")
 

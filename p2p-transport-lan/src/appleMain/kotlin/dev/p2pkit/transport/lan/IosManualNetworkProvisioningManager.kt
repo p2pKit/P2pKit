@@ -77,7 +77,9 @@ public class IosManualNetworkProvisioningManager internal constructor(
         )
 
     override suspend fun getManualConnectionInfo(): ManualConnectionInfo? {
-        val port = ctx.lanTcpPort ?: return null
+        // Read lazily — the LAN data transport's port isn't bound until
+        // `kit.start()` (or the first lifecycle call) succeeds.
+        val port = ctx.lanTcpPort() ?: return null
         // Apple does not give us a non-loopback IP list synchronously without
         // a path monitor subscription; populating hostAddresses requires the
         // Swift consumer to read it themselves (e.g., via

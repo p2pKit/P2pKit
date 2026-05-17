@@ -15,8 +15,13 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
 import platform.Network.nw_connection_create
@@ -46,15 +51,24 @@ import platform.darwin.dispatch_time
 /**
  * iOS LAN [DataTransport].
  *
- * Holds one `nw_listener_t` bound to an OS-chosen ephemeral TCP port for
+ * Owns one `nw_listener_t` bound to an OS-chosen ephemeral TCP port for
  * inbound connections. Outbound `connect(peer)` looks the peer's resolved
  * `nw_endpoint_t` up in [IosEndpointRegistry] (populated by
  * [IosLanDiscoveryTransport]) and builds an `nw_connection_t` to it.
  *
- * Construction blocks for up to 5 s until the listener reaches
- * `nw_listener_state_ready`. This mirrors the JVM/Android factories binding
- * `ServerSocket(0)` synchronously so [tcpPort] is stable from the moment the
- * `TransportFactory.build` call returns.
+ * **Lifecycle (v0.3 refactor).** The listener bind no longer happens in
+ * `init` — instead [start] is a `suspend` method that runs the
+ * `nw_listener_start` + 5-second semaphore wait. A bind failure surfaces
+ * as `Result.failure(IllegalStateException)`, which the kit wraps in
+ * `P2pError.TransportStartFailed`. This replaces the v0.2 behaviour where
+ * a port=0 outcome would `throw IllegalStateException` from `init` and
+ * tear down the entire kit-construction call site (which, on iOS, was a
+ * runtime panic because Kotlin/Native doesn't bridge un-`@Throws` exceptions
+ * to ObjC).
+ *
+ * [start] is idempotent: after the first success subsequent calls return
+ * `Result.success(Unit)` immediately. After a failure they retry — a port
+ * that was unavailable a moment ago might be free now.
  */
 internal class IosLanDataTransport(
     @Suppress("unused") private val transportContext: TransportContext,
@@ -71,45 +85,57 @@ internal class IosLanDataTransport(
     /**
      * Non-TLS TCP parameters, matching the JVM/Android `Socket` wire format.
      * `SecurityMode.NoneForMvp` parity. Shared between listener and outbound
-     * connections.
-     *
-     * Constructed entirely in ObjC via the
-     * [p2pkit_nw_create_plain_tcp_parameters] cinterop helper — see
-     * `src/nativeInterop/cinterop/p2pkit_nw.h` for why we can't call the
-     * `nw_parameters_create_secure_tcp` macro pair from Kotlin directly.
+     * connections. Constructed entirely in ObjC via the
+     * [p2pkit_nw_create_plain_tcp_parameters] cinterop helper.
      */
     internal val parameters: nw_parameters_t =
         p2pkit_nw_create_plain_tcp_parameters()
             ?: error("p2pkit_nw_create_plain_tcp_parameters returned null")
 
-    internal val listener: nw_listener_t
+    private val _tcpPort = MutableStateFlow<Int?>(null)
+    override val tcpPort: StateFlow<Int?> = _tcpPort.asStateFlow()
+
+    /**
+     * Exposed for the discovery transport to attach an advertise descriptor.
+     * Null until [start] succeeds. Reading from `nw_listener_set_advertise_descriptor`
+     * before start would silently no-op, so [IosLanDiscoveryTransport]'s
+     * `startAdvertising` is sequenced after `data.start()` via
+     * `P2pKitImpl.ensureStarted`.
+     */
+    @Volatile
+    internal var listener: nw_listener_t = null
+        private set
+
     private val incomingChannel = Channel<RawConnection>(Channel.UNLIMITED)
+    private val startMutex = Mutex()
 
     @Volatile
     private var closed: Boolean = false
 
-    override val tcpPort: Int
+    override suspend fun start(): Result<Unit> = startMutex.withLock {
+        if (listener != null) return Result.success(Unit)
+        if (closed) return Result.failure(IllegalStateException("transport already closed"))
 
-    init {
         val l = nw_listener_create(parameters)
-            ?: error("nw_listener_create returned null")
-        listener = l
+            ?: return Result.failure(
+                IllegalStateException("nw_listener_create returned null")
+            )
 
-        nw_listener_set_queue(listener, queue)
+        nw_listener_set_queue(l, queue)
 
-        nw_listener_set_new_connection_handler(listener) { conn ->
+        nw_listener_set_new_connection_handler(l) { conn ->
             if (conn != null && !closed) {
                 val raw = IosRawConnection.wrap(conn, queue)
                 incomingChannel.trySend(raw)
             }
             // Force Unit return — without this, Kotlin/Native infers the
-            // lambda type from trySend()'s ChannelResult and bridges it to an
-            // id-returning ObjC block, which libdispatch then crashes on.
+            // lambda type from trySend()'s ChannelResult and bridges it to
+            // an id-returning ObjC block, which libdispatch crashes on.
             Unit
         }
 
         val ready = dispatch_semaphore_create(0)
-        nw_listener_set_state_changed_handler(listener) { state, _ ->
+        nw_listener_set_state_changed_handler(l) { state, _ ->
             when (state) {
                 nw_listener_state_ready,
                 nw_listener_state_failed,
@@ -120,24 +146,24 @@ internal class IosLanDataTransport(
             Unit
         }
 
-        nw_listener_start(listener)
+        nw_listener_start(l)
         val deadline = dispatch_time(DISPATCH_TIME_NOW, (5L * NSEC_PER_SEC.toLong()))
         dispatch_semaphore_wait(ready, deadline)
-        val port = nw_listener_get_port(listener).toInt()
+        val port = nw_listener_get_port(l).toInt()
         if (port == 0) {
-            // Either the listener never reached .ready within the timeout
-            // window, or it transitioned to .failed / .cancelled. Either way,
-            // returning a "transport" with port 0 silently breaks Bonjour
-            // advertise + every later connect attempt. Surface the failure
-            // loudly so the kit factory throws — matches how ServerSocket(0)
-            // throws on the JVM/Android side when bind fails.
-            nw_listener_cancel(listener)
-            throw IllegalStateException(
-                "iOS LAN listener failed to bind a TCP port within 5 s " +
-                    "(tcpPort=0 after nw_listener_start)"
+            // .failed / .cancelled or the 5 s timeout expired — surface as
+            // a typed Result.failure. The kit converts to TransportStartFailed.
+            nw_listener_cancel(l)
+            return Result.failure(
+                IllegalStateException(
+                    "iOS LAN listener failed to bind a TCP port within 5 s " +
+                        "(tcpPort=0 after nw_listener_start)"
+                )
             )
         }
-        tcpPort = port
+        listener = l
+        _tcpPort.value = port
+        return Result.success(Unit)
     }
 
     override fun canConnect(peer: InternalPeer): Boolean {
@@ -155,10 +181,6 @@ internal class IosLanDataTransport(
             ?: peer.transportHints.firstOrNull {
                 it.type == TransportKind.LAN && !it.host.isNullOrBlank() && (it.port ?: 0) > 0
             }?.let { hint ->
-                // Manual-IP dial: build an `nw_endpoint_t` from the host/port
-                // pair the consumer supplied (typed in via the sample UI, or
-                // injected through NetworkProvisioningManager.createManualPeer).
-                // Apple's API takes the port as a C string.
                 IosLanDebug.log("connect", "manual-IP fallback for ${peer.publicPeer.id.value}: host=${hint.host} port=${hint.port}")
                 nw_endpoint_create_host(hint.host!!, hint.port!!.toString())
             }
@@ -166,13 +188,6 @@ internal class IosLanDataTransport(
         val conn = nw_connection_create(endpoint, parameters)
             ?: throw P2pError.ConnectionFailed("nw_connection_create returned null")
         val raw = IosRawConnection.wrap(conn, queue)
-        // Wait until it transitions out of Connecting. IosRawConnection's
-        // state-changed handler flips Connected on .ready or Closed on .failed
-        // / .cancelled, mirroring how JvmRawConnection's Socket constructor
-        // throws on connect failure. Bounded so a stale endpoint (peer
-        // disappeared between discovery and dial) doesn't hang the caller —
-        // 10 s comfortably exceeds NW's typical Bonjour resolve + TCP SYN
-        // window on a LAN.
         val terminal = try {
             withTimeout(CONNECT_TIMEOUT_MILLIS) {
                 raw.state.first { it != ConnectionState.Connecting }
@@ -192,7 +207,7 @@ internal class IosLanDataTransport(
     override suspend fun close() {
         if (closed) return
         closed = true
-        nw_listener_cancel(listener)
+        listener?.let { nw_listener_cancel(it) }
         incomingChannel.close()
         endpointRegistry.clear()
     }

@@ -5,7 +5,6 @@ import dev.p2pkit.core.dsl.TransportsBuilder
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
-import java.net.ServerSocket
 
 /**
  * Register the LAN transport (NsdManager discovery + TCP data) on Android.
@@ -31,6 +30,10 @@ import java.net.ServerSocket
  *   mDNS reception on some devices/Wi-Fi states)
  * - `android.permission.NEARBY_WIFI_DEVICES` (runtime, API 33+); without this,
  *   add `android.permission.ACCESS_FINE_LOCATION` for older API levels.
+ *
+ * The actual `ServerSocket(0)` bind happens inside the transport's `start()`
+ * (called by [dev.p2pkit.core.P2pKit.start], or lazily by the first
+ * `startAdvertising` / `connect`). Factory construction has no blocking I/O.
  */
 public fun TransportsBuilder.lan(applicationContext: Context) {
     register(AndroidLanTransportFactory(applicationContext.applicationContext))
@@ -40,19 +43,14 @@ internal class AndroidLanTransportFactory(
     private val androidContext: Context
 ) : TransportFactory {
     override fun build(context: TransportContext): TransportPair {
-        val serverSocket = ServerSocket(0)
-        val tcpPort = serverSocket.localPort
-
         val registration = LanServiceRegistration(
             appId = context.appId,
             localPeerId = context.localPeerId,
             deviceName = context.deviceName,
-            platform = context.platform,
-            tcpPort = tcpPort
+            platform = context.platform
         )
-
         return TransportPair(
-            data = AndroidLanDataTransport(registration, serverSocket),
+            data = AndroidLanDataTransport(registration),
             discovery = AndroidLanDiscoveryTransport(androidContext, registration)
         )
     }

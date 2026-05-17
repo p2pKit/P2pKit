@@ -41,6 +41,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Production [P2pKit] implementation. Wired up by
@@ -90,6 +92,16 @@ internal class P2pKitImpl(
 
     private val supportedTransportKinds: Set<TransportKind>
 
+    // Lazy-start gate. `start()` is suspend and idempotent — a successful
+    // start latches in via [startResult] = Result.success; a failed start
+    // is recorded but lets the next caller retry. The mutex prevents two
+    // concurrent suspend callers from racing two transport bind attempts.
+    // The fast-path read of [startResult] outside the mutex is intentionally
+    // un-synchronised: if a stale read says "not started," the slow path
+    // re-checks under the lock. Worst case is one extra `withLock` round-trip.
+    private val startMutex = Mutex()
+    private var startResult: Result<Unit>? = null
+
     init {
         // Materialize transports
         val ctx = TransportContext(
@@ -133,22 +145,24 @@ internal class P2pKitImpl(
 
         // Build the provisioning manager from the registered factory, or fall
         // back to Unsupported if none was registered. Done last in init so the
-        // factory sees a fully-wired peerRegistry and the LAN transport's
-        // bound TCP port (when present).
+        // factory sees a fully-wired peerRegistry. Since the v0.3 transport
+        // lifecycle refactor, the LAN transport's TCP port isn't bound until
+        // start() runs — so we hand the factory a `() -> Int?` provider that
+        // reads the current value each time the manager queries it.
         networkProvisioning = run {
             val factory = provisioningFactory
             if (factory == null) {
                 UnsupportedNetworkProvisioningManager()
             } else {
-                val lanPort = dataTransports.filterIsInstance<HasLocalTcpEndpoint>()
-                    .firstOrNull()?.tcpPort
+                val lanEndpoint = dataTransports.filterIsInstance<HasLocalTcpEndpoint>()
+                    .firstOrNull()
                 val ctx = ProvisioningContext(
                     appId = appId,
                     localPeerId = localPeerId,
                     localDeviceName = deviceName,
                     config = provisioningConfig,
                     logger = logger,
-                    lanTcpPort = lanPort,
+                    lanTcpPort = { lanEndpoint?.tcpPort?.value },
                     manualPeerRegistrar = peerRegistry,
                     parentJob = internalJob
                 )
@@ -175,8 +189,50 @@ internal class P2pKitImpl(
     override val incomingSessions: SharedFlow<P2pSession> get() = sessionManager.incomingSessions
     override val sessions: StateFlow<List<P2pSession>> get() = sessionManager.sessions
 
+    override suspend fun start() {
+        ensureStarted()
+    }
+
+    /**
+     * Bring every registered transport up. Idempotent: a successful first
+     * call latches `startResult = success`; subsequent callers no-op. A
+     * failed start does NOT latch — the next call retries the bind, which
+     * matters for transient port-exhaustion or `EADDRINUSE` races where
+     * a second attempt seconds later will succeed.
+     *
+     * Any per-transport failure surfaces as
+     * [P2pError.TransportStartFailed]; we attribute the error to that
+     * transport's [DataTransport.type] so the caller can show which medium
+     * failed without inspecting the cause's class.
+     */
+    private suspend fun ensureStarted() {
+        startResult?.let { prior ->
+            if (prior.isSuccess) return
+        }
+        startMutex.withLock {
+            startResult?.let { prior ->
+                if (prior.isSuccess) return
+            }
+            for (transport in dataTransports) {
+                val r = runCatching { transport.start() }.getOrElse { Result.failure(it) }
+                if (r.isFailure) {
+                    val cause = r.exceptionOrNull()
+                    val failed = P2pError.TransportStartFailed(
+                        transportKind = transport.type,
+                        reason = cause?.message ?: "transport.start() returned failure",
+                        underlying = cause
+                    )
+                    startResult = Result.failure(failed)
+                    throw failed
+                }
+            }
+            startResult = Result.success(Unit)
+        }
+    }
+
     override suspend fun startAdvertising() {
         ensurePermissions()
+        ensureStarted()
         _state.value = P2pState.Starting
         val localInfo = LocalPeerInfo(
             peerId = localPeerId,
@@ -199,6 +255,7 @@ internal class P2pKitImpl(
 
     override suspend fun startDiscovery() {
         ensurePermissions()
+        ensureStarted()
         for (transport in discoveryTransports) {
             transport.startDiscovery()
         }
@@ -211,6 +268,7 @@ internal class P2pKitImpl(
     }
 
     override suspend fun connect(peer: Peer): P2pSession {
+        ensureStarted()
         val internalPeer = peerRegistry.internalPeer(peer.id)
             ?: dev.p2pkit.core.transport.InternalPeer(
                 publicPeer = peer,

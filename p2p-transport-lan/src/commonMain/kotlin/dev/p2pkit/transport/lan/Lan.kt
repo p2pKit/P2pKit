@@ -9,12 +9,27 @@ import dev.p2pkit.core.Platform
  * accepted sockets. Created by each platform's factory when the TCP server
  * binds to its ephemeral port.
  */
-internal data class LanServiceRegistration(
+/**
+ * Identity advertised over mDNS plus the bound TCP port.
+ *
+ * The port is mutable since the v0.3 transport-lifecycle refactor: the data
+ * transport binds its server socket lazily in `start()`, then writes the
+ * chosen port back into this struct before the discovery transport begins
+ * advertising. A zero value means "not bound yet" — discovery transports
+ * should not call this with [tcpPort] == 0.
+ *
+ * The platform `@Volatile` annotations differ between JVM and Kotlin/Native,
+ * so we just rely on the call-ordering guarantee from [P2pKitImpl.ensureStarted]
+ * (which acquires a [Mutex] and runs `data.start()` strictly before
+ * `discovery.startAdvertising()`). No cross-thread reads of [tcpPort]
+ * happen outside that ordering.
+ */
+internal class LanServiceRegistration(
     val appId: AppId,
     val localPeerId: PeerId,
     val deviceName: String,
     val platform: Platform,
-    val tcpPort: Int
+    var tcpPort: Int = 0
 )
 
 /** Wire-level constants shared by the JVM and Android implementations. */

@@ -55,7 +55,7 @@ class AndroidNetworkProvisioningManagerTest {
         localDeviceName = "Pixel",
         config = NetworkProvisioningConfig(enableLocalHotspot = true),
         logger = P2pLogger.NoOp,
-        lanTcpPort = lanTcpPort,
+        lanTcpPort = { lanTcpPort },
         manualPeerRegistrar = registrar
     )
 
