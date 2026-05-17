@@ -132,6 +132,19 @@ internal class IosRawConnection private constructor(
                         is_complete = false,
                         completion = { error ->
                             if (error != null) {
+                                // Flip state to Closed AND latch closed=true
+                                // before resuming with the exception, mirroring
+                                // the receive-error path (line ~167). Without
+                                // this the session-level keep-alive only learns
+                                // the connection is dead one ping interval
+                                // later, and the consuming app would keep
+                                // dispatching `send()` calls into a wedged
+                                // socket until the read side eventually
+                                // surfaces the error. Symptom on iOS:
+                                // messages silently stop being delivered while
+                                // session.state stays Connected.
+                                closed = true
+                                _state.value = ConnectionState.Closed
                                 cont.resumeWithException(
                                     NetworkException("nw_connection_send failed")
                                 )

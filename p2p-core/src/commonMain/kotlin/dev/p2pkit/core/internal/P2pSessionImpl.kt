@@ -139,9 +139,48 @@ internal class P2pSessionImpl(
         val job = SupervisorJob(parent = sessionJob)
         epochJob = job
         val epochScope = CoroutineScope(scope.coroutineContext + job)
+        // Capture the current connection ref once so all three loops act on
+        // the same epoch's connection. Rearm replaces `connection` and
+        // cancels the epoch; new loops then see the new ref.
+        val epochConnection = connection
         lastPongAt.value = clock()
         epochScope.launch { routeEvents(events) }
-        epochScope.launch { keepAliveLoop(connection) }
+        epochScope.launch { keepAliveLoop(epochConnection) }
+        epochScope.launch { observeRawState(epochConnection) }
+    }
+
+    /**
+     * Watches the underlying [RawConnection.state] and triggers
+     * [onConnectionLost] the moment it transitions to `Closed` or `Failed`
+     * while our session is still `Connected`. Before this loop existed the
+     * session's authoritative source for "connection died" was either:
+     *   (a) the read flow ending (which fires from `routeEvents` when the
+     *       protocol's event channel closes — depends on the OS surfacing
+     *       a receive error, which can lag a real outage), or
+     *   (b) the keep-alive PING send failing or PONG timing out (worst
+     *       case one full `pingIntervalMillis` after the break).
+     *
+     * On iOS specifically, an `nw_connection_send` error sets `closed=true`
+     * + `_state = Closed` synchronously in the send completion handler.
+     * Without this observer, `session.state` would still report Connected
+     * for up to a ping interval; users see "messages sent successfully" in
+     * the UI logic but the bytes never reach the wire.
+     *
+     * Once raw goes to a terminal state we only act if our own state is
+     * still `Connected`. If we're already `Closing`, `Reconnecting`, or
+     * a terminal state, [onConnectionLost] short-circuits inside its mutex.
+     */
+    private suspend fun observeRawState(epochConnection: RawConnection) {
+        epochConnection.state.collect { rawState ->
+            when (rawState) {
+                ConnectionState.Closed, ConnectionState.Failed -> {
+                    if (_state.value == ConnectionState.Connected) {
+                        onConnectionLost("raw connection -> $rawState")
+                    }
+                }
+                else -> { /* Connecting / Connected / Handshaking — wait */ }
+            }
+        }
     }
 
     override suspend fun send(message: P2pMessage) {
