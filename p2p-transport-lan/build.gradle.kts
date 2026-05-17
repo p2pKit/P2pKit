@@ -13,6 +13,14 @@ kotlin {
         minSdk = libs.versions.android.minSdk.get().toInt()
     }
 
+    // v0.3.0-dev: iOS LAN/TCP via Bonjour + Network.framework. Same public API
+    // as JVM/Android (`transports { lan() }`), backed by NWBrowser / NWListener
+    // / NWConnection. Requires iOS 13+; minimum is enforced by the Network
+    // framework symbols themselves.
+    iosX64()
+    iosArm64()
+    iosSimulatorArm64()
+
     sourceSets {
         commonMain.dependencies {
             implementation(project(":p2p-core"))
