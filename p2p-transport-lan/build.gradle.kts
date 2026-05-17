@@ -28,11 +28,28 @@ kotlin {
                 defFile = project.file("src/nativeInterop/cinterop/p2pkit_nw.def")
             }
         }
+        // Sample-app consumers want a single Swift-importable framework that
+        // bundles :p2p-core's types alongside the LAN transport extension.
+        // `export(project(":p2p-core"))` lifts the dependency's public API
+        // into the framework's Swift surface so consumers can reference
+        // P2pKit / AppId / Peer / P2pMessage / ... directly.
+        // Run `./gradlew :p2p-transport-lan:linkDebugFrameworkIosSimulatorArm64`
+        // (or `linkReleaseFrameworkIosArm64` for device builds) and drop the
+        // resulting `.framework` into Xcode — see docs/ios-sample-app/.
+        target.binaries.framework {
+            baseName = "P2pKitShared"
+            isStatic = false
+            export(project(":p2p-core"))
+        }
     }
 
     sourceSets {
         commonMain.dependencies {
-            implementation(project(":p2p-core"))
+            // `api` rather than `implementation`: the iOS framework's
+            // `export(project(":p2p-core"))` above requires the dependency to
+            // be in the public API surface. Has no effect on the JVM/Android
+            // consumers (their build doesn't surface it differently).
+            api(project(":p2p-core"))
             implementation(libs.kotlinx.coroutines.core)
         }
         commonTest.dependencies {
