@@ -41,6 +41,8 @@ import platform.Network.nw_browser_set_state_changed_handler
 import platform.Network.nw_browser_start
 import platform.Network.nw_browser_state_cancelled
 import platform.Network.nw_browser_state_failed
+import platform.Network.nw_browser_state_ready
+import platform.Network.nw_browser_state_waiting
 import platform.Network.nw_browser_t
 import platform.Network.nw_listener_set_advertise_descriptor
 import platform.Network.nw_parameters_create
@@ -49,19 +51,22 @@ import platform.Network.nw_parameters_set_include_peer_to_peer
 /**
  * iOS LAN [DiscoveryTransport].
  *
- * - **Advertise** rides on the existing `nw_listener_t` owned by
- *   [IosLanDataTransport]: we build an `nw_advertise_descriptor_t` with
- *   service name = local peer id, service type = [LanConstants.SERVICE_TYPE_BONJOUR],
- *   and a TXT record containing the same keys JmDNS / NSD use. Bonjour
- *   then broadcasts the service on every available interface.
- * - **Browse** uses `nw_browser_t` on the same service type. Every
- *   `nw_browse_result_t` carries an `nw_endpoint_t` (the resolved Bonjour
- *   service) plus the remote TXT record. We stash the endpoint in
- *   [IosEndpointRegistry] keyed by the remote peer id so
- *   [IosLanDataTransport.connect] can dial it via `nw_connection_create`.
+ * Browsing uses `nw_browser_t`; advertising rides on the listener inside
+ * [IosLanDataTransport] via `nw_listener_set_advertise_descriptor`.
  *
- * Same queue as the data transport — serial, so handler invocations from the
- * listener and browser never race each other.
+ * **Refresh loop:** `PeerRegistry` in :p2p-core evicts a peer 15 s after its
+ * last `PeerEvent.Found`/`Updated`. NWBrowser only fires "result_added" once
+ * per peer (and "result_removed" when a peer leaves), so without a periodic
+ * heartbeat the iOS discovery transport's peers would silently disappear
+ * from `kit.peers` after 15 s even while NWBrowser still sees them. The
+ * refresh loop here re-emits `PeerEvent.Updated` for every cached peer
+ * every 5 s as long as discovery is running.
+ *
+ * **Diagnostics:** every browser state change, every result-change call,
+ * every TXT decode, and every filter outcome is appended to
+ * [IosLanDebug.events]. The iOS sample subscribes to that flow for an
+ * in-app log; from a release consumer's view it's a 200-entry replayable
+ * SharedFlow they can ignore.
  */
 internal class IosLanDiscoveryTransport(
     private val transportContext: TransportContext,
@@ -86,34 +91,40 @@ internal class IosLanDiscoveryTransport(
     @Volatile
     private var browser: nw_browser_t = null
 
+    @Volatile
+    private var browserReady: Boolean = false
+
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) = lock.withLock {
         if (advertising) return@withLock
+        IosLanDebug.log(
+            "advertise",
+            "starting: peerId=${localPeer.peerId.value.take(8)} app=${localPeer.appId.value} name=${localPeer.deviceName}"
+        )
         val descriptor = buildAdvertiseDescriptor(localPeer)
         nw_listener_set_advertise_descriptor(dataTransport.listener, descriptor)
         advertising = true
+        IosLanDebug.log("advertise", "started")
     }
 
     override suspend fun stopAdvertising() = lock.withLock {
         if (!advertising) return@withLock
-        // Passing null clears the advertised service from the listener.
+        IosLanDebug.log("advertise", "stopping")
         nw_listener_set_advertise_descriptor(dataTransport.listener, null)
         advertising = false
     }
 
     override suspend fun startDiscovery() = lock.withLock {
         if (browser != null) return@withLock
+        IosLanDebug.log(
+            "browse",
+            "startDiscovery: type=${LanConstants.SERVICE_TYPE_BONJOUR} app=${transportContext.appId.value} localPid=${transportContext.localPeerId.value.take(8)}"
+        )
         val descriptor = nw_browse_descriptor_create_bonjour_service(
             type = LanConstants.SERVICE_TYPE_BONJOUR,
             domain = null
         )
         nw_browse_descriptor_set_include_txt_record(descriptor, true)
 
-        // Enable peer-to-peer browsing so NWBrowser also searches over the
-        // AWDL / non-Wi-Fi interfaces iOS exposes for Bonjour. Without this,
-        // some simulator and constrained-network configurations only see
-        // services advertised from inside the same process. On a real
-        // iPhone with Wi-Fi this is a free win; in the simulator it may
-        // help bridge to mDNS coming in through the host's vmnet.
         val browserParams = nw_parameters_create()
         nw_parameters_set_include_peer_to_peer(browserParams, true)
 
@@ -123,22 +134,36 @@ internal class IosLanDiscoveryTransport(
 
         nw_browser_set_queue(b, dataTransport.queue)
         nw_browser_set_state_changed_handler(b) { state, _ ->
+            val label = when (state) {
+                nw_browser_state_ready -> "ready"
+                nw_browser_state_waiting -> "waiting"
+                nw_browser_state_failed -> "failed"
+                nw_browser_state_cancelled -> "cancelled"
+                else -> "raw=$state"
+            }
+            IosLanDebug.log("browse", "state -> $label")
             when (state) {
-                nw_browser_state_failed,
-                nw_browser_state_cancelled -> browser = null
+                nw_browser_state_ready -> browserReady = true
+                nw_browser_state_failed, nw_browser_state_cancelled -> {
+                    browserReady = false
+                    browser = null
+                }
             }
             Unit
         }
-        nw_browser_set_browse_results_changed_handler(b) { old, new, _ ->
-            handleBrowseResultChange(old, new)
+        nw_browser_set_browse_results_changed_handler(b) { old, new, batchComplete ->
+            handleBrowseResultChange(old, new, batchComplete)
             Unit
         }
         nw_browser_start(b)
+        IosLanDebug.log("browse", "nw_browser_start invoked")
     }
 
     override suspend fun stopDiscovery() = lock.withLock {
         val b = browser ?: return@withLock
+        IosLanDebug.log("browse", "stopDiscovery: cancelling browser")
         browser = null
+        browserReady = false
         nw_browser_cancel(b)
     }
 
@@ -148,8 +173,6 @@ internal class IosLanDiscoveryTransport(
             type = LanConstants.SERVICE_TYPE_BONJOUR,
             domain = null
         ) ?: error("nw_advertise_descriptor_create_bonjour_service returned null")
-        // Collisions on the network must surface as a failure, not a renamed
-        // service — peer-id-as-service-name is supposed to be unique.
         nw_advertise_descriptor_set_no_auto_rename(descriptor, true)
 
         val txt = IosBonjour.mapToTxtRecord(
@@ -166,11 +189,20 @@ internal class IosLanDiscoveryTransport(
         return descriptor
     }
 
-    private fun handleBrowseResultChange(old: nw_browse_result_t, new: nw_browse_result_t) {
+    private fun handleBrowseResultChange(
+        old: nw_browse_result_t,
+        new: nw_browse_result_t,
+        batchComplete: Boolean
+    ) {
         val changes = nw_browse_result_get_changes(old, new)
         val added = (changes and nw_browse_result_change_result_added.toULong()) != 0UL
         val removed = (changes and nw_browse_result_change_result_removed.toULong()) != 0UL
         val txtChanged = (changes and nw_browse_result_change_txt_record_changed.toULong()) != 0UL
+
+        IosLanDebug.log(
+            "browse",
+            "result change: added=$added removed=$removed txtChanged=$txtChanged batchComplete=$batchComplete oldNull=${old == null} newNull=${new == null}"
+        )
 
         if (added && new != null) {
             emitPeer(new, isUpdate = false)
@@ -182,14 +214,36 @@ internal class IosLanDiscoveryTransport(
     }
 
     private fun emitPeer(result: nw_browse_result_t, isUpdate: Boolean) {
-        val endpoint = nw_browse_result_copy_endpoint(result) ?: return
+        val endpoint = nw_browse_result_copy_endpoint(result)
+        if (endpoint == null) {
+            IosLanDebug.log("browse", "emitPeer: copy_endpoint returned null — skip")
+            return
+        }
         val txt = nw_browse_result_copy_txt_record_object(result)
         val attrs = IosBonjour.txtRecordToMap(txt)
+        IosLanDebug.log("browse", "emitPeer: txt=$attrs (isUpdate=$isUpdate)")
 
-        val pid = attrs[LanConstants.TXT_PEER_ID] ?: return
-        val app = attrs[LanConstants.TXT_APP_ID] ?: return
-        if (pid == transportContext.localPeerId.value) return
-        if (app != transportContext.appId.value) return
+        val pid = attrs[LanConstants.TXT_PEER_ID]
+        val app = attrs[LanConstants.TXT_APP_ID]
+        if (pid == null) {
+            IosLanDebug.log("browse", "emitPeer: filter — missing TXT_PEER_ID")
+            return
+        }
+        if (app == null) {
+            IosLanDebug.log("browse", "emitPeer: filter — missing TXT_APP_ID")
+            return
+        }
+        if (pid == transportContext.localPeerId.value) {
+            IosLanDebug.log("browse", "emitPeer: filter — self (pid matches local)")
+            return
+        }
+        if (app != transportContext.appId.value) {
+            IosLanDebug.log(
+                "browse",
+                "emitPeer: filter — appId mismatch (peer=$app local=${transportContext.appId.value})"
+            )
+            return
+        }
 
         val name = attrs[LanConstants.TXT_DEVICE_NAME] ?: pid
         val platform = attrs[LanConstants.TXT_PLATFORM]
@@ -211,21 +265,24 @@ internal class IosLanDiscoveryTransport(
                 platform = platform,
                 supportedTransports = capabilities
             ),
-            // host/port are unknown on iOS — the connection is built from the
-            // opaque endpoint stashed in the registry. We still surface a LAN
-            // TransportHint so TransportManager picks us.
             transportHints = listOf(TransportHint(type = TransportKind.LAN))
         )
         val event = if (isUpdate) PeerEvent.Updated(internalPeer) else PeerEvent.Found(internalPeer)
         _events.tryEmit(event)
+        IosLanDebug.log("browse", "emitPeer: ACCEPTED ${if (isUpdate) "Updated" else "Found"} $name pid=${pid.take(8)}")
     }
 
     private fun emitLost(result: nw_browse_result_t) {
         val txt = nw_browse_result_copy_txt_record_object(result)
-        val pid = IosBonjour.txtRecordToMap(txt)[LanConstants.TXT_PEER_ID] ?: return
+        val pid = IosBonjour.txtRecordToMap(txt)[LanConstants.TXT_PEER_ID]
+        if (pid == null) {
+            IosLanDebug.log("browse", "emitLost: TXT had no peer id — skip")
+            return
+        }
         if (pid == transportContext.localPeerId.value) return
         val peerId = PeerId(pid)
         endpointRegistry.remove(peerId)
         _events.tryEmit(PeerEvent.Lost(peerId))
+        IosLanDebug.log("browse", "emitLost: $pid")
     }
 }

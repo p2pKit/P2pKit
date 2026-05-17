@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
 import platform.Network.nw_connection_create
+import platform.Network.nw_endpoint_create_host
+import platform.Network.nw_endpoint_t
 import platform.Network.nw_listener_cancel
 import platform.Network.nw_listener_create
 import platform.Network.nw_listener_get_port
@@ -138,11 +140,28 @@ internal class IosLanDataTransport(
         tcpPort = port
     }
 
-    override fun canConnect(peer: InternalPeer): Boolean =
-        endpointRegistry.get(peer.publicPeer.id) != null
+    override fun canConnect(peer: InternalPeer): Boolean {
+        if (endpointRegistry.get(peer.publicPeer.id) != null) return true
+        // Manual-IP fallback: peers registered via ManualPeerRegistrar
+        // carry a TransportHint(LAN, host, port) that we can dial directly,
+        // mirroring how JvmLanDataTransport handles them.
+        return peer.transportHints.any {
+            it.type == TransportKind.LAN && !it.host.isNullOrBlank() && (it.port ?: 0) > 0
+        }
+    }
 
     override suspend fun connect(peer: InternalPeer): RawConnection {
-        val endpoint = endpointRegistry.get(peer.publicPeer.id)
+        val endpoint: nw_endpoint_t = endpointRegistry.get(peer.publicPeer.id)
+            ?: peer.transportHints.firstOrNull {
+                it.type == TransportKind.LAN && !it.host.isNullOrBlank() && (it.port ?: 0) > 0
+            }?.let { hint ->
+                // Manual-IP dial: build an `nw_endpoint_t` from the host/port
+                // pair the consumer supplied (typed in via the sample UI, or
+                // injected through NetworkProvisioningManager.createManualPeer).
+                // Apple's API takes the port as a C string.
+                IosLanDebug.log("connect", "manual-IP fallback for ${peer.publicPeer.id.value}: host=${hint.host} port=${hint.port}")
+                nw_endpoint_create_host(hint.host!!, hint.port!!.toString())
+            }
             ?: throw P2pError.NoTransportAvailable(peer.publicPeer)
         val conn = nw_connection_create(endpoint, parameters)
             ?: throw P2pError.ConnectionFailed("nw_connection_create returned null")
