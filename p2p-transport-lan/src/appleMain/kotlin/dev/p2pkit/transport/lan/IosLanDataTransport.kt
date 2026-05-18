@@ -12,14 +12,21 @@ import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import kotlin.concurrent.Volatile
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
@@ -39,6 +46,14 @@ import platform.Network.nw_listener_state_failed
 import platform.Network.nw_listener_state_ready
 import platform.Network.nw_listener_t
 import platform.Network.nw_parameters_t
+import platform.Network.nw_path_get_status
+import platform.Network.nw_path_monitor_cancel
+import platform.Network.nw_path_monitor_create
+import platform.Network.nw_path_monitor_set_queue
+import platform.Network.nw_path_monitor_set_update_handler
+import platform.Network.nw_path_monitor_start
+import platform.Network.nw_path_monitor_t
+import platform.Network.nw_path_status_satisfied
 import platform.darwin.DISPATCH_TIME_NOW
 import platform.darwin.NSEC_PER_SEC
 import platform.darwin.dispatch_queue_create
@@ -112,6 +127,79 @@ internal class IosLanDataTransport(
     @Volatile
     private var closed: Boolean = false
 
+    // ──────────────────────────────────────────────────────────────────
+    // V0.4-IOS-LISTENER-REBIND: path-monitor state + rebind hooks.
+    //
+    // Apple's mDNSResponder reaps DNS-SD subscriptions tied to a dead
+    // network interface after ~90s (`dnssd_clientstub DEFUNCT`), which
+    // kills the NWBrowser and the listener's attached Bonjour advertise.
+    // To prevent that, watch the network path with a dedicated
+    // `nw_path_monitor_t` and, on a satisfied-after-change transition,
+    // cancel-and-recreate the listener before the daemon subscriptions
+    // expire. Discovery is notified via two suspend hooks to tear down
+    // and rebuild its NWBrowser + re-attach its advertise descriptor.
+    //
+    // Lock ordering: rebindNow holds `startMutex`, then the hooks acquire
+    // IosLanDiscoveryTransport.lock. Discovery never holds its own lock
+    // while calling into data transport methods that acquire startMutex,
+    // so no inversion is possible.
+    // ──────────────────────────────────────────────────────────────────
+
+    /** Serial queue dedicated to the rebind path monitor. */
+    private val pathQueue: dispatch_queue_t =
+        dispatch_queue_create("dev.p2pkit.lan.ios.path", null)
+
+    @Volatile
+    private var pathMonitor: nw_path_monitor_t = null
+
+    /**
+     * Whether the most recent path observation was `satisfied`.
+     * Read & written ONLY from the path-monitor update handler, which is
+     * invoked serially on [pathQueue] (created with `null` attributes →
+     * serial dispatch queue). The only cross-context write is
+     * [stopPathMonitor]'s reset, sequenced AFTER `nw_path_monitor_cancel`
+     * which prevents further handler invocations. `@Volatile` guarantees
+     * memory visibility across that boundary; `synchronized` is not
+     * available in Kotlin/Native.
+     */
+    @Volatile
+    private var lastWasSatisfied: Boolean = false
+
+    /** Has any path observation reported `satisfied` yet — used to skip first-signal rebind. */
+    @Volatile
+    private var hasEverObservedSatisfied: Boolean = false
+
+    /**
+     * Scope for the debounced rebind coroutine. SupervisorJob so one
+     * failed rebind cycle does not poison the scope for future rebinds.
+     */
+    private val rebindScope: CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** Most recent debounced rebind job; cancelled when superseded. */
+    private var pendingRebindJob: Job? = null
+
+    /**
+     * Hook fired by [rebindNow] BEFORE the old listener is cancelled.
+     * The discovery transport uses this to cancel its NWBrowser and
+     * capture state (was-browsing flag) that the after-hook needs.
+     * Wired by [IosLanDiscoveryTransport]'s `init` block.
+     */
+    internal var beforeListenerRebind: (suspend () -> Unit)? = null
+
+    /**
+     * Hook fired by [rebindNow] AFTER a fresh listener has reached
+     * `ready` and [listener] has been re-assigned. Receives the new
+     * listener so discovery can re-attach its advertise descriptor and
+     * recreate its NWBrowser on top of it. Wired by
+     * [IosLanDiscoveryTransport]'s `init` block.
+     *
+     * Not invoked when listener rebuild fails — discovery has nothing to
+     * attach to in that case and we leave the transport in a degraded
+     * state (listener=null) until the next path event or explicit retry.
+     */
+    internal var afterListenerRebind: (suspend (newListener: nw_listener_t) -> Unit)? = null
+
     override suspend fun start(): Result<Unit> = startMutex.withLock {
         if (listener != null) {
             IosLanDebug.log("data", "start: already started (port=${_tcpPort.value})")
@@ -121,18 +209,37 @@ internal class IosLanDataTransport(
             IosLanDebug.log("data", "start: refused (transport already closed)")
             return Result.failure(IllegalStateException("transport already closed"))
         }
+        val l = buildListener() ?: return Result.failure(
+            IllegalStateException(
+                "iOS LAN listener failed to bind a TCP port within 5 s " +
+                    "(tcpPort=0 after nw_listener_start)"
+            )
+        )
+        listener = l
+        IosLanDebug.log("data", "start: SUCCESS port=${_tcpPort.value}")
+        startPathMonitor()
+        return Result.success(Unit)
+    }
 
-        IosLanDebug.log("data", "start: nw_listener_create")
+    /**
+     * Create and bind a fresh `nw_listener_t`. Sets [_tcpPort] as a side
+     * effect on success and returns the listener in `ready` state. Returns
+     * `null` if the bind fails (semaphore timeout or `.failed` state) —
+     * caller decides whether to surface that as a fatal error
+     * ([start]) or a degraded state ([rebindNow]).
+     *
+     * Caller is responsible for assigning the result to [listener].
+     */
+    private fun buildListener(): nw_listener_t {
+        IosLanDebug.log("data", "buildListener: nw_listener_create")
         val l = nw_listener_create(parameters)
             ?: run {
-                IosLanDebug.log("data", "start: nw_listener_create returned NULL")
-                return Result.failure(
-                    IllegalStateException("nw_listener_create returned null")
-                )
+                IosLanDebug.log("data", "buildListener: nw_listener_create returned NULL")
+                return null
             }
 
         nw_listener_set_queue(l, queue)
-        IosLanDebug.log("data", "start: queue attached, wiring handlers")
+        IosLanDebug.log("data", "buildListener: queue attached, wiring handlers")
 
         nw_listener_set_new_connection_handler(l) { conn ->
             if (conn != null && !closed) {
@@ -174,25 +281,20 @@ internal class IosLanDataTransport(
             Unit
         }
 
-        IosLanDebug.log("data", "start: nw_listener_start (waiting up to 5s for .ready)")
+        IosLanDebug.log("data", "buildListener: nw_listener_start (waiting up to 5s for .ready)")
         nw_listener_start(l)
         val deadline = dispatch_time(DISPATCH_TIME_NOW, (5L * NSEC_PER_SEC.toLong()))
         dispatch_semaphore_wait(ready, deadline)
         val port = nw_listener_get_port(l).toInt()
         if (port == 0) {
-            IosLanDebug.log("data", "start: port=0 (semaphore timeout or .failed) — cancelling listener")
+            IosLanDebug.log("data", "buildListener: port=0 (semaphore timeout or .failed) — cancelling listener")
             nw_listener_cancel(l)
-            return Result.failure(
-                IllegalStateException(
-                    "iOS LAN listener failed to bind a TCP port within 5 s " +
-                        "(tcpPort=0 after nw_listener_start)"
-                )
-            )
+            _tcpPort.value = null
+            return null
         }
-        listener = l
         _tcpPort.value = port
-        IosLanDebug.log("data", "start: SUCCESS port=$port")
-        return Result.success(Unit)
+        IosLanDebug.log("data", "buildListener: SUCCESS port=$port")
+        return l
     }
 
     override fun canConnect(peer: InternalPeer): Boolean {
@@ -253,15 +355,182 @@ internal class IosLanDataTransport(
 
     override suspend fun close() {
         if (closed) return
-        IosLanDebug.log("data", "close: cancelling listener and incoming channel")
+        IosLanDebug.log("data", "close: cancelling path monitor, listener, and incoming channel")
         closed = true
+        stopPathMonitor()
+        rebindScope.coroutineContext.cancelChildren()
         listener?.let { nw_listener_cancel(it) }
         incomingChannel.close()
         endpointRegistry.clear()
     }
 
+    // ──────────────────────────────────────────────────────────────────
+    // V0.4-IOS-LISTENER-REBIND: path monitor + rebind cycle.
+    // ──────────────────────────────────────────────────────────────────
+
+    /**
+     * Start an `nw_path_monitor_t` dedicated to driving the rebind cycle.
+     * Idempotent. Called from [start] after the initial listener is bound.
+     *
+     * Update handler treats only a "satisfied AFTER a transition" as a
+     * rebind trigger — the initial satisfied observation right after
+     * startup is skipped because the listener was just bound against the
+     * current path. Subsequent unsatisfied → satisfied transitions
+     * (typical of Wi-Fi rotation / hotspot join) trigger a debounced rebind.
+     */
+    private fun startPathMonitor() {
+        if (pathMonitor != null) return
+        val m = nw_path_monitor_create() ?: run {
+            IosLanDebug.log(
+                "data",
+                "startPathMonitor: nw_path_monitor_create returned NULL — no rebind on path changes"
+            )
+            return
+        }
+        nw_path_monitor_set_queue(m, pathQueue)
+        nw_path_monitor_set_update_handler(m) { path ->
+            // All invocations of this handler are serialized on pathQueue
+            // (created as a serial dispatch queue). State reads/writes
+            // below are safe without explicit synchronization; the
+            // @Volatile annotations guarantee visibility against the
+            // stopPathMonitor reset path which runs after
+            // nw_path_monitor_cancel and therefore after the last handler
+            // invocation.
+            val status = nw_path_get_status(path)
+            val isSatisfied = (status == nw_path_status_satisfied)
+            val prevWasSatisfied = lastWasSatisfied
+            val isFirstEver = !hasEverObservedSatisfied
+            lastWasSatisfied = isSatisfied
+            if (isSatisfied) hasEverObservedSatisfied = true
+            val becameSatisfied = isSatisfied && !prevWasSatisfied
+            IosLanDebug.log(
+                "data",
+                "path-monitor: status=$status isSatisfied=$isSatisfied " +
+                    "becameSatisfied=$becameSatisfied isFirst=$isFirstEver"
+            )
+            if (becameSatisfied && !isFirstEver) {
+                scheduleRebind("path satisfied after change (status=$status)")
+            }
+            Unit
+        }
+        nw_path_monitor_start(m)
+        pathMonitor = m
+        IosLanDebug.log("data", "startPathMonitor: monitor started")
+    }
+
+    private fun stopPathMonitor() {
+        val m = pathMonitor ?: return
+        pathMonitor = null
+        nw_path_monitor_cancel(m)
+        pendingRebindJob?.cancel()
+        pendingRebindJob = null
+        // Safe to reset directly: nw_path_monitor_cancel above prevents
+        // further handler invocations, and @Volatile guarantees visibility.
+        lastWasSatisfied = false
+        hasEverObservedSatisfied = false
+        IosLanDebug.log("data", "stopPathMonitor: monitor cancelled, pending rebind cleared")
+    }
+
+    /**
+     * Debounce-schedule a rebind. Each call cancels any pending job and
+     * launches a fresh delay; back-to-back path callbacks during a single
+     * physical rotation collapse into one actual rebind. Callbacks must
+     * remain cheap and non-blocking — the lock + NSD/NWListener work all
+     * happens inside [rebindNow].
+     */
+    private fun scheduleRebind(reason: String) {
+        pendingRebindJob?.cancel()
+        IosLanDebug.log(
+            "data",
+            "scheduleRebind: $reason (debounce=${REBIND_DEBOUNCE_MILLIS}ms)"
+        )
+        pendingRebindJob = rebindScope.launch {
+            delay(REBIND_DEBOUNCE_MILLIS)
+            rebindNow(reason)
+        }
+    }
+
+    /**
+     * Cancel-and-recreate cycle for the listener. Runs under [startMutex]
+     * so it cannot race with [start] / [close]. Coordinates with
+     * [IosLanDiscoveryTransport] via the two suspend hooks so the browser
+     * is torn down before and the advertise descriptor is re-attached
+     * after the listener is rebuilt.
+     *
+     * On rebuild failure: leaves [listener] = null and does NOT invoke
+     * [afterListenerRebind] — discovery has nothing to attach to in that
+     * case. The transport is in a degraded state recoverable on the next
+     * path event or explicit [start] retry. The failure is logged with
+     * a distinct signature so it is easy to distinguish from "rebuild
+     * succeeded but discovery hook failed".
+     */
+    private suspend fun rebindNow(reason: String): Unit = startMutex.withLock {
+        if (closed) {
+            IosLanDebug.log("data", "rebindNow: transport closed; skipping ($reason)")
+            return@withLock
+        }
+        val old = listener ?: run {
+            IosLanDebug.log("data", "rebindNow: no listener to rebind; skipping ($reason)")
+            return@withLock
+        }
+        val oldPort = _tcpPort.value
+        IosLanDebug.log("data", "rebindNow: starting ($reason) oldPort=$oldPort")
+
+        runCatching { beforeListenerRebind?.invoke() }
+            .onSuccess {
+                IosLanDebug.log("data", "rebindNow: beforeListenerRebind hook complete")
+            }
+            .onFailure { e ->
+                IosLanDebug.log(
+                    "data",
+                    "rebindNow: beforeListenerRebind hook FAILED: ${e.message ?: e::class.simpleName}"
+                )
+            }
+
+        nw_listener_cancel(old)
+        listener = null
+        _tcpPort.value = null
+        IosLanDebug.log("data", "rebindNow: old listener cancelled (oldPort=$oldPort)")
+
+        val fresh = buildListener()
+        if (fresh == null) {
+            IosLanDebug.log(
+                "data",
+                "rebindNow: REBUILD FAILED — listener stays null, afterListenerRebind NOT invoked ($reason)"
+            )
+            return@withLock
+        }
+        listener = fresh
+        val newPort = _tcpPort.value
+        IosLanDebug.log("data", "rebindNow: new listener ready newPort=$newPort")
+
+        runCatching { afterListenerRebind?.invoke(fresh) }
+            .onSuccess {
+                IosLanDebug.log(
+                    "data",
+                    "rebindNow: complete (port rotated: $oldPort -> $newPort)"
+                )
+            }
+            .onFailure { e ->
+                IosLanDebug.log(
+                    "data",
+                    "rebindNow: REBUILD OK but afterListenerRebind hook FAILED: " +
+                        "${e.message ?: e::class.simpleName} (listener=$newPort, discovery degraded)"
+                )
+            }
+    }
+
     internal companion object {
         /** Bounded outbound connect; LAN should resolve + handshake in << 10 s. */
         const val CONNECT_TIMEOUT_MILLIS: Long = 10_000
+
+        /**
+         * Debounce window for back-to-back path callbacks. Matches the
+         * V0.4-NSD/V0.4-AP value for cross-platform symmetry — a single
+         * Wi-Fi → hotspot transition typically emits multiple path events
+         * within a few hundred ms; 800ms catches the burst while keeping
+         * recovery latency bounded.
+         */
+        const val REBIND_DEBOUNCE_MILLIS: Long = 800
     }
 }

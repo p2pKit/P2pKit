@@ -45,6 +45,7 @@ import platform.Network.nw_browser_state_ready
 import platform.Network.nw_browser_state_waiting
 import platform.Network.nw_browser_t
 import platform.Network.nw_listener_set_advertise_descriptor
+import platform.Network.nw_listener_t
 import platform.Network.nw_parameters_create
 import platform.Network.nw_parameters_set_include_peer_to_peer
 
@@ -94,6 +95,35 @@ internal class IosLanDiscoveryTransport(
     @Volatile
     private var browserReady: Boolean = false
 
+    /**
+     * V0.4-IOS-LISTENER-REBIND: the most recent [LocalPeerInfo] passed to
+     * [startAdvertising], retained so [onAfterListenerRebind] can rebuild
+     * the advertise descriptor on the new listener. Cleared in
+     * [stopAdvertising]. Bonjour identity stability across rebinds
+     * depends on reusing this exact instance — the peerId / service name
+     * / TXT contents are all derived from it.
+     */
+    @Volatile
+    private var cachedLocalPeer: LocalPeerInfo? = null
+
+    /**
+     * V0.4-IOS-LISTENER-REBIND: captured by [onBeforeListenerRebind] so
+     * [onAfterListenerRebind] knows whether to recreate the browser. We
+     * cannot infer this from `browser != null` after the before-hook
+     * because the before-hook is the one that nulls it.
+     */
+    @Volatile
+    private var wasBrowsingBeforeRebind: Boolean = false
+
+    init {
+        // Wire the listener-rebind hooks at factory construction time —
+        // both transports are built together by `IosLanTransportFactory`,
+        // so dataTransport is fully constructed and ready to accept hook
+        // wiring before either transport is started.
+        dataTransport.beforeListenerRebind = ::onBeforeListenerRebind
+        dataTransport.afterListenerRebind = ::onAfterListenerRebind
+    }
+
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) = lock.withLock {
         if (advertising) return@withLock
         IosLanDebug.log(
@@ -103,6 +133,7 @@ internal class IosLanDiscoveryTransport(
         val descriptor = buildAdvertiseDescriptor(localPeer)
         nw_listener_set_advertise_descriptor(dataTransport.listener, descriptor)
         advertising = true
+        cachedLocalPeer = localPeer
         IosLanDebug.log("advertise", "started")
     }
 
@@ -111,6 +142,7 @@ internal class IosLanDiscoveryTransport(
         IosLanDebug.log("advertise", "stopping")
         nw_listener_set_advertise_descriptor(dataTransport.listener, null)
         advertising = false
+        cachedLocalPeer = null
     }
 
     override suspend fun startDiscovery() = lock.withLock {
@@ -119,6 +151,93 @@ internal class IosLanDiscoveryTransport(
             "browse",
             "startDiscovery: type=${LanConstants.SERVICE_TYPE_BONJOUR} app=${transportContext.appId.value} localPid=${transportContext.localPeerId.value.take(8)}"
         )
+        createBrowserLocked()
+    }
+
+    override suspend fun stopDiscovery() = lock.withLock {
+        val b = browser ?: return@withLock
+        IosLanDebug.log("browse", "stopDiscovery: cancelling browser")
+        browser = null
+        browserReady = false
+        nw_browser_cancel(b)
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // V0.4-IOS-LISTENER-REBIND: listener-rebind hook handlers.
+    //
+    // These are invoked by IosLanDataTransport.rebindNow while it holds
+    // its startMutex. Each handler acquires this transport's [lock]
+    // independently — lock order is `data.startMutex -> discovery.lock`,
+    // never the reverse (no discovery method calls into data methods
+    // that acquire startMutex while holding discovery.lock).
+    // ──────────────────────────────────────────────────────────────────
+
+    /**
+     * Pre-rebind: cancel the existing browser (if any) and capture the
+     * was-browsing flag for the after-hook. The data transport will
+     * cancel the listener shortly after this returns, which implicitly
+     * drops its attached advertise descriptor — we do NOT need to call
+     * `nw_listener_set_advertise_descriptor(..., null)` here.
+     *
+     * `advertising` flag and [cachedLocalPeer] are intentionally NOT
+     * cleared — they're how the after-hook knows to re-attach.
+     */
+    private suspend fun onBeforeListenerRebind(): Unit = lock.withLock {
+        wasBrowsingBeforeRebind = browser != null
+        browser?.let { b ->
+            IosLanDebug.log("browse", "rebind: cancelling old browser (wasBrowsing=true)")
+            nw_browser_cancel(b)
+        }
+        browser = null
+        browserReady = false
+        IosLanDebug.log(
+            "browse",
+            "rebind: pre-rebind state captured " +
+                "(advertising=$advertising wasBrowsing=$wasBrowsingBeforeRebind " +
+                "cachedPeer=${cachedLocalPeer?.peerId?.value?.take(8)})"
+        )
+    }
+
+    /**
+     * Post-rebind: re-attach the advertise descriptor on the new listener
+     * (preserving Bonjour identity via [cachedLocalPeer] reuse), and
+     * recreate the browser if we had one before the rebind.
+     */
+    private suspend fun onAfterListenerRebind(newListener: nw_listener_t): Unit = lock.withLock {
+        if (advertising) {
+            val cached = cachedLocalPeer
+            if (cached != null) {
+                val descriptor = buildAdvertiseDescriptor(cached)
+                nw_listener_set_advertise_descriptor(newListener, descriptor)
+                IosLanDebug.log(
+                    "advertise",
+                    "rebind: re-attached descriptor on new listener " +
+                        "(peerId=${cached.peerId.value.take(8)} name=${cached.deviceName})"
+                )
+            } else {
+                IosLanDebug.log(
+                    "advertise",
+                    "rebind: advertising=true but cachedLocalPeer=null — advertise NOT restored"
+                )
+            }
+        } else {
+            IosLanDebug.log("advertise", "rebind: was not advertising; nothing to re-attach")
+        }
+        if (wasBrowsingBeforeRebind) {
+            createBrowserLocked()
+            wasBrowsingBeforeRebind = false
+            IosLanDebug.log("browse", "rebind: browser recreated on new listener queue")
+        } else {
+            IosLanDebug.log("browse", "rebind: was not browsing; nothing to recreate")
+        }
+    }
+
+    /**
+     * Browser-creation body, extracted so [startDiscovery] and
+     * [onAfterListenerRebind] share the same lifecycle code. Caller MUST
+     * hold [lock] and MUST have checked that [browser] is null.
+     */
+    private fun createBrowserLocked() {
         val descriptor = nw_browse_descriptor_create_bonjour_service(
             type = LanConstants.SERVICE_TYPE_BONJOUR,
             domain = null
@@ -157,14 +276,6 @@ internal class IosLanDiscoveryTransport(
         }
         nw_browser_start(b)
         IosLanDebug.log("browse", "nw_browser_start invoked")
-    }
-
-    override suspend fun stopDiscovery() = lock.withLock {
-        val b = browser ?: return@withLock
-        IosLanDebug.log("browse", "stopDiscovery: cancelling browser")
-        browser = null
-        browserReady = false
-        nw_browser_cancel(b)
     }
 
     private fun buildAdvertiseDescriptor(localPeer: LocalPeerInfo): nw_advertise_descriptor_t {
