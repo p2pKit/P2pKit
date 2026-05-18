@@ -27,6 +27,14 @@ internal class FakeDataTransport(
     private var canConnectResult: Boolean = true
     private var closed = false
 
+    /**
+     * Ordered list of every [InternalPeer] passed to [connect], oldest first.
+     * Tests that exercise per-attempt re-resolution (V0.4-RECONNECT) read
+     * this to assert which target each reconnect attempt actually dialed.
+     */
+    private val _connectCalls: MutableList<InternalPeer> = mutableListOf()
+    val connectCalls: List<InternalPeer> get() = _connectCalls.toList()
+
     init {
         for (c in preStagedIncoming) incoming.trySend(c)
     }
@@ -39,6 +47,7 @@ internal class FakeDataTransport(
 
     override suspend fun connect(peer: InternalPeer): RawConnection {
         check(!closed) { "Transport closed" }
+        _connectCalls.add(peer)
         val factory = outgoingConnection ?: error("FakeDataTransport has no outgoing connection")
         return factory()
     }

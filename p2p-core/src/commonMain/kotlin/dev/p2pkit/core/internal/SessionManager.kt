@@ -68,7 +68,20 @@ internal class SessionManager(
     private val localTransports: Set<TransportKind>,
     private val clock: () -> Long,
     private val logger: P2pLogger,
-    private val fileTransferConfig: FileTransferConfig = FileTransferConfig()
+    private val fileTransferConfig: FileTransferConfig = FileTransferConfig(),
+    /**
+     * Lock-free best-effort lookup of the latest [InternalPeer] known to
+     * [PeerRegistry] for a given [PeerId]. Read by [SessionReconnectHandler]
+     * before every reconnect attempt so address rotation (DHCP lease change,
+     * hotspot move, captive-portal reattach) is picked up automatically.
+     *
+     * Returns `null` when the registry has no entry (peer evicted as stale,
+     * never discovered); the handler falls back to its original capture.
+     *
+     * Default `{ null }` makes existing tests that construct SessionManager
+     * without a registry transparently fall back to the captured peer.
+     */
+    private val peerLookup: (PeerId) -> InternalPeer? = { null }
 ) {
 
     /**
@@ -214,7 +227,7 @@ internal class SessionManager(
             if (policy is ReconnectPolicy.Enabled) {
                 session.reconnectHandler = SessionReconnectHandler(
                     expectedPeer = handshake.resolvedPeer,
-                    internalPeer = internalPeerForReconnect,
+                    originalInternalPeer = internalPeerForReconnect,
                     policy = policy
                 )
             }
@@ -308,19 +321,28 @@ internal class SessionManager(
      * itself runs on the session's coroutine scope, so cancellation also
      * propagates structurally.
      *
-     * Per spec §16.3 we do **not** re-resolve discovery during retry — the
-     * [internalPeer] captured at session creation is reused for every
-     * attempt. If the peer's address has rotated, retries exhaust until the
-     * app re-discovers the peer and reconnects.
+     * V0.4-RECONNECT: each attempt re-resolves the target [InternalPeer] via
+     * [peerLookup] (typically `PeerRegistry::internalPeer`) so address
+     * rotation — DHCP lease change, hotspot move, captive-portal reattach,
+     * Android NSD rebind after network rotation — is picked up automatically.
+     * The lookup is a lock-free [kotlinx.coroutines.flow.StateFlow.value]
+     * snapshot read, performed immediately before transport selection /
+     * dial to minimise the stale window. The result is NOT cached between
+     * attempts; every attempt does a fresh lookup. If the registry has no
+     * entry (peer evicted as stale, never registered), the fallback is the
+     * [originalInternalPeer] captured at session creation — the address we
+     * successfully connected to once, which is a reasonable last-resort
+     * guess and matches the v0.3 behaviour.
      */
     private inner class SessionReconnectHandler(
         private val expectedPeer: Peer,
-        private val internalPeer: InternalPeer,
+        private val originalInternalPeer: InternalPeer,
         private val policy: ReconnectPolicy.Enabled
     ) : ReconnectHandler {
 
         override suspend fun onConnectionLost(session: P2pSessionImpl) {
             var attempt = 0
+            var lastResolvedHints = originalInternalPeer.transportHints
             while (attempt < policy.maxAttempts) {
                 attempt++
                 try {
@@ -338,9 +360,22 @@ internal class SessionManager(
                 }
                 if (session.state.value != ConnectionState.Reconnecting) return
 
+                // Fresh per-attempt lookup. No caching between attempts; the
+                // read happens immediately before transport selection so the
+                // stale window between snapshot and dial is microseconds.
+                val target = peerLookup(expectedPeer.id) ?: originalInternalPeer
+                if (target.transportHints != lastResolvedHints) {
+                    logger.debug(
+                        "Reconnect target changed for peer=${expectedPeer.id.value.take(8)} " +
+                            "on attempt $attempt: previous=$lastResolvedHints " +
+                            "new=${target.transportHints}"
+                    )
+                    lastResolvedHints = target.transportHints
+                }
+
                 val outcome = runCatching {
-                    val transport = transportManager.selectBestTransport(internalPeer)
-                    val raw = transport.connect(internalPeer)
+                    val transport = transportManager.selectBestTransport(target)
+                    val raw = transport.connect(target)
                     runHandshake(raw, expectedPeer = expectedPeer)
                 }
 

@@ -144,7 +144,8 @@ internal class P2pKitImpl(
             localTransports = supportedTransportKinds,
             clock = clock,
             logger = logger,
-            fileTransferConfig = fileTransferConfig
+            fileTransferConfig = fileTransferConfig,
+            peerLookup = peerRegistry::internalPeer
         )
         peerRegistry.start()
         sessionManager.startAcceptingIncoming(dataTransports)
