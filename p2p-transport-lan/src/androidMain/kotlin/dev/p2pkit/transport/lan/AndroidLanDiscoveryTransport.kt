@@ -1,9 +1,14 @@
 package dev.p2pkit.transport.lan
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
+import android.util.Log
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -14,10 +19,16 @@ import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerEvent
 import dev.p2pkit.core.transport.TransportHint
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -36,6 +47,18 @@ import kotlinx.coroutines.sync.withLock
  * **receive** other peers' advertisements. The lock is acquired on first
  * start (advertise or discover, whichever comes first) and released when both
  * have stopped.
+ *
+ * Network-rotation rebind (v0.4): NsdManager's registration and discovery
+ * listeners are bound to the network interface that was the system multicast
+ * route at the time of `registerService` / `discoverServices`. When that
+ * underlying network changes (Wi-Fi → hotspot, Wi-Fi → Ethernet, captive
+ * portal accept), the listeners silently stop receiving multicast — peers
+ * appear "lost forever" until the host app restarts discovery. To recover
+ * automatically we watch [ConnectivityManager] for Wi-Fi/Ethernet rotation
+ * events and, after a debounce settle window, unregister the old NSD
+ * listeners and register fresh ones. The debounced rebind runs in
+ * [rebindScope]; ConnectivityManager callbacks themselves do no work beyond
+ * scheduling. Multicast-lock state is preserved across rebinds.
  */
 internal class AndroidLanDiscoveryTransport(
     private val context: Context,
@@ -56,17 +79,107 @@ internal class AndroidLanDiscoveryTransport(
         context.applicationContext.getSystemService(Context.NSD_SERVICE) as NsdManager
     private val wifi: WifiManager? =
         context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+    private val connectivity: ConnectivityManager =
+        context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE)
+            as ConnectivityManager
 
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
     private var multicastLock: WifiManager.MulticastLock? = null
+
+    /**
+     * Cached `LocalPeerInfo` from the most recent `startAdvertising` call.
+     * Used by [rebindNow] to rebuild the [NsdServiceInfo] on a fresh listener.
+     * Cleared in `stopAdvertising` so a subsequent rebind cannot inadvertently
+     * re-advertise after the host app stopped.
+     */
+    private var cachedLocalPeer: LocalPeerInfo? = null
+
+    /**
+     * Scope for the debounced rebind coroutine. Uses [SupervisorJob] so a
+     * single failed rebind does not poison the scope for future rebinds.
+     * Lifetime is the transport instance — children are cancelled via
+     * [pendingRebindJob] handles when the watcher stops, but the scope
+     * itself persists for re-use on the next start.
+     */
+    private val rebindScope: CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** The most recent debounced rebind job; cancelled when superseded. */
+    private var pendingRebindJob: Job? = null
+
+    /** ConnectivityManager callback, non-null iff watcher is active. */
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    private val networkLock = Any()
+
+    /** Most recent network reported by the callback. `null` after `onLost`. */
+    @Suppress("AnnotationOnSuperclass")
+    private var observedNetwork: Network? = null
+
+    /** True once any onAvailable has fired — distinguishes startup from rotation. */
+    private var hasEverObservedNetwork: Boolean = false
+
+    /**
+     * Network present at the time of the most recent successful NSD register
+     * (initial or post-rebind). Used by [rebindNow] to skip no-op rebinds when
+     * the observed network has not actually changed since we last bound.
+     * Guarded by [lock] (set inside the NSD register path).
+     */
+    private var boundNetwork: Network? = null
 
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) = lock.withLock {
         if (registrationListener != null) return@withLock
 
         acquireMulticastLockIfNeeded()
 
-        val info = NsdServiceInfo().apply {
+        val info = buildServiceInfo(localPeer)
+        val registered = CompletableDeferred<Unit>()
+        val listener = buildRegistrationListener(registered)
+        nsd.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener)
+        registrationListener = listener
+        cachedLocalPeer = localPeer
+        boundNetwork = connectivity.activeNetwork
+        Log.d(TAG, "startAdvertising: registerService submitted, boundNetwork=$boundNetwork")
+        ensureNetworkWatcherStarted()
+        // Wait for confirmation so callers know we're really advertising.
+        registered.await()
+    }
+
+    override suspend fun stopAdvertising() = lock.withLock {
+        val listener = registrationListener ?: return@withLock
+        runCatching { nsd.unregisterService(listener) }
+        registrationListener = null
+        cachedLocalPeer = null
+        Log.d(TAG, "stopAdvertising: unregisterService submitted")
+        stopNetworkWatcherIfIdle()
+        releaseMulticastLockIfIdle()
+    }
+
+    override suspend fun startDiscovery() = lock.withLock {
+        if (discoveryListener != null) return@withLock
+
+        acquireMulticastLockIfNeeded()
+
+        val listener = buildDiscoveryListener()
+        nsd.discoverServices(LanConstants.SERVICE_TYPE_NSD, NsdManager.PROTOCOL_DNS_SD, listener)
+        discoveryListener = listener
+        boundNetwork = connectivity.activeNetwork
+        Log.d(TAG, "startDiscovery: discoverServices submitted, boundNetwork=$boundNetwork")
+        ensureNetworkWatcherStarted()
+    }
+
+    override suspend fun stopDiscovery() = lock.withLock {
+        val listener = discoveryListener ?: return@withLock
+        runCatching { nsd.stopServiceDiscovery(listener) }
+        discoveryListener = null
+        Log.d(TAG, "stopDiscovery: stopServiceDiscovery submitted")
+        stopNetworkWatcherIfIdle()
+        releaseMulticastLockIfIdle()
+    }
+
+    private fun buildServiceInfo(localPeer: LocalPeerInfo): NsdServiceInfo =
+        NsdServiceInfo().apply {
             serviceName = registration.localPeerId.value
             serviceType = LanConstants.SERVICE_TYPE_NSD
             port = registration.tcpPort
@@ -81,72 +194,61 @@ internal class AndroidLanDiscoveryTransport(
             setAttribute(LanConstants.TXT_PROTOCOL_VERSION, LanConstants.PROTOCOL_VERSION.toString())
         }
 
-        val registered = CompletableDeferred<Unit>()
-        val listener = object : NsdManager.RegistrationListener {
-            override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
-                registered.complete(Unit)
-            }
-
-            override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                registered.completeExceptionally(
-                    IllegalStateException("NsdManager registration failed: errorCode=$errorCode")
-                )
-            }
-
-            override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) = Unit
-            override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) = Unit
+    /**
+     * Builds a fresh [NsdManager.RegistrationListener]. A new instance is
+     * constructed for every register (initial or post-rebind) — Android does
+     * not document whether listeners survive an unregister + re-register
+     * cycle, and reusing one risks subtle bugs.
+     *
+     * The optional [confirmation] deferred is completed only by the initial
+     * `startAdvertising` call (so the caller blocks until NSD confirms);
+     * rebind-time registrations pass `null` because the rebind body runs
+     * fire-and-forget under the lock.
+     */
+    private fun buildRegistrationListener(
+        confirmation: CompletableDeferred<Unit>?
+    ): NsdManager.RegistrationListener = object : NsdManager.RegistrationListener {
+        override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
+            confirmation?.complete(Unit)
         }
-        nsd.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener)
-        registrationListener = listener
-        // Wait for confirmation so callers know we're really advertising.
-        registered.await()
+
+        override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+            confirmation?.completeExceptionally(
+                IllegalStateException("NsdManager registration failed: errorCode=$errorCode")
+            )
+            Log.w(TAG, "RegistrationListener.onRegistrationFailed: errorCode=$errorCode")
+        }
+
+        override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) = Unit
+        override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+            Log.w(TAG, "RegistrationListener.onUnregistrationFailed: errorCode=$errorCode")
+        }
     }
 
-    override suspend fun stopAdvertising() = lock.withLock {
-        val listener = registrationListener ?: return@withLock
-        runCatching { nsd.unregisterService(listener) }
-        registrationListener = null
-        releaseMulticastLockIfIdle()
-    }
+    private fun buildDiscoveryListener(): NsdManager.DiscoveryListener =
+        object : NsdManager.DiscoveryListener {
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Log.w(TAG, "DiscoveryListener.onStartDiscoveryFailed: errorCode=$errorCode")
+            }
 
-    override suspend fun startDiscovery() = lock.withLock {
-        if (discoveryListener != null) return@withLock
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Log.w(TAG, "DiscoveryListener.onStopDiscoveryFailed: errorCode=$errorCode")
+            }
 
-        acquireMulticastLockIfNeeded()
-
-        val listener = object : NsdManager.DiscoveryListener {
-            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
-            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
             override fun onDiscoveryStarted(serviceType: String) = Unit
             override fun onDiscoveryStopped(serviceType: String) = Unit
 
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                // Skip self by name before paying for resolution.
                 if (serviceInfo.serviceName == registration.localPeerId.value) return
                 resolve(serviceInfo)
             }
 
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {
-                // We don't get TXT records on lost; the service name is our PeerId.
                 val pid = serviceInfo.serviceName ?: return
                 if (pid == registration.localPeerId.value) return
                 _events.tryEmit(PeerEvent.Lost(PeerId(pid)))
             }
         }
-        nsd.discoverServices(
-            LanConstants.SERVICE_TYPE_NSD,
-            NsdManager.PROTOCOL_DNS_SD,
-            listener
-        )
-        discoveryListener = listener
-    }
-
-    override suspend fun stopDiscovery() = lock.withLock {
-        val listener = discoveryListener ?: return@withLock
-        runCatching { nsd.stopServiceDiscovery(listener) }
-        discoveryListener = null
-        releaseMulticastLockIfIdle()
-    }
 
     private fun acquireMulticastLockIfNeeded() {
         if (multicastLock != null) return
@@ -211,5 +313,217 @@ internal class AndroidLanDiscoveryTransport(
                 _events.tryEmit(PeerEvent.Found(internalPeer))
             }
         })
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Network-rotation rebind
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Registers a [ConnectivityManager.NetworkCallback] that observes
+     * Wi-Fi/Ethernet rotation events. Idempotent — calling again while a
+     * callback is already registered is a no-op.
+     *
+     * Called from `startAdvertising` / `startDiscovery` inside the existing
+     * [lock], so it never races with the rebind body.
+     */
+    private fun ensureNetworkWatcherStarted() {
+        if (networkCallback != null) return
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+            .build()
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val (prev, shouldRebind) = synchronized(networkLock) {
+                    val p = observedNetwork
+                    val isFirst = !hasEverObservedNetwork
+                    observedNetwork = network
+                    hasEverObservedNetwork = true
+                    when {
+                        // Very first signal since the watcher started: NSD
+                        // was just registered on the current network, so we
+                        // trust the implicit binding and skip rebind.
+                        isFirst -> p to false
+                        // Same network as before — capability tick, no
+                        // rotation. Avoid redundant churn.
+                        p == network -> p to false
+                        // Different network: rotation. Schedule rebind.
+                        else -> p to true
+                    }
+                }
+                if (shouldRebind) {
+                    Log.d(TAG, "NetworkCallback.onAvailable: rotation detected, prev=$prev now=$network")
+                    scheduleRebind("onAvailable rotation: $prev -> $network")
+                } else {
+                    Log.d(TAG, "NetworkCallback.onAvailable: $network (no rebind)")
+                }
+            }
+
+            override fun onLost(network: Network) {
+                val cleared = synchronized(networkLock) {
+                    if (observedNetwork == network) {
+                        observedNetwork = null
+                        true
+                    } else false
+                }
+                if (cleared) {
+                    Log.d(TAG, "NetworkCallback.onLost: $network (observed cleared; awaiting next onAvailable)")
+                } else {
+                    Log.d(TAG, "NetworkCallback.onLost: $network (was not current observed)")
+                }
+            }
+        }
+        runCatching { connectivity.registerNetworkCallback(request, cb) }
+            .onSuccess {
+                networkCallback = cb
+                Log.d(TAG, "ensureNetworkWatcherStarted: registered NetworkCallback (WIFI|ETHERNET)")
+            }
+            .onFailure { e ->
+                Log.w(TAG, "ensureNetworkWatcherStarted: registerNetworkCallback failed", e)
+            }
+    }
+
+    /**
+     * Tears down the watcher and cancels any pending debounced rebind.
+     * Called from `stopAdvertising` / `stopDiscovery` only when **both**
+     * listeners have been cleared — symmetric with multicast-lock release.
+     */
+    private fun stopNetworkWatcherIfIdle() {
+        if (registrationListener != null || discoveryListener != null) return
+        val cb = networkCallback ?: return
+        runCatching { connectivity.unregisterNetworkCallback(cb) }
+        networkCallback = null
+        pendingRebindJob?.cancel()
+        pendingRebindJob = null
+        synchronized(networkLock) {
+            observedNetwork = null
+            hasEverObservedNetwork = false
+        }
+        boundNetwork = null
+        Log.d(TAG, "stopNetworkWatcherIfIdle: unregistered NetworkCallback and reset state")
+    }
+
+    /**
+     * Debounces rebind requests. Each call cancels the previous pending job
+     * and launches a fresh one after [REBIND_DEBOUNCE_MILLIS]. Multiple
+     * back-to-back rotation events (typical of Android's
+     * `onAvailable`/`onLost`/`onCapabilitiesChanged` storms on a single
+     * physical handover) collapse into one actual rebind.
+     *
+     * No `lock` is taken here — that happens inside [rebindNow]. Callbacks
+     * must remain cheap and non-blocking.
+     */
+    private fun scheduleRebind(reason: String) {
+        pendingRebindJob?.cancel()
+        Log.d(TAG, "scheduleRebind: $reason (debounce=${REBIND_DEBOUNCE_MILLIS}ms)")
+        pendingRebindJob = rebindScope.launch {
+            delay(REBIND_DEBOUNCE_MILLIS)
+            rebindNow(reason)
+        }
+    }
+
+    /**
+     * Performs the actual unregister + re-register cycle for whichever of
+     * advertising / discovery is currently active. Runs under [lock] so it
+     * cannot race with `startAdvertising` / `startDiscovery` / `stop*`.
+     *
+     * Idempotency:
+     *   - If [networkCallback] is null (watcher was stopped after schedule),
+     *     this is a no-op.
+     *   - If [observedNetwork] equals [boundNetwork] (the rotation that
+     *     scheduled us was already absorbed by a prior rebind), this is a
+     *     no-op.
+     *
+     * Listener instances are always rebuilt fresh — the old ones are
+     * unregistered and discarded. Multicast-lock state is left untouched.
+     */
+    private suspend fun rebindNow(reason: String): Unit = lock.withLock {
+        if (networkCallback == null) {
+            Log.d(TAG, "rebindNow: watcher already stopped; skipping ($reason)")
+            return@withLock
+        }
+        val target = synchronized(networkLock) { observedNetwork }
+        if (target == null) {
+            Log.d(TAG, "rebindNow: no observed network; skipping ($reason)")
+            return@withLock
+        }
+        if (target == boundNetwork) {
+            Log.d(TAG, "rebindNow: already bound to $target; skipping ($reason)")
+            return@withLock
+        }
+
+        val hadAdvertising = registrationListener != null
+        val hadDiscovery = discoveryListener != null
+        if (!hadAdvertising && !hadDiscovery) {
+            Log.d(TAG, "rebindNow: neither advertising nor discovery active; skipping ($reason)")
+            return@withLock
+        }
+
+        Log.d(
+            TAG,
+            "rebindNow: starting; reason=$reason from=$boundNetwork to=$target " +
+                "advertising=$hadAdvertising discovery=$hadDiscovery"
+        )
+
+        if (hadAdvertising) {
+            val oldListener = registrationListener!!
+            runCatching { nsd.unregisterService(oldListener) }
+            registrationListener = null
+            Log.d(TAG, "rebindNow: unregisterService submitted on old listener")
+
+            val cached = cachedLocalPeer
+            if (cached != null) {
+                val info = buildServiceInfo(cached)
+                val freshListener = buildRegistrationListener(confirmation = null)
+                runCatching {
+                    nsd.registerService(info, NsdManager.PROTOCOL_DNS_SD, freshListener)
+                }.onSuccess {
+                    registrationListener = freshListener
+                    Log.d(TAG, "rebindNow: registerService submitted on fresh listener")
+                }.onFailure { e ->
+                    Log.w(TAG, "rebindNow: registerService failed", e)
+                }
+            } else {
+                Log.w(TAG, "rebindNow: cachedLocalPeer was null; advertising not restored")
+            }
+        }
+
+        if (hadDiscovery) {
+            val oldListener = discoveryListener!!
+            runCatching { nsd.stopServiceDiscovery(oldListener) }
+            discoveryListener = null
+            Log.d(TAG, "rebindNow: stopServiceDiscovery submitted on old listener")
+
+            val freshListener = buildDiscoveryListener()
+            runCatching {
+                nsd.discoverServices(
+                    LanConstants.SERVICE_TYPE_NSD,
+                    NsdManager.PROTOCOL_DNS_SD,
+                    freshListener
+                )
+            }.onSuccess {
+                discoveryListener = freshListener
+                Log.d(TAG, "rebindNow: discoverServices submitted on fresh listener")
+            }.onFailure { e ->
+                Log.w(TAG, "rebindNow: discoverServices failed", e)
+            }
+        }
+
+        boundNetwork = target
+        Log.d(TAG, "rebindNow: complete; boundNetwork=$target")
+    }
+
+    private companion object {
+        const val TAG = "P2pKitNsd"
+
+        /**
+         * Debounce window for back-to-back rotation signals. Android emits
+         * multiple `onAvailable` / `onCapabilitiesChanged` ticks per single
+         * physical handover (typically 100-400ms apart on Pixel devices);
+         * 800ms catches a comfortable majority while keeping perceived
+         * recovery latency bounded.
+         */
+        const val REBIND_DEBOUNCE_MILLIS = 800L
     }
 }
