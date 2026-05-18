@@ -96,6 +96,20 @@ internal class IosLanDiscoveryTransport(
     private var browserReady: Boolean = false
 
     /**
+     * V0.4-IOS-FOREGROUND-REBIND follow-up: tracks whether the host app
+     * asked us to be discovering (via [startDiscovery]), independent of
+     * whether the current [browser] instance is alive. The two diverge
+     * when iOS reaps DNS-SD subscriptions during app suspension — the
+     * `nw_browser_t` transitions to `failed` and the state-changed
+     * handler nulls [browser], but the host's intent (we should still
+     * be browsing) is unchanged. [onBeforeListenerRebind] reads this
+     * flag instead of `browser != null` so the post-rebind hook can
+     * correctly recreate a fresh browser after a sleep/wake cycle.
+     */
+    @Volatile
+    private var discoveryStartedByHost: Boolean = false
+
+    /**
      * V0.4-IOS-LISTENER-REBIND: the most recent [LocalPeerInfo] passed to
      * [startAdvertising], retained so [onAfterListenerRebind] can rebuild
      * the advertise descriptor on the new listener. Cleared in
@@ -151,12 +165,14 @@ internal class IosLanDiscoveryTransport(
             "browse",
             "startDiscovery: type=${LanConstants.SERVICE_TYPE_BONJOUR} app=${transportContext.appId.value} localPid=${transportContext.localPeerId.value.take(8)}"
         )
+        discoveryStartedByHost = true
         createBrowserLocked()
     }
 
     override suspend fun stopDiscovery() = lock.withLock {
         val b = browser ?: return@withLock
         IosLanDebug.log("browse", "stopDiscovery: cancelling browser")
+        discoveryStartedByHost = false
         browser = null
         browserReady = false
         nw_browser_cancel(b)
@@ -181,11 +197,18 @@ internal class IosLanDiscoveryTransport(
      *
      * `advertising` flag and [cachedLocalPeer] are intentionally NOT
      * cleared — they're how the after-hook knows to re-attach.
+     *
+     * Read host intent ([discoveryStartedByHost]) rather than current
+     * browser-instance presence — iOS may have already reaped the
+     * NWBrowser during app suspension, nulling [browser] before this
+     * hook fires. The host's intent to be discovering is still valid;
+     * the after-hook must recreate a fresh browser regardless of the
+     * current [browser] field state.
      */
     private suspend fun onBeforeListenerRebind(): Unit = lock.withLock {
-        wasBrowsingBeforeRebind = browser != null
+        wasBrowsingBeforeRebind = discoveryStartedByHost
         browser?.let { b ->
-            IosLanDebug.log("browse", "rebind: cancelling old browser (wasBrowsing=true)")
+            IosLanDebug.log("browse", "rebind: cancelling old browser")
             nw_browser_cancel(b)
         }
         browser = null
