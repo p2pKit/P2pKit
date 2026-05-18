@@ -591,6 +591,26 @@ internal class P2pSessionImpl(
             logger.debug("Session $id: connection lost ($cause), starting reconnect")
             // Run on the session scope so close() / kit.stop() cancel it.
             scope.launch { handler.onConnectionLost(this@P2pSessionImpl) }
+            // Stabilization watchdog: emit a single WARN if the session is
+            // still in Reconnecting after [STUCK_RECONNECTING_THRESHOLD_MS].
+            // Under normal operation a session should either reach Connected
+            // (rearmWith) or Failed (markFailedAfterExhaustion) well within
+            // `maxAttempts × retryDelayMillis` — typically a few seconds.
+            // Persisting past 30 s indicates a bug in the reconnect path
+            // (e.g., a stale internalPeer pointing at an unreachable address,
+            // a `pathSatisfiedSignal` emission consumed by another handler and
+            // never re-emitted, or a deadlocked reconnect handler). Launched
+            // on the session scope so `close()` / `kit.stop()` cancel it.
+            scope.launch {
+                delay(STUCK_RECONNECTING_THRESHOLD_MS)
+                if (_state.value == ConnectionState.Reconnecting) {
+                    logger.warn(
+                        "Session $id: STUCK in Reconnecting for >${STUCK_RECONNECTING_THRESHOLD_MS}ms " +
+                            "(cause=$cause). Investigate: stale internalPeer, lost path signal, " +
+                            "or deadlocked SessionReconnectHandler."
+                    )
+                }
+            }
         } else if (shouldFail) {
             // No reconnect handler (incoming session, or outgoing with
             // Disabled). Centralised terminal path handles state flip,
@@ -598,5 +618,17 @@ internal class P2pSessionImpl(
             // place.
             transitionToTerminal(ConnectionState.Failed, cause)
         }
+    }
+
+    private companion object {
+        /**
+         * Threshold for the stuck-Reconnecting watchdog. Generous enough to
+         * cover any reasonable `maxAttempts × retryDelayMillis` budget
+         * (default is ~4 s; even pathological configs rarely exceed 20 s);
+         * crossing it means the reconnect path is wedged. Used during the
+         * post-S3 stabilization phase to surface lifecycle leaks that the
+         * structural fixes haven't covered yet.
+         */
+        const val STUCK_RECONNECTING_THRESHOLD_MS: Long = 30_000
     }
 }
