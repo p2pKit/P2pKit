@@ -63,25 +63,25 @@ internal interface ReconnectHandler {
  * ERROR → connection-lost (eligible for retry).
  */
 /**
- * SessionManager-side view of "is this session still the one we publish?"
+ * SessionStore-side view of "is this session still the one we publish?"
  * Used by [P2pSessionImpl.routeEvents] to detect zombie emissions —
- * messages emitted to the public `incoming` flow while SessionManager has
- * already evicted or replaced this session in its [SessionManager.active]
- * map / [SessionManager.sessions] StateFlow.
+ * messages emitted to the public `incoming` flow while [SessionStore] has
+ * already evicted or replaced this session in its byPeer map / published
+ * sessions StateFlow.
  *
- * Read without taking SessionManager's `activeLock` — diagnostics-only,
+ * Read without taking [SessionStore]'s mutex — diagnostics-only,
  * tolerating a microsecond-stale read is fine. The caller wraps the lookup
  * in a `runCatching` so a corrupt mid-write read can't itself crash the
  * receive loop.
  */
 internal data class SessionRegistration(
     /**
-     * Session id currently in `SessionManager.active[peer.id]`, or `null`
-     * if there is no entry. Equal to the calling session's `id` when this
-     * session is the registered one.
+     * Session id currently in SessionStore's byPeer map for this peer, or
+     * `null` if there is no entry. Equal to the calling session's `id`
+     * when this session is the registered one.
      */
     val activeSessionId: String?,
-    /** True iff this exact session instance is still in `SessionManager.sessions.value`. */
+    /** True iff this exact session instance is still in SessionStore's published sessions list. */
     val isInPublicList: Boolean
 )
 
@@ -405,13 +405,13 @@ internal class P2pSessionImpl(
      * StateFlow stabilises at Closed and never re-emits) — would otherwise
      * outlive the session's public lifetime. Without the cancel,
      * `routeEvents` can keep pumping inbound `_incoming.emit(...)` calls
-     * **after** SessionManager has already evicted us from `active` and
-     * `_sessions`. That is the hypothesis-B1 leak: messages reach the
-     * Swift collector (still subscribed to the shared flow) while the UI
-     * — which reads `kit.sessions.value` — shows "not connected." Cancel
-     * the epoch and close the raw so the session footprint is fully torn
-     * down before SessionManager's `watchForTerminal` finishes its
-     * activeLock / `_sessions` cleanup.
+     * **after** SessionStore has already evicted us from byPeer / the
+     * published sessions list. That is the hypothesis-B1 leak: messages
+     * reach the Swift collector (still subscribed to the shared flow)
+     * while the UI — which reads `kit.sessions.value` — shows "not
+     * connected." Cancel the epoch and close the raw so the session
+     * footprint is fully torn down before SessionManager's
+     * `watchForTerminal` finishes its store cleanup.
      */
     internal suspend fun markFailedAfterExhaustion() {
         // Guard: only this method's contract requires we transition only

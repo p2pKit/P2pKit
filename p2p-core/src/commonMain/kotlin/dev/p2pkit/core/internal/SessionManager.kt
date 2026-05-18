@@ -27,20 +27,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.ReceiveChannel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -77,8 +71,15 @@ internal class SessionManager(
     private val fileTransferConfig: FileTransferConfig = FileTransferConfig()
 ) {
 
-    private val _sessions = MutableStateFlow<List<P2pSession>>(emptyList())
-    val sessions: StateFlow<List<P2pSession>> = _sessions.asStateFlow()
+    /**
+     * Single source of truth for session bookkeeping — owns the byPeer
+     * map, the in-flight `pending` map, and the published [sessions]
+     * StateFlow under a single mutex. See [SessionStore] kdoc for the
+     * rationale (replaces the previous "two stores updated by convention"
+     * model).
+     */
+    private val store = SessionStore(logger)
+    val sessions: StateFlow<List<P2pSession>> = store.sessions
 
     private val _incomingSessions = MutableSharedFlow<P2pSession>(
         replay = 0,
@@ -86,19 +87,6 @@ internal class SessionManager(
         onBufferOverflow = BufferOverflow.SUSPEND
     )
     val incomingSessions: SharedFlow<P2pSession> = _incomingSessions.asSharedFlow()
-
-    /** Maps peer id to the active session, for idempotent [connect]. */
-    private val active: MutableMap<PeerId, P2pSession> = mutableMapOf()
-
-    /**
-     * Maps peer id to the in-flight [connect] attempt, so simultaneous
-     * [connect] calls for the same peer share a single transport.connect
-     * + handshake instead of racing each other.
-     */
-    private val pending: MutableMap<PeerId, CompletableDeferred<P2pSession>> = mutableMapOf()
-
-    /** Protects [active] and [pending] across concurrent connect/incoming/close calls. */
-    private val activeLock = Mutex()
 
     /**
      * Path-recovered signal consumed by every [SessionReconnectHandler]
@@ -129,40 +117,15 @@ internal class SessionManager(
     }
 
     suspend fun connect(peer: Peer, internalPeer: InternalPeer): P2pSession {
-        // Atomic decision under the lock: return an existing active session,
-        // wait on someone else's in-flight connect, or become the connector.
-        // The actual `await` / connect work runs OUTSIDE the lock so the lock
-        // is short-held.
-        val outcome: ConnectOutcome = activeLock.withLock {
-            val existing = active[peer.id]
-            if (existing != null && existing.state.value in ACTIVE_STATES) {
-                return existing
-            }
-            if (existing != null) {
-                // Terminal existing — remove from BOTH `active` and `_sessions`.
-                // The terminal session's `watchForTerminal` coroutine has either
-                // already filtered _sessions (then this filter is a no-op) or
-                // is still pending (then we beat it to the punch). Either way
-                // the public `sessions` list is consistent with `active` for
-                // the next caller — a fresh connect that lands in
-                // registerSession's "Accepted" branch sees an empty _sessions
-                // entry for this peer.
-                active.remove(peer.id)
-                _sessions.update { list -> list.filter { it !== existing } }
-            }
-            val inFlight = pending[peer.id]
-            if (inFlight != null) {
-                ConnectOutcome.Await(inFlight)
-            } else {
-                val fresh = CompletableDeferred<P2pSession>()
-                pending[peer.id] = fresh
-                ConnectOutcome.Connect(fresh)
-            }
-        }
-
-        return when (outcome) {
-            is ConnectOutcome.Await -> outcome.deferred.await()
-            is ConnectOutcome.Connect -> performConnect(peer, internalPeer, outcome.deferred)
+        // Atomic decision delegated to the store: return an existing active
+        // session, wait on someone else's in-flight connect, or become the
+        // connector. The actual `await` / connect work runs OUTSIDE the
+        // store's mutex (the decision is short-held, the work is not).
+        return when (val decision = store.startOrJoin(peer.id)) {
+            is ConnectDecision.Existing -> decision.session
+            is ConnectDecision.JoinPending -> decision.deferred.await()
+            is ConnectDecision.BecomeConnector ->
+                performConnect(peer, internalPeer, decision.deferred)
         }
     }
 
@@ -192,15 +155,8 @@ internal class SessionManager(
             deferred.completeExceptionally(e)
             throw e
         } finally {
-            activeLock.withLock {
-                if (pending[peer.id] === deferred) pending.remove(peer.id)
-            }
+            store.endPending(peer.id, deferred)
         }
-    }
-
-    private sealed class ConnectOutcome {
-        data class Await(val deferred: CompletableDeferred<P2pSession>) : ConnectOutcome()
-        data class Connect(val deferred: CompletableDeferred<P2pSession>) : ConnectOutcome()
     }
 
     private fun handleIncoming(connection: RawConnection) {
@@ -246,7 +202,7 @@ internal class SessionManager(
             clock = clock,
             logger = logger,
             fileTransferConfig = fileTransferConfig,
-            lookupRegistration = ::registrationOf
+            lookupRegistration = store::registrationOf
         )
 
         // Reconnect handler is wired BEFORE start() so the very first
@@ -441,42 +397,12 @@ internal class SessionManager(
         session: P2pSession,
         isIncoming: Boolean
     ): RegisterOutcome {
-        val outcome: RegisterOutcome = activeLock.withLock {
-            val existing = active[peerId]
-            val existingState = existing?.state?.value
-            if (existing != null && existingState in ACTIVE_STATES) {
-                val newWinsLocally = if (localPeerId.value < peerId.value) {
-                    // We're the smaller-id side — keep our outgoing, reject our incoming.
-                    !isIncoming
-                } else {
-                    // We're the larger-id side (or equal, which is impossible
-                    // by construction) — keep our incoming, reject our outgoing.
-                    isIncoming
-                }
-                if (newWinsLocally) {
-                    active[peerId] = session
-                    _sessions.update { list -> list.filter { it !== existing } + session }
-                    RegisterOutcome.Replaced(winner = session, loser = existing)
-                } else {
-                    RegisterOutcome.Rejected(winner = existing, loser = session)
-                }
-            } else {
-                // Existing may be `null` OR in a terminal state (Closed / Failed /
-                // Closing / Idle). In the terminal case `watchForTerminal` is
-                // either pending or mid-run and the existing session may still
-                // be in `_sessions`. Filter it out atomically with the add so
-                // the public `sessions` list never has both the dead and the
-                // fresh session for the same peer for any observable window —
-                // the iOS sample's PeerRow ↔ session matching iterates by
-                // peerId and would otherwise see two rows for the same peer.
-                active[peerId] = session
-                _sessions.update { list ->
-                    if (existing != null) list.filter { it !== existing } + session
-                    else list + session
-                }
-                RegisterOutcome.Accepted(session = session)
-            }
-        }
+        val outcome = store.tryRegister(
+            peerId = peerId,
+            session = session,
+            isIncoming = isIncoming,
+            localPeerIdValue = localPeerId.value
+        )
 
         val existingStateLabel = (outcome as? RegisterOutcome.Replaced)?.loser?.state?.value?.name
             ?: (outcome as? RegisterOutcome.Rejected)?.loser?.state?.value?.name
@@ -512,49 +438,19 @@ internal class SessionManager(
     }
 
     /**
-     * Lock-free best-effort lookup of a session's registration in this
-     * manager. Read by [P2pSessionImpl.routeEvents] before each `Message`
-     * emit so a desync between this manager's bookkeeping (which the
-     * public `kit.sessions` mirrors) and the session's still-alive
-     * `_incoming` flow can be logged.
-     *
-     * Diagnostics-only — does **not** take [activeLock]. A microsecond-
-     * stale read is fine; what we care about is steady-state divergence
-     * (the session is still emitting but has been evicted entirely from
-     * both maps for many emissions in a row).
-     */
-    private fun registrationOf(session: P2pSession): SessionRegistration {
-        val current = active[session.peer.id]
-        return SessionRegistration(
-            activeSessionId = current?.id,
-            isInPublicList = _sessions.value.any { it === session }
-        )
-    }
-
-    /**
      * Watch a registered session for its terminal state and clean it out of
-     * [active] and [_sessions]. Extracted so [registerSession] can attach it
-     * to the winner in both the Accepted and Replaced paths.
+     * the store. Extracted so [registerSession] can attach it to the winner
+     * in both the Accepted and Replaced paths.
      */
     private fun watchForTerminal(peerId: PeerId, session: P2pSession) {
         scope.launch {
             session.state.first { it == ConnectionState.Closed || it == ConnectionState.Failed }
-            activeLock.withLock {
-                if (active[peerId] === session) active.remove(peerId)
-            }
-            _sessions.update { list -> list.filter { it !== session } }
+            store.removeIfMatches(peerId, session)
         }
     }
 
-    /** Result of a [registerSession] call. Drives the post-registration routing. */
-    internal sealed class RegisterOutcome {
-        data class Accepted(val session: P2pSession) : RegisterOutcome()
-        data class Replaced(val winner: P2pSession, val loser: P2pSession) : RegisterOutcome()
-        data class Rejected(val winner: P2pSession, val loser: P2pSession) : RegisterOutcome()
-    }
-
     suspend fun closeAllSessions() {
-        val snapshot = activeLock.withLock { active.values.toList() }
+        val snapshot = store.activeSnapshot()
         for (session in snapshot) {
             runCatching { session.close() }
         }
@@ -582,7 +478,7 @@ internal class SessionManager(
         when (status) {
             NetworkPathStatus.Unsatisfied -> {
                 scope.launch {
-                    val toNotify = activeLock.withLock { active.values.toList() }
+                    val toNotify = store.activeSnapshot()
                     for (s in toNotify) {
                         (s as? P2pSessionImpl)?.notifyPathLost()
                     }
@@ -602,14 +498,5 @@ internal class SessionManager(
             }
             is BackgroundPolicy.KeepRunning -> { /* nothing to do */ }
         }
-    }
-
-    private companion object {
-        val ACTIVE_STATES = setOf(
-            ConnectionState.Connecting,
-            ConnectionState.Handshaking,
-            ConnectionState.Connected,
-            ConnectionState.Reconnecting
-        )
     }
 }
