@@ -28,17 +28,24 @@ import kotlinx.coroutines.sync.withLock
  * }
  * ```
  *
- * Watches the system's default network with `NET_CAPABILITY_INTERNET`. On
- * `onAvailable` / `onCapabilitiesChanged` (validated) → [NetworkPathStatus.Satisfied].
- * On `onLost` (no other matching network remaining) → [NetworkPathStatus.Unsatisfied].
+ * Watches all networks reachable via Wi-Fi or Ethernet transport,
+ * regardless of upstream-internet status. On `onAvailable` →
+ * [NetworkPathStatus.Satisfied]. On `onLost` (and no other matching
+ * network remaining) → [NetworkPathStatus.Unsatisfied].
  *
- * Note: this observer only consults `INTERNET` capability — LAN-only
- * scenarios (e.g., joined to a peer's hotspot with no upstream internet)
- * may report `Unsatisfied` even though the LAN is reachable. The SDK's
- * keep-alive PING / read-error path is the secondary signal for that
- * case, and the reconnect machinery still kicks in via the existing
- * mechanisms — this observer just adds a faster trigger for the common
- * full-network-drop case.
+ * Semantics chosen for LAN/P2P reachability, not internet reachability.
+ * A peer's hotspot Wi-Fi without upstream internet still counts as a
+ * Satisfied path because peers on that LAN are reachable. This is the
+ * correct signal for our reconnect machinery, which cares whether *any*
+ * link is usable for TCP/Bonjour traffic — not whether the device can
+ * reach the public internet.
+ *
+ * Cellular networks are intentionally NOT matched. LAN peer discovery
+ * (NSD/Bonjour) is interface-bound and won't traverse cellular, so a
+ * cellular-only device cannot reach LAN peers; reporting Satisfied in
+ * that case would only trigger fruitless reconnect attempts. If the
+ * device acquires Wi-Fi (e.g., joins a hotspot), this observer will
+ * flip to Satisfied at that point.
  *
  * Requires `ACCESS_NETWORK_STATE` (already required by the LAN
  * transport — install-time permission, no runtime prompt).
@@ -89,8 +96,12 @@ public class AndroidNetworkPathObserver(
                 // whether the network is metered, VPN'd, etc.
             }
         }
+        // Match LAN-capable transports without requiring upstream internet.
+        // Dropping NET_CAPABILITY_INTERNET is deliberate — hotspot Wi-Fi
+        // without internet is still a valid P2P path. See class-level kdoc.
         val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
             .build()
         try {
             connectivity.registerNetworkCallback(request, cb)

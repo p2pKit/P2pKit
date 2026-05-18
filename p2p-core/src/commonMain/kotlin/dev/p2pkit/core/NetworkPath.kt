@@ -22,8 +22,9 @@ public sealed class NetworkPathStatus {
     /**
      * The default network path is up and routable. On iOS this is
      * `nw_path_status_satisfied`; on Android it's the moment after
-     * `NetworkCallback.onAvailable` fires for a network that has
-     * `NET_CAPABILITY_INTERNET` (or local-only when applicable).
+     * `NetworkCallback.onAvailable` fires for a Wi-Fi or Ethernet network
+     * — upstream-internet status is irrelevant for LAN P2P, so hotspot
+     * Wi-Fi without internet still counts as `Satisfied`.
      *
      * When the SDK observes a transition from `Unsatisfied` or `Unknown` to
      * `Satisfied`, sessions currently in `Reconnecting` get their pending
@@ -35,7 +36,8 @@ public sealed class NetworkPathStatus {
     /**
      * No usable default path. On iOS this is `nw_path_status_unsatisfied`
      * (typically Wi-Fi off, in-flight mode, or no carrier); on Android it's
-     * after the last network with `NET_CAPABILITY_INTERNET` is lost.
+     * after the last matching Wi-Fi/Ethernet network is lost (cellular
+     * alone does not satisfy — see [AndroidNetworkPathObserver]).
      *
      * When the SDK observes a transition into `Unsatisfied`, every session
      * in `Connected` is immediately routed to `onConnectionLost`. That
