@@ -245,7 +245,8 @@ internal class SessionManager(
             keepAlive = keepAlive,
             clock = clock,
             logger = logger,
-            fileTransferConfig = fileTransferConfig
+            fileTransferConfig = fileTransferConfig,
+            lookupRegistration = ::registrationOf
         )
 
         // Reconnect handler is wired BEFORE start() so the very first
@@ -508,6 +509,26 @@ internal class SessionManager(
             }
         }
         return outcome
+    }
+
+    /**
+     * Lock-free best-effort lookup of a session's registration in this
+     * manager. Read by [P2pSessionImpl.routeEvents] before each `Message`
+     * emit so a desync between this manager's bookkeeping (which the
+     * public `kit.sessions` mirrors) and the session's still-alive
+     * `_incoming` flow can be logged.
+     *
+     * Diagnostics-only — does **not** take [activeLock]. A microsecond-
+     * stale read is fine; what we care about is steady-state divergence
+     * (the session is still emitting but has been evicted entirely from
+     * both maps for many emissions in a row).
+     */
+    private fun registrationOf(session: P2pSession): SessionRegistration {
+        val current = active[session.peer.id]
+        return SessionRegistration(
+            activeSessionId = current?.id,
+            isInPublicList = _sessions.value.any { it === session }
+        )
     }
 
     /**

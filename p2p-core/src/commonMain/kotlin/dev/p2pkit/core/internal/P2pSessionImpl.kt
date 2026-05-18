@@ -60,6 +60,29 @@ internal interface ReconnectHandler {
  * PONG, PONG → reset keep-alive deadline, CLOSE → clean close (no retry),
  * ERROR → connection-lost (eligible for retry).
  */
+/**
+ * SessionManager-side view of "is this session still the one we publish?"
+ * Used by [P2pSessionImpl.routeEvents] to detect zombie emissions —
+ * messages emitted to the public `incoming` flow while SessionManager has
+ * already evicted or replaced this session in its [SessionManager.active]
+ * map / [SessionManager.sessions] StateFlow.
+ *
+ * Read without taking SessionManager's `activeLock` — diagnostics-only,
+ * tolerating a microsecond-stale read is fine. The caller wraps the lookup
+ * in a `runCatching` so a corrupt mid-write read can't itself crash the
+ * receive loop.
+ */
+internal data class SessionRegistration(
+    /**
+     * Session id currently in `SessionManager.active[peer.id]`, or `null`
+     * if there is no entry. Equal to the calling session's `id` when this
+     * session is the registered one.
+     */
+    val activeSessionId: String?,
+    /** True iff this exact session instance is still in `SessionManager.sessions.value`. */
+    val isInPublicList: Boolean
+)
+
 internal class P2pSessionImpl(
     override val id: String,
     override val peer: Peer,
@@ -71,7 +94,19 @@ internal class P2pSessionImpl(
     private val clock: () -> Long,
     private val logger: P2pLogger,
     private val fileTransferConfig: FileTransferConfig = FileTransferConfig(),
-    private val random: Random = Random.Default
+    private val random: Random = Random.Default,
+    /**
+     * Optional best-effort lookup of this session's registration state in
+     * the owning SessionManager. Wired by SessionManager itself; `null`
+     * for stand-alone tests that don't go through a SessionManager. When
+     * present, [routeEvents] consults it before every `Message` emit and
+     * logs a `ZOMBIE` warning if the registration says this session is
+     * no longer the published one — which is the smoking-gun signature of
+     * the hypothesis-B1 leak (epoch coroutines outliving a terminal
+     * transition and continuing to pump incoming messages into the
+     * public flow).
+     */
+    private val lookupRegistration: ((P2pSession) -> SessionRegistration)? = null
 ) : P2pSession {
 
     private val sessionJob = SupervisorJob(parent = parentScope.coroutineContext[Job])
@@ -259,12 +294,41 @@ internal class P2pSessionImpl(
      * Final transition when the reconnect handler exhausts its retry budget.
      * No-op if the session is already in a terminal state (e.g., the user
      * called [close] while we were retrying — close wins).
+     *
+     * Symmetric with the no-handler branch of [onConnectionLost]: once we
+     * flip to Failed without ever rearming, the epoch coroutines from the
+     * last attempt — `routeEvents`, `keepAliveLoop`, and especially
+     * `observeRawState` (which parks on `raw.state.collect` because the
+     * StateFlow stabilises at Closed and never re-emits) — would otherwise
+     * outlive the session's public lifetime. Without the cancel,
+     * `routeEvents` can keep pumping inbound `_incoming.emit(...)` calls
+     * **after** SessionManager has already evicted us from `active` and
+     * `_sessions`. That is the hypothesis-B1 leak: messages reach the
+     * Swift collector (still subscribed to the shared flow) while the UI
+     * — which reads `kit.sessions.value` — shows "not connected." Cancel
+     * the epoch and close the raw so the session footprint is fully torn
+     * down before SessionManager's `watchForTerminal` finishes its
+     * activeLock / `_sessions` cleanup.
      */
     internal suspend fun markFailedAfterExhaustion() {
-        connectionLock.withLock {
+        val cleanup = connectionLock.withLock {
             if (_state.value == ConnectionState.Reconnecting) {
                 _state.value = ConnectionState.Failed
+                true
+            } else {
+                false
             }
+        }
+        if (cleanup) {
+            logger.debug(
+                "Session $id: Failed after reconnect exhaustion, cancelling epoch + closing raw"
+            )
+            epochJob?.cancel()
+            // Fire-and-forget close on the session scope (not the caller's,
+            // which is the reconnect handler's coroutine on the same scope —
+            // so cancellation of the epoch above does NOT cancel this
+            // launch). Idempotent on an already-closed raw.
+            scope.launch { runCatching { connection.close() } }
         }
     }
 
@@ -272,7 +336,37 @@ internal class P2pSessionImpl(
         try {
             for (event in channel) {
                 when (event) {
-                    is ProtocolEvent.Message -> _incoming.emit(event.message)
+                    is ProtocolEvent.Message -> {
+                        // Zombie-detection. If we're about to push a message
+                        // into the public `incoming` flow but SessionManager
+                        // no longer treats us as the registered session for
+                        // this peer (either evicted or replaced), the public
+                        // session-list view is desynced from the live
+                        // message stream — the failure mode described in the
+                        // architecture review's hypothesis B1. Log loudly
+                        // every time it happens; we still emit the message
+                        // so observable behaviour doesn't regress, but the
+                        // warning surfaces the inconsistency for the next
+                        // run's log dump.
+                        val reg = lookupRegistration?.let { lookup ->
+                            runCatching { lookup(this@P2pSessionImpl) }.getOrNull()
+                        }
+                        if (reg != null) {
+                            val differentActive = reg.activeSessionId != null &&
+                                reg.activeSessionId != id
+                            if (!reg.isInPublicList || differentActive) {
+                                logger.warn(
+                                    "ZOMBIE session emitting Message: " +
+                                        "sessionId=$id " +
+                                        "peerId=${peer.id.value.take(8)} " +
+                                        "state=${_state.value.name} " +
+                                        "activeSessionId=${reg.activeSessionId ?: "(none)"} " +
+                                        "inPublicList=${reg.isInPublicList}"
+                                )
+                            }
+                        }
+                        _incoming.emit(event.message)
+                    }
                     is ProtocolEvent.Ping -> {
                         runCatching {
                             sendMutex.withLock { protocol.sendPong(connection) }
