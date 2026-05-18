@@ -31,6 +31,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
+import platform.Foundation.NSNotification
+import platform.Foundation.NSNotificationCenter
 import platform.Network.nw_connection_create
 import platform.Network.nw_endpoint_create_host
 import platform.Network.nw_endpoint_t
@@ -54,7 +56,9 @@ import platform.Network.nw_path_monitor_set_update_handler
 import platform.Network.nw_path_monitor_start
 import platform.Network.nw_path_monitor_t
 import platform.Network.nw_path_status_satisfied
+import platform.UIKit.UIApplicationWillEnterForegroundNotification
 import platform.darwin.DISPATCH_TIME_NOW
+import platform.darwin.NSObjectProtocol
 import platform.darwin.NSEC_PER_SEC
 import platform.darwin.dispatch_queue_create
 import platform.darwin.dispatch_queue_t
@@ -153,6 +157,22 @@ internal class IosLanDataTransport(
     private var pathMonitor: nw_path_monitor_t = null
 
     /**
+     * V0.4-IOS-FOREGROUND-REBIND: token returned by NSNotificationCenter
+     * when we subscribe to `UIApplicationWillEnterForegroundNotification`.
+     * Held so we can unregister cleanly in [close]. Non-null iff observer
+     * is registered.
+     *
+     * Lifecycle-driven rebind is needed because the path-monitor signal
+     * is insufficient on its own — iOS may invalidate `nw_listener_t` /
+     * `nw_browser_t` during prolonged app suspension while the network
+     * path itself remains "satisfied". No `becameSatisfied=true` event
+     * fires on wake; our V0.4-IOS-LISTENER-REBIND trigger stays silent.
+     * Subscribing to `WillEnterForeground` gives us the missing trigger.
+     */
+    @Volatile
+    private var foregroundObserver: NSObjectProtocol? = null
+
+    /**
      * Whether the most recent path observation was `satisfied`.
      * Read & written ONLY from the path-monitor update handler, which is
      * invoked serially on [pathQueue] (created with `null` attributes →
@@ -218,6 +238,7 @@ internal class IosLanDataTransport(
         listener = l
         IosLanDebug.log("data", "start: SUCCESS port=${_tcpPort.value}")
         startPathMonitor()
+        startForegroundObserver()
         return Result.success(Unit)
     }
 
@@ -355,9 +376,10 @@ internal class IosLanDataTransport(
 
     override suspend fun close() {
         if (closed) return
-        IosLanDebug.log("data", "close: cancelling path monitor, listener, and incoming channel")
+        IosLanDebug.log("data", "close: cancelling path monitor, foreground observer, listener, and incoming channel")
         closed = true
         stopPathMonitor()
+        stopForegroundObserver()
         rebindScope.coroutineContext.cancelChildren()
         listener?.let { nw_listener_cancel(it) }
         incomingChannel.close()
@@ -429,6 +451,45 @@ internal class IosLanDataTransport(
         lastWasSatisfied = false
         hasEverObservedSatisfied = false
         IosLanDebug.log("data", "stopPathMonitor: monitor cancelled, pending rebind cleared")
+    }
+
+    /**
+     * V0.4-IOS-FOREGROUND-REBIND: subscribe to
+     * `UIApplicationWillEnterForegroundNotification`. On wake, schedule
+     * a rebind via the existing [scheduleRebind] machinery — same
+     * 800ms debounce, same cancel-and-recreate cycle as path-driven
+     * rebinds.
+     *
+     * Idempotent: a second call while already subscribed is a no-op.
+     * Notifications fire on the posting thread (main thread for UIKit
+     * notifications); the callback only schedules — it does no I/O.
+     */
+    private fun startForegroundObserver() {
+        if (foregroundObserver != null) return
+        val token = NSNotificationCenter.defaultCenter.addObserverForName(
+            name = UIApplicationWillEnterForegroundNotification,
+            `object` = null,
+            queue = null
+        ) { _: NSNotification? ->
+            IosLanDebug.log(
+                "data",
+                "foreground notification observed (UIApplicationWillEnterForeground)"
+            )
+            scheduleRebind("returning to foreground")
+            Unit
+        }
+        foregroundObserver = token
+        IosLanDebug.log(
+            "data",
+            "startForegroundObserver: registered for UIApplicationWillEnterForegroundNotification"
+        )
+    }
+
+    private fun stopForegroundObserver() {
+        val token = foregroundObserver ?: return
+        foregroundObserver = null
+        NSNotificationCenter.defaultCenter.removeObserver(token)
+        IosLanDebug.log("data", "stopForegroundObserver: unregistered")
     }
 
     /**
