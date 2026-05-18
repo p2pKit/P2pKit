@@ -165,6 +165,27 @@ internal class AndroidLanDiscoveryTransport(
     /** Default network present at the time of the most recent successful NSD register. */
     private var boundDefaultNetwork: Network? = null
 
+    // ──────────────────────────────────────────────────────────────────
+    // V0.4-RESOLVE-RETRY: re-resolve rejected peers after a short delay.
+    //
+    // When [selectRoutableHost] returns null (e.g., peer advertised
+    // fe80:: link-local only because its DHCP IPv4 hadn't completed yet
+    // during a hotspot transition), we'd otherwise be stuck — NsdManager
+    // does not re-resolve a known service on its own. Schedule a fresh
+    // resolveService call after a short delay; by then the peer has
+    // likely re-announced with the full address set.
+    //
+    // Capped per-peer to avoid storms (RESOLVE_RETRY_MAX_ATTEMPTS). The
+    // retry jobs run on [rebindScope] (already SupervisorJob-backed).
+    // Cancellation triggers: peer-Lost event, stopDiscovery,
+    // rebindNow (the old NsdServiceInfo references would be stale after
+    // a listener rebind anyway).
+    // ──────────────────────────────────────────────────────────────────
+
+    private val resolveRetryLock = Any()
+    private val pendingResolveRetries: MutableMap<String, Job> = mutableMapOf()
+    private val resolveRetryAttempts: MutableMap<String, Int> = mutableMapOf()
+
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) = lock.withLock {
         if (registrationListener != null) return@withLock
 
@@ -221,6 +242,9 @@ internal class AndroidLanDiscoveryTransport(
         runCatching { nsd.stopServiceDiscovery(listener) }
         discoveryListener = null
         Log.d(TAG, "stopDiscovery: stopServiceDiscovery submitted")
+        // V0.4-RESOLVE-RETRY: no more discovery → pending retries reference
+        // service infos from a listener that's about to be torn down.
+        clearAllResolveRetries("stopDiscovery")
         stopNetworkWatcherIfIdle()
         releaseMulticastLockIfIdle()
     }
@@ -293,6 +317,10 @@ internal class AndroidLanDiscoveryTransport(
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {
                 val pid = serviceInfo.serviceName ?: return
                 if (pid == registration.localPeerId.value) return
+                // V0.4-RESOLVE-RETRY: peer is gone — cancel any pending
+                // re-resolve so we don't keep trying to reach a peer that
+                // has explicitly left.
+                clearResolveRetry(pid, "service lost")
                 _events.tryEmit(PeerEvent.Lost(PeerId(pid)))
             }
         }
@@ -338,14 +366,22 @@ internal class AndroidLanDiscoveryTransport(
                     // rather than publish an undialable hint. Typical cause is
                     // a peer whose only advertised IP on this resolution cycle
                     // is an unscoped fe80:: link-local IPv6 (EINVAL on dial).
-                    // The next mDNS announcement may bring an IPv4 we can use.
                     Log.d(
                         TAG,
                         "resolve: rejecting peer=${pid.take(8)} — no routable host " +
                             "in candidates=$candidates"
                     )
+                    // V0.4-RESOLVE-RETRY: the peer may have just re-announced
+                    // mid-DHCP (only fe80:: bound so far). Schedule a fresh
+                    // resolve in a few seconds — by then the host typically
+                    // has a routable IPv4 too. Cap'd to avoid storms; see
+                    // [scheduleResolveRetry] for the per-peer attempt counter.
+                    scheduleResolveRetry(info, pid, "unroutable candidates=$candidates")
                     return
                 }
+                // V0.4-RESOLVE-RETRY: success — clear any pending retry for
+                // this peer so a future re-resolve doesn't fire redundantly.
+                clearResolveRetry(pid, "resolve succeeded with host=$host")
                 val port = info.port
 
                 val supportedTransports = caps
@@ -613,6 +649,13 @@ internal class AndroidLanDiscoveryTransport(
                 "advertising=$hadAdvertising discovery=$hadDiscovery"
         )
 
+        // V0.4-RESOLVE-RETRY: the old discovery listener is about to be
+        // torn down; pending retries reference NsdServiceInfos from it.
+        // Discard them so we don't replay stale state against the new
+        // listener. (The fresh listener will re-discover peers from
+        // scratch via NsdManager's own announcement cycle.)
+        clearAllResolveRetries("rebindNow")
+
         if (hadAdvertising) {
             val oldListener = registrationListener!!
             runCatching { nsd.unregisterService(oldListener) }
@@ -665,6 +708,81 @@ internal class AndroidLanDiscoveryTransport(
         )
     }
 
+    /**
+     * V0.4-RESOLVE-RETRY: schedule a re-resolve for [pid] using [info].
+     * The retry runs on [rebindScope] after [RESOLVE_RETRY_DELAY_MILLIS].
+     *
+     * Idempotent per peer — calling again with the same pid cancels the
+     * prior pending retry and replaces it with a fresh one (attempt
+     * counter is monotonic, not reset). Capped at
+     * [RESOLVE_RETRY_MAX_ATTEMPTS] total attempts per peer; further
+     * rejections are logged and the peer stays undiscovered.
+     */
+    private fun scheduleResolveRetry(info: NsdServiceInfo, pid: String, reason: String) {
+        val nextAttempt: Int
+        synchronized(resolveRetryLock) {
+            val current = resolveRetryAttempts.getOrElse(pid) { 0 }
+            if (current >= RESOLVE_RETRY_MAX_ATTEMPTS) {
+                Log.d(
+                    TAG,
+                    "scheduleResolveRetry: peer=${pid.take(8)} max attempts " +
+                        "($current/$RESOLVE_RETRY_MAX_ATTEMPTS) — giving up ($reason)"
+                )
+                return
+            }
+            nextAttempt = current + 1
+            resolveRetryAttempts[pid] = nextAttempt
+            // Cancel any prior pending retry for this peer; the most recent
+            // schedule call wins.
+            pendingResolveRetries[pid]?.cancel()
+        }
+        Log.d(
+            TAG,
+            "scheduleResolveRetry: peer=${pid.take(8)} attempt " +
+                "$nextAttempt/$RESOLVE_RETRY_MAX_ATTEMPTS in ${RESOLVE_RETRY_DELAY_MILLIS}ms ($reason)"
+        )
+        val job = rebindScope.launch {
+            delay(RESOLVE_RETRY_DELAY_MILLIS)
+            Log.d(
+                TAG,
+                "scheduleResolveRetry: peer=${pid.take(8)} attempt $nextAttempt firing re-resolve"
+            )
+            resolve(info)
+        }
+        synchronized(resolveRetryLock) {
+            pendingResolveRetries[pid] = job
+        }
+    }
+
+    /**
+     * Clear any pending resolve-retry state for [pid]. Called when a
+     * resolve succeeds (peer is now discoverable), when the peer is Lost,
+     * and during bulk cancellation in [stopDiscovery] / [rebindNow].
+     */
+    private fun clearResolveRetry(pid: String, reason: String) {
+        synchronized(resolveRetryLock) {
+            val job = pendingResolveRetries.remove(pid)
+            val hadAttempts = resolveRetryAttempts.remove(pid) != null
+            if (job != null || hadAttempts) {
+                Log.d(TAG, "clearResolveRetry: peer=${pid.take(8)} ($reason)")
+            }
+            job?.cancel()
+        }
+    }
+
+    private fun clearAllResolveRetries(reason: String) {
+        synchronized(resolveRetryLock) {
+            if (pendingResolveRetries.isEmpty() && resolveRetryAttempts.isEmpty()) return
+            Log.d(
+                TAG,
+                "clearAllResolveRetries: cancelling ${pendingResolveRetries.size} pending retries ($reason)"
+            )
+            pendingResolveRetries.values.forEach { it.cancel() }
+            pendingResolveRetries.clear()
+            resolveRetryAttempts.clear()
+        }
+    }
+
     private companion object {
         const val TAG = "P2pKitNsd"
 
@@ -676,6 +794,22 @@ internal class AndroidLanDiscoveryTransport(
          * recovery latency bounded.
          */
         const val REBIND_DEBOUNCE_MILLIS = 800L
+
+        /**
+         * V0.4-RESOLVE-RETRY: how long to wait before re-resolving a peer
+         * whose first resolve produced no routable host. Sized to comfortably
+         * exceed a typical hotspot DHCP completion window (~1-2 s on most
+         * stacks).
+         */
+        const val RESOLVE_RETRY_DELAY_MILLIS = 3000L
+
+        /**
+         * V0.4-RESOLVE-RETRY: max total resolve attempts per peer (initial +
+         * N-1 retries). With a 3 s delay and max 3 attempts, worst-case
+         * wall-clock from first rejection to give-up is ~9 seconds — long
+         * enough for slow DHCP without leaving a peer permanently stuck.
+         */
+        const val RESOLVE_RETRY_MAX_ATTEMPTS = 3
     }
 }
 
