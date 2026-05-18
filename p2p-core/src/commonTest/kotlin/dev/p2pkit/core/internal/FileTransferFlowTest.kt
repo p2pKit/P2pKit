@@ -361,7 +361,7 @@ class FileTransferFlowTest {
             // Kick off a file transfer, then send a regular message — message
             // should land regardless of transfer state.
             val payload = ByteArray(2048) { (it and 0xFF).toByte() }
-            launch {
+            val fileJob = launch {
                 val transfer = outgoing.sendFile(
                     name = "parallel.bin",
                     sizeBytes = payload.size.toLong(),
@@ -376,6 +376,21 @@ class FileTransferFlowTest {
             val msg = withTimeout(5_000) { msgDeferred.await() }
             val text = assertIs<dev.p2pkit.core.P2pMessage.Text>(msg)
             assertEquals("ping", text.value)
+
+            // Wait for the file transfer launch to finish before entering the
+            // finally block. Without this, `alice.stop()` in `finally` can race
+            // ahead of the launch's `offer.accept(...)`: alice's close tears
+            // down her wire, bob's `routeEvents` exits, bob's `markCleanlyClosed`
+            // fires, and bob's FileTransferDispatcher.closeAll evicts the
+            // pending offer — so the still-suspended `offer.accept(...)` would
+            // throw "Offer no longer pending" after the assertions are already
+            // done. The OLD SDK was lenient (markCleanlyClosed did NOT call
+            // closeAll), so the offer survived to be accepted on a wire that
+            // was being torn down. The S3 commit makes terminal transitions
+            // symmetric (file-transfer cleanup happens on every terminal path),
+            // which is the correct semantic — and exposes this test's reliance
+            // on the previous looseness.
+            withTimeout(5_000) { fileJob.join() }
         } finally {
             alice.stop()
             bob.stop()

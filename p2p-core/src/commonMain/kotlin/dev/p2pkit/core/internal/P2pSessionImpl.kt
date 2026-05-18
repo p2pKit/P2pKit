@@ -17,8 +17,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -240,26 +242,35 @@ internal class P2pSessionImpl(
     }
 
     override suspend fun close() {
-        val terminalAlready = connectionLock.withLock {
+        // Idempotent: skip if already terminal.
+        val alreadyTerminal = connectionLock.withLock {
             val s = _state.value
-            if (s == ConnectionState.Closed || s == ConnectionState.Failed) return@withLock true
-            _state.value = ConnectionState.Closing
-            false
+            s == ConnectionState.Closed || s == ConnectionState.Failed
         }
-        if (terminalAlready) return
+        if (alreadyTerminal) return
 
-        // Abort in-flight file transfers before we tear the connection down so
-        // their state surfaces a sensible "session closed" cause rather than a
-        // mid-write IOException.
-        runCatching { fileTransferDispatcher.closeAll("session $id closed") }
-        // Best-effort CLOSE frame on whatever connection is current.
+        // Best-effort CLOSE frame BEFORE we tear the wire down. Must happen
+        // before [transitionToTerminal] cancels the epoch — once the epoch
+        // is gone, [connection] is closed and the protocol writer would
+        // throw. This is the only terminal path that sends a CLOSE frame;
+        // unintentional failure paths don't (the wire is presumably already
+        // dead).
         runCatching {
             sendMutex.withLock { protocol.sendClose(connection) }
         }
-        // Cancel every child (epoch loops + any in-flight reconnect handler).
+
+        // Centralised cleanup: file transfers, epoch cancel, raw close, and
+        // the state flip to Closed all happen here atomically.
+        transitionToTerminal(ConnectionState.Closed, "user close()")
+
+        // Additionally tear down the rest of the session — primarily the
+        // reconnect handler if one is still mid-dial. Only [close] does
+        // this, because failure paths cannot: they are themselves called
+        // from coroutines that are children of [sessionJob], and cancelling
+        // their own ancestor would prevent the cleanup from completing.
+        // [close] runs from outside [sessionJob] (the kit's scope or a
+        // user-controlled scope), so the cancelAndJoin is safe.
         sessionJob.cancelAndJoin()
-        runCatching { connection.close() }
-        _state.value = ConnectionState.Closed
     }
 
     /**
@@ -291,6 +302,98 @@ internal class P2pSessionImpl(
     }
 
     /**
+     * The single, canonical path to a terminal state. Every transition into
+     * [ConnectionState.Closed] or [ConnectionState.Failed] goes through this
+     * method, regardless of trigger (user `close()`, remote hangup, PING
+     * timeout, reconnect exhaustion, path-loss without a handler). Centralising
+     * the transition converts what used to be a 4-way convention — "if you
+     * set `_state.value = Failed`, remember to also cancel the epoch, close
+     * the connection, and tear down file transfers" — into a structural
+     * guarantee: the cleanup happens iff the state flip happens, atomically
+     * and in the same place.
+     *
+     * **Behaviour:**
+     *   1. Atomic decision under [connectionLock]: if already terminal, this
+     *      call is a no-op. Otherwise flip `_state` to [target].
+     *   2. The cleanup block runs in [NonCancellable] context. This matters
+     *      because the most common caller path is `onConnectionLost` triggered
+     *      by `observeRawState`, whose coroutine runs inside the epoch we're
+     *      about to cancel — without [NonCancellable] the cleanup itself
+     *      would be cancelled at the first suspension point, leaking the
+     *      raw connection and the file-transfer dispatcher.
+     *   3. Cleanup order: tear down file transfers first (they may be
+     *      writing to the connection); cancel the epoch (stops
+     *      `routeEvents` from emitting to `_incoming` — guarantees contract
+     *      C1: no incoming after terminal); then close the raw connection
+     *      (releases NWConnection / Socket FD).
+     *   4. The runtime invariants at the end aren't paranoia — they document
+     *      the post-condition and crash early if a future refactor breaks it.
+     *
+     * **What this method does NOT do:**
+     *   - It does not cancel the session-wide [sessionJob]. The failure
+     *     paths cannot — they are called from coroutines that are themselves
+     *     children of `sessionJob`. Only the user-initiated [close] (which
+     *     runs from outside `sessionJob`) does the additional
+     *     `sessionJob.cancelAndJoin` step after this method returns.
+     *   - It does not send a CLOSE frame on the wire. Only `close()` does
+     *     that, before calling this method.
+     *
+     * @param target [ConnectionState.Closed] or [ConnectionState.Failed]
+     * @param cause one-line diagnostic string ("user close", "PING timeout",
+     *   "reconnect exhausted", "raw connection -> failed", …)
+     */
+    private suspend fun transitionToTerminal(
+        target: ConnectionState,
+        cause: String
+    ) {
+        check(target == ConnectionState.Closed || target == ConnectionState.Failed) {
+            "transitionToTerminal: target must be Closed or Failed, got $target"
+        }
+        val didTransition = connectionLock.withLock {
+            val current = _state.value
+            if (current == ConnectionState.Closed || current == ConnectionState.Failed) {
+                // I-double-terminal: a second call is idempotent. No cleanup
+                // (the first call did it).
+                return
+            }
+            _state.value = target
+            true
+        }
+        if (!didTransition) return  // unreachable; defensive.
+
+        logger.debug("Session $id: terminal → ${target.name} ($cause)")
+
+        // NonCancellable so the cleanup completes even when our caller is in
+        // the cancellation tree of [epochJob] (the typical case — see KDoc).
+        withContext(NonCancellable) {
+            // File transfers first: they may be mid-write on the connection;
+            // tear them down before we close the socket so they surface a
+            // sensible "session ended" status instead of a mid-write
+            // IOException.
+            runCatching {
+                fileTransferDispatcher.closeAll("session $id ${target.name}: $cause")
+            }
+            // Cancel the epoch — stops routeEvents, keepAliveLoop, and the
+            // parked observeRawState. Guarantees no further _incoming.emit.
+            epochJob?.cancel()
+            // Close the underlying raw connection.
+            runCatching { connection.close() }
+        }
+
+        // Hard invariants. check() throws on violation; that's intentional —
+        // if any of these fail, the SDK is in a state where downstream
+        // behaviour is undefined and we'd rather crash on the developer's
+        // machine than ship a silent corruption.
+        check(_state.value == target) {
+            "I-terminal-state: expected ${target.name} after transition, got ${_state.value.name}"
+        }
+        val ej = epochJob
+        check(ej == null || ej.isCancelled) {
+            "I-terminal-epoch: epochJob still alive after transition to ${target.name}"
+        }
+    }
+
+    /**
      * Final transition when the reconnect handler exhausts its retry budget.
      * No-op if the session is already in a terminal state (e.g., the user
      * called [close] while we were retrying — close wins).
@@ -311,24 +414,15 @@ internal class P2pSessionImpl(
      * activeLock / `_sessions` cleanup.
      */
     internal suspend fun markFailedAfterExhaustion() {
-        val cleanup = connectionLock.withLock {
-            if (_state.value == ConnectionState.Reconnecting) {
-                _state.value = ConnectionState.Failed
-                true
-            } else {
-                false
-            }
+        // Guard: only this method's contract requires we transition only
+        // when in Reconnecting. transitionToTerminal itself accepts any
+        // non-terminal state, but a stale exhaustion call should not flip
+        // a session that somehow re-Connected via a race.
+        val proceed = connectionLock.withLock {
+            _state.value == ConnectionState.Reconnecting
         }
-        if (cleanup) {
-            logger.debug(
-                "Session $id: Failed after reconnect exhaustion, cancelling epoch + closing raw"
-            )
-            epochJob?.cancel()
-            // Fire-and-forget close on the session scope (not the caller's,
-            // which is the reconnect handler's coroutine on the same scope —
-            // so cancellation of the epoch above does NOT cancel this
-            // launch). Idempotent on an already-closed raw.
-            scope.launch { runCatching { connection.close() } }
+        if (proceed) {
+            transitionToTerminal(ConnectionState.Failed, "reconnect exhausted")
         }
     }
 
@@ -438,10 +532,15 @@ internal class P2pSessionImpl(
     }
 
     private suspend fun markCleanlyClosed() {
-        connectionLock.withLock {
-            if (_state.value == ConnectionState.Connected) {
-                _state.value = ConnectionState.Closed
-            }
+        // Guard: only act on Connected. transitionToTerminal itself is
+        // idempotent vs Closed/Failed, but a stale clean-close shouldn't
+        // override an in-flight Reconnecting (a brand new raw might be
+        // about to rearm us).
+        val proceed = connectionLock.withLock {
+            _state.value == ConnectionState.Connected
+        }
+        if (proceed) {
+            transitionToTerminal(ConnectionState.Closed, "remote hangup / clean close")
         }
     }
 
@@ -468,14 +567,17 @@ internal class P2pSessionImpl(
     }
 
     private suspend fun onConnectionLost(cause: String) {
-        var cleanupForFail = false
+        // Decide under the lock:
+        //   - shouldFail = "transition to Failed via transitionToTerminal"
+        //   - handler    = "kick off a reconnect attempt"
+        // Only one is true; both can be false (already terminal / Reconnecting).
+        var shouldFail = false
         val handler: ReconnectHandler? = connectionLock.withLock {
             when (_state.value) {
                 ConnectionState.Connected -> {
                     val h = reconnectHandler
                     if (h == null) {
-                        _state.value = ConnectionState.Failed
-                        cleanupForFail = true
+                        shouldFail = true  // hand off to transitionToTerminal below
                         null
                     } else {
                         _state.value = ConnectionState.Reconnecting
@@ -489,24 +591,12 @@ internal class P2pSessionImpl(
             logger.debug("Session $id: connection lost ($cause), starting reconnect")
             // Run on the session scope so close() / kit.stop() cancel it.
             scope.launch { handler.onConnectionLost(this@P2pSessionImpl) }
-        }
-        if (cleanupForFail) {
-            // No reconnect handler is wired (incoming session, or outgoing
-            // with ReconnectPolicy.Disabled). State is now Failed and
-            // SessionManager's watchForTerminal will remove us from the
-            // public lists. Without explicit cleanup, the epoch's three
-            // coroutines (routeEvents / keepAliveLoop / observeRawState)
-            // linger until kit.stop() — observeRawState in particular parks
-            // on raw.state.collect forever because the StateFlow is stable
-            // at Closed and never emits again. Cancel the epoch so the
-            // session footprint is closed promptly, and fire-and-forget
-            // close the underlying raw connection on the session scope so
-            // the NWConnection / Socket releases its file descriptor.
-            logger.debug(
-                "Session $id: Failed ($cause), cancelling epoch + closing raw connection"
-            )
-            epochJob?.cancel()
-            scope.launch { runCatching { connection.close() } }
+        } else if (shouldFail) {
+            // No reconnect handler (incoming session, or outgoing with
+            // Disabled). Centralised terminal path handles state flip,
+            // epoch cancel, file-transfer teardown, and raw close in one
+            // place.
+            transitionToTerminal(ConnectionState.Failed, cause)
         }
     }
 }
