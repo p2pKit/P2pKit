@@ -71,13 +71,15 @@ internal class SessionStore(private val logger: P2pLogger) {
             _sessions.value = _sessions.value.filter { it !== existing }
         }
         val inFlight = pending[peerId]
-        if (inFlight != null) {
+        val decision = if (inFlight != null) {
             ConnectDecision.JoinPending(inFlight)
         } else {
             val fresh = CompletableDeferred<P2pSession>()
             pending[peerId] = fresh
             ConnectDecision.BecomeConnector(fresh)
         }
+        checkInvariants("startOrJoin")
+        decision
     }
 
     /**
@@ -90,6 +92,7 @@ internal class SessionStore(private val logger: P2pLogger) {
         expected: CompletableDeferred<P2pSession>
     ): Unit = mutex.withLock {
         if (pending[peerId] === expected) pending.remove(peerId)
+        checkInvariants("endPending")
     }
 
     /**
@@ -120,7 +123,7 @@ internal class SessionStore(private val logger: P2pLogger) {
     ): RegisterOutcome = mutex.withLock {
         val existing = byPeer[peerId]
         val existingState = existing?.state?.value
-        if (existing != null && existingState in ACTIVE_STATES) {
+        val outcome: RegisterOutcome = if (existing != null && existingState in ACTIVE_STATES) {
             val newWinsLocally = if (localPeerIdValue < peerId.value) {
                 // We're the smaller-id side — keep our outgoing, reject our incoming.
                 !isIncoming
@@ -153,6 +156,8 @@ internal class SessionStore(private val logger: P2pLogger) {
             }
             RegisterOutcome.Accepted(session = session)
         }
+        checkInvariants("tryRegister")
+        outcome
     }
 
     /**
@@ -165,6 +170,7 @@ internal class SessionStore(private val logger: P2pLogger) {
     suspend fun removeIfMatches(peerId: PeerId, session: P2pSession): Unit = mutex.withLock {
         if (byPeer[peerId] === session) byPeer.remove(peerId)
         _sessions.value = _sessions.value.filter { it !== session }
+        checkInvariants("removeIfMatches")
     }
 
     /**
@@ -195,6 +201,45 @@ internal class SessionStore(private val logger: P2pLogger) {
         )
     }
 
+    /**
+     * Structural-invariant check run at the end of every mutation method
+     * while [mutex] is still held. Hard `check()` calls — a violation
+     * means the store has reached a state the design considers
+     * impossible, and the application MUST crash rather than continue
+     * with an inconsistent view of `kit.sessions`.
+     *
+     * Invariants (all evaluated under [mutex], so the state is stable):
+     *
+     *  - **I-store-membership**: every active byPeer entry appears in the
+     *    published sessions list. The reverse is not required — a session
+     *    in the list but not in byPeer is a terminal session whose
+     *    per-session terminal watcher has not yet run `removeIfMatches`.
+     *  - **I-store-uniqueness**: no duplicate session *instance* in the
+     *    published sessions list. (Per-peer uniqueness is NOT asserted
+     *    here — a brief window may legitimately contain one terminal and
+     *    one fresh session for the same peer, evicted within the same
+     *    mutation; the filter-then-add pattern in [tryRegister] removes
+     *    both staleness windows the public list ever exhibited.)
+     *
+     * Gated by [ASSERT_INVARIANTS]. Leave `true` through v0.4 — if a real
+     * device run trips a check, revert Commit 2 only; the structural
+     * refactor in Commit 1 stays.
+     */
+    private fun checkInvariants(site: String) {
+        if (!ASSERT_INVARIANTS) return
+        val visible = _sessions.value
+        check(byPeer.values.all { entry -> visible.any { it === entry } }) {
+            "SessionStore[$site]: active byPeer entry missing from published sessions list. " +
+                "byPeer.size=${byPeer.size} visible.size=${visible.size}"
+        }
+        val distinctByIdentity = visible.fold(0) { acc, s ->
+            acc + if (visible.count { it === s } == 1) 0 else 1
+        }
+        check(distinctByIdentity == 0) {
+            "SessionStore[$site]: duplicate session instance in published list (size=${visible.size})"
+        }
+    }
+
     companion object {
         val ACTIVE_STATES: Set<ConnectionState> = setOf(
             ConnectionState.Connecting,
@@ -202,6 +247,15 @@ internal class SessionStore(private val logger: P2pLogger) {
             ConnectionState.Connected,
             ConnectionState.Reconnecting
         )
+
+        /**
+         * Master switch for [checkInvariants]. `true` through v0.4 — if
+         * hardware testing surfaces a benign-but-valid ordering that
+         * trips a check, flip to `false` and open an issue. Reverting
+         * this whole commit (S1 Commit 2) is also clean since Commit 1
+         * already stands on its own.
+         */
+        private const val ASSERT_INVARIANTS = true
     }
 }
 
