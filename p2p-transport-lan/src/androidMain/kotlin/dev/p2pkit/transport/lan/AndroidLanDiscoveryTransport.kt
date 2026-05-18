@@ -58,11 +58,21 @@ import kotlinx.coroutines.sync.withLock
  * underlying network changes (Wi-Fi → hotspot, Wi-Fi → Ethernet, captive
  * portal accept), the listeners silently stop receiving multicast — peers
  * appear "lost forever" until the host app restarts discovery. To recover
- * automatically we watch [ConnectivityManager] for Wi-Fi/Ethernet rotation
- * events and, after a debounce settle window, unregister the old NSD
- * listeners and register fresh ones. The debounced rebind runs in
- * [rebindScope]; ConnectivityManager callbacks themselves do no work beyond
- * scheduling. Multicast-lock state is preserved across rebinds.
+ * automatically we watch [ConnectivityManager] for transitions and, after a
+ * debounce settle window, unregister the old NSD listeners and register
+ * fresh ones. Two complementary callbacks feed the rebind machinery:
+ *
+ *   - **Primary (V0.4-NSD):** filtered on `TRANSPORT_WIFI | TRANSPORT_ETHERNET`.
+ *     Catches client-mode Wi-Fi/Ethernet appearance/loss and Wi-Fi→Wi-Fi
+ *     handover.
+ *   - **Default (V0.4-AP):** registered via `registerDefaultNetworkCallback`.
+ *     Catches transitions the primary misses — most importantly the
+ *     device-becomes-hotspot-host case where the AP interface is surfaced
+ *     as tethering rather than as a client `TRANSPORT_WIFI` network.
+ *
+ * The debounced rebind runs in [rebindScope]; ConnectivityManager callbacks
+ * themselves do no work beyond scheduling. Multicast-lock state is preserved
+ * across rebinds.
  */
 internal class AndroidLanDiscoveryTransport(
     private val context: Context,
@@ -112,25 +122,48 @@ internal class AndroidLanDiscoveryTransport(
     /** The most recent debounced rebind job; cancelled when superseded. */
     private var pendingRebindJob: Job? = null
 
-    /** ConnectivityManager callback, non-null iff watcher is active. */
+    /**
+     * Primary [ConnectivityManager] callback filtered on
+     * `TRANSPORT_WIFI | TRANSPORT_ETHERNET`. Tracks client-mode LAN
+     * availability — Wi-Fi / Ethernet networks the device has joined as a
+     * client. Non-null iff watcher is active.
+     */
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /**
+     * V0.4-AP: secondary [ConnectivityManager] callback registered via
+     * `registerDefaultNetworkCallback`. Catches transitions that the
+     * primary `TRANSPORT_WIFI/ETHERNET` callback misses — most importantly
+     * the device-becomes-hotspot-host case, where the AP interface is
+     * surfaced as tethering rather than as a client-Wi-Fi `Network` and so
+     * never fires `onAvailable` on the primary callback. The default
+     * network's onLost (when client Wi-Fi goes away and there's no
+     * replacement default) is also a valid rebind trigger.
+     */
+    private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
 
     private val networkLock = Any()
 
-    /** Most recent network reported by the callback. `null` after `onLost`. */
+    /** Most recent network reported by the primary callback. `null` after `onLost`. */
     @Suppress("AnnotationOnSuperclass")
     private var observedNetwork: Network? = null
 
-    /** True once any onAvailable has fired — distinguishes startup from rotation. */
+    /** Most recent system-default network reported by the default callback. */
+    private var observedDefaultNetwork: Network? = null
+
+    /** True once any onAvailable has fired on the primary callback — distinguishes startup from rotation. */
     private var hasEverObservedNetwork: Boolean = false
 
     /**
      * Network present at the time of the most recent successful NSD register
      * (initial or post-rebind). Used by [rebindNow] to skip no-op rebinds when
-     * the observed network has not actually changed since we last bound.
+     * neither observed signal has changed since we last bound.
      * Guarded by [lock] (set inside the NSD register path).
      */
     private var boundNetwork: Network? = null
+
+    /** Default network present at the time of the most recent successful NSD register. */
+    private var boundDefaultNetwork: Network? = null
 
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) = lock.withLock {
         if (registrationListener != null) return@withLock
@@ -144,7 +177,12 @@ internal class AndroidLanDiscoveryTransport(
         registrationListener = listener
         cachedLocalPeer = localPeer
         boundNetwork = connectivity.activeNetwork
-        Log.d(TAG, "startAdvertising: registerService submitted, boundNetwork=$boundNetwork")
+        boundDefaultNetwork = connectivity.activeNetwork
+        Log.d(
+            TAG,
+            "startAdvertising: registerService submitted, " +
+                "boundNetwork=$boundNetwork boundDefaultNetwork=$boundDefaultNetwork"
+        )
         ensureNetworkWatcherStarted()
         // Wait for confirmation so callers know we're really advertising.
         registered.await()
@@ -169,7 +207,12 @@ internal class AndroidLanDiscoveryTransport(
         nsd.discoverServices(LanConstants.SERVICE_TYPE_NSD, NsdManager.PROTOCOL_DNS_SD, listener)
         discoveryListener = listener
         boundNetwork = connectivity.activeNetwork
-        Log.d(TAG, "startDiscovery: discoverServices submitted, boundNetwork=$boundNetwork")
+        boundDefaultNetwork = connectivity.activeNetwork
+        Log.d(
+            TAG,
+            "startDiscovery: discoverServices submitted, " +
+                "boundNetwork=$boundNetwork boundDefaultNetwork=$boundDefaultNetwork"
+        )
         ensureNetworkWatcherStarted()
     }
 
@@ -337,20 +380,54 @@ internal class AndroidLanDiscoveryTransport(
     // ─────────────────────────────────────────────────────────────────────
 
     /**
-     * Registers a [ConnectivityManager.NetworkCallback] that observes
-     * Wi-Fi/Ethernet rotation events. Idempotent — calling again while a
-     * callback is already registered is a no-op.
+     * Registers BOTH the primary `TRANSPORT_WIFI|ETHERNET` callback (V0.4-NSD)
+     * AND the default-network callback (V0.4-AP). The two signals are
+     * complementary: the primary covers client-mode LAN rotation; the
+     * default covers everything else that mutates the system default,
+     * most importantly the device-becomes-hotspot-host transition where
+     * the AP interface is invisible to a transport-filtered request.
      *
-     * Called from `startAdvertising` / `startDiscovery` inside the existing
-     * [lock], so it never races with the rebind body.
+     * Idempotent — calling again while either callback is already registered
+     * leaves that callback alone but ensures the other is up. Called from
+     * `startAdvertising` / `startDiscovery` inside the existing [lock], so
+     * it never races with the rebind body.
      */
     private fun ensureNetworkWatcherStarted() {
-        if (networkCallback != null) return
-        val request = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-            .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
-            .build()
-        val cb = object : ConnectivityManager.NetworkCallback() {
+        if (networkCallback == null) {
+            val cb = buildPrimaryNetworkCallback()
+            val request = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+                .build()
+            runCatching { connectivity.registerNetworkCallback(request, cb) }
+                .onSuccess {
+                    networkCallback = cb
+                    Log.d(TAG, "ensureNetworkWatcherStarted: registered NetworkCallback (WIFI|ETHERNET)")
+                }
+                .onFailure { e ->
+                    Log.w(TAG, "ensureNetworkWatcherStarted: registerNetworkCallback failed", e)
+                }
+        }
+        if (defaultNetworkCallback == null) {
+            val cb = buildDefaultNetworkCallback()
+            runCatching { connectivity.registerDefaultNetworkCallback(cb) }
+                .onSuccess {
+                    defaultNetworkCallback = cb
+                    Log.d(TAG, "ensureNetworkWatcherStarted: registered DefaultNetworkCallback")
+                }
+                .onFailure { e ->
+                    Log.w(TAG, "ensureNetworkWatcherStarted: registerDefaultNetworkCallback failed", e)
+                }
+        }
+    }
+
+    /**
+     * Primary callback construction. Body unchanged from V0.4-NSD — only
+     * client-mode WIFI/ETHERNET rotation triggers scheduleRebind here;
+     * `onLost` is informational (clears state, awaits next onAvailable).
+     */
+    private fun buildPrimaryNetworkCallback(): ConnectivityManager.NetworkCallback =
+        object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 val (prev, shouldRebind) = synchronized(networkLock) {
                     val p = observedNetwork
@@ -391,34 +468,78 @@ internal class AndroidLanDiscoveryTransport(
                 }
             }
         }
-        runCatching { connectivity.registerNetworkCallback(request, cb) }
-            .onSuccess {
-                networkCallback = cb
-                Log.d(TAG, "ensureNetworkWatcherStarted: registered NetworkCallback (WIFI|ETHERNET)")
-            }
-            .onFailure { e ->
-                Log.w(TAG, "ensureNetworkWatcherStarted: registerNetworkCallback failed", e)
-            }
-    }
 
     /**
-     * Tears down the watcher and cancels any pending debounced rebind.
-     * Called from `stopAdvertising` / `stopDiscovery` only when **both**
-     * listeners have been cleared — symmetric with multicast-lock release.
+     * Default-network callback (V0.4-AP). Schedules a rebind on BOTH
+     * onAvailable and onLost — the hotspot-host scenario surfaces as
+     * "default Wi-Fi lost, no equivalent default replaces it" and we want
+     * NSD to re-bind regardless of whether the primary callback also saw
+     * a change. Debounce + the two-target no-change check in `rebindNow`
+     * absorb any redundant fires when both callbacks see the same
+     * transition.
+     */
+    private fun buildDefaultNetworkCallback(): ConnectivityManager.NetworkCallback =
+        object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val prev = synchronized(networkLock) {
+                    val p = observedDefaultNetwork
+                    observedDefaultNetwork = network
+                    p
+                }
+                if (prev != network) {
+                    Log.d(TAG, "DefaultNetworkCallback.onAvailable: prev=$prev now=$network")
+                    scheduleRebind("default network changed: $prev -> $network")
+                } else {
+                    Log.d(TAG, "DefaultNetworkCallback.onAvailable: $network (no change)")
+                }
+            }
+
+            override fun onLost(network: Network) {
+                val cleared = synchronized(networkLock) {
+                    if (observedDefaultNetwork == network) {
+                        observedDefaultNetwork = null
+                        true
+                    } else false
+                }
+                if (cleared) {
+                    Log.d(TAG, "DefaultNetworkCallback.onLost: $network (default cleared)")
+                    scheduleRebind("default network lost: $network")
+                } else {
+                    Log.d(TAG, "DefaultNetworkCallback.onLost: $network (was not current default)")
+                }
+            }
+        }
+
+    /**
+     * Tears down BOTH callbacks (primary + default) and cancels any pending
+     * debounced rebind. Called from `stopAdvertising` / `stopDiscovery`
+     * only when **both** NSD listeners have been cleared — symmetric with
+     * multicast-lock release. The two callbacks are registered together
+     * (`ensureNetworkWatcherStarted`) and unregistered together to keep the
+     * lifecycle invariant tight.
      */
     private fun stopNetworkWatcherIfIdle() {
         if (registrationListener != null || discoveryListener != null) return
-        val cb = networkCallback ?: return
-        runCatching { connectivity.unregisterNetworkCallback(cb) }
-        networkCallback = null
+        if (networkCallback == null && defaultNetworkCallback == null) return
+
+        networkCallback?.let { cb ->
+            runCatching { connectivity.unregisterNetworkCallback(cb) }
+            networkCallback = null
+        }
+        defaultNetworkCallback?.let { cb ->
+            runCatching { connectivity.unregisterNetworkCallback(cb) }
+            defaultNetworkCallback = null
+        }
         pendingRebindJob?.cancel()
         pendingRebindJob = null
         synchronized(networkLock) {
             observedNetwork = null
+            observedDefaultNetwork = null
             hasEverObservedNetwork = false
         }
         boundNetwork = null
-        Log.d(TAG, "stopNetworkWatcherIfIdle: unregistered NetworkCallback and reset state")
+        boundDefaultNetwork = null
+        Log.d(TAG, "stopNetworkWatcherIfIdle: unregistered both callbacks and reset state")
     }
 
     /**
@@ -445,28 +566,36 @@ internal class AndroidLanDiscoveryTransport(
      * advertising / discovery is currently active. Runs under [lock] so it
      * cannot race with `startAdvertising` / `startDiscovery` / `stop*`.
      *
-     * Idempotency:
-     *   - If [networkCallback] is null (watcher was stopped after schedule),
-     *     this is a no-op.
-     *   - If [observedNetwork] equals [boundNetwork] (the rotation that
-     *     scheduled us was already absorbed by a prior rebind), this is a
-     *     no-op.
+     * Idempotency (V0.4-AP two-target check):
+     *   - If both watcher callbacks are null (watcher was stopped after
+     *     schedule), this is a no-op.
+     *   - If BOTH the WIFI/ETHERNET observation AND the default-network
+     *     observation are unchanged since the last successful bind, this
+     *     is a no-op. The old "target == null → skip" is gone — `null`
+     *     observedNetwork is a legitimate steady state in the hotspot-host
+     *     case (the AP interface isn't surfaced as a TRANSPORT_WIFI
+     *     network), and we still want NSD to re-bind so it picks up
+     *     whatever multicast carrier is alive.
      *
      * Listener instances are always rebuilt fresh — the old ones are
      * unregistered and discarded. Multicast-lock state is left untouched.
      */
     private suspend fun rebindNow(reason: String): Unit = lock.withLock {
-        if (networkCallback == null) {
+        if (networkCallback == null && defaultNetworkCallback == null) {
             Log.d(TAG, "rebindNow: watcher already stopped; skipping ($reason)")
             return@withLock
         }
         val target = synchronized(networkLock) { observedNetwork }
-        if (target == null) {
-            Log.d(TAG, "rebindNow: no observed network; skipping ($reason)")
-            return@withLock
-        }
-        if (target == boundNetwork) {
-            Log.d(TAG, "rebindNow: already bound to $target; skipping ($reason)")
+        val defaultTarget = synchronized(networkLock) { observedDefaultNetwork }
+
+        val noChangeSinceLastBind =
+            target == boundNetwork && defaultTarget == boundDefaultNetwork
+        if (noChangeSinceLastBind) {
+            Log.d(
+                TAG,
+                "rebindNow: no changes since last bind; skipping ($reason) " +
+                    "transport=$boundNetwork default=$boundDefaultNetwork"
+            )
             return@withLock
         }
 
@@ -479,7 +608,8 @@ internal class AndroidLanDiscoveryTransport(
 
         Log.d(
             TAG,
-            "rebindNow: starting; reason=$reason from=$boundNetwork to=$target " +
+            "rebindNow: starting; reason=$reason " +
+                "transport: $boundNetwork -> $target  default: $boundDefaultNetwork -> $defaultTarget " +
                 "advertising=$hadAdvertising discovery=$hadDiscovery"
         )
 
@@ -528,7 +658,11 @@ internal class AndroidLanDiscoveryTransport(
         }
 
         boundNetwork = target
-        Log.d(TAG, "rebindNow: complete; boundNetwork=$target")
+        boundDefaultNetwork = defaultTarget
+        Log.d(
+            TAG,
+            "rebindNow: complete; boundNetwork=$target boundDefaultNetwork=$defaultTarget"
+        )
     }
 
     private companion object {
