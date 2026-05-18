@@ -8,6 +8,7 @@ import android.net.NetworkRequest
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.util.Log
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
@@ -18,6 +19,9 @@ import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerEvent
 import dev.p2pkit.core.transport.TransportHint
+import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -284,8 +288,21 @@ internal class AndroidLanDiscoveryTransport(
                 val name = attrs[LanConstants.TXT_DEVICE_NAME]?.decodeToString() ?: pid
                 val plat = attrs[LanConstants.TXT_PLATFORM]?.decodeToString()
                 val caps = attrs[LanConstants.TXT_CAPABILITIES]?.decodeToString()
-                @Suppress("DEPRECATION") // info.host is the supported way on API < 34.
-                val host = info.host?.hostAddress ?: return
+                val candidates = collectHostCandidates(info)
+                val host = selectRoutableHost(candidates)
+                if (host == null) {
+                    // V0.4-IPV6: no routable address — skip the Found event
+                    // rather than publish an undialable hint. Typical cause is
+                    // a peer whose only advertised IP on this resolution cycle
+                    // is an unscoped fe80:: link-local IPv6 (EINVAL on dial).
+                    // The next mDNS announcement may bring an IPv4 we can use.
+                    Log.d(
+                        TAG,
+                        "resolve: rejecting peer=${pid.take(8)} — no routable host " +
+                            "in candidates=$candidates"
+                    )
+                    return
+                }
                 val port = info.port
 
                 val supportedTransports = caps
@@ -526,4 +543,60 @@ internal class AndroidLanDiscoveryTransport(
          */
         const val REBIND_DEBOUNCE_MILLIS = 800L
     }
+}
+
+/**
+ * Returns the candidate [InetAddress]es Android NSD has resolved for a
+ * peer's service. On API 34+ this is the full [NsdServiceInfo.hostAddresses]
+ * list (multiple address families possible). On older APIs only a single
+ * `info.host` is exposed by the platform; we wrap it in a single-element
+ * list so [selectRoutableHost] applies uniformly.
+ */
+private fun collectHostCandidates(info: NsdServiceInfo): List<InetAddress> =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        info.hostAddresses
+    } else {
+        @Suppress("DEPRECATION") // info.host is the supported way on API < 34.
+        listOfNotNull(info.host)
+    }
+
+/**
+ * Pick the most-likely-routable host string from [candidates] for use as a
+ * dial target. Returns `null` when no candidate is dialable — the caller
+ * skips the corresponding discovery event rather than publish an unusable
+ * hint.
+ *
+ * Precedence (V0.4-IPV6):
+ *   1. First [Inet4Address] that is neither loopback nor wildcard.
+ *      IPv4 link-local (169.254/16) IS accepted — sometimes dialable on
+ *      direct-cable / auto-config segments and matches the prior JVM
+ *      behaviour.
+ *   2. First [Inet6Address] that is neither loopback, wildcard, nor an
+ *      unscoped link-local. An [Inet6Address] whose `scopeId` is non-zero
+ *      is accepted because [InetAddress.getHostAddress] preserves the
+ *      `%scope` suffix, producing a dialable string.
+ *
+ * Rejected outright: loopback (127.0.0.1, ::1), any-local (0.0.0.0, ::),
+ * and `fe80::` IPv6 link-local with `scopeId == 0` (the Test 3 case —
+ * Android TCP returns EINVAL on these because no scope is known).
+ *
+ * Intentionally NOT done here:
+ *   - No retry / re-resolve fallback — pure function.
+ *   - No normalization that strips `%scope` from accepted scoped addresses.
+ *   - No identity-check changes — peerId/appId filtering is the caller's
+ *     responsibility and happens upstream.
+ */
+internal fun selectRoutableHost(candidates: List<InetAddress>): String? {
+    candidates.firstOrNull { addr ->
+        addr is Inet4Address && !addr.isLoopbackAddress && !addr.isAnyLocalAddress
+    }?.let { return it.hostAddress }
+
+    candidates.firstOrNull { addr ->
+        addr is Inet6Address &&
+            !addr.isLoopbackAddress &&
+            !addr.isAnyLocalAddress &&
+            (!addr.isLinkLocalAddress || addr.scopeId != 0)
+    }?.let { return it.hostAddress }
+
+    return null
 }
