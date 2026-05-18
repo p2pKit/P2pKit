@@ -138,7 +138,18 @@ internal class SessionManager(
             if (existing != null && existing.state.value in ACTIVE_STATES) {
                 return existing
             }
-            if (existing != null) active.remove(peer.id) // terminal — replace
+            if (existing != null) {
+                // Terminal existing — remove from BOTH `active` and `_sessions`.
+                // The terminal session's `watchForTerminal` coroutine has either
+                // already filtered _sessions (then this filter is a no-op) or
+                // is still pending (then we beat it to the punch). Either way
+                // the public `sessions` list is consistent with `active` for
+                // the next caller — a fresh connect that lands in
+                // registerSession's "Accepted" branch sees an empty _sessions
+                // entry for this peer.
+                active.remove(peer.id)
+                _sessions.update { list -> list.filter { it !== existing } }
+            }
             val inFlight = pending[peer.id]
             if (inFlight != null) {
                 ConnectOutcome.Await(inFlight)
@@ -431,7 +442,8 @@ internal class SessionManager(
     ): RegisterOutcome {
         val outcome: RegisterOutcome = activeLock.withLock {
             val existing = active[peerId]
-            if (existing != null && existing.state.value in ACTIVE_STATES) {
+            val existingState = existing?.state?.value
+            if (existing != null && existingState in ACTIVE_STATES) {
                 val newWinsLocally = if (localPeerId.value < peerId.value) {
                     // We're the smaller-id side — keep our outgoing, reject our incoming.
                     !isIncoming
@@ -448,11 +460,30 @@ internal class SessionManager(
                     RegisterOutcome.Rejected(winner = existing, loser = session)
                 }
             } else {
+                // Existing may be `null` OR in a terminal state (Closed / Failed /
+                // Closing / Idle). In the terminal case `watchForTerminal` is
+                // either pending or mid-run and the existing session may still
+                // be in `_sessions`. Filter it out atomically with the add so
+                // the public `sessions` list never has both the dead and the
+                // fresh session for the same peer for any observable window —
+                // the iOS sample's PeerRow ↔ session matching iterates by
+                // peerId and would otherwise see two rows for the same peer.
                 active[peerId] = session
-                _sessions.update { it + session }
+                _sessions.update { list ->
+                    if (existing != null) list.filter { it !== existing } + session
+                    else list + session
+                }
                 RegisterOutcome.Accepted(session = session)
             }
         }
+
+        val existingStateLabel = (outcome as? RegisterOutcome.Replaced)?.loser?.state?.value?.name
+            ?: (outcome as? RegisterOutcome.Rejected)?.loser?.state?.value?.name
+        logger.info(
+            "registerSession ${if (isIncoming) "in" else "out"} peer=${peerId.value.take(8)} " +
+                "decision=${outcome::class.simpleName} " +
+                "existingState=${existingStateLabel ?: "none"}"
+        )
 
         when (outcome) {
             is RegisterOutcome.Accepted -> {

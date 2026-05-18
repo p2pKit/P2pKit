@@ -540,6 +540,41 @@ struct ContentView: View {
             )
         }
 
+        // Watchdog: multiple sessions for the same peer should never persist
+        // for more than one poll-tick (1 s) — the SDK's `registerSession` /
+        // `connect()` / `watchForTerminal` paths are supposed to keep
+        // `_sessions` consistent with `active` (one entry per peerId at most).
+        // Log loudly if we observe more than one row for a single peerId so
+        // a real bug doesn't hide silently behind the PeerRow's isLive filter.
+        let groupedByPeer = Dictionary(grouping: sessionRows, by: { $0.peerId })
+        for (peerIdKey, rows) in groupedByPeer where rows.count > 1 {
+            let summary = rows.map { "\($0.id.prefix(12))[\($0.state)]" }.joined(separator: ", ")
+            diag(
+                "session",
+                "WARN: \(rows.count) sessions for peer=\(peerIdKey.prefix(8)): \(summary)"
+            )
+        }
+
+        // Cross-check: for each PeerRow in self.peers, does at least one
+        // SessionRow share its peerId? Surfaces the "messages flow but UI
+        // shows Connect" symptom if it's a peer-id mismatch (e.g., a Bonjour
+        // vs HELLO disagreement, or a Swift bridge formatting glitch).
+        for peerRow in self.peers {
+            let matchingSessions = sessionRows.filter { $0.peerId == peerRow.id }
+            if matchingSessions.isEmpty && !sessionRows.isEmpty {
+                // We have sessions but none match THIS peer's id. Worth
+                // logging because the user-reported "shows not connected"
+                // symptom looks like this.
+                let allSessionPeerIds = sessionRows.map { $0.peerId.prefix(8) }
+                    .joined(separator: ",")
+                diag(
+                    "session",
+                    "WARN: peer \(peerRow.name) id=\(peerRow.id.prefix(8)) " +
+                        "has no matching session row (sessions exist with peerIds=[\(allSessionPeerIds)])"
+                )
+            }
+        }
+
         if sessionRows != self.sessions { self.sessions = sessionRows }
 
         for row in sessionRows where !collectedSessionIds.contains(row.id) {

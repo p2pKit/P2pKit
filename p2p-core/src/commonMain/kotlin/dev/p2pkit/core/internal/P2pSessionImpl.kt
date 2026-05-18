@@ -374,12 +374,14 @@ internal class P2pSessionImpl(
     }
 
     private suspend fun onConnectionLost(cause: String) {
+        var cleanupForFail = false
         val handler: ReconnectHandler? = connectionLock.withLock {
             when (_state.value) {
                 ConnectionState.Connected -> {
                     val h = reconnectHandler
                     if (h == null) {
                         _state.value = ConnectionState.Failed
+                        cleanupForFail = true
                         null
                     } else {
                         _state.value = ConnectionState.Reconnecting
@@ -393,6 +395,24 @@ internal class P2pSessionImpl(
             logger.debug("Session $id: connection lost ($cause), starting reconnect")
             // Run on the session scope so close() / kit.stop() cancel it.
             scope.launch { handler.onConnectionLost(this@P2pSessionImpl) }
+        }
+        if (cleanupForFail) {
+            // No reconnect handler is wired (incoming session, or outgoing
+            // with ReconnectPolicy.Disabled). State is now Failed and
+            // SessionManager's watchForTerminal will remove us from the
+            // public lists. Without explicit cleanup, the epoch's three
+            // coroutines (routeEvents / keepAliveLoop / observeRawState)
+            // linger until kit.stop() — observeRawState in particular parks
+            // on raw.state.collect forever because the StateFlow is stable
+            // at Closed and never emits again. Cancel the epoch so the
+            // session footprint is closed promptly, and fire-and-forget
+            // close the underlying raw connection on the session scope so
+            // the NWConnection / Socket releases its file descriptor.
+            logger.debug(
+                "Session $id: Failed ($cause), cancelling epoch + closing raw connection"
+            )
+            epochJob?.cancel()
+            scope.launch { runCatching { connection.close() } }
         }
     }
 }
