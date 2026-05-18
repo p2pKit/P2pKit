@@ -109,6 +109,17 @@ internal class P2pKitImpl(
     private var startResult: Result<Unit>? = null
 
     init {
+        // V0.4-PROVENANCE (L2): emit framework identity to BOTH the
+        // user-supplied P2pLogger (visible to samples that wire it) AND
+        // the platform's native log channel (visible regardless of host
+        // wiring). The native path matters because the default P2pLogger
+        // is NoOp — without it, the iPhone Xcode console (which uses
+        // the default logger in the iOS sample) would never show the
+        // build identity.
+        val identity = dev.p2pkit.core.BuildInfo.describe()
+        logger.info("[buildInfo] $identity")
+        nativeBuildInfoLog(identity)
+
         // Materialize transports
         val ctx = TransportContext(
             appId = appId,

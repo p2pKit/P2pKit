@@ -93,7 +93,19 @@ private fun P2pKitSampleApp(vm: P2pKitViewModel) {
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
-                title = { Text("P2pKit Test Harness") }
+                title = {
+                    Column {
+                        Text("P2pKit Test Harness")
+                        // V0.4-PROVENANCE (L2 UI): show the active SDK
+                        // build identity in the title bar so the
+                        // operator can visually confirm the deployed
+                        // version before starting any hardware test.
+                        Text(
+                            text = dev.p2pkit.core.BuildInfo.describe(),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
             )
         }
     ) { padding ->

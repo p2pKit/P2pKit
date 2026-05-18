@@ -118,7 +118,15 @@ struct ContentView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("P2pKit v0.3 Sample").font(.title)
+                Text("P2pKit Sample").font(.title)
+                // V0.4-PROVENANCE (L2 UI): show the active framework
+                // build identity so the operator can visually confirm
+                // the deployed SDK version before starting any hardware
+                // test, without grepping logs.
+                Text(BuildInfo.shared.describe())
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .textSelection(.enabled)
                 Text("Status: \(status)")
 
                 if let err = errorBanner {

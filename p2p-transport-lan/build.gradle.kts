@@ -5,6 +5,40 @@ plugins {
     alias(libs.plugins.android.kmp.library)
 }
 
+// V0.4-PROVENANCE (L3): write a BUILD_COMMIT.txt sidecar file alongside
+// the freshly-assembled XCFramework so the Xcode pre-build script can
+// validate the framework's commit hash against `git rev-parse HEAD`
+// before allowing the iOS app to compile against it. Wired as a
+// `finalizedBy` on both the Release and Debug XCFramework assembly
+// tasks below.
+val writeXcframeworkCommit by tasks.registering {
+    val rootDir = rootProject.projectDir
+    val outDirs = listOf(
+        layout.buildDirectory.dir("XCFrameworks/release"),
+        layout.buildDirectory.dir("XCFrameworks/debug")
+    )
+    outputs.upToDateWhen { false }
+    doLast {
+        fun git(vararg args: String): String = try {
+            val p = ProcessBuilder("git", *args)
+                .directory(rootDir)
+                .redirectErrorStream(true)
+                .start()
+            val out = p.inputStream.bufferedReader().readText().trim()
+            if (p.waitFor() == 0) out else ""
+        } catch (_: Exception) {
+            ""
+        }
+        val commit = git("rev-parse", "HEAD").ifBlank { "unknown" }
+        outDirs.forEach { dirProvider ->
+            val dir = dirProvider.get().asFile
+            if (dir.exists()) {
+                dir.resolve("BUILD_COMMIT.txt").writeText(commit + "\n")
+            }
+        }
+    }
+}
+
 kotlin {
     // Bundles all three iOS arch slices (device arm64 + sim arm64 + sim x64)
     // into a single .xcframework so the Xcode app at iosApp/ can pick the
@@ -68,5 +102,17 @@ kotlin {
         jvmMain.dependencies {
             implementation(libs.jmdns)
         }
+    }
+}
+
+// Make every XCFramework-assembly task write the BUILD_COMMIT.txt sidecar.
+// V0.4-PROVENANCE (L3): the Xcode pre-build script reads this file to
+// validate the deployed framework matches `git rev-parse HEAD` before
+// allowing the iOS app to compile against it.
+afterEvaluate {
+    tasks.matching {
+        it.name.startsWith("assemble") && it.name.contains("XCFramework")
+    }.configureEach {
+        finalizedBy(writeXcframeworkCommit)
     }
 }
