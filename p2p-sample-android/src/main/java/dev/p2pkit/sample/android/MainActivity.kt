@@ -177,14 +177,25 @@ private fun SetupScreen(
 
 @Composable
 private fun ReconnectChoicePicker(vm: P2pKitViewModel) {
+    // v0.4 sample-only bump: the picker preset is 10 / 1500 instead of the
+    // SDK's documented 5 / 1000 defaults. Reason — see README "Known
+    // limitations" entry for the v0.4 NsdManager mDNS-cache limitation:
+    // when the *remote* peer's network flaps (e.g. iPhone Wi-Fi off/on),
+    // Android's NSD daemon serves stale cached SRV records for an
+    // extended TTL window. A longer reconnect budget lets the retry loop
+    // outlast both the remote peer's cellular-handover gap and the
+    // daemon's cache eviction so a fresh resolution can land before
+    // attempts exhaust. The SDK's defaults are intentionally NOT
+    // changed — apps that don't hit this scenario shouldn't be forced
+    // into a longer perceived-failure window.
     var maxAttemptsText by remember {
         mutableStateOf(
-            (vm.reconnectChoice as? ReconnectChoice.Enabled)?.maxAttempts?.toString() ?: "5"
+            (vm.reconnectChoice as? ReconnectChoice.Enabled)?.maxAttempts?.toString() ?: "10"
         )
     }
     var retryDelayText by remember {
         mutableStateOf(
-            (vm.reconnectChoice as? ReconnectChoice.Enabled)?.retryDelayMillis?.toString() ?: "1000"
+            (vm.reconnectChoice as? ReconnectChoice.Enabled)?.retryDelayMillis?.toString() ?: "1500"
         )
     }
     val choice = vm.reconnectChoice
@@ -200,8 +211,8 @@ private fun ReconnectChoicePicker(vm: P2pKitViewModel) {
             RadioButton(
                 selected = choice is ReconnectChoice.Enabled,
                 onClick = {
-                    val attempts = maxAttemptsText.toIntOrNull()?.coerceAtLeast(1) ?: 5
-                    val delay = retryDelayText.toLongOrNull()?.coerceAtLeast(0L) ?: 1_000L
+                    val attempts = maxAttemptsText.toIntOrNull()?.coerceAtLeast(1) ?: 10
+                    val delay = retryDelayText.toLongOrNull()?.coerceAtLeast(0L) ?: 1_500L
                     vm.updateReconnectChoice(ReconnectChoice.Enabled(attempts, delay))
                 }
             )
