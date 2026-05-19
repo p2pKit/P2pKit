@@ -27,6 +27,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -378,74 +379,157 @@ internal class SessionManager(
                         "reason=${e::class.simpleName}: ${e.message ?: ""}"
                 )
             }
-            while (attempt < policy.maxAttempts) {
-                attempt++
-                try {
-                    // Wait either for the retry delay OR for a path-satisfied
-                    // signal, whichever fires first. The signal accelerates
-                    // recovery on Wi-Fi handovers: an `Unsatisfied → Satisfied`
-                    // transition wakes parked handlers immediately so the next
-                    // dial happens within milliseconds of the network coming
-                    // back instead of after the full `retryDelayMillis`.
-                    withTimeoutOrNull(policy.retryDelayMillis) {
-                        pathSatisfiedSignal.first()
+
+            // V0.5-PERIODIC-REFRESH (Phase 2.5): the one-shot refresh above
+            // fires the moment we enter `Reconnecting`, but if the remote
+            // peer's Wi-Fi is still down at that instant its re-announce
+            // hasn't been sent yet — by the time it lands seconds later, our
+            // single refresh window has already passed and every subsequent
+            // dial uses the stale port from JmDNS's cache. Launching a
+            // background loop that refires `refreshDiscovery()` every ~3s
+            // (with small jitter to desync concurrent reconnects) keeps the
+            // local NSD cache aligned with the remote's actual state
+            // throughout the entire retry budget. Cancelled in the `finally`
+            // below on every exit path — success, exhaustion, or session
+            // state change.
+            val periodicRefreshJob = launchPeriodicRefresh(session, peerShort)
+            try {
+                while (attempt < policy.maxAttempts) {
+                    attempt++
+                    try {
+                        // Wait either for the retry delay OR for a path-satisfied
+                        // signal, whichever fires first. The signal accelerates
+                        // recovery on Wi-Fi handovers: an `Unsatisfied → Satisfied`
+                        // transition wakes parked handlers immediately so the next
+                        // dial happens within milliseconds of the network coming
+                        // back instead of after the full `retryDelayMillis`.
+                        withTimeoutOrNull(policy.retryDelayMillis) {
+                            pathSatisfiedSignal.first()
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
                     }
-                } catch (e: CancellationException) {
-                    throw e
-                }
-                if (session.state.value != ConnectionState.Reconnecting) return
+                    if (session.state.value != ConnectionState.Reconnecting) return
 
-                // Fresh per-attempt lookup. No caching between attempts; the
-                // read happens immediately before transport selection so the
-                // stale window between snapshot and dial is microseconds.
-                val resolved = peerLookup(expectedPeer.id)
-                val target = resolved ?: originalInternalPeer
-                val registryHit = resolved != null
-                val resolvedStr = if (resolved != null) renderHints(resolved.transportHints) else "—"
-                val dialedStr = renderHints(target.transportHints)
-                val changedFromPrev = target.transportHints != lastResolvedHints
-                val source = if (registryHit) "REGISTRY" else "FALLBACK"
-                logger.info(
-                    "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
-                        "name=${expectedPeer.name} cached=$cachedStr resolved=$resolvedStr " +
-                        "dialed=$dialedStr source=$source registryHit=$registryHit " +
-                        "changedFromPrev=$changedFromPrev"
-                )
-                lastResolvedHints = target.transportHints
-
-                val outcome = runCatching {
-                    val transport = transportManager.selectBestTransport(target)
-                    val raw = transport.connect(target)
-                    runHandshake(raw, expectedPeer = expectedPeer)
-                }
-
-                val handshake = outcome.getOrElse { e ->
-                    if (e is CancellationException) throw e
-                    logger.warn(
+                    // Fresh per-attempt lookup. No caching between attempts; the
+                    // read happens immediately before transport selection so the
+                    // stale window between snapshot and dial is microseconds.
+                    val resolved = peerLookup(expectedPeer.id)
+                    val target = resolved ?: originalInternalPeer
+                    val registryHit = resolved != null
+                    val resolvedStr = if (resolved != null) renderHints(resolved.transportHints) else "—"
+                    val dialedStr = renderHints(target.transportHints)
+                    val changedFromPrev = target.transportHints != lastResolvedHints
+                    val source = if (registryHit) "REGISTRY" else "FALLBACK"
+                    logger.info(
                         "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
-                            "name=${expectedPeer.name} FAILED dialed=$dialedStr source=$source " +
-                            "reason=${e::class.simpleName}: ${e.message ?: ""}"
+                            "name=${expectedPeer.name} cached=$cachedStr resolved=$resolvedStr " +
+                            "dialed=$dialedStr source=$source registryHit=$registryHit " +
+                            "changedFromPrev=$changedFromPrev"
                     )
-                    null
-                } ?: continue
+                    lastResolvedHints = target.transportHints
 
-                if (session.state.value != ConnectionState.Reconnecting) {
-                    // Session terminated while we were dialling. Discard the
-                    // fresh connection; the reader's collect will exit when
-                    // we close it.
-                    handshake.readerJob.cancel()
-                    runCatching { handshake.secureConnection.close() }
+                    val outcome = runCatching {
+                        val transport = transportManager.selectBestTransport(target)
+                        val raw = transport.connect(target)
+                        runHandshake(raw, expectedPeer = expectedPeer)
+                    }
+
+                    val handshake = outcome.getOrElse { e ->
+                        if (e is CancellationException) throw e
+                        logger.warn(
+                            "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
+                                "name=${expectedPeer.name} FAILED dialed=$dialedStr source=$source " +
+                                "reason=${e::class.simpleName}: ${e.message ?: ""}"
+                        )
+                        null
+                    } ?: continue
+
+                    if (session.state.value != ConnectionState.Reconnecting) {
+                        // Session terminated while we were dialling. Discard the
+                        // fresh connection; the reader's collect will exit when
+                        // we close it.
+                        handshake.readerJob.cancel()
+                        runCatching { handshake.secureConnection.close() }
+                        return
+                    }
+
+                    session.rearmWith(handshake.secureConnection, handshake.events)
+                    logger.info(
+                        "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
+                            "name=${expectedPeer.name} SUCCEEDED dialed=$dialedStr source=$source"
+                    )
                     return
                 }
-
-                session.rearmWith(handshake.secureConnection, handshake.events)
-                logger.info(
-                    "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
-                        "name=${expectedPeer.name} SUCCEEDED dialed=$dialedStr source=$source"
-                )
-                return
+                session.markFailedAfterExhaustion()
+            } finally {
+                periodicRefreshJob.cancel()
             }
-            session.markFailedAfterExhaustion()
+        }
+
+        /**
+         * V0.5-PERIODIC-REFRESH: background coroutine that refires
+         * [refreshDiscovery] every ~3s (with jitter) while the session is in
+         * `Reconnecting`. Started by [onConnectionLost] right after the
+         * initial one-shot refresh; cancelled in that function's `finally` so
+         * every exit path — rearm success, attempt exhaustion, state change
+         * to `Failed`/`Closed`, or scope cancellation — also stops the loop.
+         *
+         * Self-stops as a defensive belt-and-suspenders if it ever observes
+         * the session leaving `Reconnecting` between ticks; the outer
+         * `cancel()` is authoritative, this is just to log a more specific
+         * reason than "cancelled" when the state-transition path runs first.
+         *
+         * Launched on the SessionManager's [scope] (not the session's scope)
+         * so a session-scope-cancellation race during rearmWith() can't kill
+         * the periodic refresh mid-tick — the outer `finally` cancels it
+         * deterministically.
+         */
+        private fun launchPeriodicRefresh(
+            session: P2pSessionImpl,
+            peerShort: String
+        ): Job {
+            val periodMs = 3000L
+            val jitterMs = 400L
+            return scope.launch {
+                var tick = 0
+                var stopReason = "cancelled"
+                logger.info(
+                    "reconnect: periodic refresh started peer=$peerShort " +
+                        "name=${expectedPeer.name} periodMs=$periodMs jitterMs=±$jitterMs"
+                )
+                try {
+                    while (true) {
+                        val nextDelay = ((periodMs - jitterMs)..(periodMs + jitterMs)).random()
+                        delay(nextDelay)
+                        if (session.state.value != ConnectionState.Reconnecting) {
+                            stopReason = "stateChange:${session.state.value}"
+                            break
+                        }
+                        tick++
+                        logger.info(
+                            "reconnect: periodic refresh tick=$tick peer=$peerShort " +
+                                "name=${expectedPeer.name} delayMs=$nextDelay"
+                        )
+                        try {
+                            refreshDiscovery()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Throwable) {
+                            logger.warn(
+                                "reconnect: periodic refresh tick=$tick peer=$peerShort " +
+                                    "name=${expectedPeer.name} FAILED " +
+                                    "reason=${e::class.simpleName}: ${e.message ?: ""}"
+                            )
+                        }
+                    }
+                } finally {
+                    logger.info(
+                        "reconnect: periodic refresh stopped peer=$peerShort " +
+                            "name=${expectedPeer.name} ticks=$tick reason=$stopReason"
+                    )
+                }
+            }
         }
 
         private fun renderHints(hints: List<dev.p2pkit.core.transport.TransportHint>): String =
