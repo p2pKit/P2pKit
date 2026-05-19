@@ -343,6 +343,8 @@ internal class SessionManager(
         override suspend fun onConnectionLost(session: P2pSessionImpl) {
             var attempt = 0
             var lastResolvedHints = originalInternalPeer.transportHints
+            val peerShort = expectedPeer.id.value.take(8)
+            val cachedStr = renderHints(originalInternalPeer.transportHints)
             while (attempt < policy.maxAttempts) {
                 attempt++
                 try {
@@ -363,15 +365,20 @@ internal class SessionManager(
                 // Fresh per-attempt lookup. No caching between attempts; the
                 // read happens immediately before transport selection so the
                 // stale window between snapshot and dial is microseconds.
-                val target = peerLookup(expectedPeer.id) ?: originalInternalPeer
-                if (target.transportHints != lastResolvedHints) {
-                    logger.debug(
-                        "Reconnect target changed for peer=${expectedPeer.id.value.take(8)} " +
-                            "on attempt $attempt: previous=$lastResolvedHints " +
-                            "new=${target.transportHints}"
-                    )
-                    lastResolvedHints = target.transportHints
-                }
+                val resolved = peerLookup(expectedPeer.id)
+                val target = resolved ?: originalInternalPeer
+                val registryHit = resolved != null
+                val resolvedStr = if (resolved != null) renderHints(resolved.transportHints) else "—"
+                val dialedStr = renderHints(target.transportHints)
+                val changedFromPrev = target.transportHints != lastResolvedHints
+                val source = if (registryHit) "REGISTRY" else "FALLBACK"
+                logger.info(
+                    "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
+                        "name=${expectedPeer.name} cached=$cachedStr resolved=$resolvedStr " +
+                        "dialed=$dialedStr source=$source registryHit=$registryHit " +
+                        "changedFromPrev=$changedFromPrev"
+                )
+                lastResolvedHints = target.transportHints
 
                 val outcome = runCatching {
                     val transport = transportManager.selectBestTransport(target)
@@ -382,8 +389,9 @@ internal class SessionManager(
                 val handshake = outcome.getOrElse { e ->
                     if (e is CancellationException) throw e
                     logger.warn(
-                        "Reconnect attempt $attempt/${policy.maxAttempts} for " +
-                            "${expectedPeer.name} failed: ${e.message ?: e::class.simpleName}"
+                        "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
+                            "name=${expectedPeer.name} FAILED dialed=$dialedStr source=$source " +
+                            "reason=${e::class.simpleName}: ${e.message ?: ""}"
                     )
                     null
                 } ?: continue
@@ -398,13 +406,19 @@ internal class SessionManager(
                 }
 
                 session.rearmWith(handshake.secureConnection, handshake.events)
-                logger.debug(
-                    "Session ${session.id}: reconnected to ${expectedPeer.name} on attempt $attempt"
+                logger.info(
+                    "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
+                        "name=${expectedPeer.name} SUCCEEDED dialed=$dialedStr source=$source"
                 )
                 return
             }
             session.markFailedAfterExhaustion()
         }
+
+        private fun renderHints(hints: List<dev.p2pkit.core.transport.TransportHint>): String =
+            if (hints.isEmpty()) "—" else hints.joinToString(",") { h ->
+                "${h.type}:${h.host ?: "?"}:${h.port ?: "?"}"
+            }
     }
 
     /**

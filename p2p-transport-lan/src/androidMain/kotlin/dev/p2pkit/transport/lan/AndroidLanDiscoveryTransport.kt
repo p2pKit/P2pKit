@@ -311,12 +311,14 @@ internal class AndroidLanDiscoveryTransport(
 
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
                 if (serviceInfo.serviceName == registration.localPeerId.value) return
+                Log.d(TAG, "onServiceFound: pid=${serviceInfo.serviceName?.take(8)} — resolving")
                 resolve(serviceInfo)
             }
 
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {
                 val pid = serviceInfo.serviceName ?: return
                 if (pid == registration.localPeerId.value) return
+                Log.d(TAG, "onServiceLost: pid=${pid.take(8)} — emitting PeerEvent.Lost (peer evicted from registry)")
                 // V0.4-RESOLVE-RETRY: peer is gone — cancel any pending
                 // re-resolve so we don't keep trying to reach a peer that
                 // has explicitly left.
@@ -405,6 +407,10 @@ internal class AndroidLanDiscoveryTransport(
                     transportHints = listOf(
                         TransportHint(type = TransportKind.LAN, host = host, port = port)
                     )
+                )
+                Log.d(
+                    TAG,
+                    "onServiceResolved: pid=${pid.take(8)} host=$host port=$port — emitting PeerEvent.Found"
                 )
                 _events.tryEmit(PeerEvent.Found(internalPeer))
             }
