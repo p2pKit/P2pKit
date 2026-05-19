@@ -48,6 +48,9 @@ import platform.Network.nw_listener_state_failed
 import platform.Network.nw_listener_state_ready
 import platform.Network.nw_listener_t
 import platform.Network.nw_parameters_t
+import platform.Network.nw_interface_type_cellular
+import platform.Network.nw_interface_type_wifi
+import platform.Network.nw_interface_type_wired
 import platform.Network.nw_path_get_status
 import platform.Network.nw_path_monitor_cancel
 import platform.Network.nw_path_monitor_create
@@ -56,6 +59,7 @@ import platform.Network.nw_path_monitor_set_update_handler
 import platform.Network.nw_path_monitor_start
 import platform.Network.nw_path_monitor_t
 import platform.Network.nw_path_status_satisfied
+import platform.Network.nw_path_uses_interface_type
 import platform.UIKit.UIApplicationWillEnterForegroundNotification
 import platform.darwin.DISPATCH_TIME_NOW
 import platform.darwin.NSObjectProtocol
@@ -188,6 +192,30 @@ internal class IosLanDataTransport(
     /** Has any path observation reported `satisfied` yet — used to skip first-signal rebind. */
     @Volatile
     private var hasEverObservedSatisfied: Boolean = false
+
+    /**
+     * V0.4-IOS-PATH-INTERFACE-CHANGE: 3-bit fingerprint of which
+     * interface types are currently part of the satisfied path:
+     *
+     *   bit 0 = Wi-Fi   (nw_interface_type_wifi)
+     *   bit 1 = cellular (nw_interface_type_cellular)
+     *   bit 2 = wired   (nw_interface_type_wired)
+     *
+     * Sentinel `-1` = never observed (used to skip first-signal rebind,
+     * paralleling [hasEverObservedSatisfied]). Required because Apple's
+     * `nw_path_status` stays `satisfied` when Wi-Fi flaps with cellular
+     * fallback available — the satisfaction bit doesn't change but the
+     * interface set does, and our LAN listener/browser are bound to
+     * whatever interface was active at registration. When the active
+     * interface set changes, the SDK must re-register on the new one.
+     *
+     * Read/written only from the path-monitor update handler (serial on
+     * [pathQueue]). The only cross-context write is [stopPathMonitor]'s
+     * reset, sequenced after `nw_path_monitor_cancel`; `@Volatile`
+     * guarantees visibility across that boundary.
+     */
+    @Volatile
+    private var lastInterfaceFingerprint: Int = -1
 
     /**
      * Scope for the debounced rebind coroutine. SupervisorJob so one
@@ -425,13 +453,48 @@ internal class IosLanDataTransport(
             lastWasSatisfied = isSatisfied
             if (isSatisfied) hasEverObservedSatisfied = true
             val becameSatisfied = isSatisfied && !prevWasSatisfied
+
+            // V0.4-IOS-PATH-INTERFACE-CHANGE: complementary trigger that
+            // fires when the satisfied path's interface set changes
+            // (Wi-Fi flap masked by cellular fallback — the satisfaction
+            // bit never flips, but the LAN listener needs rebinding
+            // because the underlying interface has changed).
+            val usesWifi = nw_path_uses_interface_type(path, nw_interface_type_wifi)
+            val usesCellular = nw_path_uses_interface_type(path, nw_interface_type_cellular)
+            val usesWired = nw_path_uses_interface_type(path, nw_interface_type_wired)
+            val fingerprint = (if (usesWifi) 1 else 0) or
+                (if (usesCellular) 2 else 0) or
+                (if (usesWired) 4 else 0)
+            val prevFingerprint = lastInterfaceFingerprint
+            val isFirstFingerprint = prevFingerprint == -1
+            // Only update fingerprint while satisfied — if we're transiently
+            // unsatisfied, we want to retain the last-known-good interface
+            // set so the next "back to satisfied" comparison sees the real
+            // pre-flap baseline, not a transient null state.
+            if (isSatisfied) lastInterfaceFingerprint = fingerprint
+            val interfaceChanged = isSatisfied &&
+                !isFirstFingerprint &&
+                prevFingerprint != fingerprint
+
             IosLanDebug.log(
                 "data",
                 "path-monitor: status=$status isSatisfied=$isSatisfied " +
-                    "becameSatisfied=$becameSatisfied isFirst=$isFirstEver"
+                    "becameSatisfied=$becameSatisfied isFirst=$isFirstEver " +
+                    "usesWifi=$usesWifi usesCellular=$usesCellular usesWired=$usesWired " +
+                    "fingerprint=$fingerprint prev=$prevFingerprint " +
+                    "interfaceChanged=$interfaceChanged"
             )
-            if (becameSatisfied && !isFirstEver) {
-                scheduleRebind("path satisfied after change (status=$status)")
+
+            when {
+                becameSatisfied && !isFirstEver -> {
+                    scheduleRebind("path satisfied after change (status=$status)")
+                }
+                interfaceChanged -> {
+                    scheduleRebind(
+                        "active interface set changed: $prevFingerprint -> $fingerprint " +
+                            "(usesWifi=$usesWifi usesCellular=$usesCellular usesWired=$usesWired)"
+                    )
+                }
             }
             Unit
         }
@@ -450,6 +513,7 @@ internal class IosLanDataTransport(
         // further handler invocations, and @Volatile guarantees visibility.
         lastWasSatisfied = false
         hasEverObservedSatisfied = false
+        lastInterfaceFingerprint = -1
         IosLanDebug.log("data", "stopPathMonitor: monitor cancelled, pending rebind cleared")
     }
 
