@@ -102,6 +102,13 @@ kotlin {
         jvmMain.dependencies {
             implementation(libs.jmdns)
         }
+        // Task #25 (v0.5): Android uses JmDNS instead of NsdManager to own the
+        // mDNS cache in-process and unblock per-peer record invalidation that
+        // the system NSD daemon does not expose. Pure-Java jar, no native
+        // bits, so the same artifact as jvmMain.
+        androidMain.dependencies {
+            implementation(libs.jmdns)
+        }
     }
 }
 

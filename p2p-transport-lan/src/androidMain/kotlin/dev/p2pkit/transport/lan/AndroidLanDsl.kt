@@ -7,11 +7,14 @@ import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
 
 /**
- * Register the LAN transport (NsdManager discovery + TCP data) on Android.
+ * Register the LAN transport (JmDNS discovery + TCP data) on Android.
  *
- * Requires a `Context` because [android.net.nsd.NsdManager] is obtained from
- * `Context.getSystemService`. Only the [Context.getApplicationContext] is
- * held, so a short-lived Activity is safe to pass.
+ * v0.5 (task #25) swapped the previous `NsdManager`-based discovery for
+ * in-process JmDNS so the SDK owns the mDNS cache. `Context` is still
+ * required because the multicast-lock and connectivity-manager hooks
+ * are obtained from `Context.getSystemService`. Only
+ * [Context.getApplicationContext] is held, so a short-lived Activity is
+ * safe to pass.
  *
  * Usage:
  *

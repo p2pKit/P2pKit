@@ -25,7 +25,7 @@ set -e
 cd "${SRCROOT:-$(dirname "$0")/..}/.."
 
 echo "→ V0.4-PROVENANCE: ensuring P2pKitShared XCFramework is up to date..."
-./gradlew :p2p-transport-lan:assembleP2pKitSharedReleaseXCFramework \
+sh ./gradlew :p2p-transport-lan:assembleP2pKitSharedReleaseXCFramework \
   -q --console=plain
 
 XCF_DIR="p2p-transport-lan/build/XCFrameworks/release"
@@ -41,7 +41,7 @@ fi
 if [ ! -f "$XCF_COMMIT_FILE" ]; then
     echo "error: BUILD_COMMIT.txt sidecar missing at $XCF_COMMIT_FILE"
     echo "       writeXcframeworkCommit did not finalize the assemble task."
-    echo "       Run: ./gradlew :p2p-transport-lan:assembleP2pKitSharedReleaseXCFramework"
+    echo "       Run: sh ./gradlew :p2p-transport-lan:assembleP2pKitSharedReleaseXCFramework"
     exit 1
 fi
 
@@ -52,7 +52,7 @@ if [ "$XCF_COMMIT" != "$HEAD_COMMIT" ]; then
     echo "error: XCFramework identity mismatch — refusing to build against stale code:"
     echo "  expected (git HEAD):  $HEAD_COMMIT"
     echo "  actual (framework):   $XCF_COMMIT"
-    echo "  Fix: ./gradlew :p2p-transport-lan:assembleP2pKitSharedReleaseXCFramework"
+    echo "  Fix: sh ./gradlew :p2p-transport-lan:assembleP2pKitSharedReleaseXCFramework"
     exit 1
 fi
 
