@@ -38,6 +38,8 @@ internal class FakeDiscoveryTransport(
         private set
     var stopDiscoveryCalls: Int = 0
         private set
+    var refreshCalls: Int = 0
+        private set
 
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) {
         startAdvertisingCalls++
@@ -53,6 +55,10 @@ internal class FakeDiscoveryTransport(
 
     override suspend fun stopDiscovery() {
         stopDiscoveryCalls++
+    }
+
+    override suspend fun refresh() {
+        refreshCalls++
     }
 
     /** Push a discovery event into the kit's `PeerRegistry`. */

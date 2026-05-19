@@ -178,6 +178,32 @@ internal class IosLanDiscoveryTransport(
         nw_browser_cancel(b)
     }
 
+    /**
+     * V0.4-DISCOVERY-REFRESH: cancel and immediately recreate the NWBrowser
+     * so a fresh Bonjour query goes out on the wire. Called by
+     * SessionManager when an outgoing session enters Reconnecting — closes
+     * the gap where the remote peer rebound to a new port but we haven't
+     * received the unsolicited announce yet.
+     *
+     * Reads [discoveryStartedByHost] (not the [browser] field) because iOS
+     * may have transiently nulled the browser between the host's intent
+     * and now — we want to honour the host's intent regardless.
+     *
+     * No-op if the host hasn't started discovery.
+     */
+    override suspend fun refresh() = lock.withLock {
+        if (!discoveryStartedByHost) {
+            IosLanDebug.log("browse", "refresh: host not discovering — skipping")
+            return@withLock
+        }
+        IosLanDebug.log("browse", "refresh: cancel + recreate browser to flush Bonjour cache")
+        browser?.let { nw_browser_cancel(it) }
+        browser = null
+        browserReady = false
+        createBrowserLocked()
+        IosLanDebug.log("browse", "refresh: fresh browser started")
+    }
+
     // ──────────────────────────────────────────────────────────────────
     // V0.4-IOS-LISTENER-REBIND: listener-rebind hook handlers.
     //

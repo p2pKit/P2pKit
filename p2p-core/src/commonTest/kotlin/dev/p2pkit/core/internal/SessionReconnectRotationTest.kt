@@ -239,6 +239,99 @@ class SessionReconnectRotationTest {
         }
     }
 
+    /**
+     * V0.4-DISCOVERY-REFRESH: when an outgoing session enters Reconnecting,
+     * SessionManager must invoke `refresh()` on every registered
+     * DiscoveryTransport exactly once before the retry loop starts. This
+     * closes the gap where the remote peer rebound to a new port but the
+     * local NSD cache hasn't observed the re-announcement — the active
+     * refresh forces a fresh query so the remote can respond with its
+     * current port before the next dial.
+     */
+    @Test
+    fun discoveryRefreshFiresOnReconnectingTransition() = runBlocking<Unit> {
+        val pair1 = FakeConnectionPair()
+        val pair2 = FakeConnectionPair()
+        val outQueue = ArrayDeque<RawConnection>().apply {
+            add(pair1.a); add(pair2.a)
+        }
+        val aliceData = FakeDataTransport(outgoingConnection = { outQueue.removeFirst() })
+        val aliceDiscovery = FakeDiscoveryTransport()
+
+        val hintsV1 = listOf(TransportHint(TransportKind.LAN, host = "10.0.0.5", port = 4000))
+        val bobV1 = InternalPeer(publicPeer = bobPeer, transportHints = hintsV1)
+
+        val alice = P2pKit.create {
+            appId = AppId("com.example.test")
+            deviceName = "Alice"
+            keepAlive {
+                pingIntervalMillis = 60_000
+                timeoutMillis = 120_000
+            }
+            lifecycle {
+                reconnectPolicy = ReconnectPolicy.Enabled(
+                    maxAttempts = 3,
+                    retryDelayMillis = 200
+                )
+            }
+            transports {
+                register(RotationTestFactory(aliceData, aliceDiscovery))
+            }
+        }
+        val bob = P2pKit.create {
+            appId = AppId("com.example.test")
+            deviceName = "Bob"
+            keepAlive {
+                pingIntervalMillis = 60_000
+                timeoutMillis = 120_000
+            }
+            transports {
+                register(
+                    RotationTestFactory(
+                        data = FakeDataTransport(
+                            preStagedIncoming = listOf(pair1.b, pair2.b)
+                        ),
+                        discovery = null
+                    )
+                )
+            }
+        }
+        try {
+            aliceDiscovery.emit(PeerEvent.Found(bobV1))
+            withTimeout(2_000) {
+                alice.peers.first { list -> list.any { it.id == bobPeer.id } }
+            }
+
+            val session = withTimeout(5_000) { alice.connect(bobPeer) }
+            assertEquals(ConnectionState.Connected, session.state.value)
+            // refresh() must NOT fire on initial connect — only on reconnect.
+            assertEquals(0, aliceDiscovery.refreshCalls, "no refresh during initial connect")
+
+            // Break the wire — session goes Reconnecting → handler should
+            // invoke refresh() exactly once before the first retry dials.
+            pair1.a.breakWith(RuntimeException("simulated wire break"))
+            withTimeout(5_000) {
+                session.state.first { it == ConnectionState.Reconnecting }
+            }
+
+            // Wait for reconnect to land. The exact ordering of refresh()
+            // vs. the first retry attempt is "refresh first, then attempts" —
+            // we assert refreshCalls becomes 1 by the time we observe
+            // Connected, and stays at 1 (single refresh per Reconnecting
+            // episode).
+            withTimeout(5_000) {
+                session.state.first { it == ConnectionState.Connected }
+            }
+            assertEquals(
+                1, aliceDiscovery.refreshCalls,
+                "refresh() must be invoked exactly once per Reconnecting episode"
+            )
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
     private class RotationTestFactory(
         private val data: FakeDataTransport,
         private val discovery: DiscoveryTransport?

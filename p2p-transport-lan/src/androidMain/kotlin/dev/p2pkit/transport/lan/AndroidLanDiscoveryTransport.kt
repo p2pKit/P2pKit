@@ -249,6 +249,48 @@ internal class AndroidLanDiscoveryTransport(
         releaseMulticastLockIfIdle()
     }
 
+    /**
+     * V0.4-DISCOVERY-REFRESH: force a fresh round of NSD active queries.
+     *
+     * Called when a session enters Reconnecting. We tear down the current
+     * discovery listener and immediately install a fresh one — the fresh
+     * `discoverServices` call sends new mDNS queries on the wire, so a
+     * remote peer that rebound to a new port (and whose unsolicited
+     * announce we missed) will respond and re-populate `PeerRegistry`
+     * before the next dial.
+     *
+     * No-op if discovery wasn't running (host stopped it explicitly).
+     * Pending resolve retries are cleared because they reference the
+     * old listener's service infos.
+     */
+    override suspend fun refresh() = lock.withLock {
+        val oldListener = discoveryListener
+        if (oldListener == null) {
+            Log.d(TAG, "refresh: no discovery listener active — skipping")
+            return@withLock
+        }
+        Log.d(TAG, "refresh: stop+start discoverServices to flush mDNS cache")
+        runCatching { nsd.stopServiceDiscovery(oldListener) }
+        // Stale pending re-resolves point at infos from the old listener
+        // and would race a fresh round of onServiceFound emissions.
+        clearAllResolveRetries("refresh")
+        val freshListener = buildDiscoveryListener()
+        runCatching {
+            nsd.discoverServices(
+                LanConstants.SERVICE_TYPE_NSD,
+                NsdManager.PROTOCOL_DNS_SD,
+                freshListener
+            )
+            discoveryListener = freshListener
+            Log.d(TAG, "refresh: discoverServices submitted on fresh listener")
+        }.onFailure { e ->
+            // Leave discoveryListener null so the next state change can
+            // re-attempt cleanly via startDiscovery / rebindNow.
+            discoveryListener = null
+            Log.w(TAG, "refresh: discoverServices failed", e)
+        }
+    }
+
     private fun buildServiceInfo(localPeer: LocalPeerInfo): NsdServiceInfo =
         NsdServiceInfo().apply {
             serviceName = registration.localPeerId.value

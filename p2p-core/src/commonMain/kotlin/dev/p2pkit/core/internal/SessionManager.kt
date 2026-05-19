@@ -81,7 +81,18 @@ internal class SessionManager(
      * Default `{ null }` makes existing tests that construct SessionManager
      * without a registry transparently fall back to the captured peer.
      */
-    private val peerLookup: (PeerId) -> InternalPeer? = { null }
+    private val peerLookup: (PeerId) -> InternalPeer? = { null },
+    /**
+     * V0.4-DISCOVERY-REFRESH: invoked once when an outgoing session enters
+     * `Reconnecting`, before the first retry attempt. Wired by P2pKitImpl
+     * to call `DiscoveryTransport.refresh()` on every registered discovery
+     * transport — forces a fresh active mDNS query so the remote peer's
+     * post-rebind port can land in `PeerRegistry` before the next dial.
+     *
+     * Default `{}` keeps existing tests (no transports / no registry)
+     * working without a refresh path.
+     */
+    private val refreshDiscovery: suspend () -> Unit = {}
 ) {
 
     /**
@@ -345,6 +356,28 @@ internal class SessionManager(
             var lastResolvedHints = originalInternalPeer.transportHints
             val peerShort = expectedPeer.id.value.take(8)
             val cachedStr = renderHints(originalInternalPeer.transportHints)
+            // V0.4-DISCOVERY-REFRESH: ask every discovery transport to send
+            // a fresh active query before the first dial. Closes the gap
+            // where the remote peer rebound to a new port but our NSD cache
+            // hasn't observed the re-announcement yet — the active query
+            // forces the remote responder to answer with its current state.
+            // Errors are caught + logged but do not block the retry loop.
+            logger.info(
+                "reconnect: refresh requested peer=$peerShort name=${expectedPeer.name}"
+            )
+            try {
+                refreshDiscovery()
+                logger.info(
+                    "reconnect: refresh complete peer=$peerShort name=${expectedPeer.name}"
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                logger.warn(
+                    "reconnect: refresh failed peer=$peerShort name=${expectedPeer.name} " +
+                        "reason=${e::class.simpleName}: ${e.message ?: ""}"
+                )
+            }
             while (attempt < policy.maxAttempts) {
                 attempt++
                 try {

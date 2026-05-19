@@ -156,7 +156,22 @@ internal class P2pKitImpl(
             clock = clock,
             logger = logger,
             fileTransferConfig = fileTransferConfig,
-            peerLookup = peerRegistry::internalPeer
+            peerLookup = peerRegistry::internalPeer,
+            refreshDiscovery = {
+                // V0.4-DISCOVERY-REFRESH: fan out to every registered
+                // discovery transport. Run sequentially under each
+                // transport's own lock; runCatching keeps one transport's
+                // failure from blocking the others.
+                discoveryTransports.forEach { transport ->
+                    runCatching { transport.refresh() }
+                        .onFailure { e ->
+                            logger.warn(
+                                "discovery refresh failed for ${transport.type}: " +
+                                    "${e::class.simpleName}: ${e.message ?: ""}"
+                            )
+                        }
+                }
+            }
         )
         peerRegistry.start()
         sessionManager.startAcceptingIncoming(dataTransports)
