@@ -412,6 +412,18 @@ struct ContentView: View {
             builder.transports { (tx: TransportsBuilder) in
                 tx.lan()
             }
+            // Sample-only tuning. SDK defaults are pingIntervalMillis=10_000 /
+            // timeoutMillis=30_000 — appropriate for general-purpose /
+            // battery-conscious apps. The values below are tuned for
+            // interactive / real-time use (e.g. local-multiplayer games)
+            // where ~6s disconnect detection matters more than the ~24s
+            // of extra background pings per session. Apps consuming this
+            // library can pick their own values via the same
+            // `keepAlive { ... }` block.
+            builder.keepAlive { (kaBuilder: KeepAliveConfigBuilder) in
+                kaBuilder.pingIntervalMillis = 2_000
+                kaBuilder.timeoutMillis = 6_000
+            }
             builder.networkProvisioning { (np: NetworkProvisioningConfigBuilder) in
                 np.iosManualIp()
             }
