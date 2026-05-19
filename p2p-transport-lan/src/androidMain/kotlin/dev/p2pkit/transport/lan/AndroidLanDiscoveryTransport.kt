@@ -246,45 +246,93 @@ internal class AndroidLanDiscoveryTransport(
     }
 
     /**
-     * V0.4-DISCOVERY-REFRESH: re-attach the JmDNS service listener so a
-     * fresh round of active mDNS queries goes out on the wire.
+     * V0.4-DISCOVERY-REFRESH + V0.5-FORCED-REFRESH: force a fresh round
+     * of active mDNS queries plus per-peer cache invalidation.
      *
-     * v0.5 (task #25) note: the v0.4 `V0.4-D-ANDROID-NUDGE` workaround
-     * (unregister + brief delay + re-register own service) existed solely
-     * to nudge the platform NSD daemon to flush its opaque mDNS cache.
-     * JmDNS owns the cache in-process, so the nudge is gone. Phase 2 of
-     * task #25 lands the actual per-peer `requestServiceInfo(force=true)`
-     * primitive that gives reconnect a targeted cache-flush capability;
-     * for Phase 1 the listener-rotation pattern is sufficient — it
-     * mirrors how the JVM transport handles refresh today (default
-     * no-op) plus the historical Android intent of forcing a fresh
-     * query round.
+     * Two-step body, both steps under [lock]:
      *
-     * No-op if discovery wasn't running.
+     *   1. **Listener rotation** — remove + re-add the service listener.
+     *      JmDNS issues a fresh generic browse query (PTR for the service
+     *      type) whenever a listener is added, so any peer that has gone
+     *      silent since the last query gets a chance to re-announce.
+     *
+     *   2. **Per-peer forced re-query** — iterate `JmDNS.list(type)` and
+     *      call `requestServiceInfo(type, name, persistent=true)` for
+     *      every cached non-self peer. Closes the v0.4 known limitation:
+     *      when a remote peer rebinds its listener port the local cache
+     *      keeps the stale port until the original TTL expires, and
+     *      without this call reconnect dials the dead port. The forced
+     *      re-query invalidates the cache entry and triggers a fresh
+     *      SRV/TXT/A resolution — `serviceResolved` then fires with the
+     *      peer's current port and `PeerRegistry` updates in time for
+     *      the next reconnect attempt.
+     *
+     * Why the v0.4 `V0.4-D-ANDROID-NUDGE` is gone: it existed only to
+     * nudge the platform NSD daemon to flush its opaque cache (which
+     * was the v0.4 limitation in the first place). JmDNS owns the cache
+     * in-process, so the targeted `requestServiceInfo` call above is
+     * the real fix the v0.4 nudge was approximating.
+     *
+     * Logs the cached port per peer before the force re-query so the
+     * subsequent `serviceResolved` line (which logs the post-refresh
+     * host+port) makes the stale→fresh transition visible in logcat.
+     *
+     * No-op if discovery isn't currently running.
      */
     override suspend fun refresh() = lock.withLock {
         val old = serviceListener
-        if (old == null) {
+        val handle = jmdns
+        if (old == null || handle == null) {
             Log.d(TAG, "refresh: no listener active — skipping")
             return@withLock
         }
-        Log.d(TAG, "refresh: re-adding service listener to force fresh mDNS query")
+        Log.d(TAG, "refresh: rotating listener + force re-querying known peers")
+
+        // Step 1: listener rotation — fresh generic browse.
         withContext(Dispatchers.IO) {
-            runCatching { jmdns?.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, old) }
+            runCatching { handle.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, old) }
         }
         val fresh = buildServiceListener()
-        runCatching {
+        val listenerOk = runCatching {
             withContext(Dispatchers.IO) {
-                jmdns?.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, fresh)
+                handle.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, fresh)
             }
             serviceListener = fresh
-            Log.d(TAG, "refresh: listener re-attached")
         }.onFailure { e ->
             // Leave serviceListener null so the next state change can
             // re-attempt cleanly via startDiscovery / rebindNow.
             serviceListener = null
             Log.w(TAG, "refresh: addServiceListener failed", e)
+        }.isSuccess
+
+        if (!listenerOk) return@withLock
+
+        // Step 2: per-peer forced re-query. JmDNS.list() returns the
+        // current cached ServiceInfo entries WITHOUT issuing a fresh
+        // wire query — it's a pure cache read. requestServiceInfo(...,
+        // persistent=true) then invalidates that entry and re-resolves.
+        val cached = withContext(Dispatchers.IO) {
+            runCatching { handle.list(LanConstants.SERVICE_TYPE_JMDNS) }
+                .getOrDefault(emptyArray())
         }
+        var forced = 0
+        cached.forEach { info ->
+            val pid = info.getPropertyString(LanConstants.TXT_PEER_ID) ?: info.name
+            if (pid == registration.localPeerId.value) return@forEach
+            val cachedPort = info.port
+            Log.d(
+                TAG,
+                "refresh: force re-query pid=${pid.take(8)} " +
+                    "name=${info.name} cachedPort=$cachedPort"
+            )
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    handle.requestServiceInfo(info.type, info.name, true)
+                }
+            }
+            forced++
+        }
+        Log.d(TAG, "refresh: complete (rotated listener; forced re-query for $forced peers)")
     }
 
     // ──────────────────────────────────────────────────────────────────
