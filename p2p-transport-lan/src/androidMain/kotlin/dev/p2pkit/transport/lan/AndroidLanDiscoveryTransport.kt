@@ -252,12 +252,20 @@ internal class AndroidLanDiscoveryTransport(
     /**
      * V0.4-DISCOVERY-REFRESH: force a fresh round of NSD active queries.
      *
-     * Called when a session enters Reconnecting. We tear down the current
-     * discovery listener and immediately install a fresh one — the fresh
-     * `discoverServices` call sends new mDNS queries on the wire, so a
-     * remote peer that rebound to a new port (and whose unsolicited
-     * announce we missed) will respond and re-populate `PeerRegistry`
-     * before the next dial.
+     * Called when a session enters Reconnecting. Two-part refresh:
+     *
+     * 1. Tear down + install a fresh discovery listener — the fresh
+     *    `discoverServices` call sends new mDNS queries on the wire.
+     * 2. **V0.4-D-ANDROID-NUDGE**: if we're currently advertising, also
+     *    unregister + re-register our own service. The platform NSD
+     *    daemon caches mDNS records aggressively, and the simple
+     *    discovery restart in part 1 alone often returns cached
+     *    resolutions (observed: 41ms turnaround serving a stale port).
+     *    Forcing the local advertise registration through a full
+     *    unregister/re-register cycle nudges the daemon's mDNS
+     *    subsystem to flush related caches and re-emit traffic, which
+     *    in turn coaxes peers to re-announce and fresh records to
+     *    populate.
      *
      * No-op if discovery wasn't running (host stopped it explicitly).
      * Pending resolve retries are cleared because they reference the
@@ -288,6 +296,48 @@ internal class AndroidLanDiscoveryTransport(
             // re-attempt cleanly via startDiscovery / rebindNow.
             discoveryListener = null
             Log.w(TAG, "refresh: discoverServices failed", e)
+        }
+        nudgeOwnServiceRegistration()
+    }
+
+    /**
+     * V0.4-D-ANDROID-NUDGE: unregister + (brief delay) + re-register our
+     * own NSD service. Called from [refresh] while holding [lock].
+     *
+     * Rationale: even when [refresh]'s discovery restart returns a fresh
+     * cached resolution, that resolution often carries a stale port
+     * because Android's NSD daemon caches mDNS SRV records for an
+     * extended TTL. Forcing the daemon to re-process our own advertise
+     * cycle gives it a chance to:
+     *  - flush the in-process cache for our service type,
+     *  - re-emit local mDNS announcement traffic,
+     *  - actively re-query for peers it already knows about.
+     *
+     * No-op when not currently advertising.
+     */
+    private suspend fun nudgeOwnServiceRegistration() {
+        val oldAdvertiseListener = registrationListener
+        val cached = cachedLocalPeer
+        if (oldAdvertiseListener == null || cached == null) {
+            Log.d(TAG, "refresh: nudge skipped — not currently advertising")
+            return
+        }
+        Log.d(TAG, "refresh: nudge — unregistering own service to flush NSD cache")
+        runCatching { nsd.unregisterService(oldAdvertiseListener) }
+        registrationListener = null
+        // Brief gap so the NSD daemon processes the goodbye before the
+        // fresh register arrives — without this they can collapse into a
+        // no-op (same name + same type observed as unchanged).
+        delay(NUDGE_GAP_MILLIS)
+        val info = buildServiceInfo(cached)
+        val freshListener = buildRegistrationListener(confirmation = null)
+        runCatching {
+            nsd.registerService(info, NsdManager.PROTOCOL_DNS_SD, freshListener)
+            registrationListener = freshListener
+            Log.d(TAG, "refresh: nudge — own service re-registered")
+        }.onFailure { e ->
+            registrationListener = null
+            Log.w(TAG, "refresh: nudge — own service re-register failed", e)
         }
     }
 
@@ -858,6 +908,16 @@ internal class AndroidLanDiscoveryTransport(
          * enough for slow DHCP without leaving a peer permanently stuck.
          */
         const val RESOLVE_RETRY_MAX_ATTEMPTS = 3
+
+        /**
+         * V0.4-D-ANDROID-NUDGE: gap between `unregisterService` and the
+         * fresh `registerService` during a discovery refresh. Without a
+         * non-zero gap the NSD daemon coalesces them into a no-op
+         * (same service name + type appears unchanged); 200 ms is enough
+         * for the daemon to process the goodbye before the new registration
+         * arrives, while keeping the total refresh window short.
+         */
+        const val NUDGE_GAP_MILLIS = 200L
     }
 }
 

@@ -14,10 +14,16 @@ import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportHint
 import kotlin.concurrent.Volatile
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import platform.Network.nw_advertise_descriptor_create_bonjour_service
@@ -128,6 +134,18 @@ internal class IosLanDiscoveryTransport(
      */
     @Volatile
     private var wasBrowsingBeforeRebind: Boolean = false
+
+    /**
+     * V0.4-D-IOS-NUDGE: scope for the post-rebind Bonjour re-announce
+     * nudge. SupervisorJob so a failed nudge doesn't poison the scope for
+     * subsequent rebinds. Lives for the transport's lifetime.
+     */
+    private val nudgeScope: CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** Most recent pending nudge job; superseded on each new rebind. */
+    @Volatile
+    private var pendingNudgeJob: Job? = null
 
     init {
         // Wire the listener-rebind hooks at factory construction time —
@@ -263,6 +281,7 @@ internal class IosLanDiscoveryTransport(
                     "rebind: re-attached descriptor on new listener " +
                         "(peerId=${cached.peerId.value.take(8)} name=${cached.deviceName})"
                 )
+                scheduleBonjourReannounceNudge(newListener, cached)
             } else {
                 IosLanDebug.log(
                     "advertise",
@@ -278,6 +297,71 @@ internal class IosLanDiscoveryTransport(
             IosLanDebug.log("browse", "rebind: browser recreated on new listener queue")
         } else {
             IosLanDebug.log("browse", "rebind: was not browsing; nothing to recreate")
+        }
+    }
+
+    /**
+     * V0.4-D-IOS-NUDGE: force Apple's mDNSResponder to emit a fresh
+     * goodbye + announce sequence on the new interface.
+     *
+     * Background: when the listener rebinds during a Wi-Fi flap, Apple's
+     * mDNSResponder may have multicast its previous announcement on a
+     * dying interface (Wi-Fi just went off) so the new-port announcement
+     * never reaches peers. Re-attaching the same descriptor onto the new
+     * listener is often treated as a no-op by mDNSResponder because the
+     * service identity (name+type) is unchanged.
+     *
+     * The nudge: after a small delay (so the rebind's initial registration
+     * settles), explicitly null the descriptor (mDNS goodbye), wait for the
+     * goodbye to multicast, then re-attach (mDNS fresh announcement). This
+     * gives any peer whose cache is holding the pre-flap port a clear
+     * "service-removed then service-added" sequence to act on.
+     *
+     * Runs on a separate scope so the rebind path returns promptly. The
+     * pending job is cancelled if a fresh rebind supersedes us — only the
+     * latest rebind's nudge needs to fire. Each step re-acquires [lock]
+     * and re-checks state, so a `stopAdvertising` (or another rebind)
+     * mid-nudge aborts cleanly without leaving the listener mis-configured.
+     */
+    private fun scheduleBonjourReannounceNudge(
+        listener: nw_listener_t,
+        peer: LocalPeerInfo
+    ) {
+        pendingNudgeJob?.cancel()
+        pendingNudgeJob = nudgeScope.launch {
+            // Let the rebind's normal announcement complete first.
+            delay(NUDGE_INITIAL_DELAY_MS)
+            lock.withLock {
+                if (!advertising || cachedLocalPeer?.peerId != peer.peerId) {
+                    IosLanDebug.log(
+                        "advertise",
+                        "rebind: nudge skipped — advertise state changed before goodbye"
+                    )
+                    return@withLock
+                }
+                IosLanDebug.log(
+                    "advertise",
+                    "rebind: nudge — deregistering descriptor (mDNS goodbye)"
+                )
+                nw_listener_set_advertise_descriptor(listener, null)
+            }
+            // Wait for the goodbye to multicast before the fresh announce.
+            delay(NUDGE_GAP_MS)
+            lock.withLock {
+                if (!advertising || cachedLocalPeer?.peerId != peer.peerId) {
+                    IosLanDebug.log(
+                        "advertise",
+                        "rebind: nudge — skipping re-register (state changed mid-nudge)"
+                    )
+                    return@withLock
+                }
+                val freshDescriptor = buildAdvertiseDescriptor(peer)
+                nw_listener_set_advertise_descriptor(listener, freshDescriptor)
+                IosLanDebug.log(
+                    "advertise",
+                    "rebind: nudge — re-registered descriptor (mDNS fresh announce)"
+                )
+            }
         }
     }
 
@@ -444,5 +528,22 @@ internal class IosLanDiscoveryTransport(
         endpointRegistry.remove(peerId)
         _events.tryEmit(PeerEvent.Lost(peerId))
         IosLanDebug.log("browse", "emitLost: $pid")
+    }
+
+    private companion object {
+        /**
+         * V0.4-D-IOS-NUDGE: wait this long after a listener rebind before
+         * deregistering the Bonjour descriptor. Gives mDNSResponder time
+         * to finish the rebind's initial announcement.
+         */
+        const val NUDGE_INITIAL_DELAY_MS: Long = 150
+
+        /**
+         * V0.4-D-IOS-NUDGE: gap between mDNS goodbye (descriptor=null) and
+         * fresh announce (descriptor re-set). Lets the goodbye packet
+         * multicast before the re-announce overwrites the responder's
+         * internal state.
+         */
+        const val NUDGE_GAP_MS: Long = 100
     }
 }
