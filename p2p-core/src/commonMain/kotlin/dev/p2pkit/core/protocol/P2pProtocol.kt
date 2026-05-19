@@ -29,6 +29,15 @@ internal interface P2pProtocol {
 
     suspend fun sendError(connection: RawConnection, reason: String)
 
+    // File transfer (v0.2.2). transferId is reused as the frame's messageId
+    // so the receiver can demultiplex incoming FILE_DATA frames by transfer.
+    suspend fun sendFileOffer(connection: RawConnection, transferId: MessageId, offer: FileOfferPayload)
+    suspend fun sendFileAccept(connection: RawConnection, transferId: MessageId)
+    suspend fun sendFileReject(connection: RawConnection, transferId: MessageId, reason: String?)
+    suspend fun sendFileDataFrame(connection: RawConnection, frame: Frame)
+    suspend fun sendFileDone(connection: RawConnection, transferId: MessageId)
+    suspend fun sendFileCancel(connection: RawConnection, transferId: MessageId, reason: String?)
+
     /**
      * Stream of decoded events read from [connection]. Completes when the
      * underlying read flow completes; throws on protocol or transport errors.

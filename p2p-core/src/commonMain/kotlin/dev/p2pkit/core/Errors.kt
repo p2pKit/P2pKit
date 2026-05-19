@@ -37,4 +37,21 @@ public sealed class P2pError(message: String? = null, cause: Throwable? = null) 
     /** Peer advertised an incompatible protocol major version. */
     public data class VersionMismatch(val localVersion: Int, val remoteVersion: Int) :
         P2pError("Protocol version mismatch: local=$localVersion remote=$remoteVersion")
+
+    /**
+     * A registered transport could not be brought up by [P2pKit.start] or by
+     * the first [P2pKit.startAdvertising] / [P2pKit.connect] call that
+     * triggered lazy startup. Carries the failed transport's kind and the
+     * underlying cause so the host app can surface an actionable message.
+     *
+     * Replaces the v0.2 behaviour where a transport's `init` block could
+     * throw (e.g., `IllegalStateException` from `IosLanDataTransport` when
+     * Apple's listener didn't reach `.ready` in 5 s) and tear down the
+     * kit-construction call site.
+     */
+    public data class TransportStartFailed(
+        val transportKind: TransportKind,
+        val reason: String,
+        val underlying: Throwable? = null
+    ) : P2pError("Transport $transportKind failed to start: $reason", underlying)
 }

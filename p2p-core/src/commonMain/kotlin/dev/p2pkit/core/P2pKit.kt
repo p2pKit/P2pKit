@@ -99,10 +99,55 @@ public interface P2pKit {
      */
     public val networkProvisioning: NetworkProvisioningManager
 
+    /**
+     * Host device's default network path status. Driven by the configured
+     * [NetworkPathObserver]:
+     *   - iOS: real `nw_path_monitor` events (Wi-Fi / cellular / VPN
+     *     transitions).
+     *   - Android: host-provided `AndroidNetworkPathObserver(ctx)`, which
+     *     listens to `ConnectivityManager.NetworkCallback`. Without that
+     *     override the value stays [NetworkPathStatus.Unknown].
+     *   - JVM desktop: defaults to [NetworkPathStatus.Unknown] unless the
+     *     host app supplies a custom observer.
+     *
+     * Useful for the host app's UI ("offline" banner). Internally the SDK
+     * uses the same flow to drive reconnect on path-recovered (see
+     * [dev.p2pkit.core.internal.SessionManager.applyPathChange]).
+     */
+    public val networkPathStatus: StateFlow<NetworkPathStatus>
+
+    /**
+     * Bring up all registered transports and provisioning sidecar. Optional
+     * to call — if the host app skips it, [startAdvertising], [startDiscovery],
+     * and [connect] each lazily ensure the kit is started on their first
+     * invocation. Calling `start()` explicitly is preferable because it
+     * surfaces a typed [P2pError.TransportStartFailed] at a single,
+     * predictable call site instead of inside the first lifecycle method.
+     *
+     * Idempotent: subsequent calls after a successful start return without
+     * re-binding. After a failed start, the next call retries.
+     *
+     * @throws P2pError.TransportStartFailed if any registered transport's
+     *   `start()` returned a failure (port exhaustion, missing entitlement,
+     *   listener bind timeout, etc.).
+     */
+    /**
+     * @throws [Exception] bridged to Swift as `NSError`. Without `@Throws`
+     * Kotlin/Native terminates the process on any thrown error rather than
+     * bridging it to a catchable NSError. Same reasoning applies to every
+     * other public suspend method below.
+     */
+    @Throws(Exception::class)
+    public suspend fun start()
+
+    @Throws(Exception::class)
     public suspend fun startAdvertising()
+    @Throws(Exception::class)
     public suspend fun stopAdvertising()
 
+    @Throws(Exception::class)
     public suspend fun startDiscovery()
+    @Throws(Exception::class)
     public suspend fun stopDiscovery()
 
     /**
@@ -113,6 +158,7 @@ public interface P2pKit {
      * @throws P2pError.ConnectionFailed if the underlying connection fails
      * @throws P2pError.PermissionMissing if required runtime permissions are not granted
      */
+    @Throws(Exception::class)
     public suspend fun connect(peer: Peer): P2pSession
 
     /** Last time the peer with [peerId] was observed by discovery, in epoch milliseconds. */
@@ -124,6 +170,7 @@ public interface P2pKit {
     /** Notify the SDK that the host app returned to the foreground. */
     public fun notifyAppForegrounded()
 
+    @Throws(Exception::class)
     public suspend fun stop()
 
     public companion object {

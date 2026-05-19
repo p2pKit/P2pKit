@@ -22,14 +22,19 @@ public interface NetworkProvisioningManager {
     public val networkState: StateFlow<NetworkState>
     public val events: Flow<NetworkProvisioningEvent>
 
+    @Throws(Exception::class)
     public suspend fun startLocalNetwork(config: LocalNetworkConfig = LocalNetworkConfig()): LocalNetworkResult
+    @Throws(Exception::class)
     public suspend fun stopLocalNetwork()
 
+    @Throws(Exception::class)
     public suspend fun joinLocalNetwork(credentials: WifiCredentials): JoinNetworkResult
 
+    @Throws(Exception::class)
     public suspend fun getManualConnectionInfo(): ManualConnectionInfo?
 
     @ExperimentalP2pApi
+    @Throws(Exception::class)
     public suspend fun createManualPeer(host: String, port: Int): Peer
 }
 

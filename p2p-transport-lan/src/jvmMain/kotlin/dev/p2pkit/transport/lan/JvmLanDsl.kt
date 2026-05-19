@@ -4,7 +4,6 @@ import dev.p2pkit.core.dsl.TransportsBuilder
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
-import java.net.ServerSocket
 
 /**
  * Register the LAN transport (JmDNS discovery + TCP data) on JVM desktop.
@@ -17,6 +16,13 @@ import java.net.ServerSocket
  *
  * For Android, use the `lan(applicationContext)` overload from
  * `:p2p-transport-lan` androidMain — `NsdManager` needs a `Context`.
+ *
+ * The actual `ServerSocket(0)` bind happens inside the transport's
+ * `start()` (called by [dev.p2pkit.core.P2pKit.start], or lazily by the
+ * first `startAdvertising` / `connect`). Factory construction has no
+ * blocking I/O, so a bind failure (port exhaustion, permission denied)
+ * surfaces as [dev.p2pkit.core.P2pError.TransportStartFailed] at start
+ * time instead of throwing from the kit's `create` call.
  */
 public fun TransportsBuilder.lan() {
     register(JvmLanTransportFactory)
@@ -24,20 +30,14 @@ public fun TransportsBuilder.lan() {
 
 internal object JvmLanTransportFactory : TransportFactory {
     override fun build(context: TransportContext): TransportPair {
-        // Bind the TCP server first so we know which port to advertise over mDNS.
-        val serverSocket = ServerSocket(0)
-        val tcpPort = serverSocket.localPort
-
         val registration = LanServiceRegistration(
             appId = context.appId,
             localPeerId = context.localPeerId,
             deviceName = context.deviceName,
-            platform = context.platform,
-            tcpPort = tcpPort
+            platform = context.platform
         )
-
         return TransportPair(
-            data = JvmLanDataTransport(registration, serverSocket),
+            data = JvmLanDataTransport(registration),
             discovery = JvmLanDiscoveryTransport(registration)
         )
     }

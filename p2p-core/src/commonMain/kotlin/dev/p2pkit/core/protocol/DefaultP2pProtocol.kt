@@ -48,6 +48,56 @@ internal class DefaultP2pProtocol(
         connection.write(FrameCodec.encode(controlFrame(PacketType.ERROR, payload)))
     }
 
+    override suspend fun sendFileOffer(
+        connection: RawConnection,
+        transferId: MessageId,
+        offer: FileOfferPayload
+    ) {
+        val frame = controlFrame(
+            type = PacketType.FILE_OFFER,
+            messageId = transferId,
+            payload = FileOfferPayload.encode(offer)
+        )
+        connection.write(FrameCodec.encode(frame))
+    }
+
+    override suspend fun sendFileAccept(connection: RawConnection, transferId: MessageId) {
+        connection.write(FrameCodec.encode(controlFrame(PacketType.FILE_ACCEPT, messageId = transferId)))
+    }
+
+    override suspend fun sendFileReject(
+        connection: RawConnection,
+        transferId: MessageId,
+        reason: String?
+    ) {
+        val payload = reason?.encodeToByteArray() ?: EMPTY
+        connection.write(
+            FrameCodec.encode(controlFrame(PacketType.FILE_REJECT, messageId = transferId, payload = payload))
+        )
+    }
+
+    override suspend fun sendFileDataFrame(connection: RawConnection, frame: Frame) {
+        require(frame.type == PacketType.FILE_DATA) {
+            "sendFileDataFrame expects FILE_DATA, got ${frame.type}"
+        }
+        connection.write(FrameCodec.encode(frame))
+    }
+
+    override suspend fun sendFileDone(connection: RawConnection, transferId: MessageId) {
+        connection.write(FrameCodec.encode(controlFrame(PacketType.FILE_DONE, messageId = transferId)))
+    }
+
+    override suspend fun sendFileCancel(
+        connection: RawConnection,
+        transferId: MessageId,
+        reason: String?
+    ) {
+        val payload = reason?.encodeToByteArray() ?: EMPTY
+        connection.write(
+            FrameCodec.encode(controlFrame(PacketType.FILE_CANCEL, messageId = transferId, payload = payload))
+        )
+    }
+
     override fun events(connection: RawConnection): Flow<ProtocolEvent> = flow {
         val reader = FrameReader(logger)
         val reassembler = Reassembler(clock = clock)
@@ -78,13 +128,32 @@ internal class DefaultP2pProtocol(
                 ProtocolEvent.PeerError(reason)
             }
             PacketType.ACK -> ProtocolEvent.Ack(frame.messageId, frame.chunkIndex)
+            PacketType.FILE_OFFER -> {
+                val payload = FileOfferPayload.decode(frame.payload)
+                ProtocolEvent.FileOffer(frame.messageId, payload)
+            }
+            PacketType.FILE_ACCEPT -> ProtocolEvent.FileAccept(frame.messageId)
+            PacketType.FILE_REJECT -> {
+                val reason = if (frame.payload.isEmpty()) null else frame.payload.decodeToString()
+                ProtocolEvent.FileReject(frame.messageId, reason)
+            }
+            PacketType.FILE_DATA -> ProtocolEvent.FileData(frame)
+            PacketType.FILE_DONE -> ProtocolEvent.FileDone(frame.messageId)
+            PacketType.FILE_CANCEL -> {
+                val reason = if (frame.payload.isEmpty()) null else frame.payload.decodeToString()
+                ProtocolEvent.FileCancel(frame.messageId, reason)
+            }
         }
     }
 
-    private fun controlFrame(type: PacketType, payload: ByteArray = EMPTY): Frame = Frame(
+    private fun controlFrame(
+        type: PacketType,
+        payload: ByteArray = EMPTY,
+        messageId: MessageId = MessageId.random(random)
+    ): Frame = Frame(
         type = type,
         flags = FrameFlags.LAST_CHUNK.toByte(),
-        messageId = MessageId.random(random),
+        messageId = messageId,
         chunkIndex = 0,
         totalChunks = 1,
         payload = payload

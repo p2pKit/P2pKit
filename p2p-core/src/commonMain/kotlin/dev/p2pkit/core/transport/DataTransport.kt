@@ -16,6 +16,27 @@ public interface DataTransport {
     /** Higher = preferred. Used for transport selection when multiple match. */
     public val priority: Int
 
+    /**
+     * Bring the transport up: bind sockets / create listeners / acquire
+     * resources. Called by [dev.p2pkit.core.P2pKit.start] (or implicitly on
+     * the first call to [dev.p2pkit.core.P2pKit.startAdvertising] /
+     * [dev.p2pkit.core.P2pKit.connect] if the host app skips the explicit
+     * `start()`).
+     *
+     * Default impl is a no-op for transports that don't bind a server —
+     * outbound-only transports stay quiet here. The contract is **must be
+     * idempotent**: calling `start()` a second time after success must
+     * return `Result.success(Unit)`.
+     *
+     * Returns:
+     * - `Result.success(Unit)` once the transport is fully usable.
+     * - `Result.failure(throwable)` if the underlying OS rejected the bind
+     *   (e.g., port exhaustion, missing entitlement, multicast disabled).
+     *   The kit wraps it in [dev.p2pkit.core.P2pError.TransportStartFailed]
+     *   for the caller; transports do not throw.
+     */
+    public suspend fun start(): Result<Unit> = Result.success(Unit)
+
     public fun canConnect(peer: InternalPeer): Boolean
 
     public suspend fun connect(peer: InternalPeer): RawConnection

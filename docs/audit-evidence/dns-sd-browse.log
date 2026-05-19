@@ -1,0 +1,9 @@
+Browsing for _p2pkit._tcp.local.
+DATE: ---Sun 17 May 2026---
+15:16:52.290  ...STARTING...
+Timestamp     A/R    Flags  if Domain               Service Type         Instance Name
+15:16:56.417  Add        2  14 local.               _p2pkit._tcp.        0f0ddd0b-e720-437f-8498-904523e4c41f
+15:17:34.449  Add        3   1 local.               _p2pkit._tcp.        61ca2c26-9442-4e41-8e13-c3e2a4c83ab0
+15:17:34.449  Add        2  14 local.               _p2pkit._tcp.        61ca2c26-9442-4e41-8e13-c3e2a4c83ab0
+15:18:34.753  Rmv        1   1 local.               _p2pkit._tcp.        61ca2c26-9442-4e41-8e13-c3e2a4c83ab0
+15:18:34.753  Rmv        0  14 local.               _p2pkit._tcp.        61ca2c26-9442-4e41-8e13-c3e2a4c83ab0

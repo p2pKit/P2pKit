@@ -4,6 +4,8 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.AppKilledPolicy
 import dev.p2pkit.core.BackgroundPolicy
 import dev.p2pkit.core.KeepAliveConfig
+import dev.p2pkit.core.NetworkPathObserver
+import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
@@ -18,12 +20,16 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.core.protocol.DefaultP2pProtocol
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
+import dev.p2pkit.core.provisioning.NetworkProvisioningFactory
 import dev.p2pkit.core.provisioning.NetworkProvisioningManager
+import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.UnsupportedNetworkProvisioningManager
 import dev.p2pkit.core.security.NoOpSecurityManager
 import dev.p2pkit.core.security.SecurityManager
+import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.DiscoveryTransport
+import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -37,11 +43,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Production [P2pKit] implementation. Wired up by
  * [dev.p2pkit.core.dsl.P2pKitBuilder].
  */
+@OptIn(dev.p2pkit.core.ExperimentalP2pApi::class)
 internal class P2pKitImpl(
     override val appId: AppId,
     private val deviceName: String,
@@ -53,18 +62,25 @@ internal class P2pKitImpl(
     private val backgroundPolicy: BackgroundPolicy,
     @Suppress("unused") private val appKilledPolicy: AppKilledPolicy,
     @Suppress("unused") private val securityMode: SecurityMode,
-    @Suppress("unused") private val provisioningConfig: NetworkProvisioningConfig,
+    private val provisioningConfig: NetworkProvisioningConfig,
+    private val provisioningFactory: NetworkProvisioningFactory?,
+    private val fileTransferConfig: FileTransferConfig,
     override val permissions: P2pPermissionManager,
-    override val networkProvisioning: NetworkProvisioningManager,
     private val logger: P2pLogger,
     private val clock: () -> Long,
-    parentJob: Job?
+    parentJob: Job?,
+    private val pathObserver: NetworkPathObserver
 ) : P2pKit {
 
     private val internalJob = SupervisorJob(parent = parentJob)
     private val scope = CoroutineScope(Dispatchers.Default + internalJob)
 
+    override val networkProvisioning: NetworkProvisioningManager
+
     override val localDeviceName: String get() = deviceName
+
+    override val networkPathStatus: StateFlow<NetworkPathStatus>
+        get() = pathObserver.status
 
     private val _state = MutableStateFlow<P2pState>(P2pState.Idle)
     override val state: StateFlow<P2pState> = _state.asStateFlow()
@@ -82,7 +98,28 @@ internal class P2pKitImpl(
 
     private val supportedTransportKinds: Set<TransportKind>
 
+    // Lazy-start gate. `start()` is suspend and idempotent — a successful
+    // start latches in via [startResult] = Result.success; a failed start
+    // is recorded but lets the next caller retry. The mutex prevents two
+    // concurrent suspend callers from racing two transport bind attempts.
+    // The fast-path read of [startResult] outside the mutex is intentionally
+    // un-synchronised: if a stale read says "not started," the slow path
+    // re-checks under the lock. Worst case is one extra `withLock` round-trip.
+    private val startMutex = Mutex()
+    private var startResult: Result<Unit>? = null
+
     init {
+        // V0.4-PROVENANCE (L2): emit framework identity to BOTH the
+        // user-supplied P2pLogger (visible to samples that wire it) AND
+        // the platform's native log channel (visible regardless of host
+        // wiring). The native path matters because the default P2pLogger
+        // is NoOp — without it, the iPhone Xcode console (which uses
+        // the default logger in the iOS sample) would never show the
+        // build identity.
+        val identity = dev.p2pkit.core.BuildInfo.describe()
+        logger.info("[buildInfo] $identity")
+        nativeBuildInfoLog(identity)
+
         // Materialize transports
         val ctx = TransportContext(
             appId = appId,
@@ -117,10 +154,60 @@ internal class P2pKitImpl(
             localPlatform = localPlatform,
             localTransports = supportedTransportKinds,
             clock = clock,
-            logger = logger
+            logger = logger,
+            fileTransferConfig = fileTransferConfig,
+            peerLookup = peerRegistry::internalPeer,
+            refreshDiscovery = {
+                // V0.4-DISCOVERY-REFRESH: fan out to every registered
+                // discovery transport. Run sequentially under each
+                // transport's own lock; runCatching keeps one transport's
+                // failure from blocking the others.
+                discoveryTransports.forEach { transport ->
+                    runCatching { transport.refresh() }
+                        .onFailure { e ->
+                            logger.warn(
+                                "discovery refresh failed for ${transport.type}: " +
+                                    "${e::class.simpleName}: ${e.message ?: ""}"
+                            )
+                        }
+                }
+            }
         )
         peerRegistry.start()
         sessionManager.startAcceptingIncoming(dataTransports)
+
+        // Build the provisioning manager from the registered factory, or fall
+        // back to Unsupported if none was registered. Done last in init so the
+        // factory sees a fully-wired peerRegistry. Since the v0.3 transport
+        // lifecycle refactor, the LAN transport's TCP port isn't bound until
+        // start() runs — so we hand the factory a `() -> Int?` provider that
+        // reads the current value each time the manager queries it.
+        networkProvisioning = run {
+            val factory = provisioningFactory
+            if (factory == null) {
+                UnsupportedNetworkProvisioningManager()
+            } else {
+                val lanEndpoint = dataTransports.filterIsInstance<HasLocalTcpEndpoint>()
+                    .firstOrNull()
+                val ctx = ProvisioningContext(
+                    appId = appId,
+                    localPeerId = localPeerId,
+                    localDeviceName = deviceName,
+                    config = provisioningConfig,
+                    logger = logger,
+                    lanTcpPort = { lanEndpoint?.tcpPort?.value },
+                    manualPeerRegistrar = peerRegistry,
+                    parentJob = internalJob
+                )
+                runCatching { factory.build(ctx) }.getOrElse { e ->
+                    logger.warn(
+                        "Network provisioning factory threw during build; falling back to Unsupported",
+                        e
+                    )
+                    UnsupportedNetworkProvisioningManager()
+                }
+            }
+        }
 
         if (reconnectPolicy is ReconnectPolicy.Enabled) {
             logger.debug(
@@ -135,8 +222,66 @@ internal class P2pKitImpl(
     override val incomingSessions: SharedFlow<P2pSession> get() = sessionManager.incomingSessions
     override val sessions: StateFlow<List<P2pSession>> get() = sessionManager.sessions
 
+    override suspend fun start() {
+        ensureStarted()
+    }
+
+    /**
+     * Bring every registered transport up. Idempotent: a successful first
+     * call latches `startResult = success`; subsequent callers no-op. A
+     * failed start does NOT latch — the next call retries the bind, which
+     * matters for transient port-exhaustion or `EADDRINUSE` races where
+     * a second attempt seconds later will succeed.
+     *
+     * Any per-transport failure surfaces as
+     * [P2pError.TransportStartFailed]; we attribute the error to that
+     * transport's [DataTransport.type] so the caller can show which medium
+     * failed without inspecting the cause's class.
+     */
+    private suspend fun ensureStarted() {
+        startResult?.let { prior ->
+            if (prior.isSuccess) return
+        }
+        startMutex.withLock {
+            startResult?.let { prior ->
+                if (prior.isSuccess) return
+            }
+            for (transport in dataTransports) {
+                val r = runCatching { transport.start() }.getOrElse { Result.failure(it) }
+                if (r.isFailure) {
+                    val cause = r.exceptionOrNull()
+                    val failed = P2pError.TransportStartFailed(
+                        transportKind = transport.type,
+                        reason = cause?.message ?: "transport.start() returned failure",
+                        underlying = cause
+                    )
+                    startResult = Result.failure(failed)
+                    throw failed
+                }
+            }
+            // Best-effort path observer startup. A failure here is logged
+            // but never propagates — `networkPathStatus` simply stays at
+            // [NetworkPathStatus.Unknown] and the SDK behaves as if no
+            // observer is wired up.
+            runCatching { pathObserver.start() }.onFailure {
+                logger.warn("NetworkPathObserver.start() failed; path-change recovery disabled for this session", it)
+            }
+            // Subscribe SessionManager to path changes. Done after the
+            // observer starts so [SessionManager.applyPathChange] sees the
+            // observer's initial emission. We launch on the kit's internal
+            // scope so the subscription tears down with kit.stop().
+            scope.launch {
+                pathObserver.status.collect { status ->
+                    sessionManager.applyPathChange(status)
+                }
+            }
+            startResult = Result.success(Unit)
+        }
+    }
+
     override suspend fun startAdvertising() {
         ensurePermissions()
+        ensureStarted()
         _state.value = P2pState.Starting
         val localInfo = LocalPeerInfo(
             peerId = localPeerId,
@@ -159,6 +304,7 @@ internal class P2pKitImpl(
 
     override suspend fun startDiscovery() {
         ensurePermissions()
+        ensureStarted()
         for (transport in discoveryTransports) {
             transport.startDiscovery()
         }
@@ -171,6 +317,7 @@ internal class P2pKitImpl(
     }
 
     override suspend fun connect(peer: Peer): P2pSession {
+        ensureStarted()
         val internalPeer = peerRegistry.internalPeer(peer.id)
             ?: dev.p2pkit.core.transport.InternalPeer(
                 publicPeer = peer,
@@ -210,6 +357,7 @@ internal class P2pKitImpl(
         for (transport in dataTransports) {
             runCatching { transport.close() }
         }
+        runCatching { pathObserver.close() }
         internalJob.cancel()
         _state.value = P2pState.Stopped
     }
@@ -235,10 +383,14 @@ internal fun newP2pKit(
     appKilledPolicy: AppKilledPolicy,
     securityMode: SecurityMode,
     provisioningConfig: NetworkProvisioningConfig,
+    provisioningFactory: NetworkProvisioningFactory?,
+    fileTransferConfig: FileTransferConfig,
     logger: P2pLogger,
-    peerIdStorageOverride: PeerIdStorage? = null
+    peerIdStorageOverride: PeerIdStorage? = null,
+    networkPathObserverOverride: NetworkPathObserver? = null
 ): P2pKit {
     val peerIdStorage = peerIdStorageOverride ?: defaultPeerIdStorage(appId, logger)
+    val pathObserver = networkPathObserverOverride ?: defaultNetworkPathObserver(logger)
     return P2pKitImpl(
         appId = appId,
         deviceName = deviceName,
@@ -251,10 +403,12 @@ internal fun newP2pKit(
         appKilledPolicy = appKilledPolicy,
         securityMode = securityMode,
         provisioningConfig = provisioningConfig,
+        provisioningFactory = provisioningFactory,
+        fileTransferConfig = fileTransferConfig,
         permissions = dev.p2pkit.core.permission.NoOpP2pPermissionManager(),
-        networkProvisioning = UnsupportedNetworkProvisioningManager(),
         logger = logger,
         clock = ::systemTimeMillis,
-        parentJob = null
+        parentJob = null,
+        pathObserver = pathObserver
     )
 }

@@ -4,6 +4,7 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.AppKilledPolicy
 import dev.p2pkit.core.BackgroundPolicy
 import dev.p2pkit.core.KeepAliveConfig
+import dev.p2pkit.core.NetworkPathObserver
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.ReconnectPolicy
@@ -11,6 +12,8 @@ import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.internal.PeerIdStorage
 import dev.p2pkit.core.internal.newP2pKit
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
+import dev.p2pkit.core.provisioning.NetworkProvisioningFactory
+import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.TransportFactory
 
 /**
@@ -46,6 +49,16 @@ public class P2pKitBuilder internal constructor() {
     internal var appKilledPolicy: AppKilledPolicy = AppKilledPolicy.NoPersistenceForMvp
     internal var securityMode: SecurityMode = SecurityMode.NoneForMvp
     internal var networkProvisioning: NetworkProvisioningConfig = NetworkProvisioningConfig()
+    internal var networkProvisioningFactory: NetworkProvisioningFactory? = null
+    internal var fileTransfer: FileTransferConfig = FileTransferConfig()
+    /**
+     * Optional host-provided network path observer. When `null`, the kit
+     * uses the platform default (iOS: real `nw_path_monitor`; JVM and
+     * Android: no-op). Host apps that want path-change recovery on
+     * Android construct `AndroidNetworkPathObserver(applicationContext)`
+     * inside `lifecycle { … }`.
+     */
+    internal var networkPathObserver: NetworkPathObserver? = null
 
     /**
      * Override the [PeerIdStorage] the kit uses. **Internal** — set from
@@ -66,10 +79,16 @@ public class P2pKitBuilder internal constructor() {
     }
 
     public fun lifecycle(block: LifecycleConfigBuilder.() -> Unit) {
-        val b = LifecycleConfigBuilder(reconnectPolicy, backgroundPolicy, appKilledPolicy).apply(block)
+        val b = LifecycleConfigBuilder(
+            reconnectPolicy,
+            backgroundPolicy,
+            appKilledPolicy,
+            networkPathObserver
+        ).apply(block)
         reconnectPolicy = b.reconnectPolicy
         backgroundPolicy = b.onBackground
         appKilledPolicy = b.onAppKilled
+        networkPathObserver = b.networkPathObserver
     }
 
     public fun security(block: SecurityConfigBuilder.() -> Unit) {
@@ -80,6 +99,16 @@ public class P2pKitBuilder internal constructor() {
     public fun networkProvisioning(block: NetworkProvisioningConfigBuilder.() -> Unit) {
         val b = NetworkProvisioningConfigBuilder(networkProvisioning).apply(block)
         networkProvisioning = b.toConfig()
+        networkProvisioningFactory = b.factory
+    }
+
+    /**
+     * Configure the file-transfer subsystem. See [FileTransferConfig] for
+     * available knobs (max file size, chunk size, offer timeout).
+     */
+    public fun fileTransfer(block: FileTransferConfigBuilder.() -> Unit) {
+        val b = FileTransferConfigBuilder(fileTransfer).apply(block)
+        fileTransfer = b.toConfig()
     }
 
     internal fun build(): P2pKit {
@@ -98,8 +127,11 @@ public class P2pKitBuilder internal constructor() {
             appKilledPolicy = appKilledPolicy,
             securityMode = securityMode,
             provisioningConfig = networkProvisioning,
+            provisioningFactory = networkProvisioningFactory,
+            fileTransferConfig = fileTransfer,
             logger = logger,
-            peerIdStorageOverride = peerIdStorage
+            peerIdStorageOverride = peerIdStorage,
+            networkPathObserverOverride = networkPathObserver
         )
     }
 }
@@ -127,17 +159,55 @@ public class KeepAliveConfigBuilder internal constructor(initial: KeepAliveConfi
 public class LifecycleConfigBuilder internal constructor(
     public var reconnectPolicy: ReconnectPolicy,
     public var onBackground: BackgroundPolicy,
-    public var onAppKilled: AppKilledPolicy
+    public var onAppKilled: AppKilledPolicy,
+    /**
+     * Host-provided override for the network path observer. When `null`,
+     * the kit uses the platform default — iOS gets a real `nw_path_monitor`
+     * observer; JVM and Android default to no-op.
+     *
+     * On Android, host apps that want network-recovery behavior construct
+     * `AndroidNetworkPathObserver(applicationContext)` here:
+     *
+     * ```kotlin
+     * lifecycle {
+     *     reconnectPolicy = ReconnectPolicy.Enabled(maxAttempts = 8, retryDelayMillis = 500)
+     *     networkPathObserver = AndroidNetworkPathObserver(applicationContext)
+     * }
+     * ```
+     */
+    public var networkPathObserver: NetworkPathObserver?
 )
 
 @P2pKitDsl
 public class SecurityConfigBuilder internal constructor(public var mode: SecurityMode)
 
 @P2pKitDsl
+public class FileTransferConfigBuilder internal constructor(initial: FileTransferConfig) {
+    public var maxFileSizeBytes: Long = initial.maxFileSizeBytes
+    public var chunkSizeBytes: Int = initial.chunkSizeBytes
+    public var offerTimeoutMillis: Long = initial.offerTimeoutMillis
+
+    internal fun toConfig(): FileTransferConfig =
+        FileTransferConfig(maxFileSizeBytes, chunkSizeBytes, offerTimeoutMillis)
+}
+
+@P2pKitDsl
 public class NetworkProvisioningConfigBuilder internal constructor(initial: NetworkProvisioningConfig) {
     public var enableLocalHotspot: Boolean = initial.enableLocalHotspot
     public var enableWifiJoin: Boolean = initial.enableWifiJoin
     public var enableManualIpFallback: Boolean = initial.enableManualIpFallback
+
+    /**
+     * Platform-module hook. Provisioning modules expose extension helpers
+     * (e.g. `jvm()`, `android(context)`) that call this. When no factory is
+     * registered, the kit uses
+     * [dev.p2pkit.core.provisioning.UnsupportedNetworkProvisioningManager].
+     */
+    public fun register(factory: NetworkProvisioningFactory) {
+        this.factory = factory
+    }
+
+    internal var factory: NetworkProvisioningFactory? = null
 
     internal fun toConfig(): NetworkProvisioningConfig =
         NetworkProvisioningConfig(enableLocalHotspot, enableWifiJoin, enableManualIpFallback)

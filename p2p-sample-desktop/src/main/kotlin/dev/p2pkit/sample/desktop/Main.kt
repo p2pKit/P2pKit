@@ -1,12 +1,17 @@
 package dev.p2pkit.sample.desktop
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.ReconnectPolicy
+import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.core.transfer.sendFile
+import dev.p2pkit.provisioning.desktop.jvm
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +23,8 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.io.asSink
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -47,12 +54,22 @@ import java.util.concurrent.ConcurrentHashMap
  * - `send <text>`                 — broadcast to every active session
  * - `to <id-or-name> <text>`      — targeted send to one peer
  * - `close <id-or-name>`          — close one session
+ * - `manual <host>:<port>`        — connect by IP without mDNS (manual-IP fallback);
+ *                                   uses the JVM provisioning module to register
+ *                                   a synthetic peer and then dials it
+ * - `sendfile <id-or-name> <path>` — stream a file from disk to one peer
  * - `help`                        — print this list
  * - `quit` / `exit`               — stop the kit and exit
+ *
+ * Incoming file offers are auto-accepted and saved under
+ * `<user.home>/.p2pkit/incoming/<sender-name>/<filename>` so the CLI can be
+ * used unattended; state transitions print as `[file …]` lines.
  */
 fun main(args: Array<String>) {
-    val deviceName = args.getOrNull(0) ?: "Desktop-${System.currentTimeMillis() % 10_000}"
-    val rawAppId = args.getOrNull(1)?.takeUnless { it.startsWith("reconnect=") } ?: "p2pkit-desktop-sample"
+    val rawName = args.getOrNull(0)?.trim().orEmpty()
+    val deviceName = rawName.ifEmpty { "Desktop-${System.currentTimeMillis() % 10_000}" }
+    val rawAppId = args.getOrNull(1)?.trim()?.takeUnless { it.startsWith("reconnect=") || it.isEmpty() }
+        ?: "p2pkit-desktop-sample"
     val appId = AppId(rawAppId)
     val reconnectArg = args.firstOrNull { it.startsWith("reconnect=") }
     val reconnect = parseReconnect(reconnectArg)
@@ -64,6 +81,7 @@ fun main(args: Array<String>) {
         this.deviceName = deviceName
         transports { lan() }
         lifecycle { reconnectPolicy = reconnect }
+        networkProvisioning { jvm() }
         logger = StdErrLogger
     }
     val advertising = StateLatch()
@@ -72,6 +90,13 @@ fun main(args: Array<String>) {
 
     val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     val sessions = ConcurrentHashMap<String, P2pSession>()
+    // Peers with an in-flight `kit.connect` initiated by either auto-mesh
+    // or the user-typed `connect <name>` command. Both paths consult this
+    // set before launching their own coroutine, so a manual tap during
+    // auto-mesh's in-flight window doesn't kick off a second concurrent
+    // connect attempt for the same peer. The SDK still dedupes either way,
+    // but the local guard keeps the CLI output one-clean per session.
+    val pendingConnects: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     p2p.peers
         .onEach { peers ->
@@ -102,17 +127,22 @@ fun main(args: Array<String>) {
                 for (peer in peers) {
                     if (sessions.containsKey(peer.id.value)) continue
                     if (myId >= peer.id.value) continue
+                    if (!pendingConnects.add(peer.id.value)) continue
                     System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.name}")
                     scope.launch {
-                        runCatching {
-                            val s = p2p.connect(peer)
-                            sessions[s.peer.id.value] = s
-                            wireIncoming(s, scope)
-                            launch {
-                                s.state.collect { st -> println("[state] ${s.peer.name} → $st") }
+                        try {
+                            runCatching {
+                                val s = p2p.connect(peer)
+                                sessions[s.peer.id.value] = s
+                                wireIncoming(s, scope)
+                                launch {
+                                    s.state.collect { st -> println("[state] ${s.peer.name} → $st") }
+                                }
+                            }.onFailure {
+                                System.err.println("[p2pkit WARN] auto-mesh connect to ${peer.name} failed: ${it.message}")
                             }
-                        }.onFailure {
-                            System.err.println("[p2pkit WARN] auto-mesh connect to ${peer.name} failed: ${it.message}")
+                        } finally {
+                            pendingConnects.remove(peer.id.value)
                         }
                     }
                 }
@@ -125,14 +155,18 @@ fun main(args: Array<String>) {
             p2p.startDiscovery();   discovering.set(true)
         } catch (e: Throwable) {
             System.err.println("Failed to start: ${e.message}")
+            runCatching { p2p.stop() }
+            scope.cancel()
             return@runBlocking
         }
 
         println("Ready. Type 'help' for commands.")
-        repl(p2p, scope, sessions, advertising, discovering, autoMesh)
+        repl(p2p, scope, sessions, pendingConnects, advertising, discovering, autoMesh)
 
         println("Stopping…")
-        p2p.stop()
+        runCatching { p2p.stop() }.onFailure {
+            System.err.println("kit.stop() failed: ${it.message}")
+        }
         scope.cancel()
     }
 }
@@ -163,6 +197,10 @@ private suspend fun repl(
     p2p: P2pKit,
     scope: CoroutineScope,
     sessions: ConcurrentHashMap<String, P2pSession>,
+    // Shared with the auto-mesh loop in main() so both paths consult the
+    // same in-flight-connect set. The SDK dedupes either way, but routing
+    // both through the same gate keeps the CLI output clean.
+    pendingConnects: MutableSet<String>,
     advertising: StateLatch,
     discovering: StateLatch,
     autoMesh: MutableStateFlow<Boolean>
@@ -171,7 +209,15 @@ private suspend fun repl(
     while (true) {
         print("> ")
         System.out.flush()
-        val line = reader.readLine()?.trim() ?: break
+        val rawLine = reader.readLine()
+        if (rawLine == null) {
+            // EOF — Ctrl+D, pipe closed, or stdin redirected from a finished
+            // file. Treat as graceful exit so the kit teardown still runs.
+            println()
+            println("(stdin closed — exiting)")
+            return
+        }
+        val line = rawLine.trim()
         if (line.isEmpty()) continue
 
         val (cmd, arg) = line.split(' ', limit = 2).let {
@@ -197,6 +243,46 @@ private suspend fun repl(
             }
 
             "info", "state" -> printInfo(p2p, sessions, advertising, discovering, autoMesh)
+
+            "manual" -> {
+                val parts = arg.split(':', limit = 2)
+                val host = parts.getOrNull(0)?.trim().orEmpty()
+                val port = parts.getOrNull(1)?.trim()?.toIntOrNull()
+                if (host.isEmpty()) {
+                    println("usage: manual <host>:<port>  (host is empty)")
+                    continue
+                }
+                if (port == null || port !in 1..65_535) {
+                    println("usage: manual <host>:<port>  (port must be 1..65535, got '${parts.getOrNull(1)}')")
+                    continue
+                }
+                // Light host-form sanity check — reject obvious garbage so the
+                // user sees a useful message instead of waiting on a connect
+                // timeout. Allows IPv4/IPv6 numerics and DNS hostnames.
+                if (!host.all { it.isLetterOrDigit() || it in ".:_-" }) {
+                    println("manual: host contains invalid characters: '$host'")
+                    continue
+                }
+                scope.launch {
+                    @OptIn(ExperimentalP2pApi::class)
+                    val synthetic = runCatching { p2p.networkProvisioning.createManualPeer(host, port) }
+                        .getOrElse {
+                            System.err.println("manual createManualPeer failed: ${it.message}")
+                            return@launch
+                        }
+                    runCatching {
+                        val session = p2p.connect(synthetic)
+                        sessions[session.peer.id.value] = session
+                        wireIncoming(session, scope)
+                        launch {
+                            session.state.collect { st -> println("[state] ${session.peer.name} → $st") }
+                        }
+                        println("connected manual peer ${session.peer.name}")
+                    }.onFailure {
+                        System.err.println("manual connect failed: ${it.message}")
+                    }
+                }
+            }
 
             "mesh" -> {
                 when (arg) {
@@ -254,6 +340,16 @@ private suspend fun repl(
                     println("no peer matching '$arg'")
                     continue
                 }
+                val peerId = match.id.value
+                val existing = sessions[peerId]
+                if (existing != null && existing.state.value == ConnectionState.Connected) {
+                    println("already connected to ${match.name}")
+                    continue
+                }
+                if (!pendingConnects.add(peerId)) {
+                    println("already connecting to ${match.name}")
+                    continue
+                }
                 scope.launch {
                     try {
                         val session = p2p.connect(match)
@@ -265,6 +361,8 @@ private suspend fun repl(
                         println("connected to ${session.peer.name} (${session.peer.id.value.take(8)})")
                     } catch (e: Throwable) {
                         System.err.println("connect failed: ${e.message}")
+                    } finally {
+                        pendingConnects.remove(peerId)
                     }
                 }
             }
@@ -279,9 +377,19 @@ private suspend fun repl(
                     println("no active session; run `connect` first")
                     continue
                 }
+                val live = snapshot.filter { it.state.value == ConnectionState.Connected }
+                if (live.isEmpty()) {
+                    println("no Connected sessions (have ${snapshot.size} session(s) in " +
+                        "non-Connected states: ${snapshot.joinToString { "${it.peer.name}=${it.state.value}" }})")
+                    continue
+                }
+                val skipped = snapshot - live.toSet()
+                if (skipped.isNotEmpty()) {
+                    println("skipping non-Connected: ${skipped.joinToString { "${it.peer.name}(${it.state.value})" }}")
+                }
                 val msg = P2pMessage.Text(arg)
-                println("[broadcast → ${snapshot.size}] $arg")
-                for (session in snapshot) {
+                println("[broadcast → ${live.size}] $arg")
+                for (session in live) {
                     scope.launch {
                         runCatching { session.send(msg) }.onFailure {
                             System.err.println("send to ${session.peer.name} failed: ${it.message}")
@@ -307,6 +415,10 @@ private suspend fun repl(
                     println("no active session matching '$target'")
                     continue
                 }
+                if (session.state.value != ConnectionState.Connected) {
+                    println("session with ${session.peer.name} is not Connected (state=${session.state.value}) — send skipped")
+                    continue
+                }
                 println("[to ${session.peer.name}] $text")
                 scope.launch {
                     runCatching { session.send(P2pMessage.Text(text)) }.onFailure {
@@ -326,9 +438,59 @@ private suspend fun repl(
                     continue
                 }
                 scope.launch {
-                    runCatching { session.close() }
+                    runCatching { session.close() }.onFailure {
+                        System.err.println("close ${session.peer.name} failed: ${it.message}")
+                    }
                     sessions.remove(session.peer.id.value)
                     println("closed session with ${session.peer.name}")
+                }
+            }
+
+            "sendfile" -> {
+                val space = arg.indexOf(' ')
+                if (space <= 0 || space == arg.length - 1) {
+                    println("usage: sendfile <peer-id-prefix-or-name> <path>")
+                    continue
+                }
+                val target = arg.substring(0, space).trim()
+                val rawPath = arg.substring(space + 1).trim().trim('"')
+                if (rawPath.isEmpty()) {
+                    println("usage: sendfile <peer-id-prefix-or-name> <path>")
+                    continue
+                }
+                val file = File(rawPath)
+                if (!file.exists() || !file.isFile) {
+                    println("file not found or not a regular file: ${file.absolutePath}")
+                    continue
+                }
+                if (!file.canRead()) {
+                    println("file is not readable (check permissions): ${file.absolutePath}")
+                    continue
+                }
+                if (file.length() == 0L) {
+                    println("file is empty (0 bytes), nothing to send: ${file.absolutePath}")
+                    continue
+                }
+                val session = sessions.values.firstOrNull { matches(it.peer, target) }
+                if (session == null) {
+                    println("no active session matching '$target'")
+                    continue
+                }
+                if (session.state.value != ConnectionState.Connected) {
+                    println("session with ${session.peer.name} is not Connected (state=${session.state.value}) — sendfile skipped")
+                    continue
+                }
+                println("[file → ${session.peer.name}] sending ${file.name} (${file.length()}B)")
+                scope.launch {
+                    runCatching { session.sendFile(file) }
+                        .onSuccess { transfer ->
+                            scope.launch {
+                                transfer.state.collect { st ->
+                                    println("[file → ${session.peer.name} ${file.name}] $st")
+                                }
+                            }
+                        }
+                        .onFailure { System.err.println("sendfile failed: ${it.message}") }
                 }
             }
 
@@ -356,6 +518,13 @@ private fun printInfo(
     println("auto-mesh        ${autoMesh.value}")
     println("peers known      ${p2p.peers.value.size}")
     println("active sessions  ${sessions.size}")
+    val info = runBlocking { p2p.networkProvisioning.getManualConnectionInfo() }
+    if (info != null) {
+        println("manual host(s)   ${info.hostAddresses.joinToString(", ")}")
+        println("manual port      ${info.port}")
+    } else {
+        println("manual info      (none — provisioning not configured or no LAN port)")
+    }
     println("---")
 }
 
@@ -363,18 +532,23 @@ private fun printHelp() {
     println(
         """
         Commands:
-          peers                       — list discovered peers
-          sessions                    — list active sessions
-          info | state                — local identity + kit/adv/disc/mesh state + counts
-          adv on | adv off            — toggle advertising
-          disc on | disc off          — toggle discovery
-          mesh on | mesh off          — toggle auto-mesh (auto-connect to discovered peers)
-          connect <id-or-name>        — open a session
-          send <text>                 — broadcast to every active session (room)
-          to <id-or-name> <text>      — send to one peer
-          close <id-or-name>          — close a session
-          help                        — show this list
-          quit | exit                 — stop and exit
+          peers                              — list discovered peers
+          sessions                           — list active sessions
+          info | state                       — local identity + kit/adv/disc/mesh state + counts
+          adv on | adv off                   — toggle advertising
+          disc on | disc off                 — toggle discovery
+          mesh on | mesh off                 — toggle auto-mesh (auto-connect to discovered peers)
+          connect <id-or-name>               — open a session
+          send <text>                        — broadcast to every active session (room)
+          to <id-or-name> <text>             — send to one peer
+          manual <host>:<port>               — connect by IP, no mDNS needed
+          sendfile <id-or-name> <path>       — stream a file from disk to one peer
+          close <id-or-name>                 — close a session
+          help                               — show this list
+          quit | exit                        — stop and exit
+
+        Incoming file offers are auto-accepted to
+          ~/.p2pkit/incoming/<sender-name>/<filename>
         """.trimIndent()
     )
 }
@@ -398,6 +572,43 @@ private fun wireIncoming(session: P2pSession, scope: CoroutineScope) {
             }
         }
         .launchIn(scope)
+    session.incomingFiles
+        .onEach { offer ->
+            val saveDir = File(
+                File(System.getProperty("user.home") ?: ".", ".p2pkit"),
+                "incoming/${sanitizeName(session.peer.name)}"
+            ).also { it.mkdirs() }
+            val saveFile = File(saveDir, sanitizeName(offer.name))
+            println("[file ← ${session.peer.name}] offered ${offer.name} (${offer.sizeBytes}B) → ${saveFile.absolutePath}")
+            scope.launch {
+                val out = saveFile.outputStream()
+                val transfer = runCatching { offer.accept(out.asSink()) }
+                    .getOrElse {
+                        runCatching { out.close() }
+                        System.err.println("[file ← ${session.peer.name}] accept failed: ${it.message}")
+                        return@launch
+                    }
+                scope.launch {
+                    transfer.state.collect { st ->
+                        println("[file ← ${session.peer.name} ${offer.name}] $st")
+                        if (st is FileTransferState.Completed ||
+                            st is FileTransferState.Failed ||
+                            st is FileTransferState.Cancelled
+                        ) {
+                            runCatching { out.close() }
+                        }
+                    }
+                }
+            }
+        }
+        .launchIn(scope)
+}
+
+private fun sanitizeName(raw: String): String {
+    // Strip path separators and the few characters that are illegal on
+    // Windows; everything else (spaces, unicode, dots) is fine for the sample.
+    val cleaned = raw.replace(Regex("""[\\/:*?"<>|]"""), "_").trim()
+    return cleaned.ifEmpty { "untitled" }
 }
 
 private object StdErrLogger : P2pLogger {

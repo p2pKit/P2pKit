@@ -4,6 +4,7 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.BackgroundPolicy
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.KeepAliveConfig
+import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pSession
@@ -15,6 +16,7 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.security.SecurityManager
+import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.RawConnection
@@ -25,20 +27,15 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.ReceiveChannel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Owns the lifecycle of every active [P2pSession].
@@ -70,11 +67,43 @@ internal class SessionManager(
     private val localPlatform: Platform,
     private val localTransports: Set<TransportKind>,
     private val clock: () -> Long,
-    private val logger: P2pLogger
+    private val logger: P2pLogger,
+    private val fileTransferConfig: FileTransferConfig = FileTransferConfig(),
+    /**
+     * Lock-free best-effort lookup of the latest [InternalPeer] known to
+     * [PeerRegistry] for a given [PeerId]. Read by [SessionReconnectHandler]
+     * before every reconnect attempt so address rotation (DHCP lease change,
+     * hotspot move, captive-portal reattach) is picked up automatically.
+     *
+     * Returns `null` when the registry has no entry (peer evicted as stale,
+     * never discovered); the handler falls back to its original capture.
+     *
+     * Default `{ null }` makes existing tests that construct SessionManager
+     * without a registry transparently fall back to the captured peer.
+     */
+    private val peerLookup: (PeerId) -> InternalPeer? = { null },
+    /**
+     * V0.4-DISCOVERY-REFRESH: invoked once when an outgoing session enters
+     * `Reconnecting`, before the first retry attempt. Wired by P2pKitImpl
+     * to call `DiscoveryTransport.refresh()` on every registered discovery
+     * transport — forces a fresh active mDNS query so the remote peer's
+     * post-rebind port can land in `PeerRegistry` before the next dial.
+     *
+     * Default `{}` keeps existing tests (no transports / no registry)
+     * working without a refresh path.
+     */
+    private val refreshDiscovery: suspend () -> Unit = {}
 ) {
 
-    private val _sessions = MutableStateFlow<List<P2pSession>>(emptyList())
-    val sessions: StateFlow<List<P2pSession>> = _sessions.asStateFlow()
+    /**
+     * Single source of truth for session bookkeeping — owns the byPeer
+     * map, the in-flight `pending` map, and the published [sessions]
+     * StateFlow under a single mutex. See [SessionStore] kdoc for the
+     * rationale (replaces the previous "two stores updated by convention"
+     * model).
+     */
+    private val store = SessionStore(logger)
+    val sessions: StateFlow<List<P2pSession>> = store.sessions
 
     private val _incomingSessions = MutableSharedFlow<P2pSession>(
         replay = 0,
@@ -83,18 +112,25 @@ internal class SessionManager(
     )
     val incomingSessions: SharedFlow<P2pSession> = _incomingSessions.asSharedFlow()
 
-    /** Maps peer id to the active session, for idempotent [connect]. */
-    private val active: MutableMap<PeerId, P2pSession> = mutableMapOf()
-
     /**
-     * Maps peer id to the in-flight [connect] attempt, so simultaneous
-     * [connect] calls for the same peer share a single transport.connect
-     * + handshake instead of racing each other.
+     * Path-recovered signal consumed by every [SessionReconnectHandler]
+     * currently in its retry loop. When the host's network path
+     * transitions to [NetworkPathStatus.Satisfied], [applyPathChange]
+     * emits to this flow and any handler currently parked in its
+     * `retryDelayMillis` wait will wake immediately and attempt a dial
+     * instead of waiting out the rest of the delay.
+     *
+     * `extraBufferCapacity = 1` + `DROP_OLDEST` means: if Satisfied fires
+     * while no handler is parked (e.g., all handlers are mid-dial), the
+     * latest signal is cached. The first handler to enter `.first()` next
+     * picks it up — subsequent handlers see no buffered value (replay=0)
+     * and wait for the next emit or for their delay to expire.
      */
-    private val pending: MutableMap<PeerId, CompletableDeferred<P2pSession>> = mutableMapOf()
-
-    /** Protects [active] and [pending] across concurrent connect/incoming/close calls. */
-    private val activeLock = Mutex()
+    private val pathSatisfiedSignal = MutableSharedFlow<Unit>(
+        replay = 0,
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
 
     fun startAcceptingIncoming(transports: List<DataTransport>) {
         for (transport in transports) {
@@ -105,29 +141,15 @@ internal class SessionManager(
     }
 
     suspend fun connect(peer: Peer, internalPeer: InternalPeer): P2pSession {
-        // Atomic decision under the lock: return an existing active session,
-        // wait on someone else's in-flight connect, or become the connector.
-        // The actual `await` / connect work runs OUTSIDE the lock so the lock
-        // is short-held.
-        val outcome: ConnectOutcome = activeLock.withLock {
-            val existing = active[peer.id]
-            if (existing != null && existing.state.value in ACTIVE_STATES) {
-                return existing
-            }
-            if (existing != null) active.remove(peer.id) // terminal — replace
-            val inFlight = pending[peer.id]
-            if (inFlight != null) {
-                ConnectOutcome.Await(inFlight)
-            } else {
-                val fresh = CompletableDeferred<P2pSession>()
-                pending[peer.id] = fresh
-                ConnectOutcome.Connect(fresh)
-            }
-        }
-
-        return when (outcome) {
-            is ConnectOutcome.Await -> outcome.deferred.await()
-            is ConnectOutcome.Connect -> performConnect(peer, internalPeer, outcome.deferred)
+        // Atomic decision delegated to the store: return an existing active
+        // session, wait on someone else's in-flight connect, or become the
+        // connector. The actual `await` / connect work runs OUTSIDE the
+        // store's mutex (the decision is short-held, the work is not).
+        return when (val decision = store.startOrJoin(peer.id)) {
+            is ConnectDecision.Existing -> decision.session
+            is ConnectDecision.JoinPending -> decision.deferred.await()
+            is ConnectDecision.BecomeConnector ->
+                performConnect(peer, internalPeer, decision.deferred)
         }
     }
 
@@ -157,15 +179,8 @@ internal class SessionManager(
             deferred.completeExceptionally(e)
             throw e
         } finally {
-            activeLock.withLock {
-                if (pending[peer.id] === deferred) pending.remove(peer.id)
-            }
+            store.endPending(peer.id, deferred)
         }
-    }
-
-    private sealed class ConnectOutcome {
-        data class Await(val deferred: CompletableDeferred<P2pSession>) : ConnectOutcome()
-        data class Connect(val deferred: CompletableDeferred<P2pSession>) : ConnectOutcome()
     }
 
     private fun handleIncoming(connection: RawConnection) {
@@ -209,7 +224,9 @@ internal class SessionManager(
             parentScope = scope,
             keepAlive = keepAlive,
             clock = clock,
-            logger = logger
+            logger = logger,
+            fileTransferConfig = fileTransferConfig,
+            lookupRegistration = store::registrationOf
         )
 
         // Reconnect handler is wired BEFORE start() so the very first
@@ -221,7 +238,7 @@ internal class SessionManager(
             if (policy is ReconnectPolicy.Enabled) {
                 session.reconnectHandler = SessionReconnectHandler(
                     expectedPeer = handshake.resolvedPeer,
-                    internalPeer = internalPeerForReconnect,
+                    originalInternalPeer = internalPeerForReconnect,
                     policy = policy
                 )
             }
@@ -315,39 +332,99 @@ internal class SessionManager(
      * itself runs on the session's coroutine scope, so cancellation also
      * propagates structurally.
      *
-     * Per spec §16.3 we do **not** re-resolve discovery during retry — the
-     * [internalPeer] captured at session creation is reused for every
-     * attempt. If the peer's address has rotated, retries exhaust until the
-     * app re-discovers the peer and reconnects.
+     * V0.4-RECONNECT: each attempt re-resolves the target [InternalPeer] via
+     * [peerLookup] (typically `PeerRegistry::internalPeer`) so address
+     * rotation — DHCP lease change, hotspot move, captive-portal reattach,
+     * Android NSD rebind after network rotation — is picked up automatically.
+     * The lookup is a lock-free [kotlinx.coroutines.flow.StateFlow.value]
+     * snapshot read, performed immediately before transport selection /
+     * dial to minimise the stale window. The result is NOT cached between
+     * attempts; every attempt does a fresh lookup. If the registry has no
+     * entry (peer evicted as stale, never registered), the fallback is the
+     * [originalInternalPeer] captured at session creation — the address we
+     * successfully connected to once, which is a reasonable last-resort
+     * guess and matches the v0.3 behaviour.
      */
     private inner class SessionReconnectHandler(
         private val expectedPeer: Peer,
-        private val internalPeer: InternalPeer,
+        private val originalInternalPeer: InternalPeer,
         private val policy: ReconnectPolicy.Enabled
     ) : ReconnectHandler {
 
         override suspend fun onConnectionLost(session: P2pSessionImpl) {
             var attempt = 0
+            var lastResolvedHints = originalInternalPeer.transportHints
+            val peerShort = expectedPeer.id.value.take(8)
+            val cachedStr = renderHints(originalInternalPeer.transportHints)
+            // V0.4-DISCOVERY-REFRESH: ask every discovery transport to send
+            // a fresh active query before the first dial. Closes the gap
+            // where the remote peer rebound to a new port but our NSD cache
+            // hasn't observed the re-announcement yet — the active query
+            // forces the remote responder to answer with its current state.
+            // Errors are caught + logged but do not block the retry loop.
+            logger.info(
+                "reconnect: refresh requested peer=$peerShort name=${expectedPeer.name}"
+            )
+            try {
+                refreshDiscovery()
+                logger.info(
+                    "reconnect: refresh complete peer=$peerShort name=${expectedPeer.name}"
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                logger.warn(
+                    "reconnect: refresh failed peer=$peerShort name=${expectedPeer.name} " +
+                        "reason=${e::class.simpleName}: ${e.message ?: ""}"
+                )
+            }
             while (attempt < policy.maxAttempts) {
                 attempt++
                 try {
-                    delay(policy.retryDelayMillis)
+                    // Wait either for the retry delay OR for a path-satisfied
+                    // signal, whichever fires first. The signal accelerates
+                    // recovery on Wi-Fi handovers: an `Unsatisfied → Satisfied`
+                    // transition wakes parked handlers immediately so the next
+                    // dial happens within milliseconds of the network coming
+                    // back instead of after the full `retryDelayMillis`.
+                    withTimeoutOrNull(policy.retryDelayMillis) {
+                        pathSatisfiedSignal.first()
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 }
                 if (session.state.value != ConnectionState.Reconnecting) return
 
+                // Fresh per-attempt lookup. No caching between attempts; the
+                // read happens immediately before transport selection so the
+                // stale window between snapshot and dial is microseconds.
+                val resolved = peerLookup(expectedPeer.id)
+                val target = resolved ?: originalInternalPeer
+                val registryHit = resolved != null
+                val resolvedStr = if (resolved != null) renderHints(resolved.transportHints) else "—"
+                val dialedStr = renderHints(target.transportHints)
+                val changedFromPrev = target.transportHints != lastResolvedHints
+                val source = if (registryHit) "REGISTRY" else "FALLBACK"
+                logger.info(
+                    "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
+                        "name=${expectedPeer.name} cached=$cachedStr resolved=$resolvedStr " +
+                        "dialed=$dialedStr source=$source registryHit=$registryHit " +
+                        "changedFromPrev=$changedFromPrev"
+                )
+                lastResolvedHints = target.transportHints
+
                 val outcome = runCatching {
-                    val transport = transportManager.selectBestTransport(internalPeer)
-                    val raw = transport.connect(internalPeer)
+                    val transport = transportManager.selectBestTransport(target)
+                    val raw = transport.connect(target)
                     runHandshake(raw, expectedPeer = expectedPeer)
                 }
 
                 val handshake = outcome.getOrElse { e ->
                     if (e is CancellationException) throw e
                     logger.warn(
-                        "Reconnect attempt $attempt/${policy.maxAttempts} for " +
-                            "${expectedPeer.name} failed: ${e.message ?: e::class.simpleName}"
+                        "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
+                            "name=${expectedPeer.name} FAILED dialed=$dialedStr source=$source " +
+                            "reason=${e::class.simpleName}: ${e.message ?: ""}"
                     )
                     null
                 } ?: continue
@@ -362,13 +439,19 @@ internal class SessionManager(
                 }
 
                 session.rearmWith(handshake.secureConnection, handshake.events)
-                logger.debug(
-                    "Session ${session.id}: reconnected to ${expectedPeer.name} on attempt $attempt"
+                logger.info(
+                    "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
+                        "name=${expectedPeer.name} SUCCEEDED dialed=$dialedStr source=$source"
                 )
                 return
             }
             session.markFailedAfterExhaustion()
         }
+
+        private fun renderHints(hints: List<dev.p2pkit.core.transport.TransportHint>): String =
+            if (hints.isEmpty()) "—" else hints.joinToString(",") { h ->
+                "${h.type}:${h.host ?: "?"}:${h.port ?: "?"}"
+            }
     }
 
     /**
@@ -396,30 +479,20 @@ internal class SessionManager(
         session: P2pSession,
         isIncoming: Boolean
     ): RegisterOutcome {
-        val outcome: RegisterOutcome = activeLock.withLock {
-            val existing = active[peerId]
-            if (existing != null && existing.state.value in ACTIVE_STATES) {
-                val newWinsLocally = if (localPeerId.value < peerId.value) {
-                    // We're the smaller-id side — keep our outgoing, reject our incoming.
-                    !isIncoming
-                } else {
-                    // We're the larger-id side (or equal, which is impossible
-                    // by construction) — keep our incoming, reject our outgoing.
-                    isIncoming
-                }
-                if (newWinsLocally) {
-                    active[peerId] = session
-                    _sessions.update { list -> list.filter { it !== existing } + session }
-                    RegisterOutcome.Replaced(winner = session, loser = existing)
-                } else {
-                    RegisterOutcome.Rejected(winner = existing, loser = session)
-                }
-            } else {
-                active[peerId] = session
-                _sessions.update { it + session }
-                RegisterOutcome.Accepted(session = session)
-            }
-        }
+        val outcome = store.tryRegister(
+            peerId = peerId,
+            session = session,
+            isIncoming = isIncoming,
+            localPeerIdValue = localPeerId.value
+        )
+
+        val existingStateLabel = (outcome as? RegisterOutcome.Replaced)?.loser?.state?.value?.name
+            ?: (outcome as? RegisterOutcome.Rejected)?.loser?.state?.value?.name
+        logger.info(
+            "registerSession ${if (isIncoming) "in" else "out"} peer=${peerId.value.take(8)} " +
+                "decision=${outcome::class.simpleName} " +
+                "existingState=${existingStateLabel ?: "none"}"
+        )
 
         when (outcome) {
             is RegisterOutcome.Accepted -> {
@@ -448,30 +521,55 @@ internal class SessionManager(
 
     /**
      * Watch a registered session for its terminal state and clean it out of
-     * [active] and [_sessions]. Extracted so [registerSession] can attach it
-     * to the winner in both the Accepted and Replaced paths.
+     * the store. Extracted so [registerSession] can attach it to the winner
+     * in both the Accepted and Replaced paths.
      */
     private fun watchForTerminal(peerId: PeerId, session: P2pSession) {
         scope.launch {
             session.state.first { it == ConnectionState.Closed || it == ConnectionState.Failed }
-            activeLock.withLock {
-                if (active[peerId] === session) active.remove(peerId)
-            }
-            _sessions.update { list -> list.filter { it !== session } }
+            store.removeIfMatches(peerId, session)
         }
     }
 
-    /** Result of a [registerSession] call. Drives the post-registration routing. */
-    internal sealed class RegisterOutcome {
-        data class Accepted(val session: P2pSession) : RegisterOutcome()
-        data class Replaced(val winner: P2pSession, val loser: P2pSession) : RegisterOutcome()
-        data class Rejected(val winner: P2pSession, val loser: P2pSession) : RegisterOutcome()
-    }
-
     suspend fun closeAllSessions() {
-        val snapshot = activeLock.withLock { active.values.toList() }
+        val snapshot = store.activeSnapshot()
         for (session in snapshot) {
             runCatching { session.close() }
+        }
+    }
+
+    /**
+     * Handle a host-network path-status change. Called by [P2pKitImpl] which
+     * subscribes to the kit's [NetworkPathObserver] once at startup.
+     *
+     * - [NetworkPathStatus.Unsatisfied]: route every active session through
+     *   [P2pSessionImpl.notifyPathLost], which calls `onConnectionLost`. The
+     *   session's existing decision tree handles the rest — sessions wired
+     *   with a reconnect handler go to `Reconnecting`; sessions without one
+     *   go straight to `Failed`. Concurrent triggers from PING failure or
+     *   raw-state observers are de-duped by the connection lock in
+     *   `onConnectionLost`.
+     * - [NetworkPathStatus.Satisfied]: emit to [pathSatisfiedSignal] so any
+     *   reconnect handler currently parked in `retryDelayMillis` wakes and
+     *   attempts immediately.
+     * - [NetworkPathStatus.Unknown]: no-op. Treated as "no information",
+     *   not "no network" — matches the [NoOpNetworkPathObserver] default
+     *   on platforms with no observer wired up.
+     */
+    fun applyPathChange(status: NetworkPathStatus) {
+        when (status) {
+            NetworkPathStatus.Unsatisfied -> {
+                scope.launch {
+                    val toNotify = store.activeSnapshot()
+                    for (s in toNotify) {
+                        (s as? P2pSessionImpl)?.notifyPathLost()
+                    }
+                }
+            }
+            NetworkPathStatus.Satisfied -> {
+                pathSatisfiedSignal.tryEmit(Unit)
+            }
+            NetworkPathStatus.Unknown -> { /* no action */ }
         }
     }
 
@@ -482,14 +580,5 @@ internal class SessionManager(
             }
             is BackgroundPolicy.KeepRunning -> { /* nothing to do */ }
         }
-    }
-
-    private companion object {
-        val ACTIVE_STATES = setOf(
-            ConnectionState.Connecting,
-            ConnectionState.Handshaking,
-            ConnectionState.Connected,
-            ConnectionState.Reconnecting
-        )
     }
 }

@@ -1,0 +1,10 @@
+[P2pKit CLI] deviceName=JvmAlice  appId=p2pkit-desktop-sample  reconnect=Disabled
+[peers] 0: 
+Ready. Type 'help' for commands.
+> [p2pkit] auto-mesh: initiating connect to iOSDiagnostic
+[peers] 1: iOSDiagnostic(61ca2c26)
+[state] iOSDiagnostic → Connected
+[peers] 0: 
+[peers] 1: iOSDiagnostic(61ca2c26)
+[peers] 0: 
+[state] iOSDiagnostic → Closed

@@ -9,6 +9,9 @@ import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerEvent
 import dev.p2pkit.core.transport.TransportHint
+import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
@@ -116,9 +119,7 @@ internal class JvmLanDiscoveryTransport(
                 val name = info.getPropertyString(LanConstants.TXT_DEVICE_NAME) ?: pid
                 val plat = info.getPropertyString(LanConstants.TXT_PLATFORM)
                 val caps = info.getPropertyString(LanConstants.TXT_CAPABILITIES)
-                val host = info.inet4Addresses.firstOrNull()?.hostAddress
-                    ?: info.hostAddresses.firstOrNull()
-                    ?: return
+                val host = selectRoutableHost(info.inetAddresses.toList()) ?: return
                 val port = info.port
                 val supportedTransports = caps
                     ?.split(",")
@@ -169,4 +170,50 @@ internal class JvmLanDiscoveryTransport(
         jmdns = null
         withContext(Dispatchers.IO) { runCatching { handle.close() } }
     }
+}
+
+/**
+ * Pick the most-likely-routable host string from [candidates] for use as a
+ * dial target. Returns `null` when no candidate is dialable — the caller
+ * skips the corresponding discovery event rather than publish an unusable
+ * hint.
+ *
+ * Precedence (V0.4-IPV6):
+ *   1. First [Inet4Address] that is neither loopback nor wildcard.
+ *      IPv4 link-local (169.254/16) IS accepted — sometimes dialable on
+ *      direct-cable / auto-config segments.
+ *   2. First [Inet6Address] that is neither loopback, wildcard, nor an
+ *      unscoped link-local. An [Inet6Address] whose `scopeId` is non-zero
+ *      is accepted because [InetAddress.getHostAddress] preserves the
+ *      `%scope` suffix, producing a dialable string.
+ *
+ * Rejected outright: loopback (127.0.0.1, ::1), any-local (0.0.0.0, ::),
+ * and `fe80::` IPv6 link-local with `scopeId == 0` (TCP rejects these with
+ * EINVAL because no scope is known). Closes task #25.
+ *
+ * Intentionally NOT done here:
+ *   - No retry / re-resolve fallback — pure function.
+ *   - No normalization that strips `%scope` from accepted scoped addresses.
+ *   - No identity-check changes — peerId/appId filtering happens upstream.
+ *
+ * Implementation is duplicated verbatim in `AndroidLanDiscoveryTransport`
+ * (androidMain source set). The two source sets cannot share JVM-only
+ * code via commonMain without adding a `jvmAndAndroidMain` source set —
+ * larger build-config delta than warranted for ~20 lines. Keep both
+ * copies in sync; the `HostSelectorTest` in `:p2p-transport-lan:jvmTest`
+ * pins the JVM-side behaviour and serves as the de-facto contract.
+ */
+internal fun selectRoutableHost(candidates: List<InetAddress>): String? {
+    candidates.firstOrNull { addr ->
+        addr is Inet4Address && !addr.isLoopbackAddress && !addr.isAnyLocalAddress
+    }?.let { return it.hostAddress }
+
+    candidates.firstOrNull { addr ->
+        addr is Inet6Address &&
+            !addr.isLoopbackAddress &&
+            !addr.isAnyLocalAddress &&
+            (!addr.isLinkLocalAddress || addr.scopeId != 0)
+    }?.let { return it.hostAddress }
+
+    return null
 }
