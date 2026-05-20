@@ -161,7 +161,16 @@ internal class JvmLanDiscoveryTransport(
 
     private suspend fun ensureJmdns() {
         if (jmdns != null) return
-        jmdns = withContext(Dispatchers.IO) { JmDNS.create() }
+        // Internal/test-only opt-in for binding JmDNS to a specific local
+        // address. Used by `JvmLanLoopbackTest` to work around macOS where
+        // `InetAddress.getLocalHost()` resolves to 127.0.0.1 and JmDNS then
+        // advertises a loopback IP, which `selectRoutableHost` rejects.
+        // Production callers leave this unset and get the default behaviour.
+        val bindAddress = System.getProperty("dev.p2pkit.test.jmdnsBindAddress")
+        jmdns = withContext(Dispatchers.IO) {
+            if (bindAddress != null) JmDNS.create(InetAddress.getByName(bindAddress))
+            else JmDNS.create()
+        }
     }
 
     private suspend fun maybeCloseJmdns() {
