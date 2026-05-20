@@ -47,6 +47,7 @@ import platform.Network.nw_listener_state_cancelled
 import platform.Network.nw_listener_state_failed
 import platform.Network.nw_listener_state_ready
 import platform.Network.nw_listener_t
+import platform.Network.nw_parameters_prohibit_interface_type
 import platform.Network.nw_parameters_t
 import platform.Network.nw_interface_type_cellular
 import platform.Network.nw_interface_type_wifi
@@ -110,10 +111,18 @@ internal class IosLanDataTransport(
      * `SecurityMode.NoneForMvp` parity. Shared between listener and outbound
      * connections. Constructed entirely in ObjC via the
      * [p2pkit_nw_create_plain_tcp_parameters] cinterop helper.
+     *
+     * Cellular is prohibited so the LAN listener never binds on a cellular-only
+     * interface (which would advertise an Android-unreachable Bonjour port
+     * during a Wi-Fi gap) and outbound dials never route over cellular. Closes
+     * the v0.5 residual edge case where an iPhone with cellular ENABLED would
+     * rotate its listener through an intermediate cellular-only port during a
+     * Wi-Fi flap. Wired Ethernet remains permitted.
      */
     internal val parameters: nw_parameters_t =
-        p2pkit_nw_create_plain_tcp_parameters()
-            ?: error("p2pkit_nw_create_plain_tcp_parameters returned null")
+        (p2pkit_nw_create_plain_tcp_parameters()
+            ?: error("p2pkit_nw_create_plain_tcp_parameters returned null"))
+            .also { nw_parameters_prohibit_interface_type(it, nw_interface_type_cellular) }
 
     private val _tcpPort = MutableStateFlow<Int?>(null)
     override val tcpPort: StateFlow<Int?> = _tcpPort.asStateFlow()
