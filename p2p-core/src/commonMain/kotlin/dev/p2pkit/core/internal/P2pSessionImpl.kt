@@ -296,8 +296,16 @@ internal class P2pSessionImpl(
             runCatching { connection.close() }
             connection = newConnection
             events = newEvents
-            startEpoch()
+            // V0.5.1-RECONNECT-RACE (issue #15): flip to Connected BEFORE
+            // launching the new epoch. `keepAliveLoop` gates its outer
+            // `while` on `_state.value == Connected`; on a multi-thread
+            // dispatcher the launched coroutine can read the field on
+            // another worker before this thread reaches the assignment,
+            // see Reconnecting, exit immediately, and leave the rearmed
+            // session with no liveness watchdog. Next disconnect goes
+            // undetected (Android stuck in Connected).
             _state.value = ConnectionState.Connected
+            startEpoch()
         }
     }
 
