@@ -14,13 +14,17 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.io.asSink
 import kotlinx.io.asSource
 import java.io.File
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.nio.file.Files
 import java.security.MessageDigest
 import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import org.junit.Assume
 
 /**
  * Integration test: two [P2pKit] instances on `127.0.0.1`, both using the
@@ -34,6 +38,25 @@ import kotlin.test.assertIs
 class JvmLanLoopbackTest {
 
     private val unique = "p2pkit-itest-${System.currentTimeMillis()}"
+
+    /**
+     * Pin JmDNS to a routable IPv4 interface for these tests. On macOS,
+     * `InetAddress.getLocalHost()` resolves to 127.0.0.1 when the machine's
+     * `.local` hostname isn't published on the LAN; JmDNS then binds to the
+     * loopback interface and `selectRoutableHost` (in production code) drops
+     * the resulting hints because they're loopback addresses. Pinning to a
+     * non-loopback IPv4 sidesteps that and gives the test a deterministic
+     * interface to discover on. Production callers don't set this property.
+     */
+    @BeforeTest
+    fun setupBindAddress() {
+        val routable = findRoutableIpv4()
+        Assume.assumeTrue(
+            "No routable IPv4 interface available for JmDNS loopback test",
+            routable != null
+        )
+        System.setProperty(JMDNS_BIND_PROPERTY, routable!!)
+    }
 
     private fun newKit(name: String): P2pKit = P2pKit.create {
         appId = AppId(unique)
@@ -51,11 +74,14 @@ class JvmLanLoopbackTest {
     private val tempHomes = mutableListOf<File>()
 
     @AfterTest
-    fun teardown() = runBlocking {
-        toStop.forEach { runCatching { it.stop() } }
-        toStop.clear()
-        tempHomes.forEach { runCatching { it.deleteRecursively() } }
-        tempHomes.clear()
+    fun teardown() {
+        runBlocking {
+            toStop.forEach { runCatching { it.stop() } }
+            toStop.clear()
+            tempHomes.forEach { runCatching { it.deleteRecursively() } }
+            tempHomes.clear()
+        }
+        System.clearProperty(JMDNS_BIND_PROPERTY)
     }
 
     /**
@@ -244,5 +270,26 @@ class JvmLanLoopbackTest {
         const val HANDSHAKE_TIMEOUT_MS: Long = 10_000
         const val MESSAGE_TIMEOUT_MS: Long = 10_000
         const val FILE_TRANSFER_TIMEOUT_MS: Long = 60_000
+        const val JMDNS_BIND_PROPERTY: String = "dev.p2pkit.test.jmdnsBindAddress"
+
+        /**
+         * First IPv4 address on an up, non-loopback interface, excluding
+         * link-local (169.254/16) which JmDNS multicast doesn't reliably
+         * traverse on macOS. Returns `null` when no such interface exists
+         * (CI sandboxes with only loopback, network-off laptops); the
+         * caller skips the test in that case.
+         */
+        fun findRoutableIpv4(): String? {
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
+            for (iface in interfaces) {
+                if (!iface.isUp || iface.isLoopback) continue
+                for (addr in iface.inetAddresses) {
+                    if (addr !is Inet4Address) continue
+                    if (addr.isLoopbackAddress || addr.isLinkLocalAddress) continue
+                    return addr.hostAddress
+                }
+            }
+            return null
+        }
     }
 }
