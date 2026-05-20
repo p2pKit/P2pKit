@@ -60,4 +60,20 @@ internal object LanConstants {
 
     /** Wire protocol version. Must match `ProtocolConstants.VERSION` in :p2p-core. */
     const val PROTOCOL_VERSION: Int = 1
+
+    /**
+     * Per-attempt TCP connect timeout used by the JVM and Android data
+     * transports when dialing a discovered peer. v0.5 real-device traces
+     * showed the kernel's default `Socket(host, port)` blocking ~17 s
+     * before ECONNREFUSED on a stale port — that whole window is wasted
+     * dead time during reconnect because the next attempt would have
+     * picked up the fresh port from the JmDNS cache. 5 s comfortably
+     * exceeds typical LAN RTT plus TCP SYN retries while still keeping
+     * three full retries inside the sample's
+     * `ReconnectPolicy.Enabled(maxAttempts=10, retryDelayMillis=1500)`
+     * budget. iOS-side `NWConnection` already times out on a shorter
+     * horizon via `Network.framework`, so no equivalent knob is needed
+     * on the appleMain path.
+     */
+    const val TCP_CONNECT_TIMEOUT_MS: Int = 5_000
 }

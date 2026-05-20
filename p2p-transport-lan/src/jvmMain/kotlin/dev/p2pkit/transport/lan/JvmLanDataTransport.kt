@@ -20,8 +20,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.net.ConnectException
+import java.net.InetSocketAddress
+import java.net.NoRouteToHostException
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketTimeoutException
 
 internal class JvmLanDataTransport(
     private val registration: LanServiceRegistration
@@ -85,10 +89,25 @@ internal class JvmLanDataTransport(
         val host = hint.host!!
         val port = hint.port!!
         val socket = withContext(Dispatchers.IO) {
+            val s = Socket()
             try {
-                Socket(host, port)
+                // V0.5.1-TCP-TIMEOUT (issue #9): bounded connect so a stale
+                // SRV record doesn't burn ~17 s of the reconnect budget on
+                // the OS-default `Socket(host, port)` blocking wait. The
+                // failure classification below feeds the `reason` field that
+                // `SessionReconnectHandler` already logs per attempt.
+                s.connect(InetSocketAddress(host, port), LanConstants.TCP_CONNECT_TIMEOUT_MS)
+                s
             } catch (e: Throwable) {
-                throw P2pError.ConnectionFailed("TCP connect $host:$port failed: ${e.message}")
+                runCatching { s.close() }
+                val reason = when (e) {
+                    is SocketTimeoutException ->
+                        "timed out after ${LanConstants.TCP_CONNECT_TIMEOUT_MS}ms"
+                    is ConnectException -> "refused (${e.message ?: "ECONNREFUSED"})"
+                    is NoRouteToHostException -> "unreachable (${e.message ?: "EHOSTUNREACH"})"
+                    else -> "failed (${e::class.simpleName}: ${e.message ?: ""})"
+                }
+                throw P2pError.ConnectionFailed("TCP connect $host:$port $reason")
             }
         }
         return JvmRawConnection(socket)
