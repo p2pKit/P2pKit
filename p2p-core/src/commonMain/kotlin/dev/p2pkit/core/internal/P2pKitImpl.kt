@@ -45,6 +45,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * Production [P2pKit] implementation. Wired up by
@@ -242,58 +243,74 @@ internal class P2pKitImpl(
         startResult?.let { prior ->
             if (prior.isSuccess) return
         }
-        startMutex.withLock {
-            startResult?.let { prior ->
-                if (prior.isSuccess) return
-            }
-            for (transport in dataTransports) {
-                val r = runCatching { transport.start() }.getOrElse { Result.failure(it) }
-                if (r.isFailure) {
-                    val cause = r.exceptionOrNull()
-                    val failed = P2pError.TransportStartFailed(
-                        transportKind = transport.type,
-                        reason = cause?.message ?: "transport.start() returned failure",
-                        underlying = cause
-                    )
-                    startResult = Result.failure(failed)
-                    throw failed
+        // V0.6-#20-FIX: run the start pipeline on Dispatchers.Default so the
+        // suspending `transport.start()` hops (which internally do
+        // `withContext(Dispatchers.IO)`) don't resume on whatever dispatcher
+        // the caller is using. On Android, callers on Main paid a ~600 ms
+        // IO->Main resumption tax during cold-start UI/Compose init even
+        // though the transport's IO body completes in ~7 ms.
+        withContext(Dispatchers.Default) {
+            startMutex.withLock {
+                startResult?.let { prior ->
+                    if (prior.isSuccess) return@withLock
                 }
-            }
-            // Best-effort path observer startup. A failure here is logged
-            // but never propagates — `networkPathStatus` simply stays at
-            // [NetworkPathStatus.Unknown] and the SDK behaves as if no
-            // observer is wired up.
-            runCatching { pathObserver.start() }.onFailure {
-                logger.warn("NetworkPathObserver.start() failed; path-change recovery disabled for this session", it)
-            }
-            // Subscribe SessionManager to path changes. Done after the
-            // observer starts so [SessionManager.applyPathChange] sees the
-            // observer's initial emission. We launch on the kit's internal
-            // scope so the subscription tears down with kit.stop().
-            scope.launch {
-                pathObserver.status.collect { status ->
-                    sessionManager.applyPathChange(status)
+                for (transport in dataTransports) {
+                    val r = runCatching { transport.start() }.getOrElse { Result.failure(it) }
+                    if (r.isFailure) {
+                        val cause = r.exceptionOrNull()
+                        val failed = P2pError.TransportStartFailed(
+                            transportKind = transport.type,
+                            reason = cause?.message ?: "transport.start() returned failure",
+                            underlying = cause
+                        )
+                        startResult = Result.failure(failed)
+                        throw failed
+                    }
                 }
+                // Best-effort path observer startup. A failure here is logged
+                // but never propagates — `networkPathStatus` simply stays at
+                // [NetworkPathStatus.Unknown] and the SDK behaves as if no
+                // observer is wired up.
+                runCatching { pathObserver.start() }.onFailure {
+                    logger.warn("NetworkPathObserver.start() failed; path-change recovery disabled for this session", it)
+                }
+                // Subscribe SessionManager to path changes. Done after the
+                // observer starts so [SessionManager.applyPathChange] sees the
+                // observer's initial emission. We launch on the kit's internal
+                // scope so the subscription tears down with kit.stop().
+                scope.launch {
+                    pathObserver.status.collect { status ->
+                        sessionManager.applyPathChange(status)
+                    }
+                }
+                startResult = Result.success(Unit)
             }
-            startResult = Result.success(Unit)
         }
     }
 
     override suspend fun startAdvertising() {
-        ensurePermissions()
-        ensureStarted()
-        _state.value = P2pState.Starting
-        val localInfo = LocalPeerInfo(
-            peerId = localPeerId,
-            deviceName = deviceName,
-            platform = localPlatform,
-            appId = appId,
-            supportedTransports = supportedTransportKinds
-        )
-        for (transport in discoveryTransports) {
-            transport.startAdvertising(localInfo)
+        // V0.6-#20-FIX (Option 1): extend the dispatcher-safe boundary
+        // outward to the public entrypoint. The body — ensurePermissions,
+        // ensureStarted, transport.startAdvertising — runs on Default so
+        // the Main caller pays at most one Default->Main hop on return
+        // (after work is logically complete), not one hop per suspend
+        // point inside.
+        withContext(Dispatchers.Default) {
+            ensurePermissions()
+            ensureStarted()
+            _state.value = P2pState.Starting
+            val localInfo = LocalPeerInfo(
+                peerId = localPeerId,
+                deviceName = deviceName,
+                platform = localPlatform,
+                appId = appId,
+                supportedTransports = supportedTransportKinds
+            )
+            for (transport in discoveryTransports) {
+                transport.startAdvertising(localInfo)
+            }
+            _state.value = P2pState.Running
         }
-        _state.value = P2pState.Running
     }
 
     override suspend fun stopAdvertising() {
@@ -303,10 +320,15 @@ internal class P2pKitImpl(
     }
 
     override suspend fun startDiscovery() {
-        ensurePermissions()
-        ensureStarted()
-        for (transport in discoveryTransports) {
-            transport.startDiscovery()
+        // V0.6-#20-FIX (Option 1): same Default wrap as startAdvertising —
+        // the suspend body's IO/Default hops resolve on Default so the
+        // Main caller doesn't pay per-hop resumption tax during cold-start.
+        withContext(Dispatchers.Default) {
+            ensurePermissions()
+            ensureStarted()
+            for (transport in discoveryTransports) {
+                transport.startDiscovery()
+            }
         }
     }
 
@@ -317,15 +339,21 @@ internal class P2pKitImpl(
     }
 
     override suspend fun connect(peer: Peer): P2pSession {
-        ensureStarted()
-        val internalPeer = peerRegistry.internalPeer(peer.id)
-            ?: dev.p2pkit.core.transport.InternalPeer(
-                publicPeer = peer,
-                transportHints = peer.supportedTransports.map {
-                    dev.p2pkit.core.transport.TransportHint(type = it)
-                }
-            )
-        return sessionManager.connect(peer, internalPeer)
+        // V0.6-#20-FIX (Option 1): connect() also gates on ensureStarted
+        // (and may run during the same cold-start window when a manual
+        // tap happens immediately after launch), so it shares the same
+        // dispatcher-safe wrap as startAdvertising/startDiscovery.
+        return withContext(Dispatchers.Default) {
+            ensureStarted()
+            val internalPeer = peerRegistry.internalPeer(peer.id)
+                ?: dev.p2pkit.core.transport.InternalPeer(
+                    publicPeer = peer,
+                    transportHints = peer.supportedTransports.map {
+                        dev.p2pkit.core.transport.TransportHint(type = it)
+                    }
+                )
+            sessionManager.connect(peer, internalPeer)
+        }
     }
 
     override fun lastSeen(peerId: PeerId): Long? = peerRegistry.lastSeen(peerId)
