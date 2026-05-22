@@ -185,13 +185,14 @@ internal class AndroidLanDiscoveryTransport(
         if (advertisedInfo != null) return@withLock
 
         acquireMulticastLockIfNeeded()
-        ensureJmdns()
+        val preferred = selectPreferredBindNetwork()
+        ensureJmdns(preferred)
 
         val info = buildServiceInfo(localPeer)
         withContext(Dispatchers.IO) { jmdns!!.registerService(info) }
         advertisedInfo = info
         cachedLocalPeer = localPeer
-        boundNetwork = connectivity.activeNetwork
+        boundNetwork = preferred
         boundDefaultNetwork = connectivity.activeNetwork
         Log.d(
             TAG,
@@ -216,14 +217,15 @@ internal class AndroidLanDiscoveryTransport(
         if (serviceListener != null) return@withLock
 
         acquireMulticastLockIfNeeded()
-        ensureJmdns()
+        val preferred = selectPreferredBindNetwork()
+        ensureJmdns(preferred)
 
         val l = buildServiceListener()
         withContext(Dispatchers.IO) {
             jmdns!!.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, l)
         }
         serviceListener = l
-        boundNetwork = connectivity.activeNetwork
+        boundNetwork = preferred
         boundDefaultNetwork = connectivity.activeNetwork
         Log.d(
             TAG,
@@ -340,23 +342,28 @@ internal class AndroidLanDiscoveryTransport(
     // ──────────────────────────────────────────────────────────────────
 
     /**
-     * Lazily creates the [JmDNS] handle bound to the current active
-     * network's primary IPv4 address. Falls back to JmDNS's own default
-     * (which enumerates interfaces internally) when [resolveBindAddress]
-     * cannot determine an address — better than failing the start.
+     * Lazily creates the [JmDNS] handle bound to [network]'s primary IPv4
+     * address. Falls back to JmDNS's own default (which enumerates
+     * interfaces internally) when [resolveBindAddress] cannot determine an
+     * address — better than failing the start.
+     *
+     * Callers pick [network] via [selectPreferredBindNetwork] so the
+     * initial bind lands on a Wi-Fi/Ethernet interface even when
+     * `activeNetwork` points at a non-LAN pseudo-default (issue #10).
      *
      * Called under [lock] from `start*` and from [rebindNow] after the
      * old handle is closed.
      */
-    private suspend fun ensureJmdns() {
+    private suspend fun ensureJmdns(network: Network?) {
         if (jmdns != null) return
-        val bindAddr = resolveBindAddress(connectivity.activeNetwork)
+        val bindAddr = resolveBindAddress(network)
         jmdns = withContext(Dispatchers.IO) {
             if (bindAddr != null) JmDNS.create(bindAddr) else JmDNS.create()
         }
         Log.d(
             TAG,
-            "ensureJmdns: created handle bindAddr=${bindAddr?.hostAddress ?: "default"}"
+            "ensureJmdns: created handle bindAddr=${bindAddr?.hostAddress ?: "default"} " +
+                "preferredNetwork=$network activeNetwork=${connectivity.activeNetwork}"
         )
     }
 
@@ -394,6 +401,45 @@ internal class AndroidLanDiscoveryTransport(
             .firstOrNull { addr -> addr is Inet4Address && !addr.isLoopbackAddress }
             ?.let { return it }
         return null
+    }
+
+    /**
+     * Choose the [Network] to bind JmDNS to at cold start.
+     *
+     * `ConnectivityManager.activeNetwork` returns the *system default*,
+     * which on some devices (issue #10 was reproduced on Huawei) is a
+     * non-LAN pseudo-interface that briefly outranks Wi-Fi during boot.
+     * Binding JmDNS there sends mDNS multicast onto the wrong interface;
+     * the existing rebind path repairs it ~3.2s later (debounce + tear-down
+     * + recreate), which is exactly the cold-start delay tracked by #10.
+     *
+     * This helper enumerates [ConnectivityManager.getAllNetworks] and
+     * returns the first network whose capabilities include
+     * [NetworkCapabilities.TRANSPORT_WIFI] or
+     * [NetworkCapabilities.TRANSPORT_ETHERNET] and that has a usable
+     * IPv4 link address (same transport filter the primary network
+     * callback uses, so the choice is consistent with what
+     * `observedNetwork` will later report). Falls back to
+     * `activeNetwork` if no LAN-transport network is currently usable
+     * — preserving the prior behavior as the safety net.
+     *
+     * Called under [lock] only from `start*`. [rebindNow] keeps its own
+     * `observedNetwork`-based selection so the corrective rebind path
+     * remains a safety net for genuine network rotations.
+     */
+    @Suppress("DEPRECATION")
+    private fun selectPreferredBindNetwork(): Network? {
+        val candidates = runCatching { connectivity.allNetworks }
+            .getOrDefault(emptyArray())
+        for (net in candidates) {
+            val caps = runCatching { connectivity.getNetworkCapabilities(net) }
+                .getOrNull() ?: continue
+            val isLan = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+            if (!isLan) continue
+            if (resolveBindAddress(net) != null) return net
+        }
+        return connectivity.activeNetwork
     }
 
     // ──────────────────────────────────────────────────────────────────
