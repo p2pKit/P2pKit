@@ -37,6 +37,21 @@ struct ContentView: View {
     @State private var isManualDialing: Bool = false
     @State private var pendingConnectPeerIds: Set<String> = []
 
+    /// Peer ids for which the auto-mesh "waiting (lex tie-break)" decision
+    /// has been logged this discovery cycle. Pruned in `autoMeshTick` when
+    /// the peer disappears so a re-discovery logs the decision again
+    /// instead of going silent. Issue #19.
+    @State private var autoMeshWaitedPeerIds: Set<String> = []
+
+    /// Peer ids for which auto-mesh has already initiated a connect this
+    /// discovery cycle. Pruned in `autoMeshTick` when the peer disappears
+    /// so a re-discovery triggers exactly one more attempt. Mirrors the
+    /// Android sample's event-driven combine(_autoMesh, peers): each peer
+    /// appearance produces at most one initiation, and a stale/unreachable
+    /// peer kept alive in the mDNS cache does not cause an auto-retry
+    /// loop. Manual Connect bypasses this guard. Issue #19.
+    @State private var autoMeshAttemptedPeerIds: Set<String> = []
+
     /// Session ids whose `incoming` flow we've already subscribed to,
     /// so duplicate Connect taps don't attach a second MessageCollector
     /// and echo every received message.
@@ -600,6 +615,77 @@ struct ContentView: View {
         for row in sessionRows where !collectedSessionIds.contains(row.id) {
             Task { await attachMessageCollector(to: row.session, label: "tracked") }
         }
+
+        // Issue #19: auto-mesh decision. Runs after peers/sessions are
+        // updated so a freshly-discovered peer is considered on the same
+        // poll tick that surfaced it.
+        autoMeshTick()
+    }
+
+    /// Issue #19 — Auto-mesh: when this device's `localPeerId` is
+    /// lexicographically less than a discovered peer's id, initiate the
+    /// connect on this side; otherwise wait for the other side to dial.
+    /// Mirrors `P2pKitViewModel.kt`'s auto-mesh policy on the Android
+    /// sample. The lex tie-break exists because the current SDK does not
+    /// arbitrate simultaneous-open, so exactly one side per pair must
+    /// initiate. Manual `Connect` taps still work — they bypass this
+    /// helper and go straight through `connect(_:)`.
+    @MainActor
+    private func autoMeshTick() {
+        guard !localPeerId.isEmpty, kit != nil, !isStopping else { return }
+        let myId = localPeerId
+        let liveSessionPeerIds = Set(sessions.filter { $0.isLive }.map { $0.peerId })
+        let currentPeerIds = Set(peers.map { $0.id })
+        // Drop stale "waited"/"attempted" entries for peers we no longer
+        // see, so a re-discovery (peer leaves the mDNS cache and reappears)
+        // emits the decision log again and is eligible for a fresh attempt
+        // instead of being permanently suppressed.
+        autoMeshWaitedPeerIds.formIntersection(currentPeerIds)
+        // Auto-mesh one-shot semantics (issue #19, verified 2026-05-22):
+        //
+        //   - `autoMeshAttemptedPeerIds` enforces at most one auto-mesh
+        //     connect attempt per peer appearance. While the peer stays
+        //     continuously present in the SDK's peers snapshot, a failed
+        //     connect is NOT retried by auto-mesh on the next 1 Hz poll —
+        //     manual Connect remains available, and established sessions
+        //     are handled by the SDK's ReconnectPolicy.
+        //
+        //   - The `formIntersection` below drops the attempted entry if and
+        //     only if the SDK removes the peer from its snapshot. We
+        //     verified (Case A, 2026-05-22) that after a connect TIMEOUT
+        //     against a stale Bonjour endpoint the SDK transiently evicts
+        //     the peer, then re-adds it when the next mDNS TXT broadcast
+        //     arrives — typically advertising a fresh process / port.
+        //
+        //   - That re-addition is treated as a fresh peer appearance and
+        //     becomes eligible for exactly one new auto-mesh attempt. This
+        //     is the recovery path after a peer restart with a stale
+        //     cached endpoint; it does not produce a spin loop because the
+        //     peer must actually leave and re-enter the snapshot — a peer
+        //     that remains continuously present after a failed connect is
+        //     not re-dialled.
+        autoMeshAttemptedPeerIds.formIntersection(currentPeerIds)
+        for row in peers {
+            if liveSessionPeerIds.contains(row.id) { continue }
+            if pendingConnectPeerIds.contains(row.id) { continue }
+            if myId < row.id {
+                // One-shot per peer appearance. If the connect fails
+                // (stale endpoint, ghost in mDNS cache, transient error),
+                // we do not re-dial on the next 1 Hz poll — the user can
+                // still tap Connect manually, and the SDK's ReconnectPolicy
+                // handles re-establishment of already-connected sessions.
+                if autoMeshAttemptedPeerIds.contains(row.id) { continue }
+                autoMeshAttemptedPeerIds.insert(row.id)
+                diag("automesh", "initiating connect to \(row.name) (peer=\(row.id.prefix(8)))")
+                Task { await connect(row) }
+            } else if !autoMeshWaitedPeerIds.contains(row.id) {
+                autoMeshWaitedPeerIds.insert(row.id)
+                diag(
+                    "automesh",
+                    "waiting on \(row.name) (peer=\(row.id.prefix(8))) — localPeerId >= peer.id, other side initiates"
+                )
+            }
+        }
     }
 
     private func attachMessageCollector(to session: P2pSession, label: String) async {
@@ -838,6 +924,8 @@ struct ContentView: View {
         sessions = []
         collectedSessionIds = []
         pendingConnectPeerIds = []
+        autoMeshWaitedPeerIds = []
+        autoMeshAttemptedPeerIds = []
         localPeerId = ""
         localTcpPort = 0
         errorBanner = nil
