@@ -52,8 +52,12 @@ internal class PeerRegistry(
      * [registerManualPeer], not by a discovery `Found` event. These are
      * skipped by the staleness sweeper since no transport sends heartbeats
      * for them.
+     *
+     * Held as a [MutableStateFlow] so reads from [evictStalePeers] (running
+     * on the registry's scope) and writes from [registerManualPeer] (which
+     * is a public API callable from any thread) are atomic without locks.
      */
-    private val manualPeerIds: MutableSet<PeerId> = mutableSetOf()
+    private val manualPeerIds: MutableStateFlow<Set<PeerId>> = MutableStateFlow(emptySet())
 
     private val tracked: MutableStateFlow<Map<PeerId, TrackedPeer>> = MutableStateFlow(emptyMap())
     private val _peers: MutableStateFlow<List<Peer>> = MutableStateFlow(emptyList())
@@ -103,7 +107,7 @@ internal class PeerRegistry(
         val now = clock()
         tracked.update { current ->
             current.filterValues { tracked ->
-                tracked.internalPeer.publicPeer.id in manualPeerIds ||
+                tracked.internalPeer.publicPeer.id in manualPeerIds.value ||
                     now - tracked.lastSeenAtMillis <= staleTimeoutMillis
             }
         }
@@ -132,7 +136,7 @@ internal class PeerRegistry(
             transportHints = listOf(TransportHint(type = kind, host = host, port = port))
         )
         tracked.update { current -> current + (syntheticId to TrackedPeer(internal, clock())) }
-        manualPeerIds.add(syntheticId)
+        manualPeerIds.update { it + syntheticId }
         publishPeers()
         return publicPeer
     }
