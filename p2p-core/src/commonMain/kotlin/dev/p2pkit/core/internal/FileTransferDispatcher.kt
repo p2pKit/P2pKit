@@ -364,13 +364,23 @@ internal class FileTransferDispatcher(
         try {
             val total = recv.acceptDataChunk(frame)
             entry.session.recordBytesReceived(total)
-        } catch (e: P2pError) {
-            entry.session.markFailed(e)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // acceptDataChunk can throw P2pError (protocol violation) OR a raw
+            // kotlinx-io IOException from the sink (disk full / closed fd). Both
+            // must stay scoped to THIS transfer — letting a non-P2pError escape
+            // into routeEvents would tear down the whole session (every other
+            // transfer + message) because one receiver's disk filled up.
+            val err = if (e is P2pError) e
+            else P2pError.ConnectionFailed("file receive write failed: ${e.message ?: e::class.simpleName}")
+            entry.session.markFailed(err)
+            recv.abort()
             lock.withLock { incoming.remove(frame.messageId) }
             // Tell the peer we won't be completing this.
             runCatching {
                 sendMutex.withLock {
-                    protocol.sendFileCancel(getConnection(), frame.messageId, "protocol error: ${e.message}")
+                    protocol.sendFileCancel(getConnection(), frame.messageId, "receive error: ${err.message}")
                 }
             }
         }

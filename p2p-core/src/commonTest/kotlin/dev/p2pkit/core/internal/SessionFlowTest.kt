@@ -58,6 +58,11 @@ class SessionFlowTest {
         P2pKit.create {
             appId = AppId("com.example.test")
             deviceName = name
+            // Seed the incoming peer's id to the value the outgoing side dials
+            // ("bob-id") so the HELLO peerId matches — mirrors production, where
+            // the dialed id comes from the same discovery record the peer
+            // advertises. Required since the outgoing handshake now verifies it.
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000

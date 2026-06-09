@@ -19,9 +19,13 @@ internal class TransportManager(
 ) {
 
     fun selectBestTransport(peer: InternalPeer): DataTransport {
+        // Highest priority wins; ties broken deterministically by transport
+        // kind ordinal (then registration order) so selection is stable and
+        // reproducible rather than dependent on `maxByOrNull`'s first-max bias.
         return transports
             .filter { it.canConnect(peer) }
-            .maxByOrNull { it.priority }
+            .sortedWith(compareByDescending<DataTransport> { it.priority }.thenBy { it.type.ordinal })
+            .firstOrNull()
             ?: throw P2pError.NoTransportAvailable(peer.publicPeer)
     }
 }

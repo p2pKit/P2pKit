@@ -299,6 +299,19 @@ internal class SessionManager(
                 localPlatform = localPlatform,
                 localTransports = localTransports
             )
+            // Identity check for OUTGOING connects: we dialed a specific peer
+            // (expectedPeer) at a discovery-supplied host:port. Any LAN device
+            // can answer on that address (spoof / race), so verify the remote's
+            // claimed PeerId in its HELLO matches who we intended to reach;
+            // otherwise we'd register a stranger under the expected peer's id.
+            // Under NoneForMvp this closes the accidental/active host:port-race
+            // case (full protection needs the security handshake).
+            if (expectedPeer != null && peerHello.peerId != expectedPeer.id.value) {
+                runCatching { protocol.sendError(rawConnection, "peerId mismatch") }
+                throw P2pError.HandshakeRejected(
+                    "peerId mismatch: expected ${expectedPeer.id.value} but remote announced ${peerHello.peerId}"
+                )
+            }
             // Security wrap — no-op in v0.1 (NoOpSecurityManager returns a
             // passthrough), but keeps the future encryption hook open.
             val resolvedPeer = expectedPeer ?: peerHello.toPeer()

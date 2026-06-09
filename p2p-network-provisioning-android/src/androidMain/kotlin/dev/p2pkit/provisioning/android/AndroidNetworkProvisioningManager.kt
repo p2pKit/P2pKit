@@ -73,10 +73,26 @@ public class AndroidNetworkProvisioningManager internal constructor(
     override val events: Flow<NetworkProvisioningEvent> = _events.asSharedFlow()
 
     private val lifecycleLock = Mutex()
+    @kotlin.concurrent.Volatile
     private var handle: HotspotHandle? = null
     private var stopWatch: Job? = null
+    @kotlin.concurrent.Volatile
     private var joinHandle: JoinHandle? = null
     private var joinReleaseWatch: Job? = null
+
+    init {
+        // Release native resources (LocalOnlyHotspot reservation, joined-network
+        // process binding) whenever the scope completes — including when the
+        // kit's parent job is cancelled by P2pKit.stop(). Previously stop() only
+        // cancelled the scope (stopping the watcher coroutines) but never invoked
+        // close(), so the hotspot reservation leaked for the process lifetime.
+        // Fields are @Volatile so this handler (which runs without lifecycleLock)
+        // observes the latest writes. close() releases are idempotent (runCatching).
+        scopeJob.invokeOnCompletion {
+            runCatching { handle?.close() }
+            runCatching { joinHandle?.close() }
+        }
+    }
 
     // --- NetworkProvisioningManager surface -------------------------------
 

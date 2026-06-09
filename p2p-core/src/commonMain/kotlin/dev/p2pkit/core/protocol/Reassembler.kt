@@ -24,7 +24,8 @@ internal class Reassembler(
         val totalChunks: Int,
         val isText: Boolean,
         val chunks: MutableMap<Int, ByteArray>,
-        val firstSeenMillis: Long
+        val firstSeenMillis: Long,
+        var bufferedBytes: Long = 0
     )
 
     private val pending: MutableMap<MessageId, Pending> = mutableMapOf()
@@ -41,6 +42,24 @@ internal class Reassembler(
             return decodePayload(frame.payload, frame.isText)
         }
 
+        // Untrusted-input guards (frame.totalChunks is peer-controlled):
+        //   - cap totalChunks so the per-message chunk map can't be opened huge,
+        //   - cap the number of concurrently-pending partial messages,
+        // both close the session via ProtocolError. See ProtocolConstants.
+        if (frame.totalChunks > ProtocolConstants.MAX_TOTAL_CHUNKS) {
+            throw P2pError.ProtocolError(
+                "totalChunks ${frame.totalChunks} exceeds maximum ${ProtocolConstants.MAX_TOTAL_CHUNKS}"
+            )
+        }
+        if (frame.messageId !in pending &&
+            pending.size >= ProtocolConstants.MAX_PENDING_REASSEMBLIES
+        ) {
+            throw P2pError.ProtocolError(
+                "Too many concurrent partial messages (${pending.size}); " +
+                    "max ${ProtocolConstants.MAX_PENDING_REASSEMBLIES}"
+            )
+        }
+
         val state = pending.getOrPut(frame.messageId) {
             Pending(
                 totalChunks = frame.totalChunks,
@@ -53,14 +72,28 @@ internal class Reassembler(
             pending.remove(frame.messageId)
             throw P2pError.ProtocolError(
                 "Mismatched totalChunks for messageId=${frame.messageId}: " +
-                    "first saw ${state.totalChunks}, now $frame.totalChunks"
+                    "first saw ${state.totalChunks}, now ${frame.totalChunks}"
             )
+        }
+        // Track running buffered size (Long) and reject before a reassembled
+        // message could exceed MAX_PAYLOAD_BYTES. Only count newly-seen indices
+        // so a duplicate chunk can't inflate the total. Guards against both the
+        // Int-overflow of summing sizes and an oversized aggregate allocation.
+        if (frame.chunkIndex !in state.chunks) {
+            state.bufferedBytes += frame.payload.size.toLong()
+            if (state.bufferedBytes > ProtocolConstants.MAX_PAYLOAD_BYTES) {
+                pending.remove(frame.messageId)
+                throw P2pError.ProtocolError(
+                    "Reassembled message for messageId=${frame.messageId} would exceed " +
+                        "MAX_PAYLOAD_BYTES (${ProtocolConstants.MAX_PAYLOAD_BYTES})"
+                )
+            }
         }
         state.chunks[frame.chunkIndex] = frame.payload
 
         if (state.chunks.size != state.totalChunks) return null
 
-        val totalSize = state.chunks.values.sumOf { it.size }
+        val totalSize = state.chunks.values.sumOf { it.size.toLong() }.toInt()
         val combined = ByteArray(totalSize)
         var offset = 0
         for (i in 0 until state.totalChunks) {

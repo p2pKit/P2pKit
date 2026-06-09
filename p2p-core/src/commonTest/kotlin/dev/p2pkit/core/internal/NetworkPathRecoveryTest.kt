@@ -77,6 +77,9 @@ class NetworkPathRecoveryTest {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000
             }
+            // Match the dialed id ("bob-id") so the outgoing handshake's peerId
+            // verification passes (mirrors production discovery).
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
             transports {
                 register(PathRecoveryTestFactory(FakeDataTransport(preStagedIncoming = preStaged)))
             }

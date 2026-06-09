@@ -228,15 +228,23 @@ internal class SessionStore(private val logger: P2pLogger) {
     private fun checkInvariants(site: String) {
         if (!ASSERT_INVARIANTS) return
         val visible = _sessions.value
-        check(byPeer.values.all { entry -> visible.any { it === entry } }) {
-            "SessionStore[$site]: active byPeer entry missing from published sessions list. " +
-                "byPeer.size=${byPeer.size} visible.size=${visible.size}"
+        // Log-don't-crash: an invariant violation is a serious bug, but a
+        // published library must not bring down the host app's process over a
+        // bookkeeping inconsistency. We surface it loudly via the logger so it
+        // is caught in testing/diagnostics without an in-the-field crash.
+        if (!byPeer.values.all { entry -> visible.any { it === entry } }) {
+            logger.warn(
+                "SessionStore[$site] INVARIANT: active byPeer entry missing from published sessions list. " +
+                    "byPeer.size=${byPeer.size} visible.size=${visible.size}"
+            )
         }
-        val distinctByIdentity = visible.fold(0) { acc, s ->
+        val duplicateInstances = visible.fold(0) { acc, s ->
             acc + if (visible.count { it === s } == 1) 0 else 1
         }
-        check(distinctByIdentity == 0) {
-            "SessionStore[$site]: duplicate session instance in published list (size=${visible.size})"
+        if (duplicateInstances != 0) {
+            logger.warn(
+                "SessionStore[$site] INVARIANT: duplicate session instance in published list (size=${visible.size})"
+            )
         }
     }
 

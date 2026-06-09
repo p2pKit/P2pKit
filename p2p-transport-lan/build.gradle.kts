@@ -3,6 +3,7 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.kmp.library)
+    `maven-publish`
 }
 
 // V0.4-PROVENANCE (L3): write a BUILD_COMMIT.txt sidecar file alongside
@@ -121,5 +122,35 @@ afterEvaluate {
         it.name.startsWith("assemble") && it.name.contains("XCFramework")
     }.configureEach {
         finalizedBy(writeXcframeworkCommit)
+    }
+}
+
+// Maven publishing (fixes no-publishing-plugin / no-pom-metadata). See
+// :p2p-core build for rationale. Auto-created KMP publications; POM enriched
+// for Central-readiness; signing left to CI.
+publishing {
+    publications.withType<MavenPublication>().configureEach {
+        pom {
+            name.set("P2pKit ${project.name}")
+            description.set("P2pKit LAN transport — Bonjour/JmDNS discovery + TCP data over Network.framework/sockets.")
+            url.set("https://github.com/Apdelrahman1911/P2pKit")
+            licenses {
+                license {
+                    name.set("The Apache License, Version 2.0")
+                    url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                }
+            }
+            developers {
+                developer {
+                    id.set("Apdelrahman1911")
+                    name.set("Abdelrahman")
+                }
+            }
+            scm {
+                url.set("https://github.com/Apdelrahman1911/P2pKit")
+                connection.set("scm:git:https://github.com/Apdelrahman1911/P2pKit.git")
+                developerConnection.set("scm:git:ssh://git@github.com/Apdelrahman1911/P2pKit.git")
+            }
+        }
     }
 }

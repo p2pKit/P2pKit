@@ -33,6 +33,7 @@ import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -42,7 +43,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -107,6 +107,12 @@ internal class P2pKitImpl(
     // re-checks under the lock. Worst case is one extra `withLock` round-trip.
     private val startMutex = Mutex()
     private var startResult: Result<Unit>? = null
+
+    // Set once by [stop]. A stopped kit is terminal: its internal scope is
+    // cancelled and cannot be revived, so every lifecycle entry point rejects
+    // further calls instead of silently returning success onto a dead scope.
+    @kotlin.concurrent.Volatile
+    private var stopped: Boolean = false
 
     init {
         // V0.4-PROVENANCE (L2): emit framework identity to BOTH the
@@ -239,12 +245,19 @@ internal class P2pKitImpl(
      * failed without inspecting the cause's class.
      */
     private suspend fun ensureStarted() {
+        if (stopped) throw IllegalStateException("P2pKit has been stopped; create a new instance")
         startResult?.let { prior ->
             if (prior.isSuccess) return
         }
         startMutex.withLock {
+            if (stopped) throw IllegalStateException("P2pKit has been stopped; create a new instance")
             startResult?.let { prior ->
                 if (prior.isSuccess) return
+            }
+            // Drive the documented lifecycle: Idle/Failed -> Starting on the
+            // first (or retried) start attempt.
+            if (_state.value == P2pState.Idle || _state.value is P2pState.Failed) {
+                _state.value = P2pState.Starting
             }
             for (transport in dataTransports) {
                 val r = runCatching { transport.start() }.getOrElse { Result.failure(it) }
@@ -256,6 +269,9 @@ internal class P2pKitImpl(
                         underlying = cause
                     )
                     startResult = Result.failure(failed)
+                    // Surface the documented terminal Failed state (Errors.kt
+                    // claims TransportStartFailed surfaces through the lifecycle).
+                    _state.value = P2pState.Failed(failed)
                     throw failed
                 }
             }
@@ -276,24 +292,36 @@ internal class P2pKitImpl(
                 }
             }
             startResult = Result.success(Unit)
+            // Successful start reaches Running, regardless of which entry point
+            // (start / startAdvertising / startDiscovery / connect) triggered it.
+            _state.value = P2pState.Running
         }
     }
 
     override suspend fun startAdvertising() {
         ensurePermissions()
         ensureStarted()
-        _state.value = P2pState.Starting
-        val localInfo = LocalPeerInfo(
-            peerId = localPeerId,
-            deviceName = deviceName,
-            platform = localPlatform,
-            appId = appId,
-            supportedTransports = supportedTransportKinds
-        )
-        for (transport in discoveryTransports) {
-            transport.startAdvertising(localInfo)
+        try {
+            val localInfo = LocalPeerInfo(
+                peerId = localPeerId,
+                deviceName = deviceName,
+                platform = localPlatform,
+                appId = appId,
+                supportedTransports = supportedTransportKinds
+            )
+            for (transport in discoveryTransports) {
+                transport.startAdvertising(localInfo)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // A partial advertise failure must not leave state stuck — surface
+            // it as Failed (consistent with the ensureStarted bind-failure path).
+            val err = if (e is P2pError) e
+            else P2pError.ConnectionFailed("startAdvertising failed: ${e.message ?: e::class.simpleName}")
+            _state.value = P2pState.Failed(err)
+            throw err
         }
-        _state.value = P2pState.Running
     }
 
     override suspend fun stopAdvertising() {
@@ -331,14 +359,19 @@ internal class P2pKitImpl(
     override fun lastSeen(peerId: PeerId): Long? = peerRegistry.lastSeen(peerId)
 
     override fun notifyAppBackgrounded() {
-        sessionManager.applyBackgroundPolicy(backgroundPolicy)
         when (backgroundPolicy) {
             is BackgroundPolicy.CloseActiveSessions -> {
+                // Close sessions + pause advertising/discovery, but do NOT emit
+                // P2pState.Stopped: the data transports stay bound (only stop()
+                // closes them) and the kit is still functional, so reporting
+                // Stopped would lie to host UIs and never recover on foreground.
+                // applyBackgroundPolicy already closes active sessions; don't
+                // double-close here.
                 scope.launch {
                     runCatching { stopAdvertising() }
                     runCatching { stopDiscovery() }
-                    _state.value = P2pState.Stopped
                 }
+                sessionManager.applyBackgroundPolicy(backgroundPolicy)
             }
             is BackgroundPolicy.KeepRunning -> { /* nothing to do */ }
         }
@@ -350,6 +383,13 @@ internal class P2pKitImpl(
     }
 
     override suspend fun stop() {
+        // Terminal & idempotent. internalJob.cancel() below permanently kills
+        // the scope that powers SessionManager / PeerRegistry / accept loops,
+        // so the instance cannot be revived — the `stopped` flag makes any
+        // subsequent lifecycle call fail loudly (IllegalStateException) instead
+        // of latching onto a dead scope and silently no-op'ing.
+        if (stopped) return
+        stopped = true
         _state.value = P2pState.Stopping
         runCatching { stopAdvertising() }
         runCatching { stopDiscovery() }
@@ -357,6 +397,10 @@ internal class P2pKitImpl(
         for (transport in dataTransports) {
             runCatching { transport.close() }
         }
+        // Provisioning managers attach their scope to internalJob; the
+        // internalJob.cancel() below fires their invokeOnCompletion teardown
+        // (e.g. AndroidNetworkProvisioningManager releases its LocalOnlyHotspot
+        // reservation and unbinds the joined network there).
         runCatching { pathObserver.close() }
         internalJob.cancel()
         _state.value = P2pState.Stopped

@@ -90,6 +90,9 @@ class SessionReconnectRotationTest {
         val bob = P2pKit.create {
             appId = AppId("com.example.test")
             deviceName = "Bob"
+            // Match the dialed id ("bob-id") so the outgoing handshake's peerId
+            // verification passes (mirrors production discovery).
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000
@@ -188,6 +191,9 @@ class SessionReconnectRotationTest {
         val bob = P2pKit.create {
             appId = AppId("com.example.test")
             deviceName = "Bob"
+            // Match the dialed id ("bob-id") so the outgoing handshake's peerId
+            // verification passes (mirrors production discovery).
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000
@@ -281,6 +287,9 @@ class SessionReconnectRotationTest {
         val bob = P2pKit.create {
             appId = AppId("com.example.test")
             deviceName = "Bob"
+            // Match the dialed id ("bob-id") so the outgoing handshake's peerId
+            // verification passes (mirrors production discovery).
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000

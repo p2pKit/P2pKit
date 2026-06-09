@@ -151,7 +151,7 @@ internal class P2pSessionImpl(
      */
     internal var reconnectHandler: ReconnectHandler? = null
 
-    private val fileTransferDispatcher: FileTransferDispatcher by lazy {
+    private val fileTransferDispatcherLazy = lazy {
         FileTransferDispatcher(
             sessionId = id,
             remotePeer = peer,
@@ -164,6 +164,7 @@ internal class P2pSessionImpl(
             logger = logger
         )
     }
+    private val fileTransferDispatcher: FileTransferDispatcher get() = fileTransferDispatcherLazy.value
 
     override val incomingFiles: SharedFlow<P2pFileOffer>
         get() = fileTransferDispatcher.incomingFiles
@@ -293,6 +294,16 @@ internal class P2pSessionImpl(
                 return
             }
             epochJob?.cancelAndJoin()
+            // Fail any in-flight file transfers BEFORE swapping the connection.
+            // The outgoing streamer runs on the session scope (not the epoch
+            // scope), so cancelling epochJob alone does not stop it; without
+            // this it would keep writing mid-stream FILE_DATA chunks onto the
+            // brand-new connection, corrupting the rearmed session. Matches the
+            // closeAll-on-terminal contract. Only touch the dispatcher if it
+            // was ever used, so reconnects of message-only sessions stay cheap.
+            if (fileTransferDispatcherLazy.isInitialized()) {
+                runCatching { fileTransferDispatcher.closeAll("reconnect: connection replaced") }
+            }
             runCatching { connection.close() }
             connection = newConnection
             events = newEvents
@@ -378,8 +389,10 @@ internal class P2pSessionImpl(
             // tear them down before we close the socket so they surface a
             // sensible "session ended" status instead of a mid-write
             // IOException.
-            runCatching {
-                fileTransferDispatcher.closeAll("session $id ${target.name}: $cause")
+            if (fileTransferDispatcherLazy.isInitialized()) {
+                runCatching {
+                    fileTransferDispatcher.closeAll("session $id ${target.name}: $cause")
+                }
             }
             // Cancel the epoch — stops routeEvents, keepAliveLoop, and the
             // parked observeRawState. Guarantees no further _incoming.emit.

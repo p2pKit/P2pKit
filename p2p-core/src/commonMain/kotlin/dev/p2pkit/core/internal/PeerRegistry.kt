@@ -47,14 +47,6 @@ internal class PeerRegistry(
     private val evictionPollMillis: Long = DEFAULT_EVICTION_POLL_MS
 ) : ManualPeerRegistrar {
 
-    /**
-     * Peer ids whose [TrackedPeer] entry was created by
-     * [registerManualPeer], not by a discovery `Found` event. These are
-     * skipped by the staleness sweeper since no transport sends heartbeats
-     * for them.
-     */
-    private val manualPeerIds: MutableSet<PeerId> = mutableSetOf()
-
     private val tracked: MutableStateFlow<Map<PeerId, TrackedPeer>> = MutableStateFlow(emptyMap())
     private val _peers: MutableStateFlow<List<Peer>> = MutableStateFlow(emptyList())
 
@@ -102,9 +94,11 @@ internal class PeerRegistry(
     internal fun evictStalePeers() {
         val now = clock()
         tracked.update { current ->
+            // Manual peers carry no heartbeats, so they are exempt from
+            // staleness eviction. The manual flag lives on the entry itself
+            // (atomic with the map update) — no separate, unsynchronized set.
             current.filterValues { tracked ->
-                tracked.internalPeer.publicPeer.id in manualPeerIds ||
-                    now - tracked.lastSeenAtMillis <= staleTimeoutMillis
+                tracked.isManual || now - tracked.lastSeenAtMillis <= staleTimeoutMillis
             }
         }
         publishPeers()
@@ -131,8 +125,7 @@ internal class PeerRegistry(
             publicPeer = publicPeer,
             transportHints = listOf(TransportHint(type = kind, host = host, port = port))
         )
-        tracked.update { current -> current + (syntheticId to TrackedPeer(internal, clock())) }
-        manualPeerIds.add(syntheticId)
+        tracked.update { current -> current + (syntheticId to TrackedPeer(internal, clock(), isManual = true)) }
         publishPeers()
         return publicPeer
     }
@@ -140,7 +133,15 @@ internal class PeerRegistry(
     private suspend fun evictLoop() {
         while (scope.isActive) {
             delay(evictionPollMillis)
-            evictStalePeers()
+            // Isolate per-iteration failures so one throw can't kill peer
+            // eviction for the kit's lifetime (rethrow cancellation).
+            try {
+                evictStalePeers()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // No logger here by design; swallow and keep the loop alive.
+            }
         }
     }
 
@@ -152,7 +153,9 @@ internal class PeerRegistry(
 
 internal data class TrackedPeer(
     val internalPeer: InternalPeer,
-    val lastSeenAtMillis: Long
+    val lastSeenAtMillis: Long,
+    /** True for entries created by [PeerRegistry.registerManualPeer]; exempt from staleness eviction. */
+    val isManual: Boolean = false
 ) {
     val peer: Peer get() = internalPeer.publicPeer
 }

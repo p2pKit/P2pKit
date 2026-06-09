@@ -82,6 +82,11 @@ internal object FrameCodec {
         if (payloadLen < 0) {
             throw P2pError.ProtocolError("Negative payload length: $payloadLen")
         }
+        if (payloadLen > ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES) {
+            throw P2pError.ProtocolError(
+                "Payload length $payloadLen exceeds maximum ${ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES}"
+            )
+        }
         if (totalChunks <= 0) {
             throw P2pError.ProtocolError("Invalid totalChunks: $totalChunks")
         }

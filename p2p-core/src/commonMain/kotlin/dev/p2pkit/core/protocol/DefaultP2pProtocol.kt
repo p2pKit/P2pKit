@@ -102,6 +102,11 @@ internal class DefaultP2pProtocol(
         val reader = FrameReader(logger)
         val reassembler = Reassembler(clock = clock)
         connection.read().collect { bytes ->
+            // Reclaim partial multi-chunk messages whose final chunk never
+            // arrived. evictStale() is otherwise never driven (it has no timer),
+            // so without this call a stalled transfer would pin its chunks for
+            // the life of the connection. Cheap: no-op while `pending` is empty.
+            reassembler.evictStale()
             val frames = reader.feed(bytes)
             for (frame in frames) {
                 val event = decodeEvent(frame, reassembler)
@@ -117,7 +122,15 @@ internal class DefaultP2pProtocol(
                 ProtocolEvent.Message(message)
             }
             PacketType.HELLO -> {
-                val payload = HelloPayload.decode(frame.payload)
+                // A malformed HELLO body must not throw a SerializationException
+                // out of the events flow (which would tear the session down as
+                // an unhandled error). Skip + warn, mirroring the unknown-packet
+                // policy; during the handshake a missing HELLO simply times out
+                // and surfaces as a clean HandshakeRejected.
+                val payload = runCatching { HelloPayload.decode(frame.payload) }.getOrElse { e ->
+                    logger.warn("Skipping malformed HELLO frame: ${e.message ?: e::class.simpleName}")
+                    return null
+                }
                 ProtocolEvent.Hello(payload)
             }
             PacketType.PING -> ProtocolEvent.Ping
@@ -129,7 +142,14 @@ internal class DefaultP2pProtocol(
             }
             PacketType.ACK -> ProtocolEvent.Ack(frame.messageId, frame.chunkIndex)
             PacketType.FILE_OFFER -> {
-                val payload = FileOfferPayload.decode(frame.payload)
+                // Skip + warn on a malformed offer body instead of letting the
+                // SerializationException escape into routeEvents. A hostile peer
+                // could otherwise resend a bad FILE_OFFER after every reconnect
+                // to drive a reconnect loop.
+                val payload = runCatching { FileOfferPayload.decode(frame.payload) }.getOrElse { e ->
+                    logger.warn("Skipping malformed FILE_OFFER frame: ${e.message ?: e::class.simpleName}")
+                    return null
+                }
                 ProtocolEvent.FileOffer(frame.messageId, payload)
             }
             PacketType.FILE_ACCEPT -> ProtocolEvent.FileAccept(frame.messageId)
