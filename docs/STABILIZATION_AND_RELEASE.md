@@ -130,20 +130,25 @@ be on the post-RC / encryption-milestone radar:
 - **Inbound HELLO peerId is not verified** (`SessionManager`, `TODO(encryption-milestone)`).
   Trusted-LAN only under `SecurityMode.NoneForMvp`; the real fix is the
   encryption handshake. The reject-own-peerId guard is in place.
-- **`SessionManager` handshake-phase exceptions** can still escape `connect()`
-  as non-`P2pError` (only transport-connect is wrapped). Cheap follow-up: wrap
-  the handshake path too.
 - **iOS `include_peer_to_peer` asymmetry** (browser vs. listener/connection) —
   AWDL peers may be undialable; needs device testing (A2/A3) to confirm fix
   direction.
 - **Interface selection** (`AndroidLanDiscoveryTransport`, `JvmLanDiscoveryTransport`)
   can bind a cellular/loopback NIC; JVM has no network-rotation rebind. Validate
   on multi-interface hardware (A7).
-- **`IosNetworkPathObserver` counts cellular as Satisfied**, diverging from the
-  cellular-prohibited data transport — can drive reconnect storms.
-- **Test gaps:** no `HandshakeTest` (outgoing peerId anti-spoof) / `KeepAliveTest`
-  (positive PING/PONG path).
-- **~remaining doc-drift minors** — mechanical, low risk.
+
+**Resolved during stabilization** (closed on this branch, no longer deferred):
+
+- ✅ **Handshake-phase exceptions** now wrap into a typed `P2pError`
+  (`SessionManager.runHandshake`).
+- ✅ **`IosNetworkPathObserver` cellular-only** paths now report `Unsatisfied`,
+  mirroring the cellular-prohibited data transport (no more reconnect storms
+  during Wi-Fi gaps).
+- ✅ **Test gaps** filled: `HandshakeIdentityTest` (outgoing peerId anti-spoof:
+  match / mismatch / self-collision) and `KeepAliveTest` (PONG responder +
+  positive stays-connected path).
+- ✅ **Mechanical doc-drift** swept (stale NsdManager current-state references,
+  the `gradle.properties` publishing comment).
 
 ### C2 — Known-flaky automated tests (pre-existing, not regressions)
 
