@@ -394,6 +394,19 @@ internal class SessionManager(
         private val policy: ReconnectPolicy.Enabled
     ) : ReconnectHandler {
 
+        /**
+         * Path-recovered generation snapshot taken at the Reconnecting edge by
+         * [onWillReconnect]. The retry loop waits for the counter to move past
+         * this, so a Satisfied transition arriving any time after we entered
+         * Reconnecting (even before the loop starts) wakes the dial early.
+         */
+        @kotlin.concurrent.Volatile
+        private var pathWakeBaseline: Int = pathSatisfiedGeneration.value
+
+        override fun onWillReconnect() {
+            pathWakeBaseline = pathSatisfiedGeneration.value
+        }
+
         override suspend fun onConnectionLost(session: P2pSessionImpl) {
             var attempt = 0
             var lastResolvedHints = originalInternalPeer.transportHints
@@ -435,11 +448,14 @@ internal class SessionManager(
             // below on every exit path — success, exhaustion, or session
             // state change.
             val periodicRefreshJob = launchPeriodicRefresh(session, peerShort)
-            // Snapshot the path-recovered generation before the loop; each
-            // iteration parks until it changes, then re-snapshots. Because the
-            // counter is a StateFlow, a Satisfied transition that arrives
-            // between snapshot and park is observed immediately (no drop).
-            var lastPathGen = pathSatisfiedGeneration.value
+            // Start from the baseline captured at the Reconnecting edge by
+            // [onWillReconnect] (NOT a fresh read here — refreshDiscovery above
+            // can take long enough under load that a Satisfied landing during
+            // it would otherwise be captured as the baseline and missed). Each
+            // iteration parks until the counter moves past lastPathGen, then
+            // re-snapshots. StateFlow retains its value, so a transition that
+            // already happened is observed immediately (no drop).
+            var lastPathGen = pathWakeBaseline
             try {
                 while (attempt < policy.maxAttempts) {
                     attempt++

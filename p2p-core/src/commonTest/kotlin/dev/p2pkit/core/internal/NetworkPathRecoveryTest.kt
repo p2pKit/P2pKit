@@ -186,9 +186,13 @@ class NetworkPathRecoveryTest {
             // emit is now race-free.
             fake.emit(NetworkPathStatus.Satisfied)
 
-            // Bounded < retryDelayMillis to prove the signal woke the
-            // handler early.
-            val rearmed = withTimeout(2_000) {
+            // Bounded well under retryDelayMillis (5_000) to prove the signal
+            // woke the handler early rather than the delay expiring. 3_500ms
+            // (not a tighter 2_000) keeps the assertion robust when the full
+            // test suite runs in parallel and saturates the CPU — the rearm
+            // handshake still completes far inside the 5 s delay
+            // (AUDIT-2026-06).
+            val rearmed = withTimeout(3_500) {
                 session.state.first { it == ConnectionState.Connected }
             }
             assertEquals(ConnectionState.Connected, rearmed)

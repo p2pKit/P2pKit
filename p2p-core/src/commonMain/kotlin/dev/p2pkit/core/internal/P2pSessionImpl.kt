@@ -49,6 +49,16 @@ import kotlin.random.Random
  */
 internal interface ReconnectHandler {
     suspend fun onConnectionLost(session: P2pSessionImpl)
+
+    /**
+     * Called synchronously at the instant the session transitions to
+     * `Reconnecting`, under the connection lock and before the retry loop is
+     * launched. Lets the handler snapshot any "wake early on network
+     * recovery" baseline at the exact Reconnecting edge, so a path-Satisfied
+     * signal that arrives between the transition and the (async) start of the
+     * retry loop is not missed (AUDIT-2026-06). Default: no-op.
+     */
+    fun onWillReconnect() {}
 }
 
 /**
@@ -630,6 +640,12 @@ internal class P2pSessionImpl(
                         null
                     } else {
                         _state.value = ConnectionState.Reconnecting
+                        // Snapshot the path-wake baseline at the exact
+                        // Reconnecting edge (still under the lock, before the
+                        // async retry loop launches) so a Satisfied signal that
+                        // lands in that gap still wakes the handler early
+                        // (AUDIT-2026-06).
+                        h.onWillReconnect()
                         h
                     }
                 }
