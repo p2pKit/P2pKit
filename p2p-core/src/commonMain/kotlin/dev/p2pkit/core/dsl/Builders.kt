@@ -11,6 +11,7 @@ import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.internal.PeerIdStorage
 import dev.p2pkit.core.internal.newP2pKit
+import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
 import dev.p2pkit.core.provisioning.NetworkProvisioningFactory
 import dev.p2pkit.core.transfer.FileTransferConfig
@@ -68,6 +69,16 @@ public class P2pKitBuilder internal constructor() {
      * `P2pKitAndroid.initialize(context)` wasn't called).
      */
     internal var peerIdStorage: PeerIdStorage? = null
+
+    /**
+     * Optional host-provided [P2pPermissionManager]. When `null`, the kit uses
+     * the platform default ([dev.p2pkit.core.internal.defaultPlatformPermissionManager]):
+     * a real manifest-permission checker on Android (once
+     * `P2pKitAndroid.initialize(context)` has run), no-op on JVM/iOS. Wire in a
+     * provisioning sidecar's richer manager (e.g. `AndroidP2pPermissionManager`)
+     * here when the app uses hotspot/Wi-Fi-join provisioning.
+     */
+    public var permissionManager: P2pPermissionManager? = null
 
     public fun transports(block: TransportsBuilder.() -> Unit) {
         transportsBuilder.apply(block)
@@ -131,7 +142,8 @@ public class P2pKitBuilder internal constructor() {
             fileTransferConfig = fileTransfer,
             logger = logger,
             peerIdStorageOverride = peerIdStorage,
-            networkPathObserverOverride = networkPathObserver
+            networkPathObserverOverride = networkPathObserver,
+            permissionManagerOverride = permissionManager
         )
     }
 }

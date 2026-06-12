@@ -466,10 +466,12 @@ internal fun newP2pKit(
     fileTransferConfig: FileTransferConfig,
     logger: P2pLogger,
     peerIdStorageOverride: PeerIdStorage? = null,
-    networkPathObserverOverride: NetworkPathObserver? = null
+    networkPathObserverOverride: NetworkPathObserver? = null,
+    permissionManagerOverride: dev.p2pkit.core.permission.P2pPermissionManager? = null
 ): P2pKit {
     val peerIdStorage = peerIdStorageOverride ?: defaultPeerIdStorage(appId, logger)
     val pathObserver = networkPathObserverOverride ?: defaultNetworkPathObserver(logger)
+    val permissionManager = permissionManagerOverride ?: defaultPlatformPermissionManager(logger)
     return P2pKitImpl(
         appId = appId,
         deviceName = deviceName,
@@ -484,7 +486,7 @@ internal fun newP2pKit(
         provisioningConfig = provisioningConfig,
         provisioningFactory = provisioningFactory,
         fileTransferConfig = fileTransferConfig,
-        permissions = dev.p2pkit.core.permission.NoOpP2pPermissionManager(),
+        permissions = permissionManager,
         logger = logger,
         clock = ::systemTimeMillis,
         parentJob = null,

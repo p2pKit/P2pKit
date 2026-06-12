@@ -113,6 +113,22 @@ internal class PeerRegistry(
     ): Peer {
         require(host.isNotBlank()) { "host must not be blank" }
         require(port in 1..65_535) { "port out of range: $port" }
+
+        // Dedup by (host, port, kind): repeated registrations of the same
+        // endpoint reuse the existing synthetic peer instead of minting a
+        // fresh "manual-<uuid>" each time. Without this, a provisioning
+        // manager calling createManualPeer once per connect attempt grew the
+        // registry unbounded (manual entries are eviction-exempt).
+        // Manual peers are session-scoped: they live only in this in-memory
+        // map, so they are forgotten on kit.stop() / process exit and a stale
+        // IP is never silently redialed in a later session (AUDIT-2026-06).
+        val existing = tracked.value.values.firstOrNull { t ->
+            t.isManual && t.internalPeer.transportHints.any {
+                it.type == kind && it.host == host && it.port == port
+            }
+        }
+        if (existing != null) return existing.internalPeer.publicPeer
+
         val syntheticId = PeerId("manual-${Uuid.random()}")
         val displayName = deviceName?.takeIf { it.isNotBlank() } ?: "manual:$host:$port"
         val publicPeer = Peer(

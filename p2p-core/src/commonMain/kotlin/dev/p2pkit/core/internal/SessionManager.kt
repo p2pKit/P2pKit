@@ -326,6 +326,20 @@ internal class SessionManager(
                     "peerId mismatch: expected ${expectedPeer.id.value} but remote announced ${peerHello.peerId}"
                 )
             }
+            // Cheap inbound guard: reject a HELLO that claims OUR OWN peerId
+            // (impossible by construction from an honest peer; a spoof would
+            // poison the byPeer slot / simultaneous-open tie-break).
+            if (peerHello.peerId == localPeerId.value) {
+                runCatching { protocol.sendError(rawConnection, "peerId collision with local") }
+                throw P2pError.HandshakeRejected("remote announced our own peerId ${peerHello.peerId}")
+            }
+            // TODO(encryption-milestone): INBOUND peerId is otherwise still
+            // trusted at face value here — a rogue LAN peer sharing the appId
+            // can claim any *other* peerId and hijack that peer's session slot.
+            // Full identity verification (binding peerId to a key) is deferred
+            // to the SecurityManager/encryption milestone; under
+            // SecurityMode.NoneForMvp the LAN is the trust boundary. See
+            // AUDIT_REPORT_2026-06.md "inbound HELLO peerId never verified".
             // Security wrap — no-op in v0.1 (NoOpSecurityManager returns a
             // passthrough), but keeps the future encryption hook open.
             val resolvedPeer =
