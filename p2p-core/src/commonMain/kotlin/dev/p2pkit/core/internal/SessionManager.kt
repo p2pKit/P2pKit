@@ -351,10 +351,26 @@ internal class SessionManager(
                 readerJob = readerJob,
                 resolvedPeer = resolvedPeer
             )
-        } catch (e: Throwable) {
+        } catch (e: CancellationException) {
             readerJob.cancel()
             runCatching { rawConnection.close() }
             throw e
+        } catch (e: P2pError) {
+            // Already typed (HandshakeRejected / VersionMismatch from
+            // performHandshake, or the peerId checks above) — surface as-is.
+            readerJob.cancel()
+            runCatching { rawConnection.close() }
+            throw e
+        } catch (e: Throwable) {
+            // AUDIT-2026-06: raw handshake-phase failures previously escaped
+            // connect() un-typed — e.g. a write error from sendHello, or the
+            // reader closing the events channel with an IOException that
+            // surfaces out of events.receive(). Wrap them so callers only ever
+            // see a documented P2pError, mirroring the transport-connect wrap
+            // in performConnect.
+            readerJob.cancel()
+            runCatching { rawConnection.close() }
+            throw P2pError.ConnectionFailed("Handshake failed: ${e.message}")
         }
     }
 

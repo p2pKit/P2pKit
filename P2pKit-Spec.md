@@ -51,7 +51,7 @@ P2pKit is **transport-agnostic by design**. v0.1 ships with a LAN/TCP transport.
 - `:p2p-sample-desktop`
 
 **Features**
-- LAN peer discovery via mDNS (Android `NsdManager`, JVM `JmDNS`).
+- LAN peer discovery via mDNS (in-process `JmDNS` on Android & JVM, Bonjour/`NWBrowser` on iOS).
 - TCP socket data transport.
 - Send/receive `P2pMessage.Text` and `P2pMessage.Binary`.
 - Outgoing connections via `connect(peer)`.

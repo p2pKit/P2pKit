@@ -15,8 +15,8 @@ import dev.p2pkit.core.transport.TransportPair
  * transports { lan() }
  * ```
  *
- * Same public API as on JVM and Android — wire-compatible with the JmDNS /
- * `NsdManager` implementations (`_p2pkit._tcp` service type, identical TXT
+ * Same public API as on JVM and Android — wire-compatible with the JVM/Android
+ * in-process `JmDNS` implementation (`_p2pkit._tcp` service type, identical TXT
  * record keys). See `IosLanDataTransport` / `IosLanDiscoveryTransport` for the
  * implementations.
  */
