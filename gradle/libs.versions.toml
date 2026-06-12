@@ -5,6 +5,7 @@ coroutines = "1.11.0"
 serialization = "1.10.0"
 kotlinx-io = "0.9.0"
 jmdns = "3.6.3"
+slf4j = "2.0.13"
 android-minSdk = "24"
 android-compileSdk = "36"
 android-targetSdk = "36"
@@ -20,6 +21,7 @@ kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-t
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinx-io" }
 jmdns = { module = "org.jmdns:jmdns", version.ref = "jmdns" }
+slf4j-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j" }
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core-ktx" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity-compose" }
 androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "androidx-lifecycle" }

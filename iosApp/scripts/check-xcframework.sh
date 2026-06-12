@@ -29,14 +29,20 @@ sh ./gradlew :p2p-transport-lan:assembleP2pKitSharedReleaseXCFramework \
   -q --console=plain
 
 XCF_DIR="p2p-transport-lan/build/XCFrameworks/release"
-XCF_BIN="$XCF_DIR/P2pKitShared.xcframework/ios-arm64/P2pKitShared.framework/P2pKitShared"
 XCF_COMMIT_FILE="$XCF_DIR/BUILD_COMMIT.txt"
 
-if [ ! -f "$XCF_BIN" ]; then
-    echo "error: XCFramework binary missing at $XCF_BIN"
-    echo "       The XCFramework assembly task did not produce the expected output."
-    exit 1
-fi
+# AUDIT-2026-06 (A-G9-samples-desktop-ios-13): check every slice, not just
+# the ios-arm64 device slice — the simulator slice is the one
+# scripts/run-ios-app.sh actually links and runs, and a malformed/partial
+# simulator slice previously passed this gate unnoticed.
+for XCF_SLICE in ios-arm64 ios-arm64_x86_64-simulator; do
+    XCF_BIN="$XCF_DIR/P2pKitShared.xcframework/$XCF_SLICE/P2pKitShared.framework/P2pKitShared"
+    if [ ! -f "$XCF_BIN" ]; then
+        echo "error: XCFramework binary missing at $XCF_BIN"
+        echo "       The XCFramework assembly task did not produce the expected output."
+        exit 1
+    fi
+done
 
 if [ ! -f "$XCF_COMMIT_FILE" ]; then
     echo "error: BUILD_COMMIT.txt sidecar missing at $XCF_COMMIT_FILE"
@@ -63,5 +69,8 @@ if ! git diff-index --quiet HEAD --; then
     echo "  Test results are non-reproducible from a clean checkout of $HEAD_COMMIT."
 fi
 
-SHORT="${XCF_COMMIT:0:7}"
+# AUDIT-2026-06 (A-G9-samples-desktop-ios-13): ${VAR:0:7} is a bash-only
+# substring expansion; this script declares #!/bin/sh and must stay POSIX
+# (sh is dash on some hosts). printf %.7s is the portable equivalent.
+SHORT=$(printf %.7s "$XCF_COMMIT")
 echo "✅ XCFramework is fresh: ${SHORT} (matches HEAD)"

@@ -63,7 +63,9 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * Incoming file offers are auto-accepted and saved under
  * `<user.home>/.p2pkit/incoming/<sender-name>/<filename>` so the CLI can be
- * used unattended; state transitions print as `[file …]` lines.
+ * used unattended; if the destination name is already taken the file lands in
+ * `<name> (n).<ext>` instead of overwriting. State transitions print as
+ * `[file …]` lines.
  */
 fun main(args: Array<String>) {
     // Filter the optional `reconnect=` token from the positional args before
@@ -101,21 +103,24 @@ fun main(args: Array<String>) {
     // connect attempt for the same peer. The SDK still dedupes either way,
     // but the local guard keeps the CLI output one-clean per session.
     val pendingConnects: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    // AUDIT-2026-06 (B-G9-samples-desktop-ios-10): session ids whose collectors
+    // are already wired. p2p.connect() is idempotent and can return the SAME
+    // P2pSession instance (e.g. `connect` typed while that session is still
+    // Connecting/Reconnecting); without this guard the CLI wired a second set
+    // of incoming/state collectors onto the instance and every message and
+    // state change printed twice for the rest of the run. See registerSession.
+    val wiredSessionIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     p2p.peers
         .onEach { peers ->
-            println("[peers] ${peers.size}: ${peers.joinToString { "${it.name}(${it.id.value.take(8)})" }}")
+            println("[peers] ${peers.size}: ${peers.joinToString { "${it.name.sanitizedForTerminal()}(${it.id.value.take(8)})" }}")
         }
         .launchIn(scope)
 
     p2p.incomingSessions
         .onEach { session ->
-            println("[incoming] from ${session.peer.name} (${session.peer.id.value.take(8)})")
-            sessions[session.peer.id.value] = session
-            wireIncoming(session, scope)
-            scope.launch {
-                session.state.collect { st -> println("[state] ${session.peer.name} → $st") }
-            }
+            println("[incoming] from ${session.peer.name.sanitizedForTerminal()} (${session.peer.id.value.take(8)})")
+            registerSession(session, scope, sessions, wiredSessionIds)
         }
         .launchIn(scope)
 
@@ -132,18 +137,14 @@ fun main(args: Array<String>) {
                     if (sessions.containsKey(peer.id.value)) continue
                     if (myId >= peer.id.value) continue
                     if (!pendingConnects.add(peer.id.value)) continue
-                    System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.name}")
+                    System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.name.sanitizedForTerminal()}")
                     scope.launch {
                         try {
                             runCatching {
                                 val s = p2p.connect(peer)
-                                sessions[s.peer.id.value] = s
-                                wireIncoming(s, scope)
-                                launch {
-                                    s.state.collect { st -> println("[state] ${s.peer.name} → $st") }
-                                }
+                                registerSession(s, scope, sessions, wiredSessionIds)
                             }.onFailure {
-                                System.err.println("[p2pkit WARN] auto-mesh connect to ${peer.name} failed: ${it.message}")
+                                System.err.println("[p2pkit WARN] auto-mesh connect to ${peer.name.sanitizedForTerminal()} failed: ${it.message}")
                             }
                         } finally {
                             pendingConnects.remove(peer.id.value)
@@ -165,7 +166,7 @@ fun main(args: Array<String>) {
         }
 
         println("Ready. Type 'help' for commands.")
-        repl(p2p, scope, sessions, pendingConnects, advertising, discovering, autoMesh)
+        repl(p2p, scope, sessions, pendingConnects, wiredSessionIds, advertising, discovering, autoMesh)
 
         println("Stopping…")
         runCatching { p2p.stop() }.onFailure {
@@ -205,6 +206,9 @@ private suspend fun repl(
     // same in-flight-connect set. The SDK dedupes either way, but routing
     // both through the same gate keeps the CLI output clean.
     pendingConnects: MutableSet<String>,
+    // AUDIT-2026-06 (B-G9-samples-desktop-ios-10): shared wired-collector set,
+    // see registerSession.
+    wiredSessionIds: MutableSet<String>,
     advertising: StateLatch,
     discovering: StateLatch,
     autoMesh: MutableStateFlow<Boolean>
@@ -241,7 +245,7 @@ private suspend fun repl(
                     println("(no active sessions)")
                 } else {
                     sessions.values.forEach {
-                        println("  ${it.peer.name} (${it.peer.id.value.take(8)})  state=${it.state.value}")
+                        println("  ${it.peer.name.sanitizedForTerminal()} (${it.peer.id.value.take(8)})  state=${it.state.value}")
                     }
                 }
             }
@@ -249,15 +253,24 @@ private suspend fun repl(
             "info", "state" -> printInfo(p2p, sessions, advertising, discovering, autoMesh)
 
             "manual" -> {
-                val parts = arg.split(':', limit = 2)
-                val host = parts.getOrNull(0)?.trim().orEmpty()
-                val port = parts.getOrNull(1)?.trim()?.toIntOrNull()
+                // AUDIT-2026-06 (A-G9-samples-desktop-ios-18): the input used to
+                // be split at the FIRST colon, which truncated IPv6 literals
+                // (e.g. `fe80::1:9000`) at their first colon even though the
+                // host check below claims IPv6 support. Split at the LAST colon
+                // instead, and accept the unambiguous `[v6-literal]:port`
+                // bracket form too.
+                val sep = arg.lastIndexOf(':')
+                val host = (if (sep >= 0) arg.substring(0, sep) else arg)
+                    .trim()
+                    .removeSurrounding("[", "]")
+                val portToken = if (sep >= 0) arg.substring(sep + 1).trim() else null
+                val port = portToken?.toIntOrNull()
                 if (host.isEmpty()) {
                     println("usage: manual <host>:<port>  (host is empty)")
                     continue
                 }
                 if (port == null || port !in 1..65_535) {
-                    println("usage: manual <host>:<port>  (port must be 1..65535, got '${parts.getOrNull(1)}')")
+                    println("usage: manual <host>:<port>  (port must be 1..65535, got '$portToken')")
                     continue
                 }
                 // Light host-form sanity check — reject obvious garbage so the
@@ -276,12 +289,8 @@ private suspend fun repl(
                         }
                     runCatching {
                         val session = p2p.connect(synthetic)
-                        sessions[session.peer.id.value] = session
-                        wireIncoming(session, scope)
-                        launch {
-                            session.state.collect { st -> println("[state] ${session.peer.name} → $st") }
-                        }
-                        println("connected manual peer ${session.peer.name}")
+                        registerSession(session, scope, sessions, wiredSessionIds)
+                        println("connected manual peer ${session.peer.name.sanitizedForTerminal()}")
                     }.onFailure {
                         System.err.println("manual connect failed: ${it.message}")
                     }
@@ -347,22 +356,23 @@ private suspend fun repl(
                 val peerId = match.id.value
                 val existing = sessions[peerId]
                 if (existing != null && existing.state.value == ConnectionState.Connected) {
-                    println("already connected to ${match.name}")
+                    println("already connected to ${match.name.sanitizedForTerminal()}")
                     continue
                 }
                 if (!pendingConnects.add(peerId)) {
-                    println("already connecting to ${match.name}")
+                    println("already connecting to ${match.name.sanitizedForTerminal()}")
                     continue
                 }
                 scope.launch {
                     try {
                         val session = p2p.connect(match)
-                        sessions[session.peer.id.value] = session
-                        wireIncoming(session, scope)
-                        scope.launch {
-                            session.state.collect { st -> println("[state] ${session.peer.name} → $st") }
-                        }
-                        println("connected to ${session.peer.name} (${session.peer.id.value.take(8)})")
+                        // AUDIT-2026-06 (B-G9-samples-desktop-ios-10): for a peer in
+                        // Connecting/Handshaking/Reconnecting, connect() dedupes
+                        // onto the SAME session instance; registerSession skips
+                        // re-wiring collectors on an already-wired id so output
+                        // doesn't start printing twice.
+                        registerSession(session, scope, sessions, wiredSessionIds)
+                        println("connected to ${session.peer.name.sanitizedForTerminal()} (${session.peer.id.value.take(8)})")
                     } catch (e: Throwable) {
                         System.err.println("connect failed: ${e.message}")
                     } finally {
@@ -384,19 +394,19 @@ private suspend fun repl(
                 val live = snapshot.filter { it.state.value == ConnectionState.Connected }
                 if (live.isEmpty()) {
                     println("no Connected sessions (have ${snapshot.size} session(s) in " +
-                        "non-Connected states: ${snapshot.joinToString { "${it.peer.name}=${it.state.value}" }})")
+                        "non-Connected states: ${snapshot.joinToString { "${it.peer.name.sanitizedForTerminal()}=${it.state.value}" }})")
                     continue
                 }
                 val skipped = snapshot - live.toSet()
                 if (skipped.isNotEmpty()) {
-                    println("skipping non-Connected: ${skipped.joinToString { "${it.peer.name}(${it.state.value})" }}")
+                    println("skipping non-Connected: ${skipped.joinToString { "${it.peer.name.sanitizedForTerminal()}(${it.state.value})" }}")
                 }
                 val msg = P2pMessage.Text(arg)
                 println("[broadcast → ${live.size}] $arg")
                 for (session in live) {
                     scope.launch {
                         runCatching { session.send(msg) }.onFailure {
-                            System.err.println("send to ${session.peer.name} failed: ${it.message}")
+                            System.err.println("send to ${session.peer.name.sanitizedForTerminal()} failed: ${it.message}")
                         }
                     }
                 }
@@ -420,13 +430,13 @@ private suspend fun repl(
                     continue
                 }
                 if (session.state.value != ConnectionState.Connected) {
-                    println("session with ${session.peer.name} is not Connected (state=${session.state.value}) — send skipped")
+                    println("session with ${session.peer.name.sanitizedForTerminal()} is not Connected (state=${session.state.value}) — send skipped")
                     continue
                 }
-                println("[to ${session.peer.name}] $text")
+                println("[to ${session.peer.name.sanitizedForTerminal()}] $text")
                 scope.launch {
                     runCatching { session.send(P2pMessage.Text(text)) }.onFailure {
-                        System.err.println("send to ${session.peer.name} failed: ${it.message}")
+                        System.err.println("send to ${session.peer.name.sanitizedForTerminal()} failed: ${it.message}")
                     }
                 }
             }
@@ -443,10 +453,10 @@ private suspend fun repl(
                 }
                 scope.launch {
                     runCatching { session.close() }.onFailure {
-                        System.err.println("close ${session.peer.name} failed: ${it.message}")
+                        System.err.println("close ${session.peer.name.sanitizedForTerminal()} failed: ${it.message}")
                     }
                     sessions.remove(session.peer.id.value)
-                    println("closed session with ${session.peer.name}")
+                    println("closed session with ${session.peer.name.sanitizedForTerminal()}")
                 }
             }
 
@@ -481,16 +491,19 @@ private suspend fun repl(
                     continue
                 }
                 if (session.state.value != ConnectionState.Connected) {
-                    println("session with ${session.peer.name} is not Connected (state=${session.state.value}) — sendfile skipped")
+                    println("session with ${session.peer.name.sanitizedForTerminal()} is not Connected (state=${session.state.value}) — sendfile skipped")
                     continue
                 }
-                println("[file → ${session.peer.name}] sending ${file.name} (${file.length()}B)")
+                println("[file → ${session.peer.name.sanitizedForTerminal()}] sending ${file.name} (${file.length()}B)")
                 scope.launch {
                     runCatching { session.sendFile(file) }
                         .onSuccess { transfer ->
                             scope.launch {
                                 transfer.state.collect { st ->
-                                    println("[file → ${session.peer.name} ${file.name}] $st")
+                                    // AUDIT-2026-06 (B-G9-samples-desktop-ios-11): a Failed
+                                    // state can embed the remote peer's reject
+                                    // reason — sanitize before printing.
+                                    println("[file → ${session.peer.name.sanitizedForTerminal()} ${file.name}] ${st.toString().sanitizedForTerminal()}")
                                 }
                             }
                         }
@@ -556,12 +569,13 @@ private fun printHelp() {
 
         Incoming file offers are auto-accepted to
           ~/.p2pkit/incoming/<sender-name>/<filename>
+        (a " (n)" suffix is appended when the name is already taken)
         """.trimIndent()
     )
 }
 
 private fun printPeer(peer: Peer) {
-    println("  ${peer.id.value.take(8)}…  ${peer.name}  [${peer.platform}]")
+    println("  ${peer.id.value.take(8)}…  ${peer.name.sanitizedForTerminal()}  [${peer.platform}]")
 }
 
 private fun findPeer(p2p: P2pKit, query: String): Peer? =
@@ -570,12 +584,56 @@ private fun findPeer(p2p: P2pKit, query: String): Peer? =
 private fun matches(peer: Peer, query: String): Boolean =
     peer.id.value.startsWith(query) || peer.name.equals(query, ignoreCase = true)
 
+/**
+ * Single registration path for every session the CLI obtains (incoming,
+ * auto-mesh, `connect`, `manual`): stores it in the local map, wires the
+ * message/file collectors once, and watches state until terminal.
+ *
+ * AUDIT-2026-06 (B-G9-samples-desktop-ios-10): `p2p.connect()` is idempotent
+ * and returns the SAME session instance while one is already in flight
+ * (Connecting/Handshaking/Reconnecting). Wiring collectors a second time on
+ * that instance made every subsequent message and state change print twice
+ * for the rest of the run; [wiredSessionIds] makes wiring once-per-session-id
+ * (ids are unique per session instance, so a replacement session for the same
+ * peer still gets wired).
+ *
+ * AUDIT-2026-06 (A-G9-samples-desktop-ios-14): entries used to leave the
+ * sessions map only via the user `close` command, so a session that reached
+ * Closed/Failed (peer restart, network drop, reconnect exhausted) stayed in
+ * the map forever — auto-mesh's containsKey guard then skipped the peer for
+ * good and `sessions`/`send` kept reporting the dead session. The state
+ * watcher below prunes the entry on terminal state. The two-arg remove is
+ * identity-checked so a newer session already stored for the same peer is
+ * never evicted, and the watcher cancels itself afterwards since a terminal
+ * StateFlow never changes again.
+ */
+private fun registerSession(
+    session: P2pSession,
+    scope: CoroutineScope,
+    sessions: ConcurrentHashMap<String, P2pSession>,
+    wiredSessionIds: MutableSet<String>,
+) {
+    sessions[session.peer.id.value] = session
+    if (!wiredSessionIds.add(session.id)) return // collectors already wired on this instance
+    wireIncoming(session, scope)
+    scope.launch {
+        session.state.collect { st ->
+            println("[state] ${session.peer.name.sanitizedForTerminal()} → $st")
+            if (st == ConnectionState.Closed || st == ConnectionState.Failed) {
+                sessions.remove(session.peer.id.value, session)
+                wiredSessionIds.remove(session.id)
+                cancel()
+            }
+        }
+    }
+}
+
 private fun wireIncoming(session: P2pSession, scope: CoroutineScope) {
     session.incoming
         .onEach { msg ->
             when (msg) {
-                is P2pMessage.Text -> println("[${session.peer.name}] ${msg.value}")
-                is P2pMessage.Binary -> println("[${session.peer.name}] <binary ${msg.bytes.size}B>")
+                is P2pMessage.Text -> println("[${session.peer.name.sanitizedForTerminal()}] ${msg.value.sanitizedForTerminal()}")
+                is P2pMessage.Binary -> println("[${session.peer.name.sanitizedForTerminal()}] <binary ${msg.bytes.size}B>")
             }
         }
         .launchIn(scope)
@@ -585,8 +643,14 @@ private fun wireIncoming(session: P2pSession, scope: CoroutineScope) {
                 File(System.getProperty("user.home") ?: ".", ".p2pkit"),
                 "incoming/${sanitizeName(session.peer.name)}"
             ).also { it.mkdirs() }
-            val saveFile = File(saveDir, sanitizeName(offer.name))
-            println("[file ← ${session.peer.name}] offered ${offer.name} (${offer.sizeBytes}B) → ${saveFile.absolutePath}")
+            // AUDIT-2026-06 (A-G9-samples-desktop-ios-19): the destination was
+            // keyed by sanitized offer name alone, so a repeated same-named
+            // offer truncated the previously received file and two concurrent
+            // same-named offers opened two streams onto one path, corrupting
+            // both. uniqueSaveFile atomically claims an unused
+            // "<name> (n).<ext>" variant per transfer instead.
+            val saveFile = uniqueSaveFile(saveDir, sanitizeName(offer.name))
+            println("[file ← ${session.peer.name.sanitizedForTerminal()}] offered ${offer.name.sanitizedForTerminal()} (${offer.sizeBytes}B) → ${saveFile.absolutePath}")
             scope.launch {
                 // Guard stream creation: a remote-controlled name that survives
                 // sanitizeName but is still unopenable (or an unwritable dir)
@@ -595,19 +659,22 @@ private fun wireIncoming(session: P2pSession, scope: CoroutineScope) {
                 // (AUDIT-2026-06 fix).
                 val out = runCatching { saveFile.outputStream() }.getOrElse { e ->
                     runCatching { offer.reject("cannot open destination: ${e.message}") }
-                    System.err.println("[file ← ${session.peer.name}] open failed: ${e.message}")
+                    System.err.println("[file ← ${session.peer.name.sanitizedForTerminal()}] open failed: ${e.message}")
                     return@launch
                 }
                 val transfer = runCatching { offer.accept(out.asSink()) }
                     .getOrElse {
                         runCatching { out.close() }
                         runCatching { offer.reject("accept failed: ${it.message}") }
-                        System.err.println("[file ← ${session.peer.name}] accept failed: ${it.message}")
+                        System.err.println("[file ← ${session.peer.name.sanitizedForTerminal()}] accept failed: ${it.message}")
                         return@launch
                     }
                 scope.launch {
                     transfer.state.collect { st ->
-                        println("[file ← ${session.peer.name} ${offer.name}] $st")
+                        // AUDIT-2026-06 (B-G9-samples-desktop-ios-11): a Failed/
+                        // Cancelled state can embed remote-supplied reasons —
+                        // sanitize before printing.
+                        println("[file ← ${session.peer.name.sanitizedForTerminal()} ${offer.name.sanitizedForTerminal()}] ${st.toString().sanitizedForTerminal()}")
                         if (st is FileTransferState.Completed ||
                             st is FileTransferState.Failed ||
                             st is FileTransferState.Cancelled
@@ -624,8 +691,46 @@ private fun wireIncoming(session: P2pSession, scope: CoroutineScope) {
 private fun sanitizeName(raw: String): String {
     // Strip path separators and the few characters that are illegal on
     // Windows; everything else (spaces, unicode, dots) is fine for the sample.
-    val cleaned = raw.replace(Regex("""[\\/:*?"<>|]"""), "_").trim()
+    // AUDIT-2026-06 (B-G9-samples-desktop-ios-11): also drop ISO control
+    // characters so a remote-supplied name can't smuggle terminal escape
+    // sequences into the saved filename (and into the printed save path).
+    val cleaned = raw.filterNot { it.isISOControl() }
+        .replace(Regex("""[\\/:*?"<>|]"""), "_")
+        .trim()
     return cleaned.ifEmpty { "untitled" }
+}
+
+// AUDIT-2026-06 (B-G9-samples-desktop-ios-11): peer names (from mDNS TXT /
+// HELLO, unvalidated by the SDK) and message bodies are remote-controlled.
+// Printing them verbatim let a hostile LAN peer embed ANSI/OSC escape
+// sequences that rewrite, hide, or spoof lines on the operator's terminal
+// (e.g. a fake "[file …] Completed" line). Strip ISO control characters
+// before any remote-controlled string reaches stdout/stderr.
+private fun String.sanitizedForTerminal(): String = filterNot { it.isISOControl() }
+
+// AUDIT-2026-06 (A-G9-samples-desktop-ios-19): pick a destination no other
+// transfer is writing to. createNewFile() atomically claims the name, so a
+// repeated offer with the same name lands in "<base> (n)<ext>" instead of
+// truncating the previous copy, and two concurrent same-named offers can
+// never open two streams onto the same path.
+private fun uniqueSaveFile(dir: File, sanitizedName: String): File {
+    val dot = sanitizedName.lastIndexOf('.')
+    val base = if (dot > 0) sanitizedName.substring(0, dot) else sanitizedName
+    val ext = if (dot > 0) sanitizedName.substring(dot) else ""
+    var n = 0
+    while (true) {
+        val candidate = if (n == 0) File(dir, sanitizedName) else File(dir, "$base ($n)$ext")
+        val claimed = try {
+            candidate.createNewFile() // atomic: false when the name is already taken
+        } catch (_: Exception) {
+            // Unopenable name or unwritable dir — return the candidate and let
+            // the accept path's open-failure guard reject the offer with the
+            // real error instead of looping here.
+            return candidate
+        }
+        if (claimed) return candidate
+        n++
+    }
 }
 
 private object StdErrLogger : P2pLogger {

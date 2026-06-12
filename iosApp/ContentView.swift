@@ -12,13 +12,17 @@ struct ContentView: View {
     @State private var peers: [PeerRow] = []
     @State private var sessions: [SessionRow] = []
     @State private var messages: [MessageRow] = []
+    @State private var transfers: [TransferRow] = []
     @State private var draft: String = "hi from iPhone"
     @State private var manualHost: String = ""
     @State private var manualPort: String = ""
-    @State private var logLines: [String] = []
+    @State private var logLines: [LogLine] = []
+    @State private var nextLogId: Int = 0
     @State private var showLog: Bool = true
 
-    /// Top-of-screen banner for user-actionable errors. Tap to dismiss.
+    /// Top-of-screen banner for user-actionable errors. Dismissed via the
+    /// explicit close button on the banner (AUDIT-2026-06: was tap-to-dismiss
+    /// with no visible affordance).
     @State private var errorBanner: String? = nil
 
     // MARK: - Kit + background tasks
@@ -29,6 +33,15 @@ struct ContentView: View {
     @State private var debugLogTask: Task<Void, Never>?
     @State private var permissionCheckTask: Task<Void, Never>?
 
+    // AUDIT-2026-06 (A-G9-samples-desktop-ios-09): per-session and
+    // per-transfer collector Tasks are tracked by id so stop() and
+    // session-removal can cancel them. Previously they were fire-and-forget
+    // `Task {}` handles that leaked (suspended on a never-completing
+    // SharedFlow collect) across every Stop/Start cycle.
+    @State private var messageCollectorTasks: [String: Task<Void, Never>] = [:]
+    @State private var fileCollectorTasks: [String: Task<Void, Never>] = [:]
+    @State private var transferWatchTasks: [String: Task<Void, Never>] = [:]
+
     // MARK: - In-flight guards (prevent rapid double-taps from spawning
     // parallel work).
 
@@ -36,16 +49,42 @@ struct ContentView: View {
     @State private var isStopping: Bool = false
     @State private var isManualDialing: Bool = false
     @State private var pendingConnectPeerIds: Set<String> = []
+    @State private var sendingFileSessionIds: Set<String> = []
 
-    /// Session ids whose `incoming` flow we've already subscribed to,
-    /// so duplicate Connect taps don't attach a second MessageCollector
-    /// and echo every received message.
+    /// Session ids whose `incoming`/`incomingFiles` flows we've already
+    /// subscribed to, so duplicate Connect taps don't attach a second
+    /// collector and echo every received message.
     @State private var collectedSessionIds: Set<String> = []
 
-    /// True once NWBrowser has transitioned to `.ready` at least once.
-    /// Used to detect iOS Local Network permission denial — if the
-    /// browser is stuck in `.waiting` for ~6 s we surface a hint.
+    /// True once NWBrowser has transitioned to `.ready` at least once
+    /// in THIS run. Used to detect iOS Local Network permission denial —
+    /// if the browser is stuck in `.waiting` for ~6 s we surface a hint.
     @State private var browserEverReady: Bool = false
+
+    // AUDIT-2026-06 (A-G9-samples-desktop-ios-06): IosLanDebug replays up to
+    // 200 lines from previous runs to late subscribers. A per-run epoch
+    // marker is logged right after we subscribe; every line before it is
+    // replayed history and must not satisfy the readiness probe (or pollute
+    // the probe after Stop/Start).
+    @State private var probeEpoch: String = ""
+    @State private var probeEpochSeen: Bool = false
+
+    // AUDIT-2026-06 (D-G9-samples-desktop-ios-19): keyboard focus tracking so
+    // the number-pad (which has no return key on iOS 15) can be dismissed via
+    // a keyboard-toolbar Done button.
+    private enum FocusField: Hashable {
+        case deviceName, manualHost, manualPort, draft
+    }
+    @FocusState private var focusedField: FocusField?
+
+    /// AUDIT-2026-06 (D-G9-samples-desktop-ios-14): the permission hint lives
+    /// in a constant so the late-readiness handler can recognize and retract
+    /// exactly this banner without clobbering unrelated errors.
+    private static let localNetworkHint =
+        "NWBrowser is not ready after 6 s. " +
+        "iOS may have denied Local Network access — open " +
+        "Settings → Privacy & Security → Local Network and " +
+        "enable this app, then tap Stop / Start."
 
     // MARK: - Row models
 
@@ -109,6 +148,41 @@ struct ContentView: View {
         }
     }
 
+    /// AUDIT-2026-06 (B-G9-samples-desktop-ios-06): log lines carry a stable,
+    /// monotonically increasing id. The previous `enumerated()` offset
+    /// identity shifted every row on each trim, forcing a full re-render of
+    /// 200 Text rows per transport event.
+    struct LogLine: Identifiable, Equatable {
+        let id: Int
+        let text: String
+    }
+
+    /// AUDIT-2026-06 (D-G9-samples-desktop-ios-03 / A-G9-samples-desktop-ios-07):
+    /// one row per file transfer (either direction) so incoming offers and
+    /// outgoing sends are visible with live progress instead of silently
+    /// timing out after 30 s.
+    struct TransferRow: Identifiable, Equatable {
+        let id: String                  // transfer.id (32-char hex)
+        let peerName: String
+        let fileName: String
+        let direction: Direction
+        var stateLabel: String
+        var bytes: Int64
+        let totalBytes: Int64
+        var isTerminal: Bool
+        /// Receive rows: destination file name under Documents/P2pKitInbox.
+        let detail: String?
+        let transfer: P2pFileTransfer
+        enum Direction { case send, receive }
+        var progress: Double {
+            totalBytes > 0 ? min(1.0, Double(bytes) / Double(totalBytes)) : 0.0
+        }
+        static func == (lhs: TransferRow, rhs: TransferRow) -> Bool {
+            lhs.id == rhs.id && lhs.stateLabel == rhs.stateLabel &&
+                lhs.bytes == rhs.bytes && lhs.isTerminal == rhs.isTerminal
+        }
+    }
+
     private var trimmedDeviceName: String {
         localDeviceName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -118,215 +192,324 @@ struct ContentView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("P2pKit Sample").font(.title)
-                // V0.4-PROVENANCE (L2 UI): show the active framework
-                // build identity so the operator can visually confirm
-                // the deployed SDK version before starting any hardware
-                // test, without grepping logs.
-                Text(BuildInfo.shared.describe())
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .textSelection(.enabled)
-                Text("Status: \(status)")
-
-                if let err = errorBanner {
-                    Text(err)
-                        .font(.callout)
-                        .foregroundColor(.white)
-                        .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.red.opacity(0.85))
-                        .cornerRadius(6)
-                        .textSelection(.enabled)
-                        .onTapGesture { errorBanner = nil }
-                }
-
-                if !debug.isEmpty {
-                    Text(debug).font(.caption2).foregroundColor(.orange).textSelection(.enabled)
-                }
-                if !localPeerId.isEmpty {
-                    Text("localPeerId: \(localPeerId)")
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                }
-                if localTcpPort > 0 {
-                    Text("localTcpPort: \(localTcpPort)")
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                }
-
-                TextField("Device name", text: $localDeviceName)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(kit != nil || isStarting)
-                    .autocorrectionDisabled()
-
-                HStack {
-                    if kit == nil {
-                        Button(isStarting ? "Starting…" : "Start") {
-                            Task { await start() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(isStarting || trimmedDeviceName.isEmpty)
-                    } else {
-                        Button(isStopping ? "Stopping…" : "Stop") {
-                            Task { await stop() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.red)
-                        .disabled(isStopping)
-                    }
-                }
-
+                headerSection
                 Divider()
-
-                // MARK: Discovered peers
-
-                Text("Peers (\(peers.count))").font(.headline)
-                if peers.isEmpty && kit != nil {
-                    Text("No peers yet. Make sure the other device is on the same Wi-Fi network and Local Network permission is granted.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                ForEach(peers) { row in
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(row.name).bold()
-                            Text(row.id.prefix(8))
-                                .font(.caption2).foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        // Match by peer.id, NOT peer.name. Two devices on the
-                        // same Wi-Fi can share a name; peer.id is the
-                        // SDK-generated UUID that's guaranteed unique.
-                        let pending = pendingConnectPeerIds.contains(row.id)
-                        let sessionForPeer = sessions.first { $0.peerId == row.id && $0.isLive }
-                        let alreadyConnected = sessionForPeer?.isConnected ?? false
-                        let inFlight = sessionForPeer != nil && !alreadyConnected
-                        Button(connectButtonLabel(
-                            pending: pending,
-                            sessionForPeer: sessionForPeer
-                        )) {
-                            Task { await connect(row) }
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(alreadyConnected || inFlight || pending || kit == nil || isStopping)
-                    }
-                    .padding(.vertical, 4)
-                }
-
+                peersSection
                 Divider()
-
-                // MARK: Manual IP fallback
-
-                Text("Manual connect (skip Bonjour)").font(.headline)
-                HStack {
-                    TextField("Host (e.g. 192.168.1.42)", text: $manualHost)
-                        .textFieldStyle(.roundedBorder)
-                        .keyboardType(.numbersAndPunctuation)
-                        .autocorrectionDisabled()
-                        .disabled(isManualDialing)
-                    TextField("Port", text: $manualPort)
-                        .textFieldStyle(.roundedBorder)
-                        .keyboardType(.numberPad)
-                        .frame(width: 80)
-                        .disabled(isManualDialing)
-                }
-                Button(isManualDialing ? "Dialing…" : "Dial manual peer") {
-                    Task { await dialManual() }
-                }
-                .buttonStyle(.bordered)
-                .disabled(
-                    kit == nil ||
-                    isManualDialing ||
-                    isStopping ||
-                    manualHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                    manualPort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                )
-
+                manualConnectSection
                 Divider()
-
-                // MARK: Sessions
-
-                let connectedCount = sessions.filter { $0.isConnected }.count
-                Text("Sessions (\(sessions.count), \(connectedCount) connected)").font(.headline)
-                ForEach(sessions) { row in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Circle()
-                                .fill(sessionDotColor(for: row))
-                                .frame(width: 8, height: 8)
-                            Text("\(row.peerName) — \(row.state)").font(.callout)
-                            Spacer()
-                            Button("Close") {
-                                Task { await closeSession(row) }
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(row.isTerminal || isStopping)
-                        }
-                        // Surface session-id + peer-id so we can verify the
-                        // session matches the peer row above. Mismatched ids
-                        // here would mean the SDK created a session against a
-                        // different peer than the one in the discovery list.
-                        Text("session=\(row.id.prefix(12))  peer=\(row.peerId.prefix(8))")
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 2)
+                sessionsSection
+                if !transfers.isEmpty {
+                    Divider()
+                    transfersSection
                 }
-                if !sessions.isEmpty {
-                    HStack {
-                        TextField("message", text: $draft)
-                            .textFieldStyle(.roundedBorder)
-                            .autocorrectionDisabled()
-                        Button("Send all (\(connectedCount))") { Task { await sendAll() } }
-                            .buttonStyle(.bordered)
-                            .disabled(
-                                draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                                connectedCount == 0 ||
-                                isStopping
-                            )
-                    }
-                }
-
                 Divider()
-
-                // MARK: Messages
-
-                Text("Messages (\(messages.count))").font(.headline)
-                ForEach(messages) { m in
-                    Text(m.text)
-                        .font(.caption)
-                        .foregroundColor(m.color)
-                        .textSelection(.enabled)
-                }
-
+                messagesSection
                 Divider()
-
-                // MARK: Diagnostic log
-                //
-                // Every iOS LAN transport event (listener bind, raw
-                // connection state transitions, every nw_connection_send /
-                // _receive completion, NWBrowser events, manual-IP dial)
-                // AND every iOS-sample UI action (Start tap, Connect tap,
-                // Send tap, picker dismissal, lifecycle) is pushed into the
-                // same `IosLanDebug` SharedFlow and rendered here in time
-                // order. The single timeline is the easiest way to see
-                // whether the UI thinks it's done one thing but the SDK is
-                // doing something else.
-
-                Toggle("Diagnostic log (\(logLines.count))", isOn: $showLog)
-                    .font(.headline)
-                if showLog {
-                    ForEach(Array(logLines.enumerated()), id: \.offset) { _, l in
-                        Text(l).font(.system(size: 10, design: .monospaced))
-                            .textSelection(.enabled)
-                    }
-                }
-
+                logSection
                 Spacer()
             }
             .padding()
+        }
+        // AUDIT-2026-06 (D-G9-samples-desktop-ios-19): keyboard toolbar Done
+        // button — the .numberPad keyboard has no return key on the iOS 15
+        // deployment target, so without this the Port field's keyboard could
+        // only be dismissed by focusing another field.
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { focusedField = nil }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var headerSection: some View {
+        Text("P2pKit Sample").font(.title)
+        // V0.4-PROVENANCE (L2 UI): show the active framework
+        // build identity so the operator can visually confirm
+        // the deployed SDK version before starting any hardware
+        // test, without grepping logs.
+        Text(BuildInfo.shared.describe())
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .textSelection(.enabled)
+        Text("Status: \(status)")
+
+        if let err = errorBanner {
+            // AUDIT-2026-06 (D-G9-samples-desktop-ios-16): explicit dismiss
+            // button with an accessibility label — the old tap-anywhere
+            // gesture was undiscoverable and invisible to VoiceOver.
+            HStack(alignment: .top, spacing: 8) {
+                Text(err)
+                    .font(.callout)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                Button {
+                    errorBanner = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.white)
+                }
+                .accessibilityLabel("Dismiss error")
+            }
+            .padding(8)
+            .background(Color.red.opacity(0.85))
+            .cornerRadius(6)
+        }
+
+        if !debug.isEmpty {
+            Text(debug).font(.caption2).foregroundColor(.orange).textSelection(.enabled)
+        }
+        if !localPeerId.isEmpty {
+            Text("localPeerId: \(localPeerId)")
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+        }
+        if localTcpPort > 0 {
+            Text("localTcpPort: \(localTcpPort)")
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+        }
+
+        TextField("Device name", text: $localDeviceName)
+            .textFieldStyle(.roundedBorder)
+            .disabled(kit != nil || isStarting)
+            .autocorrectionDisabled()
+            .focused($focusedField, equals: .deviceName)
+
+        HStack {
+            if kit == nil {
+                Button(isStarting ? "Starting…" : "Start") {
+                    Task { await start() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isStarting || trimmedDeviceName.isEmpty)
+            } else {
+                Button(isStopping ? "Stopping…" : "Stop") {
+                    Task { await stop() }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(isStopping)
+            }
+        }
+    }
+
+    // MARK: Discovered peers
+
+    @ViewBuilder
+    private var peersSection: some View {
+        Text("Peers (\(peers.count))").font(.headline)
+        if peers.isEmpty && kit != nil {
+            Text("No peers yet. Make sure the other device is on the same Wi-Fi network and Local Network permission is granted.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        ForEach(peers) { row in
+            HStack {
+                VStack(alignment: .leading) {
+                    Text(row.name).bold()
+                    Text(row.id.prefix(8))
+                        .font(.caption2).foregroundColor(.secondary)
+                }
+                Spacer()
+                // Match by peer.id, NOT peer.name. Two devices on the
+                // same Wi-Fi can share a name; peer.id is the
+                // SDK-generated UUID that's guaranteed unique.
+                let pending = pendingConnectPeerIds.contains(row.id)
+                let sessionForPeer = sessions.first { $0.peerId == row.id && $0.isLive }
+                let alreadyConnected = sessionForPeer?.isConnected ?? false
+                let inFlight = sessionForPeer != nil && !alreadyConnected
+                Button(connectButtonLabel(
+                    pending: pending,
+                    sessionForPeer: sessionForPeer
+                )) {
+                    Task { await connect(row) }
+                }
+                .buttonStyle(.bordered)
+                .disabled(alreadyConnected || inFlight || pending || kit == nil || isStopping)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    // MARK: Manual IP fallback
+
+    @ViewBuilder
+    private var manualConnectSection: some View {
+        Text("Manual connect (skip Bonjour)").font(.headline)
+        HStack {
+            TextField("Host (e.g. 192.168.1.42)", text: $manualHost)
+                .textFieldStyle(.roundedBorder)
+                .keyboardType(.numbersAndPunctuation)
+                .autocorrectionDisabled()
+                .disabled(isManualDialing)
+                .focused($focusedField, equals: .manualHost)
+            TextField("Port", text: $manualPort)
+                .textFieldStyle(.roundedBorder)
+                .keyboardType(.numberPad)
+                .frame(width: 80)
+                .disabled(isManualDialing)
+                .focused($focusedField, equals: .manualPort)
+        }
+        Button(isManualDialing ? "Dialing…" : "Dial manual peer") {
+            Task { await dialManual() }
+        }
+        .buttonStyle(.bordered)
+        .disabled(
+            kit == nil ||
+            isManualDialing ||
+            isStopping ||
+            manualHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            manualPort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        )
+    }
+
+    // MARK: Sessions
+
+    @ViewBuilder
+    private var sessionsSection: some View {
+        let connectedCount = sessions.filter { $0.isConnected }.count
+        Text("Sessions (\(sessions.count), \(connectedCount) connected)").font(.headline)
+        ForEach(sessions) { row in
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Circle()
+                        .fill(sessionDotColor(for: row))
+                        .frame(width: 8, height: 8)
+                    Text("\(row.peerName) — \(row.state)").font(.callout)
+                    Spacer()
+                    // AUDIT-2026-06 (D-G9-samples-desktop-ios-03): per-session
+                    // send-file affordance. Streams a generated 200 KB binary
+                    // through sendFile() — the same "200KB binary preset" the
+                    // README test recipes reference — so the cross-platform
+                    // file path is exercisable without a document picker.
+                    Button(sendingFileSessionIds.contains(row.id) ? "Sending…" : "Send file") {
+                        Task { await sendTestFile(to: row) }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!row.isConnected || isStopping || sendingFileSessionIds.contains(row.id))
+                    // AUDIT-2026-06 (D-G9-samples-desktop-ios-17): default
+                    // control size — .small put the tap target well under
+                    // the 44 pt guideline.
+                    Button("Close") {
+                        Task { await closeSession(row) }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(row.isTerminal || isStopping)
+                }
+                // Surface session-id + peer-id so we can verify the
+                // session matches the peer row above. Mismatched ids
+                // here would mean the SDK created a session against a
+                // different peer than the one in the discovery list.
+                // AUDIT-2026-06 (D-G9-samples-desktop-ios-17): .caption2
+                // (scales with Dynamic Type) instead of fixed 9 pt.
+                Text("session=\(row.id.prefix(12))  peer=\(row.peerId.prefix(8))")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.vertical, 2)
+        }
+        if !sessions.isEmpty {
+            HStack {
+                TextField("message", text: $draft)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    .focused($focusedField, equals: .draft)
+                Button("Send all (\(connectedCount))") { Task { await sendAll() } }
+                    .buttonStyle(.bordered)
+                    .disabled(
+                        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        connectedCount == 0 ||
+                        isStopping
+                    )
+            }
+        }
+    }
+
+    // MARK: File transfers
+    //
+    // AUDIT-2026-06 (D-G9-samples-desktop-ios-03 / A-G9-samples-desktop-ios-07):
+    // file transfer was previously invisible on iOS — no send affordance and
+    // incoming offers auto-rejected after the 30 s timeout with zero UI trace.
+    // Incoming offers are now auto-accepted into Documents/P2pKitInbox/ (a
+    // sample-harness policy: nobody is watching the phone to race a dialog
+    // against the offer timeout) and every transfer renders here with live
+    // progress and a Cancel button.
+
+    @ViewBuilder
+    private var transfersSection: some View {
+        Text("File transfers (\(transfers.count))").font(.headline)
+        ForEach(transfers) { t in
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Image(systemName: t.direction == .send ? "arrow.up.circle" : "arrow.down.circle")
+                        .foregroundColor(t.direction == .send ? .blue : .green)
+                    Text("\(t.fileName) \(t.direction == .send ? "→" : "←") \(t.peerName)")
+                        .font(.caption)
+                        .lineLimit(1)
+                    Spacer()
+                    if !t.isTerminal {
+                        Button("Cancel") {
+                            Task { await cancelTransfer(t) }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+                ProgressView(value: t.progress)
+                Text(transferCaption(for: t))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .textSelection(.enabled)
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    // MARK: Messages
+
+    @ViewBuilder
+    private var messagesSection: some View {
+        Text("Messages (\(messages.count))").font(.headline)
+        ForEach(messages) { m in
+            Text(m.text)
+                .font(.caption)
+                .foregroundColor(m.color)
+                .textSelection(.enabled)
+        }
+    }
+
+    // MARK: Diagnostic log
+    //
+    // Every iOS LAN transport event (listener bind, raw
+    // connection state transitions, every nw_connection_send /
+    // _receive completion, NWBrowser events, manual-IP dial)
+    // AND every iOS-sample UI action (Start tap, Connect tap,
+    // Send tap, picker dismissal, lifecycle) is pushed into the
+    // same `IosLanDebug` SharedFlow and rendered here in time
+    // order. The single timeline is the easiest way to see
+    // whether the UI thinks it's done one thing but the SDK is
+    // doing something else.
+
+    @ViewBuilder
+    private var logSection: some View {
+        Toggle("Diagnostic log (\(logLines.count))", isOn: $showLog)
+            .font(.headline)
+        if showLog {
+            // AUDIT-2026-06 (B-G9-samples-desktop-ios-06): LazyVStack +
+            // stable LogLine ids (the old eager ForEach keyed by enumerated
+            // offset re-rendered all 200 rows per appended line once
+            // trimming started). Font bumped from fixed 10 pt to .caption2
+            // so it scales with Dynamic Type (D-G9-samples-desktop-ios-17).
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(logLines) { l in
+                    Text(l.text)
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+            }
         }
     }
 
@@ -349,6 +532,20 @@ struct ContentView: View {
         if row.isConnected { return .green }
         if row.isLive { return .orange }    // Connecting / Handshaking / Reconnecting / Idle
         return .red                          // Closing / Closed / Failed
+    }
+
+    private func transferCaption(for t: TransferRow) -> String {
+        var caption = "\(t.stateLabel) — \(fmtBytes(t.bytes)) / \(fmtBytes(t.totalBytes))"
+        if let detail = t.detail, t.direction == .receive {
+            caption += " — Documents/P2pKitInbox/\(detail)"
+        }
+        return caption
+    }
+
+    private func fmtBytes(_ n: Int64) -> String {
+        if n >= 1_048_576 { return String(format: "%.1f MB", Double(n) / 1_048_576.0) }
+        if n >= 1_024 { return String(format: "%.0f KB", Double(n) / 1_024.0) }
+        return "\(n) B"
     }
 
     // MARK: - Actions
@@ -378,10 +575,17 @@ struct ContentView: View {
         status = "Starting..."
         debug = ""
         messages = []
+        transfers = []
         logLines = []
         collectedSessionIds = []
         pendingConnectPeerIds = []
+        sendingFileSessionIds = []
         browserEverReady = false
+        // AUDIT-2026-06 (A-G9-samples-desktop-ios-06): fresh probe epoch per
+        // run; replayed lines from previous runs precede the marker and are
+        // ignored by the readiness probe.
+        probeEpoch = "probe-epoch-\(UUID().uuidString)"
+        probeEpochSeen = false
         diag("ui", "Start: cleared local state, building kit")
 
         // Console mirror is opt-in since the audit fix (release builds no
@@ -394,17 +598,32 @@ struct ContentView: View {
         self.debugLogTask = Task.detached {
             let collector = StringCollector { line in
                 await MainActor.run {
-                    self.logLines.append(line)
-                    if line.contains("state -> ready") {
-                        self.browserEverReady = true
+                    self.appendLog(line)
+                    if !self.probeEpochSeen {
+                        if line.contains(self.probeEpoch) {
+                            self.probeEpochSeen = true
+                        }
+                        return
                     }
-                    if self.logLines.count > 200 {
-                        self.logLines.removeFirst(self.logLines.count - 200)
+                    // AUDIT-2026-06 (A-G9-samples-desktop-ios-06): match the
+                    // tagged NWBrowser line specifically. The TCP listener
+                    // logs "[data] listener state -> ready" even when Local
+                    // Network permission is denied, so the old bare
+                    // "state -> ready" substring always defeated the probe.
+                    if line.contains("[browse] state -> ready") {
+                        self.browserEverReady = true
+                        // AUDIT-2026-06 (D-G9-samples-desktop-ios-14): if the
+                        // browser reaches ready after the 6 s probe already
+                        // fired, retract the now-stale permission hint.
+                        if self.errorBanner == Self.localNetworkHint {
+                            self.errorBanner = nil
+                        }
                     }
                 }
             }
             _ = try? await IosLanDebug.shared.events.collect(collector: collector)
         }
+        diag("ui", probeEpoch)
 
         // Build the kit. P2pKitCompanion.create is not marked @Throws on
         // the Kotlin side, so a synchronous failure during transport init
@@ -471,14 +690,34 @@ struct ContentView: View {
                     tag: "ui",
                     message: "incomingSessions emitted: peer=\(session.peer.id) name=\(session.peer.name) id=\(session.id)"
                 )
-                await self.attachMessageCollector(to: session, label: "incoming")
+                await self.attachCollectors(to: session, label: "incoming")
             }
             _ = try? await built?.incomingSessions.collect(collector: collector)
         }
 
         self.pollTask = Task { @MainActor in
-            while self.kit != nil {
+            var tick = 0
+            // AUDIT-2026-06 (A-G9-samples-desktop-ios-08): also check
+            // Task.isCancelled — after stop() cancels this task, Task.sleep
+            // throws immediately, and a kit!=nil-only condition busy-spun
+            // refreshPeersAndSessions on the main actor for the whole
+            // duration of kit.stop().
+            while !Task.isCancelled && self.kit != nil {
                 refreshPeersAndSessions(from: built)
+                // AUDIT-2026-06 (A-G9-samples-desktop-ios-10): the iOS data
+                // transport rebinds its NWListener on network changes and the
+                // port can rotate — re-read the manual-connect info on a slow
+                // cadence instead of only once at start.
+                if tick % 5 == 0 {
+                    if let info = try? await built.networkProvisioning.getManualConnectionInfo() {
+                        let port = Int(info.port)
+                        if port > 0 && port != self.localTcpPort {
+                            diag("kit", "localTcpPort changed \(self.localTcpPort) -> \(port) (listener rebind)")
+                            self.localTcpPort = port
+                        }
+                    }
+                }
+                tick += 1
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
@@ -489,10 +728,7 @@ struct ContentView: View {
         self.permissionCheckTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 6_000_000_000)
             if self.kit != nil && !self.browserEverReady {
-                self.errorBanner = "NWBrowser is not ready after 6 s. " +
-                    "iOS may have denied Local Network access — open " +
-                    "Settings → Privacy & Security → Local Network and " +
-                    "enable this app, then tap Stop / Start."
+                self.errorBanner = Self.localNetworkHint
             }
         }
     }
@@ -563,6 +799,14 @@ struct ContentView: View {
                 "session",
                 "removed id=\(prev.id.prefix(12)) peer=\(prev.peerId.prefix(8)) lastState=\(prev.state)"
             )
+            // AUDIT-2026-06 (A-G9-samples-desktop-ios-09): release the dead
+            // session's collector tasks and its dedup entry — they otherwise
+            // stay suspended on the never-completing SharedFlow forever.
+            messageCollectorTasks[prev.id]?.cancel()
+            messageCollectorTasks[prev.id] = nil
+            fileCollectorTasks[prev.id]?.cancel()
+            fileCollectorTasks[prev.id] = nil
+            collectedSessionIds.remove(prev.id)
         }
 
         // Watchdog: multiple sessions for the same peer should never persist
@@ -603,31 +847,241 @@ struct ContentView: View {
         if sessionRows != self.sessions { self.sessions = sessionRows }
 
         for row in sessionRows where !collectedSessionIds.contains(row.id) {
-            Task { await attachMessageCollector(to: row.session, label: "tracked") }
+            attachCollectors(to: row.session, label: "tracked")
         }
     }
 
-    private func attachMessageCollector(to session: P2pSession, label: String) async {
+    /// Subscribe to a session's `incoming` (messages) and `incomingFiles`
+    /// (file offers) flows.
+    ///
+    /// AUDIT-2026-06 (B-G9-samples-desktop-ios-03): both flows are hot
+    /// SharedFlows whose `collect` NEVER completes, so this function spawns
+    /// each collect into a stored, cancellable Task and returns immediately.
+    /// The old version awaited `incoming.collect` inline, which wedged every
+    /// caller that awaited it: connect()'s and dialManual()'s `defer`
+    /// cleanups never ran (Connect button stuck on "Connecting…", manual
+    /// dial latched forever) and the incomingSessions collector stalled
+    /// after its first emission.
+    ///
+    /// AUDIT-2026-06 (A-G9-samples-desktop-ios-09): the spawned tasks are
+    /// tracked in dictionaries keyed by session id and cancelled in stop()
+    /// and on session removal.
+    @MainActor
+    private func attachCollectors(to session: P2pSession, label: String) {
         let sid = session.id
-        let alreadySubscribed = await MainActor.run { () -> Bool in
-            if collectedSessionIds.contains(sid) { return true }
-            collectedSessionIds.insert(sid)
-            return false
-        }
-        if alreadySubscribed { return }
-        await MainActor.run {
-            self.appendMessage("[\(label)] session opened: \(session.peer.name)", kind: .info)
-        }
-        let collector = MessageCollector { msg in
-            await MainActor.run {
-                if let text = msg as? P2pMessage.Text {
-                    self.appendMessage("\(session.peer.name) -> \(text.value)", kind: .received)
-                } else if msg != nil {
-                    self.appendMessage("\(session.peer.name) -> <binary or other>", kind: .received)
+        guard !collectedSessionIds.contains(sid) else { return }
+        collectedSessionIds.insert(sid)
+        appendMessage("[\(label)] session opened: \(session.peer.name)", kind: .info)
+
+        messageCollectorTasks[sid] = Task.detached {
+            let collector = MessageCollector { msg in
+                await MainActor.run {
+                    if let text = msg as? P2pMessage.Text {
+                        self.appendMessage("\(session.peer.name) -> \(text.value)", kind: .received)
+                    } else if let bin = msg as? P2pMessage.Binary {
+                        self.appendMessage(
+                            "\(session.peer.name) -> <binary \(bin.bytes.size) bytes>",
+                            kind: .received
+                        )
+                    } else if msg != nil {
+                        self.appendMessage("\(session.peer.name) -> <other message>", kind: .received)
+                    }
                 }
             }
+            _ = try? await session.incoming.collect(collector: collector)
         }
-        _ = try? await session.incoming.collect(collector: collector)
+
+        // AUDIT-2026-06 (A-G9-samples-desktop-ios-07): subscribe to file
+        // offers — previously nothing collected incomingFiles on iOS, so
+        // offers from desktop/Android peers invisibly auto-rejected as
+        // "timeout" after 30 s.
+        fileCollectorTasks[sid] = Task.detached {
+            let collector = FileOfferCollector { offer in
+                await self.handleIncomingOffer(offer)
+            }
+            _ = try? await session.incomingFiles.collect(collector: collector)
+        }
+    }
+
+    // MARK: - File transfer
+
+    /// AUDIT-2026-06 (D-G9-samples-desktop-ios-03 / A-G9-samples-desktop-ios-07):
+    /// auto-accept an incoming offer into Documents/P2pKitInbox/<name>.
+    /// Auto-accept is a deliberate harness policy — an unattended phone
+    /// would otherwise race a consent dialog against the 30 s offer timeout.
+    /// The accepted bytes stream through a FileHandle-backed RawSink; the
+    /// transfer row in the UI shows live progress and the saved location.
+    @MainActor
+    private func handleIncomingOffer(_ offer: P2pFileOffer) async {
+        diag(
+            "file",
+            "offer id=\(offer.id.prefix(8)) name='\(offer.name)' size=\(offer.sizeBytes) mime=\(offer.mimeType ?? "-") from \(offer.peer.name)"
+        )
+        let fm = FileManager.default
+        let inbox = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("P2pKitInbox", isDirectory: true)
+        do {
+            try fm.createDirectory(at: inbox, withIntermediateDirectories: true)
+        } catch {
+            appendMessage("file offer '\(offer.name)': cannot create inbox dir — rejecting", kind: .error)
+            try? await offer.reject(reason: "receiver storage unavailable")
+            return
+        }
+        // Strip any path components a hostile sender might embed in the name.
+        let lastComponent = offer.name.components(separatedBy: "/").last ?? ""
+        let safeName = lastComponent.isEmpty ? "incoming-\(offer.id.prefix(8)).bin" : lastComponent
+        var dest = inbox.appendingPathComponent(safeName)
+        if fm.fileExists(atPath: dest.path) {
+            dest = inbox.appendingPathComponent("\(Int(Date().timeIntervalSince1970))-\(safeName)")
+        }
+        guard fm.createFile(atPath: dest.path, contents: nil),
+              let handle = FileHandle(forWritingAtPath: dest.path) else {
+            appendMessage("file offer '\(offer.name)': cannot open \(dest.lastPathComponent) — rejecting", kind: .error)
+            try? await offer.reject(reason: "receiver could not open destination")
+            return
+        }
+        let sink = FileHandleRawSink(handle: handle)
+        do {
+            let transfer = try await offer.accept(sink: sink)
+            appendMessage(
+                "receiving '\(safeName)' (\(fmtBytes(offer.sizeBytes))) from \(offer.peer.name)",
+                kind: .info
+            )
+            watchTransfer(transfer, direction: .receive, detail: dest.lastPathComponent) {
+                sink.close()
+            }
+        } catch {
+            sink.close()
+            try? fm.removeItem(at: dest)
+            diag("file", "accept THREW for '\(offer.name)': \(error.localizedDescription)")
+            appendMessage("accept failed for '\(offer.name)': \(error.localizedDescription)", kind: .error)
+        }
+    }
+
+    /// AUDIT-2026-06 (D-G9-samples-desktop-ios-03): demonstrate the outgoing
+    /// file path. Generates a deterministic 200 KB blob in memory (the
+    /// README's "200KB binary preset") and streams it through
+    /// `sendFile(name:sizeBytes:mimeType:source:)` via a RawSource adapter —
+    /// no document picker needed, so the flow is one tap on the test bench.
+    @MainActor
+    private func sendTestFile(to row: SessionRow) async {
+        guard !sendingFileSessionIds.contains(row.id) else { return }
+        sendingFileSessionIds.insert(row.id)
+        defer { sendingFileSessionIds.remove(row.id) }
+
+        let size = 200 * 1024
+        var data = Data(count: size)
+        for i in 0..<size {
+            data[i] = UInt8(truncatingIfNeeded: i &* 31 &+ 7)   // deterministic pattern
+        }
+        let name = "ios-test-\(Int(Date().timeIntervalSince1970)).bin"
+        let source = DataRawSource(data: data)
+        diag("file", "sendFile '\(name)' (\(size) B) -> \(row.peerName)")
+        do {
+            let transfer = try await row.session.sendFile(
+                name: name,
+                sizeBytes: Int64(size),
+                mimeType: "application/octet-stream",
+                source: source
+            )
+            appendMessage("offering file '\(name)' (\(fmtBytes(Int64(size)))) to \(row.peerName)", kind: .sent)
+            watchTransfer(transfer, direction: .send, detail: nil) {
+                source.close()
+            }
+        } catch {
+            source.close()
+            diag("file", "sendFile THREW for \(row.peerId.prefix(8)): \(error.localizedDescription)")
+            appendMessage("sendFile failed (\(row.peerName)): \(error.localizedDescription)", kind: .error)
+            errorBanner = "Send file to \(row.peerName) failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Track one transfer's StateFlows into a UI row until it reaches a
+    /// terminal state, then run `onTerminal` (the SDK leaves closing the
+    /// sink/source to the caller). Polled at 5 Hz rather than collected —
+    /// `StateFlow<T>.value` generic-erases to `Any?` across the bridge
+    /// (see IosSwiftHelpers.kt), so we cast per read; a poll loop that exits
+    /// on terminal/cancel is simpler and self-cleaning compared to two more
+    /// never-completing flow collects per transfer.
+    @MainActor
+    private func watchTransfer(
+        _ transfer: P2pFileTransfer,
+        direction: TransferRow.Direction,
+        detail: String?,
+        onTerminal: @escaping () -> Void
+    ) {
+        transfers.append(TransferRow(
+            id: transfer.id,
+            peerName: transfer.peer.name,
+            fileName: transfer.name,
+            direction: direction,
+            stateLabel: "Offered",
+            bytes: 0,
+            totalBytes: transfer.sizeBytes,
+            isTerminal: false,
+            detail: detail,
+            transfer: transfer
+        ))
+        transferWatchTasks[transfer.id] = Task { @MainActor in
+            var lastLabel = ""
+            while !Task.isCancelled {
+                let (label, terminal) = describeTransferState(transfer.state.value)
+                let bytes = (transfer.bytesTransferred.value as? KotlinLong)?.int64Value ?? 0
+                if let idx = transfers.firstIndex(where: { $0.id == transfer.id }) {
+                    transfers[idx].stateLabel = label
+                    transfers[idx].bytes = bytes
+                    transfers[idx].isTerminal = terminal
+                }
+                if label != lastLabel {
+                    lastLabel = label
+                    diag("file", "transfer \(transfer.id.prefix(8)) '\(transfer.name)' -> \(label) (\(bytes)/\(transfer.sizeBytes) B)")
+                    if terminal {
+                        let arrow = direction == .send ? "→" : "←"
+                        appendMessage(
+                            "file '\(transfer.name)' \(arrow) \(transfer.peer.name): \(label)",
+                            kind: label == "Completed" ? .info : .error
+                        )
+                    }
+                }
+                if terminal { break }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            onTerminal()
+            transferWatchTasks[transfer.id] = nil
+        }
+    }
+
+    /// Map the bridged `FileTransferState` (arrives as `Any?` because
+    /// `StateFlow`'s generic argument erases) to a UI label + terminal flag.
+    private func describeTransferState(_ value: Any?) -> (label: String, terminal: Bool) {
+        switch value {
+        case is FileTransferState.Offered:
+            return ("Offered", false)
+        case is FileTransferState.Accepted:
+            return ("Accepted", false)
+        case let s as FileTransferState.Sending:
+            return ("Sending \(Int(s.progress * 100))%", false)
+        case is FileTransferState.Completed:
+            return ("Completed", true)
+        case let s as FileTransferState.Rejected:
+            return ("Rejected" + (s.reason.map { ": \($0)" } ?? ""), true)
+        case let s as FileTransferState.Cancelled:
+            return ("Cancelled" + (s.reason.map { ": \($0)" } ?? ""), true)
+        case let s as FileTransferState.Failed:
+            return ("Failed: \(s.error.message ?? "\(s.error)")", true)
+        default:
+            return ("…", false)
+        }
+    }
+
+    @MainActor
+    private func cancelTransfer(_ row: TransferRow) async {
+        diag("file", "Cancel tapped for transfer \(row.id.prefix(8)) '\(row.fileName)'")
+        do {
+            try await row.transfer.cancel(reason: "cancelled from iOS sample UI")
+        } catch {
+            appendMessage("cancel failed (\(row.fileName)): \(error.localizedDescription)", kind: .error)
+        }
     }
 
     @MainActor
@@ -657,6 +1111,11 @@ struct ContentView: View {
             return
         }
         pendingConnectPeerIds.insert(pid)
+        // AUDIT-2026-06 (B-G9-samples-desktop-ios-03): this defer now runs as
+        // soon as connect() finishes the handshake — attachCollectors returns
+        // immediately instead of awaiting a never-completing SharedFlow
+        // collect, so the Connect button no longer wedges on "Connecting…"
+        // after the session later dies.
         defer { pendingConnectPeerIds.remove(pid) }
 
         diag("ui", "calling kit.connect(\(pid.prefix(8)))")
@@ -667,7 +1126,7 @@ struct ContentView: View {
                 "ui",
                 "kit.connect returned session id=\(session.id) peer=\(session.peer.id) state=\(IosSwiftHelpersKt.stateName(session))"
             )
-            await attachMessageCollector(to: session, label: "outgoing")
+            attachCollectors(to: session, label: "outgoing")
         } catch {
             diag("ui", "kit.connect THREW: \(error.localizedDescription)")
             appendMessage("connect failed (\(row.name)): \(error.localizedDescription)", kind: .error)
@@ -714,6 +1173,9 @@ struct ContentView: View {
         }
 
         isManualDialing = true
+        // AUDIT-2026-06 (B-G9-samples-desktop-ios-03): with attachCollectors
+        // returning immediately, this defer runs when the dial settles —
+        // isManualDialing no longer latches true forever after one dial.
         defer { isManualDialing = false }
         errorBanner = nil
         appendMessage("manual: createManualPeer host=\(host) port=\(portInt)", kind: .info)
@@ -725,7 +1187,7 @@ struct ContentView: View {
             diag("ui", "calling kit.connect on synthetic peer \(peer.id)")
             let session = try await k.connect(peer: peer)
             diag("ui", "kit.connect (manual) returned session id=\(session.id) state=\(IosSwiftHelpersKt.stateName(session))")
-            await attachMessageCollector(to: session, label: "manual")
+            attachCollectors(to: session, label: "manual")
         } catch {
             diag("ui", "manual dial THREW: \(error.localizedDescription)")
             appendMessage("manual: failed - \(error.localizedDescription)", kind: .error)
@@ -772,6 +1234,7 @@ struct ContentView: View {
             return
         }
 
+        var successes = 0
         var failures: [String] = []
         for row in liveSessions {
             diag("ui", "Send → session=\(row.id.prefix(12)) peer=\(row.peerId.prefix(8)) (\(text.count) chars)")
@@ -779,6 +1242,7 @@ struct ContentView: View {
                 try await row.session.send(message: P2pMessage.Text(value: text, metadata: [:]))
                 diag("ui", "session.send OK for \(row.peerId.prefix(8))")
                 appendMessage("me -> \(row.peerName): \(text)", kind: .sent)
+                successes += 1
             } catch {
                 let msg = error.localizedDescription
                 diag("ui", "session.send THREW for \(row.peerId.prefix(8)): \(msg)")
@@ -801,7 +1265,12 @@ struct ContentView: View {
         for row in skipped {
             appendMessage("skipped \(row.peerName) (state=\(row.state))", kind: .info)
         }
-        draft = ""
+        // AUDIT-2026-06 (D-G9-samples-desktop-ios-11): keep the draft when
+        // every send failed — clearing it forced the operator to retype the
+        // message after a transient failure.
+        if successes > 0 {
+            draft = ""
+        }
     }
 
     @MainActor
@@ -832,6 +1301,17 @@ struct ContentView: View {
         incomingSessionsTask?.cancel()
         debugLogTask?.cancel()
         permissionCheckTask?.cancel()
+        // AUDIT-2026-06 (A-G9-samples-desktop-ios-09): also cancel the
+        // per-session message/file collectors and per-transfer watchers —
+        // stop() previously cancelled only the four named tasks, leaking
+        // every session collector (and its captured session/kit) across
+        // each Stop/Start cycle.
+        messageCollectorTasks.values.forEach { $0.cancel() }
+        fileCollectorTasks.values.forEach { $0.cancel() }
+        transferWatchTasks.values.forEach { $0.cancel() }
+        messageCollectorTasks = [:]
+        fileCollectorTasks = [:]
+        transferWatchTasks = [:]
 
         do {
             try await k.stop()
@@ -841,8 +1321,10 @@ struct ContentView: View {
         kit = nil
         peers = []
         sessions = []
+        transfers = []
         collectedSessionIds = []
         pendingConnectPeerIds = []
+        sendingFileSessionIds = []
         localPeerId = ""
         localTcpPort = 0
         errorBanner = nil
@@ -856,6 +1338,17 @@ struct ContentView: View {
         messages.append(MessageRow(text: text, kind: kind))
         if messages.count > 200 {
             messages.removeFirst(messages.count - 200)
+        }
+    }
+
+    /// AUDIT-2026-06 (B-G9-samples-desktop-ios-06): append with a stable,
+    /// monotonically increasing id so trimming doesn't shift row identities.
+    @MainActor
+    private func appendLog(_ text: String) {
+        logLines.append(LogLine(id: nextLogId, text: text))
+        nextLogId += 1
+        if logLines.count > 200 {
+            logLines.removeFirst(logLines.count - 200)
         }
     }
 
@@ -918,5 +1411,117 @@ final class StringCollector: NSObject, Kotlinx_coroutines_coreFlowCollector {
         } else {
             completionHandler(nil)
         }
+    }
+}
+
+/// AUDIT-2026-06 (A-G9-samples-desktop-ios-07): Swift adapter for
+/// `kotlinx.coroutines.flow.FlowCollector<P2pFileOffer>` — mirrors
+/// MessageCollector for the `session.incomingFiles` stream.
+final class FileOfferCollector: NSObject, Kotlinx_coroutines_coreFlowCollector {
+    private let onOffer: (P2pFileOffer) async -> Void
+    init(_ onOffer: @escaping (P2pFileOffer) async -> Void) {
+        self.onOffer = onOffer
+    }
+    func emit(value: Any?, completionHandler: @escaping (Error?) -> Void) {
+        if let offer = value as? P2pFileOffer {
+            Task {
+                await onOffer(offer)
+                completionHandler(nil)
+            }
+        } else {
+            completionHandler(nil)
+        }
+    }
+}
+
+// MARK: - kotlinx-io adapters
+//
+// AUDIT-2026-06 (D-G9-samples-desktop-ios-03): `sendFile` takes a
+// `kotlinx.io.RawSource` and `P2pFileOffer.accept` takes a
+// `kotlinx.io.RawSink`. kotlinx-io is not export()-ed into the XCFramework,
+// so its interfaces surface in Swift with the `Kotlinx_io_core` prefix —
+// they are plain (non-suspend) protocols, implementable from Swift. Bytes
+// cross the bridge through `KotlinByteArray`, element-by-element via
+// get/set — a sample-grade simplification (~tens of ms per MiB), fine for
+// the 200 KB preset and multi-MiB test files.
+
+/// `kotlinx.io.RawSource` over in-memory bytes. Used by the "Send file"
+/// button to stream a generated test blob through `P2pSession.sendFile`.
+/// The SDK pulls chunks sequentially from a background dispatcher, so no
+/// internal locking is required.
+final class DataRawSource: NSObject, Kotlinx_io_coreRawSource {
+    private let data: Data
+    private var offset: Int = 0
+    init(data: Data) {
+        self.data = data
+    }
+
+    func readAtMostTo(sink: Kotlinx_io_coreBuffer, byteCount: Int64) -> Int64 {
+        if offset >= data.count { return -1 }      // exhausted, per RawSource contract
+        if byteCount <= 0 { return 0 }
+        let n = Int(min(byteCount, Int64(data.count - offset)))
+        let arr = KotlinByteArray(size: Int32(n))
+        for i in 0..<n {
+            arr.set(index: Int32(i), value: Int8(bitPattern: data[offset + i]))
+        }
+        sink.write(source: arr, startIndex: 0, endIndex: Int32(n))
+        offset += n
+        return Int64(n)
+    }
+
+    func close() {
+        // Nothing to release; kept for the RawSource (AutoCloseable) contract.
+    }
+}
+
+/// `kotlinx.io.RawSink` writing to a local file via `FileHandle`. Used to
+/// receive accepted file offers into Documents/P2pKitInbox. The SDK's
+/// receive loop calls `write` sequentially off the main thread; on
+/// `Completed` the SDK flushes but does NOT close — the transfer watcher
+/// closes this sink once the transfer reaches a terminal state.
+final class FileHandleRawSink: NSObject, Kotlinx_io_coreRawSink {
+    private let handle: FileHandle
+    private var closed = false
+    /// RawSink.write cannot throw across the ObjC bridge (no NSError slot in
+    /// the kotlinx-io interface), so disk-write failures are remembered and
+    /// logged; subsequent writes become no-ops. Sample-grade tradeoff.
+    private var failed = false
+
+    init(handle: FileHandle) {
+        self.handle = handle
+    }
+
+    func write(source: Kotlinx_io_coreBuffer, byteCount: Int64) {
+        var remaining = byteCount
+        while remaining > 0 && !failed {
+            let chunk = Int32(min(remaining, 64 * 1024))
+            let arr = KotlinByteArray(size: chunk)
+            let read = source.readAtMostTo(sink: arr, startIndex: 0, endIndex: chunk)
+            if read <= 0 { break }                 // buffer exhausted early
+            var data = Data(count: Int(read))
+            for i in 0..<Int(read) {
+                data[i] = UInt8(bitPattern: arr.get(index: Int32(i)))
+            }
+            do {
+                try handle.write(contentsOf: data)
+            } catch {
+                failed = true
+                IosLanDebug.shared.log(
+                    tag: "file",
+                    message: "sink write FAILED: \(error.localizedDescription)"
+                )
+            }
+            remaining -= Int64(read)
+        }
+    }
+
+    func flush() {
+        // FileHandle writes are unbuffered at this layer; nothing to do.
+    }
+
+    func close() {
+        guard !closed else { return }
+        closed = true
+        try? handle.close()
     }
 }

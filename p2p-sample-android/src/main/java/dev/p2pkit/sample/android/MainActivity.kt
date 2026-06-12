@@ -25,11 +25,16 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
@@ -40,6 +45,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -50,14 +56,19 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -68,8 +79,33 @@ import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.provisioning.JoinNetworkResult
 import dev.p2pkit.core.provisioning.LocalNetworkResult
+import dev.p2pkit.core.provisioning.WifiSecurityType
 import dev.p2pkit.core.transfer.FileTransferState
-import androidx.compose.ui.graphics.Color
+import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/**
+ * AUDIT-2026-06: C-G8-samples-android-07 — shared spacing tokens so card
+ * padding, section gaps and line spacing are uniform across the screen
+ * instead of ad-hoc 2/4/6/8/10/12dp literals. Shapes come from
+ * `MaterialTheme.shapes` rather than hand-rolled corner radii.
+ */
+private object Dimens {
+    /** Outer padding of each screen. */
+    val ScreenPadding = 16.dp
+    /** Content padding inside every Card. */
+    val CardPadding = 12.dp
+    /** Vertical gap between major sections. */
+    val SectionGap = 12.dp
+    /** Gap between sibling items and before buttons. */
+    val ItemGap = 8.dp
+    /** Gap between closely related lines/controls. */
+    val SmallGap = 4.dp
+    /** Tight line spacing in dense lists. */
+    val LineGap = 2.dp
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -133,12 +169,21 @@ private fun SetupScreen(
     vm: P2pKitViewModel
 ) {
     val isStarting by vm.isStarting.collectAsState()
+    // AUDIT-2026-06: D-G8-samples-android-02 — Start must also wait for the
+    // previous kit's async teardown, or two kits overlap (duplicate mDNS
+    // advertisements + two TCP listeners).
+    val isStopping by vm.isStopping.collectAsState()
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(paddingValues)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            // AUDIT-2026-06: D-G8-samples-android-14 — scrollable + imePadding so
+            // the Start button stays reachable with the keyboard open
+            // (adjustResize) and in landscape.
+            .verticalScroll(rememberScrollState())
+            .imePadding()
+            .padding(Dimens.ScreenPadding),
+        verticalArrangement = Arrangement.spacedBy(Dimens.SectionGap)
     ) {
         Text(
             text = "Discover devices on your Wi-Fi and chat with all of them in a room.",
@@ -157,20 +202,26 @@ private fun SetupScreen(
             style = MaterialTheme.typography.bodySmall
         )
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Dimens.ItemGap))
         Text(
             text = "Reconnect policy",
             style = MaterialTheme.typography.titleSmall
         )
         ReconnectChoicePicker(vm)
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Dimens.ItemGap))
         Button(
             onClick = vm::start,
-            enabled = vm.deviceName.trim().isNotEmpty() && !isStarting,
+            enabled = vm.deviceName.trim().isNotEmpty() && !isStarting && !isStopping,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(if (isStarting) "Starting…" else "Start")
+            Text(
+                when {
+                    isStarting -> "Starting…"
+                    isStopping -> "Stopping previous run…"
+                    else -> "Start"
+                }
+            )
         }
     }
 }
@@ -188,63 +239,87 @@ private fun ReconnectChoicePicker(vm: P2pKitViewModel) {
     // attempts exhaust. The SDK's defaults are intentionally NOT
     // changed — apps that don't hit this scenario shouldn't be forced
     // into a longer perceived-failure window.
-    var maxAttemptsText by remember {
+    //
+    // AUDIT-2026-06: C-G8-samples-android-05 — rememberSaveable so the
+    // half-edited values survive rotation/theme changes.
+    var maxAttemptsText by rememberSaveable {
         mutableStateOf(
             (vm.reconnectChoice as? ReconnectChoice.Enabled)?.maxAttempts?.toString() ?: "10"
         )
     }
-    var retryDelayText by remember {
+    var retryDelayText by rememberSaveable {
         mutableStateOf(
             (vm.reconnectChoice as? ReconnectChoice.Enabled)?.retryDelayMillis?.toString() ?: "1500"
         )
     }
     val choice = vm.reconnectChoice
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    // AUDIT-2026-06: A-G8-samples-android-16 — single commit path: blank /
+    // mid-edit fields fall back to the same 10 / 1500 preset the radio
+    // commits (previously the fields silently committed 1 / 0).
+    fun commitEnabled() {
+        val attempts = maxAttemptsText.toIntOrNull()?.coerceAtLeast(1) ?: 10
+        val delay = retryDelayText.toLongOrNull()?.coerceAtLeast(0L) ?: 1_500L
+        vm.updateReconnectChoice(ReconnectChoice.Enabled(attempts, delay))
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(Dimens.SmallGap)) {
+        // AUDIT-2026-06: D-G8-samples-android-11 — the whole row is the
+        // selectable element (Role.RadioButton) so the label is announced
+        // and tappable; the inner control has onClick = null.
+        Row(
+            modifier = Modifier.selectable(
+                selected = choice is ReconnectChoice.Disabled,
+                role = Role.RadioButton,
+                onClick = { vm.updateReconnectChoice(ReconnectChoice.Disabled) }
+            ),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             RadioButton(
                 selected = choice is ReconnectChoice.Disabled,
-                onClick = { vm.updateReconnectChoice(ReconnectChoice.Disabled) }
+                onClick = null
             )
             Text("Disabled")
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.selectable(
+                selected = choice is ReconnectChoice.Enabled,
+                role = Role.RadioButton,
+                onClick = { commitEnabled() }
+            ),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             RadioButton(
                 selected = choice is ReconnectChoice.Enabled,
-                onClick = {
-                    val attempts = maxAttemptsText.toIntOrNull()?.coerceAtLeast(1) ?: 10
-                    val delay = retryDelayText.toLongOrNull()?.coerceAtLeast(0L) ?: 1_500L
-                    vm.updateReconnectChoice(ReconnectChoice.Enabled(attempts, delay))
-                }
+                onClick = null
             )
             Text("Enabled")
         }
         if (choice is ReconnectChoice.Enabled) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(Dimens.ItemGap),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedTextField(
                     value = maxAttemptsText,
                     onValueChange = { txt ->
                         maxAttemptsText = txt.filter { it.isDigit() }.take(4)
-                        val attempts = maxAttemptsText.toIntOrNull()?.coerceAtLeast(1) ?: 1
-                        val delay = retryDelayText.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
-                        vm.updateReconnectChoice(ReconnectChoice.Enabled(attempts, delay))
+                        commitEnabled()
                     },
                     label = { Text("maxAttempts") },
                     singleLine = true,
+                    // AUDIT-2026-06: D-G8-samples-android-05 — numeric keyboard
+                    // for the digit-only field.
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f)
                 )
                 OutlinedTextField(
                     value = retryDelayText,
                     onValueChange = { txt ->
                         retryDelayText = txt.filter { it.isDigit() }.take(6)
-                        val attempts = maxAttemptsText.toIntOrNull()?.coerceAtLeast(1) ?: 1
-                        val delay = retryDelayText.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
-                        vm.updateReconnectChoice(ReconnectChoice.Enabled(attempts, delay))
+                        commitEnabled()
                     },
                     label = { Text("retryDelayMillis") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -270,7 +345,8 @@ private fun RoomScreen(
     val localPeerId by vm.localPeerId.collectAsState()
     val isStopping by vm.isStopping.collectAsState()
     val networkPathStatus by vm.networkPathStatus.collectAsState()
-    var draft by remember { mutableStateOf("") }
+    // AUDIT-2026-06: C-G8-samples-android-05 — survive configuration changes.
+    var draft by rememberSaveable { mutableStateOf("") }
 
     Column(
         modifier = Modifier
@@ -278,7 +354,7 @@ private fun RoomScreen(
             .padding(paddingValues)
             .imePadding()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp)
+            .padding(Dimens.ScreenPadding)
     ) {
         StatusHeader(
             appId = vm.appId,
@@ -295,38 +371,45 @@ private fun RoomScreen(
             onToggleAutoMesh = vm::toggleAutoMesh,
             onStop = vm::stop
         )
-        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+        HorizontalDivider(modifier = Modifier.padding(vertical = Dimens.ItemGap))
 
         Text(
             text = "Discovered peers (${peers.size})",
             style = MaterialTheme.typography.titleMedium
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(Dimens.SmallGap))
         LazyColumn(
             modifier = Modifier.fillMaxWidth().height(140.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            verticalArrangement = Arrangement.spacedBy(Dimens.ItemGap)
         ) {
             items(peers, key = { it.id.value }) { peer ->
                 PeerCard(
                     peer = peer,
-                    isConnected = vm.connectedSessions.any { it.peer.id.value == peer.id.value },
+                    // AUDIT-2026-06: A-G8-samples-android-18 — hand the session
+                    // over so the card can label from its real state instead of
+                    // showing "Connected" for any non-terminal session.
+                    session = vm.connectedSessions.firstOrNull { it.peer.id.value == peer.id.value },
                     isConnecting = vm.pendingConnectPeerIds.contains(peer.id.value),
                     onConnect = { vm.connect(peer) }
                 )
             }
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(Dimens.SectionGap))
         HotspotCard(vm = vm)
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Dimens.ItemGap))
         JoinHotspotCard(vm = vm)
 
-        val connected = vm.connectedSessions.toList()
-        Spacer(Modifier.height(12.dp))
+        // AUDIT-2026-06: B-G8-samples-android-04 — read the SnapshotStateList
+        // directly; no per-recomposition toList() copies.
+        val connected = vm.connectedSessions
+        Spacer(Modifier.height(Dimens.SectionGap))
 
         // File picker shared across all per-chip "Send file…" menu items.
-        var pendingSendPeerId by remember { mutableStateOf<String?>(null) }
+        // AUDIT-2026-06: A-G8-samples-android-15 — rememberSaveable so the
+        // target peer survives Activity recreation while the picker is open.
+        var pendingSendPeerId by rememberSaveable { mutableStateOf<String?>(null) }
         val pickerLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.OpenDocument()
         ) { uri ->
@@ -335,6 +418,9 @@ private fun RoomScreen(
             when {
                 uri != null && peerId != null -> vm.sendFile(peerId, uri)
                 uri == null && peerId != null -> vm.notifyFilePickerCancelled(peerId)
+                // AUDIT-2026-06: A-G8-samples-android-15 — surface the dropped
+                // result instead of silently discarding the picked file.
+                uri != null -> vm.notifySendTargetLost()
             }
         }
 
@@ -343,8 +429,8 @@ private fun RoomScreen(
                 text = "Room (${connected.size} connected)",
                 style = MaterialTheme.typography.titleMedium
             )
-            Spacer(Modifier.height(4.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spacer(Modifier.height(Dimens.SmallGap))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(Dimens.ItemGap)) {
                 items(connected, key = { it.id }) { session ->
                     ConnectedPeerChip(
                         session = session,
@@ -374,20 +460,31 @@ private fun RoomScreen(
             )
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(Dimens.SectionGap))
 
         Text(text = "Timeline", style = MaterialTheme.typography.titleSmall)
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(Dimens.SmallGap))
+        // AUDIT-2026-06: D-G8-samples-android-06 — autoscroll so the newest
+        // timeline entries are visible without manual scrolling. Keyed on
+        // size + last id so it also fires once the capacity trim keeps the
+        // size constant.
+        val timelineState = rememberLazyListState()
+        LaunchedEffect(vm.roomMessages.size, vm.roomMessages.lastOrNull()?.id) {
+            if (vm.roomMessages.isNotEmpty()) {
+                timelineState.animateScrollToItem(vm.roomMessages.size - 1)
+            }
+        }
         LazyColumn(
+            state = timelineState,
             modifier = Modifier.fillMaxWidth().height(200.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
+            verticalArrangement = Arrangement.spacedBy(Dimens.LineGap)
         ) {
-            items(vm.roomMessages.toList(), key = { it.id }) { line ->
+            items(vm.roomMessages, key = { it.id }) { line ->
                 RoomLine(line)
             }
         }
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Dimens.ItemGap))
 
         OutlinedTextField(
             value = draft,
@@ -396,18 +493,16 @@ private fun RoomScreen(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Dimens.ItemGap))
         val targetCount = vm.targetedPeerIds.size
         val sendLabel = when {
             connected.isEmpty() -> "No peers connected"
             targetCount == 0 -> "Broadcast (${connected.size})"
             else -> "Send to $targetCount"
         }
-        // Filter to sessions whose state is Connected — the ViewModel
-        // does the same on send, but reflecting it here lets the Send
-        // button visually convey "no Connected peers" without needing a
-        // click to learn that.
-        val hasConnectedSession = connected.any { it.state.collectAsState().value == ConnectionState.Connected }
+        // AUDIT-2026-06: A-G8-samples-android-19 — single derived flag from the
+        // ViewModel instead of collectAsState() inside a short-circuiting any{}.
+        val hasConnectedSession by vm.hasConnectedSession.collectAsState()
         Button(
             onClick = {
                 val text = draft.trim()
@@ -421,39 +516,45 @@ private fun RoomScreen(
             Text(sendLabel)
         }
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Dimens.ItemGap))
 
         if (vm.fileTransfers.isNotEmpty()) {
             Text(
                 text = "File transfers (${vm.fileTransfers.size})",
                 style = MaterialTheme.typography.titleSmall
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(Dimens.SmallGap))
             LazyColumn(
                 modifier = Modifier.fillMaxWidth().height(160.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(Dimens.SmallGap)
             ) {
-                items(vm.fileTransfers.toList(), key = { it.id }) { row ->
+                items(vm.fileTransfers, key = { it.id }) { row ->
                     FileTransferRowView(row = row, onCancel = { vm.cancelFileTransfer(row.id) })
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Dimens.ItemGap))
         }
 
         Text(
             text = "Logs (last ${vm.logTail.size})",
             style = MaterialTheme.typography.labelMedium
         )
+        // AUDIT-2026-06: D-G8-samples-android-06 — keep the newest log lines
+        // in view as they arrive.
+        val logState = rememberLazyListState()
+        LaunchedEffect(vm.logTail.size, vm.logTail.lastOrNull()) {
+            if (vm.logTail.isNotEmpty()) logState.scrollToItem(vm.logTail.size - 1)
+        }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(100.dp)
-                .clip(RoundedCornerShape(6.dp))
+                .clip(MaterialTheme.shapes.small)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(6.dp)
+                .padding(Dimens.ItemGap)
         ) {
-            LazyColumn {
-                items(vm.logTail.toList()) { line ->
+            LazyColumn(state = logState) {
+                items(vm.logTail) { line ->
                     Text(
                         text = line,
                         style = MaterialTheme.typography.labelSmall,
@@ -486,7 +587,7 @@ private fun StatusHeader(
     onToggleAutoMesh: () -> Unit,
     onStop: () -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(Dimens.LineGap)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -505,51 +606,68 @@ private fun StatusHeader(
                 text = "state: ${kitState::class.simpleName}",
                 style = MaterialTheme.typography.bodySmall
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(Dimens.ItemGap))
             NetworkPathChip(networkPathStatus)
         }
+        // AUDIT-2026-06: D-G8-samples-android-11 — each label+switch row is one
+        // toggleable element (Role.Switch): screen readers announce the label
+        // and tapping the label toggles; the inner Switch has no own handler.
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(Dimens.SectionGap),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Advertise", style = MaterialTheme.typography.bodySmall)
-                Switch(checked = advertising, onCheckedChange = { onToggleAdvertising() })
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Discover", style = MaterialTheme.typography.bodySmall)
-                Switch(checked = discovering, onCheckedChange = { onToggleDiscovery() })
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Auto-mesh", style = MaterialTheme.typography.bodySmall)
-                Switch(checked = autoMesh, onCheckedChange = { onToggleAutoMesh() })
-            }
+            LabelledSwitch(label = "Advertise", checked = advertising, onToggle = onToggleAdvertising)
+            LabelledSwitch(label = "Discover", checked = discovering, onToggle = onToggleDiscovery)
+            LabelledSwitch(label = "Auto-mesh", checked = autoMesh, onToggle = onToggleAutoMesh)
         }
     }
 }
 
+@Composable
+private fun LabelledSwitch(label: String, checked: Boolean, onToggle: () -> Unit) {
+    Row(
+        modifier = Modifier.toggleable(
+            value = checked,
+            role = Role.Switch,
+            onValueChange = { onToggle() }
+        ),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.width(Dimens.SmallGap))
+        Switch(checked = checked, onCheckedChange = null)
+    }
+}
+
 /**
- * Tiny coloured chip showing the current [NetworkPathStatus]. Green for
- * Satisfied, red for Unsatisfied, grey for Unknown. Sized to fit on the
- * same row as the kit-state text so testers can watch path transitions
- * during Wi-Fi toggle tests without scrolling.
+ * Tiny coloured chip showing the current [NetworkPathStatus]. Sized to fit
+ * on the same row as the kit-state text so testers can watch path
+ * transitions during Wi-Fi toggle tests without scrolling.
+ *
+ * AUDIT-2026-06: C-G8-samples-android-06 — colors come from the
+ * MaterialTheme color scheme (container/on-container roles) instead of
+ * hardcoded hex literals, so the chip stays consistent with the theme.
  */
 @Composable
 private fun NetworkPathChip(status: NetworkPathStatus) {
-    val (label, color) = when (status) {
-        NetworkPathStatus.Satisfied -> "online" to Color(0xFF2E7D32)
-        NetworkPathStatus.Unsatisfied -> "offline" to Color(0xFFC62828)
-        NetworkPathStatus.Unknown -> "path: unknown" to Color(0xFF757575)
+    val scheme = MaterialTheme.colorScheme
+    val (label, bg, fg) = when (status) {
+        NetworkPathStatus.Satisfied ->
+            Triple("online", scheme.primaryContainer, scheme.onPrimaryContainer)
+        NetworkPathStatus.Unsatisfied ->
+            Triple("offline", scheme.errorContainer, scheme.onErrorContainer)
+        NetworkPathStatus.Unknown ->
+            Triple("path: unknown", scheme.surfaceVariant, scheme.onSurfaceVariant)
     }
     Text(
         text = label,
         style = MaterialTheme.typography.labelSmall,
-        color = Color.White,
+        color = fg,
         modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(color)
-            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .clip(MaterialTheme.shapes.small)
+            .background(bg)
+            .padding(horizontal = Dimens.ItemGap, vertical = Dimens.LineGap)
     )
 }
 
@@ -558,7 +676,9 @@ private fun OverflowMenu(onStop: () -> Unit, isStopping: Boolean) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
-            Text("⋮", style = MaterialTheme.typography.titleLarge)
+            // AUDIT-2026-06: D-G8-samples-android-10 — real icon with a
+            // contentDescription instead of an unlabeled "⋮" glyph.
+            Icon(Icons.Default.MoreVert, contentDescription = "Kit options")
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
@@ -594,7 +714,11 @@ private fun ConnectedPeerChip(
             },
             trailingIcon = {
                 IconButton(onClick = { menuExpanded = true }) {
-                    Text("⋮")
+                    // AUDIT-2026-06: D-G8-samples-android-10 — labeled icon.
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "Session options for ${session.peer.name}"
+                    )
                 }
             }
         )
@@ -626,11 +750,14 @@ private fun FileTransferRowView(row: FileTransferRow, onCancel: () -> Unit) {
         state is FileTransferState.Accepted ||
         state is FileTransferState.Sending
     val arrow = if (row.direction == FileTransferDirection.Outgoing) "↑" else "↓"
+    // AUDIT-2026-06: D-G8-samples-android-12 — direction also as text
+    // ("to"/"from" the peer), not just the arrow glyph screen readers skip.
+    val directionWord = if (row.direction == FileTransferDirection.Outgoing) "to" else "from"
     val sizeKb = row.sizeBytes / 1024
     val sentKb = row.bytesTransferred / 1024
     val pct = if (row.sizeBytes > 0) ((row.bytesTransferred * 100) / row.sizeBytes).toInt() else 0
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(8.dp)) {
+        Column(modifier = Modifier.padding(Dimens.CardPadding)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -640,11 +767,16 @@ private fun FileTransferRowView(row: FileTransferRow, onCancel: () -> Unit) {
                     text = "$arrow ${row.name}",
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
                 Text(
-                    text = "${row.peerName} · ${state.label()}",
-                    style = MaterialTheme.typography.labelSmall
+                    text = "$directionWord ${row.peerName} · ${state.label()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    // AUDIT-2026-06: B-G8-samples-android-07 — bound the line so a
+                    // hostile remote reason can't blow up text layout.
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             Text(
@@ -660,26 +792,34 @@ private fun FileTransferRowView(row: FileTransferRow, onCancel: () -> Unit) {
                 )
             }
             if (isActive) {
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(Dimens.SmallGap))
                 TextButton(onClick = onCancel) { Text("Cancel") }
             }
         }
     }
 }
 
+// AUDIT-2026-06: B-G8-samples-android-07 — remote-supplied reject/cancel
+// reasons and error messages are truncated before rendering (a hostile peer
+// can ship a reason bounded only by the 8 MiB frame limit).
 private fun FileTransferState.label(): String = when (this) {
     is FileTransferState.Offered -> "offered"
     is FileTransferState.Accepted -> "accepted"
     is FileTransferState.Sending -> "sending ${"%.0f".format(progress * 100)}%"
     is FileTransferState.Completed -> "completed"
-    is FileTransferState.Rejected -> "rejected" + (reason?.let { " — $it" } ?: "")
-    is FileTransferState.Cancelled -> "cancelled" + (reason?.let { " — $it" } ?: "")
-    is FileTransferState.Failed -> "failed — ${error.message ?: error::class.simpleName}"
+    is FileTransferState.Rejected -> "rejected" + (reason?.let { " — ${it.take(200)}" } ?: "")
+    is FileTransferState.Cancelled -> "cancelled" + (reason?.let { " — ${it.take(200)}" } ?: "")
+    is FileTransferState.Failed -> "failed — ${(error.message ?: error::class.simpleName.toString()).take(200)}"
 }
 
 @Composable
 private fun RoomLine(message: RoomMessage) {
     val style = MaterialTheme.typography.bodyMedium
+    // AUDIT-2026-06: B-G8-samples-android-08 — render the timestamp instead of
+    // carrying it as a write-only field.
+    val time = remember(message.timestamp) {
+        SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(message.timestamp))
+    }
     val prefix = when (message.direction) {
         RoomMessage.Direction.Incoming -> "${message.senderName} → "
         RoomMessage.Direction.Outgoing -> {
@@ -693,7 +833,7 @@ private fun RoomLine(message: RoomMessage) {
         RoomMessage.Direction.System -> "[system] "
     }
     Text(
-        text = "$prefix${message.displayBody}",
+        text = "$time  $prefix${message.displayBody}",
         style = style,
         maxLines = 3,
         overflow = TextOverflow.Ellipsis
@@ -745,7 +885,16 @@ private fun HotspotCard(vm: P2pKitViewModel) {
     // Device-wide Location toggle is settings-only — no permission API can
     // flip it. Some OEMs (Huawei, MIUI, older Samsung) require it ON even
     // when NEARBY_WIFI_DEVICES is granted.
-    val locationOff = !isLocationModeOn(context)
+    // AUDIT-2026-06: C-G8-samples-android-04 — polled as snapshot state
+    // (produceState) instead of a binder IPC on every recomposition; also
+    // refreshes after returning from the Location settings screen.
+    val locationOn by produceState(initialValue = true, context) {
+        while (true) {
+            value = isLocationModeOn(context)
+            delay(5_000)
+        }
+    }
+    val locationOff = !locationOn
     val isLocationProblem = (result as? LocalNetworkResult.Failed)
         ?.error is dev.p2pkit.core.NetworkProvisioningError.PermissionMissingForProvisioning &&
         (((result as LocalNetworkResult.Failed).error
@@ -753,12 +902,12 @@ private fun HotspotCard(vm: P2pKitViewModel) {
             .permissions.contains(dev.p2pkit.core.permission.P2pPermission.Location))
 
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(Dimens.CardPadding)) {
             Text(
                 text = "Hotspot host (LocalOnlyHotspot)",
                 style = MaterialTheme.typography.titleSmall
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(Dimens.SmallGap))
             val r = result
             when {
                 r is LocalNetworkResult.Started -> {
@@ -777,7 +926,7 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                         )
                         Text("port: ${info.port}", style = MaterialTheme.typography.bodySmall)
                     }
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(Dimens.ItemGap))
                     Button(
                         onClick = vm::stopHotspot,
                         enabled = !busy,
@@ -800,7 +949,7 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                         overflow = TextOverflow.Ellipsis
                     )
                     Text("port: ${info.port}", style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(Dimens.ItemGap))
                     Button(
                         onClick = vm::stopHotspot,
                         enabled = !busy,
@@ -818,7 +967,7 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                                 "in system Settings, then Retry.",
                             style = MaterialTheme.typography.bodySmall
                         )
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(Dimens.ItemGap))
                         Button(
                             onClick = {
                                 context.startActivity(
@@ -830,7 +979,7 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                         ) {
                             Text("Open Location settings")
                         }
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(Dimens.SmallGap))
                         Button(
                             onClick = vm::startHotspot,
                             enabled = !busy,
@@ -843,7 +992,7 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                             text = "Failed: ${r.error::class.simpleName} — ${r.error.message ?: ""}",
                             style = MaterialTheme.typography.bodySmall
                         )
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(Dimens.ItemGap))
                         Button(
                             onClick = {
                                 if (missing.isNotEmpty()) launcher.launch(perm) else vm.startHotspot()
@@ -867,6 +1016,23 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
+                // AUDIT-2026-06: A-G8-samples-android-17 — show the instruction
+                // the user must follow instead of falling into the idle branch
+                // (previously visible only in logcat).
+                r is LocalNetworkResult.RequiresUserAction -> {
+                    Text(
+                        text = r.instruction,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(Dimens.ItemGap))
+                    Button(
+                        onClick = vm::startHotspot,
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (busy) "Working…" else "Retry")
+                    }
+                }
                 else -> {
                     Text(
                         text = "Host a LocalOnlyHotspot so a nearby peer can join (no SIM / no router needed). " +
@@ -874,7 +1040,7 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                         style = MaterialTheme.typography.bodySmall
                     )
                     if (locationOff) {
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(Dimens.SmallGap))
                         Text(
                             text = "Note: this device's system-wide Location toggle is OFF. " +
                                 "Many OEMs require it ON for hotspot hosting. If start fails, " +
@@ -882,7 +1048,7 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(Dimens.ItemGap))
                     Button(
                         onClick = {
                             if (missing.isNotEmpty()) launcher.launch(perm) else vm.startHotspot()
@@ -904,12 +1070,21 @@ private fun HotspotCard(vm: P2pKitViewModel) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun JoinHotspotCard(vm: P2pKitViewModel) {
     val joinResult by vm.joinResult.collectAsState()
     val missing by vm.missingPermissions.collectAsState()
     val busy by vm.provisioningBusy.collectAsState()
-    val context = LocalContext.current
+
+    // AUDIT-2026-06: C-G8-samples-android-05 — rememberSaveable so the SSID /
+    // passphrase the tester just copied from the host device survive rotation.
+    var ssidInput by rememberSaveable { mutableStateOf("") }
+    var passInput by rememberSaveable { mutableStateOf("") }
+    // AUDIT-2026-06: A-G8-samples-android-11 — WPA2/WPA3 selectable so
+    // WPA3-SAE-only hotspots can be joined.
+    var useWpa3 by rememberSaveable { mutableStateOf(false) }
+    val security = if (useWpa3) WifiSecurityType.WPA3 else WifiSecurityType.WPA2
 
     // Pick the right runtime permission for the device's API level.
     val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -921,11 +1096,12 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         vm.refreshMissingPermissions()
-        if (!granted) vm.notifyPermissionDenied("hotspot join")
+        // AUDIT-2026-06: A-G8-samples-android-20 — resume the join after the
+        // grant (the host card already did this); previously the user had to
+        // tap the button a second time.
+        if (granted) vm.joinHotspot(ssidInput, passInput, security)
+        else vm.notifyPermissionDenied("hotspot join")
     }
-
-    var ssidInput by remember { mutableStateOf("") }
-    var passInput by remember { mutableStateOf("") }
 
     val isLocationProblem = (joinResult as? JoinNetworkResult.Failed)
         ?.error is dev.p2pkit.core.NetworkProvisioningError.PermissionMissingForProvisioning &&
@@ -933,13 +1109,14 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
             as dev.p2pkit.core.NetworkProvisioningError.PermissionMissingForProvisioning)
             .permissions.contains(dev.p2pkit.core.permission.P2pPermission.Location)
 
+    val context = LocalContext.current
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(Dimens.CardPadding)) {
             Text(
                 text = "Join hotspot (WifiNetworkSpecifier)",
                 style = MaterialTheme.typography.titleSmall
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(Dimens.SmallGap))
             val r = joinResult
             when {
                 r is JoinNetworkResult.Joined -> {
@@ -957,12 +1134,21 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    Spacer(Modifier.height(6.dp))
+                    // AUDIT-2026-06: D-G8-samples-android-13 — the process stays
+                    // bound to the joined network after dismissing; say so and
+                    // label the action honestly instead of "Clear status".
+                    Spacer(Modifier.height(Dimens.SmallGap))
+                    Text(
+                        text = "The join stays active until you stop the kit — dismissing only " +
+                            "hides this card.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(Dimens.ItemGap))
                     Button(
                         onClick = vm::clearJoinResult,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Clear status")
+                        Text("Dismiss — still joined")
                     }
                 }
                 r is JoinNetworkResult.Failed -> {
@@ -973,7 +1159,7 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
                                 "is granted (Huawei / MIUI / older Samsung behavior).",
                             style = MaterialTheme.typography.bodySmall
                         )
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(Dimens.ItemGap))
                         Button(
                             onClick = {
                                 context.startActivity(
@@ -991,18 +1177,20 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(Dimens.ItemGap))
                     JoinInputs(
                         ssid = ssidInput,
                         onSsidChange = { ssidInput = it },
                         pass = passInput,
-                        onPassChange = { passInput = it }
+                        onPassChange = { passInput = it },
+                        useWpa3 = useWpa3,
+                        onUseWpa3Change = { useWpa3 = it }
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(Dimens.SmallGap))
                     Button(
                         onClick = {
                             if (missing.isNotEmpty()) permLauncher.launch(perm)
-                            else vm.joinHotspot(ssidInput, passInput)
+                            else vm.joinHotspot(ssidInput, passInput, security)
                         },
                         enabled = ssidInput.trim().isNotEmpty() && !busy,
                         modifier = Modifier.fillMaxWidth()
@@ -1028,6 +1216,17 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
+                // AUDIT-2026-06: A-G8-samples-android-17 — a Pending join no
+                // longer falls into the idle branch showing an active Join
+                // button as if nothing were in flight.
+                r is JoinNetworkResult.Pending -> {
+                    Text(
+                        text = "Join request pending — approve the system dialog if it appears.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(Dimens.SmallGap))
+                    TextButton(onClick = vm::clearJoinResult) { Text("Dismiss") }
+                }
                 else -> {
                     Text(
                         text = "Connect this device to a peer's LocalOnlyHotspot. Enter the SSID + " +
@@ -1035,18 +1234,20 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
                             "you to approve the join.",
                         style = MaterialTheme.typography.bodySmall
                     )
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(Dimens.ItemGap))
                     JoinInputs(
                         ssid = ssidInput,
                         onSsidChange = { ssidInput = it },
                         pass = passInput,
-                        onPassChange = { passInput = it }
+                        onPassChange = { passInput = it },
+                        useWpa3 = useWpa3,
+                        onUseWpa3Change = { useWpa3 = it }
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(Dimens.SmallGap))
                     Button(
                         onClick = {
                             if (missing.isNotEmpty()) permLauncher.launch(perm)
-                            else vm.joinHotspot(ssidInput, passInput)
+                            else vm.joinHotspot(ssidInput, passInput, security)
                         },
                         enabled = ssidInput.trim().isNotEmpty() && !busy,
                         modifier = Modifier.fillMaxWidth()
@@ -1065,12 +1266,15 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun JoinInputs(
     ssid: String,
     onSsidChange: (String) -> Unit,
     pass: String,
-    onPassChange: (String) -> Unit
+    onPassChange: (String) -> Unit,
+    useWpa3: Boolean,
+    onUseWpa3Change: (Boolean) -> Unit
 ) {
     OutlinedTextField(
         value = ssid,
@@ -1079,7 +1283,7 @@ private fun JoinInputs(
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
-    Spacer(Modifier.height(4.dp))
+    Spacer(Modifier.height(Dimens.SmallGap))
     OutlinedTextField(
         value = pass,
         onValueChange = onPassChange,
@@ -1087,12 +1291,33 @@ private fun JoinInputs(
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
+    // AUDIT-2026-06: A-G8-samples-android-11 — security type selector (only
+    // meaningful for protected networks).
+    if (pass.isNotEmpty()) {
+        Spacer(Modifier.height(Dimens.SmallGap))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Dimens.ItemGap),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Security", style = MaterialTheme.typography.bodySmall)
+            FilterChip(
+                selected = !useWpa3,
+                onClick = { onUseWpa3Change(false) },
+                label = { Text("WPA2") }
+            )
+            FilterChip(
+                selected = useWpa3,
+                onClick = { onUseWpa3Change(true) },
+                label = { Text("WPA3") }
+            )
+        }
+    }
 }
 
 @Composable
 private fun PeerCard(
     peer: Peer,
-    isConnected: Boolean,
+    session: P2pSession?,
     isConnecting: Boolean,
     onConnect: () -> Unit
 ) {
@@ -1100,7 +1325,7 @@ private fun PeerCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(10.dp),
+                .padding(Dimens.CardPadding),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -1111,9 +1336,17 @@ private fun PeerCard(
                     style = MaterialTheme.typography.bodySmall
                 )
             }
+            // AUDIT-2026-06: A-G8-samples-android-18 — label derives from the
+            // session's actual state; a Reconnecting session no longer reads
+            // "Connected".
+            val sessionState = session?.state?.collectAsState()?.value
             when {
-                isConnected -> Text(text = "Connected", style = MaterialTheme.typography.labelSmall)
-                isConnecting -> Text(text = "Connecting…", style = MaterialTheme.typography.labelSmall)
+                sessionState == ConnectionState.Connected ->
+                    Text(text = "Connected", style = MaterialTheme.typography.labelSmall)
+                sessionState != null ->
+                    Text(text = sessionState.name, style = MaterialTheme.typography.labelSmall)
+                isConnecting ->
+                    Text(text = "Connecting…", style = MaterialTheme.typography.labelSmall)
                 else -> TextButton(onClick = onConnect) { Text("Connect") }
             }
         }

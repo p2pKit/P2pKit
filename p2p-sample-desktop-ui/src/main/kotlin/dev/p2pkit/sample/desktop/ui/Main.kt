@@ -15,6 +15,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
@@ -38,8 +42,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,6 +55,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -71,19 +78,24 @@ import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transfer.sendFile
 import dev.p2pkit.provisioning.desktop.jvm
 import dev.p2pkit.transport.lan.lan
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.io.asSink
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
+import java.io.OutputStream
 
 // =====================================================================
 // Entry point
@@ -105,9 +117,12 @@ fun main() = application {
 
 @Composable
 private fun P2pKitSampleApp() {
-    // Parent-scoped coroutine scope. Survives the screen leaving composition,
-    // which is critical for `kit.stop()` cleanup to complete on Stop without
-    // being cancelled mid-flight.
+    // AUDIT-2026-06 (B-G9-samples-desktop-ios-20): this scope survives Setup<->Room
+    // screen switches, so the Stop-button `kit.stop()` launched into it is not
+    // cancelled by a screen change. It does NOT outlive the window: on window close
+    // the scope dies with the composition and the process exits, so the mDNS
+    // goodbye inside `kit.stop()` is best-effort only — remote peers may keep a
+    // ghost entry until their cache evicts it.
     val appScope = rememberCoroutineScope()
     val holder = remember { DesktopP2pState(appScope) }
 
@@ -209,8 +224,34 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
 
     private var kit: P2pKit? = null
     private var runScope: CoroutineScope? = null
-    private val sessionJobs: MutableMap<String, Job> = mutableMapOf()
+
+    // AUDIT-2026-06 (A-G9-samples-desktop-ios-21): track ALL per-session collector
+    // jobs (incoming messages, state, incomingFiles) so every one of them is
+    // cancelled when the session leaves kit.sessions — previously only the
+    // incoming-message job was tracked and the rest leaked until kit stop.
+    private val sessionJobs: MutableMap<String, List<Job>> = mutableMapOf()
+
+    // AUDIT-2026-06 (A-G9-samples-desktop-ios-20): open incoming-file sinks keyed
+    // by transfer id so stop() can close them deterministically even after the
+    // run-scope collectors are cancelled.
+    private val activeIncomingSinks: MutableMap<String, OutputStream> = mutableMapOf()
+
     private var nextMessageId: Long = 1L
+
+    // AUDIT-2026-06 (A-G9-samples-desktop-ios-26): P2pLogger callbacks arrive on
+    // arbitrary SDK threads (JmDNS listeners, socket coroutines). Funnel them
+    // through a channel consumed on the UI scope so logTail is only ever mutated
+    // — including the trim — on the UI dispatcher.
+    private val logLines = Channel<String>(capacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    init {
+        appScope.launch {
+            for (line in logLines) {
+                if (logTail.size >= LOG_TAIL_CAPACITY) logTail.removeAt(0)
+                logTail.add(line)
+            }
+        }
+    }
 
     // --- intents -----------------------------------------------------------
 
@@ -275,20 +316,23 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             // Refresh manual connection info on a slow cadence so the UI shows
             // the latest local host(s) without spamming the provisioning impl.
             while (true) {
-                _manualConnectionInfo.value = runCatching {
+                _manualConnectionInfo.value = runCatchingCancellable {
                     newKit.networkProvisioning.getManualConnectionInfo()
                 }.getOrNull()
                 kotlinx.coroutines.delay(5_000)
             }
         }
         scope.launch {
-            runCatching { newKit.startAdvertising() }
+            // AUDIT-2026-06 (A-G9-samples-desktop-ios-29): runCatchingCancellable
+            // everywhere a suspend call is guarded, so teardown cancellation is
+            // not reported as a spurious failure.
+            runCatchingCancellable { newKit.startAdvertising() }
                 .onSuccess { _advertising.value = true }
                 .onFailure {
                     System.err.println("[p2pkit WARN] startAdvertising failed: ${it.message}")
                     appendSystemMessage("advertise failed: ${it.message ?: it::class.simpleName}")
                 }
-            runCatching { newKit.startDiscovery() }
+            runCatchingCancellable { newKit.startDiscovery() }
                 .onSuccess { _discovering.value = true }
                 .onFailure {
                     System.err.println("[p2pkit WARN] startDiscovery failed: ${it.message}")
@@ -301,21 +345,27 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         // Connect tap during the in-flight window doesn't race onto a
         // second `kit.connect` invocation. See the Android sample's
         // equivalent block for the full rationale.
+        // AUDIT-2026-06 (A-G9-samples-desktop-ios-25): kit.sessions is part of the
+        // combine trigger so the mesh pass re-fires when a session drops while the
+        // peer list stays stable (heartbeats do not churn the peers StateFlow).
+        // Without it, a lost session with reconnect Disabled never self-heals
+        // until a peer Lost/Found cycle or a manual Connect tap.
         scope.launch {
-            combine(_autoMesh, newKit.peers) { enabled, peers -> enabled to peers }
-                .collect { (enabled, peers) ->
-                    if (!enabled) return@collect
-                    val myId = newKit.localPeerId.value
-                    val connectedIds = connectedSessions.map { it.peer.id.value }.toSet()
-                    for (peer in peers) {
-                        if (peer.id.value in connectedIds) continue
-                        if (pendingConnectPeerIds.contains(peer.id.value)) continue
-                        if (myId < peer.id.value) {
-                            System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.name}")
-                            connect(peer)
-                        }
+            combine(_autoMesh, newKit.peers, newKit.sessions) { enabled, peers, sessions ->
+                Triple(enabled, peers, sessions)
+            }.collect { (enabled, peers, sessions) ->
+                if (!enabled) return@collect
+                val myId = newKit.localPeerId.value
+                val sessionPeerIds = sessions.map { it.peer.id.value }.toSet()
+                for (peer in peers) {
+                    if (peer.id.value in sessionPeerIds) continue
+                    if (pendingConnectPeerIds.contains(peer.id.value)) continue
+                    if (myId < peer.id.value) {
+                        System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.name}")
+                        connect(peer)
                     }
                 }
+            }
         }
 
         isRunning = true
@@ -338,7 +388,8 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         pendingConnectPeerIds.add(peerId)
         scope.launch {
             try {
-                runCatching { currentKit.connect(peer) }.onFailure {
+                // AUDIT-2026-06 (A-G9-samples-desktop-ios-29): rethrows cancellation.
+                runCatchingCancellable { currentKit.connect(peer) }.onFailure {
                     System.err.println("[p2pkit WARN] connect to ${peer.name} failed: ${it.message}")
                     appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
                 }
@@ -384,14 +435,14 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         _isManualDialing.value = true
         scope.launch {
             try {
-                val synthetic = runCatching {
+                val synthetic = runCatchingCancellable {
                     currentKit.networkProvisioning.createManualPeer(host, port)
                 }.getOrElse {
                     System.err.println("[p2pkit WARN] manual createManualPeer failed: ${it.message}")
                     appendSystemMessage("manual: createManualPeer failed: ${it.message ?: it::class.simpleName}")
                     return@launch
                 }
-                runCatching { currentKit.connect(synthetic) }.onFailure {
+                runCatchingCancellable { currentKit.connect(synthetic) }.onFailure {
                     System.err.println("[p2pkit WARN] manual connect failed: ${it.message}")
                     appendSystemMessage("manual: connect to $host:$port failed: ${it.message ?: it::class.simpleName}")
                 }
@@ -409,7 +460,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             return
         }
         scope.launch {
-            runCatching { target.close() }.onFailure {
+            runCatchingCancellable { target.close() }.onFailure {
                 System.err.println("[p2pkit WARN] close session to ${target.peer.name} failed: ${it.message}")
                 appendSystemMessage("close ${target.peer.name} failed: ${it.message ?: it::class.simpleName}")
             }
@@ -454,7 +505,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         }
 
         val body = P2pMessage.Text(trimmed)
-        roomMessages.add(
+        appendRoomMessage(
             RoomMessage(
                 id = nextMessageId++,
                 senderPeerId = null,
@@ -472,7 +523,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
 
         for (session in recipients) {
             scope.launch {
-                runCatching { session.send(body) }.onFailure {
+                runCatchingCancellable { session.send(body) }.onFailure {
                     System.err.println("[p2pkit WARN] send to ${session.peer.name} failed: ${it.message}")
                     appendSystemMessage("send to ${session.peer.name} failed: ${it.message ?: it::class.simpleName}")
                 }
@@ -485,11 +536,11 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         val scope = runScope ?: return
         scope.launch {
             if (_advertising.value) {
-                runCatching { currentKit.stopAdvertising() }
+                runCatchingCancellable { currentKit.stopAdvertising() }
                     .onSuccess { _advertising.value = false }
                     .onFailure { System.err.println("[p2pkit WARN] stopAdvertising failed: ${it.message}") }
             } else {
-                runCatching { currentKit.startAdvertising() }
+                runCatchingCancellable { currentKit.startAdvertising() }
                     .onSuccess { _advertising.value = true }
                     .onFailure { System.err.println("[p2pkit WARN] startAdvertising failed: ${it.message}") }
             }
@@ -501,11 +552,11 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         val scope = runScope ?: return
         scope.launch {
             if (_discovering.value) {
-                runCatching { currentKit.stopDiscovery() }
+                runCatchingCancellable { currentKit.stopDiscovery() }
                     .onSuccess { _discovering.value = false }
                     .onFailure { System.err.println("[p2pkit WARN] stopDiscovery failed: ${it.message}") }
             } else {
-                runCatching { currentKit.startDiscovery() }
+                runCatchingCancellable { currentKit.startDiscovery() }
                     .onSuccess { _discovering.value = true }
                     .onFailure { System.err.println("[p2pkit WARN] startDiscovery failed: ${it.message}") }
             }
@@ -524,6 +575,10 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         runScope?.cancel()
         runScope = null
         sessionJobs.clear()
+        // AUDIT-2026-06 (A-G9-samples-desktop-ios-20): the per-transfer collectors
+        // were just cancelled with runScope — close any still-open incoming sinks
+        // deterministically instead of leaving them to the GC cleaner.
+        closeAllIncomingSinks()
         _peers.value = emptyList()
         connectedSessions.clear()
         pendingConnectPeerIds.clear()
@@ -536,8 +591,12 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         // appScope (not runScope) so the stop coroutine survives our
         // runScope.cancel() above.
         appScope.launch {
-            runCatching { toStop.stop() }
-            _isStopping.value = false
+            try {
+                runCatchingCancellable { toStop.stop() }
+                    .onFailure { System.err.println("[p2pkit WARN] kit.stop() failed: ${it.message}") }
+            } finally {
+                _isStopping.value = false
+            }
         }
     }
 
@@ -569,7 +628,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             return
         }
         scope.launch {
-            val transfer = runCatching { session.sendFile(file) }
+            val transfer = runCatchingCancellable { session.sendFile(file) }
                 .getOrElse {
                     System.err.println("[p2pkit WARN] sendFile failed: ${it.message}")
                     appendSystemMessage("send file '${file.name}' failed: ${it.message ?: it::class.simpleName}")
@@ -593,10 +652,12 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     fun cancelFileTransfer(id: String) {
         val row = fileTransfers.firstOrNull { it.id == id } ?: return
         val scope = runScope ?: return
-        scope.launch { runCatching { row.transfer.cancel("user cancelled") } }
+        scope.launch { runCatchingCancellable { row.transfer.cancel("user cancelled") } }
     }
 
-    private fun wireIncomingFiles(session: P2pSession, scope: CoroutineScope) {
+    // AUDIT-2026-06 (A-G9-samples-desktop-ios-21): returns the collector Job so
+    // reconcileSessions can track and cancel it with the session.
+    private fun wireIncomingFiles(session: P2pSession, scope: CoroutineScope): Job =
         scope.launch {
             session.incomingFiles.collect { offer ->
                 val baseDir = File(System.getProperty("user.home") ?: ".", ".p2pkit/incoming")
@@ -608,10 +669,10 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 val out = runCatching { saveFile.outputStream() }
                     .getOrElse { e ->
                         System.err.println("[p2pkit WARN] cannot open $saveFile: ${e.message}")
-                        runCatching { offer.reject("cannot open destination") }
+                        runCatchingCancellable { offer.reject("cannot open destination") }
                         return@collect
                     }
-                val incoming = runCatching { offer.accept(out.asSink()) }
+                val incoming = runCatchingCancellable { offer.accept(out.asSink()) }
                     .getOrElse { e ->
                         runCatching { out.close() }
                         System.err.println("[p2pkit WARN] accept ${offer.name} failed: ${e.message}")
@@ -620,7 +681,6 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 registerIncomingTransfer(incoming, session.peer.name, saveFile.absolutePath, scope, out)
             }
         }
-    }
 
     private fun registerOutgoingTransfer(
         transfer: P2pFileTransfer,
@@ -641,8 +701,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             )
         )
         appendSystemMessage("sending file '${transfer.name}' (${transfer.sizeBytes}B) to $peerName")
-        scope.launch { transfer.state.collect { st -> updateRowState(transfer.id, st) } }
-        scope.launch { transfer.bytesTransferred.collect { b -> updateRowBytes(transfer.id, b) } }
+        watchTransfer(transfer, scope)
     }
 
     private fun registerIncomingTransfer(
@@ -650,7 +709,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         peerName: String,
         destinationPath: String,
         scope: CoroutineScope,
-        out: java.io.OutputStream
+        out: OutputStream
     ) {
         addRow(
             FileTransferRow(
@@ -666,24 +725,64 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             )
         )
         appendSystemMessage("receiving file '${transfer.name}' from $peerName → $destinationPath")
+        // AUDIT-2026-06 (A-G9-samples-desktop-ios-20): register the sink and close
+        // it when the transfer reaches a terminal state OR the collector is
+        // cancelled (Stop mid-transfer) — not only via a live happy-path collector.
+        activeIncomingSinks[transfer.id] = out
+        watchTransfer(transfer, scope) { closeIncomingSink(transfer.id) }
+    }
+
+    /**
+     * Collects a transfer's state/bytes into its history row, stopping once the
+     * transfer reaches a terminal state so per-transfer collectors don't pile up
+     * over long runs. [onFinally] runs when collection ends for any reason
+     * (terminal state or run-scope cancellation).
+     */
+    private fun watchTransfer(
+        transfer: P2pFileTransfer,
+        scope: CoroutineScope,
+        onFinally: (() -> Unit)? = null
+    ) {
         scope.launch {
-            transfer.state.collect { st ->
-                updateRowState(transfer.id, st)
-                if (st is FileTransferState.Completed ||
-                    st is FileTransferState.Failed ||
-                    st is FileTransferState.Cancelled
-                ) {
-                    runCatching { out.close() }
+            val bytesJob = launch {
+                transfer.bytesTransferred.collect { b -> updateRowBytes(transfer.id, b) }
+            }
+            try {
+                transfer.state.first { st ->
+                    updateRowState(transfer.id, st)
+                    st.isTerminal()
                 }
+                // Snap the byte counter to its final value before the collector dies.
+                updateRowBytes(transfer.id, transfer.bytesTransferred.value)
+            } finally {
+                bytesJob.cancel()
+                onFinally?.invoke()
             }
         }
-        scope.launch { transfer.bytesTransferred.collect { b -> updateRowBytes(transfer.id, b) } }
+    }
+
+    private fun closeIncomingSink(transferId: String) {
+        activeIncomingSinks.remove(transferId)?.let { sink ->
+            runCatching { sink.close() }
+                .onFailure { System.err.println("[p2pkit WARN] closing incoming sink failed: ${it.message}") }
+        }
+    }
+
+    private fun closeAllIncomingSinks() {
+        val sinks = activeIncomingSinks.values.toList()
+        activeIncomingSinks.clear()
+        for (sink in sinks) runCatching { sink.close() }
     }
 
     private fun addRow(row: FileTransferRow) {
         fileTransfers.add(0, row)
-        while (fileTransfers.size > FILE_TRANSFER_HISTORY_CAPACITY) {
-            fileTransfers.removeAt(fileTransfers.size - 1)
+        // AUDIT-2026-06 (A-G9-samples-desktop-ios-24): evict only TERMINAL rows
+        // (oldest first). An active transfer keeps its progress row and Cancel
+        // button even when the history is over capacity.
+        var idx = fileTransfers.size - 1
+        while (fileTransfers.size > FILE_TRANSFER_HISTORY_CAPACITY && idx > 0) {
+            if (fileTransfers[idx].state.isTerminal()) fileTransfers.removeAt(idx)
+            idx--
         }
     }
 
@@ -716,7 +815,9 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
 
         val droppedIds = sessionJobs.keys.toList().filter { it !in currentIds }
         for (id in droppedIds) {
-            sessionJobs.remove(id)?.cancel()
+            // AUDIT-2026-06 (A-G9-samples-desktop-ios-21): cancel every collector
+            // launched for this session, not just the incoming-message job.
+            sessionJobs.remove(id)?.forEach { it.cancel() }
             val removed = connectedSessions.firstOrNull { it.id == id }
             if (removed != null) {
                 connectedSessions.remove(removed)
@@ -731,32 +832,48 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             connectedSessions.add(session)
             appendSystemMessage("connected to ${session.peer.name}")
             System.err.println("[p2pkit] room: session added ${session.peer.name}")
-            sessionJobs[session.id] = scope.launch {
+            val jobs = mutableListOf<Job>()
+            jobs += scope.launch {
                 session.incoming.collect { msg ->
                     System.err.println("[p2pkit] room: incoming from ${session.peer.name}")
-                    roomMessages.add(
+                    // AUDIT-2026-06 (B-G9-samples-desktop-ios-18): keep a size-only
+                    // summary of Binary payloads instead of retaining the bytes in
+                    // history (displayBody renders the identical text either way).
+                    val storedBody = when (msg) {
+                        is P2pMessage.Binary -> P2pMessage.Text("<binary ${msg.bytes.size}B>")
+                        else -> msg
+                    }
+                    appendRoomMessage(
                         RoomMessage(
                             id = nextMessageId++,
                             senderPeerId = session.peer.id.value,
                             senderName = session.peer.name,
-                            body = msg,
+                            body = storedBody,
                             timestamp = System.currentTimeMillis(),
                             direction = RoomMessage.Direction.Incoming
                         )
                     )
                 }
             }
-            scope.launch {
+            jobs += scope.launch {
                 session.state.collect { st ->
                     System.err.println("[p2pkit] session ${session.peer.name} → $st")
                 }
             }
-            wireIncomingFiles(session, scope)
+            jobs += wireIncomingFiles(session, scope)
+            sessionJobs[session.id] = jobs
         }
     }
 
+    // AUDIT-2026-06 (B-G9-samples-desktop-ios-18): bound the timeline like every
+    // other history in this sample (logTail, fileTransfers) — trim oldest first.
+    private fun appendRoomMessage(message: RoomMessage) {
+        roomMessages.add(message)
+        while (roomMessages.size > ROOM_MESSAGE_CAPACITY) roomMessages.removeAt(0)
+    }
+
     private fun appendSystemMessage(text: String) {
-        roomMessages.add(
+        appendRoomMessage(
             RoomMessage(
                 id = nextMessageId++,
                 senderPeerId = null,
@@ -769,14 +886,18 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     }
 
     internal fun recordLog(level: String, message: String) {
-        if (logTail.size >= LOG_TAIL_CAPACITY) logTail.removeAt(0)
-        logTail.add("$level  $message")
+        // AUDIT-2026-06 (A-G9-samples-desktop-ios-26): thread-safe handoff — the
+        // SnapshotStateList is only touched by the channel consumer on appScope.
+        logLines.trySend("$level  $message")
     }
 
     companion object {
         const val DEFAULT_APP_ID = "p2pkit-desktop-sample"
         const val LOG_TAIL_CAPACITY = 30
         const val FILE_TRANSFER_HISTORY_CAPACITY = 24
+
+        // AUDIT-2026-06 (B-G9-samples-desktop-ios-18): timeline history cap.
+        const val ROOM_MESSAGE_CAPACITY = 500
     }
 }
 
@@ -801,6 +922,56 @@ private fun pickFile(): File? {
     val dir = dialog.directory ?: return null
     return File(dir, name)
 }
+
+// AUDIT-2026-06 (A-G9-samples-desktop-ios-24): a transfer is terminal once it can
+// no longer make progress. Only terminal rows may be evicted from history, and
+// only non-terminal rows show a Cancel button.
+private fun FileTransferState.isTerminal(): Boolean = when (this) {
+    is FileTransferState.Completed,
+    is FileTransferState.Rejected,
+    is FileTransferState.Cancelled,
+    is FileTransferState.Failed -> true
+    is FileTransferState.Offered,
+    is FileTransferState.Accepted,
+    is FileTransferState.Sending -> false
+}
+
+/**
+ * AUDIT-2026-06 (A-G9-samples-desktop-ios-29): [runCatching] variant that rethrows
+ * [CancellationException], so a coroutine cancelled mid-suspend-call (Stop / window
+ * close) propagates cancellation promptly instead of logging a spurious failure
+ * and completing normally.
+ */
+private inline fun <T> runCatchingCancellable(block: () -> T): Result<T> = try {
+    Result.success(block())
+} catch (e: CancellationException) {
+    throw e
+} catch (t: Throwable) {
+    Result.failure(t)
+}
+
+// =====================================================================
+// Shared UI tokens
+// =====================================================================
+
+// AUDIT-2026-06 (C-G9-samples-desktop-ios-29): single source of truth for spacing
+// and panel shape so screens and cards stay visually consistent instead of
+// drifting per call site.
+private object Dimens {
+    val ScreenPadding = 16.dp
+    val SectionGap = 12.dp
+    val ItemGap = 8.dp
+    val LabelGap = 4.dp
+    val LineGap = 2.dp
+    val CardPadding = 10.dp
+    val PanelPadding = 8.dp
+    val PanelShape = RoundedCornerShape(8.dp)
+}
+
+// AUDIT-2026-06 (C-G9-samples-desktop-ios-22): one shared default pair for the
+// reconnect preset — used by the radio preset AND as the blank-field fallback.
+private const val DEFAULT_RECONNECT_MAX_ATTEMPTS = 5
+private const val DEFAULT_RECONNECT_RETRY_DELAY_MS = 1_000L
 
 // =====================================================================
 // Sample-level types — identical shape to the Android sample
@@ -872,8 +1043,9 @@ private class TailLogger(private val state: DesktopP2pState) : P2pLogger {
 private fun SetupScreen(state: DesktopP2pState) {
     val isStarting by state.isStarting.collectAsState()
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        // AUDIT-2026-06 (C-G9-samples-desktop-ios-29): same screen padding as RoomScreen.
+        modifier = Modifier.fillMaxSize().padding(Dimens.ScreenPadding),
+        verticalArrangement = Arrangement.spacedBy(Dimens.SectionGap)
     ) {
         Text(
             text = "P2pKit Test Harness",
@@ -918,48 +1090,83 @@ private fun SetupScreen(state: DesktopP2pState) {
 private fun ReconnectChoicePicker(state: DesktopP2pState) {
     var maxAttemptsText by remember {
         mutableStateOf(
-            (state.reconnectChoice as? ReconnectChoice.Enabled)?.maxAttempts?.toString() ?: "5"
+            (state.reconnectChoice as? ReconnectChoice.Enabled)?.maxAttempts?.toString()
+                ?: DEFAULT_RECONNECT_MAX_ATTEMPTS.toString()
         )
     }
     var retryDelayText by remember {
         mutableStateOf(
-            (state.reconnectChoice as? ReconnectChoice.Enabled)?.retryDelayMillis?.toString() ?: "1000"
+            (state.reconnectChoice as? ReconnectChoice.Enabled)?.retryDelayMillis?.toString()
+                ?: DEFAULT_RECONNECT_RETRY_DELAY_MS.toString()
         )
     }
     val choice = state.reconnectChoice
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            RadioButton(
+    val attemptsValid = (maxAttemptsText.toIntOrNull() ?: 0) >= 1
+    val delayValid = retryDelayText.toLongOrNull() != null
+
+    // AUDIT-2026-06 (C-G9-samples-desktop-ios-22): never commit a policy from
+    // blank/invalid fields — keep the last valid policy and flag the field with
+    // isError instead of silently coercing to Enabled(1, 0).
+    fun commitIfValid() {
+        val attempts = maxAttemptsText.toIntOrNull()?.takeIf { it >= 1 } ?: return
+        val delay = retryDelayText.toLongOrNull()?.takeIf { it >= 0L } ?: return
+        state.reconnectChoice = ReconnectChoice.Enabled(attempts, delay)
+    }
+
+    // AUDIT-2026-06 (D-G9-samples-desktop-ios-18): selectable rows with
+    // Role.RadioButton inside a selectableGroup, so labels are clickable and
+    // screen readers announce one named radio per row.
+    Column(
+        verticalArrangement = Arrangement.spacedBy(Dimens.LabelGap),
+        modifier = Modifier.selectableGroup()
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.selectable(
                 selected = choice is ReconnectChoice.Disabled,
+                role = Role.RadioButton,
                 onClick = { state.reconnectChoice = ReconnectChoice.Disabled }
             )
+        ) {
+            RadioButton(selected = choice is ReconnectChoice.Disabled, onClick = null)
             Text("Disabled")
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            RadioButton(
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.selectable(
                 selected = choice is ReconnectChoice.Enabled,
+                role = Role.RadioButton,
                 onClick = {
-                    val attempts = maxAttemptsText.toIntOrNull()?.coerceAtLeast(1) ?: 5
-                    val delay = retryDelayText.toLongOrNull()?.coerceAtLeast(0L) ?: 1_000L
+                    val attempts = maxAttemptsText.toIntOrNull()?.coerceAtLeast(1)
+                        ?: DEFAULT_RECONNECT_MAX_ATTEMPTS
+                    val delay = retryDelayText.toLongOrNull()?.coerceAtLeast(0L)
+                        ?: DEFAULT_RECONNECT_RETRY_DELAY_MS
+                    // Keep the fields in sync with what is actually committed.
+                    maxAttemptsText = attempts.toString()
+                    retryDelayText = delay.toString()
                     state.reconnectChoice = ReconnectChoice.Enabled(attempts, delay)
                 }
             )
+        ) {
+            RadioButton(selected = choice is ReconnectChoice.Enabled, onClick = null)
             Text("Enabled")
         }
         if (choice is ReconnectChoice.Enabled) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(Dimens.ItemGap),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedTextField(
                     value = maxAttemptsText,
                     onValueChange = { txt ->
                         maxAttemptsText = txt.filter { it.isDigit() }.take(4)
-                        val attempts = maxAttemptsText.toIntOrNull()?.coerceAtLeast(1) ?: 1
-                        val delay = retryDelayText.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
-                        state.reconnectChoice = ReconnectChoice.Enabled(attempts, delay)
+                        commitIfValid()
                     },
                     label = { Text("maxAttempts") },
+                    isError = !attemptsValid,
+                    supportingText = if (!attemptsValid) {
+                        { Text("must be ≥ 1 — last valid value (${choice.maxAttempts}) still applies") }
+                    } else null,
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
@@ -967,11 +1174,13 @@ private fun ReconnectChoicePicker(state: DesktopP2pState) {
                     value = retryDelayText,
                     onValueChange = { txt ->
                         retryDelayText = txt.filter { it.isDigit() }.take(6)
-                        val attempts = maxAttemptsText.toIntOrNull()?.coerceAtLeast(1) ?: 1
-                        val delay = retryDelayText.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
-                        state.reconnectChoice = ReconnectChoice.Enabled(attempts, delay)
+                        commitIfValid()
                     },
                     label = { Text("retryDelayMillis") },
+                    isError = !delayValid,
+                    supportingText = if (!delayValid) {
+                        { Text("must be ≥ 0 — last valid value (${choice.retryDelayMillis}) still applies") }
+                    } else null,
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
@@ -997,7 +1206,7 @@ private fun RoomScreen(state: DesktopP2pState) {
     val isManualDialing by state.isManualDialing.collectAsState()
     var draft by remember { mutableStateOf("") }
 
-    Row(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+    Row(modifier = Modifier.fillMaxSize().padding(Dimens.ScreenPadding)) {
         // ---- Left column: header + peers + connected chips + logs ----
         Column(modifier = Modifier.width(360.dp).fillMaxHeight()) {
             StatusHeader(
@@ -1014,27 +1223,39 @@ private fun RoomScreen(state: DesktopP2pState) {
                 onToggleAutoMesh = state::toggleAutoMesh,
                 onStop = state::stop
             )
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = Dimens.ItemGap))
 
             Text(
                 text = "Discovered peers (${peers.size})",
                 style = MaterialTheme.typography.titleSmall
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(Dimens.LabelGap))
             if (peers.isEmpty()) {
+                // AUDIT-2026-06 (D-G9-samples-desktop-ios-12): don't claim an
+                // active search while discovery is toggled off.
                 Text(
-                    text = "Searching… open another sample on the same Wi-Fi.",
+                    text = if (discovering) {
+                        "Searching… open another sample on the same Wi-Fi."
+                    } else {
+                        "Discovery is off — toggle Discover to search for peers."
+                    },
                     style = MaterialTheme.typography.bodySmall
                 )
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().height(220.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(Dimens.ItemGap)
                 ) {
                     items(peers, key = { it.id.value }) { peer ->
+                        // AUDIT-2026-06 (D-G9-samples-desktop-ios-09): pass the live
+                        // session state so the card distinguishes Connected from
+                        // Connecting/Handshaking/Reconnecting.
+                        val session = state.connectedSessions
+                            .firstOrNull { it.peer.id.value == peer.id.value }
+                        val sessionState = if (session != null) session.state.collectAsState().value else null
                         PeerCard(
                             peer = peer,
-                            isConnected = state.connectedSessions.any { it.peer.id.value == peer.id.value },
+                            sessionState = sessionState,
                             isConnecting = state.pendingConnectPeerIds.contains(peer.id.value),
                             onConnect = { state.connect(peer) }
                         )
@@ -1042,29 +1263,38 @@ private fun RoomScreen(state: DesktopP2pState) {
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Dimens.SectionGap))
             ManualPeerSection(
                 manualInfo = manualInfo,
                 isManualDialing = isManualDialing,
                 onConnectManual = state::connectManual
             )
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Dimens.SectionGap))
             Text(
                 text = "Logs (last ${state.logTail.size})",
                 style = MaterialTheme.typography.labelMedium
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(Dimens.LabelGap))
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(200.dp)
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(Dimens.PanelShape)
                     .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(6.dp)
+                    .padding(Dimens.PanelPadding)
             ) {
-                LazyColumn {
-                    items(state.logTail.toList()) { line ->
+                // AUDIT-2026-06 (D-G9-samples-desktop-ios-10): pin the log strip
+                // to the newest line on append.
+                val logListState = rememberLazyListState()
+                val logSnapshot = state.logTail.toList()
+                LaunchedEffect(logSnapshot.size, logSnapshot.lastOrNull()) {
+                    if (logSnapshot.isNotEmpty()) {
+                        logListState.scrollToItem(logSnapshot.size - 1)
+                    }
+                }
+                LazyColumn(state = logListState) {
+                    items(logSnapshot) { line ->
                         Text(
                             text = line,
                             style = MaterialTheme.typography.labelSmall,
@@ -1076,18 +1306,28 @@ private fun RoomScreen(state: DesktopP2pState) {
             }
         }
 
-        Spacer(Modifier.width(16.dp))
+        Spacer(Modifier.width(Dimens.ScreenPadding))
 
         // ---- Right column: room chips + timeline + input ----
         Column(modifier = Modifier.fillMaxSize()) {
             val connected = state.connectedSessions.toList()
+            // AUDIT-2026-06 (A-G9-samples-desktop-ios-27): collect each session's
+            // state exactly once, keyed by session id, instead of calling
+            // collectAsState inside a short-circuiting any{} — subscription count
+            // and positions stay stable across recompositions.
+            val sessionStates = connected.map { session ->
+                key(session.id) { session.state.collectAsState().value }
+            }
+            // AUDIT-2026-06 (D-G9-samples-desktop-ios-09): only sessions actually
+            // in ConnectionState.Connected count as connected.
+            val connectedCount = sessionStates.count { it == ConnectionState.Connected }
             if (connected.isNotEmpty()) {
                 Text(
-                    text = "Room (${connected.size} connected)",
+                    text = "Room ($connectedCount of ${connected.size} connected)",
                     style = MaterialTheme.typography.titleMedium
                 )
-                Spacer(Modifier.height(4.dp))
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Spacer(Modifier.height(Dimens.LabelGap))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(Dimens.ItemGap)) {
                     items(connected, key = { it.id }) { session ->
                         ConnectedPeerChip(
                             session = session,
@@ -1119,15 +1359,15 @@ private fun RoomScreen(state: DesktopP2pState) {
             }
 
             if (state.fileTransfers.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(Dimens.SectionGap))
                 Text(
                     text = "File transfers (${state.fileTransfers.size})",
                     style = MaterialTheme.typography.titleSmall
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(Dimens.LabelGap))
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().height(140.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalArrangement = Arrangement.spacedBy(Dimens.LabelGap)
                 ) {
                     items(state.fileTransfers.toList(), key = { it.id }) { row ->
                         FileTransferRowView(row = row, onCancel = { state.cancelFileTransfer(row.id) })
@@ -1135,25 +1375,36 @@ private fun RoomScreen(state: DesktopP2pState) {
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Dimens.SectionGap))
 
             Text(text = "Timeline", style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(Dimens.LabelGap))
+            // AUDIT-2026-06 (D-G9-samples-desktop-ios-10): auto-scroll to the
+            // newest entry on every append (message ids are monotonic).
+            val timelineListState = rememberLazyListState()
+            LaunchedEffect(state.roomMessages.lastOrNull()?.id) {
+                if (state.roomMessages.isNotEmpty()) {
+                    timelineListState.animateScrollToItem(state.roomMessages.size - 1)
+                }
+            }
             LazyColumn(
+                state = timelineListState,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(380.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                    .clip(Dimens.PanelShape)
+                    // AUDIT-2026-06 (C-G9-samples-desktop-ios-29): same panel role
+                    // as the log strip (surface blended into the window background).
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(Dimens.PanelPadding),
+                verticalArrangement = Arrangement.spacedBy(Dimens.LineGap)
             ) {
                 items(state.roomMessages.toList(), key = { it.id }) { line ->
                     RoomLine(line)
                 }
             }
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Dimens.ItemGap))
 
             OutlinedTextField(
                 value = draft,
@@ -1162,17 +1413,19 @@ private fun RoomScreen(state: DesktopP2pState) {
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Dimens.ItemGap))
             val targetCount = state.targetedPeerIds.size
             val sendLabel = when {
-                connected.isEmpty() -> "No peers connected"
-                targetCount == 0 -> "Broadcast (${connected.size})"
+                connectedCount == 0 -> "No peers connected"
+                targetCount == 0 -> "Broadcast ($connectedCount)"
                 else -> "Send to $targetCount"
             }
             // Only enable Send when at least one session is actually in
             // ConnectionState.Connected — Connecting/Reconnecting peers
             // would silently drop the send at the SDK level.
-            val hasConnectedSession = connected.any { it.state.collectAsState().value == ConnectionState.Connected }
+            // AUDIT-2026-06 (A-G9-samples-desktop-ios-27): derived from the stable
+            // per-session snapshots collected above, not collectAsState-in-any{}.
+            val hasConnectedSession = connectedCount > 0
             Button(
                 onClick = {
                     val text = draft.trim()
@@ -1208,7 +1461,7 @@ private fun StatusHeader(
     onToggleAutoMesh: () -> Unit,
     onStop: () -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(Dimens.LineGap)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1228,22 +1481,34 @@ private fun StatusHeader(
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(Dimens.SectionGap),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Advertise", style = MaterialTheme.typography.bodySmall)
-                Switch(checked = advertising, onCheckedChange = { onToggleAdvertising() })
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Discover", style = MaterialTheme.typography.bodySmall)
-                Switch(checked = discovering, onCheckedChange = { onToggleDiscovery() })
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Auto-mesh", style = MaterialTheme.typography.bodySmall)
-                Switch(checked = autoMesh, onCheckedChange = { onToggleAutoMesh() })
-            }
+            LabelledSwitch(label = "Advertise", checked = advertising, onToggle = onToggleAdvertising)
+            LabelledSwitch(label = "Discover", checked = discovering, onToggle = onToggleDiscovery)
+            LabelledSwitch(label = "Auto-mesh", checked = autoMesh, onToggle = onToggleAutoMesh)
         }
+    }
+}
+
+/**
+ * AUDIT-2026-06 (D-G9-samples-desktop-ios-18): label + switch merged into one
+ * toggleable row (Role.Switch), so the label is clickable and screen readers
+ * announce a single named switch.
+ */
+@Composable
+private fun LabelledSwitch(label: String, checked: Boolean, onToggle: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.toggleable(
+            value = checked,
+            role = Role.Switch,
+            onValueChange = { onToggle() }
+        )
+    ) {
+        Text(label, style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.width(Dimens.LabelGap))
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 
@@ -1315,15 +1580,14 @@ private fun ConnectedPeerChip(
 @Composable
 private fun FileTransferRowView(row: FileTransferRow, onCancel: () -> Unit) {
     val state = row.state
-    val isActive = state is FileTransferState.Offered ||
-        state is FileTransferState.Accepted ||
-        state is FileTransferState.Sending
+    val isActive = !state.isTerminal()
     val arrow = if (row.direction == FileTransferDirection.Outgoing) "↑" else "↓"
     val sizeKb = row.sizeBytes / 1024
     val sentKb = row.bytesTransferred / 1024
     val pct = if (row.sizeBytes > 0) ((row.bytesTransferred * 100) / row.sizeBytes).toInt() else 0
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(8.dp)) {
+        // AUDIT-2026-06 (C-G9-samples-desktop-ios-29): same card padding as PeerCard.
+        Column(modifier = Modifier.padding(Dimens.CardPadding)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1353,7 +1617,7 @@ private fun FileTransferRowView(row: FileTransferRow, onCancel: () -> Unit) {
                 )
             }
             if (isActive) {
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(Dimens.LabelGap))
                 TextButton(onClick = onCancel) { Text("Cancel") }
             }
         }
@@ -1400,7 +1664,7 @@ private fun ManualPeerSection(
     onConnectManual: (String) -> Unit
 ) {
     Text(text = "Manual peer (mDNS fallback)", style = MaterialTheme.typography.titleSmall)
-    Spacer(Modifier.height(4.dp))
+    Spacer(Modifier.height(Dimens.LabelGap))
     if (manualInfo != null) {
         val hosts = manualInfo.hostAddresses.joinToString(", ")
         Text(
@@ -1415,7 +1679,7 @@ private fun ManualPeerSection(
             style = MaterialTheme.typography.bodySmall
         )
     }
-    Spacer(Modifier.height(4.dp))
+    Spacer(Modifier.height(Dimens.LabelGap))
     var input by remember { mutableStateOf("") }
     Row(verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
@@ -1424,7 +1688,7 @@ private fun ManualPeerSection(
             label = { Text("Connect host:port") },
             singleLine = true,
             enabled = !isManualDialing,
-            modifier = Modifier.weight(1f).padding(end = 8.dp)
+            modifier = Modifier.weight(1f).padding(end = Dimens.ItemGap)
         )
         Button(
             onClick = {
@@ -1443,7 +1707,7 @@ private fun ManualPeerSection(
 @Composable
 private fun PeerCard(
     peer: Peer,
-    isConnected: Boolean,
+    sessionState: ConnectionState?,
     isConnecting: Boolean,
     onConnect: () -> Unit
 ) {
@@ -1451,7 +1715,7 @@ private fun PeerCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(10.dp),
+                .padding(Dimens.CardPadding),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -1462,9 +1726,16 @@ private fun PeerCard(
                     style = MaterialTheme.typography.bodySmall
                 )
             }
+            // AUDIT-2026-06 (D-G9-samples-desktop-ios-09): "Connected" only when the
+            // session really is Connected; other live states show their actual name
+            // instead of hiding the truth behind a blanket "Connected".
             when {
-                isConnected -> Text(text = "Connected", style = MaterialTheme.typography.labelSmall)
-                isConnecting -> Text(text = "Connecting…", style = MaterialTheme.typography.labelSmall)
+                sessionState == ConnectionState.Connected ->
+                    Text(text = "Connected", style = MaterialTheme.typography.labelSmall)
+                sessionState != null ->
+                    Text(text = sessionState.name.lowercase(), style = MaterialTheme.typography.labelSmall)
+                isConnecting ->
+                    Text(text = "Connecting…", style = MaterialTheme.typography.labelSmall)
                 else -> TextButton(onClick = onConnect) { Text("Connect") }
             }
         }
