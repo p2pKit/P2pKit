@@ -384,6 +384,11 @@ struct ContentView: View {
         browserEverReady = false
         diag("ui", "Start: cleared local state, building kit")
 
+        // Console mirror is opt-in since the audit fix (release builds no
+        // longer println every transport event); the sample is a diagnostic
+        // harness, so turn it on for Console.app / Xcode-console capture.
+        IosLanDebug.shared.mirrorToConsole = true
+
         // Subscribe to IosLanDebug BEFORE startAdvertising/Discovery so
         // we capture every browser-state and result-change from t=0.
         self.debugLogTask = Task.detached {

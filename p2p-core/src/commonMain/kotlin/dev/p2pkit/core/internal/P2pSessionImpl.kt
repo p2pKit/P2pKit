@@ -21,6 +21,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -257,7 +258,13 @@ internal class P2pSessionImpl(
         // unintentional failure paths don't (the wire is presumably already
         // dead).
         runCatching {
-            sendMutex.withLock { protocol.sendClose(connection) }
+            // Bounded: the CLOSE frame is best-effort by contract. If a wedged
+            // writer is parked holding sendMutex (peer stopped reading), an
+            // unbounded wait here would hang close() — and kit.stop() behind
+            // it — forever (AUDIT-2026-06 fix).
+            withTimeoutOrNull(2_000) {
+                sendMutex.withLock { protocol.sendClose(connection) }
+            }
         }
 
         // Centralised cleanup: file transfers, epoch cancel, raw close, and
@@ -303,6 +310,12 @@ internal class P2pSessionImpl(
             // was ever used, so reconnects of message-only sessions stay cheap.
             if (fileTransferDispatcherLazy.isInitialized()) {
                 runCatching { fileTransferDispatcher.closeAll("reconnect: connection replaced") }
+                // closeAll also latches the dispatcher's `closed` flag (it is
+                // shared with the terminal-close path). REOPEN it: the rearmed
+                // session's contract is that the same instance keeps working,
+                // but the latch silently disabled sendFile AND inbound offers
+                // after the first reconnect (AUDIT-2026-06 fix).
+                fileTransferDispatcher.reopen()
             }
             runCatching { connection.close() }
             connection = newConnection
@@ -531,6 +544,21 @@ internal class P2pSessionImpl(
         while (scope.isActive && _state.value == ConnectionState.Connected) {
             delay(keepAlive.pingIntervalMillis)
             if (!scope.isActive || _state.value != ConnectionState.Connected) return
+            // Evaluate PONG liveness BEFORE attempting the PING write: if a
+            // wedged peer blocks the shared sendMutex (file chunk parked in a
+            // full TCP send window), the timeout must still fire. Checking
+            // only after the send let a stuck writer disable keep-alive — and
+            // close()/stop() behind the same mutex — forever
+            // (AUDIT-2026-06 fix).
+            val sincePongBeforeSend = clock() - lastPongAt.value
+            if (sincePongBeforeSend > keepAlive.timeoutMillis) {
+                logger.warn(
+                    "Session $id: no PONG received for $sincePongBeforeSend ms " +
+                        "(timeout=${keepAlive.timeoutMillis} ms; checked before PING send)"
+                )
+                onConnectionLost("keep-alive timeout")
+                return
+            }
             try {
                 sendMutex.withLock { protocol.sendPing(epochConnection) }
             } catch (e: CancellationException) {

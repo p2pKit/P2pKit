@@ -66,7 +66,11 @@ import java.util.concurrent.ConcurrentHashMap
  * used unattended; state transitions print as `[file …]` lines.
  */
 fun main(args: Array<String>) {
-    val rawName = args.getOrNull(0)?.trim().orEmpty()
+    // Filter the optional `reconnect=` token from the positional args before
+    // assigning device name, mirroring the appId guard below — otherwise
+    // `--args="reconnect=10,1500"` advertised a device literally named
+    // "reconnect=10,1500" (AUDIT-2026-06 fix).
+    val rawName = args.getOrNull(0)?.trim()?.takeUnless { it.startsWith("reconnect=") }.orEmpty()
     val deviceName = rawName.ifEmpty { "Desktop-${System.currentTimeMillis() % 10_000}" }
     val rawAppId = args.getOrNull(1)?.trim()?.takeUnless { it.startsWith("reconnect=") || it.isEmpty() }
         ?: "p2pkit-desktop-sample"
@@ -501,7 +505,7 @@ private suspend fun repl(
     }
 }
 
-private fun printInfo(
+private suspend fun printInfo(
     p2p: P2pKit,
     sessions: ConcurrentHashMap<String, P2pSession>,
     advertising: StateLatch,
@@ -518,7 +522,10 @@ private fun printInfo(
     println("auto-mesh        ${autoMesh.value}")
     println("peers known      ${p2p.peers.value.size}")
     println("active sessions  ${sessions.size}")
-    val info = runBlocking { p2p.networkProvisioning.getManualConnectionInfo() }
+    // printInfo is suspend and called from the suspend repl(); calling the
+    // suspend API directly avoids a runBlocking nested inside the REPL's
+    // outer runBlocking (AUDIT-2026-06 fix).
+    val info = p2p.networkProvisioning.getManualConnectionInfo()
     if (info != null) {
         println("manual host(s)   ${info.hostAddresses.joinToString(", ")}")
         println("manual port      ${info.port}")
@@ -581,10 +588,20 @@ private fun wireIncoming(session: P2pSession, scope: CoroutineScope) {
             val saveFile = File(saveDir, sanitizeName(offer.name))
             println("[file ← ${session.peer.name}] offered ${offer.name} (${offer.sizeBytes}B) → ${saveFile.absolutePath}")
             scope.launch {
-                val out = saveFile.outputStream()
+                // Guard stream creation: a remote-controlled name that survives
+                // sanitizeName but is still unopenable (or an unwritable dir)
+                // threw out of the coroutine and left the offer neither accepted
+                // nor rejected — the sender then waited the full 30s timeout
+                // (AUDIT-2026-06 fix).
+                val out = runCatching { saveFile.outputStream() }.getOrElse { e ->
+                    runCatching { offer.reject("cannot open destination: ${e.message}") }
+                    System.err.println("[file ← ${session.peer.name}] open failed: ${e.message}")
+                    return@launch
+                }
                 val transfer = runCatching { offer.accept(out.asSink()) }
                     .getOrElse {
                         runCatching { out.close() }
+                        runCatching { offer.reject("accept failed: ${it.message}") }
                         System.err.println("[file ← ${session.peer.name}] accept failed: ${it.message}")
                         return@launch
                     }

@@ -37,3 +37,15 @@ public sealed class FileTransferState {
     /** Transfer ended in an error (I/O, protocol, connection drop). */
     public data class Failed(val error: P2pError) : FileTransferState()
 }
+
+/**
+ * True for states that end a transfer's lifecycle. Terminal states are
+ * final — internal state holders refuse to overwrite them.
+ */
+internal fun FileTransferState.isTerminal(): Boolean = when (this) {
+    is FileTransferState.Completed,
+    is FileTransferState.Rejected,
+    is FileTransferState.Cancelled,
+    is FileTransferState.Failed -> true
+    else -> false
+}

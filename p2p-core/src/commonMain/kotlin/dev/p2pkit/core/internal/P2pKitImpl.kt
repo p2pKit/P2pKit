@@ -35,6 +35,8 @@ import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -312,6 +314,11 @@ internal class P2pKitImpl(
             for (transport in discoveryTransports) {
                 transport.startAdvertising(localInfo)
             }
+            // A successful (re)advertise must clear a previously latched
+            // Failed: ensureStarted's success fast-path never re-runs the
+            // Running transition, so without this the kit reported Failed
+            // forever even though everything works (AUDIT-2026-06 fix).
+            if (_state.value is P2pState.Failed) _state.value = P2pState.Running
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -333,8 +340,21 @@ internal class P2pKitImpl(
     override suspend fun startDiscovery() {
         ensurePermissions()
         ensureStarted()
-        for (transport in discoveryTransports) {
-            transport.startDiscovery()
+        try {
+            for (transport in discoveryTransports) {
+                transport.startDiscovery()
+            }
+            if (_state.value is P2pState.Failed) _state.value = P2pState.Running
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // Mirror startAdvertising: surface a typed error instead of
+            // letting a raw platform exception escape the public API
+            // (AUDIT-2026-06 fix).
+            val err = if (e is P2pError) e
+            else P2pError.ConnectionFailed("startDiscovery failed: ${e.message ?: e::class.simpleName}")
+            _state.value = P2pState.Failed(err)
+            throw err
         }
     }
 
@@ -389,14 +409,29 @@ internal class P2pKitImpl(
         // subsequent lifecycle call fail loudly (IllegalStateException) instead
         // of latching onto a dead scope and silently no-op'ing.
         if (stopped) return
-        stopped = true
-        _state.value = P2pState.Stopping
-        runCatching { stopAdvertising() }
-        runCatching { stopDiscovery() }
-        sessionManager.closeAllSessions()
-        for (transport in dataTransports) {
-            runCatching { transport.close() }
+        // startMutex: a concurrent ensureStarted mid-bind must not interleave
+        // with teardown (it could keep binding transports after we closed
+        // them, then latch Running/startResult-success AFTER Stopped).
+        // NonCancellable: `stopped` latches at entry, so if the caller's
+        // coroutine were cancelled mid-teardown the kit would be permanently
+        // half-stopped (transports bound, scope alive) with every later
+        // stop() a no-op. closeAllSessions is additionally runCatching-
+        // wrapped so one bad session cannot abort the rest of teardown
+        // (AUDIT-2026-06 fix).
+        withContext(NonCancellable) {
+            startMutex.withLock {
+                if (stopped) return@withLock
+                stopped = true
+                _state.value = P2pState.Stopping
+                runCatching { stopAdvertising() }
+                runCatching { stopDiscovery() }
+                runCatching { sessionManager.closeAllSessions() }
+                for (transport in dataTransports) {
+                    runCatching { transport.close() }
+                }
+            }
         }
+
         // Provisioning managers attach their scope to internalJob; the
         // internalJob.cancel() below fires their invokeOnCompletion teardown
         // (e.g. AndroidNetworkProvisioningManager releases its LocalOnlyHotspot

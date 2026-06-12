@@ -371,6 +371,11 @@ private class FakeWifiManagerWrapper(
 
     override fun isWifiEnabled(): Boolean = true
 
+    override val isLocalOnlyHotspotSupported: Boolean = true
+    override val isSpecifierJoinSupported: Boolean = true
+    override fun requiredRuntimePermission() =
+        dev.p2pkit.core.permission.P2pPermission.NearbyWifiDevices
+
     override suspend fun startLocalOnlyHotspot(): HotspotStartResult {
         return when (val b = behavior) {
             Behavior.ThrowSecurity -> throw SecurityException("simulated perm-missing")

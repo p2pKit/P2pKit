@@ -634,6 +634,15 @@ internal class IosLanDataTransport(
             )
             return@withLock
         }
+        // close() does not take startMutex (it must stay non-blocking even
+        // while a rebind is mid-flight), so re-check after the blocking
+        // rebuild: without this a close() racing the 5s bind window left the
+        // fresh listener bound and orphaned forever (AUDIT-2026-06 fix).
+        if (closed) {
+            IosLanDebug.log("data", "rebindNow: closed during rebuild — cancelling fresh listener ($reason)")
+            nw_listener_cancel(fresh)
+            return@withLock
+        }
         listener = fresh
         val newPort = _tcpPort.value
         IosLanDebug.log("data", "rebindNow: new listener ready newPort=$newPort")

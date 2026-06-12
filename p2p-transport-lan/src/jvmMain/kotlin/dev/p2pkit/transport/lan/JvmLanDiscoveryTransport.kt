@@ -86,7 +86,10 @@ internal class JvmLanDiscoveryTransport(
     override suspend fun stopAdvertising() = lock.withLock {
         val info = advertisedInfo
         if (info != null) {
-            withContext(Dispatchers.IO) { jmdns?.unregisterService(info) }
+            // runCatching: a JmDNS throw here must still let state cleanup +
+            // maybeCloseJmdns run, or the handle leaks and the transport is
+            // wedged in a half-advertising state (AUDIT-2026-06 fix).
+            withContext(Dispatchers.IO) { runCatching { jmdns?.unregisterService(info) } }
         }
         advertisedInfo = null
         advertising = false
@@ -96,7 +99,15 @@ internal class JvmLanDiscoveryTransport(
     override suspend fun startDiscovery() = lock.withLock {
         ensureJmdns()
         if (discovering) return@withLock
-        val l = object : ServiceListener {
+        val l = buildServiceListener()
+        withContext(Dispatchers.IO) {
+            jmdns!!.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, l)
+        }
+        listener = l
+        discovering = true
+    }
+
+    private fun buildServiceListener(): ServiceListener = object : ServiceListener {
             override fun serviceAdded(event: ServiceEvent) {
                 // Trigger asynchronous resolution; we react in serviceResolved.
                 jmdns?.requestServiceInfo(event.type, event.name, true)
@@ -141,18 +152,57 @@ internal class JvmLanDiscoveryTransport(
                 )
                 _events.tryEmit(PeerEvent.Found(internalPeer))
             }
-        }
+    }
+
+    /**
+     * V0.5-FORCED-REFRESH, JVM port (AUDIT-2026-06 fix). SessionManager
+     * refires refresh() ~every 3 s for the entire Reconnecting window. The
+     * Android transport rotates its service listener and force re-queries
+     * every cached peer so stale SRV records (a peer whose listener port
+     * rotated) re-resolve mid-reconnect; the JVM transport inherited the
+     * interface's default no-op, leaving that documented recovery mechanism
+     * inert on desktop. Mirrors AndroidLanDiscoveryTransport.refresh().
+     * `list(type, timeout)` uses a short timeout: with the default 6 s
+     * timeout JmDNS can block while it waits for service infos, and this
+     * runs under [lock].
+     */
+    override suspend fun refresh(): Unit = lock.withLock {
+        val handle = jmdns
+        val old = listener
+        if (handle == null || old == null) return@withLock
         withContext(Dispatchers.IO) {
-            jmdns!!.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, l)
+            runCatching { handle.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, old) }
         }
-        listener = l
-        discovering = true
+        val fresh = buildServiceListener()
+        val listenerOk = runCatching {
+            withContext(Dispatchers.IO) {
+                handle.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, fresh)
+            }
+            listener = fresh
+        }.onFailure {
+            // Leave null so the next startDiscovery can re-attach cleanly.
+            listener = null
+        }.isSuccess
+        if (!listenerOk) return@withLock
+        val cached = withContext(Dispatchers.IO) {
+            runCatching { handle.list(LanConstants.SERVICE_TYPE_JMDNS, JMDNS_LIST_SNAPSHOT_TIMEOUT_MS) }
+                .getOrDefault(emptyArray())
+        }
+        cached.forEach { info ->
+            val pid = info.getPropertyString(LanConstants.TXT_PEER_ID) ?: info.name
+            if (pid == registration.localPeerId.value) return@forEach
+            withContext(Dispatchers.IO) {
+                runCatching { handle.requestServiceInfo(info.type, info.name, true) }
+            }
+        }
     }
 
     override suspend fun stopDiscovery() = lock.withLock {
         val l = listener
         if (l != null) {
-            withContext(Dispatchers.IO) { jmdns?.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, l) }
+            withContext(Dispatchers.IO) {
+                runCatching { jmdns?.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, l) }
+            }
         }
         listener = null
         discovering = false
@@ -226,3 +276,10 @@ internal fun selectRoutableHost(candidates: List<InetAddress>): String? {
 
     return null
 }
+
+/**
+ * Short snapshot timeout for JmDNS.list() during refresh: the default
+ * overload waits up to 6 s for service infos, which would stall the
+ * transport lock on the reconnect hot path.
+ */
+private const val JMDNS_LIST_SNAPSHOT_TIMEOUT_MS: Long = 200

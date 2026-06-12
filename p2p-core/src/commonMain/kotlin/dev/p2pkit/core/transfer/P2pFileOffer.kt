@@ -39,6 +39,7 @@ public interface P2pFileOffer {
      * Throws [IllegalStateException] if the offer was already accepted, rejected,
      * or timed out.
      */
+    @Throws(Exception::class)
     public suspend fun accept(sink: RawSink): P2pFileTransfer
 
     /**
@@ -46,5 +47,6 @@ public interface P2pFileOffer {
      *
      * No-op if the offer was already accepted or rejected.
      */
+    @Throws(Exception::class)
     public suspend fun reject(reason: String? = null)
 }

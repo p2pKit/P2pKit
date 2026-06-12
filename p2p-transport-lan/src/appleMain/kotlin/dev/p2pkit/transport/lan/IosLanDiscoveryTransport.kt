@@ -22,7 +22,10 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -147,6 +150,22 @@ internal class IosLanDiscoveryTransport(
     @Volatile
     private var pendingNudgeJob: Job? = null
 
+    /**
+     * Peers seen by the current browse session, re-announced as
+     * [PeerEvent.Updated] every [PEER_REANNOUNCE_INTERVAL_MS] while discovery
+     * is running. NWBrowser fires result_added exactly once per stable result
+     * set, but PeerRegistry evicts peers ~15 s after the last event — the
+     * class KDoc always documented this loop, the implementation was missing,
+     * so iOS-discovered peers vanished from kit.peers after 15 s of browse
+     * quiet (AUDIT-2026-06 fix). StateFlow CAS keeps it thread-safe between
+     * the browse callback queue and the announce coroutine without a lock.
+     */
+    private val announceCache = MutableStateFlow<Map<String, InternalPeer>>(emptyMap())
+
+    /** Re-announce loop for [announceCache]; runs while discovery is on. */
+    @Volatile
+    private var announceJob: Job? = null
+
     init {
         // Wire the listener-rebind hooks at factory construction time —
         // both transports are built together by `IosLanTransportFactory`,
@@ -163,7 +182,17 @@ internal class IosLanDiscoveryTransport(
             "starting: peerId=${localPeer.peerId.value.take(8)} app=${localPeer.appId.value} name=${localPeer.deviceName}"
         )
         val descriptor = buildAdvertiseDescriptor(localPeer)
-        nw_listener_set_advertise_descriptor(dataTransport.listener, descriptor)
+        // Listener may be null in the rebind rebuild window (or after a
+        // failed rebind); passing null into the non-null nw parameter would
+        // NPE-crash the process. Record intent — onAfterListenerRebind
+        // re-applies the descriptor once a fresh listener exists
+        // (AUDIT-2026-06 fix).
+        val l = dataTransport.listener
+        if (l != null) {
+            nw_listener_set_advertise_descriptor(l, descriptor)
+        } else {
+            IosLanDebug.log("advertise", "listener null (rebind window?) — descriptor deferred to rebind hook")
+        }
         advertising = true
         cachedLocalPeer = localPeer
         IosLanDebug.log("advertise", "started")
@@ -172,7 +201,10 @@ internal class IosLanDiscoveryTransport(
     override suspend fun stopAdvertising() = lock.withLock {
         if (!advertising) return@withLock
         IosLanDebug.log("advertise", "stopping")
-        nw_listener_set_advertise_descriptor(dataTransport.listener, null)
+        val l = dataTransport.listener
+        if (l != null) {
+            nw_listener_set_advertise_descriptor(l, null)
+        }
         advertising = false
         cachedLocalPeer = null
     }
@@ -185,12 +217,35 @@ internal class IosLanDiscoveryTransport(
         )
         discoveryStartedByHost = true
         createBrowserLocked()
+        startAnnounceLoopLocked()
+    }
+
+    /** Caller must hold [lock]. Idempotent. */
+    private fun startAnnounceLoopLocked() {
+        if (announceJob?.isActive == true) return
+        announceJob = nudgeScope.launch {
+            while (isActive) {
+                delay(PEER_REANNOUNCE_INTERVAL_MS)
+                if (!discoveryStartedByHost) continue
+                announceCache.value.values.forEach { peer ->
+                    _events.tryEmit(PeerEvent.Updated(peer))
+                }
+            }
+        }
     }
 
     override suspend fun stopDiscovery() = lock.withLock {
+        // Clear host intent BEFORE the browser null-check: when iOS reaps the
+        // browser during suspension the field is already null, and the old
+        // early-return left discoveryStartedByHost=true — the next rebind
+        // silently resurrected browsing the host had stopped
+        // (AUDIT-2026-06 fix).
+        discoveryStartedByHost = false
+        announceJob?.cancel()
+        announceJob = null
+        announceCache.value = emptyMap()
         val b = browser ?: return@withLock
         IosLanDebug.log("browse", "stopDiscovery: cancelling browser")
-        discoveryStartedByHost = false
         browser = null
         browserReady = false
         nw_browser_cancel(b)
@@ -395,10 +450,20 @@ internal class IosLanDiscoveryTransport(
             }
             IosLanDebug.log("browse", "state -> $label")
             when (state) {
-                nw_browser_state_ready -> browserReady = true
+                nw_browser_state_ready -> if (browser === b) browserReady = true
                 nw_browser_state_failed, nw_browser_state_cancelled -> {
-                    browserReady = false
-                    browser = null
+                    // Identity check: this handler belongs to `b`. refresh()
+                    // cancels the old browser and installs a replacement; the
+                    // old instance's async cancelled callback must not clobber
+                    // the field, or the replacement is orphaned (still browsing,
+                    // unreachable, re-created again on the next refresh — an
+                    // accumulating leak during the ~3s Reconnecting refresh
+                    // cadence). Only clear state for the CURRENT browser
+                    // (AUDIT-2026-06 fix).
+                    if (browser === b) {
+                        browserReady = false
+                        browser = null
+                    }
                 }
             }
             Unit
@@ -511,6 +576,7 @@ internal class IosLanDiscoveryTransport(
             ),
             transportHints = listOf(TransportHint(type = TransportKind.LAN))
         )
+        announceCache.update { it + (pid to internalPeer) }
         val event = if (isUpdate) PeerEvent.Updated(internalPeer) else PeerEvent.Found(internalPeer)
         _events.tryEmit(event)
         IosLanDebug.log("browse", "emitPeer: ACCEPTED ${if (isUpdate) "Updated" else "Found"} $name pid=${pid.take(8)}")
@@ -525,12 +591,20 @@ internal class IosLanDiscoveryTransport(
         }
         if (pid == transportContext.localPeerId.value) return
         val peerId = PeerId(pid)
+        announceCache.update { it - pid }
         endpointRegistry.remove(peerId)
         _events.tryEmit(PeerEvent.Lost(peerId))
         IosLanDebug.log("browse", "emitLost: $pid")
     }
 
     private companion object {
+        /**
+         * Cadence for re-emitting [PeerEvent.Updated] for cached browse
+         * results — must stay comfortably below PeerRegistry's 15 s
+         * staleness eviction.
+         */
+        const val PEER_REANNOUNCE_INTERVAL_MS: Long = 5_000
+
         /**
          * V0.4-D-IOS-NUDGE: wait this long after a listener rebind before
          * deregistering the Bonjour descriptor. Gives mDNSResponder time

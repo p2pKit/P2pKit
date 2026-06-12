@@ -46,5 +46,6 @@ public interface P2pFileTransfer {
      *
      * No-op if the transfer is already in a terminal state.
      */
+    @Throws(Exception::class)
     public suspend fun cancel(reason: String? = null)
 }

@@ -59,6 +59,17 @@ public object IosLanDebug {
         val ts = ((NSDate().timeIntervalSince1970 * 1000).toLong()) % 1_000_000
         val line = "[$ts][$tag] $message"
         _events.tryEmit(line)
-        println("p2pkit: $line")
+        if (mirrorToConsole) println("p2pkit: $line")
     }
+
+    /**
+     * Mirrors every line to `println` (unified logging / Console.app) when
+     * true. Default OFF: the mirror ran unconditionally in release builds,
+     * printing peer ids/device names/TXT contents to the device console and
+     * adding a string-build + syscall per transport event — including one per
+     * 64 KiB frame on the file-transfer hot path (AUDIT-2026-06 fix). The
+     * sample app (and tests) can opt back in at startup.
+     */
+    @kotlin.concurrent.Volatile
+    public var mirrorToConsole: Boolean = false
 }

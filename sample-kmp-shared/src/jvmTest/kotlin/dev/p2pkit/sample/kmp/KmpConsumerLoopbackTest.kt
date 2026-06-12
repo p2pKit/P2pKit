@@ -9,12 +9,16 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.CompletableDeferred
 import java.io.File
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.nio.file.Files
 import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import org.junit.Assume
 
 /**
  * Verifies that a KMP-style consumer can wire up P2pKit via the shared
@@ -39,6 +43,35 @@ class KmpConsumerLoopbackTest {
     fun cleanup() {
         tempHomes.forEach { runCatching { it.deleteRecursively() } }
         tempHomes.clear()
+        // Restore the bind property so it can't leak into other suites.
+        System.clearProperty("dev.p2pkit.test.jmdnsBindAddress")
+    }
+
+    /**
+     * Pin JmDNS to a routable IPv4 interface. On macOS InetAddress.getLocalHost()
+     * resolves to 127.0.0.1 when the `.local` hostname isn't published, JmDNS
+     * binds loopback, and selectRoutableHost drops the loopback hints — so
+     * discovery silently finds nothing. Mirrors JvmLanLoopbackTest's seam
+     * (AUDIT-2026-06 fix for the latent macOS flake). Production never sets it.
+     */
+    @BeforeTest
+    fun pinJmdnsBindAddress() {
+        val routable = findRoutableIpv4()
+        Assume.assumeTrue("No routable IPv4 interface for JmDNS loopback test", routable != null)
+        System.setProperty("dev.p2pkit.test.jmdnsBindAddress", routable!!)
+    }
+
+    private fun findRoutableIpv4(): String? {
+        val ifaces = NetworkInterface.getNetworkInterfaces() ?: return null
+        for (iface in ifaces) {
+            if (!iface.isUp || iface.isLoopback) continue
+            for (addr in iface.inetAddresses) {
+                if (addr !is Inet4Address) continue
+                if (addr.isLoopbackAddress || addr.isLinkLocalAddress) continue
+                return addr.hostAddress
+            }
+        }
+        return null
     }
 
     private fun createKit(deviceName: String): P2pKit {
@@ -49,7 +82,10 @@ class KmpConsumerLoopbackTest {
         return try {
             createP2pKit(appId, deviceName)
         } finally {
-            System.setProperty("user.home", savedHome ?: "")
+            // clearProperty when originally unset, instead of poisoning
+            // user.home to "" (AUDIT-2026-06 fix).
+            if (savedHome != null) System.setProperty("user.home", savedHome)
+            else System.clearProperty("user.home")
         }
     }
 

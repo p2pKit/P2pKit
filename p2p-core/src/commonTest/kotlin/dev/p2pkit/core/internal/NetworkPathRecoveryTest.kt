@@ -17,6 +17,8 @@ import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -178,8 +180,10 @@ class NetworkPathRecoveryTest {
                 session.state.first { it == ConnectionState.Reconnecting }
             }
 
-            // Wake the parked retry by emitting Satisfied. Without the
-            // signal, the test would have to wait the full 5 s.
+            // Wake the parked retry by emitting Satisfied. The generation-
+            // counter signal (AUDIT-2026-06 fix in SessionManager) retains the
+            // transition even if it lands before the handler parks, so a single
+            // emit is now race-free.
             fake.emit(NetworkPathStatus.Satisfied)
 
             // Bounded < retryDelayMillis to prove the signal woke the

@@ -5,6 +5,7 @@ import dev.p2pkit.core.Peer
 import dev.p2pkit.core.protocol.MessageId
 import dev.p2pkit.core.protocol.StreamingFileReceiver
 import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.core.transfer.isTerminal
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import kotlin.concurrent.Volatile
@@ -58,18 +59,28 @@ internal class IncomingFileSession(
     }
 
     internal fun setState(newState: FileTransferState) {
-        _state.value = newState
+        // Terminal states are final — see OutgoingFileTransferImpl
+        // (AUDIT-2026-06 fix).
+        updateUnlessTerminal { newState }
     }
 
     internal fun recordBytesReceived(total: Long) {
         _bytes.value = total
         if (sizeBytes > 0) {
             val progress = (total.toDouble() / sizeBytes.toDouble()).coerceIn(0.0, 1.0).toFloat()
-            _state.value = FileTransferState.Sending(progress)
+            updateUnlessTerminal { FileTransferState.Sending(progress) }
         }
     }
 
     internal fun markFailed(error: P2pError) {
-        _state.value = FileTransferState.Failed(error)
+        updateUnlessTerminal { FileTransferState.Failed(error) }
+    }
+
+    private inline fun updateUnlessTerminal(next: () -> FileTransferState) {
+        while (true) {
+            val cur = _state.value
+            if (cur.isTerminal()) return
+            if (_state.compareAndSet(cur, next())) return
+        }
     }
 }

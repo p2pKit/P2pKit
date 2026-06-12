@@ -38,15 +38,9 @@ internal object LanConstants {
     const val SERVICE_TYPE_JMDNS: String = "_p2pkit._tcp.local."
 
     /**
-     * Android `NsdManager`-style service type. Same wire protocol as
-     * [SERVICE_TYPE_JMDNS]; the string format just differs.
-     */
-    const val SERVICE_TYPE_NSD: String = "_p2pkit._tcp."
-
-    /**
      * Bonjour service type for iOS `nw_advertise_descriptor` and
      * `nw_browse_descriptor`. No trailing dot — Apple's API expects the
-     * canonical form. Wire-identical to the JMDNS/NSD strings above.
+     * canonical form. Wire-identical to the JmDNS string above.
      */
     const val SERVICE_TYPE_BONJOUR: String = "_p2pkit._tcp"
 

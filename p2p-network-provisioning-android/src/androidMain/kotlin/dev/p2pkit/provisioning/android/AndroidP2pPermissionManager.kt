@@ -13,11 +13,16 @@ import dev.p2pkit.core.permission.P2pPermissionManager
  * Reports which runtime permissions are required for hotspot hosting and
  * Wi-Fi discovery on the local device, branching by SDK level:
  *
- * | Target SDK | Required permission             |
- * |------------|---------------------------------|
- * | ≥ 33       | `NEARBY_WIFI_DEVICES`           |
- * | 29..32     | `ACCESS_FINE_LOCATION`          |
- * | ≤ 28       | `ACCESS_COARSE_LOCATION`        |
+ * | Device API && target SDK | Required permission    |
+ * |--------------------------|------------------------|
+ * | both ≥ 33                | `NEARBY_WIFI_DEVICES`  |
+ * | otherwise                | `ACCESS_FINE_LOCATION` |
+ *
+ * NEARBY_WIFI_DEVICES enforcement keys on the APP's targetSdk, not the
+ * device API: a targetSdk ≤ 32 app on Android 13+ is still governed by
+ * FINE_LOCATION and cannot be granted NEARBY at all (AUDIT-2026-06 fix —
+ * previously this branched on device SDK only and the table promised a
+ * COARSE row the implementation never had).
  *
  * Pure reporter — the library never requests permissions. The host app
  * is responsible for the runtime prompt; [missingPermissions] tells it
@@ -41,10 +46,15 @@ public class AndroidP2pPermissionManager(
 
     override suspend fun hasRequiredPermissions(): Boolean = missingPermissions().isEmpty()
 
-    private fun requiredWifiAwarePermission(): P2pPermission = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> P2pPermission.NearbyWifiDevices
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> P2pPermission.Location
-        else -> P2pPermission.Location
+    private fun requiredWifiAwarePermission(): P2pPermission {
+        val targetSdk = appContext.applicationInfo.targetSdkVersion
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            targetSdk >= Build.VERSION_CODES.TIRAMISU
+        ) {
+            P2pPermission.NearbyWifiDevices
+        } else {
+            P2pPermission.Location
+        }
     }
 
     private fun androidPermissionStringFor(p: P2pPermission): String? = when (p) {

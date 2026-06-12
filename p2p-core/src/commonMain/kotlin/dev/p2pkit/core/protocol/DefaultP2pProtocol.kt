@@ -137,7 +137,7 @@ internal class DefaultP2pProtocol(
             PacketType.PONG -> ProtocolEvent.Pong
             PacketType.CLOSE -> ProtocolEvent.Close
             PacketType.ERROR -> {
-                val reason = frame.payload.decodeToString()
+                val reason = frame.payload.decodeReasonCapped()
                 ProtocolEvent.PeerError(reason)
             }
             PacketType.ACK -> ProtocolEvent.Ack(frame.messageId, frame.chunkIndex)
@@ -154,13 +154,13 @@ internal class DefaultP2pProtocol(
             }
             PacketType.FILE_ACCEPT -> ProtocolEvent.FileAccept(frame.messageId)
             PacketType.FILE_REJECT -> {
-                val reason = if (frame.payload.isEmpty()) null else frame.payload.decodeToString()
+                val reason = if (frame.payload.isEmpty()) null else frame.payload.decodeReasonCapped()
                 ProtocolEvent.FileReject(frame.messageId, reason)
             }
             PacketType.FILE_DATA -> ProtocolEvent.FileData(frame)
             PacketType.FILE_DONE -> ProtocolEvent.FileDone(frame.messageId)
             PacketType.FILE_CANCEL -> {
-                val reason = if (frame.payload.isEmpty()) null else frame.payload.decodeToString()
+                val reason = if (frame.payload.isEmpty()) null else frame.payload.decodeReasonCapped()
                 ProtocolEvent.FileCancel(frame.messageId, reason)
             }
         }
@@ -182,4 +182,14 @@ internal class DefaultP2pProtocol(
     private companion object {
         val EMPTY = ByteArray(0)
     }
+}
+
+/**
+ * Reason strings (ERROR / FILE_REJECT / FILE_CANCEL) are remote-controlled and
+ * were previously decoded uncapped — up to the 8 MiB frame limit per frame.
+ * Cap them like every other untrusted string field (AUDIT-2026-06 fix).
+ */
+private fun ByteArray.decodeReasonCapped(maxBytes: Int = 1024): String {
+    if (size <= maxBytes) return decodeToString()
+    return copyOfRange(0, maxBytes).decodeToString() + "… [truncated ${size - maxBytes} bytes]"
 }

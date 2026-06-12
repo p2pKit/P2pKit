@@ -20,6 +20,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
@@ -98,13 +100,31 @@ public class AndroidNetworkProvisioningManager internal constructor(
 
     override suspend fun startLocalNetwork(config: LocalNetworkConfig): LocalNetworkResult =
         lifecycleLock.withLock {
-            if (handle != null) {
+            if (!wifi.isLocalOnlyHotspotSupported) {
+                // Contract result for unsupported platforms (API < 26 or no
+                // Wi-Fi hardware) instead of a linkage-error-backed
+                // PlatformError (AUDIT-2026-06 fix).
+                return@withLock LocalNetworkResult.Unsupported(
+                    "LocalOnlyHotspot requires Android 8.0 (API 26) and Wi-Fi hardware"
+                )
+            }
+            // Snapshot: handleSystemStop nulls `handle` from a collector
+            // coroutine, so a double-deref here could NPE between check and
+            // use (AUDIT-2026-06 fix).
+            val existing = handle
+            if (existing != null) {
                 ctx.logger.debug("provisioning: startLocalNetwork called while already running")
-                return@withLock buildStartedResult(handle!!.getCredentials(), handle!!)
+                return@withLock buildStartedResult(runCatching { existing.getCredentials() }.getOrNull(), existing)
             }
             _state.value = NetworkProvisioningState.StartingLocalNetwork
 
-            val startResult = runCatching { wifi.startLocalOnlyHotspot() }
+            // Bounded: the OS callback can simply never arrive on some OEMs;
+            // an unbounded suspend here held lifecycleLock forever, wedging
+            // every other provisioning API (AUDIT-2026-06 fix).
+            val startResult = runCatching {
+                withTimeoutOrNull(OS_CALLBACK_TIMEOUT_MS) { wifi.startLocalOnlyHotspot() }
+                    ?: HotspotStartResult.Failed(reasonCode = -1)
+            }
                 .getOrElse { e ->
                     val mapped = mapStartException(e)
                     ctx.logger.warn(
@@ -131,7 +151,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
                     handle = h
                     stopWatch = scope.launch {
                         h.stopped.collect { reason ->
-                            handleSystemStop(reason)
+                            handleSystemStop(h, reason)
                         }
                     }
                     val creds = runCatching { h.getCredentials() }.getOrNull()
@@ -159,6 +179,11 @@ public class AndroidNetworkProvisioningManager internal constructor(
 
     override suspend fun joinLocalNetwork(credentials: WifiCredentials): JoinNetworkResult =
         lifecycleLock.withLock {
+            if (!wifi.isSpecifierJoinSupported) {
+                return@withLock JoinNetworkResult.Unsupported(
+                    "WifiNetworkSpecifier join requires Android 10 (API 29)"
+                )
+            }
             if (joinHandle != null) {
                 return@withLock JoinNetworkResult.Failed(
                     NetworkProvisioningError.JoinFailed(
@@ -178,7 +203,12 @@ public class AndroidNetworkProvisioningManager internal constructor(
                 )
             )
 
-            val joinResult = runCatching { wifi.joinWifiNetwork(credentials) }
+            val joinResult = runCatching {
+                // Bounded like the hotspot wait: the approval dialog can sit
+                // unanswered indefinitely (AUDIT-2026-06 fix).
+                withTimeoutOrNull(OS_CALLBACK_TIMEOUT_MS) { wifi.joinWifiNetwork(credentials) }
+                    ?: JoinResult.Failed("join timed out after ${OS_CALLBACK_TIMEOUT_MS / 1000}s (no user approval / no matching network)")
+            }
                 .getOrElse { e ->
                     val mapped = mapStartException(e)
                     ctx.logger.warn(
@@ -201,7 +231,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
                     val h = joinResult.handle
                     joinHandle = h
                     joinReleaseWatch = scope.launch {
-                        h.released.collect { reason -> handleJoinReleased(reason) }
+                        h.released.collect { reason -> handleJoinReleased(h, reason) }
                     }
                     val nstate = h.snapshotNetworkState()
                     _networkState.value = nstate
@@ -213,14 +243,28 @@ public class AndroidNetworkProvisioningManager internal constructor(
             }
         }
 
-    private fun handleJoinReleased(reason: String) {
+    private suspend fun handleJoinReleased(firing: JoinHandle, reason: String) = lifecycleLock.withLock {
+        // Stale guard + lock: these handlers previously mutated
+        // handle/joinHandle/_state off-lock from collector coroutines,
+        // racing the locked API paths (AUDIT-2026-06 fix).
+        if (joinHandle !== firing) return@withLock
         val err = NetworkProvisioningError.JoinFailed("join released: $reason")
+        // close() the handle BEFORE dropping it: JoinHandleImpl.close() is the
+        // ONLY code that clears bindProcessToNetwork and unregisters the
+        // NetworkCallback. Nulling without closing left every socket in the
+        // host process bound to the dead network (traffic blackholed until the
+        // next successful join) and leaked one NetworkCallback per join cycle.
+        // It also stops the wrapper's re-onAvailable branch from silently
+        // re-binding after we have declared the join terminally Failed
+        // (AUDIT-2026-06 fix; close() is idempotent via runCatching).
+        joinHandle?.let { h -> runCatching { h.close() } }
         joinHandle = null
         joinReleaseWatch = null
         _state.value = NetworkProvisioningState.Failed(err)
         _networkState.value = NetworkState.Unknown
         _events.tryEmit(NetworkProvisioningEvent.Failed(err))
         ctx.logger.warn("provisioning: join released — $reason")
+        Unit
     }
 
     override suspend fun getManualConnectionInfo(): ManualConnectionInfo? {
@@ -249,6 +293,11 @@ public class AndroidNetworkProvisioningManager internal constructor(
      * cancelled (via [ProvisioningContext.parentJob]); apps may also call
      * it directly for explicit teardown.
      */
+    private companion object {
+        /** Upper bound for OS-callback waits (LOHS start, specifier join approval). */
+        const val OS_CALLBACK_TIMEOUT_MS: Long = 60_000
+    }
+
     public fun close() {
         scopeJob.cancel()
         runCatching { handle?.close() }
@@ -259,7 +308,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
 
     // --- internals --------------------------------------------------------
 
-    private fun buildStartedResult(
+    private suspend fun buildStartedResult(
         credentials: WifiCredentials?,
         h: HotspotHandle
     ): LocalNetworkResult {
@@ -279,7 +328,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
         }
     }
 
-    private fun buildManualInfoFromHandle(h: HotspotHandle): ManualConnectionInfo? {
+    private suspend fun buildManualInfoFromHandle(h: HotspotHandle): ManualConnectionInfo? {
         val port = ctx.lanTcpPort() ?: return null
         val hosts = (collectInterfaceIPs() + h.apHostAddresses()).distinct()
         if (hosts.isEmpty()) return null
@@ -292,7 +341,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
         )
     }
 
-    private fun publishStartedNetworkState(h: HotspotHandle, creds: WifiCredentials?) {
+    private suspend fun publishStartedNetworkState(h: HotspotHandle, creds: WifiCredentials?) {
         val ips = (collectInterfaceIPs() + h.apHostAddresses()).distinct()
         _networkState.value = NetworkState.LocalNetworkHosted(
             credentials = creds,
@@ -300,13 +349,15 @@ public class AndroidNetworkProvisioningManager internal constructor(
         )
     }
 
-    private fun handleSystemStop(reason: HotspotStopReason) {
+    private suspend fun handleSystemStop(firing: HotspotHandle, reason: HotspotStopReason) = lifecycleLock.withLock {
+        if (handle !== firing) return@withLock
         val err = NetworkProvisioningError.HotspotStopped(reason.source)
         handle = null
         stopWatch = null
         _state.value = NetworkProvisioningState.Failed(err)
         _networkState.value = NetworkState.Unknown
         _events.tryEmit(NetworkProvisioningEvent.Failed(err))
+        Unit
     }
 
     private fun mapStartException(e: Throwable): NetworkProvisioningError {
@@ -328,7 +379,9 @@ public class AndroidNetworkProvisioningManager internal constructor(
                 )
             }
             return NetworkProvisioningError.PermissionMissingForProvisioning(
-                permissions = listOf(P2pPermission.NearbyWifiDevices)
+                // targetSdk-aware: NEARBY_WIFI_DEVICES is ungrantable for
+                // targetSdk<=32 apps even on Android 13+ (AUDIT-2026-06 fix).
+                permissions = listOf(wifi.requiredRuntimePermission())
             )
         }
         return NetworkProvisioningError.PlatformError(e)
@@ -347,16 +400,23 @@ public class AndroidNetworkProvisioningManager internal constructor(
         else -> "UNKNOWN($code)"
     }
 
-    private fun collectInterfaceIPs(): List<String> {
+    private suspend fun collectInterfaceIPs(): List<String> = withContext(Dispatchers.IO) {
+        // IO dispatcher (the JVM sidecar already hops; Android ran the scan
+        // on the caller's thread) and per-NIC guard: isUp/inetAddresses throw
+        // SocketException when an interface vanishes mid-scan
+        // (AUDIT-2026-06 fix).
         val out = mutableListOf<String>()
-        val ifs = runCatching { NetworkInterface.getNetworkInterfaces() }.getOrNull() ?: return emptyList()
+        val ifs = runCatching { NetworkInterface.getNetworkInterfaces() }.getOrNull()
+            ?: return@withContext emptyList()
         for (nif in ifs) {
-            if (!nif.isUp || nif.isLoopback) continue
-            for (addr in nif.inetAddresses) {
-                if (addr.isLoopbackAddress || addr.isAnyLocalAddress) continue
-                if (addr is Inet4Address) out += addr.hostAddress
+            runCatching {
+                if (!nif.isUp || nif.isLoopback) return@runCatching
+                for (addr in nif.inetAddresses) {
+                    if (addr.isLoopbackAddress || addr.isAnyLocalAddress) continue
+                    if (addr is Inet4Address) out += addr.hostAddress
+                }
             }
         }
-        return out.distinct()
+        out.distinct()
     }
 }

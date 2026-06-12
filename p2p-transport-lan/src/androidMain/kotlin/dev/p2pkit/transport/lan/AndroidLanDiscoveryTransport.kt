@@ -307,12 +307,14 @@ internal class AndroidLanDiscoveryTransport(
 
         if (!listenerOk) return@withLock
 
-        // Step 2: per-peer forced re-query. JmDNS.list() returns the
-        // current cached ServiceInfo entries WITHOUT issuing a fresh
-        // wire query — it's a pure cache read. requestServiceInfo(...,
-        // persistent=true) then invalidates that entry and re-resolves.
+        // Step 2: per-peer forced re-query. NOTE: JmDNS.list() is NOT a pure
+        // cache read — the default overload can block up to 6 s waiting for
+        // service infos (ServiceCollector), and this runs under [lock] on the
+        // ~3 s reconnect refresh cadence. Use a short snapshot timeout
+        // (AUDIT-2026-06 fix). requestServiceInfo(..., persistent=true) then
+        // invalidates each entry and re-resolves.
         val cached = withContext(Dispatchers.IO) {
-            runCatching { handle.list(LanConstants.SERVICE_TYPE_JMDNS) }
+            runCatching { handle.list(LanConstants.SERVICE_TYPE_JMDNS, 200L) }
                 .getOrDefault(emptyArray())
         }
         var forced = 0
@@ -776,10 +778,22 @@ internal class AndroidLanDiscoveryTransport(
         advertisedInfo = null
         serviceListener = null
 
-        // Recreate JmDNS on the new interface.
+        // Recreate JmDNS on the new interface. MUST NOT throw out of this
+        // coroutine: rebindNow runs fire-and-forget on rebindScope (no
+        // CoroutineExceptionHandler), so an uncaught IOException here would
+        // crash an Android host process. On failure we log and leave jmdns
+        // null; the next network callback / refresh() schedules another
+        // rebind attempt (AUDIT-2026-06 fix).
         val newBindAddr = resolveBindAddress(target ?: defaultTarget)
-        val fresh = withContext(Dispatchers.IO) {
-            if (newBindAddr != null) JmDNS.create(newBindAddr) else JmDNS.create()
+        val fresh = try {
+            withContext(Dispatchers.IO) {
+                if (newBindAddr != null) JmDNS.create(newBindAddr) else JmDNS.create()
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.w(TAG, "rebindNow: JmDNS.create failed; transport degraded until next rebind", e)
+            return@withLock
         }
         jmdns = fresh
         Log.d(

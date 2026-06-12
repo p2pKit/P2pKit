@@ -7,7 +7,6 @@ import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
@@ -16,6 +15,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -41,7 +42,11 @@ internal class AndroidLanDataTransport(
     private val _tcpPort = MutableStateFlow<Int?>(null)
     override val tcpPort: StateFlow<Int?> = _tcpPort.asStateFlow()
 
-    private val serverSocketReady = CompletableDeferred<ServerSocket>()
+    // Nullable StateFlow (not a one-shot deferred) so a FAILED first bind does
+    // not permanently poison the eagerly-collected incoming flow: a later
+    // successful start() retry still serves the accept loop
+    // (AUDIT-2026-06 fix). Keep in sync with JvmLanDataTransport.
+    private val serverSocketFlow = MutableStateFlow<ServerSocket?>(null)
     private val startMutex = Mutex()
     @Volatile private var serverSocket: ServerSocket? = null
 
@@ -49,23 +54,22 @@ internal class AndroidLanDataTransport(
     private var closed: Boolean = false
 
     override suspend fun start(): Result<Unit> = startMutex.withLock {
+        if (closed) {
+            // start() after close() previously reported success on a closed
+            // socket (AUDIT-2026-06 fix).
+            return Result.failure(IllegalStateException("LAN data transport is closed"))
+        }
         if (serverSocket != null) return Result.success(Unit)
-        val result = withContext(Dispatchers.IO) {
+        withContext(Dispatchers.IO) {
             runCatching {
                 val sock = ServerSocket(0)
                 serverSocket = sock
                 registration.tcpPort = sock.localPort
                 _tcpPort.value = sock.localPort
-                serverSocketReady.complete(sock)
+                serverSocketFlow.value = sock
                 Unit
             }
         }
-        if (result.isFailure) {
-            serverSocketReady.completeExceptionally(
-                result.exceptionOrNull() ?: IllegalStateException("ServerSocket bind failed")
-            )
-        }
-        result
     }
 
     override fun canConnect(peer: InternalPeer): Boolean =
@@ -105,14 +109,10 @@ internal class AndroidLanDataTransport(
     }
 
     override fun incomingConnections(): Flow<RawConnection> = callbackFlow {
-        val sock = try {
-            serverSocketReady.await()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            close(e)
-            return@callbackFlow
-        }
+        // Park until start() binds a server socket; a later successful retry
+        // after a failed first bind still serves this collector (see
+        // serverSocketFlow KDoc).
+        val sock = serverSocketFlow.filterNotNull().first()
         val accepterJob: Job = launch(Dispatchers.IO) {
             try {
                 while (!closed) {
@@ -124,7 +124,14 @@ internal class AndroidLanDataTransport(
                         if (!closed) close(e)
                         break
                     }
-                    trySend(AndroidRawConnection(socket))
+                    // Close the socket when the channel refuses it (buffer full
+                    // under an accept burst / stalled collector): silently
+                    // dropping leaked the fd while the remote believed it had
+                    // connected (AUDIT-2026-06 fix).
+                    val offered = trySend(AndroidRawConnection(socket))
+                    if (offered.isFailure) {
+                        runCatching { socket.close() }
+                    }
                 }
                 close()
             } catch (e: CancellationException) {

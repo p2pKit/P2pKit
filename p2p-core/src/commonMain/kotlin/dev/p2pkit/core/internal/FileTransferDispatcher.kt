@@ -11,6 +11,7 @@ import dev.p2pkit.core.protocol.StreamingFileReceiver
 import dev.p2pkit.core.protocol.streamFileData
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.core.transfer.isTerminal
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transport.RawConnection
@@ -75,6 +76,7 @@ internal class FileTransferDispatcher(
     val incomingFiles: SharedFlow<P2pFileOffer> = _incomingOffers.asSharedFlow()
 
     private val outgoing: MutableMap<MessageId, OutgoingEntry> = mutableMapOf()
+
     private val incoming: MutableMap<MessageId, IncomingEntry> = mutableMapOf()
     private val lock = Mutex()
     @Volatile private var closed: Boolean = false
@@ -150,6 +152,11 @@ internal class FileTransferDispatcher(
         } catch (e: CancellationException) {
             removeOutgoing(transferId)
             timer.cancel()
+            // Mark terminal so the source-close watcher (which awaits a
+            // terminal state) fires; otherwise the caller's RawSource leaked
+            // and the watcher parked for the session lifetime
+            // (AUDIT-2026-06 fix).
+            handle.setState(FileTransferState.Cancelled("sendFile cancelled before FILE_OFFER was written"))
             throw e
         } catch (e: Throwable) {
             val err = if (e is P2pError) e else P2pError.ConnectionFailed("FILE_OFFER write failed: ${e.message}")
@@ -284,6 +291,34 @@ internal class FileTransferDispatcher(
                         transferId,
                         "sizeBytes ${payload.sizeBytes} exceeds maxFileSizeBytes ${config.maxFileSizeBytes}"
                     )
+                }
+            }
+            return
+        }
+
+        // Guard against a duplicate transferId (would orphan the first offer
+        // and cross-wire its timers) and cap concurrently pending inbound
+        // offers — each one allocates a session + two coroutines, so an
+        // unbounded map was a FILE_OFFER-spam amplification vector
+        // (AUDIT-2026-06 fix).
+        val pendingState = lock.withLock {
+            when {
+                incoming.containsKey(transferId) || outgoing.containsKey(transferId) -> -1
+                else -> incoming.size
+            }
+        }
+        if (pendingState == -1) {
+            logger.warn("Session $sessionId: duplicate FILE_OFFER transferId $transferId; ignoring")
+            return
+        }
+        if (pendingState >= MAX_PENDING_INCOMING_OFFERS) {
+            logger.warn(
+                "Session $sessionId: rejecting file offer $transferId — " +
+                    "$pendingState offers already pending (cap $MAX_PENDING_INCOMING_OFFERS)"
+            )
+            runCatching {
+                sendMutex.withLock {
+                    protocol.sendFileReject(getConnection(), transferId, "too many pending offers")
                 }
             }
             return
@@ -430,6 +465,16 @@ internal class FileTransferDispatcher(
         logger.debug("Session $sessionId: FILE_CANCEL for unknown transfer $transferId; ignoring")
     }
 
+    /**
+     * Re-enables the dispatcher after [closeAll] during a reconnect rearm.
+     * [closeAll] doubles as the terminal-close path and latches [closed];
+     * [P2pSessionImpl.rearmWith] calls this right after failing in-flight
+     * transfers so the surviving session can still transfer files.
+     */
+    fun reopen() {
+        closed = false
+    }
+
     /** Called from the session on close / connection loss. Cancels every in-flight transfer. */
     suspend fun closeAll(reason: String) {
         closed = true
@@ -457,6 +502,10 @@ internal class FileTransferDispatcher(
     // ---- Internal helpers ----
 
     private suspend fun streamOutgoingPayload(handle: OutgoingFileTransferImpl) {
+        // A FILE_CANCEL can race onFileAccept between its terminal check and
+        // this launch; bail before streaming a single chunk in that case
+        // (AUDIT-2026-06 fix).
+        if (handle.state.value.isTerminal()) return
         try {
             if (handle.sizeBytes > 0) {
                 handle.setState(FileTransferState.Sending(0f))
@@ -534,10 +583,6 @@ internal class FileTransferDispatcher(
     }
 }
 
-private fun FileTransferState.isTerminal(): Boolean = when (this) {
-    is FileTransferState.Completed,
-    is FileTransferState.Rejected,
-    is FileTransferState.Cancelled,
-    is FileTransferState.Failed -> true
-    else -> false
-}
+
+/** Cap on concurrently pending inbound FILE_OFFERs per session (DoS bound). */
+private const val MAX_PENDING_INCOMING_OFFERS: Int = 64

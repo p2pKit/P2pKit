@@ -32,7 +32,9 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -114,24 +116,21 @@ internal class SessionManager(
     val incomingSessions: SharedFlow<P2pSession> = _incomingSessions.asSharedFlow()
 
     /**
-     * Path-recovered signal consumed by every [SessionReconnectHandler]
-     * currently in its retry loop. When the host's network path
-     * transitions to [NetworkPathStatus.Satisfied], [applyPathChange]
-     * emits to this flow and any handler currently parked in its
-     * `retryDelayMillis` wait will wake immediately and attempt a dial
-     * instead of waiting out the rest of the delay.
+     * Monotonic generation counter bumped on every host-network transition
+     * to [NetworkPathStatus.Satisfied]. Every [SessionReconnectHandler] in
+     * its retry loop snapshots the current generation and parks until it
+     * changes (or its `retryDelayMillis` elapses), waking immediately on a
+     * path-recovered transition instead of waiting out the delay.
      *
-     * `extraBufferCapacity = 1` + `DROP_OLDEST` means: if Satisfied fires
-     * while no handler is parked (e.g., all handlers are mid-dial), the
-     * latest signal is cached. The first handler to enter `.first()` next
-     * picks it up — subsequent handlers see no buffered value (replay=0)
-     * and wait for the next emit or for their delay to expire.
+     * A StateFlow generation counter (not a replay=0 SharedFlow) so a
+     * Satisfied transition that lands *before* the handler parks is never
+     * dropped: the counter retains its value, so `first { it != snapshot }`
+     * returns at once. The previous SharedFlow dropped such a signal when no
+     * handler was currently subscribed, which both contradicted this field's
+     * own "is cached" KDoc and made the recovery race-dependent
+     * (AUDIT-2026-06 fix).
      */
-    private val pathSatisfiedSignal = MutableSharedFlow<Unit>(
-        replay = 0,
-        extraBufferCapacity = 1,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
-    )
+    private val pathSatisfiedGeneration = MutableStateFlow(0)
 
     fun startAcceptingIncoming(transports: List<DataTransport>) {
         for (transport in transports) {
@@ -273,7 +272,12 @@ internal class SessionManager(
         rawConnection: RawConnection,
         expectedPeer: Peer?
     ): HandshakeOutputs {
-        val eventChannel = Channel<ProtocolEvent>(capacity = Channel.UNLIMITED)
+        // Bounded so a peer flooding frames (or a slow local consumer) applies
+        // TCP backpressure instead of growing an unbounded in-memory queue —
+        // an UNLIMITED channel here was a remote-driven OOM vector
+        // (AUDIT-2026-06 fix). 256 events absorb normal bursts; when full the
+        // reader suspends and the kernel stops reading the socket.
+        val eventChannel = Channel<ProtocolEvent>(capacity = 256)
         val readerJob = scope.launch {
             try {
                 protocol.events(rawConnection).collect { event ->
@@ -306,7 +310,17 @@ internal class SessionManager(
             // otherwise we'd register a stranger under the expected peer's id.
             // Under NoneForMvp this closes the accidental/active host:port-race
             // case (full protection needs the security handshake).
-            if (expectedPeer != null && peerHello.peerId != expectedPeer.id.value) {
+            //
+            // Synthetic manual peers (registerManualPeer mints "manual-<uuid>")
+            // are exempt: the caller only knows host:port, the placeholder id
+            // can never match the remote's real persisted PeerId, and rejecting
+            // would make every manual-IP fallback connect fail. For those we
+            // adopt the remote's HELLO identity instead (AUDIT-2026-06 fix).
+            val isSyntheticManualPeer = expectedPeer != null &&
+                expectedPeer.id.value.startsWith("manual-")
+            if (expectedPeer != null && !isSyntheticManualPeer &&
+                peerHello.peerId != expectedPeer.id.value
+            ) {
                 runCatching { protocol.sendError(rawConnection, "peerId mismatch") }
                 throw P2pError.HandshakeRejected(
                     "peerId mismatch: expected ${expectedPeer.id.value} but remote announced ${peerHello.peerId}"
@@ -314,7 +328,8 @@ internal class SessionManager(
             }
             // Security wrap — no-op in v0.1 (NoOpSecurityManager returns a
             // passthrough), but keeps the future encryption hook open.
-            val resolvedPeer = expectedPeer ?: peerHello.toPeer()
+            val resolvedPeer =
+                if (expectedPeer == null || isSyntheticManualPeer) peerHello.toPeer() else expectedPeer
             val secureConnection = security.performHandshake(rawConnection, resolvedPeer)
             return HandshakeOutputs(
                 secureConnection = secureConnection,
@@ -406,6 +421,11 @@ internal class SessionManager(
             // below on every exit path — success, exhaustion, or session
             // state change.
             val periodicRefreshJob = launchPeriodicRefresh(session, peerShort)
+            // Snapshot the path-recovered generation before the loop; each
+            // iteration parks until it changes, then re-snapshots. Because the
+            // counter is a StateFlow, a Satisfied transition that arrives
+            // between snapshot and park is observed immediately (no drop).
+            var lastPathGen = pathSatisfiedGeneration.value
             try {
                 while (attempt < policy.maxAttempts) {
                     attempt++
@@ -417,8 +437,9 @@ internal class SessionManager(
                         // dial happens within milliseconds of the network coming
                         // back instead of after the full `retryDelayMillis`.
                         withTimeoutOrNull(policy.retryDelayMillis) {
-                            pathSatisfiedSignal.first()
+                            pathSatisfiedGeneration.first { it != lastPathGen }
                         }
+                        lastPathGen = pathSatisfiedGeneration.value
                     } catch (e: CancellationException) {
                         throw e
                     }
@@ -646,7 +667,7 @@ internal class SessionManager(
      *   go straight to `Failed`. Concurrent triggers from PING failure or
      *   raw-state observers are de-duped by the connection lock in
      *   `onConnectionLost`.
-     * - [NetworkPathStatus.Satisfied]: emit to [pathSatisfiedSignal] so any
+     * - [NetworkPathStatus.Satisfied]: bump [pathSatisfiedGeneration] so any
      *   reconnect handler currently parked in `retryDelayMillis` wakes and
      *   attempts immediately.
      * - [NetworkPathStatus.Unknown]: no-op. Treated as "no information",
@@ -664,7 +685,7 @@ internal class SessionManager(
                 }
             }
             NetworkPathStatus.Satisfied -> {
-                pathSatisfiedSignal.tryEmit(Unit)
+                pathSatisfiedGeneration.update { it + 1 }
             }
             NetworkPathStatus.Unknown -> { /* no action */ }
         }

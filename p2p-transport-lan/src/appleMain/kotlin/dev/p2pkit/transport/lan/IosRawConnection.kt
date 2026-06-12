@@ -74,6 +74,23 @@ internal class IosRawConnection private constructor(
     @Volatile
     private var closed: Boolean = false
 
+    /**
+     * nw_connection_cancel must be issued for EVERY terminal path, not just
+     * local close(): remote-initiated ends (failed state, read error/EOF,
+     * write error) previously latched [closed] without cancelling, so close()
+     * early-returned and the underlying nw_connection (fd + ObjC<->Kotlin
+     * reference cycle) leaked once per remote disconnect (AUDIT-2026-06 fix).
+     * AtomicInt CAS makes the cancel exactly-once across queues.
+     */
+    private val cancelIssued = kotlin.concurrent.AtomicInt(0)
+
+    private fun cancelOnce(reason: String) {
+        if (cancelIssued.compareAndSet(0, 1)) {
+            IosLanDebug.log("conn", "nw_connection_cancel ($reason)")
+            nw_connection_cancel(connection)
+        }
+    }
+
     init {
         nw_connection_set_queue(connection, queue)
         nw_connection_set_state_changed_handler(connection) { st, _ ->
@@ -89,10 +106,17 @@ internal class IosRawConnection private constructor(
                     if (!closed) _state.value = ConnectionState.Connected
                 }
 
-                nw_connection_state_failed,
+                nw_connection_state_failed -> {
+                    closed = true
+                    _state.value = ConnectionState.Closed
+                    cancelOnce("state=failed")
+                }
+
                 nw_connection_state_cancelled -> {
                     closed = true
                     _state.value = ConnectionState.Closed
+                    // Already cancelled by the framework; just latch the flag.
+                    cancelIssued.value = 1
                 }
 
                 else -> {
@@ -156,6 +180,7 @@ internal class IosRawConnection private constructor(
                                 // delivered while session.state stays Connected.
                                 closed = true
                                 _state.value = ConnectionState.Closed
+                                cancelOnce("write error")
                                 cont.resumeWithException(
                                     NetworkException("nw_connection_send failed")
                                 )
@@ -188,11 +213,13 @@ internal class IosRawConnection private constructor(
                             IosLanDebug.log("conn", "read: completion ERROR — closing")
                             closed = true
                             _state.value = ConnectionState.Closed
+                            cancelOnce("read error")
                             cont.resume(null)
                         } else if (isComplete && (out == null || out.isEmpty())) {
                             IosLanDebug.log("conn", "read: EOF (isComplete + empty) — closing")
                             closed = true
                             _state.value = ConnectionState.Closed
+                            cancelOnce("read EOF")
                             cont.resume(null)
                         } else {
                             // Successful chunk — intentionally silent. With
@@ -205,6 +232,7 @@ internal class IosRawConnection private constructor(
                                 IosLanDebug.log("conn", "read: half-close (isComplete on non-empty chunk) — closing")
                                 closed = true
                                 _state.value = ConnectionState.Closed
+                                cancelOnce("read half-close")
                             }
                         }
                         Unit
@@ -218,11 +246,12 @@ internal class IosRawConnection private constructor(
     }
 
     override suspend fun close() {
-        if (closed) return
-        IosLanDebug.log("conn", "close: nw_connection_cancel")
         closed = true
         _state.value = ConnectionState.Closed
-        nw_connection_cancel(connection)
+        // Safe after remote termination too: cancelOnce is CAS-guarded, so
+        // this is the single place that guarantees the cancel for locally
+        // closed connections without double-cancelling remotely-ended ones.
+        cancelOnce("close()")
     }
 
     internal class NetworkException(message: String) : RuntimeException(message)

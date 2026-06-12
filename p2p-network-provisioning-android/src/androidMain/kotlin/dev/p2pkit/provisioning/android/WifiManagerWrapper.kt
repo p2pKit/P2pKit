@@ -1,5 +1,6 @@
 package dev.p2pkit.provisioning.android
 
+import dev.p2pkit.core.permission.P2pPermission
 import dev.p2pkit.core.provisioning.NetworkState
 import dev.p2pkit.core.provisioning.WifiCredentials
 import kotlinx.coroutines.flow.SharedFlow
@@ -16,6 +17,26 @@ import kotlinx.coroutines.flow.SharedFlow
 internal interface WifiManagerWrapper {
 
     fun isWifiEnabled(): Boolean
+
+    /**
+     * True when the platform supports LocalOnlyHotspot (API 26+). The manager
+     * returns the contract's `Unsupported` result below that instead of
+     * letting a NoSuchMethodError surface as PlatformError
+     * (AUDIT-2026-06 fix; module minSdk is 24).
+     */
+    val isLocalOnlyHotspotSupported: Boolean
+
+    /** True when WifiNetworkSpecifier join is supported (API 29+). */
+    val isSpecifierJoinSupported: Boolean
+
+    /**
+     * The runtime permission that actually gates hotspot/join for THIS app:
+     * NEARBY_WIFI_DEVICES only when both the device (API 33+) and the app's
+     * targetSdk are 33+; otherwise ACCESS_FINE_LOCATION. Android keys
+     * enforcement on targetSdk, so reporting NEARBY to a targetSdk<=32 app
+     * told it to request an ungrantable permission (AUDIT-2026-06 fix).
+     */
+    fun requiredRuntimePermission(): P2pPermission
 
     /**
      * Start a LocalOnlyHotspot. Suspends until the system reports either
