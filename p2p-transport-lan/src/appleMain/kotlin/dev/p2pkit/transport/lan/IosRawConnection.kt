@@ -28,13 +28,23 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import platform.Network.nw_connection_cancel
+import platform.Network.nw_connection_copy_current_path
 import platform.Network.nw_connection_set_queue
 import platform.Network.nw_connection_set_state_changed_handler
 import platform.Network.nw_connection_start
 import platform.Network.nw_connection_state_cancelled
 import platform.Network.nw_connection_state_failed
+import platform.Network.nw_connection_state_preparing
 import platform.Network.nw_connection_state_ready
+import platform.Network.nw_connection_state_waiting
 import platform.Network.nw_connection_t
+import platform.Network.nw_error_get_error_code
+import platform.Network.nw_interface_type_cellular
+import platform.Network.nw_interface_type_loopback
+import platform.Network.nw_interface_type_other
+import platform.Network.nw_interface_type_wifi
+import platform.Network.nw_interface_type_wired
+import platform.Network.nw_path_uses_interface_type
 import platform.darwin.dispatch_queue_t
 import platform.posix.uint8_tVar
 
@@ -91,25 +101,70 @@ internal class IosRawConnection private constructor(
         }
     }
 
+    /**
+     * Log which interface type(s) the connection's current path is using.
+     * Issue #3 forensic signal: a connection that reached `ready` over AWDL
+     * shows up as `wifi=true` or `other=true`; a dial that never leaves
+     * `waiting`/`preparing` has no usable path. `nw_path_uses_interface_type`
+     * is the same primitive [IosLanDataTransport]'s path monitor already uses.
+     */
+    private fun logConnectionPath(reason: String) {
+        val path = nw_connection_copy_current_path(connection)
+        if (path == null) {
+            IosLanDebug.log("conn", "$reason: current path = null")
+            return
+        }
+        val wifi = nw_path_uses_interface_type(path, nw_interface_type_wifi)
+        val cell = nw_path_uses_interface_type(path, nw_interface_type_cellular)
+        val wired = nw_path_uses_interface_type(path, nw_interface_type_wired)
+        val loop = nw_path_uses_interface_type(path, nw_interface_type_loopback)
+        val other = nw_path_uses_interface_type(path, nw_interface_type_other)
+        IosLanDebug.log(
+            "conn",
+            "$reason path interfaces: wifi=$wifi cellular=$cell wired=$wired loopback=$loop other=$other " +
+                "(AWDL usually reports wifi=true or other=true)"
+        )
+    }
+
     init {
         nw_connection_set_queue(connection, queue)
-        nw_connection_set_state_changed_handler(connection) { st, _ ->
+        nw_connection_set_state_changed_handler(connection) { st, err ->
             val label = when (st) {
                 nw_connection_state_ready -> "ready"
+                nw_connection_state_preparing -> "preparing"
+                nw_connection_state_waiting -> "waiting"
                 nw_connection_state_failed -> "failed"
                 nw_connection_state_cancelled -> "cancelled"
                 else -> "raw=$st"
             }
-            IosLanDebug.log("conn", "state-changed -> $label")
+            // nw_error carries the POSIX errno (e.g. 65 EHOSTUNREACH, 61
+            // ECONNREFUSED, 60 ETIMEDOUT) — the why behind a stuck/failed dial.
+            val errCode = err?.let { nw_error_get_error_code(it) }
+            IosLanDebug.log("conn", "state-changed -> $label" + (errCode?.let { " errCode=$it" } ?: ""))
             when (st) {
                 nw_connection_state_ready -> {
                     if (!closed) _state.value = ConnectionState.Connected
+                    // Issue #3: log which interface the established connection
+                    // actually uses — reveals whether the dial routed over
+                    // Wi-Fi/wired vs. AWDL/peer-to-peer ("other").
+                    logConnectionPath("ready")
+                }
+
+                nw_connection_state_waiting -> {
+                    // Issue #3: a dial to an AWDL-discovered endpoint that these
+                    // (non-peer-to-peer) params cannot route to typically PARKS
+                    // here with a no-route error rather than failing fast.
+                    IosLanDebug.log(
+                        "conn",
+                        "WAITING errCode=${errCode ?: 0} — endpoint not yet routable " +
+                            "(AWDL-only peer without include_peer_to_peer? issue #3)"
+                    )
                 }
 
                 nw_connection_state_failed -> {
                     closed = true
                     _state.value = ConnectionState.Closed
-                    cancelOnce("state=failed")
+                    cancelOnce("state=failed errCode=${errCode ?: 0}")
                 }
 
                 nw_connection_state_cancelled -> {
@@ -120,7 +175,7 @@ internal class IosRawConnection private constructor(
                 }
 
                 else -> {
-                    // .invalid / .waiting / .preparing — keep as Connecting.
+                    // .invalid / .preparing — keep as Connecting.
                 }
             }
             Unit

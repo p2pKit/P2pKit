@@ -434,6 +434,15 @@ internal class IosLanDiscoveryTransport(
 
         val browserParams = nw_parameters_create()
         nw_parameters_set_include_peer_to_peer(browserParams, true)
+        // Issue #3 (AWDL asymmetry): the BROWSER opts into peer-to-peer (AWDL),
+        // so it can DISCOVER peers reachable only over awdl0. The data
+        // transport's listener/connection params do NOT set this, so a peer
+        // found here over AWDL may be UNDIALABLE — watch the conn-path lines in
+        // IosRawConnection on the subsequent dial.
+        IosLanDebug.log(
+            "browse",
+            "browser params: include_peer_to_peer=true (AWDL discovery ENABLED)"
+        )
 
         val b = nw_browser_create(descriptor, browserParams)
             ?: error("nw_browser_create returned null")

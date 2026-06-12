@@ -71,6 +71,10 @@ internal class JvmLanDataTransport(
                 registration.tcpPort = sock.localPort
                 _tcpPort.value = sock.localPort
                 serverSocketFlow.value = sock
+                JvmLanDiag.log(
+                    "data",
+                    "server bound: ${sock.localSocketAddress} (wildcard 0.0.0.0, port=${sock.localPort})"
+                )
                 Unit
             }
         }
@@ -87,6 +91,11 @@ internal class JvmLanDataTransport(
         } ?: throw P2pError.NoTransportAvailable(peer.publicPeer)
         val host = hint.host!!
         val port = hint.port!!
+        val pid8 = peer.publicPeer.id.value.take(8)
+        JvmLanDiag.log(
+            "dial",
+            "connect peer=$pid8 -> $host:$port (timeout=${LanConstants.TCP_CONNECT_TIMEOUT_MS}ms)"
+        )
         val socket = withContext(Dispatchers.IO) {
             val s = Socket()
             try {
@@ -106,9 +115,17 @@ internal class JvmLanDataTransport(
                     is NoRouteToHostException -> "unreachable (${e.message ?: "EHOSTUNREACH"})"
                     else -> "failed (${e::class.simpleName}: ${e.message ?: ""})"
                 }
+                JvmLanDiag.log("dial", "connect FAILED peer=$pid8 $host:$port $reason")
                 throw P2pError.ConnectionFailed("TCP connect $host:$port $reason")
             }
         }
+        // local* reveals WHICH local interface the OS chose to egress toward
+        // the peer — the Issue #2 evidence that the dial used Wi-Fi vs. a
+        // cellular / VPN route.
+        JvmLanDiag.log(
+            "dial",
+            "connect OK peer=$pid8 local=${socket.localSocketAddress} remote=${socket.remoteSocketAddress}"
+        )
         return JvmRawConnection(socket)
     }
 
@@ -128,12 +145,17 @@ internal class JvmLanDataTransport(
                         if (!closed) close(e)
                         break
                     }
+                    JvmLanDiag.log(
+                        "accept",
+                        "inbound from ${socket.remoteSocketAddress} -> local ${socket.localSocketAddress}"
+                    )
                     // Close the socket when the channel refuses it (buffer full
                     // under an accept burst / stalled collector): silently
                     // dropping leaked the fd while the remote believed it had
                     // connected (AUDIT-2026-06 fix).
                     val offered = trySend(JvmRawConnection(socket))
                     if (offered.isFailure) {
+                        JvmLanDiag.log("accept", "DROPPED ${socket.remoteSocketAddress} (channel full) — closing")
                         runCatching { socket.close() }
                     }
                 }

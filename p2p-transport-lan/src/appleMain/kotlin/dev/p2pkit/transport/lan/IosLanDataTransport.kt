@@ -148,6 +148,16 @@ internal class IosLanDataTransport(
         }
         nw_parameters_prohibit_interface_type(p, nw_interface_type_cellular)
         _parameters = p
+        // Issue #3: these params back BOTH the listener and every outbound
+        // connection, and they do NOT call nw_parameters_set_include_peer_to_peer.
+        // The browser (IosLanDiscoveryTransport) DOES, so an AWDL-discovered peer
+        // may be undialable with these params. Logged once so the asymmetry is
+        // explicit in the trail.
+        IosLanDebug.log(
+            "data",
+            "TCP params built: cellular=PROHIBITED, include_peer_to_peer=NOT_SET " +
+                "(listener + outbound) — AWDL asymmetry vs browser (issue #3)"
+        )
         return p
     }
 
@@ -436,6 +446,15 @@ internal class IosLanDataTransport(
             )
             throw P2pError.ConnectionFailed("iOS LAN TCP parameters unavailable")
         }
+        // Issue #3: a `browse(AWDL-capable)` endpoint source + a dial that then
+        // sits in `waiting` (see IosRawConnection conn-path lines) is the
+        // signature of the AWDL asymmetry — the peer was found over peer-to-peer
+        // but these connection params can't route there.
+        IosLanDebug.log(
+            "connect",
+            "peer=$pid8 endpointSource=${if (cached != null) "browse(AWDL-capable)" else "manual-IP-hint"} " +
+                "connParams.include_peer_to_peer=NOT_SET"
+        )
         val conn = nw_connection_create(endpoint, params) ?: run {
             IosLanDebug.log("connect", "ABORT peer=$pid8 — nw_connection_create returned null")
             throw P2pError.ConnectionFailed("nw_connection_create returned null")

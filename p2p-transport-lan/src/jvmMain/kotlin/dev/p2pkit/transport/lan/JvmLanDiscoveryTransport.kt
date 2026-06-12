@@ -81,6 +81,17 @@ internal class JvmLanDiscoveryTransport(
         withContext(Dispatchers.IO) { jmdns!!.registerService(info) }
         advertisedInfo = info
         advertising = true
+        // What addresses did JmDNS actually publish for us? These are the IPs
+        // a remote peer will try to dial — if they include a non-LAN interface
+        // that's the Issue #2 advertise-side failure.
+        runCatching {
+            JvmLanDiag.log(
+                "advertise",
+                "registered pid=${registration.localPeerId.value.take(8)} port=${registration.tcpPort} " +
+                    "publishedAddrs=[${info.inetAddresses.joinToString(",") { it.hostAddress }}]"
+            )
+        }
+        Unit
     }
 
     override suspend fun stopAdvertising() = lock.withLock {
@@ -117,6 +128,7 @@ internal class JvmLanDiscoveryTransport(
                 val info = event.info ?: return
                 val pid = info.getPropertyString(LanConstants.TXT_PEER_ID) ?: return
                 if (pid == registration.localPeerId.value) return
+                JvmLanDiag.log("browse", "serviceRemoved pid=${pid.take(8)} — emitting PeerEvent.Lost")
                 _events.tryEmit(PeerEvent.Lost(PeerId(pid)))
             }
 
@@ -130,7 +142,20 @@ internal class JvmLanDiscoveryTransport(
                 val name = info.getPropertyString(LanConstants.TXT_DEVICE_NAME) ?: pid
                 val plat = info.getPropertyString(LanConstants.TXT_PLATFORM)
                 val caps = info.getPropertyString(LanConstants.TXT_CAPABILITIES)
-                val host = selectRoutableHost(info.inetAddresses.toList()) ?: return
+                // Issue #2: log ALL candidate addresses the peer advertised and
+                // which one selectRoutableHost picked to dial. A peer that only
+                // advertised a non-routable address (e.g. an unscoped fe80::)
+                // shows up here as "no routable host".
+                val candidates = info.inetAddresses.toList()
+                val host = selectRoutableHost(candidates) ?: run {
+                    JvmLanDiag.log(
+                        "browse",
+                        "serviceResolved pid=${pid.take(8)} name=$name " +
+                            "candidates=[${candidates.joinToString(",") { it.hostAddress }}] " +
+                            "— NO routable host, skipping (will re-fire)"
+                    )
+                    return
+                }
                 val port = info.port
                 val supportedTransports = caps
                     ?.split(",")
@@ -149,6 +174,12 @@ internal class JvmLanDiscoveryTransport(
                     transportHints = listOf(
                         TransportHint(type = TransportKind.LAN, host = host, port = port)
                     )
+                )
+                JvmLanDiag.log(
+                    "browse",
+                    "serviceResolved pid=${pid.take(8)} name=$name plat=$plat " +
+                        "candidates=[${candidates.joinToString(",") { it.hostAddress }}] " +
+                        "selected=$host:$port — emitting PeerEvent.Found"
                 )
                 _events.tryEmit(PeerEvent.Found(internalPeer))
             }
@@ -217,9 +248,28 @@ internal class JvmLanDiscoveryTransport(
         // advertises a loopback IP, which `selectRoutableHost` rejects.
         // Production callers leave this unset and get the default behaviour.
         val bindAddress = System.getProperty("dev.p2pkit.test.jmdnsBindAddress")
+        // Issue #2 forensic trail: dump every local NIC and the address JmDNS
+        // is about to bind to BEFORE the bind, so a wrong-interface selection
+        // (VPN / virtual / loopback / tethered-cellular) is visible.
+        JvmLanDiag.log(
+            "bind",
+            "ensureJmdns: " +
+                (bindAddress?.let { "bindOverride=$it" }
+                    ?: "JmDNS default interface selection (no override)")
+        )
+        runCatching {
+            JvmLanDiag.log("bind", "InetAddress.getLocalHost()=${InetAddress.getLocalHost().hostAddress}")
+        }
+        JvmLanDiag.log("nic", "local interfaces:${JvmLanDiag.describeInterfaces()}")
         jmdns = withContext(Dispatchers.IO) {
             if (bindAddress != null) JmDNS.create(InetAddress.getByName(bindAddress))
             else JmDNS.create()
+        }
+        runCatching {
+            JvmLanDiag.log(
+                "bind",
+                "JmDNS created: boundInterface=${jmdns?.getInterface()?.hostAddress} name=${jmdns?.getName()}"
+            )
         }
     }
 

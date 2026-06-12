@@ -63,6 +63,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import dev.p2pkit.core.AppId
+import dev.p2pkit.transport.lan.JvmLanDiag
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.P2pKit
@@ -101,16 +102,22 @@ import java.io.OutputStream
 // Entry point
 // =====================================================================
 
-fun main() = application {
-    Window(
-        onCloseRequest = ::exitApplication,
-        state = rememberWindowState(width = 980.dp, height = 760.dp),
-        title = "P2pKit Test Harness (Desktop)"
-    ) {
+fun main() {
+    // LAN forensic trace (Issue #2): emit every P2pKitLAN line to stdout of the
+    // terminal that launched the UI. Harmless in a test harness; the library
+    // default stays off.
+    JvmLanDiag.enabled = true
+    application {
+        Window(
+            onCloseRequest = ::exitApplication,
+            state = rememberWindowState(width = 980.dp, height = 760.dp),
+            title = "P2pKit Test Harness (Desktop)"
+        ) {
         MaterialTheme {
             Surface(modifier = Modifier.fillMaxSize()) {
                 P2pKitSampleApp()
             }
+        }
         }
     }
 }

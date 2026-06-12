@@ -1,5 +1,6 @@
 package dev.p2pkit.transport.lan
 
+import android.util.Log
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DataTransport
@@ -67,6 +68,10 @@ internal class AndroidLanDataTransport(
                 registration.tcpPort = sock.localPort
                 _tcpPort.value = sock.localPort
                 serverSocketFlow.value = sock
+                Log.d(
+                    TAG,
+                    "server bound: ${sock.localSocketAddress} (wildcard 0.0.0.0, port=${sock.localPort})"
+                )
                 Unit
             }
         }
@@ -83,6 +88,8 @@ internal class AndroidLanDataTransport(
         } ?: throw P2pError.NoTransportAvailable(peer.publicPeer)
         val host = hint.host!!
         val port = hint.port!!
+        val pid8 = peer.publicPeer.id.value.take(8)
+        Log.d(TAG, "connect peer=$pid8 -> $host:$port (timeout=${LanConstants.TCP_CONNECT_TIMEOUT_MS}ms)")
         val socket = withContext(Dispatchers.IO) {
             val s = Socket()
             try {
@@ -102,9 +109,13 @@ internal class AndroidLanDataTransport(
                     is NoRouteToHostException -> "unreachable (${e.message ?: "EHOSTUNREACH"})"
                     else -> "failed (${e::class.simpleName}: ${e.message ?: ""})"
                 }
+                Log.d(TAG, "connect FAILED peer=$pid8 $host:$port $reason")
                 throw P2pError.ConnectionFailed("TCP connect $host:$port $reason")
             }
         }
+        // local* reveals which local interface the OS chose to egress toward the
+        // peer — Issue #2 evidence (Wi-Fi vs. cellular/VPN route).
+        Log.d(TAG, "connect OK peer=$pid8 local=${socket.localSocketAddress} remote=${socket.remoteSocketAddress}")
         return AndroidRawConnection(socket)
     }
 
@@ -128,8 +139,10 @@ internal class AndroidLanDataTransport(
                     // under an accept burst / stalled collector): silently
                     // dropping leaked the fd while the remote believed it had
                     // connected (AUDIT-2026-06 fix).
+                    Log.d(TAG, "inbound from ${socket.remoteSocketAddress} -> local ${socket.localSocketAddress}")
                     val offered = trySend(AndroidRawConnection(socket))
                     if (offered.isFailure) {
+                        Log.d(TAG, "DROPPED ${socket.remoteSocketAddress} (channel full) — closing")
                         runCatching { socket.close() }
                     }
                 }
@@ -148,8 +161,13 @@ internal class AndroidLanDataTransport(
         if (closed) return
         closed = true
         val sock = serverSocket ?: return
+        Log.d(TAG, "close: shutting down server socket ${sock.localSocketAddress}")
         withContext(Dispatchers.IO) {
             runCatching { sock.close() }
         }
+    }
+
+    private companion object {
+        const val TAG = "P2pKitLanData"
     }
 }

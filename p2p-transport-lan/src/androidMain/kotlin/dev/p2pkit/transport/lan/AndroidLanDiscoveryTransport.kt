@@ -352,7 +352,13 @@ internal class AndroidLanDiscoveryTransport(
      */
     private suspend fun ensureJmdns() {
         if (jmdns != null) return
-        val bindAddr = resolveBindAddress(connectivity.activeNetwork)
+        val active = connectivity.activeNetwork
+        val bindAddr = resolveBindAddress(active)
+        // Issue #2 smoking gun: classify the network we're binding JmDNS to.
+        // If transports=[CELLULAR] or [VPN] the bind picked an interface that
+        // cannot carry LAN multicast/TCP — discovery and dials will fail.
+        Log.d(TAG, "ensureJmdns: active ${AndroidLanDiag.describeNetwork(connectivity, active)}")
+        Log.d(TAG, "ensureJmdns: NICs:${AndroidLanDiag.describeInterfaces()}")
         jmdns = withContext(Dispatchers.IO) {
             if (bindAddr != null) JmDNS.create(bindAddr) else JmDNS.create()
         }
@@ -502,7 +508,9 @@ internal class AndroidLanDiscoveryTransport(
             )
             Log.d(
                 TAG,
-                "serviceResolved: pid=${pid.take(8)} host=$host port=$port — emitting PeerEvent.Found"
+                "serviceResolved: pid=${pid.take(8)} " +
+                    "candidates=[${candidates.joinToString(",") { it.hostAddress }}] " +
+                    "selected=$host:$port — emitting PeerEvent.Found"
             )
             _events.tryEmit(PeerEvent.Found(internalPeer))
         }
@@ -784,7 +792,11 @@ internal class AndroidLanDiscoveryTransport(
         // crash an Android host process. On failure we log and leave jmdns
         // null; the next network callback / refresh() schedules another
         // rebind attempt (AUDIT-2026-06 fix).
-        val newBindAddr = resolveBindAddress(target ?: defaultTarget)
+        val rebindTarget = target ?: defaultTarget
+        // Issue #2: classify the network we are about to rebind onto, so a
+        // post-flip rebind that lands on cellular/VPN is visible in the trail.
+        Log.d(TAG, "rebindNow: rebinding onto ${AndroidLanDiag.describeNetwork(connectivity, rebindTarget)}")
+        val newBindAddr = resolveBindAddress(rebindTarget)
         val fresh = try {
             withContext(Dispatchers.IO) {
                 if (newBindAddr != null) JmDNS.create(newBindAddr) else JmDNS.create()

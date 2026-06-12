@@ -12,6 +12,7 @@ import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transfer.sendFile
 import dev.p2pkit.provisioning.desktop.jvm
+import dev.p2pkit.transport.lan.JvmLanDiag
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -80,7 +81,20 @@ fun main(args: Array<String>) {
     val reconnectArg = args.firstOrNull { it.startsWith("reconnect=") }
     val reconnect = parseReconnect(reconnectArg)
 
+    // LAN forensic trace (Issue #2). ON by default in this harness — every
+    // P2pKitLAN line goes to stdout (greppable). Pass `trace=off` to silence,
+    // or `trace=frames` to additionally log every byte chunk on the data socket.
+    when (args.firstOrNull { it.startsWith("trace=") }?.substringAfter("=")) {
+        "off" -> JvmLanDiag.enabled = false
+        "frames" -> { JvmLanDiag.enabled = true; JvmLanDiag.traceFrames = true }
+        else -> JvmLanDiag.enabled = true
+    }
+
     println("[P2pKit CLI] deviceName=$deviceName  appId=${appId.value}  reconnect=${reconnect.describe()}")
+    println(
+        "[P2pKit CLI] LAN trace: enabled=${JvmLanDiag.enabled} frames=${JvmLanDiag.traceFrames} " +
+            "(grep 'P2pKitLAN'; pass trace=off / trace=frames to change)"
+    )
 
     val p2p = P2pKit.create {
         this.appId = appId
