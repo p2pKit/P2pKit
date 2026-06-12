@@ -1,9 +1,17 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
+    `maven-publish`
 }
 
 kotlin {
     jvmToolchain(17)
+}
+
+// Sources + (empty, Kotlin) Javadoc jars so the published artifact satisfies
+// Maven Central's required-artifacts rule.
+java {
+    withSourcesJar()
+    withJavadocJar()
 }
 
 dependencies {
@@ -14,4 +22,42 @@ dependencies {
     testImplementation(kotlin("test"))
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.kotlinx.coroutines.core)
+}
+
+// AUDIT-2026-06: this provisioning sidecar was previously unpublishable
+// (no `maven-publish`). Plain Kotlin/JVM modules don't auto-create a
+// publication, so register one from the `java` component; group/version come
+// from the root `allprojects` block and signing is wired centrally in the root
+// build. POM enriched here for Central-readiness.
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+            pom {
+                name.set("P2pKit ${project.name}")
+                description.set(
+                    "P2pKit desktop network-provisioning sidecar — manual-IP fallback " +
+                        "(NetworkProvisioningManager) for mDNS-blocked LANs on JVM."
+                )
+                url.set("https://github.com/Apdelrahman1911/P2pKit")
+                licenses {
+                    license {
+                        name.set("The Apache License, Version 2.0")
+                        url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                    }
+                }
+                developers {
+                    developer {
+                        id.set("Apdelrahman1911")
+                        name.set("Abdelrahman")
+                    }
+                }
+                scm {
+                    url.set("https://github.com/Apdelrahman1911/P2pKit")
+                    connection.set("scm:git:https://github.com/Apdelrahman1911/P2pKit.git")
+                    developerConnection.set("scm:git:ssh://git@github.com/Apdelrahman1911/P2pKit.git")
+                }
+            }
+        }
+    }
 }

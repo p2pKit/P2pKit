@@ -48,6 +48,14 @@ class SessionReconnectRotationTest {
         supportedTransports = setOf(TransportKind.LAN)
     )
 
+    // AUDIT-2026-06: bound for waiting on a discovery emit() to propagate
+    // through PeerRegistry's async onEach pipeline into the `peers` StateFlow.
+    // Widened from 2_000 because the suite runs in parallel (org.gradle.parallel)
+    // and saturates CPU — the propagation itself is sub-200ms, but a starved
+    // scheduler can blow a tighter bound and flake the suite. Mirrors the
+    // NetworkPathRecoveryTest 3_500ms widening.
+    private val peerPropagationTimeoutMs = 3_500L
+
     @Test
     fun reconnectUsesRefreshedHintsAfterPeerRegistryUpdate() = runBlocking<Unit> {
         // Two pre-staged pairs: first breaks, second is what the retry reaches.
@@ -111,7 +119,7 @@ class SessionReconnectRotationTest {
         try {
             // Seed alice's PeerRegistry with bobV1.
             aliceDiscovery.emit(PeerEvent.Found(bobV1))
-            withTimeout(2_000) {
+            withTimeout(peerPropagationTimeoutMs) {
                 alice.peers.first { list -> list.any { it.id == bobPeer.id } }
             }
 
@@ -215,7 +223,7 @@ class SessionReconnectRotationTest {
             // staleTimeoutMillis). The reconnect handler should fall back
             // to its originalInternalPeer capture.
             aliceDiscovery.emit(PeerEvent.Found(bobV1))
-            withTimeout(2_000) {
+            withTimeout(peerPropagationTimeoutMs) {
                 alice.peers.first { list -> list.any { it.id == bobPeer.id } }
             }
             val session = withTimeout(5_000) { alice.connect(bobPeer) }
@@ -225,7 +233,7 @@ class SessionReconnectRotationTest {
             // Break the wire and immediately evict the peer from the registry.
             pair1.a.breakWith(RuntimeException("simulated wire break"))
             aliceDiscovery.emit(PeerEvent.Lost(bobPeer.id))
-            withTimeout(2_000) {
+            withTimeout(peerPropagationTimeoutMs) {
                 alice.peers.first { list -> list.none { it.id == bobPeer.id } }
             }
 
@@ -307,7 +315,7 @@ class SessionReconnectRotationTest {
         }
         try {
             aliceDiscovery.emit(PeerEvent.Found(bobV1))
-            withTimeout(2_000) {
+            withTimeout(peerPropagationTimeoutMs) {
                 alice.peers.first { list -> list.any { it.id == bobPeer.id } }
             }
 

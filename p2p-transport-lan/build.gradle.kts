@@ -6,40 +6,6 @@ plugins {
     `maven-publish`
 }
 
-// V0.4-PROVENANCE (L3): write a BUILD_COMMIT.txt sidecar file alongside
-// the freshly-assembled XCFramework so the Xcode pre-build script can
-// validate the framework's commit hash against `git rev-parse HEAD`
-// before allowing the iOS app to compile against it. Wired as a
-// `finalizedBy` on both the Release and Debug XCFramework assembly
-// tasks below.
-val writeXcframeworkCommit by tasks.registering {
-    val rootDir = rootProject.projectDir
-    val outDirs = listOf(
-        layout.buildDirectory.dir("XCFrameworks/release"),
-        layout.buildDirectory.dir("XCFrameworks/debug")
-    )
-    outputs.upToDateWhen { false }
-    doLast {
-        fun git(vararg args: String): String = try {
-            val p = ProcessBuilder("git", *args)
-                .directory(rootDir)
-                .redirectErrorStream(true)
-                .start()
-            val out = p.inputStream.bufferedReader().readText().trim()
-            if (p.waitFor() == 0) out else ""
-        } catch (_: Exception) {
-            ""
-        }
-        val commit = git("rev-parse", "HEAD").ifBlank { "unknown" }
-        outDirs.forEach { dirProvider ->
-            val dir = dirProvider.get().asFile
-            if (dir.exists()) {
-                dir.resolve("BUILD_COMMIT.txt").writeText(commit + "\n")
-            }
-        }
-    }
-}
-
 kotlin {
     // Bundles all three iOS arch slices (device arm64 + sim arm64 + sim x64)
     // into a single .xcframework so the Xcode app at iosApp/ can pick the
@@ -115,21 +81,55 @@ kotlin {
     }
 }
 
-// Make every XCFramework-assembly task write the BUILD_COMMIT.txt sidecar.
-// V0.4-PROVENANCE (L3): the Xcode pre-build script reads this file to
-// validate the deployed framework matches `git rev-parse HEAD` before
-// allowing the iOS app to compile against it.
+// V0.4-PROVENANCE (L3) + AUDIT-2026-06: stamp BUILD_COMMIT.txt as the FINAL
+// action of each per-config XCFramework assembly. Using the assembly task's
+// own `doLast` (rather than a shared `finalizedBy` task) means the stamp is
+// written ONLY when that assembly actually executes and SUCCEEDS:
+//   • a `doLast` is skipped when the task FAILS — a `finalizedBy` runs even on
+//     failure, which would stamp a failed/partial framework with the current
+//     HEAD and let the Xcode freshness guard pass against a broken artifact;
+//   • a `doLast` is skipped when the task is UP-TO-DATE — so a no-op rebuild
+//     after HEAD moved no longer re-stamps an unchanged framework with a newer
+//     commit (the old "freshness guard can lie" bug); and
+//   • each task stamps ONLY the config it produced (release XOR debug), so a
+//     debug-only assembly can't re-stamp a stale release dir, or vice-versa.
+// The Xcode pre-build script reads this file to validate the deployed
+// framework matches `git rev-parse HEAD` before the iOS app compiles.
 afterEvaluate {
+    val provenanceRootDir = rootProject.projectDir
     tasks.matching {
         it.name.startsWith("assemble") && it.name.contains("XCFramework")
     }.configureEach {
-        finalizedBy(writeXcframeworkCommit)
+        val config = when {
+            name.contains("Release") -> "release"
+            name.contains("Debug") -> "debug"
+            else -> null // umbrella aggregate task: per-config tasks stamp their own dir
+        } ?: return@configureEach
+        val outDir = layout.buildDirectory.dir("XCFrameworks/$config")
+        doLast {
+            fun git(vararg args: String): String = try {
+                val p = ProcessBuilder("git", *args)
+                    .directory(provenanceRootDir)
+                    .redirectErrorStream(true)
+                    .start()
+                val out = p.inputStream.bufferedReader().readText().trim()
+                if (p.waitFor() == 0) out else ""
+            } catch (_: Exception) {
+                ""
+            }
+            val commit = git("rev-parse", "HEAD").ifBlank { "unknown" }
+            val dir = outDir.get().asFile
+            if (dir.exists()) {
+                dir.resolve("BUILD_COMMIT.txt").writeText(commit + "\n")
+            }
+        }
     }
 }
 
 // Maven publishing (fixes no-publishing-plugin / no-pom-metadata). See
 // :p2p-core build for rationale. Auto-created KMP publications; POM enriched
-// for Central-readiness; signing left to CI.
+// for Central-readiness; signing wired centrally in the root build (conditional
+// on a PGP key being supplied).
 publishing {
     publications.withType<MavenPublication>().configureEach {
         pom {

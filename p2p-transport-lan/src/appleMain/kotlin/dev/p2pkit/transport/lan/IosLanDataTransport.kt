@@ -109,7 +109,7 @@ internal class IosLanDataTransport(
     /**
      * Non-TLS TCP parameters, matching the JVM/Android `Socket` wire format.
      * `SecurityMode.NoneForMvp` parity. Shared between listener and outbound
-     * connections. Constructed entirely in ObjC via the
+     * connections. Built lazily via [ensureParameters] in ObjC through the
      * [p2pkit_nw_create_plain_tcp_parameters] cinterop helper.
      *
      * Cellular is prohibited so the LAN listener never binds on a cellular-only
@@ -118,11 +118,38 @@ internal class IosLanDataTransport(
      * the v0.5 residual edge case where an iPhone with cellular ENABLED would
      * rotate its listener through an intermediate cellular-only port during a
      * Wi-Fi flap. Wired Ethernet remains permitted.
+     *
+     * AUDIT-2026-06: construction was previously an eager property initializer
+     * that called `error()` when the cinterop helper returned null. A throw out
+     * of a constructor crosses into ObjC at `P2pKit.create { }`, and because
+     * Kotlin/Native cannot bridge an un-`@Throws` exception it panics the host
+     * process. It is now created lazily so the failure surfaces as a typed
+     * `Result.failure` / `P2pError` through [start] / [connect] instead.
      */
-    internal val parameters: nw_parameters_t =
-        (p2pkit_nw_create_plain_tcp_parameters()
-            ?: error("p2pkit_nw_create_plain_tcp_parameters returned null"))
-            .also { nw_parameters_prohibit_interface_type(it, nw_interface_type_cellular) }
+    @Volatile
+    private var _parameters: nw_parameters_t = null
+
+    /**
+     * Lazily create (and cache) the shared TCP parameters. Returns `null` if the
+     * cinterop helper fails — callers map that to a typed failure rather than a
+     * process-killing throw. Normally created by [start] under [startMutex]
+     * before any [connect]; the only unsynchronized caller is [connect], whose
+     * worst case is a benign one-time double-create if it ever raced the very
+     * first [start] (it does not in practice — the kit starts before it dials).
+     */
+    private fun ensureParameters(): nw_parameters_t {
+        _parameters?.let { return it }
+        val p = p2pkit_nw_create_plain_tcp_parameters() ?: run {
+            IosLanDebug.log(
+                "data",
+                "ensureParameters: p2pkit_nw_create_plain_tcp_parameters returned NULL"
+            )
+            return null
+        }
+        nw_parameters_prohibit_interface_type(p, nw_interface_type_cellular)
+        _parameters = p
+        return p
+    }
 
     private val _tcpPort = MutableStateFlow<Int?>(null)
     override val tcpPort: StateFlow<Int?> = _tcpPort.asStateFlow()
@@ -266,6 +293,15 @@ internal class IosLanDataTransport(
             IosLanDebug.log("data", "start: refused (transport already closed)")
             return Result.failure(IllegalStateException("transport already closed"))
         }
+        if (ensureParameters() == null) {
+            IosLanDebug.log("data", "start: refused (TCP parameters unavailable)")
+            return Result.failure(
+                IllegalStateException(
+                    "iOS LAN TCP parameters unavailable " +
+                        "(p2pkit_nw_create_plain_tcp_parameters returned null)"
+                )
+            )
+        }
         val l = buildListener() ?: return Result.failure(
             IllegalStateException(
                 "iOS LAN listener failed to bind a TCP port within 5 s " +
@@ -290,7 +326,14 @@ internal class IosLanDataTransport(
      */
     private fun buildListener(): nw_listener_t {
         IosLanDebug.log("data", "buildListener: nw_listener_create")
-        val l = nw_listener_create(parameters)
+        val params = ensureParameters() ?: run {
+            IosLanDebug.log(
+                "data",
+                "buildListener: TCP parameters unavailable (cinterop helper returned null)"
+            )
+            return null
+        }
+        val l = nw_listener_create(params)
             ?: run {
                 IosLanDebug.log("data", "buildListener: nw_listener_create returned NULL")
                 return null
@@ -386,7 +429,14 @@ internal class IosLanDataTransport(
                 IosLanDebug.log("connect", "ABORT peer=$pid8 — no transport available (no cached endpoint, no manual-IP hint)")
                 throw P2pError.NoTransportAvailable(peer.publicPeer)
             }
-        val conn = nw_connection_create(endpoint, parameters) ?: run {
+        val params = ensureParameters() ?: run {
+            IosLanDebug.log(
+                "connect",
+                "ABORT peer=$pid8 — TCP parameters unavailable (cinterop helper returned null)"
+            )
+            throw P2pError.ConnectionFailed("iOS LAN TCP parameters unavailable")
+        }
+        val conn = nw_connection_create(endpoint, params) ?: run {
             IosLanDebug.log("connect", "ABORT peer=$pid8 — nw_connection_create returned null")
             throw P2pError.ConnectionFailed("nw_connection_create returned null")
         }

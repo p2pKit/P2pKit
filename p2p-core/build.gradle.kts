@@ -112,9 +112,9 @@ kotlin {
 // Android-KMP-library plugins auto-create the per-target publications once
 // `maven-publish` is applied; group/version come from the root `allprojects`
 // block (dev.p2pkit / VERSION_NAME). We enrich the POM here so artifacts carry
-// the metadata Maven Central requires. Signing is intentionally NOT configured —
-// publishToMavenLocal needs none; add a signing plugin + keys in CI before a
-// Central release.
+// the metadata Maven Central requires. Signing is wired centrally in the root
+// build (conditional on a PGP key being supplied), so local `publishToMavenLocal`
+// stays keyless while a Central release just sets the signing properties.
 publishing {
     publications.withType<MavenPublication>().configureEach {
         pom {
