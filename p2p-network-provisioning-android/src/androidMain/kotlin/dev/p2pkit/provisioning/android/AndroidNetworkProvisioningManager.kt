@@ -42,8 +42,11 @@ import kotlinx.coroutines.sync.withLock
  *   their own). Lifetime is bound to the underlying
  *   `LocalOnlyHotspotReservation` — [stopLocalNetwork] (or scope
  *   cancellation) closes the reservation.
- * - [joinLocalNetwork]: returns [JoinNetworkResult.Unsupported] until
- *   v0.2.1 task 12 (Wi-Fi join via `WifiNetworkSpecifier`) lands.
+ * - [joinLocalNetwork]: joins a specific Wi-Fi network via
+ *   `WifiNetworkSpecifier` + `ConnectivityManager.requestNetwork` (the
+ *   system always shows a user-approval prompt; on success the process is
+ *   bound to the joined network). Requires Android 10 (API 29) — returns
+ *   [JoinNetworkResult.Unsupported] below that.
  * - [getManualConnectionInfo] / [createManualPeer]: identical shape to the
  *   JVM impl. While the hotspot is running, [ManualConnectionInfo.hostAddresses]
  *   includes the soft-AP interface IP.

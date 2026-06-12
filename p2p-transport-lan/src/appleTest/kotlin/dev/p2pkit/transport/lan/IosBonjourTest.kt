@@ -8,7 +8,7 @@ import kotlin.test.assertTrue
  * Unit tests for the iOS Bonjour TXT-record helpers.
  *
  * Round-trip on every input we plausibly ship over the wire:
- * - The five `LanConstants.TXT_*` keys (the only keys the discovery
+ * - The six `LanConstants.TXT_*` keys (the only keys the discovery
  *   transport advertises today).
  * - Empty values (key present, value blank).
  * - Unicode values (device names — surrogate pairs in emoji, non-ASCII

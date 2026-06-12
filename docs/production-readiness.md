@@ -1,8 +1,13 @@
 # P2pKit Production Readiness — Design Doc (v0.3.0+)
 
-Status: **proposal, awaiting review**. Targets the milestone after sample-app
-edge-case hardening. Builds on existing `ReconnectPolicy`, `BackgroundPolicy`,
-and `SessionManager`; no API breakage in v0.3, only new opt-in behaviour.
+Status: **partially implemented** *(updated 2026-06)*. §3 (transport lifecycle)
+and §4 (path-change recovery) shipped in v0.4 — `suspend fun start(): Result<Unit>`
+on the transports, `NetworkPathObserver` with Android/iOS impls, iOS path monitor +
+listener rebind. §2 (backoff + jitter), §5 (`IosBackgroundTaskGuard`), and §6
+(foreground-service sample) remain unimplemented proposals. Builds on existing
+`ReconnectPolicy`, `BackgroundPolicy`, and `SessionManager`; no API breakage,
+only new opt-in behaviour. "Today" snapshots below are kept as written at
+proposal time, with per-section status notes.
 
 ## 1. Goals & non-goals
 
@@ -15,6 +20,11 @@ TLS/pairing, cross-LAN reachability. `AppKilledPolicy` stays
 `NoPersistenceForMvp`. New peers go through full discovery + handshake.
 
 ## 2. Reconnect strategy
+
+*Status: still proposed — `ReconnectPolicy.Enabled` remains fixed-delay as of
+v0.6. Note one part of the "Today" snapshot has since improved: `V0.4-RECONNECT`
+replaced the captured-`InternalPeer` reuse with per-attempt endpoint
+re-resolution from fresh discovery data.*
 
 **Today.** `ReconnectPolicy.Enabled(maxAttempts, retryDelayMillis)` — fixed
 delay, outgoing-only, reuses the captured `InternalPeer`. Exhaustion → `Failed`.
@@ -34,9 +44,13 @@ for reconnect when the policy is `Enabled` AND the local side initiates a
 
 ## 3. Transport / session lifecycle ownership
 
-**Today.** `SessionManager` owns sessions; transports own `DataTransport` +
-`DiscoveryTransport`; `IosLanDataTransport.init` binds the listener
-synchronously; `nw_listener_create` failure throws and crashes the kit
+*Status: **implemented in v0.4.** `IosLanDataTransport` now exposes
+`override suspend fun start(): Result<Unit>`; listener bind failures surface
+as typed errors instead of crashing the kit factory.*
+
+**Today (at proposal time).** `SessionManager` owns sessions; transports own
+`DataTransport` + `DiscoveryTransport`; `IosLanDataTransport.init` binds the
+listener synchronously; `nw_listener_create` failure throws and crashes the kit
 factory (no `@Throws` bridge to ObjC).
 
 **Change.** Three rules:
@@ -54,9 +68,14 @@ factory (no `@Throws` bridge to ObjC).
 
 ## 4. NWPathMonitor / ConnectivityManager recovery
 
-**Today.** Neither platform reacts to path changes for active sessions.
-A Wi-Fi reconnect can rotate the local IP without us noticing until a
-keep-alive PING times out (≈ 30 s).
+*Status: **implemented in v0.4.** `NetworkPathObserver` exists with Android
+(`ConnectivityManager.NetworkCallback`) and iOS (`nw_path_monitor`) impls;
+`SessionManager` reacts via `pathSatisfiedSignal`, and the iOS transport rebinds
+its listener on path/interface changes (`startPathMonitor`).*
+
+**Today (at proposal time).** Neither platform reacts to path changes for
+active sessions. A Wi-Fi reconnect can rotate the local IP without us noticing
+until a keep-alive PING times out (≈ 30 s).
 
 **Change.** Add a new internal interface `NetworkPathObserver` with two
 impls:
@@ -75,6 +94,8 @@ the path's interface set changes.
 
 ## 5. iOS background-task handling
 
+*Status: still proposed — `IosBackgroundTaskGuard` does not exist in the tree.*
+
 **Today.** `notifyAppBackgrounded` applies `BackgroundPolicy`. With
 `KeepRunning`, NWConnection survives ≤ a few seconds before iOS suspends
 the process; sessions die silently. With `CloseActiveSessions`, the user
@@ -90,6 +111,8 @@ this is not a workaround for true background networking, which iOS
 doesn't allow third-party apps without a VoIP/Audio entitlement.
 
 ## 6. Android foreground-service behaviour
+
+*Status: still proposed — no `P2pKitForegroundService` ships in the sample yet.*
 
 **Today.** Android sample is a single Activity. When backgrounded with
 `KeepRunning`, the OS can kill the process at any time; Doze freezes
@@ -110,7 +133,7 @@ permission and the matching service type.
 |---|---|---|---|
 | PING timeout (30 s default) | → `Reconnecting` | exp backoff + jitter | `maxAttempts` |
 | Path `unsatisfied` (§4) | → `Reconnecting` immediately | wait for `satisfied`, then 1 attempt, then backoff | `maxAttempts` |
-| User `session.close()` | → `Closing` → `Closed` | none | — |
+| User `session.close()` | → `Closed` (`Closing` is reserved in `ConnectionState` but never entered) | none | — |
 | Remote `CLOSE` frame | → `Closed` | none | — |
 | Transport start failure (§3) | kit factory returns failure | none — caller decides | — |
 

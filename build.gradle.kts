@@ -9,9 +9,11 @@ plugins {
 }
 
 // Establish Maven coordinates for every module from the single source of truth
-// in gradle.properties (GROUP / VERSION_NAME). Applying a publishing plugin to
-// the library modules then produces artifacts at dev.p2pkit:<module>:<version>.
-// See PROBLEMS_P2PKIT.md → no-publishing-plugin for the remaining publish wiring.
+// in gradle.properties (GROUP / VERSION_NAME), producing artifacts at
+// dev.p2pkit:<module>:<version>.
+// AUDIT-2026-06: the `maven-publish` plugin is currently applied to :p2p-core
+// and :p2p-transport-lan only; the :p2p-network-provisioning-* sidecars still
+// need it wired before they can be published (see AUDIT_REPORT_2026-06.md).
 allprojects {
     group = (findProperty("GROUP") as String?) ?: "dev.p2pkit"
     version = (findProperty("VERSION_NAME") as String?) ?: "0.0.0-SNAPSHOT"

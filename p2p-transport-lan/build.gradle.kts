@@ -56,8 +56,8 @@ kotlin {
         minSdk = libs.versions.android.minSdk.get().toInt()
     }
 
-    // v0.3.0-dev: iOS LAN/TCP via Bonjour + Network.framework. Same public API
-    // as JVM/Android (`transports { lan() }`), backed by NWBrowser / NWListener
+    // iOS LAN/TCP via Bonjour + Network.framework. Same public API as
+    // JVM/Android (`transports { lan() }`), backed by NWBrowser / NWListener
     // / NWConnection. Requires iOS 13+; minimum is enforced by the Network
     // framework symbols themselves.
     val iosTargets = listOf(iosX64(), iosArm64(), iosSimulatorArm64())
@@ -91,8 +91,10 @@ kotlin {
         commonMain.dependencies {
             // `api` rather than `implementation`: the iOS framework's
             // `export(project(":p2p-core"))` above requires the dependency to
-            // be in the public API surface. Has no effect on the JVM/Android
-            // consumers (their build doesn't surface it differently).
+            // be in the public API surface. It also matters for JVM/Android
+            // consumers — `api` puts p2p-core's public types (P2pKit, Peer,
+            // P2pSession, …) on their compile classpath, which the transport's
+            // own public `lan()` DSL returns; `implementation` would hide them.
             api(project(":p2p-core"))
             implementation(libs.kotlinx.coroutines.core)
         }

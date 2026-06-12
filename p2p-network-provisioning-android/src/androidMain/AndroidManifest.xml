@@ -2,11 +2,13 @@
 <!--
   Provisioning module manifest.
 
-  This library does NOT declare uses-permission entries for the runtime
-  permissions it surfaces (NEARBY_WIFI_DEVICES / ACCESS_FINE_LOCATION /
-  CHANGE_WIFI_STATE / ACCESS_WIFI_STATE). The host app is responsible for
-  declaring those in its own AndroidManifest.xml — P2pKit never requests
-  permissions itself, only reports which ones are missing via
-  P2pPermissionManager.
+  This library does NOT declare uses-permission entries for the permissions
+  it surfaces. The host app is responsible for declaring all of these in its
+  own AndroidManifest.xml — P2pKit never requests permissions itself, only
+  reports which runtime ones are missing via P2pPermissionManager:
+    - NEARBY_WIFI_DEVICES (API 33+) / ACCESS_FINE_LOCATION (API <=32) — runtime
+    - ACCESS_WIFI_STATE, CHANGE_WIFI_STATE, CHANGE_NETWORK_STATE — install-time;
+      CHANGE_NETWORK_STATE is required by the WifiNetworkSpecifier join path
+      (ConnectivityManager.requestNetwork) and was previously undocumented here.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" />

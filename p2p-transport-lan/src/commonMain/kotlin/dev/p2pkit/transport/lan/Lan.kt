@@ -5,12 +5,9 @@ import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 
 /**
- * Identity advertised over mDNS and used by the data transport to label
- * accepted sockets. Created by each platform's factory when the TCP server
- * binds to its ephemeral port.
- */
-/**
- * Identity advertised over mDNS plus the bound TCP port.
+ * Identity advertised over mDNS plus the bound TCP port, shared between each
+ * platform's data and discovery transports (created once per kit by the
+ * platform's [dev.p2pkit.core.transport.TransportFactory]).
  *
  * The port is mutable since the v0.3 transport-lifecycle refactor: the data
  * transport binds its server socket lazily in `start()`, then writes the
@@ -19,10 +16,10 @@ import dev.p2pkit.core.Platform
  * should not call this with [tcpPort] == 0.
  *
  * The platform `@Volatile` annotations differ between JVM and Kotlin/Native,
- * so we just rely on the call-ordering guarantee from [P2pKitImpl.ensureStarted]
- * (which acquires a [Mutex] and runs `data.start()` strictly before
- * `discovery.startAdvertising()`). No cross-thread reads of [tcpPort]
- * happen outside that ordering.
+ * so we just rely on the SPI call ordering guaranteed by core's start path
+ * (it holds a mutex and runs `DataTransport.start()` strictly before
+ * `DiscoveryTransport.startAdvertising()`). No cross-thread reads of
+ * [tcpPort] happen outside that ordering.
  */
 internal class LanServiceRegistration(
     val appId: AppId,

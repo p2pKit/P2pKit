@@ -86,8 +86,8 @@ kotlin {
         minSdk = libs.versions.android.minSdk.get().toInt()
     }
 
-    // v0.2 scaffolding only: core types compile for iOS, but no LAN transport
-    // ships in :p2p-transport-lan for these targets. Real iOS LAN/TCP is v0.3.
+    // Core types compile for iOS; the iOS LAN/TCP transport (Bonjour +
+    // Network.framework) ships in :p2p-transport-lan's appleMain source set.
     iosX64()
     iosArm64()
     iosSimulatorArm64()

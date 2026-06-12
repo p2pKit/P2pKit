@@ -28,9 +28,11 @@ public sealed class P2pState {
 /**
  * Lifecycle state of a single [P2pSession].
  *
- * `Connecting → Handshaking → Connected` is the happy path. `close()` walks
- * `Connected → Closing → Closed`. Connection loss enters `Failed`, or
- * `Reconnecting` if [ReconnectPolicy.Enabled] is configured.
+ * `Connecting → Handshaking → Connected` is the happy path. `close()` moves
+ * the session directly from `Connected` to `Closed` — the `Closing` constant
+ * is declared for completeness but is never emitted by the current
+ * implementation, so apps should not wait on it. Connection loss enters
+ * `Failed`, or `Reconnecting` if [ReconnectPolicy.Enabled] is configured.
  */
 public enum class ConnectionState {
     Idle,

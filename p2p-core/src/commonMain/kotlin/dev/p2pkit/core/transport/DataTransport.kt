@@ -41,7 +41,13 @@ public interface DataTransport {
 
     public suspend fun connect(peer: InternalPeer): RawConnection
 
-    /** Emits a new [RawConnection] for every accepted inbound connection. */
+    /**
+     * Emits a new [RawConnection] for every accepted inbound connection.
+     * Single-collector contract: the engine collects this exactly once per
+     * transport. Shipped implementations are channel-backed, so an
+     * additional collector would steal accepted connections rather than
+     * observe them.
+     */
     public fun incomingConnections(): Flow<RawConnection>
 
     public suspend fun close()

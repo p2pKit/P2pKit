@@ -1,7 +1,7 @@
 # Workspace Sync Dashboard
 
-**Last updated:** 2026-05-17
-**Current branch:** `v0.3.0-dev` (Tasks 18–22 shipped — iOS LAN/TCP).
+**Last updated:** 2026-06-12
+**Current state:** `VERSION_NAME=0.6.0` — since the last update here, `v0.4-internal` was tagged (stabilization + real-device LAN hardening), v0.5 shipped the Android in-process JmDNS discovery rewrite, and v0.6 added the iOS cellular-interface prohibition. The iOS sample app (`iosApp/`) shipped in v0.4.
 **Host context:** macOS, post-Windows-migration. iOS Simulator loopback tests green.
 
 This file is the running scratchpad for state that isn't otherwise captured in
@@ -35,14 +35,14 @@ happen on real hardware with no shortcut available from automated tests:
 
 ### What's already covered automatically — DO NOT re-run by hand
 
-- All 123 `:p2p-core:allTests` (KMP common + JVM).
-- All 3 `:p2p-transport-lan:jvmTest` loopback tests, including the 5 MiB SHA-256 file-transfer round-trip.
+- `:p2p-core:allTests` (KMP common + JVM — 134 unique test methods as of v0.6; `allTests` multiplies commonTest across targets).
+- `:p2p-transport-lan:jvmTest` (HostSelector + the loopback tests, including the 5 MiB SHA-256 file-transfer round-trip).
 - All host-side `:p2p-network-provisioning-desktop:test` and `:p2p-network-provisioning-android:testAndroidHostTest`.
 - `assembleDebug` / `assemble` on every sample app.
 
-If the device verification later surfaces a regression, fix in `v0.2.1-dev`
-**not** the live working branch — the v0.2.1 tag must reflect the verified
-state.
+If the device verification later surfaces a regression, fix it on the current
+dev branch and re-verify there — `v0.2.1-dev` is long merged; the original
+"fix on the frozen branch" rule no longer applies.
 
 ---
 
@@ -57,7 +57,7 @@ JmDNS implementation as on Windows/Linux; nothing is platform-specific.
 ```bash
 # Repo + JDK + Gradle wrapper.
 # Java 17+ required (matches `jvmToolchain(17)` in the build files).
-cd /path/to/shareing-lib
+cd /path/to/P2pKit
 ./gradlew --version          # confirms the wrapper works and JDK is visible
 ```
 
@@ -193,24 +193,24 @@ Status legend: `[ ]` = unstarted, `[~]` = in progress, `[x]` = done.
 | **18** | Build setup + iOS source set skeleton | `[x]` | `appleMain` source set on `:p2p-transport-lan` with `IosLan*.kt` stubs and a `lan()` extension that registers an iOS factory. `./gradlew :p2p-transport-lan:compileKotlinIosSimulatorArm64` green. |
 | **19** | `IosRawConnection` + `IosLanDataTransport` | `[x]` | `nw_connection_t` wrapper with `state` StateFlow, suspending `write(bytes)`, cold `read(): Flow<ByteArray>` via `suspendCancellableCoroutine` per receive. Data transport owns one `nw_listener_t`, blocks init on `dispatch_semaphore` until `.ready` so `tcpPort` is synchronous. |
 | **20** | `IosLanDiscoveryTransport` + TXT helpers | `[x]` | `nw_browser_t` for browse, `nw_listener_set_advertise_descriptor` for advertise. `IosBonjour.kt` round-trips `nw_txt_record_t` ↔ `Map<String,String>` against `LanConstants.TXT_*`. Resolved `nw_endpoint_t` stashed in `IosEndpointRegistry` keyed by peer id. |
-| **21** | iosSimulatorArm64Test loopback | `[x]` | Three tests mirror `JvmLanLoopbackTest` (text, 200 KB binary, 5 MiB file) — `./gradlew :p2p-transport-lan:iosSimulatorArm64Test` reports 3/0. Cinterop helper `src/nativeInterop/cinterop/p2pkit_nw.h` wraps the void-returning block macros (`NW_PARAMETERS_DISABLE_PROTOCOL` etc.) plus `dispatch_data_create` + `nw_connection_send` / `_receive` so Kotlin never has to box `dispatch_data_t` / `nw_content_context_t`. |
-| **22** | Docs + cross-platform recipe + commit/push | `[x]` | README platform tables flipped, status section adds v0.3.0-dev row, `INTERNAL_TESTING.md` §K covers in-process simulator loopback + the placeholder Simulator-↔-CLI recipe (deferred until the iOS sample app ships). Final pipeline + push. |
+| **21** | iosSimulatorArm64Test loopback | `[x]` | Three tests mirror `JvmLanLoopbackTest` (text, 200 KB binary, 5 MiB file) — `./gradlew :p2p-transport-lan:iosSimulatorArm64Test` reported 3/0 at ship time (the `appleTest` suite has since grown to 20 tests). Cinterop helper `src/nativeInterop/cinterop/p2pkit_nw.h` wraps the void-returning block macros (`NW_PARAMETERS_DISABLE_PROTOCOL` etc.) plus `dispatch_data_create` + `nw_connection_send` / `_receive` so Kotlin never has to box `dispatch_data_t` / `nw_content_context_t`. |
+| **22** | Docs + cross-platform recipe + commit/push | `[x]` | README platform tables flipped, status section adds v0.3.0-dev row, `INTERNAL_TESTING.md` §K covers in-process simulator loopback + the Simulator-↔-CLI recipe (a placeholder at the time; active since the iOS sample app shipped in v0.4). Final pipeline + push. |
 
-### Out of scope for v0.3.0-dev (will become backlog rows when shipped)
+### Out of scope for v0.3.0-dev (status as of v0.6)
 
-- **iOS sample app** (SwiftUI or Compose Multiplatform). Deferred to its own milestone — requires Xcode project + Info.plist + framework export + provisioning profile, none of which unblock the SDK itself.
+- **iOS sample app** — *since shipped in v0.4*: `iosApp/` carries the Xcode project (`p2pkit-sample.xcodeproj`), SwiftUI UI, and Info.plist entries. See `INTERNAL_TESTING.md` §K.2.
 - **iOS Network Provisioning**. Stays `Unsupported`; Apple does not allow third-party apps to host hotspots or silently join Wi-Fi. This will *never* be implemented.
 - **macOS native LAN target**. Not declared anywhere; possibly a v0.3.x track once iOS is solid.
 
 ### Definition of done for v0.3.0-dev
 
 ✅ Done as of 2026-05-17: all five tasks committed on `v0.3.0-dev`,
-`:p2p-transport-lan:iosSimulatorArm64Test` reports 3/0 on the macOS host,
-JVM + Android + all three iOS targets compile clean, branch pushed to
-`origin/v0.3.0-dev`. Tagging `v0.3-internal` still depends on the same
-Task 11/12 device verification backlog rows above (since v0.3 transitively
-includes v0.2.1's provisioning) — that's tracked in §1 here and in the
-README backlog table.
+`:p2p-transport-lan:iosSimulatorArm64Test` reported 3/0 on the macOS host
+(the suite has since grown to 20 tests), JVM + Android + all three iOS
+targets compile clean, branch pushed to `origin/v0.3.0-dev`. Development
+has since moved on through `v0.4-internal` and `v0.5-internal` tags; the
+Task 11/12 hotspot device-verification rows in §1 remain the open backlog
+(also tracked in the README backlog table).
 
 ### Notable lessons captured in code/comments
 - **Kotlin/Native cannot read void-returning ObjC block globals as

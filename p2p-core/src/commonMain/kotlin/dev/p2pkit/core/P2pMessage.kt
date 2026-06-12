@@ -3,11 +3,12 @@ package dev.p2pkit.core
 /**
  * A message exchanged over a [P2pSession].
  *
- * v0.1 supports text and binary payloads. File-stream APIs are planned for
- * v0.2 and intentionally not part of this surface yet. The maximum payload
- * size per [send] call in v0.1 is 4 MiB; larger payloads throw
- * [P2pError.PayloadTooLarge]. Internally messages may be split into chunks for
- * transport, but chunking is invisible to the application.
+ * Carries text and binary payloads. Files are streamed separately via
+ * [P2pSession.sendFile] and are intentionally not a [P2pMessage] subtype.
+ * The maximum encoded payload size per [P2pSession.send] call is 4 MiB by
+ * default; larger payloads throw [P2pError.PayloadTooLarge]. Internally
+ * messages may be split into chunks for transport, but chunking is invisible
+ * to the application.
  */
 public sealed class P2pMessage {
 

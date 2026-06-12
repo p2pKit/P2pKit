@@ -11,8 +11,9 @@ import dev.p2pkit.core.transport.InternalPeer
  * true for the peer, then pick the one with the highest [DataTransport.priority].
  * Throws [P2pError.NoTransportAvailable] if none match.
  *
- * v0.1 only has LAN, so this is trivial in practice; the abstraction matters
- * for v0.2+ when BLE / Wi-Fi Direct / Multipeer / Relay are added.
+ * LAN is the only shipped transport today, so this is trivial in practice;
+ * the abstraction matters once additional transports (BLE / Wi-Fi Direct /
+ * Multipeer / Relay) are added.
  */
 internal class TransportManager(
     private val transports: List<DataTransport>

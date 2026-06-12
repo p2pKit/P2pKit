@@ -5,8 +5,12 @@ import dev.p2pkit.core.permission.P2pPermission
 /**
  * Typed errors thrown by the P2pKit public API.
  *
- * All P2pKit failures are subtypes of [P2pError] so callers can match
- * specific cases with `when`. Library code does not throw raw `RuntimeException`s.
+ * All operational failures (connect, send, handshake, transport, file
+ * transfer) are subtypes of [P2pError] so callers can match specific cases
+ * with `when`. Plain `IllegalStateException` / `UnsupportedOperationException`
+ * are reserved for API misuse and unsupported stubs — e.g. lifecycle calls
+ * after [P2pKit.stop], responding to an already-terminal file offer, or
+ * `createManualPeer` on the `Unsupported` provisioning manager.
  */
 public sealed class P2pError(message: String? = null, cause: Throwable? = null) : Exception(message, cause) {
 

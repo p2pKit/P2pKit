@@ -25,7 +25,9 @@ import dev.p2pkit.core.dsl.NetworkProvisioningConfigBuilder
  *  - `startLocalNetwork()` → hosts a `LocalOnlyHotspot` (random SSID + passphrase
  *    chosen by the OS; non-system apps cannot pick their own).
  *  - `stopLocalNetwork()` → releases the reservation cleanly.
- *  - `joinLocalNetwork()` → `Unsupported` until v0.2.1 task 12 ships `WifiNetworkSpecifier` join.
+ *  - `joinLocalNetwork()` → joins the given SSID via `WifiNetworkSpecifier` +
+ *    `ConnectivityManager.requestNetwork` (system user-approval prompt) on
+ *    Android 10+ (API 29); returns `Unsupported` below that.
  *  - `getManualConnectionInfo()` + `createManualPeer()` → identical shape to JVM.
  *
  * **Permissions:** the host app must declare and request:

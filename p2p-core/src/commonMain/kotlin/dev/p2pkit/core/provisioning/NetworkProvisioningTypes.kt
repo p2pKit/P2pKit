@@ -12,10 +12,14 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * Optional sidecar that helps two devices reach the same local network.
  *
- * v0.1 ships only an [UnsupportedNetworkProvisioningManager] stub. v0.2 will
- * add Android `LocalOnlyHotspot` hosting and Wi-Fi join helpers. The API shape
- * is locked here so consumers can mock it and the public surface does not
- * change between v0.1 and v0.2. See Spec §20.
+ * The core module ships only the [UnsupportedNetworkProvisioningManager]
+ * fallback, used when no factory is registered in the
+ * `networkProvisioning { … }` DSL block. Real implementations live in the
+ * optional platform modules: Android `LocalOnlyHotspot` hosting and
+ * `WifiNetworkSpecifier` join (`:p2p-network-provisioning-android`), JVM
+ * manual-IP fallback (`:p2p-network-provisioning-desktop`), and iOS
+ * manual-IP (`iosManualIp()` in `:p2p-transport-lan`). The API shape is
+ * locked here so consumers can mock it. See Spec §20.
  */
 public interface NetworkProvisioningManager {
     public val state: StateFlow<NetworkProvisioningState>

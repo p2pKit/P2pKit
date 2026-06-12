@@ -14,14 +14,17 @@ import platform.Foundation.NSUserDefaults
  * advertisement on the host network.
  *
  * Marked `@Ignore` so it doesn't slow the normal `iosSimulatorArm64Test`
- * cycle. Run explicitly during cross-platform interop validation via:
+ * cycle. Kotlin/Native test binaries offer no flag to force-run an
+ * `@Ignore`d test (Gradle's `--tests` filter cannot override the
+ * annotation), so to run the diagnostic, temporarily remove the `@Ignore`
+ * line and run:
  *
  *     ./gradlew :p2p-transport-lan:iosSimulatorArm64Test \
- *         --tests 'dev.p2pkit.transport.lan.IosLanDiagnosticTest' \
- *         -Pkotlin.tests.individualTaskReports=false \
- *         -Dkotlin.native.tests.ignored=false
+ *         --tests 'dev.p2pkit.transport.lan.IosLanDiagnosticTest'
  *
- * (Or temporarily remove the `@Ignore` for the duration of the capture.)
+ * Restore the `@Ignore` before committing. (AUDIT-2026-06: an earlier
+ * version of this comment suggested `-Dkotlin.native.tests.ignored=false`,
+ * which is consumed nowhere and cannot reach the simulator-hosted binary.)
  */
 class IosLanDiagnosticTest {
 

@@ -28,8 +28,9 @@ import kotlinx.io.RawSource
  *
  * ### Lifecycle
  *
- * `close()` walks `Connected → Closing → Closed`. After [close], the underlying
- * connection is released and [incoming] completes.
+ * `close()` transitions the session to `Closed` ([ConnectionState.Closing] is
+ * declared but never emitted today). After [close], the underlying connection
+ * is released and [incoming] completes.
  */
 public interface P2pSession {
     /** Stable identifier of this session for the lifetime of the process. */
@@ -44,9 +45,10 @@ public interface P2pSession {
     /**
      * Send a single message to the peer.
      *
-     * Throws [P2pError.PayloadTooLarge] for [P2pMessage.Binary] exceeding the
-     * configured maximum (default 4 MiB in v0.1). Throws
-     * [P2pError.ConnectionFailed] if the connection has dropped.
+     * Throws [P2pError.PayloadTooLarge] for any message whose encoded payload
+     * exceeds the configured maximum (default 4 MiB) — [P2pMessage.Text] is
+     * measured in UTF-8 bytes. Throws [P2pError.ConnectionFailed] if the
+     * connection has dropped.
      */
     @Throws(Exception::class)
     public suspend fun send(message: P2pMessage)
@@ -70,8 +72,9 @@ public interface P2pSession {
      *
      * Bytes are pulled from [source] in chunks of the configured
      * [dev.p2pkit.core.transfer.FileTransferConfig.chunkSizeBytes]; the whole
-     * file is never buffered in memory. The caller is responsible for closing
-     * [source] after the returned transfer reaches a terminal state.
+     * file is never buffered in memory. The kit takes ownership of [source]
+     * and closes it automatically once the returned transfer reaches a
+     * terminal state — callers must not close it themselves.
      *
      * @throws P2pError.PayloadTooLarge if [sizeBytes] exceeds the configured
      *   `maxFileSizeBytes` (default 2 GiB).

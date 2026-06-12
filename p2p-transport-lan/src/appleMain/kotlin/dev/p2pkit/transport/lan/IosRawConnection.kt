@@ -56,10 +56,10 @@ import platform.posix.uint8_tVar
  *   downstream collector applies natural backpressure — no buffer between
  *   the dispatch queue and the consumer is needed.
  *
- * Construction does not call `nw_connection_start`. Use [outbound] for
- * dialer-side connections (we need to start them ourselves) and [inbound]
- * for connections handed in by the listener's new-connection handler
- * (the listener already configured them; we just attach the receive pump).
+ * Construction attaches the state/receive handlers and immediately calls
+ * `nw_connection_start` — both dialer-side connections and connections
+ * handed in by the listener's new-connection handler (which Network.framework
+ * delivers un-started) go through the single [wrap] factory.
  */
 internal class IosRawConnection private constructor(
     private val connection: nw_connection_t,
@@ -257,7 +257,12 @@ internal class IosRawConnection private constructor(
     internal class NetworkException(message: String) : RuntimeException(message)
 
     internal companion object {
-        /** 64 KiB matches JvmRawConnection's BUFFER_SIZE. */
+        /**
+         * Max bytes requested per `nw_connection_receive` call. Independent
+         * of JvmRawConnection's 8 KiB read buffer — per-read chunk size is a
+         * platform implementation detail; framing happens above the byte
+         * stream, so the sizes need not match.
+         */
         private val RECEIVE_MAX_LENGTH: UInt = 64u * 1024u
 
         /** Bounded wait for a wedged Connecting state on write entry. */

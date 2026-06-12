@@ -12,7 +12,7 @@ The `@Ignore`-marked diagnostic test is the iOS-side fixture: it holds a kit ali
 
 ## Files
 
-- `dns-sd-browse.log` — `dns-sd -B` output capturing both services appearing and disappearing over the run.
+- `dns-sd-browse.log` — `dns-sd -B` output capturing both services appearing, and the iOS service disappearing at the end of its 60 s advertise window (the JVM CLI was still running when the capture stopped, so no `Rmv` rows for the JVM service were recorded).
 - `jvm-cli.log` — JVM CLI's peer-discovery + auto-mesh + state transitions log.
 
 ## What the evidence proves
@@ -56,7 +56,7 @@ Timestamp     A/R    Flags  if Domain   Service Type    Instance Name
 
 - JVM service `0f0ddd0b-...` (advertised via JmDNS) and iOS service `61ca2c26-...` (advertised via `nw_listener_set_advertise_descriptor`) BOTH appear under the same `_p2pkit._tcp` service type — proving wire-level service-type compatibility on the Bonjour multicast layer.
 - iOS service was added at 15:17:34 and cleanly removed at 15:18:34 — 60 s lifetime matching the diagnostic test's advertise window.
-- Both services were visible on multiple interfaces (`if 1` = loopback, `if 14` = en0 Wi-Fi).
+- The iOS service was visible on two interfaces (`if 1` = loopback, `if 14` = en0 Wi-Fi); the JVM service appeared on `if 14` (en0) only in this capture.
 
 ### TXT record from JVM side decoded correctly ✅
 

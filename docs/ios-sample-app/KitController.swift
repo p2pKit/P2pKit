@@ -1,9 +1,20 @@
 // KitController.swift — Swift facade over the P2pKit SDK.
 //
+// AUDIT-2026-06: this template has drifted from the current SDK and does NOT
+// compile or pass the README checklist as-is. Known gaps: `AppId` is a Kotlin
+// value class and is not exported to Swift as `AppId(value:)`; the iOS DSL
+// helper lives in `IosLanDsl.kt` (so the bridged name is not `LanIosDslKt`);
+// `P2pMessage.Text` requires a `metadata:` argument from Swift;
+// `kit.peers` bridges as a List, not a Set (the cast below yields nil);
+// and `kit.incomingSessions` / `session.incoming` are never collected, so
+// README steps T1.4/T1.5 cannot be observed. Treat this file as illustrative
+// pseudocode and copy from the maintained, working sample at
+// `iosApp/ContentView.swift` instead.
+//
 // The Kotlin DSL uses lambdas (`P2pKit.create { ... }`). In Swift, those
 // arrive as `(P2pKitBuilder) -> KotlinUnit` closures. Helpers here build the
 // kit on a background queue and bridge the kit's reactive flows
-// (StateFlow<Set<Peer>>, SharedFlow<P2pSession>) into `@Published`
+// (StateFlow<List<Peer>>, SharedFlow<P2pSession>) into `@Published`
 // SwiftUI-friendly state.
 
 import Foundation

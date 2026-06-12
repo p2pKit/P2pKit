@@ -63,9 +63,9 @@ internal object IosBonjour {
 
     /**
      * Decode every key/value pair in [record] back into a `Map<String,String>`.
-     * Empty values surface as `""`; entries with no value at all are
-     * dropped — they don't survive the round-trip through the JVM/Android
-     * consumers either.
+     * Empty values surface as `""`; boolean-style entries with no value at
+     * all ALSO surface as `""` (indistinguishable from empty-value entries
+     * after decoding), so every key present in the record appears in the map.
      */
     fun txtRecordToMap(record: nw_txt_record_t): Map<String, String> {
         if (record == null) return emptyMap()

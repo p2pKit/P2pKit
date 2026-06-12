@@ -12,8 +12,11 @@ import dev.p2pkit.core.P2pMessage
  * separately.
  *
  * Partial messages whose first chunk is older than [reassemblyTimeoutMillis]
- * are dropped by [evictStale] — this prevents memory leaks if a peer hangs up
- * mid-transfer.
+ * are dropped by [evictStale]. Eviction is read-driven: the protocol layer
+ * invokes [evictStale] only when further inbound frames arrive (there is no
+ * timer), so it bounds memory while a peer keeps talking. Partials from a
+ * peer that goes fully silent are reclaimed when the session itself is torn
+ * down by the keep-alive timeout, not after [reassemblyTimeoutMillis].
  */
 internal class Reassembler(
     private val clock: () -> Long,

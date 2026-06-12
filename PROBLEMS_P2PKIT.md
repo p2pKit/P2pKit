@@ -11,17 +11,17 @@ Every source file was read line-by-line by a dedicated reviewer (one per module)
 
 ## Executive summary
 
-**238 confirmed problems** across the codebase:
+**237 confirmed problems** across the codebase *(originally reported as 238; one Low entry, `unused-runblocking-import`, was listed twice — under build and dead-code — and has been de-duplicated)*:
 
 | Severity | Count | Meaning |
 |---|---|---|
 | 🔴 Critical | 5 | Data loss / crash / security hole / publish blocker |
 | 🟠 High | 27 | Breaks a real production scenario |
 | 🟡 Medium | 75 | Degraded behaviour / robustness gap |
-| ⚪ Low | 131 | Polish, docs, dead code, test quality |
-| **Total** | **238** | |
+| ⚪ Low | 130 | Polish, docs, dead code, test quality |
+| **Total** | **237** | |
 
-**232 of 238 findings (97%) are fixable & verifiable WITHOUT real hardware** (code/logic/build/unit-test). Only **6** genuinely require physical multi-device validation.
+**231 of 237 findings (97%) are fixable & verifiable WITHOUT real hardware** (code/logic/build/unit-test). Only **6** genuinely require physical multi-device validation.
 
 **Findings by category:**
 
@@ -31,7 +31,7 @@ Every source file was read line-by-line by a dedicated reviewer (one per module)
 | concurrency | 30 |
 | resource-leak | 25 |
 | test | 18 |
-| build | 16 |
+| build | 15 |
 | api-design | 16 |
 | error-handling | 16 |
 | security | 15 |
@@ -48,7 +48,7 @@ Every source file was read line-by-line by a dedicated reviewer (one per module)
 
 | Module | Count |
 |---|---|
-| p2p-core (library) | 122 |
+| p2p-core (library) | 121 |
 | p2p-transport-lan | 59 |
 | samples | 27 |
 | p2p-network-provisioning-android | 12 |
@@ -78,7 +78,7 @@ All fixes below were implemented and **verified green** against:
 - `reassembler-no-aggregate-size-cap`, `reassembler-totalsize-int-overflow` — `Reassembler` now tracks per-message buffered bytes as `Long`, rejects a message that would exceed `MAX_PAYLOAD_BYTES`, caps `totalChunks` (`MAX_TOTAL_CHUNKS`) and the concurrent-pending count (`MAX_PENDING_REASSEMBLIES`).
 - `reassembler-evictstale-never-called` — `evictStale()` is now driven from `DefaultP2pProtocol.events()` on each inbound batch (was dead code).
 - `malformed-control-payload-tears-down-session` — HELLO/FILE_OFFER JSON decode wrapped; a malformed control frame is skipped + warned instead of throwing into `routeEvents` (closes the reconnect-loop vector).
-- `hello-fileoffer-no-field-validation`, `untrusted-filename-no-validation`, `offer-size-mismatch-not-checked` — `HelloPayload.decode`/`FileOfferPayload.decode` now bound string fields and reject negative `sizeBytes`.
+- `hello-fileoffer-no-field-validation`, `untrusted-filename-no-validation` *(partial)*, `offer-size-mismatch-not-checked` — `HelloPayload.decode`/`FileOfferPayload.decode` now bound string fields and reject negative `sizeBytes`. **Partial** for `untrusted-filename-no-validation`: only the length cap + negative-size rejection landed — path-separator/control-char stripping of the offer `name`, the "name is untrusted" doc, and a `sanitizedFileName()` helper are still open (the Medium entry below remains current; `"../../etc/x"` still passes decode).
 - `outgoing-peer-id-not-verified` — outgoing handshake now verifies the remote's HELLO `peerId` matches the dialed peer; mismatch sends ERROR + throws `HandshakeRejected`. (Test fixtures updated to seed matching ids, mirroring production discovery.)
 
 **Lifecycle correctness (high):**
@@ -93,7 +93,7 @@ All fixes below were implemented and **verified green** against:
 - `ondata-failure-uncaught-nonp2p` — `onFileData` now catches `Throwable` (rethrowing cancellation), aborts the receiver, and scopes the failure to the one transfer instead of tearing down the session.
 
 **Concurrency / robustness (medium/low):**
-- `manual-peer-ids-unsynchronized`, `manual-peer-id-set-unsynchronized-vs-stateflow`, `manual-peer-ids-never-cleaned` — folded the manual flag into `TrackedPeer` and removed the unsynchronized `MutableSet` (eliminates the data race + the separate growth).
+- `manual-peer-ids-unsynchronized`, `manual-peer-id-set-unsynchronized-vs-stateflow`, `manual-peer-ids-never-cleaned` — folded the manual flag into `TrackedPeer` and removed the unsynchronized `MutableSet` (eliminates the data race + the separate growth). The remaining accumulation behind `manual-peer-ids-never-cleaned` was closed in a follow-up pass (AUDIT-2026-06): `registerManualPeer` now dedupes by (host, port, kind) so retries reuse one synthetic id, and manual peers are session-scoped (forgotten on `kit.stop()`); they remain staleness-eviction-exempt by design.
 - `evict-loop-no-error-isolation` — per-iteration try/catch keeps the eviction loop alive.
 - `transport-tie-break-nondeterministic` — `selectBestTransport` now breaks priority ties deterministically.
 - `assert-invariants-const-true-in-prod` — `SessionStore` invariant violations now **log** instead of crashing the host process.
@@ -447,6 +447,7 @@ All fixes below were implemented and **verified green** against:
 #### 🟡 `hello-payload-no-length-validation` — HELLO payload and frame size are accepted without bounds validation (untrusted input)
 - **File:** `p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/Handshake.kt:61-84`
 - **Category:** validation · **Fix validation:** ✅ no hardware needed *(severity/scope adjusted by verifier)*
+- **Status (2026-06): largely FIXED.** The entry's self-declared highest-value part shipped: `ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES` (8 MiB) is enforced in `FrameReader.feed` (before buffering) and `FrameCodec.decode`, and `HelloPayload.decode` now caps `appId`/`peerId`/`deviceName` at 512 chars and `supportedTransports` at 32 (see *Fixes applied* above). The "NO maximum frame size" / multi-hundred-MB-HELLO claims below describe the pre-fix code. Still open: charset/control-char filtering on the HELLO string fields before they reach session ids, map keys, and logs.
 - **Problem:** performHandshake/toPeer (Handshake.kt:61-84) accept peerHello.peerId, deviceName, platform, supportedTransports off the wire with no length/charset/count validation. PeerId(peerId) requires only non-blank (Identity.kt:29). More importantly, FrameReader (FrameReader.kt:37-67) and FrameCodec enforce only a NEGATIVE-length check on payloadLen (an Int up to ~2GiB) — there is NO maximum frame size. FrameReader.feed reallocates a growing combined buffer (line 40) and keeps buffering until the declared frameSize arrives, so a malicious peer can declare a multi-hundred-MB HELLO and force unbounded buffering before decode. Strings then flow into the session id and byPeer map key (SessionManager.kt:220) and into logs. CORRECTION to the original finding: the remote's HELLO peerId/deviceName do NOT flow into outbound mDNS service names — TXT records (JvmLanDiscoveryTransport.kt:73-77) are built from the LOCAL device's own peerId/deviceName, not the remote HELLO. The genuine sinks are session-id construction, map keys, and log lines.
 - **Impact:** A malicious LAN peer can exhaust memory via a giant declared frame length (no cap anywhere in the codec) and inject newlines/escape sequences into logs via deviceName/peerId. peerId becomes a session-id substring and a map key. Lower than 'critical' because NoneForMvp is already an untrusted-network mode and the giant-frame DoS requires being on the LAN.
 - **Fix:** Enforce a max frame size in FrameReader/FrameCodec (reject when payloadLen exceeds a sane cap, e.g. a few hundred KB for control frames) and validate peerHello fields after decode: cap peerId/deviceName length, cap supportedTransports count, reject control characters; reject with HandshakeRejected on violation. The max-frame-size cap is the highest-value part.
@@ -517,6 +518,7 @@ All fixes below were implemented and **verified green** against:
 #### 🟡 `no-validation-on-handshake-peer-fields` — Incoming HELLO peer fields (peerId, deviceName) used unvalidated for session id / Peer; appId IS already checked, but length/charset/impersonation are not
 - **File:** `p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt:291-311`
 - **Category:** security · **Fix validation:** ✅ no hardware needed *(severity/scope adjusted by verifier)*
+- **Status (2026-06): partially FIXED — re-read before acting.** Two claims below are stale: inbound frames are now capped (`MAX_FRAME_PAYLOAD_BYTES`, 8 MiB, enforced in `FrameReader`/`FrameCodec` — the "~2 GiB" buffering no longer exists), and `HelloPayload.decode` bounds `peerId`/`deviceName` to 512 chars. The outgoing dial also now asserts the remote HELLO `peerId` matches the dialed peer (see `outgoing-peer-id-not-verified` in *Fixes applied*). Still open: charset/control-char filtering, incoming-side impersonation under `NoOpSecurityManager` (any peer can still claim any peerId on accept — gaming the arbitration tie-break), the remote peerId embedded verbatim in the session id, and the threat-model documentation.
 - **Problem:** Partially confirmed, partially corrected by reading Handshake.kt:27-84 and SessionManager.kt:211-264. CORRECTION to the finding: the claim 'no validation that the remote appId matches the local appId before accepting' is FALSE — performHandshake explicitly rejects appId mismatch (Handshake.kt:63-68, throws HandshakeRejected) and protocol-version mismatch (69-75). So foreign-appId connections ARE rejected. CONFIRMED parts: resolvedPeer = peerHello.toPeer() (Handshake.kt:79-84) trusts the remote's self-reported peerId/deviceName/platform at face value; the session id embeds the remote-controlled peerId string verbatim (SessionManager.kt:220: "in-${handshake.resolvedPeer.id.value}-${clock()}"); there is NO length bound or charset/control-char filter on peerId or deviceName; and with NoOpSecurityManager any peer can claim any peerId (impersonation), which feeds the simultaneous-open tie-break in SessionStore.tryRegister (SessionStore.kt:127, localPeerIdValue < peerId.value) — a chosen peerId can deterministically win/lose arbitration. Separately I found inbound frames are NOT capped to MAX_PAYLOAD_BYTES (4 MiB) on receive: FrameReader.kt:49-53 only rejects negative payloadLen, so a header can request up to ~2 GiB and the reader buffers toward it — a memory-amplification vector for oversized HELLO/any frame (the 4 MiB cap is enforced only outbound in Chunker).
 - **Impact:** Peer impersonation (claim another device's peerId to hijack the byPeer slot / game simultaneous-open arbitration which keys on peerId string compare); unbounded device-name/peerId strings flowing into logs and the public Peer object; and (separate vector) unbounded inbound frame length allowing a peer to make the reader buffer up to ~2 GiB. The foreign-appId concern is already mitigated. This is the expected exposure of the NoneForMvp security mode but should be documented in the threat model and the easy bounds added.
 - **Fix:** Enforce max lengths and a charset/format (reject control characters) on peerId and deviceName in toPeer()/before building the session id. Add an inbound payload-length cap (reject payloadLen > ProtocolConstants.MAX_PAYLOAD_BYTES in FrameReader/FrameCodec). Document in the threat model that with SecurityMode.NoneForMvp peer identity is unverified and impersonation is possible; long-term bind peerId to a key in the handshake. Do NOT claim appId is unchecked — it already is.
@@ -832,7 +834,7 @@ All fixes below were implemented and **verified green** against:
 #### 🟡 `no-connect-binding-identity-check` — No transport- or handshake-level binding of the dialed endpoint to the expected PeerId: HELLO verifies appId+protocolVersion but NOT that the connected peer is the PeerId we intended to reach
 - **File:** `p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmLanDataTransport.kt:85-114`
 - **Category:** security · **Fix validation:** ✅ no hardware needed *(severity/scope adjusted by verifier)*
-- **Problem:** Verified, and the gap is larger than the finding's transport-only framing. connect() (lines 85-114) blindly dials hint.host:hint.port with no PeerId binding — expected for a transport. The finding hopes the HELLO handshake asserts the peer id. I read Handshake.kt: performHandshake validates `peerHello.appId == localAppId` (lines 63-68) and `protocolVersion` (lines 69-75) but does NOT compare peerHello.peerId against any expected id. I read SessionManager.runHandshake: for outgoing/reconnect it passes `expectedPeer` but only uses it as `expectedPeer ?: peerHello.toPeer()` (line 304) to label the session — it never asserts `peerHello.peerId == expectedPeer.id`. So a rogue LAN peer advertising the same appId can answer for any PeerId and the connector accepts it (and even rearm-on-reconnect re-dials a registry-resolved address with no id check). Combined with the trusted, unvalidated TXT/port (untrusted-txt-no-validation), this enables impersonation/redirection on plain TCP.
+- **Problem:** Verified, and the gap is larger than the finding's transport-only framing. connect() (lines 85-114) blindly dials hint.host:hint.port with no PeerId binding — expected for a transport. The finding hopes the HELLO handshake asserts the peer id. I read Handshake.kt: performHandshake validates `peerHello.appId == localAppId` (lines 63-68) and `protocolVersion` (lines 69-75) but does NOT compare peerHello.peerId against any expected id. I read SessionManager.runHandshake: for outgoing/reconnect it passes `expectedPeer` but only uses it as `expectedPeer ?: peerHello.toPeer()` (line 304) to label the session — it never asserts `peerHello.peerId == expectedPeer.id`. So a rogue LAN peer advertising the same appId can answer for any PeerId and the connector accepts it (and even rearm-on-reconnect re-dials a registry-resolved address with no id check). Combined with the trusted, unvalidated TXT/port (untrusted-txt-no-validation-jvm), this enables impersonation/redirection on plain TCP.
 - **Impact:** On an untrusted LAN a rogue peer sharing the appId can impersonate or redirect a connection; even with reconnect, the rearmed connection's peer identity is not verified against the expected PeerId. Acceptable for an explicitly trusted-network MVP, but the missing id assertion should be added (it is a one-line check) and the trust model documented before publishing.
 - **Fix:** Add a PeerId assertion in the handshake path: when expectedPeer != null, reject (throw P2pError.HandshakeRejected) if peerHello.peerId != expectedPeer.id.value — verify in Handshake.kt / SessionManager.runHandshake. Document the LAN-is-trusted-network trust model in public docs. Plan an authenticated SecurityMode before GA. This is unit-testable.
 
@@ -857,14 +859,16 @@ All fixes below were implemented and **verified green** against:
 - **Impact:** Peers that disappear are not reported Lost promptly; the peers flow shows ghost peers until staleness timeout, and a connect to a departed peer burns TCP_CONNECT_TIMEOUT_MS (5 s) before failing. The Lost fast-path is effectively dead in many real JmDNS removal scenarios.
 - **Fix:** Fall back to the service instance name when the TXT pid is unavailable: derive the PeerId from event.name (the instance name is set to localPeerId.value in startAdvertising) so a Lost can still be emitted. Apply symmetrically in both JVM and Android serviceRemoved.
 
-#### 🟡 `untrusted-txt-no-validation` — Untrusted TXT records (name/caps/plat) and the advertised port are consumed without length/charset/version bounds; protocol-version is never checked at resolve time
+#### 🟡 `untrusted-txt-no-validation-jvm` — Untrusted TXT records (name/caps/plat) and the advertised port are consumed without length/charset/version bounds; protocol-version is never checked at resolve time
+*(slug renamed from `untrusted-txt-no-validation`, which this entry previously shared with the Android finding above — the two are distinct findings)*
 - **File:** `p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmLanDiscoveryTransport.kt:112-143`
 - **Category:** validation · **Fix validation:** ✅ no hardware needed
 - **Problem:** Verified. serviceResolved (lines 112-143) filters only on appId match and self-exclusion. (a) TXT_DEVICE_NAME -> Peer.name (line 119) with no length cap or control-char sanitization; (b) TXT_PROTOCOL_VERSION is advertised (line 78) but never read in serviceResolved, so a pv-incompatible peer is still surfaced and dialed; (c) info.port (line 123) is trusted verbatim with no range check; (d) caps tags are parsed with valueOf and unknowns silently dropped (mostly benign). I confirmed the only later pv guard is in the HELLO handshake (Handshake.kt lines 69-75), which fails opaquely after a full TCP connect + handshake rather than filtering at discovery.
 - **Impact:** Unbounded device names enable log/UI bloat. Missing resolve-time pv check means cross-version peers are dialed and fail only at the framing/handshake layer (wasting a full TCP_CONNECT_TIMEOUT_MS + handshake round-trip) instead of being filtered. The port is attacker-controllable (see no-connect-binding-identity-check). These are the missing-input-validation gaps the audit asks to flag.
 - **Fix:** On resolve: skip the event when pv != LanConstants.PROTOCOL_VERSION; cap deviceName length (e.g. 256 chars) and strip control chars; reject port outside 1..65535; optionally cap caps token count. Mirror in Android serviceResolved.
 
-#### 🟡 `no-untrusted-length-cap-on-read` — write() has no socket write timeout; a peer that stops draining its TCP window wedges the writer coroutine and the keep-alive PING forever
+#### 🟡 `write-no-timeout-wedges-keepalive` — write() has no socket write timeout; a peer that stops draining its TCP window wedges the writer coroutine and the keep-alive PING forever
+*(slug renamed; formerly `no-untrusted-length-cap-on-read` — the verifier rewrote the finding around the missing write deadline, and the read-side framing in the original title was benign)*
 - **File:** `p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmRawConnection.kt:34-42`
 - **Category:** robustness · **Fix validation:** ✅ no hardware needed
 - **Problem:** Verified against the actual code. write() (lines 34-42) does `out.write(bytes); out.flush()` inside `writeLock.withLock { withContext(Dispatchers.IO) { ... } }` with no timeout and no socket-level write deadline. SO_TIMEOUT is never set (no setSoTimeout call anywhere in the file). I confirmed in P2pSessionImpl that keepAliveLoop (line 522) sends PINGs via `sendMutex.withLock { protocol.sendPing(epochConnection) }`, i.e. through the same serialized write path. If a peer accepts the connection and never reads, the kernel TCP send buffer fills, the blocking `out.write` parks indefinitely holding the write mutex, and the keep-alive PING write also blocks rather than timing out — so observeRawState never sees a terminal raw state and the session is not driven to Failed via the write path. (Note: the PONG-timeout branch of keepAliveLoop is a separate read-side liveness check; the concern here is specifically that the write itself can hang.) The read-side analysis in the original title is correct and benign; the real gap is the missing write deadline.
@@ -874,6 +878,8 @@ All fixes below were implemented and **verified green** against:
 ---
 
 ## ⚪ Low findings (polish, docs, dead code, test quality)
+
+> **Reading the glyphs:** the leading ✅ / 🔧 marks fix *validation feasibility* (✅ = verifiable without hardware), **not** whether the fix has landed — it is unrelated to the ✅ used by the *Fixes applied* section header. Entries whose fixes were already implemented in this pass are explicitly tagged **FIXED** below; everything untagged is still open.
 
 ### build / root config
 
@@ -929,17 +935,15 @@ All fixes below were implemented and **verified green** against:
   - *Fix:* Expose handshakeTimeoutMillis via Config and plumb it through SessionManager.runHandshake; add a global cap on concurrent in-flight inbound handshakes to bound resource use; consider a shorter default.
 - ✅ **`inmemory-storage-not-thread-safe`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/InMemoryPeerIdStorage.kt:18-26`, concurrency) — InMemoryPeerIdStorage.loadOrGenerate has an unsynchronized check-then-set on a non-volatile field
   - *Fix:* Make cached @Volatile and guard the check-then-set, or compute once via lazy/atomic (AtomicRef + compareAndSet, or synchronized(this)).
-- ✅ **`noop-network-observer-status-not-asserted-unknown-contract`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/NoOpNetworkPathObserver.kt:20-25`, correctness) — NoOpNetworkPathObserver is a singleton object whose single MutableStateFlow is shared across all kit instances
+- ✅ **`noop-network-observer-singleton-shared-stateflow`** *(formerly `noop-network-observer-status-not-asserted-unknown-contract`)* (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/NoOpNetworkPathObserver.kt:20-25`, correctness) — NoOpNetworkPathObserver is a singleton object whose single MutableStateFlow is shared across all kit instances
   - *Fix:* Make it a class and return NoOpNetworkPathObserver() per kit, or document explicitly that it is intentionally stateless and must remain so.
-- ✅ **`outgoing-progress-stuck-at-accepted-on-empty-after-accept`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/OutgoingFileTransferImpl.kt:47-53`, correctness) — recordBytesSent/recordBytesReceived can overwrite a concurrently-set terminal state back to Sending
+- ✅ **`record-bytes-can-overwrite-terminal-state`** *(formerly `outgoing-progress-stuck-at-accepted-on-empty-after-accept`)* (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/OutgoingFileTransferImpl.kt:47-53`, correctness) — recordBytesSent/recordBytesReceived can overwrite a concurrently-set terminal state back to Sending
   - *Fix:* Guard record* to not write Sending when the current state isTerminal() (check before setting), or perform the byte-record + state update under the dispatcher lock as the KDoc claims. Apply to both OutgoingFileTransferImpl and IncomingFileSession.
 - ✅ **`connect-internalpeer-no-hints-fallback`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt:321-327`, error-handling) — connect() fabricates a hintless InternalPeer when the peer is unknown to the registry
   - *Fix:* Validate at the connect() boundary that a usable address exists (registry hit, or a supportedTransport whose canConnect would be true) and throw a clear typed error (e.g. PeerNotReachable) otherwise; do not capture a hintless InternalPeer as the reconnect fallback.
 - ✅ **`runcatching-swallows-cancellation`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt:266-268`, error-handling) — runCatching around suspend observer start()/close() swallows CancellationException
   - *Fix:* Use a helper that rethrows CancellationException: runCatching { pathObserver.start() }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it else logger.warn(...) }. Apply to line 360 too.
-- ✅ **`unused-runblocking-import`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt:45`, build) — Unused import kotlinx.coroutines.runBlocking in P2pKitImpl
-  - *Fix:* Remove the unused import.
-- ✅ **`unused-runblocking-import`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt:45`, dead-code) — Unused import kotlinx.coroutines.runBlocking
+- ✅ **`unused-runblocking-import`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt:45`, dead-code) — Unused import kotlinx.coroutines.runBlocking — **FIXED** (import removed; this finding was originally listed twice, under build and dead-code — de-duplicated)
   - *Fix:* Remove the `import kotlinx.coroutines.runBlocking` line (45).
 - 🔧 **`observeRawState-initial-emit-races-handshake`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt:210-221`, edge-case) — observeRawState only fires on Closed/Failed; half-open/silently-dropped connections are caught only by keep-alive timeout
   - *Fix:* Document the dependency on transports faithfully driving RawConnection.state to Failed on read/write errors; ensure each transport impl does so. Keep-alive remains the backstop. Low priority.
@@ -947,11 +951,11 @@ All fixes below were implemented and **verified green** against:
   - *Fix:* Track a single watchdog Job on the session; cancel the prior one before launching a new one (or arm once per Reconnecting entry and cancel it on rearmWith/transitionToTerminal).
 - 🔧 **`zombie-still-emits`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt:441-471`, correctness) — Zombie-session detector logs but still emits to public incoming flow (diagnostic-by-design)
   - *Fix:* Once the structural cancels are confirmed (post-hardware soak), either remove the diagnostic emit-anyway behavior and treat a confirmed zombie as terminal (stop the loop, do not emit), or keep it as a logged diagnostic. Given the epoch-cancel fixes are already in place, the residual risk is low; the cleanest end-state is to drop the detector or make it terminal once telemetry shows it never fires.
-- ✅ **`evict-loop-no-error-isolation`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt:140-145`, error-handling) — evictLoop has no per-iteration error handling; one throw kills peer eviction for the kit's lifetime
+- ✅ **`evict-loop-no-error-isolation`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt:140-145`, error-handling) — evictLoop had no per-iteration error handling; one throw killed peer eviction for the kit's lifetime — **FIXED** (per-iteration try/catch, CancellationException rethrown)
   - *Fix:* Wrap the loop body in try/catch: rethrow CancellationException, log+continue otherwise, so one bad sweep doesn't permanently stop eviction.
-- ✅ **`manual-peer-id-set-unsynchronized-vs-stateflow`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt:113-138`, concurrency) — registerManualPeer adds to tracked before manualPeerIds and mutates a non-thread-safe set unsynchronized
+- ✅ **`manual-peer-id-set-unsynchronized-vs-stateflow`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt:113-138`, concurrency) — registerManualPeer added to tracked before manualPeerIds and mutated a non-thread-safe set unsynchronized — **FIXED** (the separate set was removed; manual-ness is a flag on `TrackedPeer`, atomic with the map update)
   - *Fix:* Add syntheticId to manualPeerIds BEFORE tracked.update so the never-evict marker is set before the peer becomes evictable, and make manualPeerIds thread-safe (or guard it with the same store mutex / fold it into the tracked map as a flag).
-- ✅ **`manual-peer-ids-never-cleaned`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt:86-93`, resource-leak) — manualPeerIds grows unbounded — never pruned, and manual peers are never evicted
+- ✅ **`manual-peer-ids-never-cleaned`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt:86-93`, resource-leak) — manualPeerIds grew unbounded — never pruned, and manual peers were never evicted — **FIXED** (set removed; AUDIT-2026-06 added dedup by host:port:kind and made manual peers session-scoped — staleness-exemption is retained by design)
   - *Fix:* Give manual peers a TTL or allow eviction after N failed connect attempts; remove the id from manualPeerIds when its tracked entry is dropped; dedupe manual registrations by host:port:kind so retries reuse one id.
 - ✅ **`publish-peers-equality-on-list`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt:97-100`, performance) — publishPeers rebuilds and structurally compares the full peer list on every event including heartbeats
   - *Fix:* Short-circuit publishPeers for Updated events that only refresh lastSeen without changing visible peer fields (compare ids/relevant fields), or maintain the published list incrementally.
@@ -971,7 +975,7 @@ All fixes below were implemented and **verified green** against:
   - *Fix:* Make P2pSessionImpl own the reader for the connection it holds (create/cancel inside startEpoch/transitionToTerminal under connectionLock) so reader teardown is structural rather than dependent on close() semantics across two classes.
 - ✅ **`startorjoin-terminal-eviction-loses-pending`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionStore.kt:64-83`, edge-case) — Coalesced connect() callers share fate: JoinPending awaiters all fail if the single in-flight attempt fails
   - *Fix:* Either document that coalesced connects share fate, or have JoinPending awaiters fall back to a fresh startOrJoin (becoming connector) when the awaited deferred completes exceptionally.
-- ✅ **`transport-tie-break-nondeterministic`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/TransportManager.kt:21-26`, correctness) — selectBestTransport tie-break is undefined when two transports share the highest priority
+- ✅ **`transport-tie-break-nondeterministic`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/TransportManager.kt:21-26`, correctness) — selectBestTransport tie-break was undefined when two transports shared the highest priority — **FIXED** (deterministic secondary sort by `TransportKind` ordinal, then registration order)
   - *Fix:* Define a deterministic secondary tie-break (e.g. TransportKind ordinal or registration index) and/or require unique priorities; document the rule.
 - ✅ **`noop-permission-manager-public-no-input`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/permission/NoOpP2pPermissionManager.kt:12-16`, api-design) — Default NoOpP2pPermissionManager always reports all-granted; no builder knob to override it
   - *Fix:* Thread a permissionsOverride through newP2pKit/the builder so apps can plug in a real P2pPermissionManager, and ship an Android actual checking NEARBY_WIFI_DEVICES/ACCESS_FINE_LOCATION; until then, soften the Errors/PermissionMissing docs so they don't promise unreachable behavior.
@@ -979,13 +983,13 @@ All fixes below were implemented and **verified green** against:
   - *Fix:* Use a shared fixed zero MessageId(ByteArray(16)) for control frames that carry no transfer/message identity, avoiding per-frame random allocation. If ids must later be unguessable, switch to a CSPRNG and document the requirement. Unit-testable.
 - ✅ **`events-flow-no-evictstale-on-non-data-quiet`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/DefaultP2pProtocol.kt:101-111`, resource-leak) — events() never schedules reassembly eviction; cleanup can only be driven by inbound bytes
   - *Fix:* Drive eviction from a timer independent of inbound traffic — merge a ticker flow into events() (cancelled when the flow completes) or have the session call a periodic cleanup hook on the protocol. Unit-testable with a virtual-time scheduler.
-- ✅ **`sendfile-controlframe-random-id-on-reject-cancel`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/DefaultP2pProtocol.kt:46-49`, correctness) — ERROR/FILE_REJECT/FILE_CANCEL reason strings are decoded with no length cap and surfaced to the public event API
+- ✅ **`reason-strings-no-length-cap`** *(formerly `sendfile-controlframe-random-id-on-reject-cancel`)* (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/DefaultP2pProtocol.kt:46-49`, correctness) — ERROR/FILE_REJECT/FILE_CANCEL reason strings are decoded with no length cap and surfaced to the public event API
   - *Fix:* Cap reason length on encode (truncate to e.g. 1 KiB) and validate/truncate on decode. Largely subsumed by the global frame-payload cap (frame-reader-unbounded-payload-dos) but the reason fields warrant their own small bound. Unit-testable.
-- ✅ **`offer-size-mismatch-not-checked`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/FileOfferPayload.kt:17-21`, validation) — Decoded offer sizeBytes is not validated for negative values on the incoming path
+- ✅ **`offer-size-mismatch-not-checked`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/FileOfferPayload.kt:17-21`, validation) — Decoded offer sizeBytes was not validated for negative values on the incoming path — **FIXED** (`FileOfferPayload.decode` rejects negative `sizeBytes`)
   - *Fix:* In onFileOffer, validate `payload.sizeBytes in 0..config.maxFileSizeBytes` and auto-reject (or drop) out-of-range offers before constructing the session.
 - ✅ **`frame-reader-empty-feed-noop-doc-mismatch`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/FrameReader.kt:37-44`, edge-case) — feed() empty-input contract is undefined at the SPI boundary (no busy-spin within a call, but unspecified)
   - *Fix:* Document feed([]) as a no-op returning only already-complete buffered frames, and optionally short-circuit whenever bytes.isEmpty() (a no-byte feed cannot produce a frame a previous feed didn't). Define in the DataTransport/RawConnection SPI that read() must not emit empty ByteArrays except as a benign event. Doc/contract change, unit-testable.
-- ✅ **`reassembler-toString-string-template-bug`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/Reassembler.kt:54-57`, correctness) — Mismatched-totalChunks error message has a broken string template (`$frame.totalChunks`)
+- ✅ **`reassembler-toString-string-template-bug`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/Reassembler.kt:54-57`, correctness) — Mismatched-totalChunks error message had a broken string template (`$frame.totalChunks`) — **FIXED** (interpolation corrected)
   - *Fix:* Change to "first saw ${state.totalChunks}, now ${frame.totalChunks}".
 - ✅ **`manual-connection-info-no-port-validation`** (`p2p-core/src/commonMain/kotlin/dev/p2pkit/core/provisioning/NetworkProvisioningTypes.kt:128-134`, validation) — ManualConnectionInfo and createManualPeer(host, port) accept unvalidated host/port at the public boundary
   - *Fix:* Add require(port in 1..65535) and require(host non-blank) in ManualConnectionInfo's init{}, and document createManualPeer's preconditions. Validate at the public boundary, not only in the internal registrar.
@@ -1083,7 +1087,7 @@ All fixes below were implemented and **verified green** against:
 - ✅ **`swift-helpers-cast-mismatch-in-kdoc`** (`p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosSwiftHelpers.kt:23-25`, docs) — Swift KDoc snippet uses `as? [Peer]` on a non-optional List<Peer> return, contradicting the function's stated rationale
   - *Fix:* Change the snippet to `let peers: [Peer] = kit.peersSnapshot()` and `let sessions: [P2pSession] = kit.sessionsSnapshot()` to match the documented rationale that no cast is needed.
 - ✅ **`txt-protocol-version-advertised-not-checked`** (`p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt:59-62`, maintainability) — LanConstants.PROTOCOL_VERSION is a hardcoded duplicate of core's ProtocolConstants.VERSION with only a comment linking them; nothing enforces they stay equal, and it is never validated on resolve
-  - *Fix:* Reference dev.p2pkit.core's ProtocolConstants.VERSION directly instead of redefining the literal, OR add a commonTest assertion `LanConstants.PROTOCOL_VERSION == ProtocolConstants.VERSION.toInt()`. Then actually validate pv on resolve (see untrusted-txt-no-validation).
+  - *Fix:* Reference dev.p2pkit.core's ProtocolConstants.VERSION directly instead of redefining the literal, OR add a commonTest assertion `LanConstants.PROTOCOL_VERSION == ProtocolConstants.VERSION.toInt()`. Then actually validate pv on resolve (see untrusted-txt-no-validation-jvm).
 - ✅ **`unused-service-type-nsd-constant`** (`p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt:40-44`, dead-code) — SERVICE_TYPE_NSD constant is dead after the JmDNS migration
   - *Fix:* Remove SERVICE_TYPE_NSD and its KDoc, or re-comment it as historical wire-doc reference. (Grep confirms no remaining users.)
 - ✅ **`accept-loop-runs-after-flow-cancel`** (`p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmLanDataTransport.kt:129-151`, concurrency) — accepterJob.cancel() cannot interrupt a blocking sock.accept(); only sock.close() unblocks it, so cancel() in awaitClose is effectively dead
@@ -1181,5 +1185,5 @@ These were raised by a reviewer but **rejected by the verifier** after re-readin
   - *Why not a bug:* Rejected: the predicate the finding hinges on (stop() exhaustive) is verified true at P2pKitImpl.kt:356. No real leak; the finding self-identifies as benign.
 - **`ui-filetransfer-pct-int-overflow-large-files`** (`p2p-sample-desktop-ui/src/main/kotlin/dev/p2pkit/sample/desktop/ui/Main.kt`) — Progress percentage computation does not overflow at any configured file size
   - *Why not a bug:* Verified the arithmetic at 1322-1324; the finding's own conclusion is 'No defect at default 2 GiB cap.' Since there is no real problem at any practical configuration, this is rejected as a non-issue (the author flagged it only 'for completeness'). needsHardware=false.
-- **`android-host-test-only-core-missing-jvm-tests`** (`p2p-core/build.gradle.kts`) — No Android host/unit test source set or JVM-specific tests configured for library modules
-  - *Why not a bug:* 
+
+*(A ninth rejected entry, `android-host-test-only-core-missing-jvm-tests`, was recorded here with a blank rationale — the rejection was never substantiated in writing, so the entry has been removed rather than left dangling. If the claim resurfaces, note that `:p2p-core` does have a `jvmTest` source set today.)*

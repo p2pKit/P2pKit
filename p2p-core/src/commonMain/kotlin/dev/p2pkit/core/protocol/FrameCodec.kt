@@ -72,7 +72,10 @@ internal object FrameCodec {
         val version = bytes[4]
         val typeCode = bytes[5]
         val flags = bytes[6]
-        // bytes[7] reserved
+        // bytes[7] reserved — deliberately NOT validated on decode (encode
+        // always writes 0). Same forward-compat stance as the unused upper
+        // bits of the flags byte: a future protocol revision may assign
+        // meaning to them, and old decoders must not reject such frames.
 
         val messageId = MessageId(bytes.copyOfRange(8, 8 + MessageId.SIZE))
         val chunkIndex = readIntBE(bytes, 24)

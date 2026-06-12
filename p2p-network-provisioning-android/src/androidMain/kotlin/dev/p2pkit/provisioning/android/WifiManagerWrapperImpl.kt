@@ -309,10 +309,12 @@ private class HotspotHandleImpl(
 }
 
 /**
- * Reads the SSID from a [SoftApConfiguration]. The API moved between
- * `getSsid(): String?` (pre-Android 13) and `getWifiSsid(): WifiSsid?`
- * (Android 13+). We read both safely via reflection-free try-cascade
- * because the symbol availability differs by SDK.
+ * Reads the SSID from a [SoftApConfiguration]. Android 13 deprecated
+ * `getSsid(): String?` in favour of `getWifiSsid(): WifiSsid?`, but the
+ * deprecated string getter remains available and populated on every API
+ * level where `SoftApConfiguration` exists (30+), so this reads only
+ * `config.ssid` with the deprecation suppressed — there is no
+ * `getWifiSsid()` fallback.
  */
 private fun readSsidFromSoftApConfiguration(config: SoftApConfiguration): String? {
     // String-returning getSsid is available on API 30+ regardless of OS version.

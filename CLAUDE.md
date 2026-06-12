@@ -17,7 +17,7 @@ P2pKit is a Kotlin Multiplatform SDK for discovering nearby devices and exchangi
 ./gradlew :p2p-core:jvmTest                         # JVM-only (fastest loop)
 ./gradlew :p2p-transport-lan:jvmTest                # JVM LAN loopback (real TCP + mDNS in one JVM)
 ./gradlew :p2p-transport-lan:iosSimulatorArm64Test  # iOS loopback (macOS + Xcode + simulator runtime required)
-./gradlew :p2p-network-provisioning-android:testDebugUnitTest
+./gradlew :p2p-network-provisioning-android:testAndroidHostTest
 ./gradlew :p2p-network-provisioning-desktop:test
 
 # Single test class / method (per-target task + --tests filter)
@@ -25,7 +25,7 @@ P2pKit is a Kotlin Multiplatform SDK for discovering nearby devices and exchangi
 ./gradlew :p2p-core:jvmTest --tests "*FileTransferFlowTest.someTestName*"
 
 # Sample apps
-./gradlew :p2p-sample-desktop:installDist           # then run build/install/p2p-sample-desktop/bin/p2p-sample-desktop <Name>
+./gradlew :p2p-sample-desktop:installDist           # then run p2p-sample-desktop/build/install/p2p-sample-desktop/bin/p2p-sample-desktop <Name>
 ./gradlew :p2p-sample-desktop-ui:run                # Compose Desktop UI
 ./gradlew :p2p-sample-android:assembleDebug         # APK at p2p-sample-android/build/outputs/apk/debug/
 

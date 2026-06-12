@@ -203,10 +203,13 @@ internal class SessionStore(private val logger: P2pLogger) {
 
     /**
      * Structural-invariant check run at the end of every mutation method
-     * while [mutex] is still held. Hard `check()` calls — a violation
-     * means the store has reached a state the design considers
-     * impossible, and the application MUST crash rather than continue
-     * with an inconsistent view of `kit.sessions`.
+     * while [mutex] is still held. A violation means the store has reached
+     * a state the design considers impossible — but it is surfaced as a
+     * loud `logger.warn`, NOT a `check()` crash: a published library must
+     * not bring down the host app's process over a bookkeeping
+     * inconsistency (see the log-don't-crash comment in the body).
+     * AUDIT-2026-06: this KDoc previously demanded a crash, contradicting
+     * the deliberate log-only implementation below.
      *
      * Invariants (all evaluated under [mutex], so the state is stable):
      *
@@ -222,8 +225,8 @@ internal class SessionStore(private val logger: P2pLogger) {
      *    both staleness windows the public list ever exhibited.)
      *
      * Gated by [ASSERT_INVARIANTS]. Leave `true` through v0.4 — if a real
-     * device run trips a check, revert Commit 2 only; the structural
-     * refactor in Commit 1 stays.
+     * device run trips a warning for a benign ordering, flip the gate off
+     * (see the companion constant's KDoc).
      */
     private fun checkInvariants(site: String) {
         if (!ASSERT_INVARIANTS) return
