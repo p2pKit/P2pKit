@@ -24,9 +24,16 @@ do not pre-filter.** Send the raw logs back.
 
 | Platform | How logging is enabled | Where it appears | How to capture |
 |---|---|---|---|
-| **JVM desktop** (`p2p-sample-desktop` CLI or `-ui`) | **On by default** in the samples. CLI extra modes: `trace=frames` (byte-level), `trace=off`. | **stdout** of the terminal, prefix `P2pKitLAN`. | `… | tee jvm-trace.log` |
-| **Android** (`p2p-sample-android`) | **Always on** (logcat). For byte-level frames, set `AndroidLanDiag.traceFrames = true` in the app before start. | **logcat**, tags all start with `P2pKit`. | `adb logcat -v time | tee android-trace.log` (filter: `grep P2pKit`) |
-| **iOS** (`iosApp`) | **On by default** — the sample sets `IosLanDebug.shared.mirrorToConsole = true` and shows an in-app log. | **Xcode console** and **Console.app** (filter `p2pkit`); also the on-screen log in the app. | Xcode: copy the console. Console.app: filter `p2pkit`, File ▸ Save. Or screen-record the in-app log. |
+| **JVM desktop** (`p2p-sample-desktop` CLI or `-ui`) | **On by default** in the samples (transport trace + decoded frame-type trace). CLI extra modes: `trace=frames` (also byte-level), `trace=off`. | **stdout**, prefixes `P2pKitLAN` (transport) + `P2pKitFRAME` (frame types). | `… | tee jvm-trace.log` |
+| **Android** (`p2p-sample-android`) | **Always on** (logcat). The sample also enables frame-type trace (routed to a `P2pKitFrame` logcat tag). For byte-level frames too, set `AndroidLanDiag.traceFrames = true`. | **logcat**, all tags start with `P2pKit`. | `adb logcat -v time | tee android-trace.log` (filter: `grep P2pKit`) |
+| **iOS** (`iosApp`) | **On by default** — sample sets `IosLanDebug.shared.mirrorToConsole = true` (+ shows an in-app log) and `FrameTrace.shared.enabled = true`. | **Xcode console** / **Console.app**: transport lines filter `p2pkit`, frame-type lines filter `P2pKitFRAME`. | Xcode: copy the console. Console.app: filter `p2pkit OR P2pKitFRAME`, File ▸ Save. |
+
+**Decoded frame-type trace (all platforms).** Alongside the transport byte
+lines, each protocol frame is logged once per direction with its command name
+and size, e.g. `P2pKitFRAME TX type=PING len=0B`, `… RX type=DATA len=1024B
+chunk=2/3 id=ab12cd34`, `… TX type=FILE_DATA len=65536B chunk=10/80 id=… `,
+`… RX type=PONG len=0B`. This makes a keep-alive PING, a message DATA chunk, and
+a FILE_DATA chunk distinguishable at a glance.
 
 **Tag legend** (what each line means):
 
@@ -40,6 +47,7 @@ do not pre-filter.** Send the raw logs back.
 | `dial` / `P2pKitLanData connect` | outbound TCP: target, **local egress address**, success/fail reason |
 | `accept` / `P2pKitLanData inbound` | inbound TCP accepted |
 | `conn` / `P2pKitLanConn` | per-connection lifecycle: open, EOF, socket drop, write timeout, close; iOS adds connection **path interfaces** + nw_error codes |
+| `P2pKitFRAME` (all platforms) | decoded protocol frame per direction: `TX/RX type=<CMD> len=<bytes>` (+ chunk/id for DATA/FILE_DATA) — the command-name layer above the byte trace |
 
 Before each run: **note the wall-clock time and the device's network state**
 (Wi-Fi SSID, VPN on/off, cellular on/off). Label each log file by scenario.

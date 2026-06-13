@@ -593,6 +593,13 @@ struct ContentView: View {
         // harness, so turn it on for Console.app / Xcode-console capture.
         IosLanDebug.shared.mirrorToConsole = true
 
+        // Decoded frame-type trace (Issue #2/#3). With its default sink, each
+        // TX/RX frame line (PING/PONG/DATA/FILE_*) prints "P2pKitFRAME …" to the
+        // unified log → Xcode console / Console.app (filter "P2pKitFRAME").
+        // To also surface frames in the on-screen log, additionally set:
+        //   FrameTrace.shared.sink = { IosLanDebug.shared.log(tag: "frame", message: $0) }
+        FrameTrace.shared.enabled = true
+
         // Subscribe to IosLanDebug BEFORE startAdvertising/Discovery so
         // we capture every browser-state and result-change from t=0.
         self.debugLogTask = Task.detached {

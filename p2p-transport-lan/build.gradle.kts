@@ -44,7 +44,7 @@ kotlin {
         // P2pKit / AppId / Peer / P2pMessage / ... directly.
         // Run `./gradlew :p2p-transport-lan:linkDebugFrameworkIosSimulatorArm64`
         // (or `linkReleaseFrameworkIosArm64` for device builds) and drop the
-        // resulting `.framework` into Xcode — see docs/ios-sample-app/.
+        // resulting `.framework` into Xcode — see the maintained sample at iosApp/.
         target.binaries.framework {
             baseName = "P2pKitShared"
             isStatic = false

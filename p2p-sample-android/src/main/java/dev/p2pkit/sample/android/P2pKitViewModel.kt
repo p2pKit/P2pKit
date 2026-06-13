@@ -16,6 +16,7 @@ import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.core.protocol.FrameTrace
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pState
@@ -269,6 +270,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         _isStarting.value = true
         val choice = reconnectChoice
         val ctx = getApplication<Application>().applicationContext
+        // Diagnostic frame-type trace (Issue #2/#3): route decoded frame lines
+        // to logcat under a P2pKit tag so they sit alongside the transport
+        // (P2pKitJmDNS / P2pKitLan*) lines. Library default is off.
+        FrameTrace.sink = { Log.d("P2pKitFrame", it) }
+        FrameTrace.enabled = true
         val newKit = P2pKit.create {
             appId = AppId(APP_ID)
             this.deviceName = this@P2pKitViewModel.deviceName

@@ -63,6 +63,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.protocol.FrameTrace
 import dev.p2pkit.transport.lan.JvmLanDiag
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.ExperimentalP2pApi
@@ -103,10 +104,11 @@ import java.io.OutputStream
 // =====================================================================
 
 fun main() {
-    // LAN forensic trace (Issue #2): emit every P2pKitLAN line to stdout of the
-    // terminal that launched the UI. Harmless in a test harness; the library
-    // default stays off.
+    // LAN forensic trace (Issue #2) + decoded frame-type trace: emit every
+    // P2pKitLAN / P2pKitFRAME line to stdout of the terminal that launched the
+    // UI. Harmless in a test harness; the library defaults stay off.
     JvmLanDiag.enabled = true
+    FrameTrace.enabled = true
     application {
         Window(
             onCloseRequest = ::exitApplication,

@@ -11,6 +11,7 @@ import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transfer.sendFile
+import dev.p2pkit.core.protocol.FrameTrace
 import dev.p2pkit.provisioning.desktop.jvm
 import dev.p2pkit.transport.lan.JvmLanDiag
 import dev.p2pkit.transport.lan.lan
@@ -85,15 +86,18 @@ fun main(args: Array<String>) {
     // P2pKitLAN line goes to stdout (greppable). Pass `trace=off` to silence,
     // or `trace=frames` to additionally log every byte chunk on the data socket.
     when (args.firstOrNull { it.startsWith("trace=") }?.substringAfter("=")) {
-        "off" -> JvmLanDiag.enabled = false
-        "frames" -> { JvmLanDiag.enabled = true; JvmLanDiag.traceFrames = true }
-        else -> JvmLanDiag.enabled = true
+        "off" -> { JvmLanDiag.enabled = false; FrameTrace.enabled = false }
+        "frames" -> {
+            JvmLanDiag.enabled = true; JvmLanDiag.traceFrames = true; FrameTrace.enabled = true
+        }
+        else -> { JvmLanDiag.enabled = true; FrameTrace.enabled = true }
     }
 
     println("[P2pKit CLI] deviceName=$deviceName  appId=${appId.value}  reconnect=${reconnect.describe()}")
     println(
-        "[P2pKit CLI] LAN trace: enabled=${JvmLanDiag.enabled} frames=${JvmLanDiag.traceFrames} " +
-            "(grep 'P2pKitLAN'; pass trace=off / trace=frames to change)"
+        "[P2pKit CLI] trace: lan(interfaces/conn)=${JvmLanDiag.enabled} " +
+            "frameTypes=${FrameTrace.enabled} bytes=${JvmLanDiag.traceFrames} " +
+            "(grep 'P2pKitLAN' + 'P2pKitFRAME'; pass trace=off / trace=frames to change)"
     )
 
     val p2p = P2pKit.create {

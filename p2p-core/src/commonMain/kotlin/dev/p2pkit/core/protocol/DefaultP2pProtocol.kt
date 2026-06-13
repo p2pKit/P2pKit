@@ -22,30 +22,28 @@ internal class DefaultP2pProtocol(
     override suspend fun sendMessage(connection: RawConnection, message: P2pMessage) {
         val frames = chunker.chunk(message)
         for (frame in frames) {
-            connection.write(FrameCodec.encode(frame))
+            writeFrame(connection, frame)
         }
     }
 
     override suspend fun sendHello(connection: RawConnection, hello: HelloPayload) {
-        val frame = controlFrame(PacketType.HELLO, HelloPayload.encode(hello))
-        connection.write(FrameCodec.encode(frame))
+        writeFrame(connection, controlFrame(PacketType.HELLO, HelloPayload.encode(hello)))
     }
 
     override suspend fun sendPing(connection: RawConnection) {
-        connection.write(FrameCodec.encode(controlFrame(PacketType.PING)))
+        writeFrame(connection, controlFrame(PacketType.PING))
     }
 
     override suspend fun sendPong(connection: RawConnection) {
-        connection.write(FrameCodec.encode(controlFrame(PacketType.PONG)))
+        writeFrame(connection, controlFrame(PacketType.PONG))
     }
 
     override suspend fun sendClose(connection: RawConnection) {
-        connection.write(FrameCodec.encode(controlFrame(PacketType.CLOSE)))
+        writeFrame(connection, controlFrame(PacketType.CLOSE))
     }
 
     override suspend fun sendError(connection: RawConnection, reason: String) {
-        val payload = reason.encodeToByteArray()
-        connection.write(FrameCodec.encode(controlFrame(PacketType.ERROR, payload)))
+        writeFrame(connection, controlFrame(PacketType.ERROR, reason.encodeToByteArray()))
     }
 
     override suspend fun sendFileOffer(
@@ -53,16 +51,18 @@ internal class DefaultP2pProtocol(
         transferId: MessageId,
         offer: FileOfferPayload
     ) {
-        val frame = controlFrame(
-            type = PacketType.FILE_OFFER,
-            messageId = transferId,
-            payload = FileOfferPayload.encode(offer)
+        writeFrame(
+            connection,
+            controlFrame(
+                type = PacketType.FILE_OFFER,
+                messageId = transferId,
+                payload = FileOfferPayload.encode(offer)
+            )
         )
-        connection.write(FrameCodec.encode(frame))
     }
 
     override suspend fun sendFileAccept(connection: RawConnection, transferId: MessageId) {
-        connection.write(FrameCodec.encode(controlFrame(PacketType.FILE_ACCEPT, messageId = transferId)))
+        writeFrame(connection, controlFrame(PacketType.FILE_ACCEPT, messageId = transferId))
     }
 
     override suspend fun sendFileReject(
@@ -71,20 +71,18 @@ internal class DefaultP2pProtocol(
         reason: String?
     ) {
         val payload = reason?.encodeToByteArray() ?: EMPTY
-        connection.write(
-            FrameCodec.encode(controlFrame(PacketType.FILE_REJECT, messageId = transferId, payload = payload))
-        )
+        writeFrame(connection, controlFrame(PacketType.FILE_REJECT, messageId = transferId, payload = payload))
     }
 
     override suspend fun sendFileDataFrame(connection: RawConnection, frame: Frame) {
         require(frame.type == PacketType.FILE_DATA) {
             "sendFileDataFrame expects FILE_DATA, got ${frame.type}"
         }
-        connection.write(FrameCodec.encode(frame))
+        writeFrame(connection, frame)
     }
 
     override suspend fun sendFileDone(connection: RawConnection, transferId: MessageId) {
-        connection.write(FrameCodec.encode(controlFrame(PacketType.FILE_DONE, messageId = transferId)))
+        writeFrame(connection, controlFrame(PacketType.FILE_DONE, messageId = transferId))
     }
 
     override suspend fun sendFileCancel(
@@ -93,9 +91,31 @@ internal class DefaultP2pProtocol(
         reason: String?
     ) {
         val payload = reason?.encodeToByteArray() ?: EMPTY
-        connection.write(
-            FrameCodec.encode(controlFrame(PacketType.FILE_CANCEL, messageId = transferId, payload = payload))
-        )
+        writeFrame(connection, controlFrame(PacketType.FILE_CANCEL, messageId = transferId, payload = payload))
+    }
+
+    /**
+     * Single outbound choke point: trace the frame (type + size) then write its
+     * encoded bytes. Every send method routes through here so [FrameTrace] sees
+     * exactly one TX line per frame, matching the RX line in [events].
+     */
+    private suspend fun writeFrame(connection: RawConnection, frame: Frame) {
+        FrameTrace.emit { "TX ${frameDesc(frame)}" }
+        connection.write(FrameCodec.encode(frame))
+    }
+
+    private fun frameDesc(frame: Frame): String {
+        val base = "type=${frame.type} len=${frame.payload.size}B"
+        return when (frame.type) {
+            PacketType.DATA, PacketType.FILE_DATA ->
+                "$base chunk=${frame.chunkIndex}/${frame.totalChunks} " +
+                    "id=${frame.messageId.toString().take(8)}" +
+                    (if (frame.isLastChunk) " LAST" else "")
+            PacketType.FILE_OFFER, PacketType.FILE_ACCEPT, PacketType.FILE_REJECT,
+            PacketType.FILE_DONE, PacketType.FILE_CANCEL ->
+                "$base xfer=${frame.messageId.toString().take(8)}"
+            else -> base
+        }
     }
 
     override fun events(connection: RawConnection): Flow<ProtocolEvent> = flow {
@@ -109,6 +129,7 @@ internal class DefaultP2pProtocol(
             reassembler.evictStale()
             val frames = reader.feed(bytes)
             for (frame in frames) {
+                FrameTrace.emit { "RX ${frameDesc(frame)}" }
                 val event = decodeEvent(frame, reassembler)
                 if (event != null) emit(event)
             }
