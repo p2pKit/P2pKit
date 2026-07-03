@@ -3,27 +3,44 @@ package dev.p2pkit.core.internal
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.protocol.FileOfferPayload
+import dev.p2pkit.core.protocol.Frame
+import dev.p2pkit.core.protocol.HelloPayload
+import dev.p2pkit.core.protocol.MessageId
+import dev.p2pkit.core.protocol.P2pProtocol
+import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlinx.io.Buffer
 import kotlinx.io.readByteArray
 import kotlinx.io.write
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -400,6 +417,105 @@ class FileTransferFlowTest {
         }
     }
 
+    // ---- Direct-dispatcher tests (recording protocol, no wire I/O) ----
+
+    @Test
+    fun offerProcessedWhileDispatcherClosedIsDroppedAndLeaksNoEntry() = runBlocking {
+        // Single-threaded (runBlocking's event loop) so coroutine interleaving
+        // is deterministic.
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol()
+        val dispatcher = directDispatcher(scope, protocol)
+        try {
+            val received = mutableListOf<String>()
+            val subscribed = CompletableDeferred<Unit>()
+            scope.launch {
+                dispatcher.incomingFiles
+                    .onSubscription { subscribed.complete(Unit) }
+                    .collect { received.add(it.name) }
+            }
+            subscribed.await()
+
+            dispatcher.closeAll("session closing")
+            val transferId = MessageId.random(Random(7))
+            dispatcher.onFileOffer(transferId, FileOfferPayload(name = "late.bin", sizeBytes = 8L))
+            repeat(10) { yield() }  // drain any (wrongly) launched emit
+            assertTrue(
+                received.isEmpty(),
+                "FILE_OFFER processed while closed must not surface an offer, got $received"
+            )
+            assertTrue(
+                protocol.fileRejects.isEmpty(),
+                "A closed dispatcher must drop the offer silently, sent ${protocol.fileRejects}"
+            )
+
+            // The dropped offer must leave no entry behind in `incoming`: after
+            // reopen() (the reconnect-rearm path) the same transferId must be
+            // treated as brand-new — a leaked entry would trip the
+            // duplicate-transferId guard and swallow this second offer.
+            dispatcher.reopen()
+            dispatcher.onFileOffer(transferId, FileOfferPayload(name = "late.bin", sizeBytes = 8L))
+            withTimeout(5_000) {
+                while (received.isEmpty()) yield()
+            }
+            assertEquals(listOf("late.bin"), received)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun acceptThenImmediateCancelNeverStreamsOrSendsFileDone() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol()
+        val dispatcher = directDispatcher(scope, protocol)
+        try {
+            val payload = ByteArray(64) { 3 }
+            val transfer = dispatcher.sendFile(
+                name = "cancelled.bin",
+                sizeBytes = payload.size.toLong(),
+                mimeType = null,
+                source = Buffer().apply { write(payload) }
+            )
+            val transferId = protocol.fileOffers.single()
+
+            // Remote accepted then cancelled back-to-back: the streamer job
+            // must be registered as entry.sender (and therefore cancellable)
+            // before it can produce a single frame (E:370).
+            dispatcher.onFileAccept(transferId)
+            dispatcher.onFileCancel(transferId, "changed my mind")
+            repeat(10) { yield() }  // give any (wrongly) surviving streamer a chance to run
+
+            val cancelled = assertIs<FileTransferState.Cancelled>(transfer.state.value)
+            assertEquals("changed my mind", cancelled.reason)
+            assertTrue(
+                protocol.fileData.none { it == transferId },
+                "cancelled transfer must not stream FILE_DATA, sent ${protocol.fileData}"
+            )
+            assertTrue(
+                protocol.fileDones.none { it == transferId },
+                "cancelled transfer must not send FILE_DONE, sent ${protocol.fileDones}"
+            )
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    private fun directDispatcher(scope: CoroutineScope, protocol: P2pProtocol): FileTransferDispatcher {
+        val pair = FakeConnectionPair()
+        return FileTransferDispatcher(
+            sessionId = "direct-test",
+            remotePeer = syntheticPeer("peer-id", "Peer"),
+            protocol = protocol,
+            getConnection = { pair.a },
+            sendMutex = Mutex(),
+            config = FileTransferConfig(offerTimeoutMillis = 60_000),
+            scope = scope,
+            random = Random(42),
+            logger = P2pLogger.NoOp
+        )
+    }
+
     @Suppress("UNUSED_PARAMETER")
     private fun assertSubscriberSeesNoOffer(name: String) {
         // No-op probe — left as a hook so future versions can replace with
@@ -410,4 +526,48 @@ class FileTransferFlowTest {
 private class FtFactoryFor(private val transport: FakeDataTransport) : TransportFactory {
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = null)
+}
+
+/**
+ * [P2pProtocol] fake that records file-frame sends without any wire I/O.
+ * Used by the direct-dispatcher tests to observe exactly which frames a
+ * transfer emitted.
+ */
+private class RecordingFileProtocol : P2pProtocol {
+    val fileOffers = mutableListOf<MessageId>()
+    val fileData = mutableListOf<MessageId>()
+    val fileDones = mutableListOf<MessageId>()
+    val fileCancels = mutableListOf<MessageId>()
+    val fileRejects = mutableListOf<MessageId>()
+
+    override suspend fun sendMessage(connection: RawConnection, message: P2pMessage) {}
+    override suspend fun sendHello(connection: RawConnection, hello: HelloPayload) {}
+    override suspend fun sendPing(connection: RawConnection) {}
+    override suspend fun sendPong(connection: RawConnection) {}
+    override suspend fun sendClose(connection: RawConnection) {}
+    override suspend fun sendError(connection: RawConnection, reason: String) {}
+
+    override suspend fun sendFileOffer(connection: RawConnection, transferId: MessageId, offer: FileOfferPayload) {
+        fileOffers.add(transferId)
+    }
+
+    override suspend fun sendFileAccept(connection: RawConnection, transferId: MessageId) {}
+
+    override suspend fun sendFileReject(connection: RawConnection, transferId: MessageId, reason: String?) {
+        fileRejects.add(transferId)
+    }
+
+    override suspend fun sendFileDataFrame(connection: RawConnection, frame: Frame) {
+        fileData.add(frame.messageId)
+    }
+
+    override suspend fun sendFileDone(connection: RawConnection, transferId: MessageId) {
+        fileDones.add(transferId)
+    }
+
+    override suspend fun sendFileCancel(connection: RawConnection, transferId: MessageId, reason: String?) {
+        fileCancels.add(transferId)
+    }
+
+    override fun events(connection: RawConnection): Flow<ProtocolEvent> = emptyFlow()
 }

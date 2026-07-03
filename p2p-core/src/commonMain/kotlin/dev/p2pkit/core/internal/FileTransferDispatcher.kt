@@ -17,6 +17,7 @@ import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
@@ -179,10 +180,15 @@ internal class FileTransferDispatcher(
         }
         entry.timer?.cancel()
         entry.sender?.cancel()
-        runCatching {
+        // Best-effort notify; must NOT swallow CancellationException
+        // (runCatching did — the caller's cancellation was silently eaten)
+        // (AUDIT-2026-06 fix).
+        try {
             sendMutex.withLock { protocol.sendFileCancel(getConnection(), handle.transferId, reason) }
-        }.onFailure {
-            logger.debug("Session $sessionId: best-effort FILE_CANCEL for ${handle.transferId} failed: ${it.message}")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logger.debug("Session $sessionId: best-effort FILE_CANCEL for ${handle.transferId} failed: ${e.message}")
         }
     }
 
@@ -235,10 +241,12 @@ internal class FileTransferDispatcher(
             incoming.remove(session.transferId)
             e
         }
-        runCatching {
+        try {
             sendMutex.withLock { protocol.sendFileReject(getConnection(), session.transferId, reason) }
-        }.onFailure {
-            logger.debug("Session $sessionId: best-effort FILE_REJECT for ${session.transferId} failed: ${it.message}")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logger.debug("Session $sessionId: best-effort FILE_REJECT for ${session.transferId} failed: ${e.message}")
         }
         @Suppress("UNUSED_VARIABLE")
         val unused = entry
@@ -259,7 +267,7 @@ internal class FileTransferDispatcher(
         val unused = removed
         // If we hadn't yet accepted, send FILE_REJECT (peer hasn't started streaming);
         // if we had, send FILE_CANCEL (peer is mid-stream).
-        runCatching {
+        try {
             sendMutex.withLock {
                 if (wasAccepted) {
                     protocol.sendFileCancel(getConnection(), session.transferId, reason)
@@ -267,8 +275,10 @@ internal class FileTransferDispatcher(
                     protocol.sendFileReject(getConnection(), session.transferId, reason)
                 }
             }
-        }.onFailure {
-            logger.debug("Session $sessionId: best-effort cancel for ${session.transferId} failed: ${it.message}")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logger.debug("Session $sessionId: best-effort cancel for ${session.transferId} failed: ${e.message}")
         }
     }
 
@@ -284,7 +294,7 @@ internal class FileTransferDispatcher(
                 "Session $sessionId: rejecting file offer $transferId — " +
                     "size ${payload.sizeBytes} exceeds maxFileSizeBytes ${config.maxFileSizeBytes}"
             )
-            runCatching {
+            try {
                 sendMutex.withLock {
                     protocol.sendFileReject(
                         getConnection(),
@@ -292,6 +302,10 @@ internal class FileTransferDispatcher(
                         "sizeBytes ${payload.sizeBytes} exceeds maxFileSizeBytes ${config.maxFileSizeBytes}"
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                logger.debug("Session $sessionId: best-effort FILE_REJECT for $transferId failed: ${e.message}")
             }
             return
         }
@@ -316,10 +330,14 @@ internal class FileTransferDispatcher(
                 "Session $sessionId: rejecting file offer $transferId — " +
                     "$pendingState offers already pending (cap $MAX_PENDING_INCOMING_OFFERS)"
             )
-            runCatching {
+            try {
                 sendMutex.withLock {
                     protocol.sendFileReject(getConnection(), transferId, "too many pending offers")
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                logger.debug("Session $sessionId: best-effort FILE_REJECT for $transferId failed: ${e.message}")
             }
             return
         }
@@ -341,6 +359,16 @@ internal class FileTransferDispatcher(
             autoRejectIncoming(transferId)
         }
         lock.withLock {
+            // Re-check `closed` under the lock: a concurrent closeAll() that
+            // latched `closed` and swept the maps after the check at the top
+            // of this function must not be followed by a late insert — the
+            // entry would leak with no close path left to clean it up, and
+            // the offer must not be emitted for a closed session
+            // (AUDIT-2026-06 fix).
+            if (closed) {
+                timer.cancel()
+                return
+            }
             incoming[transferId] = IncomingEntry(session = session, timer = timer)
         }
         // Don't block the session's routeEvents loop on a slow subscriber. With
@@ -364,10 +392,16 @@ internal class FileTransferDispatcher(
         handle.setState(FileTransferState.Accepted)
 
         // Launch the streamer on the session scope so close() cancels it.
-        val job = scope.launch {
+        // Start LAZY so the job is registered as entry.sender BEFORE it can
+        // run: a FILE_CANCEL landing between launch and registration would
+        // otherwise see sender == null and be unable to cancel the streamer.
+        // streamOutgoingPayload re-checks terminal state at entry, so a cancel
+        // that lands after start() is still safe (AUDIT-2026-06 fix).
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             streamOutgoingPayload(handle)
         }
         lock.withLock { entry.sender = job }
+        job.start()
     }
 
     suspend fun onFileReject(transferId: MessageId, reason: String?) {
@@ -413,10 +447,14 @@ internal class FileTransferDispatcher(
             recv.abort()
             lock.withLock { incoming.remove(frame.messageId) }
             // Tell the peer we won't be completing this.
-            runCatching {
+            try {
                 sendMutex.withLock {
                     protocol.sendFileCancel(getConnection(), frame.messageId, "receive error: ${err.message}")
                 }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                logger.debug("Session $sessionId: best-effort FILE_CANCEL for ${frame.messageId} failed: ${t.message}")
             }
         }
     }
@@ -435,8 +473,18 @@ internal class FileTransferDispatcher(
         try {
             recv.finish()
             entry.session.setState(FileTransferState.Completed)
-        } catch (e: P2pError) {
-            entry.session.markFailed(e)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // finish() flushes the sink, which can throw P2pError (incomplete
+            // payload) OR a raw kotlinx-io IOException (disk full / closed fd).
+            // Both must stay scoped to THIS transfer — letting a non-P2pError
+            // escape into routeEvents would tear down the whole session
+            // (AUDIT-2026-06 fix; mirrors onFileData).
+            val err = if (e is P2pError) e
+            else P2pError.ConnectionFailed("file receive finalize failed: ${e.message ?: e::class.simpleName}")
+            entry.session.markFailed(err)
+            recv.abort()
         } finally {
             lock.withLock { incoming.remove(transferId) }
         }
@@ -549,7 +597,7 @@ internal class FileTransferDispatcher(
             e
         }
         entry.sender?.cancel()
-        runCatching {
+        try {
             sendMutex.withLock {
                 protocol.sendFileCancel(
                     getConnection(),
@@ -557,6 +605,10 @@ internal class FileTransferDispatcher(
                     "offer not accepted within ${config.offerTimeoutMillis}ms"
                 )
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logger.debug("Session $sessionId: best-effort FILE_CANCEL for $transferId failed: ${e.message}")
         }
     }
 
@@ -571,10 +623,14 @@ internal class FileTransferDispatcher(
         }
         @Suppress("UNUSED_VARIABLE")
         val unused = entry
-        runCatching {
+        try {
             sendMutex.withLock {
                 protocol.sendFileReject(getConnection(), transferId, "timeout")
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logger.debug("Session $sessionId: best-effort FILE_REJECT for $transferId failed: ${e.message}")
         }
     }
 
