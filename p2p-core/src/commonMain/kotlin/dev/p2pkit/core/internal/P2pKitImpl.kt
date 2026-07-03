@@ -47,6 +47,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Production [P2pKit] implementation. Wired up by
@@ -272,10 +273,26 @@ internal class P2pKitImpl(
                     )
                     startResult = Result.failure(failed)
                     // Surface the documented terminal Failed state (Errors.kt
-                    // claims TransportStartFailed surfaces through the lifecycle).
-                    _state.value = P2pState.Failed(failed)
+                    // claims TransportStartFailed surfaces through the lifecycle)
+                    // — unless stop() ran meanwhile via its mutex-starvation
+                    // fallback (see below): Stopped must not be overwritten by
+                    // a late Failed (AUDIT-2026-06).
+                    if (!stopped) _state.value = P2pState.Failed(failed)
                     throw failed
                 }
+            }
+            // AUDIT-2026-06 (stop-hang fix): stop() bounds its wait for this
+            // mutex; if one of the transport.start() calls above hung past
+            // that bound, stop() has already torn the kit down WITHOUT the
+            // lock. Re-check before latching success — a Stopped kit must
+            // never latch startResult=success or flip (back) to Running.
+            // Close whatever this bind loop just (re)opened; transport
+            // close() is idempotent for the ones stop() already closed.
+            if (stopped) {
+                for (transport in dataTransports) {
+                    runCatching { transport.close() }
+                }
+                throw IllegalStateException("P2pKit has been stopped; create a new instance")
             }
             // Best-effort path observer startup. A failure here is logged
             // but never propagates — `networkPathStatus` simply stays at
@@ -409,9 +426,6 @@ internal class P2pKitImpl(
         // subsequent lifecycle call fail loudly (IllegalStateException) instead
         // of latching onto a dead scope and silently no-op'ing.
         if (stopped) return
-        // startMutex: a concurrent ensureStarted mid-bind must not interleave
-        // with teardown (it could keep binding transports after we closed
-        // them, then latch Running/startResult-success AFTER Stopped).
         // NonCancellable: `stopped` latches at entry, so if the caller's
         // coroutine were cancelled mid-teardown the kit would be permanently
         // half-stopped (transports bound, scope alive) with every later
@@ -419,16 +433,32 @@ internal class P2pKitImpl(
         // wrapped so one bad session cannot abort the rest of teardown
         // (AUDIT-2026-06 fix).
         withContext(NonCancellable) {
-            startMutex.withLock {
-                if (stopped) return@withLock
-                stopped = true
-                _state.value = P2pState.Stopping
-                runCatching { stopAdvertising() }
-                runCatching { stopDiscovery() }
-                runCatching { sessionManager.closeAllSessions() }
-                for (transport in dataTransports) {
-                    runCatching { transport.close() }
-                }
+            // Latch BEFORE anything that can suspend: ensureStarted re-checks
+            // `stopped` after its bind loop, so even the lock-less fallback
+            // below cannot be raced by a late Running/startResult latch.
+            stopped = true
+            _state.value = P2pState.Stopping
+            // startMutex: a concurrent ensureStarted mid-bind must not
+            // interleave with teardown (it could keep binding transports
+            // after we closed them, then latch Running/startResult-success
+            // AFTER Stopped). But the acquisition must be BOUNDED: if
+            // ensureStarted is parked inside a hung transport.start() while
+            // holding this mutex, an unbounded withLock would park stop()
+            // uncancellably (inside NonCancellable) forever
+            // (AUDIT-2026-06 fix). On timeout, tear down WITHOUT the lock —
+            // best-effort, and safe against a late rebind because `stopped`
+            // is already set and ensureStarted's post-bind re-check closes
+            // anything it bound in the meantime.
+            val acquired = withTimeoutOrNull(STOP_START_MUTEX_TIMEOUT_MS) {
+                startMutex.withLock { teardownBoundResources() }
+                true
+            } ?: false
+            if (!acquired) {
+                logger.warn(
+                    "stop(): startMutex not released within ${STOP_START_MUTEX_TIMEOUT_MS}ms " +
+                        "(a transport start() is likely hung); tearing down without the lock"
+                )
+                teardownBoundResources()
             }
         }
 
@@ -441,9 +471,43 @@ internal class P2pKitImpl(
         _state.value = P2pState.Stopped
     }
 
+    /**
+     * The teardown body shared by [stop]'s locked (normal) and lock-less
+     * (mutex-starved) paths. Every step is runCatching-wrapped and idempotent
+     * (sessions/transports tolerate double close), so the rare interleavings —
+     * two concurrent first `stop()` calls, or the timeout firing mid-teardown
+     * and the fallback re-running it — are safe.
+     */
+    private suspend fun teardownBoundResources() {
+        runCatching { stopAdvertising() }
+        runCatching { stopDiscovery() }
+        runCatching { sessionManager.closeAllSessions() }
+        for (transport in dataTransports) {
+            runCatching { transport.close() }
+        }
+    }
+
+    // Gates on genuinely runtime-requestable permissions only (e.g. the
+    // provisioning sidecar's NEARBY_WIFI_DEVICES / ACCESS_FINE_LOCATION via
+    // its own P2pPermissionManager). The default platform managers report
+    // none — Android's install-time Wi-Fi permissions are deliberately NOT
+    // surfaced here; a missing manifest declaration is a construction-time
+    // warn instead (AUDIT-2026-06 permission-gate regression fix; see
+    // PermissionManagerFactory.android.kt).
     private suspend fun ensurePermissions() {
         val missing = permissions.missingPermissions()
         if (missing.isNotEmpty()) throw P2pError.PermissionMissing(missing)
+    }
+
+    private companion object {
+        /**
+         * How long [stop] waits to take [startMutex] from a concurrent
+         * [ensureStarted] before falling back to lock-less teardown. Generous
+         * next to any healthy transport bind (milliseconds); only a hung
+         * `transport.start()` holds the mutex this long (AUDIT-2026-06,
+         * stop-hang fix).
+         */
+        const val STOP_START_MUTEX_TIMEOUT_MS: Long = 5_000
     }
 }
 

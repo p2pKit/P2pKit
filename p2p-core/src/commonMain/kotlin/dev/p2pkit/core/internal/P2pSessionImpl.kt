@@ -267,19 +267,29 @@ internal class P2pSessionImpl(
         // throw. This is the only terminal path that sends a CLOSE frame;
         // unintentional failure paths don't (the wire is presumably already
         // dead).
-        runCatching {
-            // Bounded: the CLOSE frame is best-effort by contract. If a wedged
-            // writer is parked holding sendMutex (peer stopped reading), an
-            // unbounded wait here would hang close() — and kit.stop() behind
-            // it — forever (AUDIT-2026-06 fix).
-            withTimeoutOrNull(2_000) {
-                sendMutex.withLock { protocol.sendClose(connection) }
-            }
+        //
+        // The send runs as a job on the session scope and only the WAIT for
+        // it is bounded (AUDIT-2026-06 fix). Bounding the write itself with
+        // withTimeoutOrNull cannot work against a wedged peer: a blocking
+        // socket write ignores cancellation, so the timeout would still park
+        // until the write returned — hanging close() (and kit.stop() behind
+        // it) forever. Instead we give the frame CLOSE_FRAME_TIMEOUT_MS to
+        // get out, then proceed with teardown regardless;
+        // [transitionToTerminal] closes the raw connection, which is the one
+        // lever that unblocks a wedged sendClose. The runCatching lives
+        // inside the launched job (it only guards the best-effort send); the
+        // bounded join is deliberately NOT wrapped, so a genuine caller
+        // CancellationException propagates instead of being swallowed.
+        val closeSend = scope.launch {
+            runCatching { sendMutex.withLock { protocol.sendClose(connection) } }
         }
+        withTimeoutOrNull(CLOSE_FRAME_TIMEOUT_MS) { closeSend.join() }
 
         // Centralised cleanup: file transfers, epoch cancel, raw close, and
-        // the state flip to Closed all happen here atomically.
+        // the state flip to Closed all happen here atomically. Closing the
+        // raw connection also unblocks a still-wedged closeSend write.
         transitionToTerminal(ConnectionState.Closed, "user close()")
+        closeSend.cancel()
 
         // Additionally tear down the rest of the session — primarily the
         // reconnect handler if one is still mid-dial. Only [close] does
@@ -686,6 +696,14 @@ internal class P2pSessionImpl(
     }
 
     private companion object {
+        /**
+         * How long [close] waits for the best-effort CLOSE frame to reach the
+         * wire before proceeding with teardown. Bounds only the wait — the
+         * send job itself is left to be unblocked by the connection close
+         * inside [transitionToTerminal] (see the comment in [close]).
+         */
+        const val CLOSE_FRAME_TIMEOUT_MS: Long = 2_000
+
         /**
          * Threshold for the stuck-Reconnecting watchdog. Generous enough to
          * cover any reasonable `maxAttempts × retryDelayMillis` budget

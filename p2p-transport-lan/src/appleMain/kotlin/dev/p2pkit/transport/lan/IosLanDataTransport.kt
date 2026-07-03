@@ -126,19 +126,20 @@ internal class IosLanDataTransport(
      * process. It is now created lazily so the failure surfaces as a typed
      * `Result.failure` / `P2pError` through [start] / [connect] instead.
      */
-    @Volatile
-    private var _parameters: nw_parameters_t = null
+    private val _parameters = kotlin.concurrent.AtomicReference<nw_parameters_t>(null)
 
     /**
      * Lazily create (and cache) the shared TCP parameters. Returns `null` if the
      * cinterop helper fails — callers map that to a typed failure rather than a
      * process-killing throw. Normally created by [start] under [startMutex]
-     * before any [connect]; the only unsynchronized caller is [connect], whose
-     * worst case is a benign one-time double-create if it ever raced the very
-     * first [start] (it does not in practice — the kit starts before it dials).
+     * before any [connect]; a [connect] racing the very first [start] is
+     * resolved by the compareAndSet below (AUDIT-2026-06 #20a) — exactly one
+     * creation wins, so every listener and outbound connection shares ONE
+     * params object. A losing racer's extra object is never assigned; it is a
+     * K/N-managed ObjC reference the GC releases once it goes out of scope.
      */
     private fun ensureParameters(): nw_parameters_t {
-        _parameters?.let { return it }
+        _parameters.value?.let { return it }
         val p = p2pkit_nw_create_plain_tcp_parameters() ?: run {
             IosLanDebug.log(
                 "data",
@@ -147,12 +148,18 @@ internal class IosLanDataTransport(
             return null
         }
         nw_parameters_prohibit_interface_type(p, nw_interface_type_cellular)
-        _parameters = p
+        if (!_parameters.compareAndSet(null, p)) {
+            IosLanDebug.log(
+                "data",
+                "ensureParameters: lost create race — dropping duplicate, using winner's params"
+            )
+            return _parameters.value
+        }
         // Issue #3: these params back BOTH the listener and every outbound
         // connection, and they do NOT call nw_parameters_set_include_peer_to_peer.
         // The browser (IosLanDiscoveryTransport) DOES, so an AWDL-discovered peer
-        // may be undialable with these params. Logged once so the asymmetry is
-        // explicit in the trail.
+        // may be undialable with these params. Logged once (only the CAS winner
+        // reaches this line) so the asymmetry is explicit in the trail.
         IosLanDebug.log(
             "data",
             "TCP params built: cellular=PROHIBITED, include_peer_to_peer=NOT_SET " +
@@ -357,6 +364,17 @@ internal class IosLanDataTransport(
                 IosLanDebug.log("data", "listener: accepted inbound nw_connection")
                 val raw = IosRawConnection.wrap(conn, queue)
                 val sent = incomingChannel.trySend(raw).isSuccess
+                if (!sent) {
+                    // AUDIT-2026-06 (#20b): wrap() already STARTED the
+                    // connection; the only way the UNLIMITED channel refuses
+                    // it is a concurrent close() having closed the channel
+                    // after the `closed` check above. Dropping the wrapper
+                    // without cancelling would leak the started nw_connection.
+                    // cancelNow is the non-suspend close — this handler runs
+                    // on the libdispatch queue and must return quickly
+                    // without suspending.
+                    raw.cancelNow("inbound dropped (incoming channel refused)")
+                }
                 IosLanDebug.log(
                     "data",
                     "listener: handed connection to incoming channel (queued=$sent)"

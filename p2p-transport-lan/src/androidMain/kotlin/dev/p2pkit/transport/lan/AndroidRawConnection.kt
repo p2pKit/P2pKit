@@ -3,7 +3,10 @@ package dev.p2pkit.transport.lan
 import android.util.Log
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.transport.RawConnection
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -19,6 +22,7 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Android [RawConnection] over a [java.net.Socket]. Identical in shape to the
@@ -35,6 +39,25 @@ internal class AndroidRawConnection(
 
     private val writeLock = Mutex()
 
+    /**
+     * CAS gate so the socket fd is released exactly once no matter which path
+     * gets there first (user [close], read-loop EOF/error, write watchdog).
+     * Every `socket.close()` in this class MUST go through [closeSocketOnce].
+     */
+    private val socketClosed = AtomicBoolean(false)
+
+    /**
+     * Connection-owned scope for the write watchdog (AUDIT-2026-06).
+     * Deliberately NOT a child of the write's own `withContext` scope — an
+     * enclosing cancellation of the caller must not kill the watchdog while
+     * the un-interruptible `out.write()` is still parked (the watchdog's
+     * `socket.close()` is the only thing that can unblock it). And
+     * deliberately on [Dispatchers.Default], not the shared IO pool, so a
+     * saturated IO pool cannot starve the very timeout that recovers it.
+     * Cancelled in [close].
+     */
+    private val connScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     /** Stable label for the diagnostic trail; remoteSocketAddress goes null after close. */
     private val label: String =
         runCatching { "${socket.localSocketAddress}<->${socket.remoteSocketAddress}" }.getOrNull()
@@ -44,35 +67,57 @@ internal class AndroidRawConnection(
         Log.d(TAG, "opened $label")
     }
 
+    /** The single place the fd is released; idempotent and safe from any thread. */
+    private fun closeSocketOnce() {
+        if (socketClosed.compareAndSet(false, true)) {
+            runCatching { socket.close() }
+        }
+    }
+
     override suspend fun write(bytes: ByteArray) {
         writeLock.withLock {
-            withContext(Dispatchers.IO) {
-                // V0.6-WRITE-TIMEOUT (AUDIT-2026-06): mirrors JvmRawConnection.
-                // java.net.Socket has no write deadline and its OutputStream
-                // ignores thread interruption, so a peer that stops draining
-                // wedges this write forever. A watchdog closes the socket once
-                // the deadline passes, forcing the blocked write to throw and
-                // tearing the dead connection down so keep-alive/reconnect
-                // observe Closed. (A plain withTimeout can't help: structured
-                // cancellation still waits for the un-interruptible write to
-                // return, so the only abort lever is socket.close().)
-                val timedOut = AtomicBoolean(false)
-                val watchdog = launch {
-                    delay(WRITE_TIMEOUT_MILLIS)
-                    timedOut.set(true)
+            // V0.6-WRITE-TIMEOUT (AUDIT-2026-06): mirrors JvmRawConnection.
+            // java.net.Socket has no write deadline and its OutputStream
+            // ignores thread interruption, so a peer that stops draining
+            // wedges this write forever. A watchdog closes the socket once
+            // the deadline passes, forcing the blocked write to throw and
+            // tearing the dead connection down so keep-alive/reconnect
+            // observe Closed. (A plain withTimeout can't help: structured
+            // cancellation still waits for the un-interruptible write to
+            // return, so the only abort lever is socket.close().)
+            //
+            // The watchdog runs on [connScope] and races the writer through
+            // [writeState] (INFLIGHT → DONE | TIMED_OUT) so that:
+            //   - caller cancellation cannot kill the watchdog before it
+            //     fires (the wedged write still gets unblocked);
+            //   - a watchdog that fires just as the write completes cannot
+            //     close a healthy socket AND be reported as success — whoever
+            //     wins the CAS decides the outcome.
+            val writeState = AtomicInteger(WRITE_INFLIGHT)
+            val watchdog = connScope.launch {
+                delay(WRITE_TIMEOUT_MILLIS)
+                if (writeState.compareAndSet(WRITE_INFLIGHT, WRITE_TIMED_OUT)) {
                     Log.d(
                         TAG,
                         "$label WRITE TIMEOUT after ${WRITE_TIMEOUT_MILLIS}ms (peer not draining) — closing socket"
                     )
-                    runCatching { socket.close() }
+                    closeSocketOnce()
+                    _state.value = ConnectionState.Closed
                 }
-                AndroidLanDiag.frame(TAG, "$label write ${bytes.size}B")
+            }
+            try {
                 try {
-                    val out = socket.getOutputStream()
-                    out.write(bytes)
-                    out.flush()
+                    withContext(Dispatchers.IO) {
+                        AndroidLanDiag.frame(TAG, "$label write ${bytes.size}B")
+                        val out = socket.getOutputStream()
+                        out.write(bytes)
+                        out.flush()
+                    }
                 } catch (e: IOException) {
-                    if (timedOut.get()) {
+                    if (!writeState.compareAndSet(WRITE_INFLIGHT, WRITE_DONE)) {
+                        // The watchdog won: this IOException is its
+                        // socket.close() surfacing inside the parked write.
+                        // Report the timeout, not the raw close error.
                         _state.value = ConnectionState.Closed
                         throw IOException(
                             "socket write timed out after ${WRITE_TIMEOUT_MILLIS}ms (peer not reading)",
@@ -81,9 +126,22 @@ internal class AndroidRawConnection(
                     }
                     Log.d(TAG, "$label write error: ${e.message}")
                     throw e
-                } finally {
-                    watchdog.cancel()
                 }
+                if (!writeState.compareAndSet(WRITE_INFLIGHT, WRITE_DONE)) {
+                    // The write call returned, but the watchdog had already
+                    // fired and closed the socket under us — the bytes may
+                    // never reach the peer. This must surface as a failure.
+                    _state.value = ConnectionState.Closed
+                    throw IOException(
+                        "socket write timed out after ${WRITE_TIMEOUT_MILLIS}ms (peer not reading)"
+                    )
+                }
+            } finally {
+                // Normal/error path: stop the still-sleeping watchdog. If the
+                // caller was cancelled while out.write() was parked, this line
+                // is not reached until the write unblocks — which is exactly
+                // why the watchdog lives on connScope and survives to fire.
+                watchdog.cancel()
             }
         }
     }
@@ -107,22 +165,36 @@ internal class AndroidRawConnection(
                 emit(buffer.copyOfRange(0, n))
             }
         }
+        // AUDIT-2026-06 fd-leak fix: a remote-initiated disconnect (EOF or
+        // read error) must release our fd, not just flip the state. Before
+        // this, the loop set Closed without closing the socket and close()
+        // early-returned on Closed — leaking the fd until GC.
+        closeSocketOnce()
         _state.value = ConnectionState.Closed
         Log.d(TAG, "$label read loop ended -> Closed")
     }
 
     override suspend fun close() {
-        if (_state.value == ConnectionState.Closed) return
+        // No early-return on _state == Closed: the read loop flips state to
+        // Closed on a remote disconnect, and close() must still be able to
+        // release local resources afterwards (AUDIT-2026-06 fd-leak fix).
+        // Idempotency comes from the closeSocketOnce CAS instead.
         _state.value = ConnectionState.Closed
         Log.d(TAG, "$label close()")
         withContext(Dispatchers.IO) {
-            runCatching { socket.close() }
+            closeSocketOnce()
         }
+        connScope.cancel()
     }
 
     private companion object {
         const val BUFFER_SIZE = 8 * 1024
         const val TAG = "P2pKitLanConn"
+
+        /** [write] outcome markers raced between the writer and its watchdog. */
+        const val WRITE_INFLIGHT = 0
+        const val WRITE_DONE = 1
+        const val WRITE_TIMED_OUT = 2
 
         /**
          * Upper bound for a single frame write. Mirrors JvmRawConnection: LAN
