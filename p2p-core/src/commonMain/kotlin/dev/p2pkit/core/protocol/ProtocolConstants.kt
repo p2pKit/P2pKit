@@ -48,6 +48,17 @@ internal object ProtocolConstants {
      */
     const val MAX_PENDING_REASSEMBLIES: Int = 256
 
+    /**
+     * Aggregate cap on buffered chunk bytes across ALL concurrently-pending
+     * partial messages in one [Reassembler]. The per-message cap alone is not
+     * enough: [MAX_PAYLOAD_BYTES] x [MAX_PENDING_REASSEMBLIES] would let a
+     * peer pin ~1 GiB (4 MiB x 256) of partials per session. 16 MiB is ample
+     * for legitimate interleaved sends (a well-behaved sender writes one
+     * message's chunks back-to-back). Exceeding it closes the session
+     * (AUDIT-2026-06 fix).
+     */
+    const val MAX_TOTAL_PENDING_BYTES: Long = 16L * 1024 * 1024
+
     /** Default reassembly timeout. Stale partial messages are discarded. */
     const val DEFAULT_REASSEMBLY_TIMEOUT_MS: Long = 60_000
 }

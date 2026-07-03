@@ -122,10 +122,13 @@ internal class DefaultP2pProtocol(
         val reader = FrameReader(logger)
         val reassembler = Reassembler(clock = clock)
         connection.read().collect { bytes ->
-            // Reclaim partial multi-chunk messages whose final chunk never
-            // arrived. evictStale() is otherwise never driven (it has no timer),
-            // so without this call a stalled transfer would pin its chunks for
-            // the life of the connection. Cheap: no-op while `pending` is empty.
+            // Reclaim partial multi-chunk messages that went idle: eviction is
+            // by inactivity (no new chunk within the reassembly timeout), not
+            // by age since the first chunk, so a slow-but-live transfer is
+            // never dropped mid-message (AUDIT-2026-06 fix). evictStale() is
+            // otherwise never driven (it has no timer), so without this call a
+            // stalled transfer would pin its chunks for the life of the
+            // connection. Cheap: no-op while `pending` is empty.
             reassembler.evictStale()
             val frames = reader.feed(bytes)
             for (frame in frames) {
