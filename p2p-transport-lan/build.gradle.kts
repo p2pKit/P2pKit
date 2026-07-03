@@ -94,7 +94,13 @@ kotlin {
 //   • each task stamps ONLY the config it produced (release XOR debug), so a
 //     debug-only assembly can't re-stamp a stale release dir, or vice-versa.
 // The Xcode pre-build script reads this file to validate the deployed
-// framework matches `git rev-parse HEAD` before the iOS app compiles.
+// framework before the iOS app compiles. Flip side of the UP-TO-DATE skip
+// (AUDIT #10): after a commit touching only non-framework files, HEAD moves
+// while the stamp stays put — so iosApp/scripts/check-xcframework.sh does
+// NOT require raw stamp == HEAD; on mismatch it passes iff no framework
+// sources (both modules' src/, their build scripts, the version catalog)
+// changed between the stamped commit and HEAD. Keep the script's path list
+// in sync with what actually feeds this framework.
 afterEvaluate {
     val provenanceRootDir = rootProject.projectDir
     tasks.matching {

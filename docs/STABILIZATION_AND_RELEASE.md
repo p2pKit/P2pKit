@@ -118,6 +118,44 @@ ORG_GRADLE_PROJECT_signingInMemoryKeyPassword="$PASSPHRASE" \
 > repository + credentials — e.g. the `com.vanniktech.maven.publish` or
 > `nmcp` plugin — and a `publish` (not just `publishToMavenLocal`) smoke run.
 
+### XCFramework provenance guard (manual verification)
+
+`iosApp/scripts/check-xcframework.sh` gates every Xcode build on the
+`BUILD_COMMIT.txt` stamp. The stamp is only written when the assemble task
+actually executes, so after a commit that touches no framework source
+(docs/Swift/project.yml) the task is UP-TO-DATE and the stamp legitimately
+lags HEAD — the script accepts that case by diffing the stamped commit
+against HEAD over the framework-relevant paths (both modules' `src/`, their
+`build.gradle.kts`, `gradle/libs.versions.toml`). After touching the script
+or the provenance block, verify all three behaviors:
+
+1. **Docs-only commit → UP-TO-DATE assemble, check still passes.** Commit a
+   docs-only change, then:
+
+   ```bash
+   sh ./gradlew :p2p-transport-lan:assembleP2pKitSharedReleaseXCFramework   # UP-TO-DATE, stamp unchanged
+   sh iosApp/scripts/check-xcframework.sh
+   # → "✅ XCFramework stamped at <short>; no framework sources changed through HEAD — OK"
+   ```
+
+2. **Kotlin edit → rebuild, re-stamp, pass.** Edit any file under
+   `p2p-transport-lan/src` or `p2p-core/src`, commit, and re-run the two
+   commands above — the assemble task executes (not UP-TO-DATE), re-stamps,
+   and the check prints `✅ XCFramework is fresh: <short> (matches HEAD)`.
+
+3. **Stale stamp + real source diff → hard fail.** Forge a stamp older than
+   the last source-touching commit (the script's embedded assemble run is
+   UP-TO-DATE, so it won't overwrite the forgery) and confirm the guard
+   refuses, then restore:
+
+   ```bash
+   STAMP=p2p-transport-lan/build/XCFrameworks/release/BUILD_COMMIT.txt
+   cp "$STAMP" /tmp/BUILD_COMMIT.txt.bak
+   git rev-parse "$(git log -1 --format=%H -- p2p-transport-lan/src p2p-core/src)^" > "$STAMP"
+   sh iosApp/scripts/check-xcframework.sh   # → "error: XCFramework identity mismatch", exit 1
+   cp /tmp/BUILD_COMMIT.txt.bak "$STAMP"
+   ```
+
 ---
 
 ## Part C — Known caveats & RC checklist
