@@ -9,6 +9,7 @@ import dev.p2pkit.core.provisioning.ManualPeerRegistrar
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.PeerEvent
+import dev.p2pkit.core.transport.PeerOrigin
 import dev.p2pkit.core.transport.TransportHint
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -139,9 +140,12 @@ internal class PeerRegistry(
         )
         val internal = InternalPeer(
             publicPeer = publicPeer,
-            transportHints = listOf(TransportHint(type = kind, host = host, port = port))
+            transportHints = listOf(TransportHint(type = kind, host = host, port = port)),
+            // Explicit provenance: SessionManager keys its manual-peer HELLO
+            // handling off this flag, never off the "manual-" id prefix.
+            origin = PeerOrigin.Manual
         )
-        tracked.update { current -> current + (syntheticId to TrackedPeer(internal, clock(), isManual = true)) }
+        tracked.update { current -> current + (syntheticId to TrackedPeer(internal, clock())) }
         publishPeers()
         return publicPeer
     }
@@ -169,9 +173,14 @@ internal class PeerRegistry(
 
 internal data class TrackedPeer(
     val internalPeer: InternalPeer,
-    val lastSeenAtMillis: Long,
-    /** True for entries created by [PeerRegistry.registerManualPeer]; exempt from staleness eviction. */
-    val isManual: Boolean = false
+    val lastSeenAtMillis: Long
 ) {
     val peer: Peer get() = internalPeer.publicPeer
+
+    /**
+     * True for entries created by [PeerRegistry.registerManualPeer]; exempt
+     * from staleness eviction. Derived from [InternalPeer.origin] so there is
+     * a single source of provenance truth (no second flag that could drift).
+     */
+    val isManual: Boolean get() = internalPeer.origin == PeerOrigin.Manual
 }

@@ -19,6 +19,7 @@ import dev.p2pkit.core.security.SecurityManager
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.PeerOrigin
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -95,7 +96,17 @@ internal class SessionManager(
      * Default `{}` keeps existing tests (no transports / no registry)
      * working without a refresh path.
      */
-    private val refreshDiscovery: suspend () -> Unit = {}
+    private val refreshDiscovery: suspend () -> Unit = {},
+    /**
+     * Test-only (#19): when `true`, [SessionStore.checkInvariants] throws
+     * on a detected bookkeeping violation instead of `logger.warn`ing —
+     * the suites run with a NoOp/quiet logger, so warn-only enforcement
+     * would let a store regression pass every test silently.
+     *
+     * Default `false` = production behavior (log-don't-crash);
+     * [P2pKitImpl] never sets it.
+     */
+    private val strictInvariants: Boolean = false
 ) {
 
     /**
@@ -105,7 +116,7 @@ internal class SessionManager(
      * rationale (replaces the previous "two stores updated by convention"
      * model).
      */
-    private val store = SessionStore(logger)
+    private val store = SessionStore(logger, strictInvariants = strictInvariants)
     val sessions: StateFlow<List<P2pSession>> = store.sessions
 
     private val _incomingSessions = MutableSharedFlow<P2pSession>(
@@ -171,7 +182,8 @@ internal class SessionManager(
                 rawConnection = rawConnection,
                 expectedPeer = peer,
                 isIncoming = false,
-                internalPeerForReconnect = internalPeer
+                internalPeerForReconnect = internalPeer,
+                isManualPeer = internalPeer.origin == PeerOrigin.Manual
             )
             deferred.complete(session)
             return session
@@ -190,7 +202,8 @@ internal class SessionManager(
                     rawConnection = connection,
                     expectedPeer = null,
                     isIncoming = true,
-                    internalPeerForReconnect = null
+                    internalPeerForReconnect = null,
+                    isManualPeer = false
                 )
             } catch (e: CancellationException) {
                 throw e
@@ -211,9 +224,10 @@ internal class SessionManager(
         rawConnection: RawConnection,
         expectedPeer: Peer?,
         isIncoming: Boolean,
-        internalPeerForReconnect: InternalPeer?
+        internalPeerForReconnect: InternalPeer?,
+        isManualPeer: Boolean = false
     ): P2pSession {
-        val handshake = runHandshake(rawConnection, expectedPeer)
+        val handshake = runHandshake(rawConnection, expectedPeer, isManualPeer)
 
         val session = P2pSessionImpl(
             id = "${if (isIncoming) "in" else "out"}-${handshake.resolvedPeer.id.value}-${clock()}",
@@ -267,10 +281,16 @@ internal class SessionManager(
      * freshly-accepted [rawConnection]. Returns everything the session needs
      * to start consuming events. On any failure, closes the connection and
      * cancels the reader job before propagating.
+     *
+     * @param isManualPeer True when [expectedPeer] is a synthetic manual peer
+     *   ([PeerOrigin.Manual], minted by `registerManualPeer` from a
+     *   user-supplied host:port). Threaded down from the dialed
+     *   [InternalPeer]'s provenance — never inferred from the id string.
      */
     private suspend fun runHandshake(
         rawConnection: RawConnection,
-        expectedPeer: Peer?
+        expectedPeer: Peer?,
+        isManualPeer: Boolean
     ): HandshakeOutputs {
         // Bounded so a peer flooding frames (or a slow local consumer) applies
         // TCP backpressure instead of growing an unbounded in-memory queue —
@@ -311,14 +331,18 @@ internal class SessionManager(
             // Under NoneForMvp this closes the accidental/active host:port-race
             // case (full protection needs the security handshake).
             //
-            // Synthetic manual peers (registerManualPeer mints "manual-<uuid>")
-            // are exempt: the caller only knows host:port, the placeholder id
-            // can never match the remote's real persisted PeerId, and rejecting
-            // would make every manual-IP fallback connect fail. For those we
-            // adopt the remote's HELLO identity instead (AUDIT-2026-06 fix).
-            val isSyntheticManualPeer = expectedPeer != null &&
-                expectedPeer.id.value.startsWith("manual-")
-            if (expectedPeer != null && !isSyntheticManualPeer &&
+            // Synthetic manual peers are exempt: the caller only knows
+            // host:port, the placeholder id can never match the remote's real
+            // persisted PeerId, and rejecting would make every manual-IP
+            // fallback connect fail. Detection is provenance-based
+            // ([PeerOrigin.Manual] threaded down from the dialed InternalPeer)
+            // — never the "manual-" id-prefix, which a discovered peer could
+            // mimic to dodge this check (AUDIT-2026-06 fix, hardened 2026-07).
+            // The session keeps the DIALED manual identity (see resolvedPeer
+            // below) so repeat connect(manualPeer) calls resolve to the same
+            // registered session instead of churning a healthy one.
+            val isManual = isManualPeer
+            if (expectedPeer != null && !isManual &&
                 peerHello.peerId != expectedPeer.id.value
             ) {
                 runCatching { protocol.sendError(rawConnection, "peerId mismatch") }
@@ -340,10 +364,18 @@ internal class SessionManager(
             // to the SecurityManager/encryption milestone; under
             // SecurityMode.NoneForMvp the LAN is the trust boundary. See
             // AUDIT_REPORT_2026-06.md "inbound HELLO peerId never verified".
+            // Outgoing sessions ALWAYS keep the dialed identity — discovered
+            // peers because the mismatch check above proved it equals the
+            // HELLO id, manual peers because the synthetic id is what the
+            // caller holds and re-dials (adopting the HELLO id here broke
+            // connect() idempotency: the session registered under the remote's
+            // id, so the next connect(manualPeer) missed it, dialed again, and
+            // tore down the healthy session via Replaced arbitration). Only
+            // incoming sessions, which have no dialed identity, adopt the
+            // remote's HELLO identity.
+            val resolvedPeer = if (expectedPeer == null) peerHello.toPeer() else expectedPeer
             // Security wrap — no-op in v0.1 (NoOpSecurityManager returns a
             // passthrough), but keeps the future encryption hook open.
-            val resolvedPeer =
-                if (expectedPeer == null || isSyntheticManualPeer) peerHello.toPeer() else expectedPeer
             val secureConnection = security.performHandshake(rawConnection, resolvedPeer)
             return HandshakeOutputs(
                 secureConnection = secureConnection,
@@ -512,7 +544,16 @@ internal class SessionManager(
                     val outcome = runCatching {
                         val transport = transportManager.selectBestTransport(target)
                         val raw = transport.connect(target)
-                        runHandshake(raw, expectedPeer = expectedPeer)
+                        // Provenance is a property of how the session's dialed
+                        // identity was minted, fixed at connect time — reuse
+                        // the original InternalPeer's origin so a manual
+                        // session's re-handshake keeps the mismatch exemption
+                        // (the remote's HELLO can never equal the synthetic id).
+                        runHandshake(
+                            raw,
+                            expectedPeer = expectedPeer,
+                            isManualPeer = originalInternalPeer.origin == PeerOrigin.Manual
+                        )
                     }
 
                     val handshake = outcome.getOrElse { e ->
