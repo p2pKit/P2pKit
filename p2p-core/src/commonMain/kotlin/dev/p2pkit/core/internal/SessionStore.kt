@@ -34,7 +34,18 @@ import kotlinx.coroutines.sync.withLock
  * structural — there is one class, one lock, one set of methods, and no
  * way to mutate one field without mutating the other.
  */
-internal class SessionStore(private val logger: P2pLogger) {
+internal class SessionStore(
+    private val logger: P2pLogger,
+    /**
+     * When `true`, a detected [checkInvariants] violation throws
+     * [IllegalStateException] instead of logging a warning. Test-only:
+     * the unit/integration suites run with a NoOp/quiet logger, so the
+     * production warn path would let a bookkeeping regression pass every
+     * test silently (#19). Production keeps the default `false` —
+     * log-don't-crash (see [checkInvariants]).
+     */
+    private val strictInvariants: Boolean = false
+) {
 
     private val mutex = Mutex()
     private val byPeer: MutableMap<PeerId, P2pSession> = mutableMapOf()
@@ -204,12 +215,16 @@ internal class SessionStore(private val logger: P2pLogger) {
     /**
      * Structural-invariant check run at the end of every mutation method
      * while [mutex] is still held. A violation means the store has reached
-     * a state the design considers impossible — but it is surfaced as a
-     * loud `logger.warn`, NOT a `check()` crash: a published library must
-     * not bring down the host app's process over a bookkeeping
-     * inconsistency (see the log-don't-crash comment in the body).
-     * AUDIT-2026-06: this KDoc previously demanded a crash, contradicting
-     * the deliberate log-only implementation below.
+     * a state the design considers impossible — in production
+     * ([strictInvariants] `false`) it is surfaced as a loud `logger.warn`,
+     * NOT a `check()` crash: a published library must not bring down the
+     * host app's process over a bookkeeping inconsistency (see the
+     * log-don't-crash comment in the body). Test harnesses opt into
+     * [strictInvariants] `true`, which turns a detected violation into an
+     * [IllegalStateException] so regressions fail loudly instead of
+     * vanishing into a NoOp logger (#19).
+     * AUDIT-2026-06: this KDoc previously demanded an unconditional crash,
+     * contradicting the deliberate log-only production implementation below.
      *
      * Invariants (all evaluated under [mutex], so the state is stable):
      *
@@ -231,12 +246,8 @@ internal class SessionStore(private val logger: P2pLogger) {
     private fun checkInvariants(site: String) {
         if (!ASSERT_INVARIANTS) return
         val visible = _sessions.value
-        // Log-don't-crash: an invariant violation is a serious bug, but a
-        // published library must not bring down the host app's process over a
-        // bookkeeping inconsistency. We surface it loudly via the logger so it
-        // is caught in testing/diagnostics without an in-the-field crash.
         if (!byPeer.values.all { entry -> visible.any { it === entry } }) {
-            logger.warn(
+            reportViolation(
                 "SessionStore[$site] INVARIANT: active byPeer entry missing from published sessions list. " +
                     "byPeer.size=${byPeer.size} visible.size=${visible.size}"
             )
@@ -245,10 +256,42 @@ internal class SessionStore(private val logger: P2pLogger) {
             acc + if (visible.count { it === s } == 1) 0 else 1
         }
         if (duplicateInstances != 0) {
-            logger.warn(
+            reportViolation(
                 "SessionStore[$site] INVARIANT: duplicate session instance in published list (size=${visible.size})"
             )
         }
+    }
+
+    /**
+     * Dispatch for a detected invariant violation.
+     *
+     * Log-don't-crash in production: an invariant violation is a serious
+     * bug, but a published library must not bring down the host app's
+     * process over a bookkeeping inconsistency. We surface it loudly via
+     * the logger so it is caught in testing/diagnostics without an
+     * in-the-field crash. Under [strictInvariants] (test suites, #19) the
+     * same message throws instead, so a regression cannot pass silently
+     * through a NoOp logger.
+     */
+    private fun reportViolation(message: String) {
+        if (strictInvariants) error(message)
+        logger.warn(message)
+    }
+
+    /**
+     * TEST-ONLY seam (#19) — never call from production code.
+     *
+     * The public mutators are designed to *maintain* the invariants, so a
+     * genuine violation cannot be manufactured through them. This method
+     * forces a known-bad state — an active [byPeer] entry deliberately left
+     * out of the published [sessions] list (violates **I-store-membership**)
+     * — and then runs [checkInvariants], letting tests assert the
+     * enforcement itself: throw under [strictInvariants], warn otherwise.
+     */
+    internal suspend fun forceInvariantViolationForTest(session: P2pSession): Unit = mutex.withLock {
+        byPeer[session.peer.id] = session
+        // Deliberately NOT added to _sessions — that is the violation.
+        checkInvariants("forceInvariantViolationForTest")
     }
 
     companion object {
@@ -265,6 +308,10 @@ internal class SessionStore(private val logger: P2pLogger) {
          * trips a check, flip to `false` and open an issue. Reverting
          * this whole commit (S1 Commit 2) is also clean since Commit 1
          * already stands on its own.
+         *
+         * Gates the whole check, including [strictInvariants] mode —
+         * strict only changes what happens *when* a violation is
+         * detected (throw instead of warn), not whether we look.
          */
         private const val ASSERT_INVARIANTS = true
     }
