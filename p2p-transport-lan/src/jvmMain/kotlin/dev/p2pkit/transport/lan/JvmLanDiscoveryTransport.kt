@@ -16,7 +16,9 @@ import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
 import javax.jmdns.ServiceListener
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -196,25 +198,49 @@ internal class JvmLanDiscoveryTransport(
      * `list(type, timeout)` uses a short timeout: with the default 6 s
      * timeout JmDNS can block while it waits for service infos, and this
      * runs under [lock].
+     *
+     * AUDIT-2026-06 (#7): the fresh listener is attached BEFORE the old one
+     * is removed, and CancellationException is never swallowed. The previous
+     * remove-then-`runCatching { add }` shape caught cancellations (and
+     * genuine add failures) after the old listener was already gone, leaving
+     * `listener = null` while `discovering` stayed true — at which point
+     * refresh() (null-listener early-return) and startDiscovery()
+     * (`discovering` guard) both became permanent no-ops and discovery was
+     * dead until a full stopDiscovery/startDiscovery cycle. With add-first
+     * ordering every failure path leaves at least one listener registered.
      */
     override suspend fun refresh(): Unit = lock.withLock {
         val handle = jmdns
         val old = listener
         if (handle == null || old == null) return@withLock
-        withContext(Dispatchers.IO) {
-            runCatching { handle.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, old) }
-        }
         val fresh = buildServiceListener()
-        val listenerOk = runCatching {
+        try {
             withContext(Dispatchers.IO) {
                 handle.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, fresh)
             }
-            listener = fresh
-        }.onFailure {
-            // Leave null so the next startDiscovery can re-attach cleanly.
-            listener = null
-        }.isSuccess
-        if (!listenerOk) return@withLock
+        } catch (e: CancellationException) {
+            // The add may still have completed on the IO thread before the
+            // cancellation surfaced; best-effort detach the fresh listener so
+            // a cancelled refresh cannot leak a duplicate. The old listener
+            // was never removed — discovery keeps working either way.
+            withContext(NonCancellable + Dispatchers.IO) {
+                runCatching { handle.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, fresh) }
+            }
+            throw e
+        } catch (e: Throwable) {
+            // Genuine add failure: keep the old listener registered so
+            // discovery stays alive; the next refresh tick retries the
+            // rotation.
+            JvmLanDiag.log(
+                "browse",
+                "refresh: addServiceListener failed (${e.message}) — keeping previous listener"
+            )
+            return@withLock
+        }
+        listener = fresh
+        withContext(Dispatchers.IO) {
+            runCatching { handle.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, old) }
+        }
         val cached = withContext(Dispatchers.IO) {
             runCatching { handle.list(LanConstants.SERVICE_TYPE_JMDNS, JMDNS_LIST_SNAPSHOT_TIMEOUT_MS) }
                 .getOrDefault(emptyArray())
