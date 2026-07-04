@@ -17,12 +17,18 @@ import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
 import javax.jmdns.ServiceListener
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -59,6 +65,19 @@ internal class JvmLanDiscoveryTransport(
     private var listener: ServiceListener? = null
     private var advertising: Boolean = false
     private var discovering: Boolean = false
+
+    /**
+     * AUDIT-2026-07 (DSC-1): scope for the discovery heartbeat loop.
+     * SupervisorJob so a failed tick cannot poison the scope; the scope
+     * itself lives for the transport's lifetime (mirrors the Android
+     * transport's rebindScope convention) — the loop job is cancelled in
+     * [stopDiscovery].
+     */
+    private val heartbeatScope: CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** Heartbeat loop; non-null while discovery is active. Guarded by [lock]. */
+    private var heartbeatJob: Job? = null
 
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) = lock.withLock {
         ensureJmdns()
@@ -138,6 +157,111 @@ internal class JvmLanDiscoveryTransport(
         }
         listener = l
         discovering = true
+        startHeartbeatLocked()
+    }
+
+    /**
+     * AUDIT-2026-07 (DSC-1): the JVM/Android discovery heartbeat. While
+     * discovery is active, re-emit [PeerEvent.Updated] for every
+     * appId-matching service already resolved in the in-process JmDNS cache
+     * every [LanConstants.PEER_REANNOUNCE_INTERVAL_MS], so
+     * `PeerRegistry.lastSeen` keeps refreshing and healthy idle peers survive
+     * the 15 s staleness eviction. `serviceResolved` fires effectively once
+     * per service appearance, so without this loop `kit.peers` silently
+     * emptied ~15 s after resolution on JVM/Android (only iOS had a
+     * re-announce loop). Reads the local cache only — a genuinely departed
+     * peer (goodbye or TTL expiry prunes its cache entry) stops being
+     * re-emitted and ages out via registry eviction, which the JmDNS goodbye
+     * observation shows is the only disappearance path on these platforms
+     * (goodbye removals carry no TXT, so the Lost path never fires for real
+     * goodbyes). Mirrors `IosLanDiscoveryTransport`'s announce loop and the
+     * Android machinery's heartbeat in [JmdnsLifecycleCoordinator].
+     *
+     * Caller must hold [lock]. Idempotent. CancellationException is rethrown,
+     * never swallowed; any other tick failure is logged and the loop stays
+     * alive (same isolation shape as PeerRegistry's evictLoop).
+     */
+    private fun startHeartbeatLocked() {
+        if (heartbeatJob?.isActive == true) return
+        heartbeatJob = heartbeatScope.launch {
+            while (isActive) {
+                delay(LanConstants.PEER_REANNOUNCE_INTERVAL_MS)
+                try {
+                    reemitCachedPeers()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    JvmLanDiag.log(
+                        "browse",
+                        "heartbeat: tick failed (${e.message}) — keeping loop alive"
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * One heartbeat tick: snapshot the already-resolved services from the
+     * local JmDNS cache and re-emit [PeerEvent.Updated] for each one that
+     * passes the same gates as `serviceResolved`. Uses the short snapshot
+     * timeout `refresh()` uses (no forced per-peer re-query — unlike
+     * `refresh()`'s step 2 — so no added multicast; the B:317 snapshot-latency
+     * deferral is untouched).
+     */
+    private suspend fun reemitCachedPeers(): Unit = lock.withLock {
+        if (!discovering) return@withLock
+        val handle = jmdns ?: return@withLock
+        val cached = withContext(Dispatchers.IO) {
+            runCatching { handle.list(LanConstants.SERVICE_TYPE_JMDNS, JMDNS_LIST_SNAPSHOT_TIMEOUT_MS) }
+                .getOrDefault(emptyArray())
+        }
+        var reemitted = 0
+        cached.forEach { info ->
+            val peer = cachedServiceInfoToInternalPeer(info) ?: return@forEach
+            if (_events.tryEmit(PeerEvent.Updated(peer))) reemitted++
+        }
+        if (reemitted > 0) {
+            JvmLanDiag.log("browse", "heartbeat: re-emitted Updated for $reemitted cached peer(s)")
+        }
+    }
+
+    /**
+     * AUDIT-2026-07 (DSC-1): maps an already-resolved cached [ServiceInfo] to
+     * the same [InternalPeer] shape `serviceResolved` emits, applying the
+     * identical gates — RBS-1 pid validation, appId filter, self skip,
+     * routable-host selection. Returns `null` when the record must be
+     * skipped. Keep in sync with `serviceResolved` in [buildServiceListener]
+     * and with the AndroidLanDiscoveryTransport twin (behavior-parity pair).
+     */
+    private fun cachedServiceInfoToInternalPeer(info: ServiceInfo): InternalPeer? {
+        val pid = validDiscoveryPeerIdOrNull(info.getPropertyString(LanConstants.TXT_PEER_ID))
+            ?: return null
+        val app = info.getPropertyString(LanConstants.TXT_APP_ID) ?: return null
+        if (pid == registration.localPeerId.value) return null
+        if (app != registration.appId.value) return null
+
+        val name = info.getPropertyString(LanConstants.TXT_DEVICE_NAME) ?: pid
+        val plat = info.getPropertyString(LanConstants.TXT_PLATFORM)
+        val caps = info.getPropertyString(LanConstants.TXT_CAPABILITIES)
+        val host = selectRoutableHost(info.inetAddresses.toList()) ?: return null
+        val port = info.port
+        val supportedTransports = caps
+            ?.split(",")
+            ?.mapNotNull { tag -> runCatching { TransportKind.valueOf(tag.trim()) }.getOrNull() }
+            ?.toSet()
+            ?: setOf(TransportKind.LAN)
+        val platform = plat?.let { runCatching { Platform.valueOf(it) }.getOrNull() } ?: Platform.UNKNOWN
+        return InternalPeer(
+            publicPeer = Peer(
+                id = PeerId(pid),
+                name = name,
+                platform = platform,
+                supportedTransports = supportedTransports
+            ),
+            transportHints = listOf(
+                TransportHint(type = TransportKind.LAN, host = host, port = port)
+            )
+        )
     }
 
     private fun buildServiceListener(): ServiceListener = object : ServiceListener {
@@ -292,6 +416,11 @@ internal class JvmLanDiscoveryTransport(
     }
 
     override suspend fun stopDiscovery() = lock.withLock {
+        // AUDIT-2026-07 (DSC-1): halt the heartbeat first — we hold [lock],
+        // so an in-flight tick is either parked on the lock (cancelled here)
+        // or already finished; no tick can re-emit after `discovering` flips.
+        heartbeatJob?.cancel()
+        heartbeatJob = null
         val l = listener
         if (l != null) {
             withContext(Dispatchers.IO) {

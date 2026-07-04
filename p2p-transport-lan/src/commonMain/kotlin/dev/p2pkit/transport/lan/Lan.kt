@@ -67,6 +67,21 @@ internal object LanConstants {
      * on the appleMain path.
      */
     const val TCP_CONNECT_TIMEOUT_MS: Int = 5_000
+
+    /**
+     * AUDIT-2026-07 (DSC-1): cadence of the JVM/Android discovery heartbeat —
+     * while discovery is active, both transports re-emit
+     * [dev.p2pkit.core.transport.PeerEvent.Updated] for every appId-matching
+     * service already resolved in the in-process JmDNS cache, so
+     * `PeerRegistry.lastSeen` keeps refreshing and healthy idle peers survive
+     * the registry's 15 s staleness eviction (previously only iOS had this
+     * loop, so `kit.peers` silently emptied on JVM/Android in steady state).
+     * Reads the local cache only — no forced network re-query, no added
+     * multicast. Must stay comfortably below PeerRegistry's 15 s eviction
+     * horizon; matches the iOS `PEER_REANNOUNCE_INTERVAL_MS`
+     * (IosLanDiscoveryTransport), which stays platform-local by design.
+     */
+    const val PEER_REANNOUNCE_INTERVAL_MS: Long = 5_000
 }
 
 /**

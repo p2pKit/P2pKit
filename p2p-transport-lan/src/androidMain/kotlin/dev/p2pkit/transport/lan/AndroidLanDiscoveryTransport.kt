@@ -338,6 +338,27 @@ internal class AndroidLanDiscoveryTransport(
                 handle.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, token as ServiceListener)
             }
 
+            override fun reemitCachedPeersBlocking(handle: JmDNS) {
+                // AUDIT-2026-07 (DSC-1): one heartbeat tick — snapshot the
+                // already-resolved services from the local JmDNS cache and
+                // re-emit Updated for each one that passes the same gates as
+                // serviceResolved. Uses the short snapshot timeout refresh()
+                // uses (no forced per-peer re-query — unlike refresh()'s
+                // step 2 — so no added multicast; the B:317 snapshot-latency
+                // deferral is untouched). Mirrors
+                // JvmLanDiscoveryTransport.reemitCachedPeers.
+                val cached = runCatching { handle.list(LanConstants.SERVICE_TYPE_JMDNS, 200L) }
+                    .getOrDefault(emptyArray())
+                var reemitted = 0
+                cached.forEach { info ->
+                    val peer = cachedServiceInfoToInternalPeer(info) ?: return@forEach
+                    if (_events.tryEmit(PeerEvent.Updated(peer))) reemitted++
+                }
+                if (reemitted > 0) {
+                    Log.d(TAG, "heartbeat: re-emitted Updated for $reemitted cached peer(s)")
+                }
+            }
+
             override fun currentNetwork(): Network? = connectivity.activeNetwork
 
             override fun observedNetwork(): Network? =
@@ -532,6 +553,45 @@ internal class AndroidLanDiscoveryTransport(
             )
             _events.tryEmit(PeerEvent.Found(internalPeer))
         }
+    }
+
+    /**
+     * AUDIT-2026-07 (DSC-1): maps an already-resolved cached [ServiceInfo] to
+     * the same [InternalPeer] shape `serviceResolved` emits, applying the
+     * identical gates — RBS-1 pid validation, appId filter, self skip,
+     * routable-host selection. Returns `null` when the record must be
+     * skipped. Keep in sync with `serviceResolved` in [buildServiceListener]
+     * and with the JvmLanDiscoveryTransport twin (behavior-parity pair).
+     */
+    private fun cachedServiceInfoToInternalPeer(info: ServiceInfo): InternalPeer? {
+        val pid = validDiscoveryPeerIdOrNull(info.getPropertyString(LanConstants.TXT_PEER_ID))
+            ?: return null
+        val app = info.getPropertyString(LanConstants.TXT_APP_ID) ?: return null
+        if (pid == registration.localPeerId.value) return null
+        if (app != registration.appId.value) return null
+
+        val name = info.getPropertyString(LanConstants.TXT_DEVICE_NAME) ?: pid
+        val plat = info.getPropertyString(LanConstants.TXT_PLATFORM)
+        val caps = info.getPropertyString(LanConstants.TXT_CAPABILITIES)
+        val host = selectRoutableHost(info.inetAddresses.toList()) ?: return null
+        val port = info.port
+        val supportedTransports = caps
+            ?.split(",")
+            ?.mapNotNull { tag -> runCatching { TransportKind.valueOf(tag.trim()) }.getOrNull() }
+            ?.toSet()
+            ?: setOf(TransportKind.LAN)
+        val platform = plat?.let { runCatching { Platform.valueOf(it) }.getOrNull() } ?: Platform.UNKNOWN
+        return InternalPeer(
+            publicPeer = Peer(
+                id = PeerId(pid),
+                name = name,
+                platform = platform,
+                supportedTransports = supportedTransports
+            ),
+            transportHints = listOf(
+                TransportHint(type = TransportKind.LAN, host = host, port = port)
+            )
+        )
     }
 
     // ──────────────────────────────────────────────────────────────────
