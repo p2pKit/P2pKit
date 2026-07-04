@@ -147,31 +147,41 @@ internal class AndroidRawConnection(
     }
 
     override fun read(): Flow<ByteArray> = flow {
-        val input = withContext(Dispatchers.IO) { socket.getInputStream() }
-        val buffer = ByteArray(BUFFER_SIZE)
-        while (currentCoroutineContext().isActive) {
-            val n = try {
-                withContext(Dispatchers.IO) { input.read(buffer) }
-            } catch (e: IOException) {
-                Log.d(TAG, "$label read error (socket dropped): ${e.message}")
-                break
+        // AUDIT-2026-07 (CON-1): the terminal cleanup below is in a `finally`
+        // so it runs on EVERY exit from this flow — including a
+        // CancellationException from either withContext when the collector is
+        // cancelled, which previously propagated past the cleanup and left
+        // the fd open until GC. The CE itself still propagates (never
+        // swallowed); every production reader-cancellation site tears the
+        // connection down anyway, so releasing here is the correct semantic.
+        try {
+            val input = withContext(Dispatchers.IO) { socket.getInputStream() }
+            val buffer = ByteArray(BUFFER_SIZE)
+            while (currentCoroutineContext().isActive) {
+                val n = try {
+                    withContext(Dispatchers.IO) { input.read(buffer) }
+                } catch (e: IOException) {
+                    Log.d(TAG, "$label read error (socket dropped): ${e.message}")
+                    break
+                }
+                if (n < 0) {
+                    Log.d(TAG, "$label EOF (remote half-closed)")
+                    break
+                }
+                if (n > 0) {
+                    AndroidLanDiag.frame(TAG, "$label read ${n}B")
+                    emit(buffer.copyOfRange(0, n))
+                }
             }
-            if (n < 0) {
-                Log.d(TAG, "$label EOF (remote half-closed)")
-                break
-            }
-            if (n > 0) {
-                AndroidLanDiag.frame(TAG, "$label read ${n}B")
-                emit(buffer.copyOfRange(0, n))
-            }
+        } finally {
+            // AUDIT-2026-06 fd-leak fix: a remote-initiated disconnect (EOF or
+            // read error) must release our fd, not just flip the state. Before
+            // this, the loop set Closed without closing the socket and close()
+            // early-returned on Closed — leaking the fd until GC.
+            closeSocketOnce()
+            _state.value = ConnectionState.Closed
+            Log.d(TAG, "$label read loop ended -> Closed")
         }
-        // AUDIT-2026-06 fd-leak fix: a remote-initiated disconnect (EOF or
-        // read error) must release our fd, not just flip the state. Before
-        // this, the loop set Closed without closing the socket and close()
-        // early-returned on Closed — leaking the fd until GC.
-        closeSocketOnce()
-        _state.value = ConnectionState.Closed
-        Log.d(TAG, "$label read loop ended -> Closed")
     }
 
     override suspend fun close() {
@@ -181,9 +191,16 @@ internal class AndroidRawConnection(
         // Idempotency comes from the closeSocketOnce CAS instead.
         _state.value = ConnectionState.Closed
         Log.d(TAG, "$label close()")
-        withContext(Dispatchers.IO) {
-            closeSocketOnce()
-        }
+        // AUDIT-2026-07 (CON-1): this used to hop through
+        // withContext(Dispatchers.IO) before releasing the socket, but
+        // withContext on an already-cancelled caller throws CE on entry
+        // WITHOUT running its block — session teardown closing connections
+        // from a cancelling scope skipped both the fd release and the
+        // watchdog-scope cancel. closeSocketOnce() is a plain CAS +
+        // socket.close() that already runs on arbitrary threads (the write
+        // watchdog calls it), so release inline with no suspension point:
+        // close() can no longer be preempted by cancellation.
+        closeSocketOnce()
         connScope.cancel()
     }
 
