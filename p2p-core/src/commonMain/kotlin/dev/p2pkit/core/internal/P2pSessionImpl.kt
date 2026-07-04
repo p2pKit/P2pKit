@@ -259,12 +259,45 @@ internal class P2pSessionImpl(
         }
     }
 
+    /**
+     * AUDIT-2026-07 (API-2, decision #12a): typed-error contract at the
+     * public [send]/[sendFile] boundary. [CancellationException] and
+     * already-typed [P2pError]s pass through as-is; any other [Throwable] —
+     * raw platform write failures (JVM/Android `IOException` including the
+     * 30 s write-watchdog timeout, iOS `nw_connection` failure shapes),
+     * internal state exceptions, argument-validation errors — is wrapped in
+     * [P2pError.ConnectionFailed] with the original exception preserved as
+     * the error's `cause`.
+     *
+     * The wrap lives here, at the public boundary, and NOT in
+     * `DefaultP2pProtocol.writeFrame`: internal callers (keep-alive
+     * PING/PONG, the file-transfer dispatcher, the best-effort CLOSE sender)
+     * keep seeing the raw exceptions their classification logic expects.
+     * Because this is commonMain, the contract is identical on JVM, Android,
+     * and iOS.
+     */
+    private inline fun <T> typedSendBoundary(operation: String, block: () -> T): T =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: P2pError) {
+            throw e
+        } catch (e: Throwable) {
+            throw P2pError.ConnectionFailed(
+                "$operation failed on session $id: ${e.message ?: e::class.simpleName}"
+            ).also { it.underlying = e }
+        }
+
     override suspend fun send(message: P2pMessage) {
         if (_state.value != ConnectionState.Connected) {
             throw P2pError.ConnectionFailed("Session $id is ${_state.value}; cannot send")
         }
-        sendMutex.withLock {
-            protocol.sendMessage(connection, message)
+        // AUDIT-2026-07 (API-2): see [typedSendBoundary].
+        typedSendBoundary("send") {
+            sendMutex.withLock {
+                protocol.sendMessage(connection, message)
+            }
         }
     }
 
@@ -277,7 +310,14 @@ internal class P2pSessionImpl(
         if (_state.value != ConnectionState.Connected) {
             throw P2pError.ConnectionFailed("Session $id is ${_state.value}; cannot send file")
         }
-        return fileTransferDispatcher.sendFile(name, sizeBytes, mimeType, source)
+        // AUDIT-2026-07 (API-2): see [typedSendBoundary]. Ownership-on-throw
+        // contract is documented on [P2pSession.sendFile]: refusals before the
+        // dispatcher registers the transfer leave [source] caller-owned and
+        // open; throws at or after registration close it via the handle's
+        // terminal transition (FIL-1 close-once guard).
+        return typedSendBoundary("sendFile") {
+            fileTransferDispatcher.sendFile(name, sizeBytes, mimeType, source)
+        }
     }
 
     override suspend fun close() {

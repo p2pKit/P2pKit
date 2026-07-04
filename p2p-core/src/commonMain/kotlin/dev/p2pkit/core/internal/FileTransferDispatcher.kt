@@ -185,7 +185,16 @@ internal class FileTransferDispatcher(
             handle.setState(FileTransferState.Cancelled("sendFile cancelled before FILE_OFFER was written"))
             throw e
         } catch (e: Throwable) {
-            val err = if (e is P2pError) e else P2pError.ConnectionFailed("FILE_OFFER write failed: ${e.message}")
+            // AUDIT-2026-07 (API-2, decision #12a): this wrap pre-types the
+            // sendFile boundary's transport-failure path, so preserve the
+            // original exception as the error's cause here too — the session's
+            // typedSendBoundary passes already-typed P2pErrors through as-is.
+            val err = if (e is P2pError) {
+                e
+            } else {
+                P2pError.ConnectionFailed("FILE_OFFER write failed: ${e.message}")
+                    .also { it.underlying = e }
+            }
             lock.withLock {
                 outgoing.remove(transferId)?.let { it.timer?.cancel(); it.sender?.cancel() }
             }
