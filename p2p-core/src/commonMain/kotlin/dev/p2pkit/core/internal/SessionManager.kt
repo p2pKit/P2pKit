@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -135,6 +136,19 @@ internal class SessionManager(
     internal suspend fun forceStoreInvariantViolationForTest(session: P2pSession) {
         store.forceInvariantViolationForTest(session)
     }
+
+    /**
+     * AUDIT-2026-07 (SEC-1, decision #9a): pre-handshake admission gate.
+     * Bounds how many inbound connections may hold pre-handshake setup
+     * resources (bounded event channel + reader job + setup coroutine)
+     * concurrently. [handleIncoming] takes a permit with a non-suspending
+     * `tryAcquire` — refusal closes the connection immediately, before any
+     * per-connection resources are allocated — and the permit is released
+     * exactly once when the handshake settles (success or failure; see
+     * [setupSession]'s `onHandshakeSettled`). Outgoing connects are not
+     * gated. See [MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS].
+     */
+    private val preHandshakeGate = Semaphore(MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS)
 
     private val _incomingSessions = MutableSharedFlow<P2pSession>(
         replay = 0,
@@ -233,20 +247,55 @@ internal class SessionManager(
     }
 
     private fun handleIncoming(connection: RawConnection) {
+        // AUDIT-2026-07 (SEC-1, decision #9a): inbound admission control,
+        // stage 1 — pre-handshake concurrency. Non-suspending tryAcquire so
+        // the accept collector never parks: once
+        // [MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS] inbound setups are in flight
+        // (e.g. many connections from a non-conforming device that never
+        // complete HELLO), further inbound connections are refused — closed
+        // immediately with a warn diagnostic, before any per-connection
+        // resources (event channel, reader job) are allocated. A conforming
+        // peer simply redials once capacity frees up.
+        if (!preHandshakeGate.tryAcquire()) {
+            logger.warn(
+                "Inbound connection refused: pre-handshake setups at capacity " +
+                    "($MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS)"
+            )
+            scope.launch { runCatching { connection.close() } }
+            return
+        }
         scope.launch {
+            // Exactly-once permit release: [setupSession] invokes
+            // onHandshakeSettled from a `finally` around the handshake, so
+            // BOTH outcomes — success and every failure path (setup timeout,
+            // handshake rejection, connection loss, cancellation) — release
+            // the permit. The outer `finally` below is a safety net for the
+            // theoretical window where this coroutine is torn down before
+            // [setupSession] runs; both call sites execute sequentially on
+            // this coroutine, so the plain [released] flag is race-free.
+            var released = false
+            val releaseOnce: () -> Unit = {
+                if (!released) {
+                    released = true
+                    preHandshakeGate.release()
+                }
+            }
             try {
                 setupSession(
                     rawConnection = connection,
                     expectedPeer = null,
                     isIncoming = true,
                     internalPeerForReconnect = null,
-                    isManualPeer = false
+                    isManualPeer = false,
+                    onHandshakeSettled = releaseOnce
                 )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
                 logger.warn("Incoming session setup failed", e)
                 runCatching { connection.close() }
+            } finally {
+                releaseOnce()
             }
         }
     }
@@ -262,9 +311,22 @@ internal class SessionManager(
         expectedPeer: Peer?,
         isIncoming: Boolean,
         internalPeerForReconnect: InternalPeer?,
-        isManualPeer: Boolean = false
+        isManualPeer: Boolean = false,
+        /**
+         * AUDIT-2026-07 (SEC-1): invoked exactly once, from the `finally`
+         * below, the moment the handshake settles — on success AND on every
+         * failure path. [handleIncoming] passes its pre-handshake permit
+         * release here so admission capacity is returned as soon as the
+         * connection graduates from (or fails) the handshake, rather than
+         * being held through registration and the incoming-sessions emit.
+         */
+        onHandshakeSettled: (() -> Unit)? = null
     ): P2pSession {
-        val handshake = runHandshake(rawConnection, expectedPeer, isManualPeer)
+        val handshake = try {
+            runHandshake(rawConnection, expectedPeer, isManualPeer)
+        } finally {
+            onHandshakeSettled?.invoke()
+        }
 
         val session = P2pSessionImpl(
             id = "${if (isIncoming) "in" else "out"}-${handshake.resolvedPeer.id.value}-${clock()}",
@@ -306,8 +368,15 @@ internal class SessionManager(
             is RegisterOutcome.Accepted -> outcome.session
             is RegisterOutcome.Replaced -> outcome.winner
             is RegisterOutcome.Rejected -> outcome.winner
+            // AUDIT-2026-07 (SEC-1): total-session bound refusal — the new
+            // session was never registered and is being closed by
+            // [registerSession]; return it to the (incoming-only) caller,
+            // which discards it. Never surfaced on [incomingSessions].
+            is RegisterOutcome.RefusedAtCapacity -> outcome.session
         }
-        if (isIncoming && outcome !is RegisterOutcome.Rejected) {
+        if (isIncoming &&
+            (outcome is RegisterOutcome.Accepted || outcome is RegisterOutcome.Replaced)
+        ) {
             _incomingSessions.emit(resultSession)
         }
         return resultSession
@@ -757,6 +826,22 @@ internal class SessionManager(
                 )
                 scope.launch { runCatching { outcome.loser.close() } }
             }
+            is RegisterOutcome.RefusedAtCapacity -> {
+                // AUDIT-2026-07 (SEC-1, decision #9a): inbound admission
+                // control, stage 2 — total-session bound. A net-new inbound
+                // session past [MAX_TOTAL_ACTIVE_SESSIONS] is refused: warn
+                // and close it cleanly (CLOSE frame, so the remote observes
+                // an orderly shutdown, never a retry-provoking failure).
+                // Refusal is a returned outcome + close, never an exception
+                // into the accept collector. Outgoing registrations and
+                // simultaneous-open arbitration (no net session growth) are
+                // exempt — see [SessionStore.tryRegister].
+                logger.warn(
+                    "Inbound session refused for peer ${peerId.value.take(8)}: " +
+                        "total active sessions at capacity ($MAX_TOTAL_ACTIVE_SESSIONS)"
+                )
+                scope.launch { runCatching { outcome.session.close() } }
+            }
         }
         return outcome
     }
@@ -824,3 +909,32 @@ internal class SessionManager(
         }
     }
 }
+
+/**
+ * AUDIT-2026-07 (SEC-1, decision #9a): maximum number of inbound connections
+ * allowed to hold pre-handshake setup resources (bounded event channel +
+ * reader job + setup coroutine) concurrently. The 10 s handshake timeout
+ * bounds each individual setup's duration; this bounds their NUMBER, so
+ * malformed or excessive peer input (many connections that never complete
+ * HELLO) cannot drive unbounded fd/coroutine/heap growth. Connections past
+ * the bound are refused (closed + warn) before anything is allocated.
+ *
+ * Internal admission-control POLICY, not public API: the value may be tuned
+ * (or surfaced as configuration) in a later release without breaking anyone.
+ * A conforming mesh keeps handshakes sub-second, so 16 concurrent setups is
+ * ample headroom.
+ */
+internal const val MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS: Int = 16
+
+/**
+ * AUDIT-2026-07 (SEC-1, decision #9a): upper bound on total concurrently
+ * ACTIVE sessions before a net-new INBOUND session is refused at
+ * registration ([SessionStore.tryRegister]). Outgoing (app-initiated)
+ * connects are never refused by this bound, and simultaneous-open
+ * arbitration is exempt (replace/reject causes no net session growth).
+ * Terminal-but-not-yet-evicted sessions do not count.
+ *
+ * Internal admission-control POLICY, not public API: the value may be tuned
+ * (or surfaced as configuration) in a later release without breaking anyone.
+ */
+internal const val MAX_TOTAL_ACTIVE_SESSIONS: Int = 64

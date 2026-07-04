@@ -50,8 +50,19 @@ internal data class HelloPayload(
             require(payload.deviceName.length <= MAX_FIELD_LEN) {
                 "HELLO deviceName too long: ${payload.deviceName.length} > $MAX_FIELD_LEN"
             }
+            // AUDIT-2026-07 (SEC-1 rider, P1-18): `platform` and each
+            // per-transport tag are bounded like every other untrusted HELLO
+            // string field. Conforming peers send short enum names, so the
+            // generous MAX_FIELD_LEN bound is never hit by a real peer.
+            require(payload.platform.length <= MAX_FIELD_LEN) {
+                "HELLO platform too long: ${payload.platform.length} > $MAX_FIELD_LEN"
+            }
             require(payload.supportedTransports.size <= MAX_TRANSPORTS) {
                 "HELLO advertised too many transports: ${payload.supportedTransports.size}"
+            }
+            require(payload.supportedTransports.all { it.length <= MAX_FIELD_LEN }) {
+                "HELLO transport tag too long: " +
+                    "${payload.supportedTransports.maxOf { it.length }} > $MAX_FIELD_LEN"
             }
             return payload
         }

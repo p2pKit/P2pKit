@@ -135,11 +135,21 @@ class HelloPayloadTest {
     fun fieldsAtMaxLenAreAccepted() {
         val atLimit = "a".repeat(HelloPayload.MAX_FIELD_LEN)
         val decoded = HelloPayload.decode(
-            HelloPayload.encode(payload(appId = atLimit, peerId = atLimit, deviceName = atLimit))
+            HelloPayload.encode(
+                payload(
+                    appId = atLimit,
+                    peerId = atLimit,
+                    deviceName = atLimit,
+                    platform = atLimit,
+                    supportedTransports = listOf(atLimit)
+                )
+            )
         )
         assertEquals(atLimit, decoded.appId)
         assertEquals(atLimit, decoded.peerId)
         assertEquals(atLimit, decoded.deviceName)
+        assertEquals(atLimit, decoded.platform)
+        assertEquals(listOf(atLimit), decoded.supportedTransports)
     }
 
     @Test
@@ -178,32 +188,45 @@ class HelloPayloadTest {
     }
 
     /**
-     * Divergence note (2026-07 review P1-18): the coverage plan lists
-     * over-limit `platform` strings among the decode guards, but the current
-     * decoder applies no length bound to `platform` — it is bounded only
-     * upstream by the frame-payload cap. This test pins the CURRENT
-     * accept-behavior so any future guard is added deliberately (with this
-     * test updated), not by accident.
+     * AUDIT-2026-07 (SEC-1 rider, P1-18): `platform` is bounded at
+     * MAX_FIELD_LEN like every other untrusted HELLO string field — one char
+     * over is rejected, as is a very large value. (Until the M4 group this
+     * field was unbounded below the frame-payload cap; the former divergence
+     * pin is replaced by this guard test.)
      */
     @Test
-    fun overLimitPlatformStringIsCurrentlyAccepted() {
-        val oversize = "p".repeat(100_000)
-        val decoded = HelloPayload.decode(HelloPayload.encode(payload(platform = oversize)))
-        assertEquals(oversize, decoded.platform)
+    fun overLimitPlatformStringIsRejected() {
+        val oneOver = "p".repeat(HelloPayload.MAX_FIELD_LEN + 1)
+        val err = assertFailsWith<IllegalArgumentException> {
+            HelloPayload.decode(HelloPayload.encode(payload(platform = oneOver)))
+        }
+        assertTrue(err.message!!.contains("platform"), "got: ${err.message}")
+
+        assertFailsWith<IllegalArgumentException> {
+            HelloPayload.decode(HelloPayload.encode(payload(platform = "p".repeat(100_000))))
+        }
     }
 
     /**
-     * Divergence note (2026-07 review P1-18): the coverage plan lists
-     * over-limit per-transport strings among the decode guards, but only the
-     * transport COUNT is bounded (MAX_TRANSPORTS) — each tag's length is not.
-     * Pins the CURRENT accept-behavior; see [overLimitPlatformStringIsCurrentlyAccepted].
+     * AUDIT-2026-07 (SEC-1 rider, P1-18): each per-transport tag is bounded
+     * at MAX_FIELD_LEN (previously only the transport COUNT was bounded) —
+     * one char over is rejected, as is a very large value. Replaces the
+     * former divergence pin.
      */
     @Test
-    fun overLimitPerTransportStringIsCurrentlyAccepted() {
-        val oversizeTag = "t".repeat(100_000)
-        val decoded = HelloPayload.decode(
-            HelloPayload.encode(payload(supportedTransports = listOf("LAN", oversizeTag)))
-        )
-        assertEquals(listOf("LAN", oversizeTag), decoded.supportedTransports)
+    fun overLimitPerTransportStringIsRejected() {
+        val oneOver = "t".repeat(HelloPayload.MAX_FIELD_LEN + 1)
+        val err = assertFailsWith<IllegalArgumentException> {
+            HelloPayload.decode(
+                HelloPayload.encode(payload(supportedTransports = listOf("LAN", oneOver)))
+            )
+        }
+        assertTrue(err.message!!.contains("transport"), "got: ${err.message}")
+
+        assertFailsWith<IllegalArgumentException> {
+            HelloPayload.decode(
+                HelloPayload.encode(payload(supportedTransports = listOf("t".repeat(100_000))))
+            )
+        }
     }
 }

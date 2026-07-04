@@ -44,7 +44,16 @@ internal class SessionStore(
      * test silently (#19). Production keeps the default `false` —
      * log-don't-crash (see [checkInvariants]).
      */
-    private val strictInvariants: Boolean = false
+    private val strictInvariants: Boolean = false,
+    /**
+     * AUDIT-2026-07 (SEC-1, decision #9a): upper bound on total concurrently
+     * active sessions, enforced in [tryRegister] for NET-NEW incoming
+     * registrations only. Internal admission-control policy, not public API;
+     * defaults to [MAX_TOTAL_ACTIVE_SESSIONS]. Parameterized only so store
+     * unit tests can exercise the boundary without 64 fixtures if ever
+     * needed — production always uses the default.
+     */
+    private val maxTotalActiveSessions: Int = MAX_TOTAL_ACTIVE_SESSIONS
 ) {
 
     private val mutex = Mutex()
@@ -150,6 +159,19 @@ internal class SessionStore(
             } else {
                 RegisterOutcome.Rejected(winner = existing, loser = session)
             }
+        } else if (
+            // AUDIT-2026-07 (SEC-1, decision #9a): total-session admission
+            // bound — applies ONLY to net-new INCOMING registrations (this
+            // branch: no active session for the peer). Outgoing registrations
+            // are app-initiated and never refused here, and simultaneous-open
+            // arbitration (the branch above) replaces/rejects with no net
+            // session growth, so it is exempt by construction. Only ACTIVE
+            // sessions count: a terminal-but-not-yet-evicted entry must not
+            // block admission of a live peer.
+            isIncoming &&
+            byPeer.values.count { it.state.value in ACTIVE_STATES } >= maxTotalActiveSessions
+        ) {
+            RegisterOutcome.RefusedAtCapacity(session = session)
         } else {
             // Existing may be `null` OR in a terminal state (Closed / Failed /
             // Closing / Idle). In the terminal case the per-session terminal
@@ -329,4 +351,12 @@ internal sealed class RegisterOutcome {
     data class Accepted(val session: P2pSession) : RegisterOutcome()
     data class Replaced(val winner: P2pSession, val loser: P2pSession) : RegisterOutcome()
     data class Rejected(val winner: P2pSession, val loser: P2pSession) : RegisterOutcome()
+
+    /**
+     * AUDIT-2026-07 (SEC-1, decision #9a): a net-new INCOMING session was
+     * refused because the total-active-session bound is reached. [session]
+     * was never added to the store; the caller closes it and does not
+     * surface it on `incomingSessions`.
+     */
+    data class RefusedAtCapacity(val session: P2pSession) : RegisterOutcome()
 }
