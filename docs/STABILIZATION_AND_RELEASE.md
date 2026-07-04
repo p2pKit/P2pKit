@@ -231,4 +231,45 @@ A4 passes on hardware.
       signatures.
 - [ ] Release notes state the trust model honestly: identity/encryption is
       `NoneForMvp` (trusted-LAN only) — C1 first bullet.
+- [x] **Decision box — `P2pMessage.metadata` (decision #3): DECIDED, option
+      (c), 2026-07-04.** Metadata is documented as **not transmitted in
+      protocol v1** (`P2pMessage` KDoc + spec §9.4), the receive side is
+      pinned empty by `MessageMetadataContractTest` (P1-06), and real
+      transmission is scheduled as the post-RC `metadata-wire` milestone
+      (C4). The RC must not tag with this line undecided (DOCA-14).
 - [ ] Tag `v0.6.0-rc1` (or chosen RC id) and capture the device-matrix logs.
+
+### C4 — Post-RC milestone: `metadata-wire` (from decision #3, recorded 2026-07-04)
+
+Owner-approved follow-up to decision #3 option (c): protocol v1 does not
+transmit `P2pMessage.metadata` (see the C3 decision box). The owner wants
+metadata transmission to land **soon after the RC line** — this section is
+the durable record of that milestone.
+
+- **What:** serialize `metadata` in a DATA-payload **envelope**. The PP2K
+  magic, version byte, 36-byte header, frame types, and `ProtocolConstants`
+  limits stay untouched; only the DATA payload encoding gains an envelope
+  (metadata + payload). The codec lives in commonMain, so all three
+  platforms share one implementation — no per-platform mirroring needed.
+- **Where:** `p2p-core` `protocol/` — encode in `Chunker.chunk` (today it
+  reads only `value`/`bytes`), decode in `Reassembler.decodePayload` (today
+  it reconstructs with the `emptyMap()` default); update `P2pMessage` KDoc,
+  spec §9.4, and **consciously flip the P1-06 pin** in
+  `MessageMetadataContractTest` from asserted-empty to round-trip equality
+  in the same commit.
+- **Prerequisites (must be decided before any bytes change):**
+  1. **Cross-version interop stance** — a metadata-capable sender to a v1
+     receiver (and the reverse) must have defined behavior: candidate
+     mechanisms are a HELLO-negotiated capability, a reserved DATA flag bit,
+     or a protocol version bump. Pick one and document the compatibility
+     matrix; a v1 receiver must never misparse an envelope as payload bytes.
+  2. **Bounds and input validation on receive** — metadata key/value/count
+     limits sized against the 4 MiB message cap and the reassembly caps, so
+     malformed or excessive metadata from a peer is rejected as a typed,
+     bounded failure rather than growing memory or throwing untyped.
+  3. **Protocol version consideration** — decide whether this is v1.1
+     (envelope negotiated in-band, version byte unchanged) or v2 (version
+     byte bump); the wire-parity rule (identical across jvmMain/androidMain/
+     appleMain) applies to whichever is chosen.
+- **Not before:** the v0.6 RC tag — this work is scoped post-RC by decision
+  #3(c); the RC ships the documented local-only contract above.

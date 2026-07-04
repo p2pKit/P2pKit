@@ -605,6 +605,8 @@ sealed class P2pMessage {
 
 No `FileChunk` in the public API. Chunking is internal.
 
+**Metadata in protocol v1 (decision #3c, 2026-07-04):** `metadata` is **not transmitted**. Protocol v1 DATA frames carry only the text/binary payload: metadata attached at `send()` is local to the sender's process, and received messages always have `metadata` empty. Wiring metadata onto the wire is the post-RC `metadata-wire` milestone (`docs/STABILIZATION_AND_RELEASE.md` §C4).
+
 **Max payload size for v0.1:** 4 MB per `send()` call. Larger payloads throw `P2pError.PayloadTooLarge`. File/stream APIs are v0.2+.
 
 ### 9.5 States
