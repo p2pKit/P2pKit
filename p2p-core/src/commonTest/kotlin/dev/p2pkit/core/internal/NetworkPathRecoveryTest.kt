@@ -174,7 +174,7 @@ class NetworkPathRecoveryTest {
             // onConnectionLost; the connection lock short-circuits the
             // second one. Session is now Reconnecting and the handler is
             // parked in `withTimeoutOrNull(5_000) { pathSatisfied.first() }`.
-            pair1.a.breakWith(RuntimeException("simulated wire break"))
+            pair1.a.breakWithException(RuntimeException("simulated wire break"))
             fake.emit(NetworkPathStatus.Unsatisfied)
             withTimeout(5_000) {
                 session.state.first { it == ConnectionState.Reconnecting }

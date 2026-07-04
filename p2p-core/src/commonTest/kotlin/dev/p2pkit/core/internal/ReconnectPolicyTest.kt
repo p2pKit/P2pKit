@@ -29,8 +29,14 @@ import kotlin.test.assertSame
  *
  * Each test wires an outgoing Alice and an incoming Bob against
  * [FakeConnectionPair]s the test controls directly. Failures are induced via
- * [dev.p2pkit.core.testfixtures.FakeRawConnection.breakWith], which lets the
- * test observe the exact state transitions without timing on real keepalives.
+ * [dev.p2pkit.core.testfixtures.FakeRawConnection.breakWithException], which
+ * lets the test observe the exact state transitions without timing on real
+ * keepalives. The throwing signature is used deliberately: it routes the
+ * loss through the session's defensive failure branch, giving a
+ * deterministic connection-loss signal regardless of the remote-termination
+ * classification race (TST-1 / SES-1). Once that classification is
+ * deterministic, these can migrate to the production-shaped
+ * [dev.p2pkit.core.testfixtures.FakeRawConnection.breakWith].
  *
  * Determinism rules:
  *   - retry delays are tiny except where the test needs a window to interpose
@@ -94,7 +100,7 @@ class ReconnectPolicyTest {
             // and the emit may have happened before we could subscribe).
             assertEquals(ConnectionState.Connected, session.state.value)
 
-            pair.a.breakWith(RuntimeException("simulated wire break"))
+            pair.a.breakWithException(RuntimeException("simulated wire break"))
 
             val terminal = withTimeout(5_000) {
                 session.state.first { it == ConnectionState.Failed || it == ConnectionState.Closed }
@@ -127,7 +133,7 @@ class ReconnectPolicyTest {
             // and the emit may have happened before we could subscribe).
             assertEquals(ConnectionState.Connected, session.state.value)
 
-            pair.a.breakWith(RuntimeException("simulated wire break"))
+            pair.a.breakWithException(RuntimeException("simulated wire break"))
 
             val reconnecting = withTimeout(5_000) {
                 session.state.first { it == ConnectionState.Reconnecting }
@@ -162,7 +168,7 @@ class ReconnectPolicyTest {
             // and the emit may have happened before we could subscribe).
             assertEquals(ConnectionState.Connected, session.state.value)
 
-            pair1.a.breakWith(RuntimeException("simulated wire break"))
+            pair1.a.breakWithException(RuntimeException("simulated wire break"))
             withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
 
             val rearmed = withTimeout(5_000) {
@@ -202,7 +208,7 @@ class ReconnectPolicyTest {
         try {
             val session = withTimeout(5_000) { alice.connect(targetPeer()) }
 
-            pair.a.breakWith(RuntimeException("simulated wire break"))
+            pair.a.breakWithException(RuntimeException("simulated wire break"))
 
             val terminal = withTimeout(5_000) {
                 session.state.first { it == ConnectionState.Failed || it == ConnectionState.Closed }
@@ -234,7 +240,7 @@ class ReconnectPolicyTest {
         try {
             val session = withTimeout(5_000) { alice.connect(targetPeer()) }
 
-            pair.a.breakWith(RuntimeException("simulated wire break"))
+            pair.a.breakWithException(RuntimeException("simulated wire break"))
             withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
 
             val attemptsAtClose = attempts.value
@@ -275,7 +281,7 @@ class ReconnectPolicyTest {
         try {
             val session = withTimeout(5_000) { alice.connect(targetPeer()) }
 
-            pair.a.breakWith(RuntimeException("simulated wire break"))
+            pair.a.breakWithException(RuntimeException("simulated wire break"))
             withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
 
             val attemptsAtStop = attempts.value
@@ -306,7 +312,7 @@ class ReconnectPolicyTest {
         try {
             val firstSession = withTimeout(5_000) { alice.connect(targetPeer()) }
 
-            pair.a.breakWith(RuntimeException("simulated wire break"))
+            pair.a.breakWithException(RuntimeException("simulated wire break"))
             withTimeout(5_000) { firstSession.state.first { it == ConnectionState.Reconnecting } }
 
             val secondSession = withTimeout(5_000) { alice.connect(targetPeer()) }

@@ -135,7 +135,7 @@ class SessionReconnectRotationTest {
 
             // Break the wire — session goes Reconnecting and the handler
             // parks on retryDelayMillis OR pathSatisfiedSignal.
-            pair1.a.breakWith(RuntimeException("simulated wire break"))
+            pair1.a.breakWithException(RuntimeException("simulated wire break"))
             withTimeout(5_000) {
                 session.state.first { it == ConnectionState.Reconnecting }
             }
@@ -231,7 +231,7 @@ class SessionReconnectRotationTest {
             assertEquals(hintsV1, aliceData.connectCalls[0].transportHints)
 
             // Break the wire and immediately evict the peer from the registry.
-            pair1.a.breakWith(RuntimeException("simulated wire break"))
+            pair1.a.breakWithException(RuntimeException("simulated wire break"))
             aliceDiscovery.emit(PeerEvent.Lost(bobPeer.id))
             withTimeout(peerPropagationTimeoutMs) {
                 alice.peers.first { list -> list.none { it.id == bobPeer.id } }
@@ -326,7 +326,7 @@ class SessionReconnectRotationTest {
 
             // Break the wire — session goes Reconnecting → handler should
             // invoke refresh() exactly once before the first retry dials.
-            pair1.a.breakWith(RuntimeException("simulated wire break"))
+            pair1.a.breakWithException(RuntimeException("simulated wire break"))
             withTimeout(5_000) {
                 session.state.first { it == ConnectionState.Reconnecting }
             }

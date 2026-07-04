@@ -1,7 +1,7 @@
 package dev.p2pkit.core.protocol
 
 import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import kotlinx.io.Buffer
 import kotlinx.io.write
 import kotlin.random.Random
@@ -19,7 +19,7 @@ class StreamingFileSenderTest {
 
     @Test
     fun emptyFileEmitsNoFrames() {
-        runBlocking<Unit> {
+        runTest {
             val frames = streamFileData(
                 transferId = id(),
                 rawSource = bufferOf(ByteArray(0)),
@@ -32,7 +32,7 @@ class StreamingFileSenderTest {
 
     @Test
     fun singleChunkFileFitsInOneFrame() {
-        runBlocking<Unit> {
+        runTest {
             val payload = ByteArray(123) { it.toByte() }
             val transferId = id()
             val frames = streamFileData(
@@ -54,7 +54,7 @@ class StreamingFileSenderTest {
 
     @Test
     fun exactMultipleOfChunkSizeSplitsCleanly() {
-        runBlocking<Unit> {
+        runTest {
             val chunk = 64
             val payload = ByteArray(chunk * 4) { (it and 0xFF).toByte() }
             val frames = streamFileData(
@@ -83,7 +83,7 @@ class StreamingFileSenderTest {
 
     @Test
     fun nonMultipleOfChunkSizeSplitsLastShort() {
-        runBlocking<Unit> {
+        runTest {
             val chunk = 64
             val payload = ByteArray(chunk * 2 + 5) { (it and 0xFF).toByte() }
             val frames = streamFileData(
@@ -102,7 +102,7 @@ class StreamingFileSenderTest {
 
     @Test
     fun largeFileStreamsWithoutBufferingAll() {
-        runBlocking<Unit> {
+        runTest {
             // 5 MiB at 64 KiB chunks → 80 frames.
             val size = 5L * 1024 * 1024
             val chunk = 64 * 1024

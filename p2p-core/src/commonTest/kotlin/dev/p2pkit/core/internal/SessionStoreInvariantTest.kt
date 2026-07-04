@@ -8,13 +8,14 @@ import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.testfixtures.RecordingLogger
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import kotlinx.io.RawSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -42,7 +43,7 @@ import kotlin.test.assertTrue
 class SessionStoreInvariantTest {
 
     @Test
-    fun strictModeThrowsOnForcedInconsistency() = runBlocking {
+    fun strictModeThrowsOnForcedInconsistency() = runTest {
         val store = SessionStore(P2pLogger.NoOp, strictInvariants = true)
         val failure = assertFailsWith<IllegalStateException> {
             store.forceInvariantViolationForTest(StubSession(peer = syntheticPeer("peer-a", "A")))
@@ -59,7 +60,7 @@ class SessionStoreInvariantTest {
     }
 
     @Test
-    fun defaultModeWarnsWithoutThrowingOnSameInconsistency() = runBlocking {
+    fun defaultModeWarnsWithoutThrowingOnSameInconsistency() = runTest {
         val logger = RecordingLogger()
         val store = SessionStore(logger) // strictInvariants defaults to false = production behavior
         // Must NOT throw — production is log-don't-crash.
@@ -74,7 +75,7 @@ class SessionStoreInvariantTest {
     }
 
     @Test
-    fun strictModeDoesNotThrowOnValidOperationSequence() = runBlocking {
+    fun strictModeDoesNotThrowOnValidOperationSequence() = runTest {
         val store = SessionStore(P2pLogger.NoOp, strictInvariants = true)
         val peerId = PeerId("peer-b")
         val localPeerIdValue = "aaaa-local" // < "peer-b": smaller-id side keeps its outgoing
@@ -169,16 +170,4 @@ private class StubSession(
     override suspend fun close() {
         _state.value = ConnectionState.Closed
     }
-}
-
-/** Captures `warn` messages so the log-don't-crash path can be asserted. */
-private class RecordingLogger : P2pLogger {
-    val warnings = mutableListOf<String>()
-    override fun debug(message: String) {}
-    override fun info(message: String) {}
-    override fun warn(message: String, throwable: Throwable?) {
-        warnings.add(message)
-    }
-
-    override fun error(message: String, throwable: Throwable?) {}
 }
