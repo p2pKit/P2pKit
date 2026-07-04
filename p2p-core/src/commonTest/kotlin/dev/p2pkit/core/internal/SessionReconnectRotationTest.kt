@@ -237,6 +237,18 @@ class SessionReconnectRotationTest {
                 alice.peers.first { list -> list.none { it.id == bobPeer.id } }
             }
 
+            // AUDIT-2026-07 (SES-1): synchronize on the Reconnecting edge
+            // before waiting for Connected, matching the sibling tests. The
+            // pre-fix raw-state observer classified the break within one
+            // dispatch of the synchronous fixture state flip, which let this
+            // test skip the Reconnecting wait; classification now routes
+            // through the protocol-event pipeline (a couple of dispatches),
+            // so a bare `first { Connected }` here could match the PRE-break
+            // Connected value and read connectCalls before the retry dialed.
+            withTimeout(5_000) {
+                session.state.first { it == ConnectionState.Reconnecting }
+            }
+
             // Reconnect attempt should now find peerLookup returning null
             // and fall back to the originally captured InternalPeer (hintsV1).
             withTimeout(5_000) {

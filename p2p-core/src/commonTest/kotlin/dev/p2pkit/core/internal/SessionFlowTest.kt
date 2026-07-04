@@ -17,6 +17,7 @@ import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
@@ -225,8 +226,52 @@ class SessionFlowTest {
                     it == ConnectionState.Closed || it == ConnectionState.Failed
                 }
             }
-            assertTrue(
-                finalState == ConnectionState.Closed || finalState == ConnectionState.Failed
+            // AUDIT-2026-07 (SES-1) / P1-02: the peer that receives our CLOSE
+            // frame must classify it as a clean close — exactly Closed, never
+            // Failed. (Was the disjunctive `Closed || Failed` while the
+            // remote-termination classification raced.)
+            assertEquals(
+                ConnectionState.Closed, finalState,
+                "a received CLOSE frame must yield exactly Closed on the receiving side"
+            )
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
+    fun incomingSessionFailsDeterministicallyOnAbruptRemoteTermination() = runBlocking {
+        // AUDIT-2026-07 (SES-1) / P1-01: an incoming session whose wire ends
+        // WITHOUT a CLOSE frame (EOF/reset signature — the peer's process went
+        // away) must deterministically reach Failed: incoming sessions never
+        // reconnect (the remote redials) and a hangup without CLOSE is not a
+        // clean close, so the clean-Closed outcome must never appear.
+        val pair = FakeConnectionPair()
+        val alice = outgoingKit("Alice", pair.a)
+        val bob = incomingKit("Bob", pair.b)
+        try {
+            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+            withTimeout(5_000) { outgoingDeferred.await() }
+            assertEquals(ConnectionState.Connected, incomingSession.state.value)
+
+            // Subscribe to the FIRST transition out of Connected before
+            // inducing the loss, so the edge cannot be missed (UNDISPATCHED
+            // runs the collector up to its first suspension point right here).
+            val firstTransition = async(start = CoroutineStart.UNDISPATCHED) {
+                incomingSession.state.first { it != ConnectionState.Connected }
+            }
+
+            // Production-shaped remote termination (fixture F1): Alice's end
+            // of the wire goes away with no CLOSE frame.
+            pair.hangUp(pair.a)
+
+            assertEquals(
+                ConnectionState.Failed,
+                withTimeout(5_000) { firstTransition.await() },
+                "an incoming session must deterministically reach Failed on abrupt remote " +
+                    "termination — never the clean-Closed outcome, never Reconnecting"
             )
         } finally {
             alice.stop()

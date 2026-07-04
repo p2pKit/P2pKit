@@ -9,6 +9,7 @@ import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.protocol.DefaultP2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
+import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.transport.RawConnection
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.CompletableDeferred
@@ -22,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -100,6 +102,68 @@ class CloseSemanticsTest {
                 // close() stays idempotent after the wedged first call.
                 withTimeout(2_000) { session.close() }
                 assertEquals(ConnectionState.Closed, session.state.value)
+            } finally {
+                supervisor.cancel()
+            }
+        }
+    }
+
+    @Test
+    fun rawTerminalStateClassifiesLossWhenEventPipelineStaysOpen() {
+        // AUDIT-2026-07 (SES-1) / P1-01 regression leg: observeRawState fires
+        // on remote close. The events channel is hand-fed and NEVER completes
+        // — modeling the send-side-only failure shape where the raw state
+        // flips terminal while the read side lags (the case the raw-state
+        // observer exists for). After the bounded classification-deferral
+        // window, the observer alone must classify the loss: no reconnect
+        // handler is wired, so the session must reach terminal Failed via
+        // transitionToTerminal — it must NOT stay Connected and must NOT
+        // latch the clean-Closed outcome (no CLOSE frame was received).
+        runBlocking {
+            val pair = FakeConnectionPair()
+            val protocol = DefaultP2pProtocol(clock = { systemTimeMillis() })
+            val supervisor = SupervisorJob()
+            val scope = CoroutineScope(Dispatchers.Default + supervisor)
+            val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
+
+            val session = P2pSessionImpl(
+                id = "raw-terminal-classification",
+                peer = Peer(
+                    id = PeerId("test-raw-terminal"),
+                    name = "Test",
+                    platform = Platform.JVM_DESKTOP,
+                    supportedTransports = setOf(TransportKind.LAN)
+                ),
+                initialConnection = pair.a,
+                initialEvents = events,
+                protocol = protocol,
+                parentScope = scope,
+                // Long intervals: the keep-alive loop must not be the one to
+                // classify the loss inside the test window.
+                keepAlive = KeepAliveConfig(pingIntervalMillis = 60_000, timeoutMillis = 120_000),
+                clock = { systemTimeMillis() },
+                logger = P2pLogger.NoOp
+            )
+            session.start()
+
+            try {
+                assertEquals(ConnectionState.Connected, session.state.value)
+
+                // Flip this side's raw state to Closed (production signature:
+                // reads end, writes fail) while the protocol-event pipeline
+                // stays open — only observeRawState can see this.
+                pair.hangUp(pair.a)
+
+                val terminal = withTimeout(5_000) {
+                    session.state.first {
+                        it == ConnectionState.Failed || it == ConnectionState.Closed
+                    }
+                }
+                assertEquals(
+                    ConnectionState.Failed, terminal,
+                    "the raw-state observer must classify a terminal raw connection as a " +
+                        "connection loss (Failed without a handler) — not a clean close"
+                )
             } finally {
                 supervisor.cancel()
             }
