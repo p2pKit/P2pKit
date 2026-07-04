@@ -166,6 +166,11 @@ public class AndroidNetworkProvisioningManager internal constructor(
             }
         }
 
+    /**
+     * Stops the hotspot only. It does **not** release a joined network —
+     * joined-network state is released when the kit is closed or [close] is
+     * called (decision #8c, 2026-07-04).
+     */
     override suspend fun stopLocalNetwork() {
         lifecycleLock.withLock {
             val h = handle ?: return
@@ -180,6 +185,15 @@ public class AndroidNetworkProvisioningManager internal constructor(
         }
     }
 
+    /**
+     * At most one joined network is active per manager. A call made while a
+     * join is still active fails with "a joined network is already active";
+     * there is no leave path in this version — the joined-network state
+     * (process-wide binding + NetworkCallback) is released when the kit is
+     * closed (parent-job cancellation) or [close] is called. A `leaveNetwork()`
+     * surface (or redefining stop semantics) is deferred to the post-RC spec
+     * discussion (decision #8c, 2026-07-04; PRM-16).
+     */
     override suspend fun joinLocalNetwork(credentials: WifiCredentials): JoinNetworkResult =
         lifecycleLock.withLock {
             if (!wifi.isSpecifierJoinSupported) {
@@ -188,9 +202,14 @@ public class AndroidNetworkProvisioningManager internal constructor(
                 )
             }
             if (joinHandle != null) {
+                // AUDIT-2026-07 (PRM-16, decision #8c): joinHandle is only
+                // ever non-null after a join has *completed successfully* and
+                // is still active (an in-flight join holds lifecycleLock, so
+                // concurrent callers wait rather than reach this branch) —
+                // word the refusal for that state, not "in progress".
                 return@withLock JoinNetworkResult.Failed(
                     NetworkProvisioningError.JoinFailed(
-                        "a join is already in progress; close the kit before retrying"
+                        "a joined network is already active; it is released only when the kit is closed"
                     )
                 )
             }
@@ -290,17 +309,26 @@ public class AndroidNetworkProvisioningManager internal constructor(
         return ctx.manualPeerRegistrar.registerManualPeer(host = host, port = port)
     }
 
-    /**
-     * Cancels the background scope and releases any active hotspot or
-     * Wi-Fi join. Called automatically when the kit's parent job is
-     * cancelled (via [ProvisioningContext.parentJob]); apps may also call
-     * it directly for explicit teardown.
-     */
     private companion object {
         /** Upper bound for OS-callback waits (LOHS start, specifier join approval). */
         const val OS_CALLBACK_TIMEOUT_MS: Long = 60_000
     }
 
+    /**
+     * Cancels the background scope and releases any active hotspot or
+     * Wi-Fi join. Called automatically when the kit's parent job is
+     * cancelled (via [ProvisioningContext.parentJob]); apps may also call
+     * it directly for explicit teardown.
+     *
+     * Documented limitation (2026-07 P1-27; decision #8c): a
+     * [startLocalNetwork] / [joinLocalNetwork] call made *after* the parent
+     * job has been cancelled is still accepted, and resources acquired then
+     * sit outside the parent-job completion cleanup (that handler has
+     * already fired) — an explicit call to this method is the only release
+     * path for them. The lifecycle rework (refusing post-cancel starts,
+     * together with a `leaveNetwork()` surface) is deferred to the post-RC
+     * spec discussion.
+     */
     public fun close() {
         scopeJob.cancel()
         runCatching { handle?.close() }

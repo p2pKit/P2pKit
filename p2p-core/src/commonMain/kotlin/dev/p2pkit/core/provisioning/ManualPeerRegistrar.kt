@@ -28,6 +28,18 @@ public interface ManualPeerRegistrar {
      * it with the kit's discovery state so `kit.connect(peer)` resolves to
      * the right transport hint.
      *
+     * **Lifetime (decision #6b, 2026-07-04):** a manual peer lives until the
+     * kit stops — it is exempt from staleness eviction and there is no
+     * unregister path in v1 (`kit.stop()` forgets it, along with the rest of
+     * the in-memory registry). A removal API (`unregisterManualPeer`) is
+     * deferred to the next deliberate spec revision.
+     *
+     * **Dedupe and name refresh (AUDIT-2026-07 (IDN-7)):** repeat
+     * registrations of the same ([host], [port], [kind]) endpoint return the
+     * same peer (same synthetic id, one registry entry). A re-registration
+     * that supplies a different non-blank [deviceName] refreshes the stored
+     * display name; a null/blank [deviceName] keeps the existing name.
+     *
      * @param host  IP or hostname the transport can dial.
      * @param port  TCP/UDP port (TCP for [TransportKind.LAN]).
      * @param kind  Transport kind that should accept this hint. Defaults to LAN.

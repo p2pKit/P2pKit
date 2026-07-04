@@ -128,7 +128,25 @@ internal class PeerRegistry(
                 it.type == kind && it.host == host && it.port == port
             }
         }
-        if (existing != null) return existing.internalPeer.publicPeer
+        if (existing != null) {
+            val existingPeer = existing.internalPeer.publicPeer
+            // AUDIT-2026-07 (IDN-7): a re-registration that supplies a new
+            // non-blank display name refreshes the stored name instead of
+            // silently dropping it — same endpoint keeps the same synthetic
+            // id and single registry entry. Null/blank keeps the old name.
+            val refreshedName = deviceName?.takeIf { it.isNotBlank() }
+            if (refreshedName == null || refreshedName == existingPeer.name) {
+                return existingPeer
+            }
+            val refreshedInternal = existing.internalPeer.copy(
+                publicPeer = existingPeer.copy(name = refreshedName)
+            )
+            tracked.update { current ->
+                current + (existingPeer.id to TrackedPeer(refreshedInternal, clock()))
+            }
+            publishPeers()
+            return refreshedInternal.publicPeer
+        }
 
         val syntheticId = PeerId("manual-${Uuid.random()}")
         val displayName = deviceName?.takeIf { it.isNotBlank() } ?: "manual:$host:$port"

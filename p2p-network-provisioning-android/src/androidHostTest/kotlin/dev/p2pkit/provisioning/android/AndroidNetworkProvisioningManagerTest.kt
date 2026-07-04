@@ -294,7 +294,9 @@ class AndroidNetworkProvisioningManagerTest {
             val result = mgr.joinLocalNetwork(testCreds)
             val failed = assertIs<JoinNetworkResult.Failed>(result)
             val err = assertIs<NetworkProvisioningError.JoinFailed>(failed.error)
-            assertTrue(err.reason.contains("already in progress"))
+            // AUDIT-2026-07 (PRM-16, decision #8c): the refusal names the
+            // actual state — an active joined network — not "in progress".
+            assertTrue(err.reason.contains("already active"))
         } finally {
             mgr.close()
         }
@@ -331,7 +333,7 @@ class AndroidNetworkProvisioningManagerTest {
             )
             assertIs<NetworkProvisioningState.Failed>(mgr.state.value)
             // The handle slot is cleared: a follow-up join must not be
-            // rejected as "already in progress".
+            // rejected as "already active".
             assertIs<JoinNetworkResult.Joined>(mgr.joinLocalNetwork(testCreds))
         } finally {
             mgr.close()

@@ -281,13 +281,15 @@ class PeerRegistryTest {
         }
     }
 
-    // ---- registerManualPeer endpoint dedupe (2026-07 review P1-11, IDN-5, A04 §3 r2) ----
+    // ---- registerManualPeer endpoint dedupe (2026-07 review P1-11, IDN-5, A04 §3 r2)
+    // ---- + dedupe-hit name refresh (AUDIT-2026-07 (IDN-7), decision #6b) ----
 
     /**
-     * Repeat registration of the same (host, port, kind) endpoint returns the
-     * same [Peer] (same id, same display name from the first registration)
-     * and keeps exactly one tracked entry — even when the repeat supplies a
-     * different deviceName, because dedupe is keyed on the endpoint alone.
+     * Repeat registration of the same (host, port, kind) endpoint reuses the
+     * existing synthetic peer (same id, exactly one tracked entry), and a
+     * repeat that supplies a different non-blank deviceName refreshes the
+     * stored display name instead of silently dropping it
+     * (AUDIT-2026-07 (IDN-7), decision #6b).
      */
     @OptIn(ExperimentalP2pApi::class)
     @Test
@@ -305,9 +307,54 @@ class PeerRegistryTest {
             val second = registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.LAN, "Different name")
 
             assertEquals(first.id, second.id, "Same endpoint must reuse the existing synthetic id")
-            assertEquals(first, second, "Same endpoint must return the same public Peer")
-            assertEquals("First name", second.name, "Dedupe keeps the originally registered name")
+            assertEquals("Different name", second.name, "Dedupe-hit must refresh the display name")
             assertEquals(1, registry.peers.value.size, "Repeat registration must not grow the registry")
+            assertEquals(
+                "Different name",
+                registry.peers.value.single().name,
+                "The published peer list must show the refreshed name"
+            )
+            assertEquals(
+                first.id,
+                registry.peers.value.single().id,
+                "The refreshed entry must keep the original synthetic id"
+            )
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    /**
+     * A dedupe-hit with a null or blank deviceName keeps the existing display
+     * name (only a non-blank new name refreshes it), and a repeat of the same
+     * name causes no registry churn (AUDIT-2026-07 (IDN-7), decision #6b).
+     */
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun registerManualPeerDedupeWithNullOrBlankNameKeepsExistingName() {
+        val supervisor = SupervisorJob()
+        try {
+            val registry = PeerRegistry(
+                discoveryTransports = listOf(FakeDiscovery()),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2
+            )
+            val first = registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.LAN, "First name")
+
+            val nullRepeat = registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.LAN, null)
+            assertEquals(first.id, nullRepeat.id)
+            assertEquals("First name", nullRepeat.name, "Null deviceName must keep the existing name")
+
+            val blankRepeat = registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.LAN, "   ")
+            assertEquals(first.id, blankRepeat.id)
+            assertEquals("First name", blankRepeat.name, "Blank deviceName must keep the existing name")
+
+            val sameName = registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.LAN, "First name")
+            assertEquals(first, sameName, "Same-name repeat returns the same public Peer value")
+
+            assertEquals(1, registry.peers.value.size, "No repeat variant may grow the registry")
         } finally {
             supervisor.cancel()
         }
