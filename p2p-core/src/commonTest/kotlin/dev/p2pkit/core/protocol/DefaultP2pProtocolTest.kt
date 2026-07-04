@@ -2,6 +2,7 @@ package dev.p2pkit.core.protocol
 
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
+import dev.p2pkit.core.testfixtures.RecordingLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -11,10 +12,12 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class DefaultP2pProtocolTest {
 
@@ -167,6 +170,154 @@ class DefaultP2pProtocolTest {
                 protocol.sendError(pair.a, "appId mismatch")
                 val event = deferred.await() as ProtocolEvent.PeerError
                 assertEquals("appId mismatch", event.reason)
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
+
+    // ---- Malformed-body skip-not-throw policy (2026-07 review P1-19, A07 §3 r3) ----
+    // A HELLO/FILE_OFFER frame whose body fails to decode must be skipped with
+    // a warn diagnostic — never thrown out of the events flow (which would
+    // tear the session down on non-conforming peer input) — and the flow must
+    // keep delivering every subsequent frame.
+
+    private val rng = Random(11)
+
+    /** A structurally valid frame carrying an arbitrary (possibly undecodable) body. */
+    private fun rawControlFrame(type: PacketType, payload: ByteArray): Frame = Frame(
+        type = type,
+        flags = FrameFlags.LAST_CHUNK.toByte(),
+        messageId = MessageId.random(rng),
+        chunkIndex = 0,
+        totalChunks = 1,
+        payload = payload
+    )
+
+    @Test
+    fun malformedHelloBodyIsSkippedWithWarnAndSubsequentFramesStillDelivered() {
+        runBlocking {
+            val pair = FakeConnectionPair()
+            val logger = RecordingLogger()
+            val protocol = DefaultP2pProtocol(clock = { 0L }, logger = logger)
+            val scope = newScope()
+            try {
+                val deferred = scope.async { protocol.events(pair.b).take(2).toList() }
+                // Non-JSON HELLO body, then a valid HELLO, then a PING.
+                pair.a.write(FrameCodec.encode(rawControlFrame(PacketType.HELLO, "{not json".encodeToByteArray())))
+                val valid = HelloPayload(
+                    appId = "com.example",
+                    peerId = "p1",
+                    deviceName = "D",
+                    platform = "ANDROID",
+                    supportedTransports = listOf("LAN")
+                )
+                protocol.sendHello(pair.a, valid)
+                protocol.sendPing(pair.a)
+
+                val events = deferred.await()
+                // The malformed frame produced no event; delivery continued in order.
+                val hello = assertIs<ProtocolEvent.Hello>(events[0])
+                assertEquals(valid, hello.payload)
+                assertEquals(ProtocolEvent.Ping, events[1])
+                assertTrue(
+                    logger.warnings.any { it.contains("malformed HELLO") },
+                    "Expected a malformed-HELLO warn diagnostic, got: ${logger.warnings}"
+                )
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
+
+    @Test
+    fun helloBodyFailingValidationIsSkippedWithWarnNotThrown() {
+        runBlocking {
+            val pair = FakeConnectionPair()
+            val logger = RecordingLogger()
+            val protocol = DefaultP2pProtocol(clock = { 0L }, logger = logger)
+            val scope = newScope()
+            try {
+                val deferred = scope.async { protocol.events(pair.b).take(1).toList() }
+                // Valid JSON that fails the decode-side input-validation guards (blank peerId).
+                val invalidBody = HelloPayload.encode(
+                    HelloPayload(
+                        appId = "com.example",
+                        peerId = " ",
+                        deviceName = "D",
+                        platform = "ANDROID",
+                        supportedTransports = listOf("LAN")
+                    )
+                )
+                pair.a.write(FrameCodec.encode(rawControlFrame(PacketType.HELLO, invalidBody)))
+                protocol.sendPing(pair.a)
+
+                val events = deferred.await()
+                assertEquals(ProtocolEvent.Ping, events[0], "The invalid HELLO must yield no event")
+                assertTrue(
+                    logger.warnings.any { it.contains("malformed HELLO") },
+                    "Expected a malformed-HELLO warn diagnostic, got: ${logger.warnings}"
+                )
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
+
+    @Test
+    fun malformedFileOfferBodyIsSkippedWithWarnAndSubsequentFramesStillDelivered() {
+        runBlocking {
+            val pair = FakeConnectionPair()
+            val logger = RecordingLogger()
+            val protocol = DefaultP2pProtocol(clock = { 0L }, logger = logger)
+            val scope = newScope()
+            try {
+                val deferred = scope.async { protocol.events(pair.b).take(1).toList() }
+                // Non-JSON FILE_OFFER body, then a valid offer.
+                pair.a.write(FrameCodec.encode(rawControlFrame(PacketType.FILE_OFFER, "###".encodeToByteArray())))
+                val transferId = MessageId.random(rng)
+                val validOffer = FileOfferPayload(name = "report.pdf", sizeBytes = 1_234, mimeType = "application/pdf")
+                protocol.sendFileOffer(pair.a, transferId, validOffer)
+
+                val events = deferred.await()
+                // First (and only) event is the VALID offer — the malformed one yielded nothing.
+                val offer = assertIs<ProtocolEvent.FileOffer>(events[0])
+                assertEquals(transferId, offer.transferId)
+                assertEquals(validOffer, offer.payload)
+                assertTrue(
+                    logger.warnings.any { it.contains("malformed FILE_OFFER") },
+                    "Expected a malformed-FILE_OFFER warn diagnostic, got: ${logger.warnings}"
+                )
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
+
+    @Test
+    fun fileOfferBodyFailingValidationIsSkippedWithWarnAndSubsequentOfferDelivered() {
+        runBlocking {
+            val pair = FakeConnectionPair()
+            val logger = RecordingLogger()
+            val protocol = DefaultP2pProtocol(clock = { 0L }, logger = logger)
+            val scope = newScope()
+            try {
+                val deferred = scope.async { protocol.events(pair.b).take(1).toList() }
+                // Valid JSON that fails the decode guards (negative sizeBytes).
+                val invalidBody = FileOfferPayload.encode(FileOfferPayload(name = "x", sizeBytes = -1))
+                pair.a.write(FrameCodec.encode(rawControlFrame(PacketType.FILE_OFFER, invalidBody)))
+                val transferId = MessageId.random(rng)
+                val validOffer = FileOfferPayload(name = "ok.bin", sizeBytes = 42)
+                protocol.sendFileOffer(pair.a, transferId, validOffer)
+
+                val events = deferred.await()
+                val offer = assertIs<ProtocolEvent.FileOffer>(events[0])
+                assertEquals(transferId, offer.transferId)
+                assertEquals(validOffer, offer.payload)
+                assertTrue(
+                    logger.warnings.any { it.contains("malformed FILE_OFFER") },
+                    "Expected a malformed-FILE_OFFER warn diagnostic, got: ${logger.warnings}"
+                )
             } finally {
                 scope.cancel()
             }

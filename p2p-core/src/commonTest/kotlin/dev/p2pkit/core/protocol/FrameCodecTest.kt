@@ -144,6 +144,26 @@ class FrameCodecTest {
         assertFailsWith<P2pError.ProtocolError> { FrameCodec.decode(encoded) }
     }
 
+    /**
+     * Decode-side twin of the reader's declared-length bound (2026-07 review
+     * P1-17, A07 §3 r1): a payload_len over
+     * [ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES] is rejected as a
+     * [P2pError.ProtocolError] citing the cap — checked before the truncation
+     * check, so the rejection is about the bound, not the missing bytes.
+     */
+    @Test
+    fun decodeRejectsOversizeDeclaredPayloadLength() {
+        val encoded = FrameCodec.encode(
+            Frame(PacketType.DATA, FrameFlags.LAST_CHUNK.toByte(), id(), 0, 1, ByteArray(4))
+        )
+        FrameCodec.writeIntBE(encoded, 32, ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES + 1)
+        val err = assertFailsWith<P2pError.ProtocolError> { FrameCodec.decode(encoded) }
+        assertTrue(
+            err.message!!.contains("exceeds maximum"),
+            "Rejection must cite the payload-length cap, got: ${err.message}"
+        )
+    }
+
     @Test
     fun flagsBitsRoundTripIndependently() {
         val withAll = Frame(
