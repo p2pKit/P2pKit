@@ -37,6 +37,22 @@ internal class OutgoingFileTransferImpl(
     private val _bytes = MutableStateFlow(0L)
     override val bytesTransferred: StateFlow<Long> = _bytes.asStateFlow()
 
+    // AUDIT-2026-07 (FIL-1): close-once latch for [source]. The kit owns the
+    // caller's RawSource (sendFile KDoc contract); the close used to be done
+    // only by a watcher coroutine on the session scope, which session teardown
+    // cancels before it can observe the terminal state — leaking the source.
+    // The guaranteed close now runs synchronously at the transition INTO a
+    // terminal state (every terminal path funnels through
+    // [updateUnlessTerminal]); the watcher remains only as a backstop, and
+    // both paths go through this idempotent guard.
+    private val sourceClosed = MutableStateFlow(false)
+
+    internal fun closeSourceOnce() {
+        if (sourceClosed.compareAndSet(expect = false, update = true)) {
+            runCatching { source.close() }
+        }
+    }
+
     override suspend fun cancel(reason: String?) {
         dispatcher.cancelOutgoing(this, reason)
     }
@@ -65,7 +81,17 @@ internal class OutgoingFileTransferImpl(
         while (true) {
             val cur = _state.value
             if (cur.isTerminal()) return
-            if (_state.compareAndSet(cur, next())) return
+            val candidate = next()
+            if (_state.compareAndSet(cur, candidate)) {
+                // AUDIT-2026-07 (FIL-1): the winning transition into a terminal
+                // state is the one guaranteed-to-run cleanup point for the
+                // source — it covers every terminal path (Completed / Rejected
+                // / Cancelled / Failed, including closeAll's markFailed during
+                // session teardown) and, unlike the watcher coroutine, cannot
+                // be cancelled out from under the transfer.
+                if (candidate.isTerminal()) closeSourceOnce()
+                return
+            }
         }
     }
 }
