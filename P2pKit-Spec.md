@@ -1,8 +1,8 @@
 # P2pKit — Kotlin Multiplatform P2P Data Transfer SDK
 
-**Version:** 0.1 specification (with v0.2 planned design)
-**Status:** Frozen — ready for implementation
-**Last updated:** 2026-05-15
+**Version:** 0.6 specification (v0.1 baseline plus amendments through v0.6 — iOS LAN shipped v0.3, file transfer v0.2.2, Android JmDNS migration v0.5, iOS cellular prohibition v0.6)
+**Status:** Living contract — the locked API shapes below are amended in place as features ship; public-API changes require a spec rev
+**Last updated:** 2026-06-12
 
 ---
 
@@ -51,7 +51,7 @@ P2pKit is **transport-agnostic by design**. v0.1 ships with a LAN/TCP transport.
 - `:p2p-sample-desktop`
 
 **Features**
-- LAN peer discovery via mDNS (Android `NsdManager`, JVM `JmDNS`).
+- LAN peer discovery via mDNS (in-process `JmDNS` on Android & JVM, Bonjour/`NWBrowser` on iOS).
 - TCP socket data transport.
 - Send/receive `P2pMessage.Text` and `P2pMessage.Binary`.
 - Outgoing connections via `connect(peer)`.
@@ -183,6 +183,10 @@ val p2p = P2pKit.create {
 
 ```kotlin
 interface P2pKit {
+    val appId: AppId               // v0.2 identity accessors — see §5.2
+    val localDeviceName: String
+    val localPeerId: PeerId
+
     val state: StateFlow<P2pState>
 
     val peers: StateFlow<List<Peer>>
@@ -190,7 +194,30 @@ interface P2pKit {
     val sessions: StateFlow<List<P2pSession>>
 
     val permissions: P2pPermissionManager
-    val networkProvisioning: NetworkProvisioningManager   // v0.2 — throws Unsupported in v0.1
+    val networkProvisioning: NetworkProvisioningManager   // real sidecars since v0.2.1; Unsupported stub otherwise
+
+    /**
+     * v0.4. Host device's default network path status, driven by the
+     * configured NetworkPathObserver: iOS gets a real nw_path_monitor
+     * observer by default; Android host apps supply
+     * AndroidNetworkPathObserver(applicationContext) via the lifecycle DSL;
+     * JVM desktop stays NetworkPathStatus.Unknown unless the host provides
+     * an observer. Values: Unknown / Satisfied / Unsatisfied. The SDK uses
+     * the same flow internally to fail Connected sessions on path loss and
+     * to wake Reconnecting sessions' retry delay on path recovery.
+     */
+    val networkPathStatus: StateFlow<NetworkPathStatus>
+
+    /**
+     * v0.4. Bring up all registered transports and the provisioning sidecar.
+     * Optional — startAdvertising(), startDiscovery(), and connect() each
+     * lazily start the kit on their first invocation. Calling start()
+     * explicitly is preferred because it surfaces
+     * P2pError.TransportStartFailed at a single, predictable call site.
+     * Idempotent after a successful start; after a failed start the next
+     * call retries.
+     */
+    suspend fun start()
 
     suspend fun startAdvertising()
     suspend fun stopAdvertising()
@@ -204,7 +231,8 @@ interface P2pKit {
      * the existing session is returned. Otherwise a new one is opened.
      *
      * Throws P2pError.NoTransportAvailable, P2pError.ConnectionFailed,
-     * or P2pError.PermissionMissing.
+     * P2pError.PermissionMissing, or P2pError.TransportStartFailed
+     * (when the implicit lazy start fails).
      */
     suspend fun connect(peer: Peer): P2pSession
 
@@ -213,6 +241,11 @@ interface P2pKit {
     fun notifyAppBackgrounded()
     fun notifyAppForegrounded()
 
+    /**
+     * Terminal. Cancels the kit's internal scope; the instance cannot be
+     * restarted — any lifecycle call after stop() throws
+     * IllegalStateException. Create a new instance to start again.
+     */
     suspend fun stop()
 
     companion object {
@@ -239,10 +272,36 @@ interface P2pSession {
     val incoming: SharedFlow<P2pMessage>
 
     /**
+     * v0.2.2. Inbound file offers from the peer, emitted when the peer calls
+     * sendFile. Hot SharedFlow with the same semantics as [incoming] —
+     * subscribe immediately. Each offer must be accepted or rejected within
+     * the configured offerTimeoutMillis (default 30 s) or it auto-rejects
+     * with reason "timeout". See §7.6.
+     */
+    val incomingFiles: SharedFlow<P2pFileOffer>
+
+    /**
      * Safe to call from multiple coroutines. Writes are serialized internally
      * with a Mutex; frames will not interleave on the same connection.
      */
     suspend fun send(message: P2pMessage)
+
+    /**
+     * v0.2.2. Offer a file to the peer. Bytes are pulled from [source] in
+     * chunkSizeBytes chunks — the file is never fully buffered in memory.
+     * The caller closes [source] after the returned transfer reaches a
+     * terminal state.
+     *
+     * Throws P2pError.PayloadTooLarge if sizeBytes exceeds the configured
+     * maxFileSizeBytes (default 2 GiB), P2pError.ConnectionFailed if the
+     * session is not Connected. See §7.6.
+     */
+    suspend fun sendFile(
+        name: String,
+        sizeBytes: Long,
+        mimeType: String?,
+        source: kotlinx.io.RawSource
+    ): P2pFileTransfer
 
     suspend fun close()
 }
@@ -255,16 +314,34 @@ class P2pKitBuilder {
     var appId: AppId? = null
     var deviceName: String? = null
     var logger: P2pLogger = P2pLogger.NoOp
+    var permissionManager: P2pPermissionManager? = null   // null = platform default
 
     fun transports(block: TransportsBuilder.() -> Unit)
     fun keepAlive(block: KeepAliveConfigBuilder.() -> Unit)
     fun lifecycle(block: LifecycleConfigBuilder.() -> Unit)
     fun security(block: SecurityConfigBuilder.() -> Unit)
+    fun networkProvisioning(block: NetworkProvisioningConfigBuilder.() -> Unit)  // v0.2.1 — see §20.4
+    fun fileTransfer(block: FileTransferConfigBuilder.() -> Unit)                // v0.2.2 — see §7.6
 }
 
 class TransportsBuilder {
-    fun lan()                              // v0.1
-    // Future: fun ble(), wifiDirect(), multipeer(), relay()
+    fun register(factory: TransportFactory)
+    // Transport modules contribute extension helpers; see §19.1 for the
+    // per-platform lan() signatures (Android's takes a Context).
+}
+
+class LifecycleConfigBuilder {
+    var reconnectPolicy: ReconnectPolicy
+    var onBackground: BackgroundPolicy
+    var onAppKilled: AppKilledPolicy
+
+    /**
+     * v0.4. Host-provided override feeding P2pKit.networkPathStatus. null =
+     * platform default: a real nw_path_monitor observer on iOS; no-op on JVM
+     * and Android. Android hosts that want path-change recovery set
+     * `networkPathObserver = AndroidNetworkPathObserver(applicationContext)`.
+     */
+    var networkPathObserver: NetworkPathObserver?
 }
 ```
 
@@ -299,6 +376,78 @@ scope.launch {
 ```
 
 Never use nested `collect { collect { ... } }`. Always `launchIn(scope)`.
+
+### 7.6 File transfer (v0.2.2 — normative)
+
+Discrete-file streaming on top of an existing session. The whole file is never
+buffered in memory; bytes stream in `chunkSizeBytes` frames through the
+session's write mutex so messages and keepalive still get slots mid-transfer.
+
+**Flow.** Sender calls `session.sendFile(name, sizeBytes, mimeType, source)` →
+receiver gets a `P2pFileOffer` on `session.incomingFiles` → receiver calls
+`offer.accept(sink)` or `offer.reject(reason)` (or the offer auto-rejects with
+reason `"timeout"` after `offerTimeoutMillis`) → on accept, FILE_DATA frames
+stream until FILE_DONE; either side may `cancel(reason)` at any point
+(FILE_CANCEL). Wire frames are FILE_OFFER / FILE_ACCEPT / FILE_REJECT /
+FILE_DATA / FILE_DONE / FILE_CANCEL (codes `0x10`–`0x15`, §13.1); the frame's
+`message_id` carries the transfer id for the lifetime of one offer.
+
+**Unanswered-offer terminal states (decision #11a, 2026-07-04):** the two
+sides of an unanswered offer terminalize asymmetrically — the receiver's
+transfer ends as `Rejected("timeout")` (the receive-side auto-reject), while
+the sender's ends as `Cancelled` carrying the offer-timeout message
+(`"offer not accepted within <offerTimeoutMillis>ms"`, from the sender's own
+local timer).
+
+**Public types** (package `dev.p2pkit.core.transfer`):
+
+```kotlin
+interface P2pFileOffer {
+    val id: String          // 32-char hex transfer id
+    val peer: Peer
+    val name: String
+    val sizeBytes: Long
+    val mimeType: String?
+
+    /** Stream the bytes into [sink]. Completed = flushed, not closed — the caller closes the sink. */
+    suspend fun accept(sink: kotlinx.io.RawSink): P2pFileTransfer
+    /** Decline. Sender observes FileTransferState.Rejected. No-op if already answered. */
+    suspend fun reject(reason: String? = null)
+}
+
+interface P2pFileTransfer {
+    val id: String
+    val peer: Peer
+    val name: String
+    val sizeBytes: Long
+    val mimeType: String?
+    val state: StateFlow<FileTransferState>
+    val bytesTransferred: StateFlow<Long>   // monotonic until terminal
+    suspend fun cancel(reason: String? = null)
+}
+
+sealed class FileTransferState {
+    data object Offered : FileTransferState()
+    data object Accepted : FileTransferState()
+    data class Sending(val progress: Float) : FileTransferState()   // 0.0..1.0
+    data object Completed : FileTransferState()                      // terminal
+    data class Rejected(val reason: String?) : FileTransferState()   // terminal
+    data class Cancelled(val reason: String?) : FileTransferState()  // terminal
+    data class Failed(val error: P2pError) : FileTransferState()     // terminal
+}
+
+data class FileTransferConfig(
+    val maxFileSizeBytes: Long = 2L * 1024 * 1024 * 1024,  // 2 GiB cap; sendFile throws PayloadTooLarge above it
+    val chunkSizeBytes: Int = 64 * 1024,                   // bytes per FILE_DATA frame (1..4 MiB)
+    val offerTimeoutMillis: Long = 30_000                  // unanswered offers auto-reject with "timeout"
+)
+```
+
+Configured via `fileTransfer { … }` on the builder. Convenience extensions:
+JVM `session.sendFile(java.io.File)` and Android
+`session.sendFile(Context, Uri)` resolve name/size/mime and open the source
+for you. Terminal states release resources; all transfers on a session are
+closed when the session closes.
 
 ---
 
@@ -410,22 +559,27 @@ enum class TransportKind {
 
 `Peer` is stable across heartbeats. Last-seen time is exposed via `P2pKit.lastSeen(peerId)`.
 
-### 9.3 Internal peer (not exposed)
+### 9.3 Internal peer (transport SPI)
+
+These types are declared `public` because transports are implemented in
+separate Gradle modules (`:p2p-transport-lan` etc.) and must construct them.
+They are SPI, not app API — application code should use `Peer` and never
+depend on `host`/`port`.
 
 ```kotlin
-internal data class InternalPeer(
+public data class InternalPeer(
     val publicPeer: Peer,
     val transportHints: List<TransportHint>
 )
 
-internal data class TransportHint(
+public data class TransportHint(
     val type: TransportKind,
     val host: String? = null,
     val port: Int? = null,
     val metadata: Map<String, String> = emptyMap()
 )
 
-internal data class LocalPeerInfo(
+public data class LocalPeerInfo(
     val peerId: PeerId,
     val deviceName: String,
     val platform: Platform,
@@ -443,7 +597,10 @@ sealed class P2pMessage {
         val metadata: Map<String, String> = emptyMap()
     ) : P2pMessage()
 
-    data class Binary(
+    // Plain class, NOT a data class: avoids compiler-generated copy() /
+    // componentN() over a mutable ByteArray. equals/hashCode/toString are
+    // hand-written and content-based.
+    class Binary(
         val bytes: ByteArray,
         val metadata: Map<String, String> = emptyMap()
     ) : P2pMessage() {
@@ -454,6 +611,8 @@ sealed class P2pMessage {
 ```
 
 No `FileChunk` in the public API. Chunking is internal.
+
+**Metadata in protocol v1 (decision #3c, 2026-07-04):** `metadata` is **not transmitted**. Protocol v1 DATA frames carry only the text/binary payload: metadata attached at `send()` is local to the sender's process, and received messages always have `metadata` empty. Wiring metadata onto the wire is the post-RC `metadata-wire` milestone (`docs/STABILIZATION_AND_RELEASE.md` §C4).
 
 **Max payload size for v0.1:** 4 MB per `send()` call. Larger payloads throw `P2pError.PayloadTooLarge`. File/stream APIs are v0.2+.
 
@@ -473,6 +632,13 @@ enum class ConnectionState {
     Idle, Connecting, Handshaking, Connected, Reconnecting, Closing, Closed, Failed
 }
 ```
+
+`Stopped` is **terminal**: `stop()` cancels the kit's internal scope
+permanently, and any lifecycle call after it throws `IllegalStateException` —
+create a new instance to start again. `Failed` carries the `P2pError` that
+aborted startup (e.g. `TransportStartFailed`); unlike `Stopped`, the next
+lifecycle call after `Failed` retries through `Starting`. Backgrounding never
+produces `Stopped` (see §16.2).
 
 ### 9.6 Config types
 
@@ -508,8 +674,8 @@ sealed class SecurityMode {
 
 - `connect(peer)` is **idempotent**. If a session exists with state in `{Connecting, Handshaking, Connected, Reconnecting}`, the existing instance is returned. Otherwise a new one is created.
 - `P2pSession.send` is **safe under concurrent calls**. Writes are serialized via an internal `Mutex`.
-- `P2pSession.incoming` is a **hot `SharedFlow`** with `replay = 0`, `extraBufferCapacity = 64`, `onBufferOverflow = SUSPEND`. Subscribe immediately after `connect()` or accept — late subscribers miss earlier messages.
-- `close()` transitions: `Connected → Closing → Closed`. ACK/keepalive stops, underlying connection releases.
+- `P2pSession.incoming` is a **hot `SharedFlow`** with `replay = 0`, `extraBufferCapacity = 64`, `onBufferOverflow = SUSPEND`. Subscribe immediately after `connect()` or accept — late subscribers miss earlier messages. For an **incoming** session this window is inherent (decision #13b, 2026-07-04): the session is created by the remote's dial, so its first messages race the app's subscription — a peer that sends immediately after connecting can deliver a message before any collector is attached, and that message is dropped. Recommended pattern: subscribe to a fresh session's flows before sending on it, and have the dialing side wait for an app-level ready/greeting reply (or apply a short grace delay) before its first real payload.
+- `close()` transitions directly `Connected → Closed`; `Closing` is a reserved `ConnectionState` constant and is not emitted by the current implementation (decision #10a, 2026-07-04). ACK/keepalive stops, underlying connection releases.
 - A failed session emits `Failed` and is removed from `sessions` (after retention or immediately, see below).
 - If `ReconnectPolicy.Enabled` is configured, the session transitions to `Reconnecting` and retries up to `maxAttempts` with `retryDelayMillis` between attempts. On exhaustion it becomes `Failed`.
 - Closed/Failed sessions are removed from `P2pKit.sessions` after they emit their terminal state.
@@ -533,9 +699,21 @@ interface DiscoveryTransport {
     suspend fun stopAdvertising()
     suspend fun startDiscovery()
     suspend fun stopDiscovery()
+
+    /**
+     * V0.4-DISCOVERY-REFRESH. Send a fresh round of active discovery queries
+     * (stop + restart the underlying browser / force per-peer re-query) so a
+     * peer that rebound its listener is re-resolved promptly. Called by
+     * SessionManager repeatedly (~3 s cadence) while any outgoing session is
+     * Reconnecting. No-op if discovery is not running; default impl is a
+     * no-op for transports without a fresh-query primitive.
+     */
+    suspend fun refresh() {}
 }
 
-internal sealed class PeerEvent {
+// Public (not internal): transports in separate modules emit these.
+// Application code never sees them — only the aggregated P2pKit.peers.
+public sealed class PeerEvent {
     data class Found(val peer: InternalPeer) : PeerEvent()
     data class Updated(val peer: InternalPeer) : PeerEvent()
     data class Lost(val peerId: PeerId) : PeerEvent()
@@ -559,6 +737,17 @@ internal sealed class PeerEvent {
 interface DataTransport {
     val type: TransportKind
     val priority: Int
+
+    /**
+     * v0.4. Bring the transport up (bind sockets, create listeners). Called
+     * by P2pKit.start() — or implicitly on the first startAdvertising() /
+     * connect() when the host app skips the explicit start. Must be
+     * idempotent: a second call after success returns Result.success.
+     * Transports do not throw from start(); a bind failure is returned as
+     * Result.failure and the kit wraps it in P2pError.TransportStartFailed.
+     * Default impl is a no-op success for outbound-only transports.
+     */
+    suspend fun start(): Result<Unit> = Result.success(Unit)
 
     fun canConnect(peer: InternalPeer): Boolean
     suspend fun connect(peer: InternalPeer): RawConnection
@@ -592,9 +781,21 @@ internal enum class PacketType(val code: Byte) {
     PING(0x04),
     PONG(0x05),
     ERROR(0x06),
-    CLOSE(0x07)
+    CLOSE(0x07),
+
+    // File transfer (v0.2.2). Same frame format; message_id carries the
+    // transferId for the lifetime of a single file offer (see §7.6).
+    FILE_OFFER(0x10),    // JSON offer payload: name, sizeBytes, mimeType
+    FILE_ACCEPT(0x11),   // empty payload
+    FILE_REJECT(0x12),   // optional UTF-8 reason payload
+    FILE_DATA(0x13),     // one chunk of file bytes
+    FILE_DONE(0x14),     // sender finished; empty payload
+    FILE_CANCEL(0x15)    // either side aborts; optional UTF-8 reason
 }
 ```
+
+All three platform transports must speak this exact frame vocabulary — a new
+code added on one platform must be mirrored on the others.
 
 ### 13.2 Frame layout
 
@@ -615,6 +816,11 @@ internal enum class PacketType(val code: Byte) {
 ```
 
 Fixed header = 36 bytes. Payload follows immediately.
+
+Receivers enforce `payload_len ≤ 8 MiB` (`MAX_FRAME_PAYLOAD_BYTES`) **before**
+buffering or allocating — a frame declaring more is a protocol violation and
+closes the session (DoS guard: a peer must not be able to declare a ~2 GiB
+payload and drive the process to OOM).
 
 ### 13.3 HELLO payload
 
@@ -638,6 +844,7 @@ Both sides exchange HELLO before any DATA. If `appId` doesn't match the local co
 - Default chunk size: 64 KB.
 - A message larger than the chunk size is split. All chunks share `message_id`. `chunk_index` starts at 0. `total_chunks` is set in every frame for that message. The final chunk has `flags & LAST_CHUNK == 1`.
 - The receiver reassembles by `message_id`. Reassembly state has a timeout (default 60s) to prevent memory leaks from incomplete messages.
+- **Receive-path caps (session-closing).** In addition to the 8 MiB per-frame payload cap (§13.2), receivers enforce `total_chunks ≤ 1024` (`MAX_TOTAL_CHUNKS`) per message and at most 256 concurrently-incomplete multi-chunk messages (`MAX_PENDING_REASSEMBLIES`) per connection. Exceeding either is treated as a protocol violation and **closes the session**, even when every individual frame is otherwise well-formed — conforming senders must chunk a ≤ 4 MiB message into ≤ 1024 chunks (the 64 KiB default yields at most 64).
 
 ### 13.5 ACK
 
@@ -647,12 +854,35 @@ Both sides exchange HELLO before any DATA. If `appId` doesn't match the local co
 
 ### 13.6 Protocol interface
 
+Control frames and file transfer are routed by `SessionManager` /
+`P2pSessionImpl`, not hidden behind a message-only `receive()` — the protocol
+layer exposes one typed send method per frame kind plus a single decoded
+event stream:
+
 ```kotlin
 internal interface P2pProtocol {
-    suspend fun send(connection: RawConnection, message: P2pMessage)
-    fun receive(connection: RawConnection): Flow<P2pMessage>
+    suspend fun sendMessage(connection: RawConnection, message: P2pMessage)
+    suspend fun sendHello(connection: RawConnection, hello: HelloPayload)
+    suspend fun sendPing(connection: RawConnection)
+    suspend fun sendPong(connection: RawConnection)
+    suspend fun sendClose(connection: RawConnection)
+    suspend fun sendError(connection: RawConnection, reason: String)
+
+    // File transfer (v0.2.2); transferId is reused as the frame's message_id.
+    suspend fun sendFileOffer(connection: RawConnection, transferId: MessageId, offer: FileOfferPayload)
+    suspend fun sendFileAccept(connection: RawConnection, transferId: MessageId)
+    suspend fun sendFileReject(connection: RawConnection, transferId: MessageId, reason: String?)
+    suspend fun sendFileDataFrame(connection: RawConnection, frame: Frame)
+    suspend fun sendFileDone(connection: RawConnection, transferId: MessageId)
+    suspend fun sendFileCancel(connection: RawConnection, transferId: MessageId, reason: String?)
+
+    /** Decoded frames from [connection] as typed events (data, control, file). */
+    fun events(connection: RawConnection): Flow<ProtocolEvent>
 }
 ```
+
+Send methods are not synchronized — the session serializes writes per
+connection with its Mutex.
 
 ---
 
@@ -692,12 +922,13 @@ enum class P2pPermission {
 - The library **never requests** permissions. The app must request them.
 - `startAdvertising()` and `startDiscovery()` throw `P2pError.PermissionMissing` if any required runtime permission is absent.
 
-### 15.3 v0.1 platform mappings
+### 15.3 Platform mappings
 
 | Platform | Required at runtime |
 |---|---|
-| Android (LAN only) | none for plain LAN/mDNS on most versions; document `NearbyWifiDevices` if discovery requires it on the device's API level |
+| Android (LAN only) | none for plain LAN/mDNS on most versions; document `NearbyWifiDevices` if discovery requires it on the device's API level. Hotspot/Wi-Fi-join provisioning (v0.2.1) needs `NEARBY_WIFI_DEVICES` (API 33+) / `ACCESS_FINE_LOCATION` (API ≤ 32) |
 | JVM desktop | none |
+| iOS (LAN, v0.3+) | none in the `P2pPermission` sense — the OS shows the Local Network privacy prompt on first use; the app must declare `NSLocalNetworkUsageDescription` and `NSBonjourServices = ["_p2pkit._tcp"]` in Info.plist |
 
 ---
 
@@ -717,7 +948,9 @@ Calling either method posts to an internal channel; a worker coroutine applies t
 - **Android backgrounded** (with default `BackgroundPolicy.CloseActiveSessions`):
   - Active sessions are closed.
   - Advertising and discovery stop.
-  - `P2pState` becomes `Stopped`.
+  - `P2pState` **stays `Running`** — the data transports remain bound and the
+    kit is still functional, so reporting `Stopped` would lie to host UIs and
+    never recover on foreground. `Stopped` is only ever produced by `stop()`.
   - No background transfer guarantee.
 - **JVM desktop minimized/backgrounded:**
   - No special action. The library keeps running.
@@ -748,7 +981,7 @@ If the underlying socket dies due to a network change (Wi-Fi → mobile data, ne
 ## 17. Error Handling
 
 ```kotlin
-sealed class P2pError(message: String? = null) : Exception(message) {
+sealed class P2pError(message: String? = null, cause: Throwable? = null) : Exception(message, cause) {
     data class NoTransportAvailable(val peer: Peer) :
         P2pError("No transport available for peer: ${peer.id.value}")
 
@@ -766,8 +999,26 @@ sealed class P2pError(message: String? = null) : Exception(message) {
 
     data class VersionMismatch(val localVersion: Int, val remoteVersion: Int) :
         P2pError("Protocol version mismatch: local=$localVersion remote=$remoteVersion")
+
+    /**
+     * v0.4. A registered transport could not be brought up by start() — or by
+     * the first startAdvertising()/connect() that triggered lazy startup.
+     * Carries the failed transport's kind and the underlying cause (port
+     * exhaustion, missing entitlement, listener bind timeout, ...).
+     */
+    data class TransportStartFailed(
+        val transportKind: TransportKind,
+        val reason: String,
+        val underlying: Throwable? = null
+    ) : P2pError("Transport $transportKind failed to start: $reason", underlying)
 }
 ```
+
+**`send()`/`sendFile()` error boundary (decision #12a, 2026-07-04):** an
+unexpected transport-level failure crossing the `send()`/`sendFile()` boundary
+surfaces as `P2pError.ConnectionFailed` with the original exception preserved
+as `cause`; `CancellationException` and already-typed `P2pError`s pass through
+unchanged.
 
 Fallback rules:
 
@@ -787,7 +1038,10 @@ interface SecurityManager {
     suspend fun performHandshake(connection: RawConnection, peer: Peer): SecureConnection
 }
 
-internal interface SecureConnection : RawConnection {
+// Public, not internal: the public SecurityManager.performHandshake returns
+// it, so Kotlin visibility rules force it public. Apps should treat it as
+// opaque and never depend on it directly.
+public interface SecureConnection : RawConnection {
     val peerIdentity: PeerIdentity
 }
 
@@ -827,7 +1081,9 @@ The public API does not need to change to add encryption. `SecurityManager.perfo
 
 ### 19.1 Module: `:p2p-transport-lan`
 
-Two cooperating internal classes share a `LanServiceRegistration`:
+Two cooperating internal classes per platform (illustrative sketch — the
+shipped classes are `JvmLan*` / `AndroidLan*` / `IosLan*`) share a
+`LanServiceRegistration`:
 
 ```kotlin
 internal class LanServiceRegistration(
@@ -845,12 +1101,21 @@ internal class LanDiscoveryTransport(
 internal class LanDataTransport(
     private val registration: LanServiceRegistration
 ) : DataTransport
+```
 
-fun TransportsBuilder.lan() {
-    val registration = /* built when P2pKit starts */
-    register(LanDiscoveryTransport(registration))
-    register(LanDataTransport(registration))
-}
+The registration entry point is a per-platform `TransportsBuilder` extension —
+**the signatures differ**:
+
+```kotlin
+// JVM
+fun TransportsBuilder.lan()
+
+// iOS (iosX64 / iosArm64 / iosSimulatorArm64)
+fun TransportsBuilder.lan()
+
+// Android — requires a Context (uses applicationContext internally for
+// WifiManager.MulticastLock and ConnectivityManager callbacks)
+fun TransportsBuilder.lan(applicationContext: Context)
 ```
 
 ### 19.2 mDNS
@@ -863,8 +1128,9 @@ fun TransportsBuilder.lan() {
   - `plat` — `ANDROID` / `JVM_DESKTOP` / etc.
   - `caps` — comma-separated `TransportKind` values
   - `pv` — protocol version (currently `1`)
-- Android: `NsdManager` for both advertising and discovery.
+- Android: in-process `JmDNS` for both advertising and discovery (**v0.5+** — replaced the v0.1–v0.4 `NsdManager` implementation so the SDK owns the mDNS cache and can force re-queries during reconnect; do not reintroduce `NsdManager`).
 - JVM: `JmDNS` (jmdns library) for both advertising and discovery.
+- iOS (v0.3+): `nw_browser_t` for discovery, `nw_listener_set_advertise_descriptor` for advertising — same service type and TXT keys, wire-indistinguishable from JmDNS peers.
 
 ### 19.3 TCP
 
@@ -995,7 +1261,10 @@ data class LocalNetworkConfig(
 )
 
 sealed class NetworkProvisioningError : P2pError() {
-    data class PlatformError(val cause: Throwable) : NetworkProvisioningError()
+    // Named platformException (not `cause`) because `cause` clashes with
+    // Throwable.cause. The wrapped throwable is also threaded into
+    // Throwable.cause for stack-trace purposes.
+    data class PlatformError(val platformException: Throwable) : NetworkProvisioningError()
     data class PermissionMissingForProvisioning(val permissions: List<P2pPermission>) : NetworkProvisioningError()
     data class HotspotStopped(val reason: String) : NetworkProvisioningError()
     data class JoinFailed(val reason: String) : NetworkProvisioningError()
@@ -1053,13 +1322,14 @@ If discovery fails, the app may call `createManualPeer(host, port)` to produce a
 - It does **not** claim silent Wi-Fi join on Android. User confirmation is often required.
 - It does **not** claim mDNS works on every network. Corporate, guest, and some mobile networks block it.
 
-### 21.3 Per-platform v0.1 reality
+### 21.3 Per-platform reality (v0.6)
 
 | Platform | Discovery | Transport | Provisioning |
 |---|---|---|---|
-| Android | mDNS via `NsdManager` | TCP | not in v0.1 (planned v0.2) |
-| JVM (Win/Lin/Mac) | mDNS via `JmDNS` | TCP | not in v0.1 (planned v0.2 with manual-info only) |
-| iOS / macOS native | not in v0.1 | not in v0.1 | not in v0.1 |
+| Android | mDNS via in-process `JmDNS` (v0.5+; `NsdManager` in v0.1–v0.4) | TCP via `java.net.Socket` | `LocalOnlyHotspot` host + Wi-Fi join via `:p2p-network-provisioning-android` (v0.2.1) |
+| JVM (Win/Lin/Mac) | mDNS via `JmDNS` | TCP via `java.net.Socket` | manual-IP fallback via `:p2p-network-provisioning-desktop` (v0.2.1) |
+| iOS | Bonjour via `nw_browser_t` (v0.3+) | TCP via `nw_connection_t`; cellular interface prohibited (v0.6) | never — Apple policy; always `Unsupported` |
+| macOS native | not shipped (v0.3.x candidate) | not shipped | not shipped |
 
 ### 21.4 Firewall and network notes (document in README)
 
@@ -1164,13 +1434,12 @@ The published README must contain:
 - `:p2p-network-provisioning` interface module
 - `:p2p-network-provisioning-android` — `LocalOnlyHotspot` host + Wi-Fi join helper
 - `:p2p-network-provisioning-desktop` — manual info, network state detection
-- File transfer API: `sendFile(file: P2pFile): Flow<TransferProgress>` and `sendStream(chunks: Flow<ByteArray>): Flow<TransferProgress>`
+- File transfer API — **shipped in v0.2.2** with a different shape than originally sketched: `P2pSession.sendFile(name, sizeBytes, mimeType, source: RawSource): P2pFileTransfer` plus `incomingFiles: SharedFlow<P2pFileOffer>` (see §7.6). No `sendStream` API shipped.
 
 ### v0.3
 
-- iOS / macOS LAN transport (Bonjour + `Network.framework`)
-- `:p2p-network-provisioning-ios` (join-only via `NEHotspotConfiguration`)
-- `:p2p-sample-ios`
+- iOS / macOS LAN transport (Bonjour + `Network.framework`) — iOS shipped in v0.3; macOS native remains a candidate
+- iOS sample app (shipped v0.4 as the `iosApp/` Xcode project)
 
 ### v0.4+
 

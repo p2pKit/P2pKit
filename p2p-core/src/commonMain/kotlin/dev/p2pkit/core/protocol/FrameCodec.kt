@@ -72,7 +72,10 @@ internal object FrameCodec {
         val version = bytes[4]
         val typeCode = bytes[5]
         val flags = bytes[6]
-        // bytes[7] reserved
+        // bytes[7] reserved — deliberately NOT validated on decode (encode
+        // always writes 0). Same forward-compat stance as the unused upper
+        // bits of the flags byte: a future protocol revision may assign
+        // meaning to them, and old decoders must not reject such frames.
 
         val messageId = MessageId(bytes.copyOfRange(8, 8 + MessageId.SIZE))
         val chunkIndex = readIntBE(bytes, 24)
@@ -81,6 +84,11 @@ internal object FrameCodec {
 
         if (payloadLen < 0) {
             throw P2pError.ProtocolError("Negative payload length: $payloadLen")
+        }
+        if (payloadLen > ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES) {
+            throw P2pError.ProtocolError(
+                "Payload length $payloadLen exceeds maximum ${ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES}"
+            )
         }
         if (totalChunks <= 0) {
             throw P2pError.ProtocolError("Invalid totalChunks: $totalChunks")

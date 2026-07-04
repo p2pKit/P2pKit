@@ -12,6 +12,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import platform.Network.nw_interface_type_cellular
+import platform.Network.nw_interface_type_wifi
+import platform.Network.nw_interface_type_wired
 import platform.Network.nw_path_get_status
 import platform.Network.nw_path_monitor_cancel
 import platform.Network.nw_path_monitor_create
@@ -21,6 +24,7 @@ import platform.Network.nw_path_monitor_start
 import platform.Network.nw_path_monitor_t
 import platform.Network.nw_path_status_satisfied
 import platform.Network.nw_path_status_unsatisfied
+import platform.Network.nw_path_uses_interface_type
 import platform.darwin.dispatch_queue_create
 
 /**
@@ -36,6 +40,12 @@ import platform.darwin.dispatch_queue_create
  * but might come back), and `invalid` (the monitor is shutting down). We
  * only care about `satisfied` and `unsatisfied` for kit decisions; the
  * other two map to [NetworkPathStatus.Unknown] so the SDK does nothing.
+ *
+ * **What about cellular-only paths?** The LAN data transport prohibits the
+ * cellular interface, so a path that is `satisfied` over cellular ONLY is
+ * useless for LAN and is reported as [NetworkPathStatus.Unsatisfied] — otherwise
+ * it would wake reconnect to re-dial peers unreachable over cellular. A path
+ * carrying Wi-Fi or wired (even alongside cellular) stays `Satisfied`.
  *
  * **Lambda return-type hazard:** the update handler block must return
  * void. Kotlin/Native infers the lambda's ObjC return type from its last
@@ -67,9 +77,22 @@ internal class IosNetworkPathObserver(
         nw_path_monitor_set_queue(m, queue)
         nw_path_monitor_set_update_handler(m) { path ->
             val s = nw_path_get_status(path)
-            val mapped: NetworkPathStatus = when (s) {
-                nw_path_status_satisfied -> NetworkPathStatus.Satisfied
-                nw_path_status_unsatisfied -> NetworkPathStatus.Unsatisfied
+            // AUDIT-2026-06: the LAN data transport prohibits cellular
+            // (nw_parameters_prohibit_interface_type(cellular)), so a path that
+            // is "satisfied" over CELLULAR ONLY is unusable for LAN. Reporting
+            // it as Satisfied would wake the reconnect machinery to re-dial a
+            // peer it can never reach over cellular — a reconnect storm during a
+            // Wi-Fi gap. Mirror the transport's prohibition: a cellular-only
+            // satisfied path maps to Unsatisfied; Wi-Fi/wired (even if cellular
+            // is also present) stays Satisfied.
+            val usesCellular = nw_path_uses_interface_type(path, nw_interface_type_cellular)
+            val usesWifi = nw_path_uses_interface_type(path, nw_interface_type_wifi)
+            val usesWired = nw_path_uses_interface_type(path, nw_interface_type_wired)
+            val cellularOnly = usesCellular && !usesWifi && !usesWired
+            val mapped: NetworkPathStatus = when {
+                s == nw_path_status_satisfied && cellularOnly -> NetworkPathStatus.Unsatisfied
+                s == nw_path_status_satisfied -> NetworkPathStatus.Satisfied
+                s == nw_path_status_unsatisfied -> NetworkPathStatus.Unsatisfied
                 else -> NetworkPathStatus.Unknown
             }
             _status.value = mapped

@@ -1,5 +1,12 @@
 # Stabilization stress tests (post-S3)
 
+> **Superseded by `docs/v0.4-cumulative-validation-runbook.md`.** This runbook
+> is pinned to the window between S3 (`473f4d4`) and S1. Since then S1 landed
+> (`3622b49`, `f84a218`) and `V0.4-RECONNECT` (`035eef1`) shipped per-attempt
+> endpoint re-resolution, which invalidates Test 3's expected logs (see the
+> note there). Kept for the historical S3 context; run the v0.4 runbook for
+> current hardware validation.
+
 **Status:** runbook for hardware validation between S3 (`473f4d4`) and S1.
 
 ## What we're validating
@@ -139,7 +146,7 @@ Run each test once, capture the log files, fill the result table at the bottom. 
 
 **Collect.** Logs + the final state screenshot.
 
-**Note.** This test is expected to exercise the "stale internalPeer" weakness called out in the architecture review. Failed → re-dial via auto-mesh is the v0.3 recovery path. The cleaner fix (re-resolve from `peerRegistry` per attempt) is queued for v0.4. The test is to confirm v0.3 recovers cleanly even if not optimally.
+**Note.** This test is expected to exercise the "stale internalPeer" weakness called out in the architecture review. Failed → re-dial via auto-mesh is the v0.3 recovery path. The cleaner fix (re-resolve from `peerRegistry` per attempt) is queued for v0.4. The test is to confirm v0.3 recovers cleanly even if not optimally. *Since shipped: `V0.4-RECONNECT` (`035eef1`) landed exactly that fix — on v0.4+ trees each retry re-resolves the endpoint (look for `Reconnect target changed` in the logs) and the "all retry attempts dial the stale address" expectation above no longer holds. Use the v0.4 runbook's R1/R2 instead.*
 
 ---
 
@@ -185,7 +192,7 @@ Run each test once, capture the log files, fill the result table at the bottom. 
 5. After the last return, send `Android → iPhone: "after bg"`.
 
 **Expected logs.**
-- Each background: `notifyAppBackgrounded` → `applyBackgroundPolicy(CloseActiveSessions)` → `kit.state = Stopped` → all sessions go to `Closing → Closed` → `[session] removed …`.
+- Each background: `notifyAppBackgrounded` → `applyBackgroundPolicy(CloseActiveSessions)` → `kit.state = Stopped` → all sessions go straight to `Closed` (the `Closing` member is never entered — see the cleanup note at the bottom) → `[session] removed …`.
 - Each foreground: the app may need to call `startAdvertising` / `startDiscovery` again (the sample handles this when the user taps Start; if scenePhase isn't wired to do it automatically, the user has to re-tap).
 - After step 5, session is Connected again and "after bg" arrives.
 

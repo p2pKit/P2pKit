@@ -6,7 +6,7 @@ Three tracks, all **NOT RUN** as of the 2026-05-17 audit pass (no hardware on th
 |---|---|---|
 | Android Task 11 (`LocalOnlyHotspot` host) | 2× Android API 26+ phones | `INTERNAL_TESTING.md §H` |
 | Android Task 12 (`WifiNetworkSpecifier` join) | Same pair | `INTERNAL_TESTING.md §I` |
-| iOS sample on physical iPhone | 1× iPhone running iOS 14+ | `docs/ios-sample-app/README.md` |
+| iOS sample on physical iPhone | 1× iPhone running iOS 14+ | `iosApp/` (build) + `docs/LAN_DIAGNOSTICS_PROTOCOL.md` |
 
 Each test below carries an explicit pass/fail criterion plus the **single line of evidence** to capture (logcat snippet, screenshot, or dns-sd output) so that a future audit can verify the row was actually run, not just claimed.
 
@@ -117,7 +117,9 @@ Source recipe: `INTERNAL_TESTING.md §I`. Phone B is the guest, joining A's hots
 
 ## C. iPhone — sample-app device validation
 
-See `docs/ios-sample-app/README.md` §4 for the full T1.1 → T1.10 checklist. The matrix below is the **abbreviated pass/fail criteria** for quick reporting.
+Build the maintained iOS sample from `iosApp/` (see its build steps) and follow
+`docs/LAN_DIAGNOSTICS_PROTOCOL.md` for log capture. The matrix below is the
+**abbreviated pass/fail criteria** for quick reporting.
 
 | ID | Test | Pass criteria | Evidence |
 |---|---|---|---|

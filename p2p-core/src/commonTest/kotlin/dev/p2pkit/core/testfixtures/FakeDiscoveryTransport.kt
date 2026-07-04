@@ -15,18 +15,27 @@ import kotlinx.coroutines.flow.asSharedFlow
  * scenarios that need to simulate address rotation (V0.4-RECONNECT).
  *
  * No actual discovery work is performed; `start*` / `stop*` are recorded as
- * counters so the kit lifecycle can be asserted if needed. Events are
- * delivered via a [MutableSharedFlow] with `replay = 0` to match the
- * production semantics of [dev.p2pkit.core.transport.DiscoveryTransport].
+ * counters so the kit lifecycle can be asserted if needed.
+ *
+ * Delivery semantics (fixture change F4 / TST-4): by default the event flow
+ * is **production-shaped**, matching all three shipped LAN discovery
+ * transports — `MutableSharedFlow(replay = 0, extraBufferCapacity = 256,
+ * onBufferOverflow = DROP_OLDEST)` fed via `tryEmit`. That means events
+ * emitted while no collector is subscribed are not delivered, and a
+ * collector lagging more than 256 events behind loses the oldest ones —
+ * exactly like production. Construct with [strictDelivery] = true for tests
+ * that must not lose events under backlog: the flow then uses
+ * `BufferOverflow.SUSPEND` and [emit] suspends until delivered.
  */
 internal class FakeDiscoveryTransport(
-    override val type: TransportKind = TransportKind.LAN
+    override val type: TransportKind = TransportKind.LAN,
+    private val strictDelivery: Boolean = false
 ) : DiscoveryTransport {
 
     private val _events = MutableSharedFlow<PeerEvent>(
         replay = 0,
-        extraBufferCapacity = 64,
-        onBufferOverflow = BufferOverflow.SUSPEND
+        extraBufferCapacity = 256,
+        onBufferOverflow = if (strictDelivery) BufferOverflow.SUSPEND else BufferOverflow.DROP_OLDEST
     )
     override val events: Flow<PeerEvent> = _events.asSharedFlow()
 
@@ -61,8 +70,16 @@ internal class FakeDiscoveryTransport(
         refreshCalls++
     }
 
-    /** Push a discovery event into the kit's `PeerRegistry`. */
+    /**
+     * Push a discovery event into the kit's `PeerRegistry`. Default mode is
+     * `tryEmit`-shaped like production (never suspends; DROP_OLDEST under
+     * backlog); with [strictDelivery] it suspends until delivered.
+     */
     suspend fun emit(event: PeerEvent) {
-        _events.emit(event)
+        if (strictDelivery) {
+            _events.emit(event)
+        } else {
+            _events.tryEmit(event)
+        }
     }
 }

@@ -79,9 +79,16 @@ static inline void p2pkit_nw_connection_receive_default(
             if (content != NULL && dispatch_data_get_size(content) > 0) {
                 const void *buffer = NULL;
                 size_t buffer_size = 0;
+                /* objc_precise_lifetime: under ARC a plain local has imprecise
+                 * lifetime and `(void)mapped` is a dead use, so the mapping
+                 * (sole owner of `buffer`) could be released BEFORE the
+                 * completion reads it — a latent use-after-free. The attribute
+                 * is the sanctioned way to pin it for the full scope
+                 * (AUDIT-2026-06 fix). */
+                __attribute__((objc_precise_lifetime))
                 dispatch_data_t mapped = dispatch_data_create_map(content, &buffer, &buffer_size);
                 completion(buffer, buffer_size, is_complete, error);
-                (void)mapped;  // keep the mapping alive across the call
+                (void)mapped;
             } else {
                 completion(NULL, 0, is_complete, error);
             }

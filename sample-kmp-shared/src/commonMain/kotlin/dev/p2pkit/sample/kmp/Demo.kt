@@ -6,7 +6,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Self-contained demo flow that exercises every public verb of P2pKit. Useful
+ * Self-contained demo flow exercising the core advertise → discover →
+ * connect → send → close path of P2pKit (not the full API surface — no
+ * stop/incoming-consumption/file-transfer/provisioning coverage). Useful
  * as a sanity smoke test from any platform: pass in a fresh [P2pKit] and a
  * name and the demo will advertise, discover one peer, connect, send a
  * greeting, and close.

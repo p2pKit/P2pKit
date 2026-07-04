@@ -52,8 +52,12 @@ public sealed class NetworkPathStatus {
 /**
  * Watches the host device's default network path and emits transitions to
  * [status]. Idempotent: implementations must be safe to [start] and [close]
- * multiple times; subsequent `start()` calls after the first do not re-attach
- * the underlying OS monitor.
+ * multiple times. Calling `start()` while already attached is a no-op;
+ * calling `start()` after [close] re-attaches the underlying OS monitor
+ * (this is how the bundled iOS and Android implementations behave). Note
+ * that [P2pKit.stop] closes the configured observer — including
+ * host-provided instances — so an observer shared across kits will be
+ * re-started by the next kit's lifecycle.
  *
  * **Platform impls:**
  *   - iOS: provided by default — uses `nw_path_monitor_t` on a serial
@@ -62,9 +66,10 @@ public sealed class NetworkPathStatus {
  *   - Android: provided as [AndroidNetworkPathObserver] (requires a
  *     `Context`). Host apps register it via
  *     `lifecycle { networkPathObserver = AndroidNetworkPathObserver(ctx) }`.
- *     Without that, Android falls back to [NoOpNetworkPathObserver] — the
- *     `ConnectivityManager` API needs a `Context` we can't synthesise from
- *     `:p2p-core` alone.
+ *     Without that override, Android falls back to [NoOpNetworkPathObserver]
+ *     — the default factory deliberately does not construct the
+ *     `ConnectivityManager`-based observer, even when a `Context` is
+ *     available via `P2pKitAndroid.initialize(context)`.
  *   - JVM desktop: defaults to [NoOpNetworkPathObserver]. There is no
  *     reliable cross-platform JDK API for network-path change events; if a
  *     desktop app wants this behaviour it can supply a custom observer

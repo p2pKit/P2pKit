@@ -1,5 +1,6 @@
 package dev.p2pkit.transport.lan
 
+import android.util.Log
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DataTransport
@@ -7,7 +8,6 @@ import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -41,7 +43,11 @@ internal class AndroidLanDataTransport(
     private val _tcpPort = MutableStateFlow<Int?>(null)
     override val tcpPort: StateFlow<Int?> = _tcpPort.asStateFlow()
 
-    private val serverSocketReady = CompletableDeferred<ServerSocket>()
+    // Nullable StateFlow (not a one-shot deferred) so a FAILED first bind does
+    // not permanently poison the eagerly-collected incoming flow: a later
+    // successful start() retry still serves the accept loop
+    // (AUDIT-2026-06 fix). Keep in sync with JvmLanDataTransport.
+    private val serverSocketFlow = MutableStateFlow<ServerSocket?>(null)
     private val startMutex = Mutex()
     @Volatile private var serverSocket: ServerSocket? = null
 
@@ -49,23 +55,26 @@ internal class AndroidLanDataTransport(
     private var closed: Boolean = false
 
     override suspend fun start(): Result<Unit> = startMutex.withLock {
+        if (closed) {
+            // start() after close() previously reported success on a closed
+            // socket (AUDIT-2026-06 fix).
+            return Result.failure(IllegalStateException("LAN data transport is closed"))
+        }
         if (serverSocket != null) return Result.success(Unit)
-        val result = withContext(Dispatchers.IO) {
+        withContext(Dispatchers.IO) {
             runCatching {
                 val sock = ServerSocket(0)
                 serverSocket = sock
                 registration.tcpPort = sock.localPort
                 _tcpPort.value = sock.localPort
-                serverSocketReady.complete(sock)
+                serverSocketFlow.value = sock
+                Log.d(
+                    TAG,
+                    "server bound: ${sock.localSocketAddress} (wildcard 0.0.0.0, port=${sock.localPort})"
+                )
                 Unit
             }
         }
-        if (result.isFailure) {
-            serverSocketReady.completeExceptionally(
-                result.exceptionOrNull() ?: IllegalStateException("ServerSocket bind failed")
-            )
-        }
-        result
     }
 
     override fun canConnect(peer: InternalPeer): Boolean =
@@ -79,6 +88,8 @@ internal class AndroidLanDataTransport(
         } ?: throw P2pError.NoTransportAvailable(peer.publicPeer)
         val host = hint.host!!
         val port = hint.port!!
+        val pid8 = peer.publicPeer.id.value.take(8)
+        Log.d(TAG, "connect peer=$pid8 -> $host:$port (timeout=${LanConstants.TCP_CONNECT_TIMEOUT_MS}ms)")
         val socket = withContext(Dispatchers.IO) {
             val s = Socket()
             try {
@@ -98,21 +109,21 @@ internal class AndroidLanDataTransport(
                     is NoRouteToHostException -> "unreachable (${e.message ?: "EHOSTUNREACH"})"
                     else -> "failed (${e::class.simpleName}: ${e.message ?: ""})"
                 }
+                Log.d(TAG, "connect FAILED peer=$pid8 $host:$port $reason")
                 throw P2pError.ConnectionFailed("TCP connect $host:$port $reason")
             }
         }
+        // local* reveals which local interface the OS chose to egress toward the
+        // peer — Issue #2 evidence (Wi-Fi vs. cellular/VPN route).
+        Log.d(TAG, "connect OK peer=$pid8 local=${socket.localSocketAddress} remote=${socket.remoteSocketAddress}")
         return AndroidRawConnection(socket)
     }
 
     override fun incomingConnections(): Flow<RawConnection> = callbackFlow {
-        val sock = try {
-            serverSocketReady.await()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            close(e)
-            return@callbackFlow
-        }
+        // Park until start() binds a server socket; a later successful retry
+        // after a failed first bind still serves this collector (see
+        // serverSocketFlow KDoc).
+        val sock = serverSocketFlow.filterNotNull().first()
         val accepterJob: Job = launch(Dispatchers.IO) {
             try {
                 while (!closed) {
@@ -124,7 +135,16 @@ internal class AndroidLanDataTransport(
                         if (!closed) close(e)
                         break
                     }
-                    trySend(AndroidRawConnection(socket))
+                    // Close the socket when the channel refuses it (buffer full
+                    // under an accept burst / stalled collector): silently
+                    // dropping leaked the fd while the remote believed it had
+                    // connected (AUDIT-2026-06 fix).
+                    Log.d(TAG, "inbound from ${socket.remoteSocketAddress} -> local ${socket.localSocketAddress}")
+                    val offered = trySend(AndroidRawConnection(socket))
+                    if (offered.isFailure) {
+                        Log.d(TAG, "DROPPED ${socket.remoteSocketAddress} (channel full) — closing")
+                        runCatching { socket.close() }
+                    }
                 }
                 close()
             } catch (e: CancellationException) {
@@ -141,8 +161,13 @@ internal class AndroidLanDataTransport(
         if (closed) return
         closed = true
         val sock = serverSocket ?: return
+        Log.d(TAG, "close: shutting down server socket ${sock.localSocketAddress}")
         withContext(Dispatchers.IO) {
             runCatching { sock.close() }
         }
+    }
+
+    private companion object {
+        const val TAG = "P2pKitLanData"
     }
 }

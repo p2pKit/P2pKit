@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.android.kmp.library)
+    `maven-publish`
 }
 
 // V0.4-PROVENANCE (L1): generate a BuildInfo Kotlin object containing the
@@ -85,8 +86,8 @@ kotlin {
         minSdk = libs.versions.android.minSdk.get().toInt()
     }
 
-    // v0.2 scaffolding only: core types compile for iOS, but no LAN transport
-    // ships in :p2p-transport-lan for these targets. Real iOS LAN/TCP is v0.3.
+    // Core types compile for iOS; the iOS LAN/TCP transport (Bonjour +
+    // Network.framework) ships in :p2p-transport-lan's appleMain source set.
     iosX64()
     iosArm64()
     iosSimulatorArm64()
@@ -103,6 +104,40 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
             implementation(libs.kotlinx.coroutines.test)
+        }
+    }
+}
+
+// Maven publishing (fixes no-publishing-plugin / no-pom-metadata). The KMP +
+// Android-KMP-library plugins auto-create the per-target publications once
+// `maven-publish` is applied; group/version come from the root `allprojects`
+// block (dev.p2pkit / VERSION_NAME). We enrich the POM here so artifacts carry
+// the metadata Maven Central requires. Signing is wired centrally in the root
+// build (conditional on a PGP key being supplied), so local `publishToMavenLocal`
+// stays keyless while a Central release just sets the signing properties.
+publishing {
+    publications.withType<MavenPublication>().configureEach {
+        pom {
+            name.set("P2pKit ${project.name}")
+            description.set("P2pKit — cross-platform peer-to-peer local-network library (Android, iOS, JVM/desktop).")
+            url.set("https://github.com/Apdelrahman1911/P2pKit")
+            licenses {
+                license {
+                    name.set("The Apache License, Version 2.0")
+                    url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                }
+            }
+            developers {
+                developer {
+                    id.set("Apdelrahman1911")
+                    name.set("Abdelrahman")
+                }
+            }
+            scm {
+                url.set("https://github.com/Apdelrahman1911/P2pKit")
+                connection.set("scm:git:https://github.com/Apdelrahman1911/P2pKit.git")
+                developerConnection.set("scm:git:ssh://git@github.com/Apdelrahman1911/P2pKit.git")
+            }
         }
     }
 }

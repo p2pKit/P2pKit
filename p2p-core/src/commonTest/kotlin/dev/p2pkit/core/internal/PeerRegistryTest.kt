@@ -1,5 +1,6 @@
 package dev.p2pkit.core.internal
 
+import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -199,6 +201,212 @@ class PeerRegistryTest {
             val second = registry.lastSeen(PeerId("p1"))
             assertNotNull(second)
             assertTrue(second > first, "Updated event should refresh lastSeen")
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    // ---- Manual-peer staleness exemption (2026-07 review P1-10, A04 §3 r1) ----
+
+    /**
+     * Manual peers carry no discovery heartbeats, so they must be exempt from
+     * staleness eviction: a discovered peer registered at the same time is
+     * evicted after the stale timeout while the manual entry survives.
+     */
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun manualPeerSurvivesStalenessEvictionWhileDiscoveredPeerIsEvicted() {
+        val supervisor = SupervisorJob()
+        try {
+            var now = 1_000L
+            val registry = PeerRegistry(
+                discoveryTransports = listOf(FakeDiscovery()),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { now },
+                staleTimeoutMillis = 5_000,
+                evictionPollMillis = Long.MAX_VALUE / 2
+            )
+            val manual = registry.registerManualPeer(
+                host = "192.168.1.50",
+                port = 9_000,
+                kind = TransportKind.LAN,
+                deviceName = "Desk"
+            )
+            registry.processEvent(PeerEvent.Found(peer("discovered")))
+            assertEquals(2, registry.peers.value.size)
+
+            now += 6_000 // beyond staleTimeoutMillis for both entries
+            registry.evictStalePeers()
+
+            assertEquals(
+                listOf(manual.id),
+                registry.peers.value.map { it.id },
+                "Only the manual peer must survive eviction after the clock advance"
+            )
+            assertNotNull(registry.lastSeen(manual.id), "Manual peer must stay tracked")
+            assertNull(registry.lastSeen(PeerId("discovered")), "Discovered peer must be evicted")
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    /**
+     * The exemption must hold across repeated eviction passes and arbitrarily
+     * large clock advances, not just the first pass after registration.
+     */
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun manualPeerSurvivesRepeatedEvictionPassesAfterLargeClockAdvance() {
+        val supervisor = SupervisorJob()
+        try {
+            var now = 1_000L
+            val registry = PeerRegistry(
+                discoveryTransports = listOf(FakeDiscovery()),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { now },
+                staleTimeoutMillis = 5_000,
+                evictionPollMillis = Long.MAX_VALUE / 2
+            )
+            val manual = registry.registerManualPeer(host = "10.1.2.3", port = 4_242)
+
+            repeat(3) {
+                now += 60_000 // 12x the stale timeout, each pass
+                registry.evictStalePeers()
+            }
+
+            assertEquals(1, registry.peers.value.size)
+            assertEquals(manual.id, registry.peers.value.single().id)
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    // ---- registerManualPeer endpoint dedupe (2026-07 review P1-11, IDN-5, A04 §3 r2)
+    // ---- + dedupe-hit name refresh (AUDIT-2026-07 (IDN-7), decision #6b) ----
+
+    /**
+     * Repeat registration of the same (host, port, kind) endpoint reuses the
+     * existing synthetic peer (same id, exactly one tracked entry), and a
+     * repeat that supplies a different non-blank deviceName refreshes the
+     * stored display name instead of silently dropping it
+     * (AUDIT-2026-07 (IDN-7), decision #6b).
+     */
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun registerManualPeerSameEndpointReturnsSamePeerAndKeepsOneEntry() {
+        val supervisor = SupervisorJob()
+        try {
+            val registry = PeerRegistry(
+                discoveryTransports = listOf(FakeDiscovery()),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2
+            )
+            val first = registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.LAN, "First name")
+            val second = registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.LAN, "Different name")
+
+            assertEquals(first.id, second.id, "Same endpoint must reuse the existing synthetic id")
+            assertEquals("Different name", second.name, "Dedupe-hit must refresh the display name")
+            assertEquals(1, registry.peers.value.size, "Repeat registration must not grow the registry")
+            assertEquals(
+                "Different name",
+                registry.peers.value.single().name,
+                "The published peer list must show the refreshed name"
+            )
+            assertEquals(
+                first.id,
+                registry.peers.value.single().id,
+                "The refreshed entry must keep the original synthetic id"
+            )
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    /**
+     * A dedupe-hit with a null or blank deviceName keeps the existing display
+     * name (only a non-blank new name refreshes it), and a repeat of the same
+     * name causes no registry churn (AUDIT-2026-07 (IDN-7), decision #6b).
+     */
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun registerManualPeerDedupeWithNullOrBlankNameKeepsExistingName() {
+        val supervisor = SupervisorJob()
+        try {
+            val registry = PeerRegistry(
+                discoveryTransports = listOf(FakeDiscovery()),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2
+            )
+            val first = registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.LAN, "First name")
+
+            val nullRepeat = registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.LAN, null)
+            assertEquals(first.id, nullRepeat.id)
+            assertEquals("First name", nullRepeat.name, "Null deviceName must keep the existing name")
+
+            val blankRepeat = registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.LAN, "   ")
+            assertEquals(first.id, blankRepeat.id)
+            assertEquals("First name", blankRepeat.name, "Blank deviceName must keep the existing name")
+
+            val sameName = registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.LAN, "First name")
+            assertEquals(first, sameName, "Same-name repeat returns the same public Peer value")
+
+            assertEquals(1, registry.peers.value.size, "No repeat variant may grow the registry")
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    /** A new endpoint (different host or different port) mints a new synthetic id. */
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun registerManualPeerNewEndpointMintsNewId() {
+        val supervisor = SupervisorJob()
+        try {
+            val registry = PeerRegistry(
+                discoveryTransports = listOf(FakeDiscovery()),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2
+            )
+            val base = registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.LAN)
+            val otherPort = registry.registerManualPeer("10.0.0.7", 7_001, TransportKind.LAN)
+            val otherHost = registry.registerManualPeer("10.0.0.8", 7_000, TransportKind.LAN)
+
+            assertNotEquals(base.id, otherPort.id, "Different port is a new endpoint")
+            assertNotEquals(base.id, otherHost.id, "Different host is a new endpoint")
+            assertNotEquals(otherPort.id, otherHost.id)
+            assertEquals(3, registry.peers.value.size)
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    /** The transport kind is part of the dedupe key: same host:port over a different kind is a new entry. */
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun registerManualPeerSameHostPortDifferentKindMintsNewId() {
+        val supervisor = SupervisorJob()
+        try {
+            val registry = PeerRegistry(
+                discoveryTransports = listOf(FakeDiscovery()),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2
+            )
+            val lan = registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.LAN)
+            val ble = registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.BLE)
+
+            assertNotEquals(lan.id, ble.id, "Same host:port under a different kind is a distinct endpoint")
+            assertEquals(2, registry.peers.value.size)
+            // And the repeat within each kind still dedupes.
+            assertEquals(lan.id, registry.registerManualPeer("10.0.0.7", 7_000, TransportKind.LAN).id)
+            assertEquals(2, registry.peers.value.size)
         } finally {
             supervisor.cancel()
         }

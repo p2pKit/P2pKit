@@ -7,7 +7,6 @@ import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
@@ -16,6 +15,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -40,14 +41,15 @@ internal class JvmLanDataTransport(
     override val tcpPort: StateFlow<Int?> = _tcpPort.asStateFlow()
 
     /**
-     * Completed by [start] with the bound server socket. [incomingConnections]
-     * suspends on this deferred so the SessionManager-driven accept loop
-     * (collected eagerly during kit init) parks cleanly until `start()` runs.
-     *
-     * A `start()` failure completes this deferred *exceptionally* so the
-     * incoming flow surfaces the bind error instead of hanging forever.
+     * Set by [start] with the bound server socket. [incomingConnections]
+     * parks on this nullable StateFlow until `start()` succeeds. A nullable
+     * StateFlow (not a one-shot deferred) so a FAILED first bind does not
+     * permanently poison the eagerly-collected incoming flow: a later
+     * successful `start()` retry still serves the accept loop
+     * (AUDIT-2026-06 fix). Bind failures surface through start()'s Result
+     * (-> P2pError.TransportStartFailed), not through this flow.
      */
-    private val serverSocketReady = CompletableDeferred<ServerSocket>()
+    private val serverSocketFlow = MutableStateFlow<ServerSocket?>(null)
 
     private val startMutex = Mutex()
     @Volatile private var serverSocket: ServerSocket? = null
@@ -56,25 +58,26 @@ internal class JvmLanDataTransport(
     private var closed: Boolean = false
 
     override suspend fun start(): Result<Unit> = startMutex.withLock {
+        if (closed) {
+            // start() after close() previously reported success on a closed
+            // socket (AUDIT-2026-06 fix).
+            return Result.failure(IllegalStateException("LAN data transport is closed"))
+        }
         if (serverSocket != null) return Result.success(Unit)
-        val result = withContext(Dispatchers.IO) {
+        withContext(Dispatchers.IO) {
             runCatching {
                 val sock = ServerSocket(0)
                 serverSocket = sock
                 registration.tcpPort = sock.localPort
                 _tcpPort.value = sock.localPort
-                serverSocketReady.complete(sock)
+                serverSocketFlow.value = sock
+                JvmLanDiag.log(
+                    "data",
+                    "server bound: ${sock.localSocketAddress} (wildcard 0.0.0.0, port=${sock.localPort})"
+                )
                 Unit
             }
         }
-        if (result.isFailure) {
-            // Propagate to any incoming-connections collector waiting on
-            // the deferred so they don't block forever after a bind failure.
-            serverSocketReady.completeExceptionally(
-                result.exceptionOrNull() ?: IllegalStateException("ServerSocket bind failed")
-            )
-        }
-        result
     }
 
     override fun canConnect(peer: InternalPeer): Boolean =
@@ -88,6 +91,11 @@ internal class JvmLanDataTransport(
         } ?: throw P2pError.NoTransportAvailable(peer.publicPeer)
         val host = hint.host!!
         val port = hint.port!!
+        val pid8 = peer.publicPeer.id.value.take(8)
+        JvmLanDiag.log(
+            "dial",
+            "connect peer=$pid8 -> $host:$port (timeout=${LanConstants.TCP_CONNECT_TIMEOUT_MS}ms)"
+        )
         val socket = withContext(Dispatchers.IO) {
             val s = Socket()
             try {
@@ -107,25 +115,25 @@ internal class JvmLanDataTransport(
                     is NoRouteToHostException -> "unreachable (${e.message ?: "EHOSTUNREACH"})"
                     else -> "failed (${e::class.simpleName}: ${e.message ?: ""})"
                 }
+                JvmLanDiag.log("dial", "connect FAILED peer=$pid8 $host:$port $reason")
                 throw P2pError.ConnectionFailed("TCP connect $host:$port $reason")
             }
         }
+        // local* reveals WHICH local interface the OS chose to egress toward
+        // the peer — the Issue #2 evidence that the dial used Wi-Fi vs. a
+        // cellular / VPN route.
+        JvmLanDiag.log(
+            "dial",
+            "connect OK peer=$pid8 local=${socket.localSocketAddress} remote=${socket.remoteSocketAddress}"
+        )
         return JvmRawConnection(socket)
     }
 
     override fun incomingConnections(): Flow<RawConnection> = callbackFlow {
-        // Wait for start() to bind the server socket. If start() fails, the
-        // await throws and the flow ends — collectors get the typed
-        // TransportStartFailed (or the underlying IOException) instead of
-        // a silent hang.
-        val sock = try {
-            serverSocketReady.await()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            close(e)
-            return@callbackFlow
-        }
+        // Park until start() binds a server socket; a later successful retry
+        // after a failed first bind still serves this collector (see
+        // serverSocketFlow KDoc).
+        val sock = serverSocketFlow.filterNotNull().first()
         val accepterJob: Job = launch(Dispatchers.IO) {
             try {
                 while (!closed) {
@@ -137,7 +145,19 @@ internal class JvmLanDataTransport(
                         if (!closed) close(e)
                         break
                     }
-                    trySend(JvmRawConnection(socket))
+                    JvmLanDiag.log(
+                        "accept",
+                        "inbound from ${socket.remoteSocketAddress} -> local ${socket.localSocketAddress}"
+                    )
+                    // Close the socket when the channel refuses it (buffer full
+                    // under an accept burst / stalled collector): silently
+                    // dropping leaked the fd while the remote believed it had
+                    // connected (AUDIT-2026-06 fix).
+                    val offered = trySend(JvmRawConnection(socket))
+                    if (offered.isFailure) {
+                        JvmLanDiag.log("accept", "DROPPED ${socket.remoteSocketAddress} (channel full) — closing")
+                        runCatching { socket.close() }
+                    }
                 }
                 close()
             } catch (e: CancellationException) {

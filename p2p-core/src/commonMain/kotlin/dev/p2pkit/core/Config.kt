@@ -33,16 +33,19 @@ public sealed class ReconnectPolicy {
      * public identity preserved (same [P2pSession] instance, same `incoming`
      * flow). On exhaustion it transitions to [ConnectionState.Failed].
      *
-     * Scope (v0.2): retries fire only on **outgoing** sessions — the ones
+     * Scope: retries fire only on **outgoing** sessions — the ones
      * opened by [dev.p2pkit.core.P2pKit.connect]. Incoming sessions that
      * lose their connection still transition directly to
      * [ConnectionState.Failed]; the remote peer is expected to redial.
      *
-     * Retries reuse the [dev.p2pkit.core.transport.InternalPeer] captured at
-     * session creation. If the peer's transport address has rotated since
-     * (e.g., Wi-Fi reconnect changed its IP), attempts may exhaust until the
-     * app re-discovers the peer and calls
-     * [dev.p2pkit.core.P2pKit.connect] again.
+     * Each attempt re-resolves the peer's endpoint from the freshest
+     * discovery data immediately before dialing, falling back to the
+     * [dev.p2pkit.core.transport.InternalPeer] captured at session creation
+     * only when the registry has no current entry. For the whole
+     * `Reconnecting` window the SDK also nudges discovery transports with
+     * periodic `refresh()` calls, so an address rotation (e.g., Wi-Fi
+     * reconnect changed the peer's IP) is picked up automatically once the
+     * peer is re-observed — no manual re-discovery is needed.
      *
      * Clean closes — both [P2pSession.close] and a `CLOSE` frame from the
      * peer — never trigger retry.

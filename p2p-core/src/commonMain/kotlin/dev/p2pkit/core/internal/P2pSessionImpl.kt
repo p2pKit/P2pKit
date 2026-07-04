@@ -21,6 +21,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -31,6 +32,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -48,6 +50,16 @@ import kotlin.random.Random
  */
 internal interface ReconnectHandler {
     suspend fun onConnectionLost(session: P2pSessionImpl)
+
+    /**
+     * Called synchronously at the instant the session transitions to
+     * `Reconnecting`, under the connection lock and before the retry loop is
+     * launched. Lets the handler snapshot any "wake early on network
+     * recovery" baseline at the exact Reconnecting edge, so a path-Satisfied
+     * signal that arrives between the transition and the (async) start of the
+     * retry loop is not missed (AUDIT-2026-06). Default: no-op.
+     */
+    fun onWillReconnect() {}
 }
 
 /**
@@ -151,7 +163,7 @@ internal class P2pSessionImpl(
      */
     internal var reconnectHandler: ReconnectHandler? = null
 
-    private val fileTransferDispatcher: FileTransferDispatcher by lazy {
+    private val fileTransferDispatcherLazy = lazy {
         FileTransferDispatcher(
             sessionId = id,
             remotePeer = peer,
@@ -164,6 +176,7 @@ internal class P2pSessionImpl(
             logger = logger
         )
     }
+    private val fileTransferDispatcher: FileTransferDispatcher get() = fileTransferDispatcherLazy.value
 
     override val incomingFiles: SharedFlow<P2pFileOffer>
         get() = fileTransferDispatcher.incomingFiles
@@ -206,13 +219,39 @@ internal class P2pSessionImpl(
      * Once raw goes to a terminal state we only act if our own state is
      * still `Connected`. If we're already `Closing`, `Reconnecting`, or
      * a terminal state, [onConnectionLost] short-circuits inside its mutex.
+     *
+     * AUDIT-2026-07 (SES-1): before classifying on the raw state alone, this
+     * observer defers for a bounded window so [routeEvents] can classify from
+     * the protocol events that are already buffered. The transports collapse
+     * remote EOF and a read failure into the same signature (read flow
+     * completes normally, raw state flips to `Closed`), so the raw state by
+     * itself cannot distinguish a clean goodbye from an abrupt loss — but
+     * ordering can: a CLOSE frame is parsed and buffered into the events
+     * channel strictly *before* the read flow completes, so by the time the
+     * raw state flips, any CLOSE that will ever arrive is already queued
+     * ahead of the channel close. Within the window, [routeEvents] latches
+     * the deterministic outcome (CLOSE frame → clean `Closed` via
+     * [markCleanlyClosed]; completion without CLOSE → [onConnectionLost]).
+     * The raw-only fallback after the window stays load-bearing for
+     * send-side-only failures where the read side lags (e.g. an iOS send
+     * error flips the raw state synchronously) — the case this observer was
+     * built for.
      */
     private suspend fun observeRawState(epochConnection: RawConnection) {
         epochConnection.state.collect { rawState ->
             when (rawState) {
                 ConnectionState.Closed, ConnectionState.Failed -> {
                     if (_state.value == ConnectionState.Connected) {
-                        onConnectionLost("raw connection -> $rawState")
+                        // AUDIT-2026-07 (SES-1): bounded deferral to the
+                        // protocol-event classification (see KDoc above).
+                        // withTimeoutOrNull swallows only its own timeout;
+                        // a real CancellationException still propagates.
+                        withTimeoutOrNull(RAW_TERMINAL_CLASSIFICATION_GRACE_MS) {
+                            _state.first { it != ConnectionState.Connected }
+                        }
+                        if (_state.value == ConnectionState.Connected) {
+                            onConnectionLost("raw connection -> $rawState")
+                        }
                     }
                 }
                 else -> { /* Connecting / Connected / Handshaking — wait */ }
@@ -220,12 +259,45 @@ internal class P2pSessionImpl(
         }
     }
 
+    /**
+     * AUDIT-2026-07 (API-2, decision #12a): typed-error contract at the
+     * public [send]/[sendFile] boundary. [CancellationException] and
+     * already-typed [P2pError]s pass through as-is; any other [Throwable] —
+     * raw platform write failures (JVM/Android `IOException` including the
+     * 30 s write-watchdog timeout, iOS `nw_connection` failure shapes),
+     * internal state exceptions, argument-validation errors — is wrapped in
+     * [P2pError.ConnectionFailed] with the original exception preserved as
+     * the error's `cause`.
+     *
+     * The wrap lives here, at the public boundary, and NOT in
+     * `DefaultP2pProtocol.writeFrame`: internal callers (keep-alive
+     * PING/PONG, the file-transfer dispatcher, the best-effort CLOSE sender)
+     * keep seeing the raw exceptions their classification logic expects.
+     * Because this is commonMain, the contract is identical on JVM, Android,
+     * and iOS.
+     */
+    private inline fun <T> typedSendBoundary(operation: String, block: () -> T): T =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: P2pError) {
+            throw e
+        } catch (e: Throwable) {
+            throw P2pError.ConnectionFailed(
+                "$operation failed on session $id: ${e.message ?: e::class.simpleName}"
+            ).also { it.underlying = e }
+        }
+
     override suspend fun send(message: P2pMessage) {
         if (_state.value != ConnectionState.Connected) {
             throw P2pError.ConnectionFailed("Session $id is ${_state.value}; cannot send")
         }
-        sendMutex.withLock {
-            protocol.sendMessage(connection, message)
+        // AUDIT-2026-07 (API-2): see [typedSendBoundary].
+        typedSendBoundary("send") {
+            sendMutex.withLock {
+                protocol.sendMessage(connection, message)
+            }
         }
     }
 
@@ -238,7 +310,14 @@ internal class P2pSessionImpl(
         if (_state.value != ConnectionState.Connected) {
             throw P2pError.ConnectionFailed("Session $id is ${_state.value}; cannot send file")
         }
-        return fileTransferDispatcher.sendFile(name, sizeBytes, mimeType, source)
+        // AUDIT-2026-07 (API-2): see [typedSendBoundary]. Ownership-on-throw
+        // contract is documented on [P2pSession.sendFile]: refusals before the
+        // dispatcher registers the transfer leave [source] caller-owned and
+        // open; throws at or after registration close it via the handle's
+        // terminal transition (FIL-1 close-once guard).
+        return typedSendBoundary("sendFile") {
+            fileTransferDispatcher.sendFile(name, sizeBytes, mimeType, source)
+        }
     }
 
     override suspend fun close() {
@@ -255,13 +334,29 @@ internal class P2pSessionImpl(
         // throw. This is the only terminal path that sends a CLOSE frame;
         // unintentional failure paths don't (the wire is presumably already
         // dead).
-        runCatching {
-            sendMutex.withLock { protocol.sendClose(connection) }
+        //
+        // The send runs as a job on the session scope and only the WAIT for
+        // it is bounded (AUDIT-2026-06 fix). Bounding the write itself with
+        // withTimeoutOrNull cannot work against a wedged peer: a blocking
+        // socket write ignores cancellation, so the timeout would still park
+        // until the write returned — hanging close() (and kit.stop() behind
+        // it) forever. Instead we give the frame CLOSE_FRAME_TIMEOUT_MS to
+        // get out, then proceed with teardown regardless;
+        // [transitionToTerminal] closes the raw connection, which is the one
+        // lever that unblocks a wedged sendClose. The runCatching lives
+        // inside the launched job (it only guards the best-effort send); the
+        // bounded join is deliberately NOT wrapped, so a genuine caller
+        // CancellationException propagates instead of being swallowed.
+        val closeSend = scope.launch {
+            runCatching { sendMutex.withLock { protocol.sendClose(connection) } }
         }
+        withTimeoutOrNull(CLOSE_FRAME_TIMEOUT_MS) { closeSend.join() }
 
         // Centralised cleanup: file transfers, epoch cancel, raw close, and
-        // the state flip to Closed all happen here atomically.
+        // the state flip to Closed all happen here atomically. Closing the
+        // raw connection also unblocks a still-wedged closeSend write.
         transitionToTerminal(ConnectionState.Closed, "user close()")
+        closeSend.cancel()
 
         // Additionally tear down the rest of the session — primarily the
         // reconnect handler if one is still mid-dial. Only [close] does
@@ -293,6 +388,22 @@ internal class P2pSessionImpl(
                 return
             }
             epochJob?.cancelAndJoin()
+            // Fail any in-flight file transfers BEFORE swapping the connection.
+            // The outgoing streamer runs on the session scope (not the epoch
+            // scope), so cancelling epochJob alone does not stop it; without
+            // this it would keep writing mid-stream FILE_DATA chunks onto the
+            // brand-new connection, corrupting the rearmed session. Matches the
+            // closeAll-on-terminal contract. Only touch the dispatcher if it
+            // was ever used, so reconnects of message-only sessions stay cheap.
+            if (fileTransferDispatcherLazy.isInitialized()) {
+                runCatching { fileTransferDispatcher.closeAll("reconnect: connection replaced") }
+                // closeAll also latches the dispatcher's `closed` flag (it is
+                // shared with the terminal-close path). REOPEN it: the rearmed
+                // session's contract is that the same instance keeps working,
+                // but the latch silently disabled sendFile AND inbound offers
+                // after the first reconnect (AUDIT-2026-06 fix).
+                fileTransferDispatcher.reopen()
+            }
             runCatching { connection.close() }
             connection = newConnection
             events = newEvents
@@ -378,8 +489,10 @@ internal class P2pSessionImpl(
             // tear them down before we close the socket so they surface a
             // sensible "session ended" status instead of a mid-write
             // IOException.
-            runCatching {
-                fileTransferDispatcher.closeAll("session $id ${target.name}: $cause")
+            if (fileTransferDispatcherLazy.isInitialized()) {
+                runCatching {
+                    fileTransferDispatcher.closeAll("session $id ${target.name}: $cause")
+                }
             }
             // Cancel the epoch — stops routeEvents, keepAliveLoop, and the
             // parked observeRawState. Guarantees no further _incoming.emit.
@@ -482,7 +595,10 @@ internal class P2pSessionImpl(
                         // Reserved for v0.2 reliability work.
                     }
                     is ProtocolEvent.Close -> {
-                        // Clean close from peer — never retry.
+                        // Clean close from peer — never retry. The received
+                        // CLOSE frame is the single remote-side clean-close
+                        // authority (AUDIT-2026-07 SES-1); see
+                        // [markCleanlyClosed].
                         markCleanlyClosed()
                         return
                     }
@@ -499,15 +615,27 @@ internal class P2pSessionImpl(
                     is ProtocolEvent.FileCancel -> fileTransferDispatcher.onFileCancel(event.transferId, event.reason)
                 }
             }
-            // Channel completed without explicit close or error frame. This
-            // is a "remote hangup". For v0.2 we treat it like a clean close —
-            // there is no error to react to, only a closed socket. The clean
-            // close path skips reconnect per spec.
-            markCleanlyClosed()
+            // AUDIT-2026-07 (SES-1): the events channel completed without a
+            // CLOSE frame (a received CLOSE returns from the loop above and
+            // never reaches this line). Every shipped transport surfaces both
+            // remote EOF and a read failure as this same normal completion,
+            // so "the wire ended with no CLOSE" is the one reliable signal
+            // that the peer did NOT close cleanly. Route it through
+            // [onConnectionLost]: outgoing sessions with a reconnect handler
+            // deterministically enter Reconnecting; sessions without one
+            // (incoming, or ReconnectPolicy.Disabled) deterministically reach
+            // Failed. Never the clean-Closed outcome — "clean closes never
+            // retry" requires the inverse too: a hangup without CLOSE is not
+            // a clean close. (Pre-2026-07 this branch called
+            // markCleanlyClosed(), racing [observeRawState] for the terminal
+            // outcome on every remote loss.)
+            onConnectionLost("remote hangup without CLOSE frame")
         } catch (e: CancellationException) {
             throw e
         } catch (_: ClosedReceiveChannelException) {
-            markCleanlyClosed()
+            // AUDIT-2026-07 (SES-1): same classification as the completion
+            // branch above — the channel ended without delivering a CLOSE.
+            onConnectionLost("remote hangup without CLOSE frame (receive on closed channel)")
         } catch (e: Throwable) {
             logger.warn("Session $id: routeEvents failed", e)
             onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}")
@@ -518,6 +646,21 @@ internal class P2pSessionImpl(
         while (scope.isActive && _state.value == ConnectionState.Connected) {
             delay(keepAlive.pingIntervalMillis)
             if (!scope.isActive || _state.value != ConnectionState.Connected) return
+            // Evaluate PONG liveness BEFORE attempting the PING write: if a
+            // wedged peer blocks the shared sendMutex (file chunk parked in a
+            // full TCP send window), the timeout must still fire. Checking
+            // only after the send let a stuck writer disable keep-alive — and
+            // close()/stop() behind the same mutex — forever
+            // (AUDIT-2026-06 fix).
+            val sincePongBeforeSend = clock() - lastPongAt.value
+            if (sincePongBeforeSend > keepAlive.timeoutMillis) {
+                logger.warn(
+                    "Session $id: no PONG received for $sincePongBeforeSend ms " +
+                        "(timeout=${keepAlive.timeoutMillis} ms; checked before PING send)"
+                )
+                onConnectionLost("keep-alive timeout")
+                return
+            }
             try {
                 sendMutex.withLock { protocol.sendPing(epochConnection) }
             } catch (e: CancellationException) {
@@ -539,16 +682,36 @@ internal class P2pSessionImpl(
         }
     }
 
+    /**
+     * Latch the clean-`Closed` outcome for a CLOSE frame received from the
+     * peer. AUDIT-2026-07 (SES-1): since the remote-termination determinism
+     * fix, this is only reachable from [routeEvents]' `ProtocolEvent.Close`
+     * branch — a wire that ends *without* a CLOSE frame routes through
+     * [onConnectionLost] instead, so a received CLOSE is the single
+     * remote-side classification that yields `Closed`.
+     *
+     * Proceeds from `Connected` AND from `Reconnecting`: the CLOSE frame is
+     * authoritative over a concurrent raw-terminal classification. The frame
+     * always enters the event pipeline before the read flow completes, so a
+     * session that raced into `Reconnecting` off the raw-state flip (the
+     * [observeRawState] deferral window elapsed under load) is corrected to
+     * the spec-mandated `Closed` as soon as the buffered CLOSE is processed;
+     * the reconnect retry loop re-checks state before every dial and
+     * [rearmWith] no-ops on terminal states, so no further dial happens. A
+     * CLOSE processed by a live [routeEvents] is always from the *current*
+     * epoch — [rearmWith] cancel-and-joins the old epoch's routeEvents under
+     * [connectionLock] before flipping back to `Connected` — so this can
+     * never close a freshly rearmed session on a stale frame. Terminal
+     * states still win: [transitionToTerminal] stays idempotent and a local
+     * `close()` / prior `Failed` is never overridden.
+     */
     private suspend fun markCleanlyClosed() {
-        // Guard: only act on Connected. transitionToTerminal itself is
-        // idempotent vs Closed/Failed, but a stale clean-close shouldn't
-        // override an in-flight Reconnecting (a brand new raw might be
-        // about to rearm us).
         val proceed = connectionLock.withLock {
-            _state.value == ConnectionState.Connected
+            _state.value == ConnectionState.Connected ||
+                _state.value == ConnectionState.Reconnecting
         }
         if (proceed) {
-            transitionToTerminal(ConnectionState.Closed, "remote hangup / clean close")
+            transitionToTerminal(ConnectionState.Closed, "remote CLOSE frame (clean close)")
         }
     }
 
@@ -589,6 +752,12 @@ internal class P2pSessionImpl(
                         null
                     } else {
                         _state.value = ConnectionState.Reconnecting
+                        // Snapshot the path-wake baseline at the exact
+                        // Reconnecting edge (still under the lock, before the
+                        // async retry loop launches) so a Satisfied signal that
+                        // lands in that gap still wakes the handler early
+                        // (AUDIT-2026-06).
+                        h.onWillReconnect()
                         h
                     }
                 }
@@ -630,6 +799,14 @@ internal class P2pSessionImpl(
 
     private companion object {
         /**
+         * How long [close] waits for the best-effort CLOSE frame to reach the
+         * wire before proceeding with teardown. Bounds only the wait — the
+         * send job itself is left to be unblocked by the connection close
+         * inside [transitionToTerminal] (see the comment in [close]).
+         */
+        const val CLOSE_FRAME_TIMEOUT_MS: Long = 2_000
+
+        /**
          * Threshold for the stuck-Reconnecting watchdog. Generous enough to
          * cover any reasonable `maxAttempts × retryDelayMillis` budget
          * (default is ~4 s; even pathological configs rarely exceed 20 s);
@@ -638,5 +815,19 @@ internal class P2pSessionImpl(
          * structural fixes haven't covered yet.
          */
         const val STUCK_RECONNECTING_THRESHOLD_MS: Long = 30_000
+
+        /**
+         * AUDIT-2026-07 (SES-1): how long [observeRawState] waits for the
+         * protocol-event pipeline to classify a remote termination before
+         * classifying on the raw state alone. A CLOSE frame is buffered into
+         * the events channel strictly before the read flow completes (which
+         * is what flips the raw state), so when a clean goodbye is in flight,
+         * [routeEvents] latches it well within this window on anything but a
+         * fully starved dispatcher. Kept small because the window also delays
+         * the send-side-only failure path (raw state terminal while the read
+         * side lags — the prompt-detection case [observeRawState] was built
+         * for) by at most this much.
+         */
+        const val RAW_TERMINAL_CLASSIFICATION_GRACE_MS: Long = 250
     }
 }

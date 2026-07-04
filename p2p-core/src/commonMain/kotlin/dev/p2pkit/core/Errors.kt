@@ -5,8 +5,12 @@ import dev.p2pkit.core.permission.P2pPermission
 /**
  * Typed errors thrown by the P2pKit public API.
  *
- * All P2pKit failures are subtypes of [P2pError] so callers can match
- * specific cases with `when`. Library code does not throw raw `RuntimeException`s.
+ * All operational failures (connect, send, handshake, transport, file
+ * transfer) are subtypes of [P2pError] so callers can match specific cases
+ * with `when`. Plain `IllegalStateException` / `UnsupportedOperationException`
+ * are reserved for API misuse and unsupported stubs — e.g. lifecycle calls
+ * after [P2pKit.stop], responding to an already-terminal file offer, or
+ * `createManualPeer` on the `Unsupported` provisioning manager.
  */
 public sealed class P2pError(message: String? = null, cause: Throwable? = null) : Exception(message, cause) {
 
@@ -14,8 +18,25 @@ public sealed class P2pError(message: String? = null, cause: Throwable? = null) 
     public data class NoTransportAvailable(val peer: Peer) :
         P2pError("No transport available for peer: ${peer.id.value}")
 
-    /** Generic connection failure (DNS, TCP, etc.). */
-    public data class ConnectionFailed(val reason: String) : P2pError(reason)
+    /**
+     * Generic connection failure (DNS, TCP, etc.).
+     *
+     * AUDIT-2026-07 (API-2, decision #12a): also the wrapper type for
+     * unexpected exceptions crossing the public [P2pSession.send] /
+     * [P2pSession.sendFile] boundary. When this error wraps such a failure,
+     * the original exception is preserved as [cause]; for direct refusals
+     * (e.g. "session is not Connected") [cause] is `null`. The backing slot
+     * is deliberately kept out of the primary constructor so the spec-locked
+     * data-class shape (constructor signature, `copy`, `equals`/`hashCode`,
+     * destructuring) is unchanged — which also means [copy] does not carry
+     * the cause.
+     */
+    public data class ConnectionFailed(val reason: String) : P2pError(reason) {
+        /** Backing slot for [cause]; internal so only the SDK can attach it. */
+        internal var underlying: Throwable? = null
+
+        override val cause: Throwable? get() = underlying
+    }
 
     /** The peer spoke the protocol incorrectly. Session is closed. */
     public data class ProtocolError(val reason: String) : P2pError(reason)

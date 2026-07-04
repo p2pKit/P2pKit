@@ -9,6 +9,7 @@ import dev.p2pkit.core.provisioning.ManualPeerRegistrar
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.PeerEvent
+import dev.p2pkit.core.transport.PeerOrigin
 import dev.p2pkit.core.transport.TransportHint
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -46,14 +47,6 @@ internal class PeerRegistry(
     private val staleTimeoutMillis: Long = DEFAULT_STALE_TIMEOUT_MS,
     private val evictionPollMillis: Long = DEFAULT_EVICTION_POLL_MS
 ) : ManualPeerRegistrar {
-
-    /**
-     * Peer ids whose [TrackedPeer] entry was created by
-     * [registerManualPeer], not by a discovery `Found` event. These are
-     * skipped by the staleness sweeper since no transport sends heartbeats
-     * for them.
-     */
-    private val manualPeerIds: MutableSet<PeerId> = mutableSetOf()
 
     private val tracked: MutableStateFlow<Map<PeerId, TrackedPeer>> = MutableStateFlow(emptyMap())
     private val _peers: MutableStateFlow<List<Peer>> = MutableStateFlow(emptyList())
@@ -102,9 +95,11 @@ internal class PeerRegistry(
     internal fun evictStalePeers() {
         val now = clock()
         tracked.update { current ->
+            // Manual peers carry no heartbeats, so they are exempt from
+            // staleness eviction. The manual flag lives on the entry itself
+            // (atomic with the map update) — no separate, unsynchronized set.
             current.filterValues { tracked ->
-                tracked.internalPeer.publicPeer.id in manualPeerIds ||
-                    now - tracked.lastSeenAtMillis <= staleTimeoutMillis
+                tracked.isManual || now - tracked.lastSeenAtMillis <= staleTimeoutMillis
             }
         }
         publishPeers()
@@ -119,6 +114,40 @@ internal class PeerRegistry(
     ): Peer {
         require(host.isNotBlank()) { "host must not be blank" }
         require(port in 1..65_535) { "port out of range: $port" }
+
+        // Dedup by (host, port, kind): repeated registrations of the same
+        // endpoint reuse the existing synthetic peer instead of minting a
+        // fresh "manual-<uuid>" each time. Without this, a provisioning
+        // manager calling createManualPeer once per connect attempt grew the
+        // registry unbounded (manual entries are eviction-exempt).
+        // Manual peers are session-scoped: they live only in this in-memory
+        // map, so they are forgotten on kit.stop() / process exit and a stale
+        // IP is never silently redialed in a later session (AUDIT-2026-06).
+        val existing = tracked.value.values.firstOrNull { t ->
+            t.isManual && t.internalPeer.transportHints.any {
+                it.type == kind && it.host == host && it.port == port
+            }
+        }
+        if (existing != null) {
+            val existingPeer = existing.internalPeer.publicPeer
+            // AUDIT-2026-07 (IDN-7): a re-registration that supplies a new
+            // non-blank display name refreshes the stored name instead of
+            // silently dropping it — same endpoint keeps the same synthetic
+            // id and single registry entry. Null/blank keeps the old name.
+            val refreshedName = deviceName?.takeIf { it.isNotBlank() }
+            if (refreshedName == null || refreshedName == existingPeer.name) {
+                return existingPeer
+            }
+            val refreshedInternal = existing.internalPeer.copy(
+                publicPeer = existingPeer.copy(name = refreshedName)
+            )
+            tracked.update { current ->
+                current + (existingPeer.id to TrackedPeer(refreshedInternal, clock()))
+            }
+            publishPeers()
+            return refreshedInternal.publicPeer
+        }
+
         val syntheticId = PeerId("manual-${Uuid.random()}")
         val displayName = deviceName?.takeIf { it.isNotBlank() } ?: "manual:$host:$port"
         val publicPeer = Peer(
@@ -129,10 +158,12 @@ internal class PeerRegistry(
         )
         val internal = InternalPeer(
             publicPeer = publicPeer,
-            transportHints = listOf(TransportHint(type = kind, host = host, port = port))
+            transportHints = listOf(TransportHint(type = kind, host = host, port = port)),
+            // Explicit provenance: SessionManager keys its manual-peer HELLO
+            // handling off this flag, never off the "manual-" id prefix.
+            origin = PeerOrigin.Manual
         )
         tracked.update { current -> current + (syntheticId to TrackedPeer(internal, clock())) }
-        manualPeerIds.add(syntheticId)
         publishPeers()
         return publicPeer
     }
@@ -140,7 +171,15 @@ internal class PeerRegistry(
     private suspend fun evictLoop() {
         while (scope.isActive) {
             delay(evictionPollMillis)
-            evictStalePeers()
+            // Isolate per-iteration failures so one throw can't kill peer
+            // eviction for the kit's lifetime (rethrow cancellation).
+            try {
+                evictStalePeers()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // No logger here by design; swallow and keep the loop alive.
+            }
         }
     }
 
@@ -155,4 +194,11 @@ internal data class TrackedPeer(
     val lastSeenAtMillis: Long
 ) {
     val peer: Peer get() = internalPeer.publicPeer
+
+    /**
+     * True for entries created by [PeerRegistry.registerManualPeer]; exempt
+     * from staleness eviction. Derived from [InternalPeer.origin] so there is
+     * a single source of provenance truth (no second flag that could drift).
+     */
+    val isManual: Boolean get() = internalPeer.origin == PeerOrigin.Manual
 }

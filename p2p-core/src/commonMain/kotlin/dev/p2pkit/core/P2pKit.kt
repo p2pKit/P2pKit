@@ -93,9 +93,14 @@ public interface P2pKit {
     public val permissions: P2pPermissionManager
 
     /**
-     * Optional sidecar for helping devices reach the same LAN. v0.1 returns an
-     * `Unsupported` implementation from every method. v0.2 will add real
-     * support; the API surface here is stable.
+     * Optional sidecar for helping devices reach the same LAN. Returns the
+     * `Unsupported` stub only when no provisioning factory is registered via
+     * the `networkProvisioning { … }` DSL block. The optional platform
+     * modules register real implementations: Android `LocalOnlyHotspot`
+     * hosting + Wi-Fi join (`:p2p-network-provisioning-android`), JVM
+     * manual-IP fallback (`:p2p-network-provisioning-desktop`), and iOS
+     * manual-IP (`iosManualIp()` in `:p2p-transport-lan`). Hotspot hosting /
+     * Wi-Fi join stay `Unsupported` on platforms whose OS forbids them (iOS).
      */
     public val networkProvisioning: NetworkProvisioningManager
 
@@ -130,12 +135,11 @@ public interface P2pKit {
      * @throws P2pError.TransportStartFailed if any registered transport's
      *   `start()` returned a failure (port exhaustion, missing entitlement,
      *   listener bind timeout, etc.).
-     */
-    /**
-     * @throws [Exception] bridged to Swift as `NSError`. Without `@Throws`
-     * Kotlin/Native terminates the process on any thrown error rather than
-     * bridging it to a catchable NSError. Same reasoning applies to every
-     * other public suspend method below.
+     *
+     * (The `@Throws(Exception::class)` annotation exists so Kotlin/Native
+     * bridges thrown errors to a catchable Swift `NSError` instead of
+     * terminating the process. Same reasoning applies to every other public
+     * suspend method below.)
      */
     @Throws(Exception::class)
     public suspend fun start()
@@ -154,9 +158,12 @@ public interface P2pKit {
      * Open a session to [peer], or return the existing session if one is
      * already in `Connecting`, `Handshaking`, `Connected`, or `Reconnecting`.
      *
+     * Note: `connect()` performs no permission check itself — runtime
+     * permissions are verified by [startAdvertising] / [startDiscovery],
+     * which surface [P2pError.PermissionMissing].
+     *
      * @throws P2pError.NoTransportAvailable if no registered transport can reach [peer]
      * @throws P2pError.ConnectionFailed if the underlying connection fails
-     * @throws P2pError.PermissionMissing if required runtime permissions are not granted
      */
     @Throws(Exception::class)
     public suspend fun connect(peer: Peer): P2pSession
@@ -178,8 +185,14 @@ public interface P2pKit {
          * Build a P2pKit instance from a DSL block. See [P2pKitBuilder] for
          * the available configuration knobs.
          *
-         * The implementation is provided in `dev.p2pkit.core.internal.P2pKitImpl`
-         * which is wired up in v0.1 step 4.
+         * Construction performs a one-time, small-file identity read/write on
+         * the calling thread (loading or generating the persistent
+         * [localPeerId]) — construct off the main thread on Android to avoid
+         * a first-launch stall (decision #5a, 2026-07-04; async/suspending
+         * construction is a recorded backlog item in
+         * `docs/production-readiness.md`).
+         *
+         * The implementation is provided by `dev.p2pkit.core.internal.P2pKitImpl`.
          */
         public fun create(block: P2pKitBuilder.() -> Unit): P2pKit {
             val builder = P2pKitBuilder().apply(block)

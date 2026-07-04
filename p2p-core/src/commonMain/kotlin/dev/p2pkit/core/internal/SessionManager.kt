@@ -19,6 +19,7 @@ import dev.p2pkit.core.security.SecurityManager
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.PeerOrigin
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -32,10 +33,14 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -93,7 +98,22 @@ internal class SessionManager(
      * Default `{}` keeps existing tests (no transports / no registry)
      * working without a refresh path.
      */
-    private val refreshDiscovery: suspend () -> Unit = {}
+    private val refreshDiscovery: suspend () -> Unit = {},
+    /**
+     * Test-only (#19 / 2026-07 TST-9, decision #15a): when `true`,
+     * [SessionStore.checkInvariants] throws on a detected bookkeeping
+     * violation instead of `logger.warn`ing — the suites run with a
+     * NoOp/quiet logger, so warn-only enforcement would let a store
+     * regression pass every test silently.
+     *
+     * Default `false` = production behavior (log-don't-crash). [P2pKitImpl]
+     * forwards its own `strictSessionInvariants` constructor parameter here,
+     * which itself defaults to `false` and is only ever set through the
+     * internal [dev.p2pkit.core.dsl.P2pKitBuilder.strictSessionInvariants]
+     * knob (enabled by the commonTest `createTestKit` fixture) — so every
+     * production construction path still resolves to `false`.
+     */
+    private val strictInvariants: Boolean = false
 ) {
 
     /**
@@ -103,8 +123,32 @@ internal class SessionManager(
      * rationale (replaces the previous "two stores updated by convention"
      * model).
      */
-    private val store = SessionStore(logger)
+    private val store = SessionStore(logger, strictInvariants = strictInvariants)
     val sessions: StateFlow<List<P2pSession>> = store.sessions
+
+    /**
+     * TEST-ONLY seam (#19 / 2026-07 P1-03) — never call from production
+     * code. Forwards to [SessionStore.forceInvariantViolationForTest] so
+     * the strict-invariants meta-test can force a known-bad bookkeeping
+     * state inside a kit-built store and assert the [strictInvariants]
+     * enforcement (throw vs warn) end to end.
+     */
+    internal suspend fun forceStoreInvariantViolationForTest(session: P2pSession) {
+        store.forceInvariantViolationForTest(session)
+    }
+
+    /**
+     * AUDIT-2026-07 (SEC-1, decision #9a): pre-handshake admission gate.
+     * Bounds how many inbound connections may hold pre-handshake setup
+     * resources (bounded event channel + reader job + setup coroutine)
+     * concurrently. [handleIncoming] takes a permit with a non-suspending
+     * `tryAcquire` — refusal closes the connection immediately, before any
+     * per-connection resources are allocated — and the permit is released
+     * exactly once when the handshake settles (success or failure; see
+     * [setupSession]'s `onHandshakeSettled`). Outgoing connects are not
+     * gated. See [MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS].
+     */
+    private val preHandshakeGate = Semaphore(MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS)
 
     private val _incomingSessions = MutableSharedFlow<P2pSession>(
         replay = 0,
@@ -114,29 +158,46 @@ internal class SessionManager(
     val incomingSessions: SharedFlow<P2pSession> = _incomingSessions.asSharedFlow()
 
     /**
-     * Path-recovered signal consumed by every [SessionReconnectHandler]
-     * currently in its retry loop. When the host's network path
-     * transitions to [NetworkPathStatus.Satisfied], [applyPathChange]
-     * emits to this flow and any handler currently parked in its
-     * `retryDelayMillis` wait will wake immediately and attempt a dial
-     * instead of waiting out the rest of the delay.
+     * Monotonic generation counter bumped on every host-network transition
+     * to [NetworkPathStatus.Satisfied]. Every [SessionReconnectHandler] in
+     * its retry loop snapshots the current generation and parks until it
+     * changes (or its `retryDelayMillis` elapses), waking immediately on a
+     * path-recovered transition instead of waiting out the delay.
      *
-     * `extraBufferCapacity = 1` + `DROP_OLDEST` means: if Satisfied fires
-     * while no handler is parked (e.g., all handlers are mid-dial), the
-     * latest signal is cached. The first handler to enter `.first()` next
-     * picks it up — subsequent handlers see no buffered value (replay=0)
-     * and wait for the next emit or for their delay to expire.
+     * A StateFlow generation counter (not a replay=0 SharedFlow) so a
+     * Satisfied transition that lands *before* the handler parks is never
+     * dropped: the counter retains its value, so `first { it != snapshot }`
+     * returns at once. The previous SharedFlow dropped such a signal when no
+     * handler was currently subscribed, which both contradicted this field's
+     * own "is cached" KDoc and made the recovery race-dependent
+     * (AUDIT-2026-06 fix).
      */
-    private val pathSatisfiedSignal = MutableSharedFlow<Unit>(
-        replay = 0,
-        extraBufferCapacity = 1,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
-    )
+    private val pathSatisfiedGeneration = MutableStateFlow(0)
 
     fun startAcceptingIncoming(transports: List<DataTransport>) {
         for (transport in transports) {
             transport.incomingConnections()
                 .onEach { connection -> handleIncoming(connection) }
+                // AUDIT-2026-07 (CON-3): a transport terminating its incoming
+                // flow with a cause (e.g. a server-socket accept error while
+                // the transport is not closed) previously escaped this
+                // collector as an uncaught exception into the kit scope —
+                // crashing Android host apps via the default handler — and
+                // silently ended inbound acceptance for the kit's lifetime.
+                // Surface it through the injectable logger instead. Defined
+                // post-failure behavior: inbound acceptance on THIS transport
+                // stays down until a later transport start()/rebind re-serves
+                // its accept loop (the nullable-StateFlow server-socket design
+                // supports that); a bounded re-collect is a tracked follow-up,
+                // deliberately not added here. Per-connection setup failures
+                // are unaffected — [handleIncoming] already isolates them, so
+                // the collector keeps accepting subsequent peers.
+                // CancellationException is rethrown, never swallowed, so
+                // kit shutdown still tears the collector down promptly.
+                .catch { e ->
+                    if (e is CancellationException) throw e
+                    logger.warn("inbound acceptance ended for ${transport.type}", e)
+                }
                 .launchIn(scope)
         }
     }
@@ -172,7 +233,8 @@ internal class SessionManager(
                 rawConnection = rawConnection,
                 expectedPeer = peer,
                 isIncoming = false,
-                internalPeerForReconnect = internalPeer
+                internalPeerForReconnect = internalPeer,
+                isManualPeer = internalPeer.origin == PeerOrigin.Manual
             )
             deferred.complete(session)
             return session
@@ -185,19 +247,55 @@ internal class SessionManager(
     }
 
     private fun handleIncoming(connection: RawConnection) {
+        // AUDIT-2026-07 (SEC-1, decision #9a): inbound admission control,
+        // stage 1 — pre-handshake concurrency. Non-suspending tryAcquire so
+        // the accept collector never parks: once
+        // [MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS] inbound setups are in flight
+        // (e.g. many connections from a non-conforming device that never
+        // complete HELLO), further inbound connections are refused — closed
+        // immediately with a warn diagnostic, before any per-connection
+        // resources (event channel, reader job) are allocated. A conforming
+        // peer simply redials once capacity frees up.
+        if (!preHandshakeGate.tryAcquire()) {
+            logger.warn(
+                "Inbound connection refused: pre-handshake setups at capacity " +
+                    "($MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS)"
+            )
+            scope.launch { runCatching { connection.close() } }
+            return
+        }
         scope.launch {
+            // Exactly-once permit release: [setupSession] invokes
+            // onHandshakeSettled from a `finally` around the handshake, so
+            // BOTH outcomes — success and every failure path (setup timeout,
+            // handshake rejection, connection loss, cancellation) — release
+            // the permit. The outer `finally` below is a safety net for the
+            // theoretical window where this coroutine is torn down before
+            // [setupSession] runs; both call sites execute sequentially on
+            // this coroutine, so the plain [released] flag is race-free.
+            var released = false
+            val releaseOnce: () -> Unit = {
+                if (!released) {
+                    released = true
+                    preHandshakeGate.release()
+                }
+            }
             try {
                 setupSession(
                     rawConnection = connection,
                     expectedPeer = null,
                     isIncoming = true,
-                    internalPeerForReconnect = null
+                    internalPeerForReconnect = null,
+                    isManualPeer = false,
+                    onHandshakeSettled = releaseOnce
                 )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
                 logger.warn("Incoming session setup failed", e)
                 runCatching { connection.close() }
+            } finally {
+                releaseOnce()
             }
         }
     }
@@ -212,9 +310,23 @@ internal class SessionManager(
         rawConnection: RawConnection,
         expectedPeer: Peer?,
         isIncoming: Boolean,
-        internalPeerForReconnect: InternalPeer?
+        internalPeerForReconnect: InternalPeer?,
+        isManualPeer: Boolean = false,
+        /**
+         * AUDIT-2026-07 (SEC-1): invoked exactly once, from the `finally`
+         * below, the moment the handshake settles — on success AND on every
+         * failure path. [handleIncoming] passes its pre-handshake permit
+         * release here so admission capacity is returned as soon as the
+         * connection graduates from (or fails) the handshake, rather than
+         * being held through registration and the incoming-sessions emit.
+         */
+        onHandshakeSettled: (() -> Unit)? = null
     ): P2pSession {
-        val handshake = runHandshake(rawConnection, expectedPeer)
+        val handshake = try {
+            runHandshake(rawConnection, expectedPeer, isManualPeer)
+        } finally {
+            onHandshakeSettled?.invoke()
+        }
 
         val session = P2pSessionImpl(
             id = "${if (isIncoming) "in" else "out"}-${handshake.resolvedPeer.id.value}-${clock()}",
@@ -256,8 +368,15 @@ internal class SessionManager(
             is RegisterOutcome.Accepted -> outcome.session
             is RegisterOutcome.Replaced -> outcome.winner
             is RegisterOutcome.Rejected -> outcome.winner
+            // AUDIT-2026-07 (SEC-1): total-session bound refusal — the new
+            // session was never registered and is being closed by
+            // [registerSession]; return it to the (incoming-only) caller,
+            // which discards it. Never surfaced on [incomingSessions].
+            is RegisterOutcome.RefusedAtCapacity -> outcome.session
         }
-        if (isIncoming && outcome !is RegisterOutcome.Rejected) {
+        if (isIncoming &&
+            (outcome is RegisterOutcome.Accepted || outcome is RegisterOutcome.Replaced)
+        ) {
             _incomingSessions.emit(resultSession)
         }
         return resultSession
@@ -268,12 +387,23 @@ internal class SessionManager(
      * freshly-accepted [rawConnection]. Returns everything the session needs
      * to start consuming events. On any failure, closes the connection and
      * cancels the reader job before propagating.
+     *
+     * @param isManualPeer True when [expectedPeer] is a synthetic manual peer
+     *   ([PeerOrigin.Manual], minted by `registerManualPeer` from a
+     *   user-supplied host:port). Threaded down from the dialed
+     *   [InternalPeer]'s provenance — never inferred from the id string.
      */
     private suspend fun runHandshake(
         rawConnection: RawConnection,
-        expectedPeer: Peer?
+        expectedPeer: Peer?,
+        isManualPeer: Boolean
     ): HandshakeOutputs {
-        val eventChannel = Channel<ProtocolEvent>(capacity = Channel.UNLIMITED)
+        // Bounded so a peer flooding frames (or a slow local consumer) applies
+        // TCP backpressure instead of growing an unbounded in-memory queue —
+        // an UNLIMITED channel here was a remote-driven OOM vector
+        // (AUDIT-2026-06 fix). 256 events absorb normal bursts; when full the
+        // reader suspends and the kernel stops reading the socket.
+        val eventChannel = Channel<ProtocolEvent>(capacity = 256)
         val readerJob = scope.launch {
             try {
                 protocol.events(rawConnection).collect { event ->
@@ -299,9 +429,59 @@ internal class SessionManager(
                 localPlatform = localPlatform,
                 localTransports = localTransports
             )
+            // Identity check for OUTGOING connects: we dialed a specific peer
+            // (expectedPeer) at a discovery-supplied host:port. Any LAN device
+            // can answer on that address (spoof / race), so verify the remote's
+            // claimed PeerId in its HELLO matches who we intended to reach;
+            // otherwise we'd register a stranger under the expected peer's id.
+            // Under NoneForMvp this closes the accidental/active host:port-race
+            // case (full protection needs the security handshake).
+            //
+            // Synthetic manual peers are exempt: the caller only knows
+            // host:port, the placeholder id can never match the remote's real
+            // persisted PeerId, and rejecting would make every manual-IP
+            // fallback connect fail. Detection is provenance-based
+            // ([PeerOrigin.Manual] threaded down from the dialed InternalPeer)
+            // — never the "manual-" id-prefix, which a discovered peer could
+            // mimic to dodge this check (AUDIT-2026-06 fix, hardened 2026-07).
+            // The session keeps the DIALED manual identity (see resolvedPeer
+            // below) so repeat connect(manualPeer) calls resolve to the same
+            // registered session instead of churning a healthy one.
+            val isManual = isManualPeer
+            if (expectedPeer != null && !isManual &&
+                peerHello.peerId != expectedPeer.id.value
+            ) {
+                runCatching { protocol.sendError(rawConnection, "peerId mismatch") }
+                throw P2pError.HandshakeRejected(
+                    "peerId mismatch: expected ${expectedPeer.id.value} but remote announced ${peerHello.peerId}"
+                )
+            }
+            // Cheap inbound guard: reject a HELLO that claims OUR OWN peerId
+            // (impossible by construction from an honest peer; a spoof would
+            // poison the byPeer slot / simultaneous-open tie-break).
+            if (peerHello.peerId == localPeerId.value) {
+                runCatching { protocol.sendError(rawConnection, "peerId collision with local") }
+                throw P2pError.HandshakeRejected("remote announced our own peerId ${peerHello.peerId}")
+            }
+            // TODO(encryption-milestone): INBOUND peerId is otherwise still
+            // trusted at face value here — a rogue LAN peer sharing the appId
+            // can claim any *other* peerId and hijack that peer's session slot.
+            // Full identity verification (binding peerId to a key) is deferred
+            // to the SecurityManager/encryption milestone; under
+            // SecurityMode.NoneForMvp the LAN is the trust boundary. See
+            // AUDIT_REPORT_2026-06.md "inbound HELLO peerId never verified".
+            // Outgoing sessions ALWAYS keep the dialed identity — discovered
+            // peers because the mismatch check above proved it equals the
+            // HELLO id, manual peers because the synthetic id is what the
+            // caller holds and re-dials (adopting the HELLO id here broke
+            // connect() idempotency: the session registered under the remote's
+            // id, so the next connect(manualPeer) missed it, dialed again, and
+            // tore down the healthy session via Replaced arbitration). Only
+            // incoming sessions, which have no dialed identity, adopt the
+            // remote's HELLO identity.
+            val resolvedPeer = if (expectedPeer == null) peerHello.toPeer() else expectedPeer
             // Security wrap — no-op in v0.1 (NoOpSecurityManager returns a
             // passthrough), but keeps the future encryption hook open.
-            val resolvedPeer = expectedPeer ?: peerHello.toPeer()
             val secureConnection = security.performHandshake(rawConnection, resolvedPeer)
             return HandshakeOutputs(
                 secureConnection = secureConnection,
@@ -309,10 +489,26 @@ internal class SessionManager(
                 readerJob = readerJob,
                 resolvedPeer = resolvedPeer
             )
-        } catch (e: Throwable) {
+        } catch (e: CancellationException) {
             readerJob.cancel()
             runCatching { rawConnection.close() }
             throw e
+        } catch (e: P2pError) {
+            // Already typed (HandshakeRejected / VersionMismatch from
+            // performHandshake, or the peerId checks above) — surface as-is.
+            readerJob.cancel()
+            runCatching { rawConnection.close() }
+            throw e
+        } catch (e: Throwable) {
+            // AUDIT-2026-06: raw handshake-phase failures previously escaped
+            // connect() un-typed — e.g. a write error from sendHello, or the
+            // reader closing the events channel with an IOException that
+            // surfaces out of events.receive(). Wrap them so callers only ever
+            // see a documented P2pError, mirroring the transport-connect wrap
+            // in performConnect.
+            readerJob.cancel()
+            runCatching { rawConnection.close() }
+            throw P2pError.ConnectionFailed("Handshake failed: ${e.message}")
         }
     }
 
@@ -351,6 +547,19 @@ internal class SessionManager(
         private val originalInternalPeer: InternalPeer,
         private val policy: ReconnectPolicy.Enabled
     ) : ReconnectHandler {
+
+        /**
+         * Path-recovered generation snapshot taken at the Reconnecting edge by
+         * [onWillReconnect]. The retry loop waits for the counter to move past
+         * this, so a Satisfied transition arriving any time after we entered
+         * Reconnecting (even before the loop starts) wakes the dial early.
+         */
+        @kotlin.concurrent.Volatile
+        private var pathWakeBaseline: Int = pathSatisfiedGeneration.value
+
+        override fun onWillReconnect() {
+            pathWakeBaseline = pathSatisfiedGeneration.value
+        }
 
         override suspend fun onConnectionLost(session: P2pSessionImpl) {
             var attempt = 0
@@ -393,6 +602,14 @@ internal class SessionManager(
             // below on every exit path — success, exhaustion, or session
             // state change.
             val periodicRefreshJob = launchPeriodicRefresh(session, peerShort)
+            // Start from the baseline captured at the Reconnecting edge by
+            // [onWillReconnect] (NOT a fresh read here — refreshDiscovery above
+            // can take long enough under load that a Satisfied landing during
+            // it would otherwise be captured as the baseline and missed). Each
+            // iteration parks until the counter moves past lastPathGen, then
+            // re-snapshots. StateFlow retains its value, so a transition that
+            // already happened is observed immediately (no drop).
+            var lastPathGen = pathWakeBaseline
             try {
                 while (attempt < policy.maxAttempts) {
                     attempt++
@@ -404,8 +621,9 @@ internal class SessionManager(
                         // dial happens within milliseconds of the network coming
                         // back instead of after the full `retryDelayMillis`.
                         withTimeoutOrNull(policy.retryDelayMillis) {
-                            pathSatisfiedSignal.first()
+                            pathSatisfiedGeneration.first { it != lastPathGen }
                         }
+                        lastPathGen = pathSatisfiedGeneration.value
                     } catch (e: CancellationException) {
                         throw e
                     }
@@ -432,7 +650,16 @@ internal class SessionManager(
                     val outcome = runCatching {
                         val transport = transportManager.selectBestTransport(target)
                         val raw = transport.connect(target)
-                        runHandshake(raw, expectedPeer = expectedPeer)
+                        // Provenance is a property of how the session's dialed
+                        // identity was minted, fixed at connect time — reuse
+                        // the original InternalPeer's origin so a manual
+                        // session's re-handshake keeps the mismatch exemption
+                        // (the remote's HELLO can never equal the synthetic id).
+                        runHandshake(
+                            raw,
+                            expectedPeer = expectedPeer,
+                            isManualPeer = originalInternalPeer.origin == PeerOrigin.Manual
+                        )
                     }
 
                     val handshake = outcome.getOrElse { e ->
@@ -599,6 +826,22 @@ internal class SessionManager(
                 )
                 scope.launch { runCatching { outcome.loser.close() } }
             }
+            is RegisterOutcome.RefusedAtCapacity -> {
+                // AUDIT-2026-07 (SEC-1, decision #9a): inbound admission
+                // control, stage 2 — total-session bound. A net-new inbound
+                // session past [MAX_TOTAL_ACTIVE_SESSIONS] is refused: warn
+                // and close it cleanly (CLOSE frame, so the remote observes
+                // an orderly shutdown, never a retry-provoking failure).
+                // Refusal is a returned outcome + close, never an exception
+                // into the accept collector. Outgoing registrations and
+                // simultaneous-open arbitration (no net session growth) are
+                // exempt — see [SessionStore.tryRegister].
+                logger.warn(
+                    "Inbound session refused for peer ${peerId.value.take(8)}: " +
+                        "total active sessions at capacity ($MAX_TOTAL_ACTIVE_SESSIONS)"
+                )
+                scope.launch { runCatching { outcome.session.close() } }
+            }
         }
         return outcome
     }
@@ -633,7 +876,7 @@ internal class SessionManager(
      *   go straight to `Failed`. Concurrent triggers from PING failure or
      *   raw-state observers are de-duped by the connection lock in
      *   `onConnectionLost`.
-     * - [NetworkPathStatus.Satisfied]: emit to [pathSatisfiedSignal] so any
+     * - [NetworkPathStatus.Satisfied]: bump [pathSatisfiedGeneration] so any
      *   reconnect handler currently parked in `retryDelayMillis` wakes and
      *   attempts immediately.
      * - [NetworkPathStatus.Unknown]: no-op. Treated as "no information",
@@ -651,7 +894,7 @@ internal class SessionManager(
                 }
             }
             NetworkPathStatus.Satisfied -> {
-                pathSatisfiedSignal.tryEmit(Unit)
+                pathSatisfiedGeneration.update { it + 1 }
             }
             NetworkPathStatus.Unknown -> { /* no action */ }
         }
@@ -666,3 +909,32 @@ internal class SessionManager(
         }
     }
 }
+
+/**
+ * AUDIT-2026-07 (SEC-1, decision #9a): maximum number of inbound connections
+ * allowed to hold pre-handshake setup resources (bounded event channel +
+ * reader job + setup coroutine) concurrently. The 10 s handshake timeout
+ * bounds each individual setup's duration; this bounds their NUMBER, so
+ * malformed or excessive peer input (many connections that never complete
+ * HELLO) cannot drive unbounded fd/coroutine/heap growth. Connections past
+ * the bound are refused (closed + warn) before anything is allocated.
+ *
+ * Internal admission-control POLICY, not public API: the value may be tuned
+ * (or surfaced as configuration) in a later release without breaking anyone.
+ * A conforming mesh keeps handshakes sub-second, so 16 concurrent setups is
+ * ample headroom.
+ */
+internal const val MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS: Int = 16
+
+/**
+ * AUDIT-2026-07 (SEC-1, decision #9a): upper bound on total concurrently
+ * ACTIVE sessions before a net-new INBOUND session is refused at
+ * registration ([SessionStore.tryRegister]). Outgoing (app-initiated)
+ * connects are never refused by this bound, and simultaneous-open
+ * arbitration is exempt (replace/reject causes no net session growth).
+ * Terminal-but-not-yet-evicted sessions do not count.
+ *
+ * Internal admission-control POLICY, not public API: the value may be tuned
+ * (or surfaced as configuration) in a later release without breaking anyone.
+ */
+internal const val MAX_TOTAL_ACTIVE_SESSIONS: Int = 64

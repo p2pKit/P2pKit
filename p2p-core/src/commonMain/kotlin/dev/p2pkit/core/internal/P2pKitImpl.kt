@@ -33,7 +33,11 @@ import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -42,9 +46,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Production [P2pKit] implementation. Wired up by
@@ -69,11 +73,32 @@ internal class P2pKitImpl(
     private val logger: P2pLogger,
     private val clock: () -> Long,
     parentJob: Job?,
-    private val pathObserver: NetworkPathObserver
+    private val pathObserver: NetworkPathObserver,
+    /**
+     * Test-only (#19 / 2026-07 TST-9, decision #15a): forwarded to
+     * [SessionManager] → [SessionStore] so bookkeeping-invariant violations
+     * throw instead of `logger.warn`ing. Production default `false`
+     * (log-don't-crash); set only through the internal
+     * [dev.p2pkit.core.dsl.P2pKitBuilder.strictSessionInvariants] knob,
+     * which the commonTest `createTestKit` fixture enables.
+     */
+    private val strictSessionInvariants: Boolean = false
 ) : P2pKit {
 
     private val internalJob = SupervisorJob(parent = parentJob)
-    private val scope = CoroutineScope(Dispatchers.Default + internalJob)
+
+    // AUDIT-2026-07 (CON-3 rider, ARCH-4): kit-scope CoroutineExceptionHandler.
+    // The SupervisorJob already keeps sibling coroutines alive, but an uncaught
+    // failure in any internal collector previously escalated to the platform's
+    // default handler — which terminates the host process on Android. Route it
+    // to the injectable logger instead: crash prevention / defense-in-depth
+    // behind the per-collector handling (e.g. startAcceptingIncoming's catch).
+    // CancellationException never reaches a CoroutineExceptionHandler, so
+    // cancellation semantics are untouched.
+    private val uncaughtHandler = CoroutineExceptionHandler { _, e ->
+        logger.error("P2pKit internal coroutine failed uncaught", e)
+    }
+    private val scope = CoroutineScope(Dispatchers.Default + internalJob + uncaughtHandler)
 
     override val networkProvisioning: NetworkProvisioningManager
 
@@ -107,6 +132,12 @@ internal class P2pKitImpl(
     // re-checks under the lock. Worst case is one extra `withLock` round-trip.
     private val startMutex = Mutex()
     private var startResult: Result<Unit>? = null
+
+    // Set once by [stop]. A stopped kit is terminal: its internal scope is
+    // cancelled and cannot be revived, so every lifecycle entry point rejects
+    // further calls instead of silently returning success onto a dead scope.
+    @kotlin.concurrent.Volatile
+    private var stopped: Boolean = false
 
     init {
         // V0.4-PROVENANCE (L2): emit framework identity to BOTH the
@@ -171,7 +202,8 @@ internal class P2pKitImpl(
                             )
                         }
                 }
-            }
+            },
+            strictInvariants = strictSessionInvariants
         )
         peerRegistry.start()
         sessionManager.startAcceptingIncoming(dataTransports)
@@ -239,15 +271,37 @@ internal class P2pKitImpl(
      * failed without inspecting the cause's class.
      */
     private suspend fun ensureStarted() {
+        if (stopped) throw IllegalStateException("P2pKit has been stopped; create a new instance")
         startResult?.let { prior ->
             if (prior.isSuccess) return
         }
         startMutex.withLock {
+            if (stopped) throw IllegalStateException("P2pKit has been stopped; create a new instance")
             startResult?.let { prior ->
                 if (prior.isSuccess) return
             }
+            // Drive the documented lifecycle: Idle/Failed -> Starting on the
+            // first (or retried) start attempt.
+            if (_state.value == P2pState.Idle || _state.value is P2pState.Failed) {
+                _state.value = P2pState.Starting
+            }
             for (transport in dataTransports) {
-                val r = runCatching { transport.start() }.getOrElse { Result.failure(it) }
+                // AUDIT-2026-07 (ARCH-1): rethrow cancellation before any
+                // wrapping or latching. The previous `runCatching` captured
+                // CancellationException too, so a caller cancelled mid-bind
+                // (a routine host-lifecycle event, e.g. an Android scope
+                // cancelling `kit.start()`) had its CE converted into
+                // TransportStartFailed, `startResult` latched as failure, and
+                // the public state corrupted to Failed. On cancellation we
+                // leave `startResult` and `_state` untouched (still Starting)
+                // so a subsequent start() retries cleanly.
+                val r = try {
+                    transport.start()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    Result.failure(e)
+                }
                 if (r.isFailure) {
                     val cause = r.exceptionOrNull()
                     val failed = P2pError.TransportStartFailed(
@@ -256,15 +310,40 @@ internal class P2pKitImpl(
                         underlying = cause
                     )
                     startResult = Result.failure(failed)
+                    // Surface the documented terminal Failed state (Errors.kt
+                    // claims TransportStartFailed surfaces through the lifecycle)
+                    // — unless stop() ran meanwhile via its mutex-starvation
+                    // fallback (see below): Stopped must not be overwritten by
+                    // a late Failed (AUDIT-2026-06).
+                    if (!stopped) _state.value = P2pState.Failed(failed)
                     throw failed
                 }
+            }
+            // AUDIT-2026-06 (stop-hang fix): stop() bounds its wait for this
+            // mutex; if one of the transport.start() calls above hung past
+            // that bound, stop() has already torn the kit down WITHOUT the
+            // lock. Re-check before latching success — a Stopped kit must
+            // never latch startResult=success or flip (back) to Running.
+            // Close whatever this bind loop just (re)opened; transport
+            // close() is idempotent for the ones stop() already closed.
+            if (stopped) {
+                for (transport in dataTransports) {
+                    runCatching { transport.close() }
+                }
+                throw IllegalStateException("P2pKit has been stopped; create a new instance")
             }
             // Best-effort path observer startup. A failure here is logged
             // but never propagates — `networkPathStatus` simply stays at
             // [NetworkPathStatus.Unknown] and the SDK behaves as if no
-            // observer is wired up.
-            runCatching { pathObserver.start() }.onFailure {
-                logger.warn("NetworkPathObserver.start() failed; path-change recovery disabled for this session", it)
+            // observer is wired up. Cancellation of the calling coroutine is
+            // NOT a failure, though: rethrow it instead of logging it away
+            // (AUDIT-2026-07 (ARCH-1), same shape as the bind loop above).
+            try {
+                pathObserver.start()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                logger.warn("NetworkPathObserver.start() failed; path-change recovery disabled for this session", e)
             }
             // Subscribe SessionManager to path changes. Done after the
             // observer starts so [SessionManager.applyPathChange] sees the
@@ -276,24 +355,41 @@ internal class P2pKitImpl(
                 }
             }
             startResult = Result.success(Unit)
+            // Successful start reaches Running, regardless of which entry point
+            // (start / startAdvertising / startDiscovery / connect) triggered it.
+            _state.value = P2pState.Running
         }
     }
 
     override suspend fun startAdvertising() {
         ensurePermissions()
         ensureStarted()
-        _state.value = P2pState.Starting
-        val localInfo = LocalPeerInfo(
-            peerId = localPeerId,
-            deviceName = deviceName,
-            platform = localPlatform,
-            appId = appId,
-            supportedTransports = supportedTransportKinds
-        )
-        for (transport in discoveryTransports) {
-            transport.startAdvertising(localInfo)
+        try {
+            val localInfo = LocalPeerInfo(
+                peerId = localPeerId,
+                deviceName = deviceName,
+                platform = localPlatform,
+                appId = appId,
+                supportedTransports = supportedTransportKinds
+            )
+            for (transport in discoveryTransports) {
+                transport.startAdvertising(localInfo)
+            }
+            // A successful (re)advertise must clear a previously latched
+            // Failed: ensureStarted's success fast-path never re-runs the
+            // Running transition, so without this the kit reported Failed
+            // forever even though everything works (AUDIT-2026-06 fix).
+            if (_state.value is P2pState.Failed) _state.value = P2pState.Running
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // A partial advertise failure must not leave state stuck — surface
+            // it as Failed (consistent with the ensureStarted bind-failure path).
+            val err = if (e is P2pError) e
+            else P2pError.ConnectionFailed("startAdvertising failed: ${e.message ?: e::class.simpleName}")
+            _state.value = P2pState.Failed(err)
+            throw err
         }
-        _state.value = P2pState.Running
     }
 
     override suspend fun stopAdvertising() {
@@ -305,8 +401,21 @@ internal class P2pKitImpl(
     override suspend fun startDiscovery() {
         ensurePermissions()
         ensureStarted()
-        for (transport in discoveryTransports) {
-            transport.startDiscovery()
+        try {
+            for (transport in discoveryTransports) {
+                transport.startDiscovery()
+            }
+            if (_state.value is P2pState.Failed) _state.value = P2pState.Running
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // Mirror startAdvertising: surface a typed error instead of
+            // letting a raw platform exception escape the public API
+            // (AUDIT-2026-06 fix).
+            val err = if (e is P2pError) e
+            else P2pError.ConnectionFailed("startDiscovery failed: ${e.message ?: e::class.simpleName}")
+            _state.value = P2pState.Failed(err)
+            throw err
         }
     }
 
@@ -331,14 +440,19 @@ internal class P2pKitImpl(
     override fun lastSeen(peerId: PeerId): Long? = peerRegistry.lastSeen(peerId)
 
     override fun notifyAppBackgrounded() {
-        sessionManager.applyBackgroundPolicy(backgroundPolicy)
         when (backgroundPolicy) {
             is BackgroundPolicy.CloseActiveSessions -> {
+                // Close sessions + pause advertising/discovery, but do NOT emit
+                // P2pState.Stopped: the data transports stay bound (only stop()
+                // closes them) and the kit is still functional, so reporting
+                // Stopped would lie to host UIs and never recover on foreground.
+                // applyBackgroundPolicy already closes active sessions; don't
+                // double-close here.
                 scope.launch {
                     runCatching { stopAdvertising() }
                     runCatching { stopDiscovery() }
-                    _state.value = P2pState.Stopped
                 }
+                sessionManager.applyBackgroundPolicy(backgroundPolicy)
             }
             is BackgroundPolicy.KeepRunning -> { /* nothing to do */ }
         }
@@ -350,21 +464,145 @@ internal class P2pKitImpl(
     }
 
     override suspend fun stop() {
-        _state.value = P2pState.Stopping
+        // Terminal & idempotent. internalJob.cancel() below permanently kills
+        // the scope that powers SessionManager / PeerRegistry / accept loops,
+        // so the instance cannot be revived — the `stopped` flag makes any
+        // subsequent lifecycle call fail loudly (IllegalStateException) instead
+        // of latching onto a dead scope and silently no-op'ing.
+        if (stopped) return
+        // NonCancellable: `stopped` latches at entry, so if the caller's
+        // coroutine were cancelled mid-teardown the kit would be permanently
+        // half-stopped (transports bound, scope alive) with every later
+        // stop() a no-op. closeAllSessions is additionally runCatching-
+        // wrapped so one bad session cannot abort the rest of teardown
+        // (AUDIT-2026-06 fix).
+        withContext(NonCancellable) {
+            // Latch BEFORE anything that can suspend: ensureStarted re-checks
+            // `stopped` after its bind loop, so even the lock-less fallback
+            // below cannot be raced by a late Running/startResult latch.
+            stopped = true
+            _state.value = P2pState.Stopping
+            // startMutex: a concurrent ensureStarted mid-bind must not
+            // interleave with teardown (it could keep binding transports
+            // after we closed them, then latch Running/startResult-success
+            // AFTER Stopped). But the acquisition must be BOUNDED: if
+            // ensureStarted is parked inside a hung transport.start() while
+            // holding this mutex, an unbounded withLock would park stop()
+            // uncancellably (inside NonCancellable) forever
+            // (AUDIT-2026-06 fix). On timeout, tear down WITHOUT the lock —
+            // best-effort, and safe against a late rebind because `stopped`
+            // is already set and ensureStarted's post-bind re-check closes
+            // anything it bound in the meantime.
+            val acquired = withTimeoutOrNull(STOP_START_MUTEX_TIMEOUT_MS) {
+                startMutex.withLock { teardownBoundResources() }
+                true
+            } ?: false
+            if (!acquired) {
+                logger.warn(
+                    "stop(): startMutex not released within ${STOP_START_MUTEX_TIMEOUT_MS}ms " +
+                        "(a transport start() is likely hung); tearing down without the lock"
+                )
+                teardownBoundResources()
+            }
+
+            // AUDIT-2026-07 (ARCH-2): this tail previously ran OUTSIDE the
+            // NonCancellable block and unbounded, with two failure shapes:
+            // a caller cancelled mid-teardown aborted `pathObserver.close()`
+            // at its first suspension point (the platform observer leaked and
+            // Stopped was never latched by this call), and a close() parked
+            // on the observer's internal mutex (e.g. one still held by a hung
+            // observer start()) parked stop() forever. Keep it inside
+            // NonCancellable and bound the observer close, mirroring the
+            // bounded startMutex acquisition above (AUDIT-2026-06 pattern).
+            //
+            // Provisioning managers attach their scope to internalJob; the
+            // internalJob.cancel() below fires their invokeOnCompletion
+            // teardown (e.g. AndroidNetworkProvisioningManager releases its
+            // LocalOnlyHotspot reservation and unbinds the joined network
+            // there).
+            val observerClosed = withTimeoutOrNull(OBSERVER_CLOSE_TIMEOUT_MS) {
+                try {
+                    pathObserver.close()
+                } catch (e: CancellationException) {
+                    // Only the bounding timeout's own cancellation can reach
+                    // here (this block is NonCancellable from the outside);
+                    // rethrow so withTimeoutOrNull reports it as `null`.
+                    throw e
+                } catch (e: Throwable) {
+                    logger.warn("NetworkPathObserver.close() failed during stop()", e)
+                }
+                true
+            } ?: false
+            if (!observerClosed) {
+                logger.warn(
+                    "stop(): NetworkPathObserver.close() did not complete within " +
+                        "${OBSERVER_CLOSE_TIMEOUT_MS}ms; abandoning it (its platform monitor " +
+                        "may stay attached until process exit)"
+                )
+            }
+            internalJob.cancel()
+            _state.value = P2pState.Stopped
+        }
+    }
+
+    /**
+     * The teardown body shared by [stop]'s locked (normal) and lock-less
+     * (mutex-starved) paths. Every step is runCatching-wrapped and idempotent
+     * (sessions/transports tolerate double close), so the rare interleavings —
+     * two concurrent first `stop()` calls, or the timeout firing mid-teardown
+     * and the fallback re-running it — are safe.
+     */
+    private suspend fun teardownBoundResources() {
         runCatching { stopAdvertising() }
         runCatching { stopDiscovery() }
-        sessionManager.closeAllSessions()
+        runCatching { sessionManager.closeAllSessions() }
         for (transport in dataTransports) {
             runCatching { transport.close() }
         }
-        runCatching { pathObserver.close() }
-        internalJob.cancel()
-        _state.value = P2pState.Stopped
     }
 
+    // Gates on genuinely runtime-requestable permissions only (e.g. the
+    // provisioning sidecar's NEARBY_WIFI_DEVICES / ACCESS_FINE_LOCATION via
+    // its own P2pPermissionManager). The default platform managers report
+    // none — Android's install-time Wi-Fi permissions are deliberately NOT
+    // surfaced here; a missing manifest declaration is a construction-time
+    // warn instead (AUDIT-2026-06 permission-gate regression fix; see
+    // PermissionManagerFactory.android.kt).
     private suspend fun ensurePermissions() {
         val missing = permissions.missingPermissions()
         if (missing.isNotEmpty()) throw P2pError.PermissionMissing(missing)
+    }
+
+    /**
+     * TEST-ONLY seam (#19 / 2026-07 P1-03) — never call from production
+     * code. Forwards to [SessionManager.forceStoreInvariantViolationForTest]
+     * so the strict-invariants meta-test can prove that a bookkeeping
+     * violation inside a **kit-built** store throws under
+     * [strictSessionInvariants] (and only warns under the production
+     * default), validating the builder → kit → manager → store threading
+     * end to end.
+     */
+    internal suspend fun forceSessionStoreInvariantViolationForTest(session: P2pSession) {
+        sessionManager.forceStoreInvariantViolationForTest(session)
+    }
+
+    private companion object {
+        /**
+         * How long [stop] waits to take [startMutex] from a concurrent
+         * [ensureStarted] before falling back to lock-less teardown. Generous
+         * next to any healthy transport bind (milliseconds); only a hung
+         * `transport.start()` holds the mutex this long (AUDIT-2026-06,
+         * stop-hang fix).
+         */
+        const val STOP_START_MUTEX_TIMEOUT_MS: Long = 5_000
+
+        /**
+         * How long [stop] waits for [NetworkPathObserver.close] before
+         * abandoning it. A healthy observer detaches in microseconds; only
+         * one parked on its own internal state (e.g. a mutex still held by a
+         * hung `start()`) reaches this bound (AUDIT-2026-07 (ARCH-2)).
+         */
+        const val OBSERVER_CLOSE_TIMEOUT_MS: Long = 5_000
     }
 }
 
@@ -387,10 +625,13 @@ internal fun newP2pKit(
     fileTransferConfig: FileTransferConfig,
     logger: P2pLogger,
     peerIdStorageOverride: PeerIdStorage? = null,
-    networkPathObserverOverride: NetworkPathObserver? = null
+    networkPathObserverOverride: NetworkPathObserver? = null,
+    permissionManagerOverride: dev.p2pkit.core.permission.P2pPermissionManager? = null,
+    strictSessionInvariants: Boolean = false
 ): P2pKit {
     val peerIdStorage = peerIdStorageOverride ?: defaultPeerIdStorage(appId, logger)
     val pathObserver = networkPathObserverOverride ?: defaultNetworkPathObserver(logger)
+    val permissionManager = permissionManagerOverride ?: defaultPlatformPermissionManager(logger)
     return P2pKitImpl(
         appId = appId,
         deviceName = deviceName,
@@ -405,10 +646,11 @@ internal fun newP2pKit(
         provisioningConfig = provisioningConfig,
         provisioningFactory = provisioningFactory,
         fileTransferConfig = fileTransferConfig,
-        permissions = dev.p2pkit.core.permission.NoOpP2pPermissionManager(),
+        permissions = permissionManager,
         logger = logger,
         clock = ::systemTimeMillis,
         parentJob = null,
-        pathObserver = pathObserver
+        pathObserver = pathObserver,
+        strictSessionInvariants = strictSessionInvariants
     )
 }

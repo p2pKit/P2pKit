@@ -22,6 +22,7 @@ import dev.p2pkit.core.provisioning.WifiCredentials
 import dev.p2pkit.core.provisioning.WifiPassword
 import dev.p2pkit.core.provisioning.WifiSecurityType
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -48,7 +49,8 @@ class AndroidNetworkProvisioningManagerTest {
 
     private fun ctx(
         lanTcpPort: Int? = 42_000,
-        registrar: ManualPeerRegistrar = RecordingRegistrar()
+        registrar: ManualPeerRegistrar = RecordingRegistrar(),
+        parentJob: Job? = null
     ): ProvisioningContext = ProvisioningContext(
         appId = AppId("provisioning-android-test"),
         localPeerId = PeerId("local-id"),
@@ -56,7 +58,8 @@ class AndroidNetworkProvisioningManagerTest {
         config = NetworkProvisioningConfig(enableLocalHotspot = true),
         logger = P2pLogger.NoOp,
         lanTcpPort = { lanTcpPort },
-        manualPeerRegistrar = registrar
+        manualPeerRegistrar = registrar,
+        parentJob = parentJob
     )
 
     @Test
@@ -291,7 +294,9 @@ class AndroidNetworkProvisioningManagerTest {
             val result = mgr.joinLocalNetwork(testCreds)
             val failed = assertIs<JoinNetworkResult.Failed>(result)
             val err = assertIs<NetworkProvisioningError.JoinFailed>(failed.error)
-            assertTrue(err.reason.contains("already in progress"))
+            // AUDIT-2026-07 (PRM-16, decision #8c): the refusal names the
+            // actual state — an active joined network — not "in progress".
+            assertTrue(err.reason.contains("already active"))
         } finally {
             mgr.close()
         }
@@ -318,8 +323,120 @@ class AndroidNetworkProvisioningManagerTest {
             val ev = withTimeout(2_000) { failedEventDeferred.await() }
             val err = assertIs<NetworkProvisioningError.JoinFailed>(ev.error)
             assertTrue(err.reason.contains("MIUI battery policy"))
+            // 2026-07 review P1-28 (A09 §3 r3): the release handler must
+            // close() the JoinHandle before dropping it — close() is the only
+            // path that clears the process-network binding and unregisters
+            // the NetworkCallback (close-before-drop, AUDIT-2026-06 fix).
+            assertTrue(
+                wifi.lastJoinHandle?.isClosed == true,
+                "System-initiated join release must close the JoinHandle"
+            )
+            assertIs<NetworkProvisioningState.Failed>(mgr.state.value)
+            // The handle slot is cleared: a follow-up join must not be
+            // rejected as "already active".
+            assertIs<JoinNetworkResult.Joined>(mgr.joinLocalNetwork(testCreds))
         } finally {
             mgr.close()
+        }
+    }
+
+    // ---- parent-job teardown path (2026-07 review P1-27, PRM-10, A09 §3 r2) ----
+    // Production tears the manager down via P2pKit.stop() cancelling
+    // ProvisioningContext.parentJob — the init-block invokeOnCompletion — not
+    // via an explicit close() call. These tests exercise that path directly.
+
+    @Test
+    fun parentJobCancellationClosesHotspotReservation() = runBlocking<Unit> {
+        val parentJob = Job()
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.Start(
+                credentials = testCreds,
+                apHosts = listOf("192.168.43.1")
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(parentJob = parentJob), wifi)
+        try {
+            mgr.startLocalNetwork(LocalNetworkConfig())
+            assertTrue(wifi.lastHandle?.isClosed == false, "Reservation must be open while running")
+
+            parentJob.cancel()
+            parentJob.join() // parent completes only after the manager scope (its child) completed
+
+            assertTrue(
+                wifi.lastHandle?.isClosed == true,
+                "Kit-stop path (parent-job cancellation) must close the hotspot reservation"
+            )
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun parentJobCancellationClosesJoinBinding() = runBlocking<Unit> {
+        val parentJob = Job()
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.JoinSucceeds(
+                networkState = dev.p2pkit.core.provisioning.NetworkState.ConnectedToWifi(
+                    ssid = null,
+                    localIpAddresses = listOf("192.168.43.55")
+                )
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(parentJob = parentJob), wifi)
+        try {
+            assertIs<JoinNetworkResult.Joined>(mgr.joinLocalNetwork(testCreds))
+            assertTrue(wifi.lastJoinHandle?.isClosed == false, "Join binding must be open while joined")
+
+            parentJob.cancel()
+            parentJob.join()
+
+            assertTrue(
+                wifi.lastJoinHandle?.isClosed == true,
+                "Kit-stop path (parent-job cancellation) must close the join binding"
+            )
+        } finally {
+            mgr.close()
+        }
+    }
+
+    /**
+     * Divergence note (2026-07 review P1-27): the coverage plan expects a
+     * start attempted after the parent job is cancelled to be refused. The
+     * current implementation does not consult scope liveness on the start
+     * path: the start is accepted and returns Started, and because the
+     * scope's completion handler has already fired, the new reservation is
+     * outside the automatic parent-job cleanup — only an explicit close()
+     * releases it. This test pins the CURRENT behavior so a future refusal
+     * guard is added deliberately (with this test updated), not by accident.
+     */
+    @Test
+    fun startAfterParentJobCancellationIsCurrentlyAcceptedNotRefused() = runBlocking<Unit> {
+        val parentJob = Job()
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.Start(
+                credentials = testCreds,
+                apHosts = listOf("192.168.43.1")
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(parentJob = parentJob), wifi)
+        try {
+            parentJob.cancel()
+            parentJob.join()
+
+            val result = mgr.startLocalNetwork(LocalNetworkConfig())
+
+            // Pins the current (divergent) behavior: accepted, not refused.
+            assertIs<LocalNetworkResult.Started>(result)
+            // The post-cancellation reservation is not covered by the
+            // parent-job completion handler (it already ran).
+            assertTrue(wifi.lastHandle?.isClosed == false)
+        } finally {
+            mgr.close()
+            // Explicit close() remains the only release path for it.
+            assertTrue(
+                wifi.lastHandle?.isClosed == true,
+                "Explicit close() must release the post-cancellation reservation"
+            )
         }
     }
 
@@ -370,6 +487,11 @@ private class FakeWifiManagerWrapper(
     }
 
     override fun isWifiEnabled(): Boolean = true
+
+    override val isLocalOnlyHotspotSupported: Boolean = true
+    override val isSpecifierJoinSupported: Boolean = true
+    override fun requiredRuntimePermission() =
+        dev.p2pkit.core.permission.P2pPermission.NearbyWifiDevices
 
     override suspend fun startLocalOnlyHotspot(): HotspotStartResult {
         return when (val b = behavior) {

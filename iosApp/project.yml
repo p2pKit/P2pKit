@@ -26,6 +26,11 @@ targets:
         # iOS 14+ silently zeroes out NWListener/NWBrowser unless these two
         # keys are present. Defining them here makes them survive
         # `xcodegen generate` re-runs.
+        # AUDIT-2026-06: load-bearing — keep NSLocalNetworkUsageDescription
+        # and NSBonjourServices ("_p2pkit._tcp") in THIS block. They are
+        # written into the generated Info.plist on every `xcodegen generate`,
+        # so declaring them here (not hand-editing the xcodeproj) is what
+        # makes discovery survive project regeneration.
         NSLocalNetworkUsageDescription: "P2pKit needs local network access to discover nearby devices over Bonjour and exchange messages over TCP."
         NSBonjourServices:
           - "_p2pkit._tcp"
@@ -39,8 +44,12 @@ targets:
         # XCFramework path is relative to the Xcode project root (iosApp/).
         # `..` walks up to the repo root.
         FRAMEWORK_SEARCH_PATHS: "$(SRCROOT)/../p2p-transport-lan/build/XCFrameworks/release"
-        # Default to manual signing; switch to ON for device builds once
-        # you've logged into your Apple ID in Xcode (one-time, see README).
+        # AUDIT-2026-06 (ARCH-samples-24): automatic signing is the default —
+        # Xcode picks a development team itself once you've logged into your
+        # Apple ID (one-time, see README). For manual provisioning-profile
+        # control, change this to `Manual` and add DEVELOPMENT_TEAM +
+        # PROVISIONING_PROFILE_SPECIFIER. (The old comment claimed the
+        # opposite of the configured value.)
         CODE_SIGN_STYLE: Automatic
         # Tell Xcode to expect the XCFramework here:
         OTHER_LDFLAGS:
@@ -50,3 +59,16 @@ targets:
       - framework: ../p2p-transport-lan/build/XCFrameworks/release/P2pKitShared.xcframework
         embed: true
         codeSign: true
+    preBuildScripts:
+      # AUDIT-2026-06 (A-G9-samples-desktop-ios-11): the V0.4-PROVENANCE (L3)
+      # freshness gate used to be hand-wired as a Run Script phase in the
+      # git-ignored xcodeproj, so every `xcodegen generate` (run via
+      # scripts/run-ios-app.sh or :iosApp:regenerateXcodeProject) silently
+      # erased it and stale XCFrameworks could reach the device through the
+      # normal build flow. Declaring the phase here makes it survive
+      # regeneration. The inline `sh` trampoline (instead of `path:`, which
+      # inlines the file's contents at generation time) means edits to
+      # scripts/check-xcframework.sh take effect without re-running xcodegen.
+      - name: "Check P2pKitShared XCFramework provenance"
+        script: sh "$SRCROOT/scripts/check-xcframework.sh"
+        basedOnDependencyAnalysis: false

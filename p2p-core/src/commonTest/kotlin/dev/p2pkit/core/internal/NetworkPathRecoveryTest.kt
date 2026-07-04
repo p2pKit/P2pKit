@@ -12,11 +12,14 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.FakeNetworkPathObserver
+import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -50,7 +53,7 @@ class NetworkPathRecoveryTest {
         policy: ReconnectPolicy,
         observer: FakeNetworkPathObserver,
         outgoingFactory: () -> RawConnection
-    ): P2pKit = P2pKit.create {
+    ): P2pKit = createTestKit {
         appId = AppId("com.example.test")
         deviceName = name
         keepAlive {
@@ -70,13 +73,16 @@ class NetworkPathRecoveryTest {
     }
 
     private fun incomingKit(name: String, preStaged: List<RawConnection>): P2pKit =
-        P2pKit.create {
+        createTestKit {
             appId = AppId("com.example.test")
             deviceName = name
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000
             }
+            // Match the dialed id ("bob-id") so the outgoing handshake's peerId
+            // verification passes (mirrors production discovery).
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
             transports {
                 register(PathRecoveryTestFactory(FakeDataTransport(preStagedIncoming = preStaged)))
             }
@@ -169,19 +175,25 @@ class NetworkPathRecoveryTest {
             // onConnectionLost; the connection lock short-circuits the
             // second one. Session is now Reconnecting and the handler is
             // parked in `withTimeoutOrNull(5_000) { pathSatisfied.first() }`.
-            pair1.a.breakWith(RuntimeException("simulated wire break"))
+            pair1.a.breakWithException(RuntimeException("simulated wire break"))
             fake.emit(NetworkPathStatus.Unsatisfied)
             withTimeout(5_000) {
                 session.state.first { it == ConnectionState.Reconnecting }
             }
 
-            // Wake the parked retry by emitting Satisfied. Without the
-            // signal, the test would have to wait the full 5 s.
+            // Wake the parked retry by emitting Satisfied. The generation-
+            // counter signal (AUDIT-2026-06 fix in SessionManager) retains the
+            // transition even if it lands before the handler parks, so a single
+            // emit is now race-free.
             fake.emit(NetworkPathStatus.Satisfied)
 
-            // Bounded < retryDelayMillis to prove the signal woke the
-            // handler early.
-            val rearmed = withTimeout(2_000) {
+            // Bounded well under retryDelayMillis (5_000) to prove the signal
+            // woke the handler early rather than the delay expiring. 3_500ms
+            // (not a tighter 2_000) keeps the assertion robust when the full
+            // test suite runs in parallel and saturates the CPU — the rearm
+            // handshake still completes far inside the 5 s delay
+            // (AUDIT-2026-06).
+            val rearmed = withTimeout(3_500) {
                 session.state.first { it == ConnectionState.Connected }
             }
             assertEquals(ConnectionState.Connected, rearmed)

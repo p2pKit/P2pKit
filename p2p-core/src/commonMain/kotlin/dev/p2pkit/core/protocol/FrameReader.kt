@@ -50,7 +50,19 @@ internal class FrameReader(
             if (payloadLen < 0) {
                 throw P2pError.ProtocolError("Negative payload length in header: $payloadLen")
             }
-            val frameSize = ProtocolConstants.HEADER_SIZE + payloadLen
+            // Reject an oversized declared length BEFORE we wait for / allocate
+            // that many bytes. Without this a peer can declare a ~2 GiB payload
+            // and drive the process to OOM (FrameReader buffers until the full
+            // frame arrives). Closes the session. See ProtocolConstants.
+            if (payloadLen > ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES) {
+                throw P2pError.ProtocolError(
+                    "Frame payload length $payloadLen exceeds maximum " +
+                        "${ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES}"
+                )
+            }
+            // Long arithmetic guards against Int overflow near Int.MAX_VALUE;
+            // safe to narrow once we know payloadLen is within the cap above.
+            val frameSize = (ProtocolConstants.HEADER_SIZE.toLong() + payloadLen).toInt()
             if (buffer.size < frameSize) break
 
             val frameBytes = buffer.copyOfRange(0, frameSize)

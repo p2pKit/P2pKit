@@ -2,7 +2,6 @@ package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
-import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -11,6 +10,7 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.FakeDiscoveryTransport
+import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.PeerEvent
@@ -48,6 +48,14 @@ class SessionReconnectRotationTest {
         supportedTransports = setOf(TransportKind.LAN)
     )
 
+    // AUDIT-2026-06: bound for waiting on a discovery emit() to propagate
+    // through PeerRegistry's async onEach pipeline into the `peers` StateFlow.
+    // Widened from 2_000 because the suite runs in parallel (org.gradle.parallel)
+    // and saturates CPU — the propagation itself is sub-200ms, but a starved
+    // scheduler can blow a tighter bound and flake the suite. Mirrors the
+    // NetworkPathRecoveryTest 3_500ms widening.
+    private val peerPropagationTimeoutMs = 3_500L
+
     @Test
     fun reconnectUsesRefreshedHintsAfterPeerRegistryUpdate() = runBlocking<Unit> {
         // Two pre-staged pairs: first breaks, second is what the retry reaches.
@@ -64,7 +72,7 @@ class SessionReconnectRotationTest {
         val bobV1 = InternalPeer(publicPeer = bobPeer, transportHints = hintsV1)
         val bobV2 = InternalPeer(publicPeer = bobPeer, transportHints = hintsV2)
 
-        val alice = P2pKit.create {
+        val alice = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Alice"
             keepAlive {
@@ -87,9 +95,12 @@ class SessionReconnectRotationTest {
                 register(RotationTestFactory(aliceData, aliceDiscovery))
             }
         }
-        val bob = P2pKit.create {
+        val bob = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Bob"
+            // Match the dialed id ("bob-id") so the outgoing handshake's peerId
+            // verification passes (mirrors production discovery).
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000
@@ -108,7 +119,7 @@ class SessionReconnectRotationTest {
         try {
             // Seed alice's PeerRegistry with bobV1.
             aliceDiscovery.emit(PeerEvent.Found(bobV1))
-            withTimeout(2_000) {
+            withTimeout(peerPropagationTimeoutMs) {
                 alice.peers.first { list -> list.any { it.id == bobPeer.id } }
             }
 
@@ -124,7 +135,7 @@ class SessionReconnectRotationTest {
 
             // Break the wire — session goes Reconnecting and the handler
             // parks on retryDelayMillis OR pathSatisfiedSignal.
-            pair1.a.breakWith(RuntimeException("simulated wire break"))
+            pair1.a.breakWithException(RuntimeException("simulated wire break"))
             withTimeout(5_000) {
                 session.state.first { it == ConnectionState.Reconnecting }
             }
@@ -168,7 +179,7 @@ class SessionReconnectRotationTest {
         val hintsV1 = listOf(TransportHint(TransportKind.LAN, host = "10.0.0.5", port = 4000))
         val bobV1 = InternalPeer(publicPeer = bobPeer, transportHints = hintsV1)
 
-        val alice = P2pKit.create {
+        val alice = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Alice"
             keepAlive {
@@ -185,9 +196,12 @@ class SessionReconnectRotationTest {
                 register(RotationTestFactory(aliceData, aliceDiscovery))
             }
         }
-        val bob = P2pKit.create {
+        val bob = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Bob"
+            // Match the dialed id ("bob-id") so the outgoing handshake's peerId
+            // verification passes (mirrors production discovery).
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000
@@ -209,7 +223,7 @@ class SessionReconnectRotationTest {
             // staleTimeoutMillis). The reconnect handler should fall back
             // to its originalInternalPeer capture.
             aliceDiscovery.emit(PeerEvent.Found(bobV1))
-            withTimeout(2_000) {
+            withTimeout(peerPropagationTimeoutMs) {
                 alice.peers.first { list -> list.any { it.id == bobPeer.id } }
             }
             val session = withTimeout(5_000) { alice.connect(bobPeer) }
@@ -217,10 +231,22 @@ class SessionReconnectRotationTest {
             assertEquals(hintsV1, aliceData.connectCalls[0].transportHints)
 
             // Break the wire and immediately evict the peer from the registry.
-            pair1.a.breakWith(RuntimeException("simulated wire break"))
+            pair1.a.breakWithException(RuntimeException("simulated wire break"))
             aliceDiscovery.emit(PeerEvent.Lost(bobPeer.id))
-            withTimeout(2_000) {
+            withTimeout(peerPropagationTimeoutMs) {
                 alice.peers.first { list -> list.none { it.id == bobPeer.id } }
+            }
+
+            // AUDIT-2026-07 (SES-1): synchronize on the Reconnecting edge
+            // before waiting for Connected, matching the sibling tests. The
+            // pre-fix raw-state observer classified the break within one
+            // dispatch of the synchronous fixture state flip, which let this
+            // test skip the Reconnecting wait; classification now routes
+            // through the protocol-event pipeline (a couple of dispatches),
+            // so a bare `first { Connected }` here could match the PRE-break
+            // Connected value and read connectCalls before the retry dialed.
+            withTimeout(5_000) {
+                session.state.first { it == ConnectionState.Reconnecting }
             }
 
             // Reconnect attempt should now find peerLookup returning null
@@ -261,7 +287,7 @@ class SessionReconnectRotationTest {
         val hintsV1 = listOf(TransportHint(TransportKind.LAN, host = "10.0.0.5", port = 4000))
         val bobV1 = InternalPeer(publicPeer = bobPeer, transportHints = hintsV1)
 
-        val alice = P2pKit.create {
+        val alice = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Alice"
             keepAlive {
@@ -278,9 +304,12 @@ class SessionReconnectRotationTest {
                 register(RotationTestFactory(aliceData, aliceDiscovery))
             }
         }
-        val bob = P2pKit.create {
+        val bob = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Bob"
+            // Match the dialed id ("bob-id") so the outgoing handshake's peerId
+            // verification passes (mirrors production discovery).
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000
@@ -298,7 +327,7 @@ class SessionReconnectRotationTest {
         }
         try {
             aliceDiscovery.emit(PeerEvent.Found(bobV1))
-            withTimeout(2_000) {
+            withTimeout(peerPropagationTimeoutMs) {
                 alice.peers.first { list -> list.any { it.id == bobPeer.id } }
             }
 
@@ -309,7 +338,7 @@ class SessionReconnectRotationTest {
 
             // Break the wire — session goes Reconnecting → handler should
             // invoke refresh() exactly once before the first retry dials.
-            pair1.a.breakWith(RuntimeException("simulated wire break"))
+            pair1.a.breakWithException(RuntimeException("simulated wire break"))
             withTimeout(5_000) {
                 session.state.first { it == ConnectionState.Reconnecting }
             }

@@ -7,6 +7,25 @@ import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 
 /**
+ * Provenance of an [InternalPeer] — how the kit learned about this peer.
+ *
+ * Public for the same reason as [InternalPeer]. Behavioral decisions that
+ * depend on provenance (e.g. the HELLO identity-mismatch exemption for
+ * manual-IP peers in `SessionManager`) key off this field — never off the
+ * shape of the peer-id string, which a remote could mimic.
+ */
+public enum class PeerOrigin {
+    /** Learned from a [DiscoveryTransport] announcement (mDNS etc.). */
+    Discovered,
+
+    /**
+     * Minted locally by `ManualPeerRegistrar.registerManualPeer` from a
+     * user-supplied host:port; carries a synthetic placeholder [PeerId].
+     */
+    Manual
+}
+
+/**
  * Internal view of a peer that includes transport-specific reach information.
  *
  * Public only because [DataTransport] and [DiscoveryTransport] are implemented
@@ -15,7 +34,9 @@ import dev.p2pkit.core.TransportKind
  */
 public data class InternalPeer(
     val publicPeer: Peer,
-    val transportHints: List<TransportHint>
+    val transportHints: List<TransportHint>,
+    /** How this entry entered the registry. Defaults to [PeerOrigin.Discovered]. */
+    val origin: PeerOrigin = PeerOrigin.Discovered
 )
 
 /**

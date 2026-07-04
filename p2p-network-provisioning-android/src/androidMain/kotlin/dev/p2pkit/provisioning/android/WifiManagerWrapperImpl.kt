@@ -11,6 +11,7 @@ import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import dev.p2pkit.core.permission.P2pPermission
 import dev.p2pkit.core.provisioning.NetworkState
 import dev.p2pkit.core.provisioning.WifiCredentials
 import dev.p2pkit.core.provisioning.WifiPassword
@@ -41,13 +42,32 @@ internal class WifiManagerWrapperImpl(
     private val applicationContext: Context
 ) : WifiManagerWrapper {
 
-    private val wifi: WifiManager =
-        applicationContext.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    // Nullable: ethernet-only Android devices (TV boxes, IoT) have no
+    // WifiManager; the previous unconditional cast NPE-crashed kit creation
+    // there even though plain LAN/mDNS works fine over ethernet
+    // (AUDIT-2026-06 fix).
+    private val wifi: WifiManager? =
+        applicationContext.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
     private val connectivity: ConnectivityManager =
         applicationContext.applicationContext
             .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
-    override fun isWifiEnabled(): Boolean = wifi.isWifiEnabled
+    override fun isWifiEnabled(): Boolean = wifi?.isWifiEnabled ?: false
+
+    override val isLocalOnlyHotspotSupported: Boolean
+        get() = wifi != null && android.os.Build.VERSION.SDK_INT >= 26
+
+    override val isSpecifierJoinSupported: Boolean
+        get() = android.os.Build.VERSION.SDK_INT >= 29
+
+    override fun requiredRuntimePermission(): P2pPermission {
+        val targetSdk = applicationContext.applicationContext.applicationInfo.targetSdkVersion
+        return if (android.os.Build.VERSION.SDK_INT >= 33 && targetSdk >= 33) {
+            P2pPermission.NearbyWifiDevices
+        } else {
+            P2pPermission.Location
+        }
+    }
 
     @Suppress("MissingPermission") // Permission handling is the caller's responsibility.
     override suspend fun startLocalOnlyHotspot(): HotspotStartResult =
@@ -57,8 +77,16 @@ internal class WifiManagerWrapperImpl(
             val callback = object : WifiManager.LocalOnlyHotspotCallback() {
                 override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation) {
                     val handle = HotspotHandleImpl(reservation, handleHolder.stopped)
-                    handleHolder.handle = handle
-                    if (cont.isActive) cont.resume(HotspotStartResult.Started(handle))
+                    if (cont.isActive) {
+                        handleHolder.handle = handle
+                        cont.resume(HotspotStartResult.Started(handle))
+                    } else {
+                        // Caller cancelled (e.g. withTimeout) before the OS
+                        // callback: nobody will ever own this reservation, so
+                        // release it immediately instead of leaking the
+                        // hotspot until process death (AUDIT-2026-06 fix).
+                        runCatching { handle.close() }
+                    }
                 }
                 override fun onStopped() {
                     val h = handleHolder.handle
@@ -72,7 +100,12 @@ internal class WifiManagerWrapperImpl(
                     if (cont.isActive) cont.resume(HotspotStartResult.Failed(reasonCode = reason))
                 }
             }
-            wifi.startLocalOnlyHotspot(callback, handler)
+            val w = wifi
+            if (w == null) {
+                if (cont.isActive) cont.resume(HotspotStartResult.Failed(reasonCode = STOPPED_BEFORE_START))
+                return@suspendCancellableCoroutine
+            }
+            w.startLocalOnlyHotspot(callback, handler)
             cont.invokeOnCancellation {
                 handleHolder.handle?.let { runCatching { it.close() } }
             }
@@ -107,8 +140,11 @@ internal class WifiManagerWrapperImpl(
 
         return suspendCancellableCoroutine { cont ->
             val terminated = AtomicBoolean(false)
+            // replay=1: one-shot terminal signal; with replay=0 an emission
+            // landing before the manager's watcher subscribed was silently
+            // dropped (AUDIT-2026-06 fix).
             val releasedFlow: MutableSharedFlow<String> = MutableSharedFlow(
-                replay = 0,
+                replay = 1,
                 extraBufferCapacity = 1,
                 onBufferOverflow = BufferOverflow.DROP_OLDEST
             )
@@ -116,6 +152,14 @@ internal class WifiManagerWrapperImpl(
             val callback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
                     if (terminated.compareAndSet(false, true)) {
+                        if (!cont.isActive) {
+                            // Caller cancelled before the user approved the
+                            // join: binding now would silently re-route the
+                            // whole process with no owner to ever unbind it
+                            // (AUDIT-2026-06 fix).
+                            runCatching { connectivity.unregisterNetworkCallback(this) }
+                            return
+                        }
                         // Route process traffic through the joined network so the
                         // LAN transport's outgoing sockets reach the AP subnet.
                         runCatching { connectivity.bindProcessToNetwork(network) }
@@ -198,8 +242,9 @@ private class JoinHandleImpl(
  */
 private class AtomicHandleHolder {
     @Volatile var handle: HotspotHandleImpl? = null
+    // replay=1 — see releasedFlow note (AUDIT-2026-06 fix).
     val stopped: MutableSharedFlow<HotspotStopReason> = MutableSharedFlow(
-        replay = 0,
+        replay = 1,
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
@@ -243,10 +288,16 @@ private class HotspotHandleImpl(
         val out = mutableListOf<String>()
         val ifs = runCatching { NetworkInterface.getNetworkInterfaces() }.getOrNull() ?: return emptyList()
         for (nif in ifs) {
-            if (!nif.isUp || nif.isLoopback) continue
-            for (addr in nif.inetAddresses) {
-                if (addr.isLoopbackAddress || addr.isAnyLocalAddress) continue
-                if (addr is Inet4Address) out += addr.hostAddress
+            // Per-interface guard: isUp/inetAddresses can throw
+            // SocketException when an interface vanishes mid-scan (hotspot/
+            // VPN churn — exactly when provisioning runs). Skip the bad NIC
+            // instead of letting the raw exception escape (AUDIT-2026-06 fix).
+            runCatching {
+                if (!nif.isUp || nif.isLoopback) return@runCatching
+                for (addr in nif.inetAddresses) {
+                    if (addr.isLoopbackAddress || addr.isAnyLocalAddress) continue
+                    if (addr is Inet4Address) out += addr.hostAddress
+                }
             }
         }
         return out.distinct()
@@ -258,10 +309,12 @@ private class HotspotHandleImpl(
 }
 
 /**
- * Reads the SSID from a [SoftApConfiguration]. The API moved between
- * `getSsid(): String?` (pre-Android 13) and `getWifiSsid(): WifiSsid?`
- * (Android 13+). We read both safely via reflection-free try-cascade
- * because the symbol availability differs by SDK.
+ * Reads the SSID from a [SoftApConfiguration]. Android 13 deprecated
+ * `getSsid(): String?` in favour of `getWifiSsid(): WifiSsid?`, but the
+ * deprecated string getter remains available and populated on every API
+ * level where `SoftApConfiguration` exists (30+), so this reads only
+ * `config.ssid` with the deprecation suppressed — there is no
+ * `getWifiSsid()` fallback.
  */
 private fun readSsidFromSoftApConfiguration(config: SoftApConfiguration): String? {
     // String-returning getSsid is available on API 30+ regardless of OS version.

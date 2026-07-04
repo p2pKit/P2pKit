@@ -3,40 +3,7 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.kmp.library)
-}
-
-// V0.4-PROVENANCE (L3): write a BUILD_COMMIT.txt sidecar file alongside
-// the freshly-assembled XCFramework so the Xcode pre-build script can
-// validate the framework's commit hash against `git rev-parse HEAD`
-// before allowing the iOS app to compile against it. Wired as a
-// `finalizedBy` on both the Release and Debug XCFramework assembly
-// tasks below.
-val writeXcframeworkCommit by tasks.registering {
-    val rootDir = rootProject.projectDir
-    val outDirs = listOf(
-        layout.buildDirectory.dir("XCFrameworks/release"),
-        layout.buildDirectory.dir("XCFrameworks/debug")
-    )
-    outputs.upToDateWhen { false }
-    doLast {
-        fun git(vararg args: String): String = try {
-            val p = ProcessBuilder("git", *args)
-                .directory(rootDir)
-                .redirectErrorStream(true)
-                .start()
-            val out = p.inputStream.bufferedReader().readText().trim()
-            if (p.waitFor() == 0) out else ""
-        } catch (_: Exception) {
-            ""
-        }
-        val commit = git("rev-parse", "HEAD").ifBlank { "unknown" }
-        outDirs.forEach { dirProvider ->
-            val dir = dirProvider.get().asFile
-            if (dir.exists()) {
-                dir.resolve("BUILD_COMMIT.txt").writeText(commit + "\n")
-            }
-        }
-    }
+    `maven-publish`
 }
 
 kotlin {
@@ -55,8 +22,8 @@ kotlin {
         minSdk = libs.versions.android.minSdk.get().toInt()
     }
 
-    // v0.3.0-dev: iOS LAN/TCP via Bonjour + Network.framework. Same public API
-    // as JVM/Android (`transports { lan() }`), backed by NWBrowser / NWListener
+    // iOS LAN/TCP via Bonjour + Network.framework. Same public API as
+    // JVM/Android (`transports { lan() }`), backed by NWBrowser / NWListener
     // / NWConnection. Requires iOS 13+; minimum is enforced by the Network
     // framework symbols themselves.
     val iosTargets = listOf(iosX64(), iosArm64(), iosSimulatorArm64())
@@ -77,7 +44,7 @@ kotlin {
         // P2pKit / AppId / Peer / P2pMessage / ... directly.
         // Run `./gradlew :p2p-transport-lan:linkDebugFrameworkIosSimulatorArm64`
         // (or `linkReleaseFrameworkIosArm64` for device builds) and drop the
-        // resulting `.framework` into Xcode — see docs/ios-sample-app/.
+        // resulting `.framework` into Xcode — see the maintained sample at iosApp/.
         target.binaries.framework {
             baseName = "P2pKitShared"
             isStatic = false
@@ -90,8 +57,10 @@ kotlin {
         commonMain.dependencies {
             // `api` rather than `implementation`: the iOS framework's
             // `export(project(":p2p-core"))` above requires the dependency to
-            // be in the public API surface. Has no effect on the JVM/Android
-            // consumers (their build doesn't surface it differently).
+            // be in the public API surface. It also matters for JVM/Android
+            // consumers — `api` puts p2p-core's public types (P2pKit, Peer,
+            // P2pSession, …) on their compile classpath, which the transport's
+            // own public `lan()` DSL returns; `implementation` would hide them.
             api(project(":p2p-core"))
             implementation(libs.kotlinx.coroutines.core)
         }
@@ -112,14 +81,84 @@ kotlin {
     }
 }
 
-// Make every XCFramework-assembly task write the BUILD_COMMIT.txt sidecar.
-// V0.4-PROVENANCE (L3): the Xcode pre-build script reads this file to
-// validate the deployed framework matches `git rev-parse HEAD` before
-// allowing the iOS app to compile against it.
+// V0.4-PROVENANCE (L3) + AUDIT-2026-06: stamp BUILD_COMMIT.txt as the FINAL
+// action of each per-config XCFramework assembly. Using the assembly task's
+// own `doLast` (rather than a shared `finalizedBy` task) means the stamp is
+// written ONLY when that assembly actually executes and SUCCEEDS:
+//   • a `doLast` is skipped when the task FAILS — a `finalizedBy` runs even on
+//     failure, which would stamp a failed/partial framework with the current
+//     HEAD and let the Xcode freshness guard pass against a broken artifact;
+//   • a `doLast` is skipped when the task is UP-TO-DATE — so a no-op rebuild
+//     after HEAD moved no longer re-stamps an unchanged framework with a newer
+//     commit (the old "freshness guard can lie" bug); and
+//   • each task stamps ONLY the config it produced (release XOR debug), so a
+//     debug-only assembly can't re-stamp a stale release dir, or vice-versa.
+// The Xcode pre-build script reads this file to validate the deployed
+// framework before the iOS app compiles. Flip side of the UP-TO-DATE skip
+// (AUDIT #10): after a commit touching only non-framework files, HEAD moves
+// while the stamp stays put — so iosApp/scripts/check-xcframework.sh does
+// NOT require raw stamp == HEAD; on mismatch it passes iff no framework
+// sources (both modules' src/, their build scripts, the version catalog)
+// changed between the stamped commit and HEAD. Keep the script's path list
+// in sync with what actually feeds this framework.
 afterEvaluate {
+    val provenanceRootDir = rootProject.projectDir
     tasks.matching {
         it.name.startsWith("assemble") && it.name.contains("XCFramework")
     }.configureEach {
-        finalizedBy(writeXcframeworkCommit)
+        val config = when {
+            name.contains("Release") -> "release"
+            name.contains("Debug") -> "debug"
+            else -> null // umbrella aggregate task: per-config tasks stamp their own dir
+        } ?: return@configureEach
+        val outDir = layout.buildDirectory.dir("XCFrameworks/$config")
+        doLast {
+            fun git(vararg args: String): String = try {
+                val p = ProcessBuilder("git", *args)
+                    .directory(provenanceRootDir)
+                    .redirectErrorStream(true)
+                    .start()
+                val out = p.inputStream.bufferedReader().readText().trim()
+                if (p.waitFor() == 0) out else ""
+            } catch (_: Exception) {
+                ""
+            }
+            val commit = git("rev-parse", "HEAD").ifBlank { "unknown" }
+            val dir = outDir.get().asFile
+            if (dir.exists()) {
+                dir.resolve("BUILD_COMMIT.txt").writeText(commit + "\n")
+            }
+        }
+    }
+}
+
+// Maven publishing (fixes no-publishing-plugin / no-pom-metadata). See
+// :p2p-core build for rationale. Auto-created KMP publications; POM enriched
+// for Central-readiness; signing wired centrally in the root build (conditional
+// on a PGP key being supplied).
+publishing {
+    publications.withType<MavenPublication>().configureEach {
+        pom {
+            name.set("P2pKit ${project.name}")
+            description.set("P2pKit LAN transport — Bonjour/JmDNS discovery + TCP data over Network.framework/sockets.")
+            url.set("https://github.com/Apdelrahman1911/P2pKit")
+            licenses {
+                license {
+                    name.set("The Apache License, Version 2.0")
+                    url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                }
+            }
+            developers {
+                developer {
+                    id.set("Apdelrahman1911")
+                    name.set("Abdelrahman")
+                }
+            }
+            scm {
+                url.set("https://github.com/Apdelrahman1911/P2pKit")
+                connection.set("scm:git:https://github.com/Apdelrahman1911/P2pKit.git")
+                developerConnection.set("scm:git:ssh://git@github.com/Apdelrahman1911/P2pKit.git")
+            }
+        }
     }
 }

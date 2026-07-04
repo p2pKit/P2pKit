@@ -11,6 +11,7 @@ import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.internal.PeerIdStorage
 import dev.p2pkit.core.internal.newP2pKit
+import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
 import dev.p2pkit.core.provisioning.NetworkProvisioningFactory
 import dev.p2pkit.core.transfer.FileTransferConfig
@@ -68,6 +69,36 @@ public class P2pKitBuilder internal constructor() {
      * `P2pKitAndroid.initialize(context)` wasn't called).
      */
     internal var peerIdStorage: PeerIdStorage? = null
+
+    /**
+     * Optional host-provided [P2pPermissionManager]. When `null`, the kit uses
+     * the platform default ([dev.p2pkit.core.internal.defaultPlatformPermissionManager]):
+     * a real manifest-permission checker on Android (once
+     * `P2pKitAndroid.initialize(context)` has run), no-op on JVM/iOS.
+     *
+     * Recommended wiring (decision #7a, 2026-07-04): keep this default even
+     * when the app uses hotspot/Wi-Fi-join provisioning — core LAN
+     * discovery/advertising needs no runtime permissions, and a kit-wide
+     * sidecar manager (e.g. `AndroidP2pPermissionManager`) gates
+     * `startAdvertising`/`startDiscovery` on provisioning-only permissions,
+     * re-creating the install-time over-gating the AUDIT-2026-06
+     * permission-gate fix removed. Query the sidecar's manager immediately
+     * before provisioning calls instead.
+     */
+    public var permissionManager: P2pPermissionManager? = null
+
+    /**
+     * **Internal, test-only** (#19 / 2026-07 TST-9, decision #15a) — never set
+     * from production code. When `true`, the kit's `SessionStore` throws
+     * [IllegalStateException] on a detected bookkeeping-invariant violation
+     * instead of `logger.warn`ing, so a store regression fails the suite
+     * loudly rather than vanishing into a NoOp logger. Threaded via
+     * [dev.p2pkit.core.internal.newP2pKit] →
+     * `P2pKitImpl` → `SessionManager` → `SessionStore`. The production
+     * default stays `false` (log-don't-crash); kit-level behavioral suites
+     * opt in through the commonTest `createTestKit` fixture. Not public API.
+     */
+    internal var strictSessionInvariants: Boolean = false
 
     public fun transports(block: TransportsBuilder.() -> Unit) {
         transportsBuilder.apply(block)
@@ -131,7 +162,9 @@ public class P2pKitBuilder internal constructor() {
             fileTransferConfig = fileTransfer,
             logger = logger,
             peerIdStorageOverride = peerIdStorage,
-            networkPathObserverOverride = networkPathObserver
+            networkPathObserverOverride = networkPathObserver,
+            permissionManagerOverride = permissionManager,
+            strictSessionInvariants = strictSessionInvariants
         )
     }
 }

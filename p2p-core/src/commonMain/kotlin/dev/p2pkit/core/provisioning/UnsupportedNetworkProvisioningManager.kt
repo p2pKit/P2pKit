@@ -9,9 +9,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 
 /**
- * v0.1 stub implementation. Every method that has an `Unsupported` variant in
+ * Fallback used when no provisioning factory is registered via the
+ * `networkProvisioning { … }` DSL block (the optional platform modules
+ * register real managers). Every method that has an `Unsupported` variant in
  * its return type returns it; `createManualPeer` throws because there is no
- * meaningful peer to fabricate without the v0.2 implementation.
+ * meaningful peer to fabricate without a real platform implementation.
  */
 public class UnsupportedNetworkProvisioningManager : NetworkProvisioningManager {
 

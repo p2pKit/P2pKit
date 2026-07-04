@@ -34,7 +34,27 @@ import kotlinx.coroutines.sync.withLock
  * structural — there is one class, one lock, one set of methods, and no
  * way to mutate one field without mutating the other.
  */
-internal class SessionStore(private val logger: P2pLogger) {
+internal class SessionStore(
+    private val logger: P2pLogger,
+    /**
+     * When `true`, a detected [checkInvariants] violation throws
+     * [IllegalStateException] instead of logging a warning. Test-only:
+     * the unit/integration suites run with a NoOp/quiet logger, so the
+     * production warn path would let a bookkeeping regression pass every
+     * test silently (#19). Production keeps the default `false` —
+     * log-don't-crash (see [checkInvariants]).
+     */
+    private val strictInvariants: Boolean = false,
+    /**
+     * AUDIT-2026-07 (SEC-1, decision #9a): upper bound on total concurrently
+     * active sessions, enforced in [tryRegister] for NET-NEW incoming
+     * registrations only. Internal admission-control policy, not public API;
+     * defaults to [MAX_TOTAL_ACTIVE_SESSIONS]. Parameterized only so store
+     * unit tests can exercise the boundary without 64 fixtures if ever
+     * needed — production always uses the default.
+     */
+    private val maxTotalActiveSessions: Int = MAX_TOTAL_ACTIVE_SESSIONS
+) {
 
     private val mutex = Mutex()
     private val byPeer: MutableMap<PeerId, P2pSession> = mutableMapOf()
@@ -139,6 +159,19 @@ internal class SessionStore(private val logger: P2pLogger) {
             } else {
                 RegisterOutcome.Rejected(winner = existing, loser = session)
             }
+        } else if (
+            // AUDIT-2026-07 (SEC-1, decision #9a): total-session admission
+            // bound — applies ONLY to net-new INCOMING registrations (this
+            // branch: no active session for the peer). Outgoing registrations
+            // are app-initiated and never refused here, and simultaneous-open
+            // arbitration (the branch above) replaces/rejects with no net
+            // session growth, so it is exempt by construction. Only ACTIVE
+            // sessions count: a terminal-but-not-yet-evicted entry must not
+            // block admission of a live peer.
+            isIncoming &&
+            byPeer.values.count { it.state.value in ACTIVE_STATES } >= maxTotalActiveSessions
+        ) {
+            RegisterOutcome.RefusedAtCapacity(session = session)
         } else {
             // Existing may be `null` OR in a terminal state (Closed / Failed /
             // Closing / Idle). In the terminal case the per-session terminal
@@ -203,10 +236,17 @@ internal class SessionStore(private val logger: P2pLogger) {
 
     /**
      * Structural-invariant check run at the end of every mutation method
-     * while [mutex] is still held. Hard `check()` calls — a violation
-     * means the store has reached a state the design considers
-     * impossible, and the application MUST crash rather than continue
-     * with an inconsistent view of `kit.sessions`.
+     * while [mutex] is still held. A violation means the store has reached
+     * a state the design considers impossible — in production
+     * ([strictInvariants] `false`) it is surfaced as a loud `logger.warn`,
+     * NOT a `check()` crash: a published library must not bring down the
+     * host app's process over a bookkeeping inconsistency (see the
+     * log-don't-crash comment in the body). Test harnesses opt into
+     * [strictInvariants] `true`, which turns a detected violation into an
+     * [IllegalStateException] so regressions fail loudly instead of
+     * vanishing into a NoOp logger (#19).
+     * AUDIT-2026-06: this KDoc previously demanded an unconditional crash,
+     * contradicting the deliberate log-only production implementation below.
      *
      * Invariants (all evaluated under [mutex], so the state is stable):
      *
@@ -222,22 +262,58 @@ internal class SessionStore(private val logger: P2pLogger) {
      *    both staleness windows the public list ever exhibited.)
      *
      * Gated by [ASSERT_INVARIANTS]. Leave `true` through v0.4 — if a real
-     * device run trips a check, revert Commit 2 only; the structural
-     * refactor in Commit 1 stays.
+     * device run trips a warning for a benign ordering, flip the gate off
+     * (see the companion constant's KDoc).
      */
     private fun checkInvariants(site: String) {
         if (!ASSERT_INVARIANTS) return
         val visible = _sessions.value
-        check(byPeer.values.all { entry -> visible.any { it === entry } }) {
-            "SessionStore[$site]: active byPeer entry missing from published sessions list. " +
-                "byPeer.size=${byPeer.size} visible.size=${visible.size}"
+        if (!byPeer.values.all { entry -> visible.any { it === entry } }) {
+            reportViolation(
+                "SessionStore[$site] INVARIANT: active byPeer entry missing from published sessions list. " +
+                    "byPeer.size=${byPeer.size} visible.size=${visible.size}"
+            )
         }
-        val distinctByIdentity = visible.fold(0) { acc, s ->
+        val duplicateInstances = visible.fold(0) { acc, s ->
             acc + if (visible.count { it === s } == 1) 0 else 1
         }
-        check(distinctByIdentity == 0) {
-            "SessionStore[$site]: duplicate session instance in published list (size=${visible.size})"
+        if (duplicateInstances != 0) {
+            reportViolation(
+                "SessionStore[$site] INVARIANT: duplicate session instance in published list (size=${visible.size})"
+            )
         }
+    }
+
+    /**
+     * Dispatch for a detected invariant violation.
+     *
+     * Log-don't-crash in production: an invariant violation is a serious
+     * bug, but a published library must not bring down the host app's
+     * process over a bookkeeping inconsistency. We surface it loudly via
+     * the logger so it is caught in testing/diagnostics without an
+     * in-the-field crash. Under [strictInvariants] (test suites, #19) the
+     * same message throws instead, so a regression cannot pass silently
+     * through a NoOp logger.
+     */
+    private fun reportViolation(message: String) {
+        if (strictInvariants) error(message)
+        logger.warn(message)
+    }
+
+    /**
+     * TEST-ONLY seam (#19) — never call from production code.
+     *
+     * The public mutators are designed to *maintain* the invariants, so a
+     * genuine violation cannot be manufactured through them. This method
+     * forces a known-bad state — an active [byPeer] entry deliberately left
+     * out of the published [sessions] list (violates **I-store-membership**)
+     * — and then runs [checkInvariants], letting tests assert the
+     * enforcement itself: throw under [strictInvariants], warn otherwise.
+     */
+    internal suspend fun forceInvariantViolationForTest(session: P2pSession): Unit = mutex.withLock {
+        byPeer[session.peer.id] = session
+        // Deliberately NOT added to _sessions — that is the violation.
+        checkInvariants("forceInvariantViolationForTest")
     }
 
     companion object {
@@ -254,6 +330,10 @@ internal class SessionStore(private val logger: P2pLogger) {
          * trips a check, flip to `false` and open an issue. Reverting
          * this whole commit (S1 Commit 2) is also clean since Commit 1
          * already stands on its own.
+         *
+         * Gates the whole check, including [strictInvariants] mode —
+         * strict only changes what happens *when* a violation is
+         * detected (throw instead of warn), not whether we look.
          */
         private const val ASSERT_INVARIANTS = true
     }
@@ -271,4 +351,12 @@ internal sealed class RegisterOutcome {
     data class Accepted(val session: P2pSession) : RegisterOutcome()
     data class Replaced(val winner: P2pSession, val loser: P2pSession) : RegisterOutcome()
     data class Rejected(val winner: P2pSession, val loser: P2pSession) : RegisterOutcome()
+
+    /**
+     * AUDIT-2026-07 (SEC-1, decision #9a): a net-new INCOMING session was
+     * refused because the total-active-session bound is reached. [session]
+     * was never added to the store; the caller closes it and does not
+     * surface it on `incomingSessions`.
+     */
+    data class RefusedAtCapacity(val session: P2pSession) : RegisterOutcome()
 }

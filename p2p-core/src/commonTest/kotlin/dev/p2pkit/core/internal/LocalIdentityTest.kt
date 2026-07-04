@@ -5,6 +5,7 @@ import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
@@ -30,7 +31,7 @@ class LocalIdentityTest {
     }
 
     private fun newKit(deviceName: String, peerIdOverride: PeerId): P2pKit {
-        val kit = P2pKit.create {
+        val kit = createTestKit {
             appId = AppId("com.example.identity-test")
             this.deviceName = deviceName
             peerIdStorage = InMemoryPeerIdStorage(seed = peerIdOverride)

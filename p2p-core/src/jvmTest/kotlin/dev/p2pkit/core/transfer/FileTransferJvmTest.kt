@@ -6,6 +6,7 @@ import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.internal.InMemoryPeerIdStorage
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.transport.RawConnection
@@ -54,6 +55,9 @@ class FileTransferJvmTest {
     private fun incomingKit(name: String, incoming: RawConnection): P2pKit = P2pKit.create {
         appId = AppId("com.example.jvm-ft")
         deviceName = name
+        // Match the dialed id ("bob-id") so the outgoing handshake's peerId
+        // verification passes (mirrors production discovery).
+        peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
         keepAlive {
             pingIntervalMillis = 60_000
             timeoutMillis = 120_000

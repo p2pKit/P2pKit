@@ -28,19 +28,37 @@ import kotlin.test.assertNotNull
 class ManualIpLoopbackTest {
 
     private val kits = mutableListOf<P2pKit>()
+    private val tempHomes = mutableListOf<java.io.File>()
 
     @AfterTest
     fun teardown() = runBlocking {
         for (k in kits) runCatching { k.stop() }
         kits.clear()
+        tempHomes.forEach { runCatching { it.deleteRecursively() } }
+        tempHomes.clear()
     }
 
+    // AUDIT-2026-06: point user.home at a fresh temp dir per kit so Alice and
+    // Bob persist DISTINCT PeerIds. Both kits share appId in one JVM, so a
+    // shared user.home would give them the same persisted id under
+    // ~/.p2pkit/<appId>/peer-id — which the inbound-HELLO self-id guard
+    // (SessionManager) now correctly rejects. Mirrors the per-kit isolation in
+    // JvmLanLoopbackTest / KmpConsumerLoopbackTest.
     private fun newKit(name: String): P2pKit {
-        val kit = P2pKit.create {
-            appId = AppId("com.example.manual-ip")
-            deviceName = name
-            transports { lan() }
-            networkProvisioning { jvm() }
+        val savedHome = System.getProperty("user.home")
+        val tempHome = java.nio.file.Files.createTempDirectory("p2pkit-manual-itest-$name-").toFile()
+        tempHomes.add(tempHome)
+        System.setProperty("user.home", tempHome.absolutePath)
+        val kit = try {
+            P2pKit.create {
+                appId = AppId("com.example.manual-ip")
+                deviceName = name
+                transports { lan() }
+                networkProvisioning { jvm() }
+            }
+        } finally {
+            if (savedHome != null) System.setProperty("user.home", savedHome)
+            else System.clearProperty("user.home")
         }
         kits.add(kit)
         return kit

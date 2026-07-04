@@ -69,8 +69,8 @@ For each test, in Xcode:
 
 **Setup.**
 - Both devices Connected per Prerequisites smoke test.
-- Android Reconnect Policy: **Enabled** (Setup screen toggle before tapping Start). MaxAttempts = 5, retry delay = 500 ms (default).
-- iPhone has no reconnect-policy UI; uses Disabled by default — that's fine.
+- Android Reconnect Policy: **Enabled** (Setup screen toggle before tapping Start). MaxAttempts = 10, retry delay = 1500 ms (the Setup screen defaults).
+- iPhone has no reconnect-policy UI; uses Disabled by default — that's fine, but it means the iOS side never enters `Reconnecting`: its session goes `Connected → Failed` on a break and recovers via a fresh session when Android re-dials.
 
 **Steps to reproduce.**
 1. Start log capture (commands above, `<TEST>=wifi-flap`).
@@ -86,8 +86,8 @@ For each test, in Xcode:
 - `[ui] Send All tapped`
 - `[conn] state-changed -> failed`
 - `[conn] state-changed -> ready`
-- `[session] … Connected → Reconnecting`
-- `[session] … Reconnecting → Connected`
+- `[session] … Connected → Failed` *(iOS runs Disabled — the `Connected → Reconnecting → Connected` transitions appear in the **Android** log instead)*
+- `[session] new id=in-…` *(the replacement session when Android re-dials)*
 - `ZOMBIE`
 - `STUCK`
 - `WARN:`
@@ -96,7 +96,7 @@ For each test, in Xcode:
 
 **Success criteria.**
 - All five "after-flap-N" messages arrive on Android.
-- Each cycle's iOS log shows `Connected → Reconnecting → Connected` within ~5 seconds.
+- Each cycle: the **Android** log shows `Connected → Reconnecting → Connected` within ~5 seconds; the **iOS** log shows `Connected → Failed` followed by a new session reaching `Connected` (with `ReconnectPolicy.Disabled`, iOS never enters `Reconnecting`).
 - Zero `ZOMBIE` lines.
 - Zero `STUCK` lines.
 - Zero lines starting with `WARN: 2 sessions for peer=` or `WARN: peer X has no matching session row`.
@@ -164,7 +164,7 @@ If anomaly: paste 10 lines around the first occurrence.
 
 ## Test 3 — Hotspot switch / network rotation
 
-**Goal.** Verify the SDK recovers when **one device** moves to a different Wi-Fi network while the other stays put. This is the test that exercises the "stale internalPeer" weakness — we're verifying v0.3 recovers even if not optimally.
+**Goal.** Verify the SDK recovers when **one device** moves to a different Wi-Fi network while the other stays put. On pre-v0.4 builds this exercised the "stale internalPeer" weakness; since `V0.4-RECONNECT` every retry re-resolves the endpoint from fresh discovery data, so what we're verifying now is clean cross-network failure + rediscovery recovery.
 
 **Setup.**
 - You'll need **two Wi-Fi networks** that the iPhone can join. Easiest combo: your home Wi-Fi + your Android phone's personal hotspot.
@@ -185,7 +185,7 @@ If anomaly: paste 10 lines around the first occurrence.
 **Logs to capture.** Same channels, file slug `hotspot-switch`.
 
 **Success criteria.**
-- During step 4 on the hotspot: iOS session for Android either goes to `Failed` (expected — `internalPeer` cached the old address) or stays Reconnecting until `markFailedAfterExhaustion` fires.
+- During step 4 on the hotspot: the iOS session for Android goes to `Failed` (iOS runs `ReconnectPolicy.Disabled` — no `Reconnecting` phase on the iPhone side). On the Android side the session enters `Reconnecting`, each retry re-resolves the endpoint (`V0.4-RECONNECT`), and it goes `Failed` after exhaustion since the iPhone left the network.
 - The STUCK warning should **not** fire (because `markFailedAfterExhaustion` should kick in well before 30 s).
 - After step 6 (back on home): iOS rediscovers Android, a new session forms, "after-rejoin" arrives.
 - Zero ZOMBIE warnings. Zero check() failures.

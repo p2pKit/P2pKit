@@ -15,7 +15,10 @@ import dev.p2pkit.core.transport.TransportPair
  * ```
  *
  * For Android, use the `lan(applicationContext)` overload from
- * `:p2p-transport-lan` androidMain — `NsdManager` needs a `Context`.
+ * `:p2p-transport-lan` androidMain — the `Context` supplies the Wi-Fi
+ * multicast lock and `ConnectivityManager` hooks that the in-process
+ * JmDNS discovery needs (Android discovery has used JmDNS, not
+ * `NsdManager`, since v0.5).
  *
  * The actual `ServerSocket(0)` bind happens inside the transport's
  * `start()` (called by [dev.p2pkit.core.P2pKit.start], or lazily by the

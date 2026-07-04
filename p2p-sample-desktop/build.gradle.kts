@@ -25,5 +25,6 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     // Silence JmDNS's SLF4J "no provider" warning on startup. No-op logger;
     // JmDNS's own log messages are simply discarded.
-    runtimeOnly("org.slf4j:slf4j-nop:2.0.13")
+    // AUDIT-2026-06: coordinate via the version catalog instead of a hardcoded literal.
+    runtimeOnly(libs.slf4j.nop)
 }

@@ -13,7 +13,7 @@ import platform.Network.nw_endpoint_t
  *
  * `NWBrowser` yields `NWBrowser.Result` values whose underlying
  * `nw_endpoint_t` is opaque — there's no public host/port to encode into a
- * [dev.p2pkit.core.transport.TransportHint] the way JmDNS/NsdManager do.
+ * [dev.p2pkit.core.transport.TransportHint] the way JmDNS does on JVM/Android.
  * Instead, the discovery transport stashes the endpoint here keyed by
  * [PeerId], and [IosLanDataTransport.connect] dials it directly via
  * `nw_connection_create(endpoint, parameters)`.

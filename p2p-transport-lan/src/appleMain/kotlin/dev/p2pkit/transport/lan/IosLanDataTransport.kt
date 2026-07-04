@@ -109,7 +109,7 @@ internal class IosLanDataTransport(
     /**
      * Non-TLS TCP parameters, matching the JVM/Android `Socket` wire format.
      * `SecurityMode.NoneForMvp` parity. Shared between listener and outbound
-     * connections. Constructed entirely in ObjC via the
+     * connections. Built lazily via [ensureParameters] in ObjC through the
      * [p2pkit_nw_create_plain_tcp_parameters] cinterop helper.
      *
      * Cellular is prohibited so the LAN listener never binds on a cellular-only
@@ -118,11 +118,55 @@ internal class IosLanDataTransport(
      * the v0.5 residual edge case where an iPhone with cellular ENABLED would
      * rotate its listener through an intermediate cellular-only port during a
      * Wi-Fi flap. Wired Ethernet remains permitted.
+     *
+     * AUDIT-2026-06: construction was previously an eager property initializer
+     * that called `error()` when the cinterop helper returned null. A throw out
+     * of a constructor crosses into ObjC at `P2pKit.create { }`, and because
+     * Kotlin/Native cannot bridge an un-`@Throws` exception it panics the host
+     * process. It is now created lazily so the failure surfaces as a typed
+     * `Result.failure` / `P2pError` through [start] / [connect] instead.
      */
-    internal val parameters: nw_parameters_t =
-        (p2pkit_nw_create_plain_tcp_parameters()
-            ?: error("p2pkit_nw_create_plain_tcp_parameters returned null"))
-            .also { nw_parameters_prohibit_interface_type(it, nw_interface_type_cellular) }
+    private val _parameters = kotlin.concurrent.AtomicReference<nw_parameters_t>(null)
+
+    /**
+     * Lazily create (and cache) the shared TCP parameters. Returns `null` if the
+     * cinterop helper fails — callers map that to a typed failure rather than a
+     * process-killing throw. Normally created by [start] under [startMutex]
+     * before any [connect]; a [connect] racing the very first [start] is
+     * resolved by the compareAndSet below (AUDIT-2026-06 #20a) — exactly one
+     * creation wins, so every listener and outbound connection shares ONE
+     * params object. A losing racer's extra object is never assigned; it is a
+     * K/N-managed ObjC reference the GC releases once it goes out of scope.
+     */
+    private fun ensureParameters(): nw_parameters_t {
+        _parameters.value?.let { return it }
+        val p = p2pkit_nw_create_plain_tcp_parameters() ?: run {
+            IosLanDebug.log(
+                "data",
+                "ensureParameters: p2pkit_nw_create_plain_tcp_parameters returned NULL"
+            )
+            return null
+        }
+        nw_parameters_prohibit_interface_type(p, nw_interface_type_cellular)
+        if (!_parameters.compareAndSet(null, p)) {
+            IosLanDebug.log(
+                "data",
+                "ensureParameters: lost create race — dropping duplicate, using winner's params"
+            )
+            return _parameters.value
+        }
+        // Issue #3: these params back BOTH the listener and every outbound
+        // connection, and they do NOT call nw_parameters_set_include_peer_to_peer.
+        // The browser (IosLanDiscoveryTransport) DOES, so an AWDL-discovered peer
+        // may be undialable with these params. Logged once (only the CAS winner
+        // reaches this line) so the asymmetry is explicit in the trail.
+        IosLanDebug.log(
+            "data",
+            "TCP params built: cellular=PROHIBITED, include_peer_to_peer=NOT_SET " +
+                "(listener + outbound) — AWDL asymmetry vs browser (issue #3)"
+        )
+        return p
+    }
 
     private val _tcpPort = MutableStateFlow<Int?>(null)
     override val tcpPort: StateFlow<Int?> = _tcpPort.asStateFlow()
@@ -266,6 +310,15 @@ internal class IosLanDataTransport(
             IosLanDebug.log("data", "start: refused (transport already closed)")
             return Result.failure(IllegalStateException("transport already closed"))
         }
+        if (ensureParameters() == null) {
+            IosLanDebug.log("data", "start: refused (TCP parameters unavailable)")
+            return Result.failure(
+                IllegalStateException(
+                    "iOS LAN TCP parameters unavailable " +
+                        "(p2pkit_nw_create_plain_tcp_parameters returned null)"
+                )
+            )
+        }
         val l = buildListener() ?: return Result.failure(
             IllegalStateException(
                 "iOS LAN listener failed to bind a TCP port within 5 s " +
@@ -290,7 +343,14 @@ internal class IosLanDataTransport(
      */
     private fun buildListener(): nw_listener_t {
         IosLanDebug.log("data", "buildListener: nw_listener_create")
-        val l = nw_listener_create(parameters)
+        val params = ensureParameters() ?: run {
+            IosLanDebug.log(
+                "data",
+                "buildListener: TCP parameters unavailable (cinterop helper returned null)"
+            )
+            return null
+        }
+        val l = nw_listener_create(params)
             ?: run {
                 IosLanDebug.log("data", "buildListener: nw_listener_create returned NULL")
                 return null
@@ -304,6 +364,17 @@ internal class IosLanDataTransport(
                 IosLanDebug.log("data", "listener: accepted inbound nw_connection")
                 val raw = IosRawConnection.wrap(conn, queue)
                 val sent = incomingChannel.trySend(raw).isSuccess
+                if (!sent) {
+                    // AUDIT-2026-06 (#20b): wrap() already STARTED the
+                    // connection; the only way the UNLIMITED channel refuses
+                    // it is a concurrent close() having closed the channel
+                    // after the `closed` check above. Dropping the wrapper
+                    // without cancelling would leak the started nw_connection.
+                    // cancelNow is the non-suspend close — this handler runs
+                    // on the libdispatch queue and must return quickly
+                    // without suspending.
+                    raw.cancelNow("inbound dropped (incoming channel refused)")
+                }
                 IosLanDebug.log(
                     "data",
                     "listener: handed connection to incoming channel (queued=$sent)"
@@ -386,7 +457,23 @@ internal class IosLanDataTransport(
                 IosLanDebug.log("connect", "ABORT peer=$pid8 — no transport available (no cached endpoint, no manual-IP hint)")
                 throw P2pError.NoTransportAvailable(peer.publicPeer)
             }
-        val conn = nw_connection_create(endpoint, parameters) ?: run {
+        val params = ensureParameters() ?: run {
+            IosLanDebug.log(
+                "connect",
+                "ABORT peer=$pid8 — TCP parameters unavailable (cinterop helper returned null)"
+            )
+            throw P2pError.ConnectionFailed("iOS LAN TCP parameters unavailable")
+        }
+        // Issue #3: a `browse(AWDL-capable)` endpoint source + a dial that then
+        // sits in `waiting` (see IosRawConnection conn-path lines) is the
+        // signature of the AWDL asymmetry — the peer was found over peer-to-peer
+        // but these connection params can't route there.
+        IosLanDebug.log(
+            "connect",
+            "peer=$pid8 endpointSource=${if (cached != null) "browse(AWDL-capable)" else "manual-IP-hint"} " +
+                "connParams.include_peer_to_peer=NOT_SET"
+        )
+        val conn = nw_connection_create(endpoint, params) ?: run {
             IosLanDebug.log("connect", "ABORT peer=$pid8 — nw_connection_create returned null")
             throw P2pError.ConnectionFailed("nw_connection_create returned null")
         }
@@ -632,6 +719,15 @@ internal class IosLanDataTransport(
                 "data",
                 "rebindNow: REBUILD FAILED — listener stays null, afterListenerRebind NOT invoked ($reason)"
             )
+            return@withLock
+        }
+        // close() does not take startMutex (it must stay non-blocking even
+        // while a rebind is mid-flight), so re-check after the blocking
+        // rebuild: without this a close() racing the 5s bind window left the
+        // fresh listener bound and orphaned forever (AUDIT-2026-06 fix).
+        if (closed) {
+            IosLanDebug.log("data", "rebindNow: closed during rebuild — cancelling fresh listener ($reason)")
+            nw_listener_cancel(fresh)
             return@withLock
         }
         listener = fresh

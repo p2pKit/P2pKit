@@ -5,12 +5,9 @@ import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 
 /**
- * Identity advertised over mDNS and used by the data transport to label
- * accepted sockets. Created by each platform's factory when the TCP server
- * binds to its ephemeral port.
- */
-/**
- * Identity advertised over mDNS plus the bound TCP port.
+ * Identity advertised over mDNS plus the bound TCP port, shared between each
+ * platform's data and discovery transports (created once per kit by the
+ * platform's [dev.p2pkit.core.transport.TransportFactory]).
  *
  * The port is mutable since the v0.3 transport-lifecycle refactor: the data
  * transport binds its server socket lazily in `start()`, then writes the
@@ -19,10 +16,10 @@ import dev.p2pkit.core.Platform
  * should not call this with [tcpPort] == 0.
  *
  * The platform `@Volatile` annotations differ between JVM and Kotlin/Native,
- * so we just rely on the call-ordering guarantee from [P2pKitImpl.ensureStarted]
- * (which acquires a [Mutex] and runs `data.start()` strictly before
- * `discovery.startAdvertising()`). No cross-thread reads of [tcpPort]
- * happen outside that ordering.
+ * so we just rely on the SPI call ordering guaranteed by core's start path
+ * (it holds a mutex and runs `DataTransport.start()` strictly before
+ * `DiscoveryTransport.startAdvertising()`). No cross-thread reads of
+ * [tcpPort] happen outside that ordering.
  */
 internal class LanServiceRegistration(
     val appId: AppId,
@@ -38,15 +35,9 @@ internal object LanConstants {
     const val SERVICE_TYPE_JMDNS: String = "_p2pkit._tcp.local."
 
     /**
-     * Android `NsdManager`-style service type. Same wire protocol as
-     * [SERVICE_TYPE_JMDNS]; the string format just differs.
-     */
-    const val SERVICE_TYPE_NSD: String = "_p2pkit._tcp."
-
-    /**
      * Bonjour service type for iOS `nw_advertise_descriptor` and
      * `nw_browse_descriptor`. No trailing dot — Apple's API expects the
-     * canonical form. Wire-identical to the JMDNS/NSD strings above.
+     * canonical form. Wire-identical to the JmDNS string above.
      */
     const val SERVICE_TYPE_BONJOUR: String = "_p2pkit._tcp"
 
@@ -76,4 +67,39 @@ internal object LanConstants {
      * on the appleMain path.
      */
     const val TCP_CONNECT_TIMEOUT_MS: Int = 5_000
+
+    /**
+     * AUDIT-2026-07 (DSC-1): cadence of the JVM/Android discovery heartbeat —
+     * while discovery is active, both transports re-emit
+     * [dev.p2pkit.core.transport.PeerEvent.Updated] for every appId-matching
+     * service already resolved in the in-process JmDNS cache, so
+     * `PeerRegistry.lastSeen` keeps refreshing and healthy idle peers survive
+     * the registry's 15 s staleness eviction (previously only iOS had this
+     * loop, so `kit.peers` silently emptied on JVM/Android in steady state).
+     * Reads the local cache only — no forced network re-query, no added
+     * multicast. Must stay comfortably below PeerRegistry's 15 s eviction
+     * horizon; matches the iOS `PEER_REANNOUNCE_INTERVAL_MS`
+     * (IosLanDiscoveryTransport), which stays platform-local by design.
+     */
+    const val PEER_REANNOUNCE_INTERVAL_MS: Long = 5_000
 }
+
+/**
+ * AUDIT-2026-07 (RBS-1): input validation for the `pid` value of a discovery
+ * TXT record, shared by the found and lost paths of the JVM, Android, and
+ * iOS discovery transports (the three must stay behavior-identical).
+ *
+ * [dev.p2pkit.core.PeerId] rejects blank values with an exception, and every
+ * discovery callback constructs a [dev.p2pkit.core.PeerId] from this TXT
+ * value — so a malformed record from a non-conforming same-service-type
+ * advertiser must be dropped inside the platform callback, never thrown
+ * across it (on iOS a throw would cross the `nw_browser` callback boundary;
+ * on JVM/Android it would surface untyped on a JmDNS listener thread).
+ *
+ * Returns [rawPid] unchanged when it is usable (present and non-blank), or
+ * `null` when the record must be skipped. Values are deliberately NOT
+ * trimmed or otherwise normalized — identity handling for conforming peers
+ * is unchanged; this is a validation guard only.
+ */
+internal fun validDiscoveryPeerIdOrNull(rawPid: String?): String? =
+    rawPid?.takeUnless { it.isBlank() }

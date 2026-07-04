@@ -15,6 +15,14 @@ public interface RawConnection {
 
     public suspend fun write(bytes: ByteArray)
 
+    /**
+     * Stream of raw bytes from the peer. Single-collector contract: the
+     * engine collects this exactly once per connection. Shipped
+     * implementations read the underlying socket directly inside the flow,
+     * so a second concurrent collector would steal bytes and corrupt
+     * framing — implementations are not required to support multiple or
+     * repeated collection.
+     */
     public fun read(): Flow<ByteArray>
 
     public suspend fun close()

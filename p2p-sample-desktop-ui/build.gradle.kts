@@ -21,7 +21,14 @@ dependencies {
     implementation(compose.materialIconsExtended)
 
     // Silence JmDNS's SLF4J "no provider" warning on startup.
-    runtimeOnly("org.slf4j:slf4j-nop:2.0.13")
+    // AUDIT-2026-06 (BUILD-G10-11): coordinates moved to the version catalog.
+    runtimeOnly(libs.slf4j.nop)
+
+    // 2026-07 (P1-32 / SMP-1): minimal test wiring for the sample's shared
+    // incoming-file destination-uniquification helper (UniqueSaveFileTest).
+    // This module previously had no test source set; samples are unpublished
+    // test harnesses, so this stays out of the published dependency graph.
+    testImplementation(kotlin("test"))
 }
 
 compose.desktop {
@@ -32,7 +39,9 @@ compose.desktop {
             targetFormats(TargetFormat.Exe, TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "P2pKit Sample"
             packageVersion = "1.0.0" // installer version; jpackage requires MAJOR > 0
-            description = "P2pKit v0.2 desktop sample (room broadcast)"
+            // AUDIT-2026-06 (BUILD-G10-12): derive from the project version
+            // (gradle.properties VERSION_NAME) instead of a stale literal.
+            description = "P2pKit ${project.version} desktop sample (room broadcast + file transfer)"
         }
     }
 }

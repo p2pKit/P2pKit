@@ -105,6 +105,49 @@ class FrameReaderTest {
         assertTrue(reader.feed(ByteArray(0)).isEmpty())
     }
 
+    // ---- Declared-length bound enforcement (2026-07 review P1-17, A07 §3 r1) ----
+
+    /**
+     * The bounded-memory guard advertised by [ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES]:
+     * a header declaring an over-limit payload length must raise
+     * [P2pError.ProtocolError] from the header alone — before a single payload
+     * byte has arrived — so the reader never waits for or buffers the declared
+     * (potentially multi-GiB) payload.
+     */
+    @Test
+    fun oversizeDeclaredPayloadLengthIsRejectedOnHeaderAloneWithoutBuffering() {
+        val reader = FrameReader()
+        // A complete valid header (encoded zero-payload frame), with the
+        // payload_len field patched to one past the cap. Only these 36 header
+        // bytes are fed — no payload bytes exist to buffer.
+        val headerOnly = FrameCodec.encode(frame(0)).copyOfRange(0, ProtocolConstants.HEADER_SIZE)
+        FrameCodec.writeIntBE(headerOnly, 32, ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES + 1)
+
+        val err = assertFailsWith<P2pError.ProtocolError> { reader.feed(headerOnly) }
+        assertTrue(
+            err.message!!.contains("exceeds maximum"),
+            "Rejection must cite the payload-length cap, got: ${err.message}"
+        )
+    }
+
+    /**
+     * Boundary companion: a declared length of exactly
+     * [ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES] is within the bound — the
+     * reader accepts the header and waits (buffering only the header bytes it
+     * was given) for the payload to arrive.
+     */
+    @Test
+    fun maxDeclaredPayloadLengthIsAcceptedAtTheBoundary() {
+        val reader = FrameReader()
+        val headerOnly = FrameCodec.encode(frame(0)).copyOfRange(0, ProtocolConstants.HEADER_SIZE)
+        FrameCodec.writeIntBE(headerOnly, 32, ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES)
+
+        val out = reader.feed(headerOnly)
+
+        assertTrue(out.isEmpty(), "No frame can be emitted until the payload arrives")
+        assertEquals(ProtocolConstants.HEADER_SIZE, reader.bufferedBytes())
+    }
+
     @Test
     fun unknownPacketTypeIsSkippedAndSurroundingFramesStillDecode() {
         val reader = FrameReader()

@@ -40,10 +40,13 @@ import kotlinx.coroutines.flow.asStateFlow
  *   it via `nw_endpoint_create_host` — see
  *   [IosLanDataTransport.connect]'s manual-IP fallback branch.
  *
- * The `hostAddresses` list returned by [getManualConnectionInfo] is
- * populated from `NWPathMonitor` cached state when available; otherwise
- * empty (Swift consumers can read the local IP themselves if needed via
- * the host-side OS API).
+ * The `hostAddresses` list returned by [getManualConnectionInfo] is always
+ * empty on iOS — Apple offers no synchronous non-loopback IP enumeration
+ * without a path-monitor subscription, so only the port/ids are populated;
+ * Swift consumers read the local IP themselves if they need to display one
+ * (e.g. `CNCopySupportedInterfaces` / `NWPathMonitor`). The [state],
+ * [networkState], and [events] surfaces are likewise static on iOS —
+ * nothing ever emits into them.
  */
 public class IosManualNetworkProvisioningManager internal constructor(
     private val ctx: ProvisioningContext

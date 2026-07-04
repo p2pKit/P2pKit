@@ -3,6 +3,7 @@ package dev.p2pkit.sample.kmp
 import android.content.Context
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.android.P2pKitAndroid
 import dev.p2pkit.transport.lan.lan
 
 @Volatile
@@ -14,7 +15,13 @@ private var applicationContext: Context? = null
  * `applicationContext` is retained.
  */
 public fun initP2pKitAndroid(context: Context) {
-    applicationContext = context.applicationContext
+    val app = context.applicationContext
+    applicationContext = app
+    // Required for persistent PeerId on Android: without this the kit falls
+    // back to in-memory storage and the device gets a new identity every
+    // process launch. The documented KMP setup pattern promised this call but
+    // never made it (AUDIT-2026-06 fix).
+    P2pKitAndroid.initialize(app)
 }
 
 public actual fun createP2pKit(appId: String, deviceName: String): P2pKit {

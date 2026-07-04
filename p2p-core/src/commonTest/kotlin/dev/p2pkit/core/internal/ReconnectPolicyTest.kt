@@ -10,10 +10,13 @@ import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -28,9 +31,16 @@ import kotlin.test.assertSame
  * Exercises [ReconnectPolicy.Enabled] behavior at the kit boundary.
  *
  * Each test wires an outgoing Alice and an incoming Bob against
- * [FakeConnectionPair]s the test controls directly. Failures are induced via
- * [dev.p2pkit.core.testfixtures.FakeRawConnection.breakWith], which lets the
- * test observe the exact state transitions without timing on real keepalives.
+ * [FakeConnectionPair]s the test controls directly. The pre-2026-07 tests
+ * induce failures via
+ * [dev.p2pkit.core.testfixtures.FakeRawConnection.breakWithException]; the
+ * throwing signature is kept deliberately there — it pins the session's
+ * defensive failure branch (routeEvents' catch-Throwable path), which stays a
+ * supported classification route. The remote-termination determinism tests
+ * added for AUDIT-2026-07 (SES-1) use the production-shaped
+ * [FakeConnectionPair.hangUp] / peer-side `close()` instead, exercising the
+ * exact EOF-vs-CLOSE-frame classification the shipped transports deliver
+ * (P1-01 / P1-02).
  *
  * Determinism rules:
  *   - retry delays are tiny except where the test needs a window to interpose
@@ -51,7 +61,7 @@ class ReconnectPolicyTest {
         name: String,
         policy: ReconnectPolicy,
         outgoingFactory: () -> RawConnection
-    ): P2pKit = P2pKit.create {
+    ): P2pKit = createTestKit {
         appId = AppId("com.example.test")
         deviceName = name
         keepAlive {
@@ -67,13 +77,16 @@ class ReconnectPolicyTest {
     }
 
     private fun incomingKit(name: String, preStaged: List<RawConnection>): P2pKit =
-        P2pKit.create {
+        createTestKit {
             appId = AppId("com.example.test")
             deviceName = name
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000
             }
+            // Match the dialed id ("bob-id") so the outgoing handshake's peerId
+            // verification passes (mirrors production discovery).
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
             transports {
                 register(ReconnectTestFactory(FakeDataTransport(preStagedIncoming = preStaged)))
             }
@@ -91,7 +104,7 @@ class ReconnectPolicyTest {
             // and the emit may have happened before we could subscribe).
             assertEquals(ConnectionState.Connected, session.state.value)
 
-            pair.a.breakWith(RuntimeException("simulated wire break"))
+            pair.a.breakWithException(RuntimeException("simulated wire break"))
 
             val terminal = withTimeout(5_000) {
                 session.state.first { it == ConnectionState.Failed || it == ConnectionState.Closed }
@@ -124,7 +137,7 @@ class ReconnectPolicyTest {
             // and the emit may have happened before we could subscribe).
             assertEquals(ConnectionState.Connected, session.state.value)
 
-            pair.a.breakWith(RuntimeException("simulated wire break"))
+            pair.a.breakWithException(RuntimeException("simulated wire break"))
 
             val reconnecting = withTimeout(5_000) {
                 session.state.first { it == ConnectionState.Reconnecting }
@@ -159,7 +172,7 @@ class ReconnectPolicyTest {
             // and the emit may have happened before we could subscribe).
             assertEquals(ConnectionState.Connected, session.state.value)
 
-            pair1.a.breakWith(RuntimeException("simulated wire break"))
+            pair1.a.breakWithException(RuntimeException("simulated wire break"))
             withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
 
             val rearmed = withTimeout(5_000) {
@@ -199,7 +212,7 @@ class ReconnectPolicyTest {
         try {
             val session = withTimeout(5_000) { alice.connect(targetPeer()) }
 
-            pair.a.breakWith(RuntimeException("simulated wire break"))
+            pair.a.breakWithException(RuntimeException("simulated wire break"))
 
             val terminal = withTimeout(5_000) {
                 session.state.first { it == ConnectionState.Failed || it == ConnectionState.Closed }
@@ -231,7 +244,7 @@ class ReconnectPolicyTest {
         try {
             val session = withTimeout(5_000) { alice.connect(targetPeer()) }
 
-            pair.a.breakWith(RuntimeException("simulated wire break"))
+            pair.a.breakWithException(RuntimeException("simulated wire break"))
             withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
 
             val attemptsAtClose = attempts.value
@@ -272,7 +285,7 @@ class ReconnectPolicyTest {
         try {
             val session = withTimeout(5_000) { alice.connect(targetPeer()) }
 
-            pair.a.breakWith(RuntimeException("simulated wire break"))
+            pair.a.breakWithException(RuntimeException("simulated wire break"))
             withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
 
             val attemptsAtStop = attempts.value
@@ -303,7 +316,7 @@ class ReconnectPolicyTest {
         try {
             val firstSession = withTimeout(5_000) { alice.connect(targetPeer()) }
 
-            pair.a.breakWith(RuntimeException("simulated wire break"))
+            pair.a.breakWithException(RuntimeException("simulated wire break"))
             withTimeout(5_000) { firstSession.state.first { it == ConnectionState.Reconnecting } }
 
             val secondSession = withTimeout(5_000) { alice.connect(targetPeer()) }
@@ -314,6 +327,141 @@ class ReconnectPolicyTest {
         } finally {
             alice.stop()
             bob.stop()
+        }
+    }
+
+    @Test
+    fun abruptRemoteTerminationWithoutCloseFrameDeterministicallyEntersReconnecting() = runBlocking<Unit> {
+        // AUDIT-2026-07 (SES-1) / P1-01: the most common field event — the
+        // peer's process goes away and the wire ends with no CLOSE frame
+        // (EOF/reset signature). An outgoing session with
+        // ReconnectPolicy.Enabled must classify that as a connection loss and
+        // enter Reconnecting as its FIRST transition out of Connected — never
+        // the clean-Closed outcome the pre-fix completion branch could latch.
+        val pair = FakeConnectionPair()
+        val queue = ArrayDeque<RawConnection>().apply { add(pair.a) }
+        val alice = outgoingKit(
+            "Alice",
+            ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000)
+        ) {
+            queue.removeFirstOrNull() ?: throw RuntimeException("no more connections")
+        }
+        val bob = incomingKit("Bob", listOf(pair.b))
+        try {
+            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+            assertEquals(ConnectionState.Connected, session.state.value)
+
+            // Subscribe to the FIRST transition out of Connected before the
+            // hang-up so the Reconnecting edge cannot be missed (UNDISPATCHED
+            // runs the collector to its first suspension point right here).
+            val firstTransition = async(start = CoroutineStart.UNDISPATCHED) {
+                session.state.first { it != ConnectionState.Connected }
+            }
+
+            // Production-shaped remote termination (fixture F1): Bob's end of
+            // the wire goes away without a CLOSE frame.
+            pair.hangUp(pair.b)
+
+            assertEquals(
+                ConnectionState.Reconnecting,
+                withTimeout(5_000) { firstTransition.await() },
+                "abrupt remote termination (no CLOSE frame) must deterministically enter " +
+                    "Reconnecting under ReconnectPolicy.Enabled — never the clean-Closed outcome"
+            )
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
+    fun remoteCloseFrameYieldsExactlyClosedAndNeverRedials() = runBlocking<Unit> {
+        // AUDIT-2026-07 (SES-1) / P1-02: a peer-initiated clean close — CLOSE
+        // frame, then the socket goes down — must end exactly Closed, never
+        // Failed, and must never re-invoke the dial factory ("clean closes
+        // never trigger retry"), even under ReconnectPolicy.Enabled.
+        val pair = FakeConnectionPair()
+        val attempts = MutableStateFlow(0)
+        val alice = outgoingKit(
+            "Alice",
+            ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000)
+        ) {
+            val n = attempts.value
+            attempts.update { it + 1 }
+            if (n == 0) pair.a else throw RuntimeException("no more connections")
+        }
+        val bob = incomingKit("Bob", listOf(pair.b))
+        try {
+            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+            assertEquals(ConnectionState.Connected, session.state.value)
+
+            // Peer-side clean close: Bob's session sends the CLOSE frame and
+            // then tears its raw connection down — the exact
+            // frame-then-socket-close sequence a shipped transport delivers.
+            val bobSession = withTimeout(5_000) { bob.sessions.first { it.isNotEmpty() } }.first()
+            bobSession.close()
+
+            val terminal = withTimeout(5_000) {
+                session.state.first { it == ConnectionState.Closed || it == ConnectionState.Failed }
+            }
+            assertEquals(
+                ConnectionState.Closed, terminal,
+                "a received CLOSE frame must classify as a clean close — exactly Closed, never Failed"
+            )
+
+            // Terminal Closed is latched (the retry loop re-checks state
+            // before every dial), so the factory must never be re-invoked.
+            delay(150)
+            assertEquals(
+                1, attempts.value,
+                "dial factory must not be re-invoked after a remote CLOSE frame"
+            )
+            assertEquals(ConnectionState.Closed, session.state.value)
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
+    fun remoteCloseThenImmediateSocketCloseClassifiesCleanlyUnderRepetition() = runBlocking<Unit> {
+        // AUDIT-2026-07 (SES-1) / P1-02 stress variant: CLOSE frame followed
+        // immediately by the socket close, repeated. Every iteration must
+        // converge on exactly Closed with no re-dial regardless of how the
+        // raw-terminal observer interleaves with CLOSE-frame processing on
+        // the kit's multi-threaded dispatcher.
+        repeat(10) { iteration ->
+            val pair = FakeConnectionPair()
+            val attempts = MutableStateFlow(0)
+            val alice = outgoingKit(
+                "Alice",
+                ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000)
+            ) {
+                val n = attempts.value
+                attempts.update { it + 1 }
+                if (n == 0) pair.a else throw RuntimeException("no more connections")
+            }
+            val bob = incomingKit("Bob", listOf(pair.b))
+            try {
+                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                val bobSession = withTimeout(5_000) { bob.sessions.first { it.isNotEmpty() } }.first()
+                bobSession.close()
+
+                val terminal = withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Closed || it == ConnectionState.Failed }
+                }
+                assertEquals(
+                    ConnectionState.Closed, terminal,
+                    "iteration $iteration: remote CLOSE must end exactly Closed, never Failed"
+                )
+                assertEquals(
+                    1, attempts.value,
+                    "iteration $iteration: dial factory must not be re-invoked after a remote CLOSE"
+                )
+            } finally {
+                alice.stop()
+                bob.stop()
+            }
         }
     }
 }

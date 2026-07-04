@@ -16,6 +16,7 @@ import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.core.protocol.FrameTrace
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pState
@@ -35,6 +36,7 @@ import dev.p2pkit.core.transfer.sendFile
 import dev.p2pkit.provisioning.android.AndroidP2pPermissionManager
 import dev.p2pkit.provisioning.android.android
 import dev.p2pkit.transport.lan.lan
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,8 +47,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.io.asSink
 import java.io.File
+import java.io.OutputStream
 
 /**
  * Owns the [P2pKit] instance and the **room** state of the sample, which
@@ -127,12 +131,24 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     val discovering: StateFlow<Boolean> = _discovering.asStateFlow()
 
     /**
+     * AUDIT-2026-06: A-G8-samples-android-19 — "is at least one session
+     * Connected" derived here once (updated from the per-session state
+     * collectors) instead of `collectAsState()` inside a short-circuiting
+     * `any {}` in the composable, which churned subscriptions.
+     */
+    private val _hasConnectedSession = MutableStateFlow(false)
+    val hasConnectedSession: StateFlow<Boolean> = _hasConnectedSession.asStateFlow()
+
+    /**
      * Auto-mesh: when ON, the sample auto-connects to every newly discovered
-     * peer in the room. To avoid both sides racing each other into duplicate
-     * sessions (the current SDK doesn't arbitrate simultaneous-open), the
-     * caller only initiates when their own `localPeerId` is lexicographically
-     * less than the discovered peer's id. Exactly one side per pair initiates;
-     * the other accepts the incoming session.
+     * peer in the room. The SDK itself arbitrates simultaneous-open (the
+     * smaller-peer-id side's outgoing connection wins, see the spec), so
+     * duplicate sessions are not a correctness risk — the lexicographic
+     * guard below merely avoids redundant dials and UI churn by having
+     * exactly one side per pair initiate; the other accepts the incoming
+     * session.
+     * (AUDIT-2026-06: A-G8-samples-android-09 — comment previously claimed
+     * the SDK does not arbitrate.)
      *
      * Default ON — this is the behavior that makes a 3-device room work
      * out-of-the-box. Toggle OFF to test selective connect.
@@ -188,7 +204,31 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     private var kit: P2pKit? = null
     private var runScope: CoroutineScope? = null
     private val cleanupScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-    private val sessionJobs: MutableMap<String, Job> = mutableMapOf()
+
+    /**
+     * AUDIT-2026-06: A-G8-samples-android-13 — all three per-session
+     * collectors (incoming messages, state log, incoming files) are tracked
+     * per session id so a dropped session cancels every collector, not just
+     * the message one.
+     */
+    private val sessionJobs: MutableMap<String, List<Job>> = mutableMapOf()
+
+    /**
+     * AUDIT-2026-06: A-G8-samples-android-07 — open destination streams of
+     * in-flight incoming transfers, keyed by transfer id. Normally closed by
+     * the per-transfer state collector on a terminal state; [stop] /
+     * [onCleared] close whatever is left after cancelling those collectors.
+     * Main-thread confined (registered/removed from runScope + stop()).
+     */
+    private val activeIncomingStreams: MutableMap<String, OutputStream> = mutableMapOf()
+
+    /**
+     * AUDIT-2026-06: ARCH-samples-18 — the in-flight teardown job launched by
+     * [stop], so [onCleared] can wait for it instead of cancelling
+     * [cleanupScope] underneath it.
+     */
+    private var pendingStopJob: Job? = null
+
     private var nextMessageId: Long = 1L
 
     // --- intents from the UI ----------------------------------------------
@@ -217,7 +257,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun start() {
-        if (_isRunning.value || _isStarting.value) return  // idempotent + re-entry safe
+        // AUDIT-2026-06: D-G8-samples-android-02 — also refuse while the
+        // previous kit is still stopping, or two kits would overlap (duplicate
+        // mDNS advertisements + two TCP listeners).
+        if (_isRunning.value || _isStarting.value || _isStopping.value) return  // idempotent + re-entry safe
         val trimmedName = deviceName.trim()
         if (trimmedName.isEmpty()) {
             Log.w(LOG_TAG, "start aborted: deviceName is blank")
@@ -227,6 +270,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         _isStarting.value = true
         val choice = reconnectChoice
         val ctx = getApplication<Application>().applicationContext
+        // Diagnostic frame-type trace (Issue #2/#3): route decoded frame lines
+        // to logcat under a P2pKit tag so they sit alongside the transport
+        // (P2pKitJmDNS / P2pKitLan*) lines. Library default is off.
+        FrameTrace.sink = { Log.d("P2pKitFrame", it) }
+        FrameTrace.enabled = true
         val newKit = P2pKit.create {
             appId = AppId(APP_ID)
             this.deviceName = this@P2pKitViewModel.deviceName
@@ -294,13 +342,13 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         scope.launch {
-            runCatching { newKit.startAdvertising() }
+            runCatchingNonCancel { newKit.startAdvertising() }
                 .onSuccess { _advertising.value = true }
                 .onFailure {
                     Log.w(LOG_TAG, "startAdvertising failed", it)
                     appendSystemMessage("advertise failed: ${it.message ?: it::class.simpleName}")
                 }
-            runCatching { newKit.startDiscovery() }
+            runCatchingNonCancel { newKit.startDiscovery() }
                 .onSuccess { _discovering.value = true }
                 .onFailure {
                     Log.w(LOG_TAG, "startDiscovery failed", it)
@@ -308,9 +356,15 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 }
         }
 
-        // Auto-mesh: react to peer changes and connect to anyone we should
-        // initiate (lexicographic tie-break by peer id). Combining with
-        // [autoMesh] means toggling the flag back ON re-evaluates immediately.
+        // Auto-mesh: react to peer/session changes and connect to anyone we
+        // should initiate toward (lexicographic tie-break by peer id).
+        // Combining with [autoMesh] means toggling the flag back ON
+        // re-evaluates immediately.
+        //
+        // AUDIT-2026-06: A-G8-samples-android-08 — kit.sessions is a combine
+        // input (not read as a snapshot inside collect) so a session dropping
+        // while the peer stays discovered re-fires mesh evaluation and the
+        // initiator re-dials; previously only peer churn re-triggered it.
         //
         // We route through [connect] (not `newKit.connect` directly) so the
         // auto-mesh path shares [pendingConnectPeerIds] with the user-tap
@@ -320,20 +374,21 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // race onto the SDK's dedup mutex and the UI would briefly show two
         // "Connecting…" states for the same peer.
         scope.launch {
-            combine(_autoMesh, newKit.peers) { enabled, peers -> enabled to peers }
-                .collect { (enabled, peers) ->
-                    if (!enabled) return@collect
-                    val myId = newKit.localPeerId.value
-                    val connectedIds = connectedSessions.map { it.peer.id.value }.toSet()
-                    for (peer in peers) {
-                        if (peer.id.value in connectedIds) continue
-                        if (pendingConnectPeerIds.contains(peer.id.value)) continue
-                        if (myId < peer.id.value) {
-                            Log.i(LOG_TAG, "auto-mesh: initiating connect to ${peer.name}")
-                            connect(peer)
-                        }
+            combine(_autoMesh, newKit.peers, newKit.sessions) { enabled, peers, sessions ->
+                Triple(enabled, peers, sessions)
+            }.collect { (enabled, peers, sessions) ->
+                if (!enabled) return@collect
+                val myId = newKit.localPeerId.value
+                val sessionPeerIds = sessions.map { it.peer.id.value }.toSet()
+                for (peer in peers) {
+                    if (peer.id.value in sessionPeerIds) continue
+                    if (pendingConnectPeerIds.contains(peer.id.value)) continue
+                    if (myId < peer.id.value) {
+                        Log.i(LOG_TAG, "auto-mesh: initiating connect to ${peer.name}")
+                        connect(peer)
                     }
                 }
+            }
         }
 
         _isRunning.value = true
@@ -356,7 +411,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         pendingConnectPeerIds.add(peerId)
         scope.launch {
             try {
-                runCatching { currentKit.connect(peer) }.onFailure {
+                runCatchingNonCancel { currentKit.connect(peer) }.onFailure {
                     Log.w(LOG_TAG, "connect to ${peer.name} failed", it)
                     appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
                 }
@@ -374,7 +429,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val scope = runScope ?: viewModelScope
         scope.launch {
             val pm = AndroidP2pPermissionManager(getApplication<Application>().applicationContext)
-            _missingPermissions.value = runCatching { pm.missingPermissions() }.getOrElse { emptyList() }
+            _missingPermissions.value =
+                runCatchingNonCancel { pm.missingPermissions() }.getOrElse { emptyList() }
         }
     }
 
@@ -389,36 +445,39 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         refreshMissingPermissions()
         _provisioningBusy.value = true
         scope.launch {
-            val result = runCatching {
-                currentKit.networkProvisioning.startLocalNetwork(LocalNetworkConfig())
-            }.getOrElse { e ->
-                Log.w(LOG_TAG, "startHotspot threw", e)
-                LocalNetworkResult.Failed(
-                    dev.p2pkit.core.NetworkProvisioningError.PlatformError(e)
-                )
+            try {
+                val result = runCatchingNonCancel {
+                    currentKit.networkProvisioning.startLocalNetwork(LocalNetworkConfig())
+                }.getOrElse { e ->
+                    Log.w(LOG_TAG, "startHotspot threw", e)
+                    LocalNetworkResult.Failed(
+                        dev.p2pkit.core.NetworkProvisioningError.PlatformError(e)
+                    )
+                }
+                _hotspotResult.value = result
+                // Log the full result detail so logcat is self-sufficient. The
+                // HotspotCard on-screen already shows error class + message; this
+                // mirrors it for non-UI diagnostics (adb logcat -s p2pkit).
+                when (result) {
+                    is LocalNetworkResult.Started ->
+                        Log.i(LOG_TAG, "hotspot Started: ssid=${result.credentials.ssid} " +
+                            "port=${result.manualConnectionInfo?.port} " +
+                            "hosts=${result.manualConnectionInfo?.hostAddresses}")
+                    is LocalNetworkResult.StartedWithoutCredentials ->
+                        Log.i(LOG_TAG, "hotspot StartedWithoutCredentials: " +
+                            "port=${result.manualConnectionInfo.port} " +
+                            "hosts=${result.manualConnectionInfo.hostAddresses}")
+                    is LocalNetworkResult.Failed ->
+                        Log.w(LOG_TAG, "hotspot Failed: ${result.error::class.simpleName} " +
+                            "— ${result.error.message ?: "(no message)"}")
+                    is LocalNetworkResult.Unsupported ->
+                        Log.w(LOG_TAG, "hotspot Unsupported: ${result.reason}")
+                    is LocalNetworkResult.RequiresUserAction ->
+                        Log.i(LOG_TAG, "hotspot RequiresUserAction: ${result.instruction}")
+                }
+            } finally {
+                _provisioningBusy.value = false
             }
-            _hotspotResult.value = result
-            // Log the full result detail so logcat is self-sufficient. The
-            // HotspotCard on-screen already shows error class + message; this
-            // mirrors it for non-UI diagnostics (adb logcat -s p2pkit).
-            when (result) {
-                is LocalNetworkResult.Started ->
-                    Log.i(LOG_TAG, "hotspot Started: ssid=${result.credentials.ssid} " +
-                        "port=${result.manualConnectionInfo?.port} " +
-                        "hosts=${result.manualConnectionInfo?.hostAddresses}")
-                is LocalNetworkResult.StartedWithoutCredentials ->
-                    Log.i(LOG_TAG, "hotspot StartedWithoutCredentials: " +
-                        "port=${result.manualConnectionInfo.port} " +
-                        "hosts=${result.manualConnectionInfo.hostAddresses}")
-                is LocalNetworkResult.Failed ->
-                    Log.w(LOG_TAG, "hotspot Failed: ${result.error::class.simpleName} " +
-                        "— ${result.error.message ?: "(no message)"}")
-                is LocalNetworkResult.Unsupported ->
-                    Log.w(LOG_TAG, "hotspot Unsupported: ${result.reason}")
-                is LocalNetworkResult.RequiresUserAction ->
-                    Log.i(LOG_TAG, "hotspot RequiresUserAction: ${result.instruction}")
-            }
-            _provisioningBusy.value = false
         }
     }
 
@@ -428,15 +487,36 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         if (_provisioningBusy.value) return
         _provisioningBusy.value = true
         scope.launch {
-            runCatching { currentKit.networkProvisioning.stopLocalNetwork() }
-            _hotspotResult.value = null
-            Log.i(LOG_TAG, "hotspot stopped")
-            _provisioningBusy.value = false
+            try {
+                // AUDIT-2026-06: D-G8-samples-android-08 — a failed stop no
+                // longer clears the card to idle / logs success; the failure
+                // is surfaced so the tester knows the hotspot may still be up.
+                runCatchingNonCancel { currentKit.networkProvisioning.stopLocalNetwork() }
+                    .onSuccess {
+                        _hotspotResult.value = null
+                        Log.i(LOG_TAG, "hotspot stopped")
+                    }
+                    .onFailure { e ->
+                        Log.w(LOG_TAG, "stopHotspot failed", e)
+                        appendSystemMessage("stop hotspot failed: ${e.message ?: e::class.simpleName}")
+                        _hotspotResult.value = LocalNetworkResult.Failed(
+                            dev.p2pkit.core.NetworkProvisioningError.PlatformError(e)
+                        )
+                    }
+            } finally {
+                _provisioningBusy.value = false
+            }
         }
     }
 
     @OptIn(ExperimentalP2pApi::class)
-    fun joinHotspot(ssid: String, passphrase: String) {
+    fun joinHotspot(
+        ssid: String,
+        passphrase: String,
+        // AUDIT-2026-06: A-G8-samples-android-11 — security type is selectable
+        // (WPA2 default, WPA3 for SAE-only hotspots) instead of hardcoded WPA2.
+        security: WifiSecurityType = WifiSecurityType.WPA2
+    ) {
         val currentKit = kit ?: return
         val scope = runScope ?: return
         if (_provisioningBusy.value) {
@@ -461,32 +541,35 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val creds = WifiCredentials(
             ssid = trimmedSsid,
             password = pass?.let { WifiPassword(it) },
-            securityType = if (pass != null) WifiSecurityType.WPA2 else WifiSecurityType.OPEN
+            securityType = if (pass != null) security else WifiSecurityType.OPEN
         )
         scope.launch {
-            val result = runCatching {
-                currentKit.networkProvisioning.joinLocalNetwork(creds)
-            }.getOrElse { e ->
-                Log.w(LOG_TAG, "joinHotspot threw", e)
-                JoinNetworkResult.Failed(
-                    dev.p2pkit.core.NetworkProvisioningError.PlatformError(e)
-                )
+            try {
+                val result = runCatchingNonCancel {
+                    currentKit.networkProvisioning.joinLocalNetwork(creds)
+                }.getOrElse { e ->
+                    Log.w(LOG_TAG, "joinHotspot threw", e)
+                    JoinNetworkResult.Failed(
+                        dev.p2pkit.core.NetworkProvisioningError.PlatformError(e)
+                    )
+                }
+                _joinResult.value = result
+                when (result) {
+                    is JoinNetworkResult.Joined ->
+                        Log.i(LOG_TAG, "join Joined: state=${result.networkState::class.simpleName}")
+                    is JoinNetworkResult.Failed ->
+                        Log.w(LOG_TAG, "join Failed: ${result.error::class.simpleName} " +
+                            "— ${result.error.message ?: "(no message)"}")
+                    is JoinNetworkResult.Unsupported ->
+                        Log.w(LOG_TAG, "join Unsupported: ${result.reason}")
+                    is JoinNetworkResult.RequiresUserAction ->
+                        Log.i(LOG_TAG, "join RequiresUserAction: ${result.instruction}")
+                    JoinNetworkResult.Pending ->
+                        Log.i(LOG_TAG, "join Pending")
+                }
+            } finally {
+                _provisioningBusy.value = false
             }
-            _joinResult.value = result
-            when (result) {
-                is JoinNetworkResult.Joined ->
-                    Log.i(LOG_TAG, "join Joined: state=${result.networkState::class.simpleName}")
-                is JoinNetworkResult.Failed ->
-                    Log.w(LOG_TAG, "join Failed: ${result.error::class.simpleName} " +
-                        "— ${result.error.message ?: "(no message)"}")
-                is JoinNetworkResult.Unsupported ->
-                    Log.w(LOG_TAG, "join Unsupported: ${result.reason}")
-                is JoinNetworkResult.RequiresUserAction ->
-                    Log.i(LOG_TAG, "join RequiresUserAction: ${result.instruction}")
-                JoinNetworkResult.Pending ->
-                    Log.i(LOG_TAG, "join Pending")
-            }
-            _provisioningBusy.value = false
         }
     }
 
@@ -515,12 +598,17 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
         val ctx = getApplication<Application>().applicationContext
         scope.launch {
-            val transfer = runCatching { session.sendFile(ctx, uri) }
-                .getOrElse {
-                    Log.w(LOG_TAG, "sendFile failed", it)
-                    appendSystemMessage("send file failed: ${it.message ?: it::class.simpleName}")
-                    return@launch
-                }
+            val transfer = runCatchingNonCancel {
+                // AUDIT-2026-06: B-G8-samples-android-02 — the SAF extension does
+                // ContentResolver getType/query/openInputStream with no internal
+                // IO hop; run it off the main thread (cloud DocumentsProviders
+                // can block for seconds → ANR risk).
+                withContext(Dispatchers.IO) { session.sendFile(ctx, uri) }
+            }.getOrElse {
+                Log.w(LOG_TAG, "sendFile failed", it)
+                appendSystemMessage("send file failed: ${it.message ?: it::class.simpleName}")
+                return@launch
+            }
             registerOutgoingTransfer(transfer, session.peer.name, scope)
         }
     }
@@ -538,6 +626,16 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * AUDIT-2026-06: A-G8-samples-android-15 — called by the UI when the SAF
+     * picker returned a file but the pending target peer was lost (e.g. the
+     * Activity was recreated while the picker was open). Previously the
+     * result was dropped with no message at all.
+     */
+    fun notifySendTargetLost() {
+        appendSystemMessage("file picked, but the send target was lost — use Send file… on the peer again")
+    }
+
+    /**
      * Called by the UI when the user denies (or has permanently denied) a
      * runtime permission needed for hotspot / join flows. Distinct from the
      * "Grant permission and retry" affordance because the system-permission
@@ -549,25 +647,46 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    private fun wireIncomingFiles(session: P2pSession, scope: CoroutineScope) {
+    private fun wireIncomingFiles(session: P2pSession, scope: CoroutineScope): Job {
         val ctx = getApplication<Application>().applicationContext
-        scope.launch {
+        return scope.launch {
             session.incomingFiles.collect { offer ->
-                val baseDir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
-                val saveDir = File(baseDir, "p2pkit-incoming/${sanitize(session.peer.name)}")
-                    .also { runCatching { it.mkdirs() } }
-                val saveFile = File(saveDir, sanitize(offer.name))
-                Log.i(LOG_TAG, "incoming file offer ${offer.name} (${offer.sizeBytes}B) → ${saveFile.absolutePath}")
-                val out = runCatching { saveFile.outputStream() }
-                    .getOrElse { e ->
-                        Log.w(LOG_TAG, "cannot open destination $saveFile", e)
-                        runCatching { offer.reject("cannot open destination") }
-                        return@collect
+                // AUDIT-2026-06: B-G8-samples-android-02 — mkdirs / create /
+                // open run on Dispatchers.IO, not the main-thread run scope.
+                val opened = withContext(Dispatchers.IO) {
+                    runCatchingNonCancel {
+                        val baseDir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
+                        val saveDir = File(baseDir, "p2pkit-incoming/${sanitize(session.peer.name)}")
+                            .also { it.mkdirs() }
+                        // AUDIT-2026-06: A-G8-samples-android-04 — uniquify the
+                        // destination so two offers with the same name (re-send,
+                        // duplicate, concurrent) never truncate/interleave one path.
+                        val saveFile = uniqueDestination(saveDir, offer.name)
+                        saveFile to saveFile.outputStream()
                     }
-                val incoming = runCatching { offer.accept(out.asSink()) }
+                }
+                val (saveFile, out) = opened.getOrElse { e ->
+                    Log.w(LOG_TAG, "cannot open destination for ${offer.name}", e)
+                    runCatchingNonCancel { offer.reject("cannot open destination") }
+                    appendSystemMessage("rejected '${offer.name}' from ${session.peer.name}: cannot open destination")
+                    return@collect
+                }
+                Log.i(LOG_TAG, "incoming file offer ${offer.name} (${offer.sizeBytes}B) → ${saveFile.absolutePath}")
+                val incoming = runCatchingNonCancel { offer.accept(out.asSink()) }
                     .getOrElse { e ->
-                        runCatching { out.close() }
                         Log.w(LOG_TAG, "accept ${offer.name} failed", e)
+                        // AUDIT-2026-06: D-G8-samples-android-09 — on accept
+                        // failure, reject the offer (so the sender doesn't wait
+                        // out the 30s offer timeout), remove the empty file, and
+                        // surface the failure in the timeline.
+                        runCatchingNonCancel { offer.reject("accept failed on receiver") }
+                        withContext(Dispatchers.IO) {
+                            runCatchingNonCancel { out.close() }
+                            runCatchingNonCancel { saveFile.delete() }
+                        }
+                        appendSystemMessage(
+                            "receive '${offer.name}' from ${session.peer.name} failed: ${e.message ?: e::class.simpleName}"
+                        )
                         return@collect
                     }
                 registerIncomingTransfer(incoming, session.peer.name, saveFile.absolutePath, scope, out)
@@ -607,7 +726,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         peerName: String,
         destinationPath: String,
         scope: CoroutineScope,
-        out: java.io.OutputStream
+        out: OutputStream
     ) {
         addRow(
             FileTransferRow(
@@ -622,15 +741,17 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 transfer = transfer
             )
         )
+        // AUDIT-2026-06: A-G8-samples-android-07 — track the stream so stop()
+        // can close it if this collector is cancelled mid-transfer.
+        activeIncomingStreams[transfer.id] = out
         appendSystemMessage("receiving file '${transfer.name}' from $peerName → $destinationPath")
         scope.launch {
             transfer.state.collect { st ->
                 updateRowState(transfer.id, st)
-                if (st is FileTransferState.Completed ||
-                    st is FileTransferState.Failed ||
-                    st is FileTransferState.Cancelled
-                ) {
-                    runCatching { out.close() }
+                if (st.isTerminal()) {
+                    activeIncomingStreams.remove(transfer.id)
+                    // AUDIT-2026-06: B-G8-samples-android-02 — close (flush) off main.
+                    withContext(Dispatchers.IO) { runCatchingNonCancel { out.close() } }
                 }
             }
         }
@@ -642,8 +763,14 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     private fun addRow(row: FileTransferRow) {
         fileTransfers.add(0, row)
         // Keep the list bounded so the UI stays responsive.
-        while (fileTransfers.size > FILE_TRANSFER_HISTORY_CAPACITY) {
-            fileTransfers.removeAt(fileTransfers.size - 1)
+        // AUDIT-2026-06: ARCH-samples-16 — evict only rows whose transfer is
+        // terminal; an active (Offered/Accepted/Sending) row keeps its Cancel
+        // affordance and live progress even when the history overflows.
+        if (fileTransfers.size > FILE_TRANSFER_HISTORY_CAPACITY) {
+            for (i in fileTransfers.indices.reversed()) {
+                if (fileTransfers.size <= FILE_TRANSFER_HISTORY_CAPACITY) break
+                if (fileTransfers[i].state.isTerminal()) fileTransfers.removeAt(i)
+            }
         }
     }
 
@@ -662,12 +789,33 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     fun cancelFileTransfer(id: String) {
         val row = fileTransfers.firstOrNull { it.id == id } ?: return
         val scope = runScope ?: return
-        scope.launch { runCatching { row.transfer.cancel("user cancelled") } }
+        scope.launch { runCatchingNonCancel { row.transfer.cancel("user cancelled") } }
     }
 
     private fun sanitize(raw: String): String {
         val cleaned = raw.replace(Regex("""[\\/:*?"<>|]"""), "_").trim()
         return cleaned.ifEmpty { "untitled" }
+    }
+
+    /**
+     * AUDIT-2026-06: A-G8-samples-android-04 — pick a destination path that
+     * does not collide with an existing file. Uses [File.createNewFile] so
+     * the claim is atomic even when two offers race; the caller's
+     * `outputStream()` then opens the (empty) claimed file. Runs on
+     * Dispatchers.IO.
+     */
+    private fun uniqueDestination(dir: File, rawName: String): File {
+        val base = sanitize(rawName)
+        val dot = base.lastIndexOf('.')
+        val stem = if (dot > 0) base.substring(0, dot) else base
+        val ext = if (dot > 0) base.substring(dot) else ""
+        var candidate = File(dir, base)
+        var n = 1
+        while (!candidate.createNewFile() && n < 10_000) {
+            candidate = File(dir, "$stem ($n)$ext")
+            n++
+        }
+        return candidate
     }
 
     fun closeSession(peerId: String) {
@@ -678,7 +826,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         scope.launch {
-            runCatching { target.close() }.onFailure {
+            runCatchingNonCancel { target.close() }.onFailure {
                 Log.w(LOG_TAG, "close session to ${target.peer.name} failed", it)
                 appendSystemMessage("close ${target.peer.name} failed: ${it.message ?: it::class.simpleName}")
             }
@@ -729,14 +877,13 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val body = P2pMessage.Text(trimmed)
         val message = RoomMessage(
             id = nextMessageId++,
-            senderPeerId = null,
             senderName = "(me)",
             body = body,
             timestamp = System.currentTimeMillis(),
             direction = RoomMessage.Direction.Outgoing,
             target = target
         )
-        roomMessages.add(message)
+        appendRoomMessage(message)
         Log.i(
             LOG_TAG,
             "room: ${if (target is SendTarget.All) "broadcast" else "targeted"} " +
@@ -745,7 +892,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
         for (session in recipients) {
             scope.launch {
-                runCatching { session.send(body) }.onFailure {
+                runCatchingNonCancel { session.send(body) }.onFailure {
                     Log.w(LOG_TAG, "room: send to ${session.peer.name} failed", it)
                     appendSystemMessage("send to ${session.peer.name} failed: ${it.message ?: it::class.simpleName}")
                 }
@@ -758,11 +905,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val scope = runScope ?: return
         scope.launch {
             if (_advertising.value) {
-                runCatching { currentKit.stopAdvertising() }
+                runCatchingNonCancel { currentKit.stopAdvertising() }
                     .onSuccess { _advertising.value = false }
                     .onFailure { Log.w(LOG_TAG, "stopAdvertising failed", it) }
             } else {
-                runCatching { currentKit.startAdvertising() }
+                runCatchingNonCancel { currentKit.startAdvertising() }
                     .onSuccess { _advertising.value = true }
                     .onFailure { Log.w(LOG_TAG, "startAdvertising failed", it) }
             }
@@ -774,11 +921,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val scope = runScope ?: return
         scope.launch {
             if (_discovering.value) {
-                runCatching { currentKit.stopDiscovery() }
+                runCatchingNonCancel { currentKit.stopDiscovery() }
                     .onSuccess { _discovering.value = false }
                     .onFailure { Log.w(LOG_TAG, "stopDiscovery failed", it) }
             } else {
-                runCatching { currentKit.startDiscovery() }
+                runCatchingNonCancel { currentKit.startDiscovery() }
                     .onSuccess { _discovering.value = true }
                     .onFailure { Log.w(LOG_TAG, "startDiscovery failed", it) }
             }
@@ -803,18 +950,30 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         targetedPeerIds.clear()
         roomMessages.clear()
         fileTransfers.clear()
+        _hasConnectedSession.value = false
         _localPeerId.value = null
         _hotspotResult.value = null
         _joinResult.value = null
         _missingPermissions.value = emptyList()
         _provisioningBusy.value = false
         _networkPathStatus.value = NetworkPathStatus.Unknown
+        // AUDIT-2026-06: A-G8-samples-android-07 — cancelling runScope killed
+        // the collectors that close incoming-file streams; close the leftovers
+        // here (after kit.stop() has quiesced the writers).
+        val streamsToClose = activeIncomingStreams.values.toList()
+        activeIncomingStreams.clear()
         // Best-effort tear down the hotspot too. Cleared via cleanupScope
         // (not runScope, which we just cancelled) so the stop call survives.
-        cleanupScope.launch {
-            runCatching { toStop.networkProvisioning.stopLocalNetwork() }
-            runCatching { toStop.stop() }
-            _isStopping.value = false
+        pendingStopJob = cleanupScope.launch {
+            try {
+                runCatchingNonCancel { toStop.networkProvisioning.stopLocalNetwork() }
+                runCatchingNonCancel { toStop.stop() }
+                withContext(Dispatchers.IO) {
+                    streamsToClose.forEach { s -> runCatchingNonCancel { s.close() } }
+                }
+            } finally {
+                _isStopping.value = false
+            }
         }
     }
 
@@ -822,14 +981,24 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         super.onCleared()
         val toStop = kit
         kit = null
-        if (toStop != null) {
-            cleanupScope.launch {
-                runCatching { toStop.stop() }
-                cleanupScope.cancel()
+        val streamsToClose = activeIncomingStreams.values.toList()
+        activeIncomingStreams.clear()
+        // AUDIT-2026-06: ARCH-samples-18 — never cancel cleanupScope while a
+        // stop() teardown launched into it is still in flight; join it first,
+        // then finish our own teardown, and only cancel the scope at the end.
+        val finalCleanup = cleanupScope.launch {
+            pendingStopJob?.join()
+            if (toStop != null) {
+                runCatchingNonCancel { toStop.networkProvisioning.stopLocalNetwork() }
+                runCatchingNonCancel { toStop.stop() }
             }
-        } else {
-            cleanupScope.cancel()
+            if (streamsToClose.isNotEmpty()) {
+                withContext(Dispatchers.IO) {
+                    streamsToClose.forEach { s -> runCatchingNonCancel { s.close() } }
+                }
+            }
         }
+        finalCleanup.invokeOnCompletion { cleanupScope.cancel() }
     }
 
     // --- helpers ----------------------------------------------------------
@@ -840,7 +1009,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // Drop sessions that left the kit.
         val droppedIds = sessionJobs.keys.toList().filter { it !in currentIds }
         for (id in droppedIds) {
-            sessionJobs.remove(id)?.cancel()
+            // AUDIT-2026-06: A-G8-samples-android-13 — cancel every collector
+            // of the dropped session (messages + state log + incoming files),
+            // not just the message one.
+            sessionJobs.remove(id)?.forEach { it.cancel() }
             val removed = connectedSessions.firstOrNull { it.id == id }
             if (removed != null) {
                 connectedSessions.remove(removed)
@@ -856,13 +1028,12 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             connectedSessions.add(session)
             appendSystemMessage("connected to ${session.peer.name}")
             Log.i(LOG_TAG, "room: session added ${session.peer.name}")
-            sessionJobs[session.id] = scope.launch {
+            val incomingJob = scope.launch {
                 session.incoming.collect { msg ->
                     Log.i(LOG_TAG, "room: incoming from ${session.peer.name}")
-                    roomMessages.add(
+                    appendRoomMessage(
                         RoomMessage(
                             id = nextMessageId++,
-                            senderPeerId = session.peer.id.value,
                             senderName = session.peer.name,
                             body = msg,
                             timestamp = System.currentTimeMillis(),
@@ -871,22 +1042,43 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
             }
-            // Log session state transitions (Connected / Reconnecting / Failed / Closed).
-            scope.launch {
+            // Log session state transitions (Connected / Reconnecting / Failed / Closed)
+            // and keep the derived hasConnectedSession flag fresh.
+            val stateJob = scope.launch {
                 session.state.collect { st ->
                     Log.i(LOG_TAG, "session ${session.peer.name} → $st")
+                    recomputeHasConnectedSession()
                 }
             }
             // Auto-accept inbound file offers and stream to external-files dir.
-            wireIncomingFiles(session, scope)
+            val filesJob = wireIncomingFiles(session, scope)
+            sessionJobs[session.id] = listOf(incomingJob, stateJob, filesJob)
+        }
+        recomputeHasConnectedSession()
+    }
+
+    /** Main-thread only (called from runScope collectors / UI intents). */
+    private fun recomputeHasConnectedSession() {
+        _hasConnectedSession.value =
+            connectedSessions.any { it.state.value == ConnectionState.Connected }
+    }
+
+    /**
+     * AUDIT-2026-06: B-G8-samples-android-04 — single append path that keeps
+     * [roomMessages] capped (oldest evicted first) so hours-long rooms don't
+     * degrade recomposition.
+     */
+    private fun appendRoomMessage(message: RoomMessage) {
+        roomMessages.add(message)
+        while (roomMessages.size > ROOM_MESSAGE_CAPACITY) {
+            roomMessages.removeAt(0)
         }
     }
 
     private fun appendSystemMessage(text: String) {
-        roomMessages.add(
+        appendRoomMessage(
             RoomMessage(
                 id = nextMessageId++,
-                senderPeerId = null,
                 senderName = "(system)",
                 body = P2pMessage.Text(text),
                 timestamp = System.currentTimeMillis(),
@@ -896,11 +1088,15 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     internal fun recordLog(level: String, message: String) {
-        // Trim to keep the strip bounded.
-        if (logTail.size >= LOG_TAIL_CAPACITY) {
-            logTail.removeAt(0)
+        // AUDIT-2026-06: ARCH-samples-11 — the SDK invokes the logger from its
+        // own threads; marshal onto the main dispatcher so the UI-backing
+        // SnapshotStateList is mutated (check-trim-add) from one thread only.
+        viewModelScope.launch {
+            if (logTail.size >= LOG_TAIL_CAPACITY) {
+                logTail.removeAt(0)
+            }
+            logTail.add("$level  $message")
         }
-        logTail.add("$level  $message")
     }
 
     private companion object {
@@ -908,8 +1104,33 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         const val LOG_TAG = "p2pkit"
         const val LOG_TAIL_CAPACITY = 30
         const val FILE_TRANSFER_HISTORY_CAPACITY = 24
+        // AUDIT-2026-06: B-G8-samples-android-04 — roomMessages cap.
+        const val ROOM_MESSAGE_CAPACITY = 500
     }
 }
+
+/**
+ * AUDIT-2026-06: C-G8-samples-android-18 — `runCatching` variant that rethrows
+ * [CancellationException]. Plain runCatching around suspend SDK calls caught
+ * the CE thrown when [P2pKitViewModel.stop] cancels the run scope, producing
+ * ghost "failed …" system messages and letting cancelled coroutines keep
+ * executing follow-up statements.
+ */
+private inline fun <T> runCatchingNonCancel(block: () -> T): Result<T> =
+    try {
+        Result.success(block())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (t: Throwable) {
+        Result.failure(t)
+    }
+
+/** Terminal states of a file transfer (safe to evict / close resources). */
+private fun FileTransferState.isTerminal(): Boolean =
+    this is FileTransferState.Completed ||
+        this is FileTransferState.Failed ||
+        this is FileTransferState.Rejected ||
+        this is FileTransferState.Cancelled
 
 /** Direction of a file transfer row in the sample UI. */
 enum class FileTransferDirection { Outgoing, Incoming }
@@ -934,10 +1155,14 @@ data class FileTransferRow(
     val transfer: P2pFileTransfer
 )
 
-/** Sample-level message envelope rendered in the room timeline. */
+/**
+ * Sample-level message envelope rendered in the room timeline.
+ *
+ * AUDIT-2026-06: B-G8-samples-android-08 — `senderPeerId` (write-only) removed;
+ * `timestamp` is now rendered by `RoomLine`.
+ */
 data class RoomMessage(
     val id: Long,
-    val senderPeerId: String?,
     val senderName: String,
     val body: P2pMessage,
     val timestamp: Long,

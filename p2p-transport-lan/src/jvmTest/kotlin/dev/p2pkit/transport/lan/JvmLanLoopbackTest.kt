@@ -1,6 +1,7 @@
 package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.transfer.FileTransferState
@@ -15,7 +16,11 @@ import kotlinx.io.asSink
 import kotlinx.io.asSource
 import java.io.File
 import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.net.ServerSocket
+import java.net.Socket
 import java.nio.file.Files
 import java.security.MessageDigest
 import kotlin.test.AfterTest
@@ -24,6 +29,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 import org.junit.Assume
 
 /**
@@ -241,6 +247,56 @@ class JvmLanLoopbackTest {
             assertEquals(srcFile.length(), transfer.bytesTransferred.value)
             assertEquals(srcFile.length(), dstFile.length())
             assertEquals(payloadHashHex, computeHash(dstFile))
+        }
+    }
+
+    /**
+     * AUDIT-2026-06 fd-leak fix: a remote-initiated disconnect must close the
+     * LOCAL socket fd, not just flip the connection state to Closed.
+     *
+     * The public P2pKit harness cannot reach the underlying [java.net.Socket]
+     * (sessions wrap the raw connection privately), so this test drives
+     * [JvmRawConnection] directly over a real loopback TCP pair — that is the
+     * exact object the fix lives in, and `socket.isClosed` is the direct
+     * observable. Pre-fix, the read loop set state to Closed without closing
+     * the socket, and close() early-returned on Closed, leaking the fd.
+     */
+    @Test
+    fun remoteDisconnectClosesLocalSocketFd() {
+        runBlocking {
+            val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+            try {
+                val localSocket = Socket()
+                localSocket.connect(
+                    InetSocketAddress(InetAddress.getLoopbackAddress(), server.localPort),
+                    5_000
+                )
+                val remoteSide = server.accept()
+                val connection = JvmRawConnection(localSocket)
+
+                // Consume the read flow the way the protocol reader does; the
+                // EOF from the remote close ends the loop.
+                val reader = launch { connection.read().collect { } }
+
+                remoteSide.close()
+
+                withTimeout(MESSAGE_TIMEOUT_MS) {
+                    connection.state.first { it == ConnectionState.Closed }
+                }
+                withTimeout(MESSAGE_TIMEOUT_MS) { reader.join() }
+
+                assertTrue(
+                    localSocket.isClosed,
+                    "remote disconnect must close the local socket fd (not just state)"
+                )
+
+                // close() after a remote-initiated close stays a safe no-op.
+                connection.close()
+                assertEquals(ConnectionState.Closed, connection.state.value)
+                assertTrue(localSocket.isClosed)
+            } finally {
+                runCatching { server.close() }
+            }
         }
     }
 
