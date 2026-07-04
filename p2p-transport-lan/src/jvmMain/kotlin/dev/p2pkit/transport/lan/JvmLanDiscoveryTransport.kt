@@ -80,7 +80,20 @@ internal class JvmLanDiscoveryTransport(
                 LanConstants.TXT_PROTOCOL_VERSION to LanConstants.PROTOCOL_VERSION.toString()
             )
         )
-        withContext(Dispatchers.IO) { jmdns!!.registerService(info) }
+        try {
+            withContext(Dispatchers.IO) { jmdns!!.registerService(info) }
+        } catch (e: Throwable) {
+            // AUDIT-2026-07 (DSC-13): a failed start must not strand the
+            // shared JmDNS handle open with both activity flags false —
+            // nothing else would close it until kit.stop(). maybeCloseJmdns
+            // keeps the handle when the other side is still active;
+            // NonCancellable so a cancelled start cleans up too, and the
+            // original failure (CancellationException included) is rethrown,
+            // never swallowed. Mirrors failedStartCleanup in the Android
+            // machinery's JmdnsLifecycleCoordinator.
+            withContext(NonCancellable) { maybeCloseJmdns() }
+            throw e
+        }
         advertisedInfo = info
         advertising = true
         // What addresses did JmDNS actually publish for us? These are the IPs
@@ -113,8 +126,15 @@ internal class JvmLanDiscoveryTransport(
         ensureJmdns()
         if (discovering) return@withLock
         val l = buildServiceListener()
-        withContext(Dispatchers.IO) {
-            jmdns!!.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, l)
+        try {
+            withContext(Dispatchers.IO) {
+                jmdns!!.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, l)
+            }
+        } catch (e: Throwable) {
+            // AUDIT-2026-07 (DSC-13): mirror startAdvertising — close the
+            // handle on a failed start unless the other side still needs it.
+            withContext(NonCancellable) { maybeCloseJmdns() }
+            throw e
         }
         listener = l
         discovering = true
@@ -304,10 +324,29 @@ internal class JvmLanDiscoveryTransport(
             JvmLanDiag.log("bind", "InetAddress.getLocalHost()=${InetAddress.getLocalHost().hostAddress}")
         }
         JvmLanDiag.log("nic", "local interfaces:${JvmLanDiag.describeInterfaces()}")
-        jmdns = withContext(Dispatchers.IO) {
-            if (bindAddress != null) JmDNS.create(InetAddress.getByName(bindAddress))
-            else JmDNS.create()
+        // AUDIT-2026-07 (DSC-3): JmDNS.create is blocking, non-cancellable
+        // work — a caller cancelled mid-create still gets a live handle
+        // produced on the IO thread, and the plain `withContext` shape then
+        // threw the cancellation and dropped that handle on the floor: an
+        // open multicast socket plus listener threads that nothing could
+        // ever close. Capture the produced handle and close it before
+        // rethrowing (withContext always waits for its block, so the catch
+        // cannot race the assignment). Mirrors createHandleClosingOrphanOnCancel
+        // in the Android machinery's JmdnsLifecycleCoordinator.
+        var produced: JmDNS? = null
+        try {
+            withContext(Dispatchers.IO) {
+                produced =
+                    if (bindAddress != null) JmDNS.create(InetAddress.getByName(bindAddress))
+                    else JmDNS.create()
+            }
+        } catch (e: CancellationException) {
+            produced?.let { orphan ->
+                withContext(NonCancellable + Dispatchers.IO) { runCatching { orphan.close() } }
+            }
+            throw e
         }
+        jmdns = produced
         runCatching {
             JvmLanDiag.log(
                 "bind",

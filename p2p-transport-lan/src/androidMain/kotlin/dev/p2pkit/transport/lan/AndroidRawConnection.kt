@@ -31,7 +31,15 @@ import java.util.concurrent.atomic.AtomicInteger
  * intermediate source set and merge the two implementations.
  */
 internal class AndroidRawConnection(
-    private val socket: Socket
+    private val socket: Socket,
+    /**
+     * AUDIT-2026-07 (CON-14) test seam: the write-watchdog deadline,
+     * injectable so the transport-level wedged-write teardown is testable
+     * (pinned by `JvmRawConnectionWriteWatchdogTest` on the JVM twin — the
+     * behavior-parity pair is changed in lockstep). Production call sites
+     * (`AndroidLanDataTransport`) pass nothing and get [WRITE_TIMEOUT_MILLIS].
+     */
+    private val writeTimeoutMillis: Long = WRITE_TIMEOUT_MILLIS
 ) : RawConnection {
 
     private val _state = MutableStateFlow(ConnectionState.Connected)
@@ -95,11 +103,11 @@ internal class AndroidRawConnection(
             //     wins the CAS decides the outcome.
             val writeState = AtomicInteger(WRITE_INFLIGHT)
             val watchdog = connScope.launch {
-                delay(WRITE_TIMEOUT_MILLIS)
+                delay(writeTimeoutMillis)
                 if (writeState.compareAndSet(WRITE_INFLIGHT, WRITE_TIMED_OUT)) {
                     Log.d(
                         TAG,
-                        "$label WRITE TIMEOUT after ${WRITE_TIMEOUT_MILLIS}ms (peer not draining) — closing socket"
+                        "$label WRITE TIMEOUT after ${writeTimeoutMillis}ms (peer not draining) — closing socket"
                     )
                     closeSocketOnce()
                     _state.value = ConnectionState.Closed
@@ -120,7 +128,7 @@ internal class AndroidRawConnection(
                         // Report the timeout, not the raw close error.
                         _state.value = ConnectionState.Closed
                         throw IOException(
-                            "socket write timed out after ${WRITE_TIMEOUT_MILLIS}ms (peer not reading)",
+                            "socket write timed out after ${writeTimeoutMillis}ms (peer not reading)",
                             e
                         )
                     }
@@ -133,7 +141,7 @@ internal class AndroidRawConnection(
                     // never reach the peer. This must surface as a failure.
                     _state.value = ConnectionState.Closed
                     throw IOException(
-                        "socket write timed out after ${WRITE_TIMEOUT_MILLIS}ms (peer not reading)"
+                        "socket write timed out after ${writeTimeoutMillis}ms (peer not reading)"
                     )
                 }
             } finally {

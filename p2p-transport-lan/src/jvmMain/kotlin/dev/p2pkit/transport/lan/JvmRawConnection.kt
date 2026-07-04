@@ -30,7 +30,15 @@ import java.util.concurrent.atomic.AtomicInteger
  * lives there, never on the caller's dispatcher.
  */
 internal class JvmRawConnection(
-    private val socket: Socket
+    private val socket: Socket,
+    /**
+     * AUDIT-2026-07 (CON-14) test seam: the write-watchdog deadline,
+     * injectable so `:p2p-transport-lan:jvmTest` can exercise the real
+     * wedged-write teardown without waiting 30 s. Production call sites
+     * (`JvmLanDataTransport`) pass nothing and get [WRITE_TIMEOUT_MILLIS];
+     * mirrored identically in `AndroidRawConnection` (behavior-parity pair).
+     */
+    private val writeTimeoutMillis: Long = WRITE_TIMEOUT_MILLIS
 ) : RawConnection {
 
     private val _state = MutableStateFlow(ConnectionState.Connected)
@@ -95,11 +103,11 @@ internal class JvmRawConnection(
             //     wins the CAS decides the outcome.
             val writeState = AtomicInteger(WRITE_INFLIGHT)
             val watchdog = connScope.launch {
-                delay(WRITE_TIMEOUT_MILLIS)
+                delay(writeTimeoutMillis)
                 if (writeState.compareAndSet(WRITE_INFLIGHT, WRITE_TIMED_OUT)) {
                     JvmLanDiag.log(
                         "conn",
-                        "$label WRITE TIMEOUT after ${WRITE_TIMEOUT_MILLIS}ms (peer not draining) — closing socket"
+                        "$label WRITE TIMEOUT after ${writeTimeoutMillis}ms (peer not draining) — closing socket"
                     )
                     closeSocketOnce()
                     _state.value = ConnectionState.Closed
@@ -120,7 +128,7 @@ internal class JvmRawConnection(
                         // Report the timeout, not the raw close error.
                         _state.value = ConnectionState.Closed
                         throw IOException(
-                            "socket write timed out after ${WRITE_TIMEOUT_MILLIS}ms (peer not reading)",
+                            "socket write timed out after ${writeTimeoutMillis}ms (peer not reading)",
                             e
                         )
                     }
@@ -133,7 +141,7 @@ internal class JvmRawConnection(
                     // never reach the peer. This must surface as a failure.
                     _state.value = ConnectionState.Closed
                     throw IOException(
-                        "socket write timed out after ${WRITE_TIMEOUT_MILLIS}ms (peer not reading)"
+                        "socket write timed out after ${writeTimeoutMillis}ms (peer not reading)"
                     )
                 }
             } finally {

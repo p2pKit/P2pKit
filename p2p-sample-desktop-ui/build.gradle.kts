@@ -23,6 +23,12 @@ dependencies {
     // Silence JmDNS's SLF4J "no provider" warning on startup.
     // AUDIT-2026-06 (BUILD-G10-11): coordinates moved to the version catalog.
     runtimeOnly(libs.slf4j.nop)
+
+    // 2026-07 (P1-32 / SMP-1): minimal test wiring for the sample's shared
+    // incoming-file destination-uniquification helper (UniqueSaveFileTest).
+    // This module previously had no test source set; samples are unpublished
+    // test harnesses, so this stays out of the published dependency graph.
+    testImplementation(kotlin("test"))
 }
 
 compose.desktop {

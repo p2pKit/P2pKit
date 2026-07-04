@@ -26,17 +26,12 @@ import javax.jmdns.ServiceListener
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -86,6 +81,16 @@ import kotlinx.coroutines.withContext
  * The debounced rebind runs in [rebindScope]; ConnectivityManager
  * callbacks themselves do no work beyond scheduling. Multicast-lock
  * state is preserved across rebinds.
+ *
+ * 2026-07 (P1-14 seam): the lifecycle/rebind state machine itself — intent
+ * flags vs live handles (AUDIT-2026-06 #5), the bounded create-retry, the
+ * idle policy for the shared handle / multicast lock / watcher, and the
+ * DSC-3/DSC-13 cleanup guarantees — lives in the platform-neutral
+ * [JmdnsLifecycleCoordinator] (commonMain) and is pinned by
+ * `JmdnsLifecycleCoordinatorTest` in `:p2p-transport-lan:jvmTest`. This class
+ * supplies the JmDNS/Android specifics behind [JmdnsLifecycleOps]. Production
+ * behavior is a verbatim port; the extraction exists so the machinery is
+ * unit-testable at all (no instrumented Android tests by repo policy).
  */
 internal class AndroidLanDiscoveryTransport(
     private val context: Context,
@@ -101,73 +106,23 @@ internal class AndroidLanDiscoveryTransport(
     )
     override val events: Flow<PeerEvent> = _events.asSharedFlow()
 
-    private val lock = Mutex()
     private val wifi: WifiManager? =
         context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
     private val connectivity: ConnectivityManager =
         context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE)
             as ConnectivityManager
 
-    // JmDNS state (mirrors [JvmLanDiscoveryTransport])
-    private var jmdns: JmDNS? = null
-    private var advertisedInfo: ServiceInfo? = null
-    private var serviceListener: ServiceListener? = null
-
-    /**
-     * AUDIT-2026-06 (#5): host INTENT flags, independent of the live JmDNS
-     * handles above. [rebindNow] nulls [advertisedInfo]/[serviceListener]
-     * mid-rebind, so a transient `JmDNS.create` failure used to leave both
-     * handles null while the host still wanted advertising/discovery — the
-     * next rebind's "neither active" guard (previously computed from the
-     * handles) then skipped forever and `refresh()` early-returned on the
-     * null handle: the transport was bricked until process restart. These
-     * flags capture what the host asked for; the handles capture what is
-     * currently live. Set on successful start*, cleared in stop*; guarded
-     * by [lock] like the handles.
-     */
-    private var advertisingIntent = false
-    private var discoveryIntent = false
-
-    /**
-     * Cached `LocalPeerInfo` from the most recent `startAdvertising` call.
-     * Used by [rebindNow] to rebuild the [ServiceInfo] after a fresh
-     * [JmDNS] handle is constructed on the new interface. Cleared in
-     * `stopAdvertising` so a subsequent rebind cannot inadvertently
-     * re-advertise after the host app stopped.
-     */
-    private var cachedLocalPeer: LocalPeerInfo? = null
-
     private var multicastLock: WifiManager.MulticastLock? = null
 
     /**
      * Scope for the debounced rebind coroutine. Uses [SupervisorJob] so a
      * single failed rebind does not poison the scope for future rebinds.
-     * Lifetime is the transport instance — children are cancelled via
-     * [pendingRebindJob] handles when the watcher stops, but the scope
-     * itself persists for re-use on the next start.
+     * Lifetime is the transport instance — children are cancelled via the
+     * coordinator's pending-job handles when the watcher stops, but the
+     * scope itself persists for re-use on the next start.
      */
     private val rebindScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Default)
-
-    /** The most recent debounced rebind job; cancelled when superseded. */
-    private var pendingRebindJob: Job? = null
-
-    /**
-     * AUDIT-2026-06 (#5): consecutive `JmDNS.create` failures in [rebindNow].
-     * Bounds the self-scheduled retry below; reset to 0 on the next
-     * successful bind and when the watcher stops. Guarded by [lock].
-     */
-    private var rebindRetryAttempts = 0
-
-    /**
-     * AUDIT-2026-06 (#5): pending self-scheduled retry after a
-     * `JmDNS.create` failure in [rebindNow]. Nothing else is guaranteed to
-     * call back in after that failure (`refresh()` early-returns on a null
-     * handle and the old handle-based activity guard read "nothing active"),
-     * so the transport must re-attempt on its own. Cancelled when the
-     * watcher stops. Guarded by [lock].
-     */
-    private var rebindRetryJob: Job? = null
 
     /**
      * Primary [ConnectivityManager] callback filtered on
@@ -201,105 +156,35 @@ internal class AndroidLanDiscoveryTransport(
     private var hasEverObservedNetwork: Boolean = false
 
     /**
-     * Network present at the time of the most recent successful JmDNS
-     * (re)bind. Used by [rebindNow] to skip no-op rebinds when neither
-     * observed signal has changed since we last bound. Guarded by [lock]
-     * (set inside the bind path).
+     * The lifecycle/rebind state machine (see the class KDoc's 2026-07 note).
+     * All start/stop/refresh/rebind serialization happens on the
+     * coordinator's internal lock, exactly where the transport's own [Mutex]
+     * used to sit.
      */
-    private var boundNetwork: Network? = null
-
-    /** Default network present at the time of the most recent successful JmDNS bind. */
-    private var boundDefaultNetwork: Network? = null
+    private val coordinator = JmdnsLifecycleCoordinator<Network, JmDNS>(
+        ops = buildOps(),
+        rebindScope = rebindScope,
+        ioContext = Dispatchers.IO
+    )
 
     // ──────────────────────────────────────────────────────────────────
     // DiscoveryTransport API
     // ──────────────────────────────────────────────────────────────────
 
-    override suspend fun startAdvertising(localPeer: LocalPeerInfo) = lock.withLock {
-        if (advertisedInfo != null) return@withLock
+    override suspend fun startAdvertising(localPeer: LocalPeerInfo) =
+        coordinator.startAdvertising(localPeer)
 
-        acquireMulticastLockIfNeeded()
-        ensureJmdns()
+    override suspend fun stopAdvertising() = coordinator.stopAdvertising()
 
-        val info = buildServiceInfo(localPeer)
-        withContext(Dispatchers.IO) { jmdns!!.registerService(info) }
-        advertisedInfo = info
-        advertisingIntent = true
-        cachedLocalPeer = localPeer
-        boundNetwork = connectivity.activeNetwork
-        boundDefaultNetwork = connectivity.activeNetwork
-        Log.d(
-            TAG,
-            "startAdvertising: registered, " +
-                "boundNetwork=$boundNetwork boundDefaultNetwork=$boundDefaultNetwork"
-        )
-        ensureNetworkWatcherStarted()
-    }
+    override suspend fun startDiscovery() = coordinator.startDiscovery()
 
-    override suspend fun stopAdvertising() = lock.withLock {
-        // AUDIT-2026-06 (#5): clear intent BEFORE the null-handle check —
-        // after a failed rebind [advertisedInfo] is null while the host
-        // still counts as advertising, and the old `?: return` shape would
-        // have skipped the clear, letting the rebind retry resurrect
-        // advertising the host just stopped.
-        advertisingIntent = false
-        val info = advertisedInfo
-        if (info != null) {
-            withContext(Dispatchers.IO) { runCatching { jmdns?.unregisterService(info) } }
-            advertisedInfo = null
-            Log.d(TAG, "stopAdvertising: unregistered")
-        }
-        cachedLocalPeer = null
-        stopNetworkWatcherIfIdle()
-        releaseMulticastLockIfIdle()
-        closeJmdnsIfIdle()
-    }
-
-    override suspend fun startDiscovery() = lock.withLock {
-        if (serviceListener != null) return@withLock
-
-        acquireMulticastLockIfNeeded()
-        ensureJmdns()
-
-        val l = buildServiceListener()
-        withContext(Dispatchers.IO) {
-            jmdns!!.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, l)
-        }
-        serviceListener = l
-        discoveryIntent = true
-        boundNetwork = connectivity.activeNetwork
-        boundDefaultNetwork = connectivity.activeNetwork
-        Log.d(
-            TAG,
-            "startDiscovery: listener added, " +
-                "boundNetwork=$boundNetwork boundDefaultNetwork=$boundDefaultNetwork"
-        )
-        ensureNetworkWatcherStarted()
-    }
-
-    override suspend fun stopDiscovery() = lock.withLock {
-        // AUDIT-2026-06 (#5): mirror stopAdvertising — clear intent before
-        // the null-handle check so a failed-rebind window (listener handle
-        // null, host still discovering) cannot strand the intent flag true.
-        discoveryIntent = false
-        val l = serviceListener
-        if (l != null) {
-            withContext(Dispatchers.IO) {
-                runCatching { jmdns?.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, l) }
-            }
-            serviceListener = null
-            Log.d(TAG, "stopDiscovery: listener removed")
-        }
-        stopNetworkWatcherIfIdle()
-        releaseMulticastLockIfIdle()
-        closeJmdnsIfIdle()
-    }
+    override suspend fun stopDiscovery() = coordinator.stopDiscovery()
 
     /**
      * V0.4-DISCOVERY-REFRESH + V0.5-FORCED-REFRESH: force a fresh round
      * of active mDNS queries plus per-peer cache invalidation.
      *
-     * Two-step body, both steps under [lock]:
+     * Two-step body, both steps under the coordinator lock:
      *
      *   1. **Listener rotation** — remove + re-add the service listener.
      *      JmDNS issues a fresh generic browse query (PTR for the service
@@ -329,13 +214,7 @@ internal class AndroidLanDiscoveryTransport(
      *
      * No-op if discovery isn't currently running.
      */
-    override suspend fun refresh() = lock.withLock {
-        val old = serviceListener
-        val handle = jmdns
-        if (old == null || handle == null) {
-            Log.d(TAG, "refresh: no listener active — skipping")
-            return@withLock
-        }
+    override suspend fun refresh(): Unit = coordinator.refreshDiscovery { handle, old, commit ->
         Log.d(TAG, "refresh: rotating listener + force re-querying known peers")
 
         // Step 1: listener rotation — fresh generic browse. AUDIT-2026-06
@@ -343,9 +222,9 @@ internal class AndroidLanDiscoveryTransport(
         // fresh listener is attached BEFORE the old one is removed so no
         // failure path leaves zero listeners registered, and
         // CancellationException is rethrown, never swallowed — the previous
-        // runCatching also caught cancellations and nulled [serviceListener]
+        // runCatching also caught cancellations and nulled the listener
         // after the old listener was already gone.
-        val fresh = buildServiceListener()
+        val fresh = buildServiceListener(handle)
         try {
             withContext(Dispatchers.IO) {
                 handle.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, fresh)
@@ -364,19 +243,21 @@ internal class AndroidLanDiscoveryTransport(
             // discovery stays alive; the next refresh tick retries the
             // rotation.
             Log.w(TAG, "refresh: addServiceListener failed — keeping previous listener", e)
-            return@withLock
+            return@refreshDiscovery
         }
-        serviceListener = fresh
+        commit(fresh)
         withContext(Dispatchers.IO) {
-            runCatching { handle.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, old) }
+            runCatching {
+                handle.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, old as ServiceListener)
+            }
         }
 
         // Step 2: per-peer forced re-query. NOTE: JmDNS.list() is NOT a pure
         // cache read — the default overload can block up to 6 s waiting for
-        // service infos (ServiceCollector), and this runs under [lock] on the
-        // ~3 s reconnect refresh cadence. Use a short snapshot timeout
-        // (AUDIT-2026-06 fix). requestServiceInfo(..., persistent=true) then
-        // invalidates each entry and re-resolves.
+        // service infos (ServiceCollector), and this runs under the
+        // coordinator lock on the ~3 s reconnect refresh cadence. Use a short
+        // snapshot timeout (AUDIT-2026-06 fix). requestServiceInfo(...,
+        // persistent=true) then invalidates each entry and re-resolves.
         val cached = withContext(Dispatchers.IO) {
             runCatching { handle.list(LanConstants.SERVICE_TYPE_JMDNS, 200L) }
                 .getOrDefault(emptyArray())
@@ -402,53 +283,101 @@ internal class AndroidLanDiscoveryTransport(
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // JmDNS lifecycle helpers
+    // JmdnsLifecycleOps — the JmDNS/Android specifics behind the coordinator
     // ──────────────────────────────────────────────────────────────────
 
-    /**
-     * Lazily creates the [JmDNS] handle bound to the current active
-     * network's primary IPv4 address. Falls back to JmDNS's own default
-     * (which enumerates interfaces internally) when [resolveBindAddress]
-     * cannot determine an address — better than failing the start.
-     *
-     * Called under [lock] from `start*` and from [rebindNow] after the
-     * old handle is closed.
-     */
-    private suspend fun ensureJmdns() {
-        if (jmdns != null) return
-        val active = connectivity.activeNetwork
-        val bindAddr = resolveBindAddress(active)
-        // Issue #2 smoking gun: classify the network we're binding JmDNS to.
-        // If transports=[CELLULAR] or [VPN] the bind picked an interface that
-        // cannot carry LAN multicast/TCP — discovery and dials will fail.
-        Log.d(TAG, "ensureJmdns: active ${AndroidLanDiag.describeNetwork(connectivity, active)}")
-        Log.d(TAG, "ensureJmdns: NICs:${AndroidLanDiag.describeInterfaces()}")
-        jmdns = withContext(Dispatchers.IO) {
-            if (bindAddr != null) JmDNS.create(bindAddr) else JmDNS.create()
-        }
-        Log.d(
-            TAG,
-            "ensureJmdns: created handle bindAddr=${bindAddr?.hostAddress ?: "default"}"
-        )
-    }
+    private fun buildOps(): JmdnsLifecycleOps<Network, JmDNS> =
+        object : JmdnsLifecycleOps<Network, JmDNS> {
 
-    private suspend fun closeJmdnsIfIdle() {
-        // AUDIT-2026-06 (#5): idle == host intent cleared on both sides. The
-        // old handle-based check misread the failed-rebind window (handles
-        // null, host still active) as idle — see the intent-flag KDoc.
-        if (advertisingIntent || discoveryIntent) return
-        val handle = jmdns ?: return
-        jmdns = null
-        withContext(Dispatchers.IO) { runCatching { handle.close() } }
-        Log.d(TAG, "closeJmdnsIfIdle: closed handle")
-    }
+            override fun createHandleBlocking(target: Network?, forRebind: Boolean): JmDNS {
+                // Issue #2 smoking gun: classify the network we're binding
+                // JmDNS to. If transports=[CELLULAR] or [VPN] the bind picked
+                // an interface that cannot carry LAN multicast/TCP —
+                // discovery and dials will fail. The two prefixes below are
+                // load-bearing diagnostic lines (docs/LAN_DIAGNOSTICS_PROTOCOL.md).
+                if (forRebind) {
+                    Log.d(
+                        TAG,
+                        "rebindNow: rebinding onto ${AndroidLanDiag.describeNetwork(connectivity, target)}"
+                    )
+                } else {
+                    Log.d(TAG, "ensureJmdns: active ${AndroidLanDiag.describeNetwork(connectivity, target)}")
+                    Log.d(TAG, "ensureJmdns: NICs:${AndroidLanDiag.describeInterfaces()}")
+                }
+                val bindAddr = resolveBindAddress(target)
+                val fresh = if (bindAddr != null) JmDNS.create(bindAddr) else JmDNS.create()
+                Log.d(
+                    TAG,
+                    (if (forRebind) "rebindNow: JmDNS recreated" else "ensureJmdns: created handle") +
+                        " bindAddr=${bindAddr?.hostAddress ?: "default"}"
+                )
+                return fresh
+            }
+
+            override fun closeHandleBlocking(handle: JmDNS) {
+                handle.close()
+            }
+
+            override fun registerServiceBlocking(handle: JmDNS, localPeer: LocalPeerInfo): Any {
+                val info = buildServiceInfo(localPeer)
+                handle.registerService(info)
+                return info
+            }
+
+            override fun unregisterServiceBlocking(handle: JmDNS, token: Any) {
+                handle.unregisterService(token as ServiceInfo)
+            }
+
+            override fun addListenerBlocking(handle: JmDNS): Any {
+                val l = buildServiceListener(handle)
+                handle.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, l)
+                return l
+            }
+
+            override fun removeListenerBlocking(handle: JmDNS, token: Any) {
+                handle.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, token as ServiceListener)
+            }
+
+            override fun currentNetwork(): Network? = connectivity.activeNetwork
+
+            override fun observedNetwork(): Network? =
+                synchronized(networkLock) { this@AndroidLanDiscoveryTransport.observedNetwork }
+
+            override fun observedDefaultNetwork(): Network? =
+                synchronized(networkLock) { this@AndroidLanDiscoveryTransport.observedDefaultNetwork }
+
+            override fun isWatcherActive(): Boolean =
+                networkCallback != null || defaultNetworkCallback != null
+
+            override fun acquireMulticastLock() = acquireMulticastLockIfNeeded()
+
+            override fun releaseMulticastLock() {
+                val held = multicastLock ?: return
+                multicastLock = null
+                runCatching { if (held.isHeld) held.release() }
+            }
+
+            override fun startNetworkWatcher() = ensureNetworkWatcherStarted()
+
+            override fun stopNetworkWatcher() = stopNetworkWatcherNow()
+
+            override fun logDebug(message: String) {
+                Log.d(TAG, message)
+            }
+
+            override fun logWarn(message: String, error: Throwable?) {
+                if (error != null) Log.w(TAG, message, error) else Log.w(TAG, message)
+            }
+        }
 
     /**
      * Pick the [InetAddress] to bind JmDNS's `MulticastSocket` to from the
      * given [Network]'s [android.net.LinkProperties]. Returns the first
      * non-loopback non-link-local IPv4 address; falls back to any
      * non-loopback IPv4 (covering 169.254/16 link-local on direct-cable
-     * segments); returns `null` if no IPv4 candidate exists.
+     * segments); returns `null` if no IPv4 candidate exists — JmDNS then
+     * falls back to its own default interface enumeration, better than
+     * failing the start.
      *
      * IPv6 binding is deliberately not attempted at Phase 1 — JmDNS's
      * IPv6 path has fewer test miles, and every Android device that
@@ -496,10 +425,15 @@ internal class AndroidLanDiscoveryTransport(
         )
 
     /**
-     * Builds a fresh [ServiceListener]. A new instance is constructed for
-     * every `addServiceListener` (initial, refresh, or rebind) — JmDNS
-     * does not document whether listeners survive a remove + re-add
-     * cycle, and reusing one risks subtle bugs.
+     * Builds a fresh [ServiceListener] for [handle]. A new instance is
+     * constructed for every `addServiceListener` (initial, refresh, or
+     * rebind) — JmDNS does not document whether listeners survive a
+     * remove + re-add cycle, and reusing one risks subtle bugs. The listener
+     * captures the handle it is registered on (2026-07, P1-14 seam: the
+     * mutable handle field moved into the coordinator) — same object the old
+     * field read yielded in every live case, and a straggler event from an
+     * already-replaced handle now re-queries via its own (possibly closed)
+     * handle inside `runCatching` instead of poking the new one.
      *
      * Note (vs. v0.4 NsdManager impl): no separate `resolve` step.
      * JmDNS's `serviceAdded → requestServiceInfo → serviceResolved`
@@ -511,9 +445,9 @@ internal class AndroidLanDiscoveryTransport(
      * the next natural re-announce will arrive with the routable
      * address and `serviceResolved` will fire again.
      */
-    private fun buildServiceListener(): ServiceListener = object : ServiceListener {
+    private fun buildServiceListener(handle: JmDNS): ServiceListener = object : ServiceListener {
         override fun serviceAdded(event: ServiceEvent) {
-            jmdns?.requestServiceInfo(event.type, event.name, true)
+            runCatching { handle.requestServiceInfo(event.type, event.name, true) }
         }
 
         override fun serviceRemoved(event: ServiceEvent) {
@@ -614,18 +548,8 @@ internal class AndroidLanDiscoveryTransport(
         multicastLock = lock
     }
 
-    private fun releaseMulticastLockIfIdle() {
-        // AUDIT-2026-06 (#5): intent-based idle check — a failed rebind nulls
-        // the handles while the host is still active, and the rebind retry
-        // needs the multicast lock kept alive to be useful.
-        if (advertisingIntent || discoveryIntent) return
-        val held = multicastLock ?: return
-        multicastLock = null
-        runCatching { if (held.isHeld) held.release() }
-    }
-
     // ──────────────────────────────────────────────────────────────────
-    // Network-rotation rebind
+    // Network-rotation watcher (rebind decisions live in the coordinator)
     // ──────────────────────────────────────────────────────────────────
 
     /**
@@ -637,9 +561,9 @@ internal class AndroidLanDiscoveryTransport(
      * the AP interface is invisible to a transport-filtered request.
      *
      * Idempotent — calling again while either callback is already registered
-     * leaves that callback alone but ensures the other is up. Called from
-     * `startAdvertising` / `startDiscovery` inside the existing [lock], so
-     * it never races with the rebind body.
+     * leaves that callback alone but ensures the other is up. Called by the
+     * coordinator from `startAdvertising` / `startDiscovery` inside its
+     * lock, so it never races with the rebind body.
      */
     private fun ensureNetworkWatcherStarted() {
         if (networkCallback == null) {
@@ -697,7 +621,7 @@ internal class AndroidLanDiscoveryTransport(
                 }
                 if (shouldRebind) {
                     Log.d(TAG, "NetworkCallback.onAvailable: rotation detected, prev=$prev now=$network")
-                    scheduleRebind("onAvailable rotation: $prev -> $network")
+                    coordinator.scheduleRebind("onAvailable rotation: $prev -> $network")
                 } else {
                     Log.d(TAG, "NetworkCallback.onAvailable: $network (no rebind)")
                 }
@@ -723,9 +647,9 @@ internal class AndroidLanDiscoveryTransport(
      * onAvailable and onLost — the hotspot-host scenario surfaces as
      * "default Wi-Fi lost, no equivalent default replaces it" and we want
      * JmDNS to re-bind regardless of whether the primary callback also
-     * saw a change. Debounce + the two-target no-change check in
-     * `rebindNow` absorb any redundant fires when both callbacks see the
-     * same transition.
+     * saw a change. Debounce + the two-target no-change check in the
+     * coordinator's `rebindNow` absorb any redundant fires when both
+     * callbacks see the same transition.
      */
     private fun buildDefaultNetworkCallback(): ConnectivityManager.NetworkCallback =
         object : ConnectivityManager.NetworkCallback() {
@@ -737,7 +661,7 @@ internal class AndroidLanDiscoveryTransport(
                 }
                 if (prev != network) {
                     Log.d(TAG, "DefaultNetworkCallback.onAvailable: prev=$prev now=$network")
-                    scheduleRebind("default network changed: $prev -> $network")
+                    coordinator.scheduleRebind("default network changed: $prev -> $network")
                 } else {
                     Log.d(TAG, "DefaultNetworkCallback.onAvailable: $network (no change)")
                 }
@@ -752,7 +676,7 @@ internal class AndroidLanDiscoveryTransport(
                 }
                 if (cleared) {
                     Log.d(TAG, "DefaultNetworkCallback.onLost: $network (default cleared)")
-                    scheduleRebind("default network lost: $network")
+                    coordinator.scheduleRebind("default network lost: $network")
                 } else {
                     Log.d(TAG, "DefaultNetworkCallback.onLost: $network (was not current default)")
                 }
@@ -760,18 +684,15 @@ internal class AndroidLanDiscoveryTransport(
         }
 
     /**
-     * Tears down BOTH callbacks (primary + default) and cancels any pending
-     * debounced rebind. Called from `stopAdvertising` / `stopDiscovery`
-     * only when **both** advertising and discovery have been cleared.
-     * The two callbacks are registered together
-     * (`ensureNetworkWatcherStarted`) and unregistered together to keep
-     * the lifecycle invariant tight.
+     * Tears down BOTH callbacks (primary + default) and resets observed
+     * state. Invoked by the coordinator only when **both** advertising and
+     * discovery intents have been cleared (its AUDIT-2026-06 #5 intent-based
+     * idle check); the coordinator also cancels any pending debounced
+     * rebind/retry in the same step. The two callbacks are registered
+     * together (`ensureNetworkWatcherStarted`) and unregistered together to
+     * keep the lifecycle invariant tight.
      */
-    private fun stopNetworkWatcherIfIdle() {
-        // AUDIT-2026-06 (#5): intent-based idle check (see intent-flag KDoc).
-        if (advertisingIntent || discoveryIntent) return
-        if (networkCallback == null && defaultNetworkCallback == null) return
-
+    private fun stopNetworkWatcherNow() {
         networkCallback?.let { cb ->
             runCatching { connectivity.unregisterNetworkCallback(cb) }
             networkCallback = null
@@ -780,230 +701,16 @@ internal class AndroidLanDiscoveryTransport(
             runCatching { connectivity.unregisterNetworkCallback(cb) }
             defaultNetworkCallback = null
         }
-        pendingRebindJob?.cancel()
-        pendingRebindJob = null
-        rebindRetryJob?.cancel()
-        rebindRetryJob = null
-        rebindRetryAttempts = 0
         synchronized(networkLock) {
             observedNetwork = null
             observedDefaultNetwork = null
             hasEverObservedNetwork = false
         }
-        boundNetwork = null
-        boundDefaultNetwork = null
         Log.d(TAG, "stopNetworkWatcherIfIdle: unregistered both callbacks and reset state")
-    }
-
-    /**
-     * Debounces rebind requests. Each call cancels the previous pending job
-     * and launches a fresh one after [REBIND_DEBOUNCE_MILLIS]. Multiple
-     * back-to-back rotation events (typical of Android's
-     * `onAvailable`/`onLost`/`onCapabilitiesChanged` storms on a single
-     * physical handover) collapse into one actual rebind.
-     *
-     * No `lock` is taken here — that happens inside [rebindNow]. Callbacks
-     * must remain cheap and non-blocking.
-     */
-    private fun scheduleRebind(reason: String) {
-        pendingRebindJob?.cancel()
-        Log.d(TAG, "scheduleRebind: $reason (debounce=${REBIND_DEBOUNCE_MILLIS}ms)")
-        pendingRebindJob = rebindScope.launch {
-            delay(REBIND_DEBOUNCE_MILLIS)
-            rebindNow(reason)
-        }
-    }
-
-    /**
-     * Performs the actual JmDNS teardown + recreate cycle for whichever
-     * of advertising / discovery is currently active. Runs under [lock]
-     * so it cannot race with `startAdvertising` / `startDiscovery` /
-     * `stop*`.
-     *
-     * Idempotency (two-target check, preserved from V0.4-AP):
-     *   - If both watcher callbacks are null (watcher stopped after
-     *     schedule), this is a no-op.
-     *   - If BOTH the WIFI/ETHERNET observation AND the default-network
-     *     observation are unchanged since the last successful bind,
-     *     this is a no-op. `null` observedNetwork is a legitimate
-     *     steady state in the hotspot-host case (the AP interface
-     *     isn't surfaced as a TRANSPORT_WIFI network), and we still
-     *     want JmDNS to re-bind so it picks up whatever multicast
-     *     carrier is alive.
-     *
-     * The old [JmDNS] handle is closed and a fresh one is created bound
-     * to the new interface's [InetAddress] (when one can be resolved).
-     * Multicast-lock state is left untouched.
-     */
-    private suspend fun rebindNow(reason: String): Unit = lock.withLock {
-        if (networkCallback == null && defaultNetworkCallback == null) {
-            Log.d(TAG, "rebindNow: watcher already stopped; skipping ($reason)")
-            return@withLock
-        }
-        val target = synchronized(networkLock) { observedNetwork }
-        val defaultTarget = synchronized(networkLock) { observedDefaultNetwork }
-
-        // AUDIT-2026-06 (#5): `jmdns != null` term — the bound* markers are
-        // only updated on a SUCCESSFUL bind, so after a failed rebind (handle
-        // torn down, create failed) they still describe the pre-teardown
-        // bind. A retry arriving after the network flipped back to the
-        // previously-bound one must not be skipped as "no change" while
-        // there is no live handle at all.
-        val noChangeSinceLastBind =
-            jmdns != null && target == boundNetwork && defaultTarget == boundDefaultNetwork
-        if (noChangeSinceLastBind) {
-            Log.d(
-                TAG,
-                "rebindNow: no changes since last bind; skipping ($reason) " +
-                    "transport=$boundNetwork default=$boundDefaultNetwork"
-            )
-            return@withLock
-        }
-
-        // AUDIT-2026-06 (#5): computed from host INTENT, not from the live
-        // handles — this method nulls advertisedInfo/serviceListener below,
-        // so after a JmDNS.create failure the handle-based check read
-        // "neither active" and skipped every subsequent rebind forever.
-        val hadAdvertising = advertisingIntent
-        val hadDiscovery = discoveryIntent
-        if (!hadAdvertising && !hadDiscovery) {
-            Log.d(TAG, "rebindNow: neither advertising nor discovery active; skipping ($reason)")
-            return@withLock
-        }
-
-        Log.d(
-            TAG,
-            "rebindNow: starting; reason=$reason " +
-                "transport: $boundNetwork -> $target  default: $boundDefaultNetwork -> $defaultTarget " +
-                "advertising=$hadAdvertising discovery=$hadDiscovery"
-        )
-
-        // Close the old JmDNS handle — this also flushes its in-process
-        // mDNS cache, so resolved peer addresses bound to the old
-        // interface don't leak forward into the next round.
-        val cached = cachedLocalPeer
-        withContext(Dispatchers.IO) { runCatching { jmdns?.close() } }
-        jmdns = null
-        advertisedInfo = null
-        serviceListener = null
-
-        // Recreate JmDNS on the new interface. MUST NOT throw out of this
-        // coroutine: rebindNow runs fire-and-forget on rebindScope (no
-        // CoroutineExceptionHandler), so an uncaught IOException here would
-        // crash an Android host process. On failure we log, leave jmdns
-        // null, and self-schedule a bounded retry — nothing external is
-        // guaranteed to call back in (refresh() early-returns on a null
-        // handle), so relying on "the next callback" bricked the transport
-        // on a transient create failure (AUDIT-2026-06 #5 fix).
-        val rebindTarget = target ?: defaultTarget
-        // Issue #2: classify the network we are about to rebind onto, so a
-        // post-flip rebind that lands on cellular/VPN is visible in the trail.
-        Log.d(TAG, "rebindNow: rebinding onto ${AndroidLanDiag.describeNetwork(connectivity, rebindTarget)}")
-        val newBindAddr = resolveBindAddress(rebindTarget)
-        val fresh = try {
-            withContext(Dispatchers.IO) {
-                if (newBindAddr != null) JmDNS.create(newBindAddr) else JmDNS.create()
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            // Bounded linear backoff (2s, 4s, … 10s), reset on the next
-            // successful bind; a genuine network callback still supersedes
-            // via scheduleRebind, and rebindNow's own guards stop the retry
-            // once the watcher is gone (intent cleared on both sides) or an
-            // interleaved rebind restored the handle with no network change.
-            // The launch body must not throw — rebindNow catches internally
-            // and rebindScope has no exception handler (see comment above).
-            val attempt = ++rebindRetryAttempts
-            if (attempt <= REBIND_RETRY_MAX_ATTEMPTS) {
-                val backoffMs = REBIND_RETRY_BASE_DELAY_MILLIS * attempt
-                Log.w(
-                    TAG,
-                    "rebindNow: JmDNS.create failed; retry $attempt/$REBIND_RETRY_MAX_ATTEMPTS " +
-                        "in ${backoffMs}ms",
-                    e
-                )
-                rebindRetryJob?.cancel()
-                rebindRetryJob = rebindScope.launch {
-                    delay(backoffMs)
-                    rebindNow("JmDNS.create retry $attempt/$REBIND_RETRY_MAX_ATTEMPTS")
-                }
-            } else {
-                Log.w(
-                    TAG,
-                    "rebindNow: JmDNS.create failed; retry budget exhausted — " +
-                        "will re-attempt on the next network change",
-                    e
-                )
-            }
-            return@withLock
-        }
-        jmdns = fresh
-        rebindRetryAttempts = 0
-        Log.d(
-            TAG,
-            "rebindNow: JmDNS recreated bindAddr=${newBindAddr?.hostAddress ?: "default"}"
-        )
-
-        if (hadAdvertising && cached != null) {
-            val info = buildServiceInfo(cached)
-            runCatching {
-                withContext(Dispatchers.IO) { fresh.registerService(info) }
-                advertisedInfo = info
-                Log.d(TAG, "rebindNow: registerService completed on fresh JmDNS")
-            }.onFailure { e ->
-                Log.w(TAG, "rebindNow: registerService failed", e)
-            }
-        } else if (hadAdvertising) {
-            Log.w(TAG, "rebindNow: cachedLocalPeer was null; advertising not restored")
-        }
-
-        if (hadDiscovery) {
-            val l = buildServiceListener()
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    fresh.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, l)
-                }
-                serviceListener = l
-                Log.d(TAG, "rebindNow: addServiceListener completed on fresh JmDNS")
-            }.onFailure { e ->
-                Log.w(TAG, "rebindNow: addServiceListener failed", e)
-            }
-        }
-
-        boundNetwork = target
-        boundDefaultNetwork = defaultTarget
-        Log.d(
-            TAG,
-            "rebindNow: complete; boundNetwork=$target boundDefaultNetwork=$defaultTarget"
-        )
     }
 
     private companion object {
         const val TAG = "P2pKitJmDNS"
-
-        /**
-         * Debounce window for back-to-back rotation signals. Android emits
-         * multiple `onAvailable` / `onCapabilitiesChanged` ticks per single
-         * physical handover (typically 100-400ms apart on Pixel devices);
-         * 800ms catches a comfortable majority while keeping perceived
-         * recovery latency bounded.
-         */
-        const val REBIND_DEBOUNCE_MILLIS = 800L
-
-        /**
-         * AUDIT-2026-06 (#5): base delay for the self-scheduled retry after
-         * a `JmDNS.create` failure in [rebindNow]; attempt N waits
-         * N * base (2s, 4s, … 10s) — bounded backoff, never a tight loop.
-         */
-        const val REBIND_RETRY_BASE_DELAY_MILLIS = 2_000L
-
-        /**
-         * AUDIT-2026-06 (#5): max consecutive create-failure retries before
-         * giving up and waiting for the next genuine network change (which
-         * schedules a fresh rebind and, on success, resets the counter).
-         */
-        const val REBIND_RETRY_MAX_ATTEMPTS = 5
     }
 }
 

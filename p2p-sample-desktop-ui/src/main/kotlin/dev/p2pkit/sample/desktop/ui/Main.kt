@@ -671,7 +671,12 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             session.incomingFiles.collect { offer ->
                 val baseDir = File(System.getProperty("user.home") ?: ".", ".p2pkit/incoming")
                 val saveDir = File(baseDir, sanitize(session.peer.name)).also { it.mkdirs() }
-                val saveFile = File(saveDir, sanitize(offer.name))
+                // 2026-07 (SMP-1): uniquify the destination — the previous
+                // name-keyed path silently truncated an earlier same-named
+                // file and let two concurrent same-named offers interleave
+                // onto one path. Same fix the CLI/Android samples already
+                // carry (AUDIT-2026-06 A-G9-samples-desktop-ios-19).
+                val saveFile = uniqueSaveFile(saveDir, sanitize(offer.name))
                 System.err.println(
                     "[p2pkit] incoming file ${offer.name} (${offer.sizeBytes}B) → ${saveFile.absolutePath}"
                 )
