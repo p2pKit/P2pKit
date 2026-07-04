@@ -73,8 +73,12 @@ confirm the sender fails the connection instead of blocking forever.
   via the root `allprojects` block.
 - Per-module POM metadata (name, description, license Apache-2.0, url, scm,
   developer) — Maven-Central-shaped.
-- The desktop sidecar publishes `-sources.jar` + `-javadoc.jar` (Central
-  requires both); KMP modules get theirs automatically.
+- All four modules publish `-sources.jar` + `-javadoc.jar` (Central requires
+  both). The KMP plugin does **not** attach a javadoc jar automatically
+  (verified 2026-07, finding BLD-2 — an earlier revision of this doc claimed
+  otherwise): the root `build.gradle.kts` attaches an empty Kotlin-style
+  javadoc jar to every KMP publication; the desktop sidecar (plain
+  Kotlin/JVM) uses `withJavadocJar()`.
 - **Signing wired centrally** in the root `build.gradle.kts` for every module
   applying `maven-publish`, plus a `publish → sign` task dependency so the
   release path has no "uses output without declaring dependency" error.
@@ -93,6 +97,17 @@ Supply the key via Gradle properties or env (`ORG_GRADLE_PROJECT_…`):
 | `signingInMemoryKeyPassword` | `ORG_GRADLE_PROJECT_signingInMemoryKeyPassword` | key passphrase |
 
 ### Local dry-run (no keys, validated on this branch)
+
+The executable gate (coverage row P1-29) publishes to a throwaway repo —
+never `~/.m2` — and asserts the full Central artifact set (main artifact +
+`-sources.jar` + `-javadoc.jar` + `.pom` + `.module`) for every publication
+of the four library modules:
+
+```bash
+scripts/check-publish-artifacts.sh           # run on macOS for the iOS klib rows
+```
+
+Manual equivalent:
 
 ```bash
 ./gradlew publishToMavenLocal
@@ -209,8 +224,9 @@ A4 passes on hardware.
 - [ ] `iosSimulatorArm64Test` green **except** the two C2 churn tests.
 - [ ] Part A device smoke matrix: A1–A8, A10–A12 PASS; A9 PASS or explicitly
       waived for the RC.
-- [ ] `./gradlew publishToMavenLocal` produces jars + sources + javadoc + pom
-      for all four modules; `sign*` SKIPPED without a key.
+- [ ] `scripts/check-publish-artifacts.sh` PASSes on macOS (full Central
+      artifact set — main artifact + sources + javadoc + pom + module — for
+      every publication of all four modules); `sign*` SKIPPED without a key.
 - [ ] One signed `publishToMavenLocal` run with a test key produces `.asc`
       signatures.
 - [ ] Release notes state the trust model honestly: identity/encryption is

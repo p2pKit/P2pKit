@@ -1,5 +1,7 @@
 import org.gradle.api.publish.PublishingExtension
+import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.publish.maven.tasks.AbstractPublishToMaven
+import org.gradle.jvm.tasks.Jar
 import org.gradle.plugins.signing.Sign
 import org.gradle.plugins.signing.SigningExtension
 
@@ -57,6 +59,32 @@ subprojects {
         // output of task … without declaring dependency" execution error.
         sub.tasks.withType(AbstractPublishToMaven::class.java).configureEach {
             dependsOn(sub.tasks.withType(Sign::class.java))
+        }
+
+        // BLD-2 (2026-07): Maven Central requires a -javadoc.jar next to every
+        // publication's -sources.jar. The Kotlin Multiplatform plugin does NOT
+        // attach one automatically (verified via a publishToMavenLocal listing:
+        // only the kotlin-jvm desktop sidecar, which uses `withJavadocJar()`,
+        // had one). Attach an empty Kotlin-style javadoc jar — the accepted
+        // Central practice for Kotlin modules; Dokka can supply real contents
+        // later — to every publication of the KMP modules. One Jar task per
+        // publication, with a unique appendix, so task outputs (and their .asc
+        // signatures when a signing key is supplied) never collide across
+        // publications. Executable gate: scripts/check-publish-artifacts.sh.
+        plugins.withId("org.jetbrains.kotlin.multiplatform") {
+            publishing.publications.withType(MavenPublication::class.java).configureEach {
+                val publicationName = name
+                val javadocJar = sub.tasks.register(
+                    "${publicationName}JavadocJar",
+                    Jar::class.java,
+                ) {
+                    archiveClassifier.set("javadoc")
+                    // Distinct local file per publication (published under the
+                    // publication's own artifactId regardless of this name).
+                    archiveAppendix.set(publicationName.lowercase())
+                }
+                artifact(javadocJar)
+            }
         }
     }
 }
