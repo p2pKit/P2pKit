@@ -82,9 +82,12 @@ private fun warnIfLanManifestPermissionsUndeclared(appContext: Context, logger: 
  *
  * Provisioning sidecars DO require real runtime permissions
  * (`NEARBY_WIFI_DEVICES` / `ACCESS_FINE_LOCATION`) and ship their own
- * manager (`AndroidP2pPermissionManager`), wired in via
- * `P2pKitBuilder.permissionManager` — that path still gates
- * startAdvertising/startDiscovery.
+ * manager (`AndroidP2pPermissionManager`). Wiring that manager in via
+ * `P2pKitBuilder.permissionManager` makes it gate
+ * startAdvertising/startDiscovery too — which re-creates the over-gating
+ * this class exists to remove. Recommended integration (decision #7a,
+ * 2026-07-04): keep this default on the kit and query the sidecar's manager
+ * immediately before provisioning calls only.
  */
 private class AndroidLanPermissionManager : P2pPermissionManager {
     override suspend fun requiredPermissions(): List<P2pPermission> = emptyList()

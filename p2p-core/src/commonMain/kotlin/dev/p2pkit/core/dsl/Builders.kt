@@ -74,9 +74,16 @@ public class P2pKitBuilder internal constructor() {
      * Optional host-provided [P2pPermissionManager]. When `null`, the kit uses
      * the platform default ([dev.p2pkit.core.internal.defaultPlatformPermissionManager]):
      * a real manifest-permission checker on Android (once
-     * `P2pKitAndroid.initialize(context)` has run), no-op on JVM/iOS. Wire in a
-     * provisioning sidecar's richer manager (e.g. `AndroidP2pPermissionManager`)
-     * here when the app uses hotspot/Wi-Fi-join provisioning.
+     * `P2pKitAndroid.initialize(context)` has run), no-op on JVM/iOS.
+     *
+     * Recommended wiring (decision #7a, 2026-07-04): keep this default even
+     * when the app uses hotspot/Wi-Fi-join provisioning — core LAN
+     * discovery/advertising needs no runtime permissions, and a kit-wide
+     * sidecar manager (e.g. `AndroidP2pPermissionManager`) gates
+     * `startAdvertising`/`startDiscovery` on provisioning-only permissions,
+     * re-creating the install-time over-gating the AUDIT-2026-06
+     * permission-gate fix removed. Query the sidecar's manager immediately
+     * before provisioning calls instead.
      */
     public var permissionManager: P2pPermissionManager? = null
 

@@ -124,6 +124,8 @@ scope.launch {
 
 **Never use nested `collect { collect { … } }`** — always use `launchIn(scope)` on inner flows.
 
+**Subscription window on fresh sessions:** `session.incoming` / `session.incomingFiles` are hot flows with `replay = 0` — messages that arrive before your collector is attached are dropped. For an *incoming* session (created by the remote's dial) the first messages inherently race your subscription, so a peer that sends immediately after connecting can beat the collector. Subscribe to a session's flows before sending on it, and have the dialing side wait for an app-level ready/greeting reply (or a short grace delay) before its first real payload (decision #13b; spec §10).
+
 ### File transfer (v0.2.2)
 
 ```kotlin
@@ -166,6 +168,8 @@ Files stream in 64 KiB chunks (configurable via `fileTransfer { chunkSizeBytes =
 ```
 
 The in-process JmDNS-based mDNS (v0.5+) does **not** require runtime permissions on any supported API level (24-36). v0.2's Wi-Fi-Direct / hotspot work will need `NEARBY_WIFI_DEVICES` (API 33+) and possibly `ACCESS_FINE_LOCATION` for older devices; the library will not request them on your behalf, but `P2pKit.permissions.missingPermissions()` will list them.
+
+**Permission-manager wiring (decision #7a, 2026-07-04):** leave the kit's `permissionManager` on its platform default — on Android it reports **no** runtime permissions, because core LAN discovery/advertising needs none (only install-time manifest permissions, which no runtime prompt can grant). If your app uses the provisioning sidecar (hotspot host / Wi-Fi join), query its `AndroidP2pPermissionManager` **immediately before the provisioning calls only** — do *not* wire it in as the kit-wide `permissionManager`. A kit-wide sidecar manager gates `startAdvertising`/`startDiscovery` on `NEARBY_WIFI_DEVICES`/`ACCESS_FINE_LOCATION`, permissions core LAN does not need — re-creating exactly the install-time over-gating the audit's permission-gate fix removed.
 
 ### JVM desktop
 

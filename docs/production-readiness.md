@@ -175,3 +175,15 @@ every relaunch. Out of scope here.
 
 Each step lands in its own PR with its own test coverage; total estimate
 5–7 commits across 1–2 weeks of focused work.
+
+## 11. Recorded backlog (2026-07)
+
+1. **Async/suspending kit construction** (decision #5a, 2026-07-04; 2026-07
+   review ARCH-10, catalogued B:201). `P2pKit.create { }` performs a one-time
+   small-file identity read/write (`peerIdStorage.loadOrGenerate()`) on the
+   calling thread; on Android, constructing on the main thread risks a brief
+   first-launch stall. Disposition for the v0.6 RC line: documented deferral —
+   the `P2pKit.create` KDoc says "construct off the main thread on Android".
+   Backlog work: move the identity load behind a suspend point (lazy/async
+   load or construction inside the first `start()`), weighed against the
+   builder-surface lock in `P2pKit-Spec.md`.

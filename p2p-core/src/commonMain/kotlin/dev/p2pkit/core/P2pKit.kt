@@ -185,6 +185,13 @@ public interface P2pKit {
          * Build a P2pKit instance from a DSL block. See [P2pKitBuilder] for
          * the available configuration knobs.
          *
+         * Construction performs a one-time, small-file identity read/write on
+         * the calling thread (loading or generating the persistent
+         * [localPeerId]) — construct off the main thread on Android to avoid
+         * a first-launch stall (decision #5a, 2026-07-04; async/suspending
+         * construction is a recorded backlog item in
+         * `docs/production-readiness.md`).
+         *
          * The implementation is provided by `dev.p2pkit.core.internal.P2pKitImpl`.
          */
         public fun create(block: P2pKitBuilder.() -> Unit): P2pKit {

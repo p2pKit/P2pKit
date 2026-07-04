@@ -392,6 +392,13 @@ stream until FILE_DONE; either side may `cancel(reason)` at any point
 FILE_DATA / FILE_DONE / FILE_CANCEL (codes `0x10`–`0x15`, §13.1); the frame's
 `message_id` carries the transfer id for the lifetime of one offer.
 
+**Unanswered-offer terminal states (decision #11a, 2026-07-04):** the two
+sides of an unanswered offer terminalize asymmetrically — the receiver's
+transfer ends as `Rejected("timeout")` (the receive-side auto-reject), while
+the sender's ends as `Cancelled` carrying the offer-timeout message
+(`"offer not accepted within <offerTimeoutMillis>ms"`, from the sender's own
+local timer).
+
 **Public types** (package `dev.p2pkit.core.transfer`):
 
 ```kotlin
@@ -667,8 +674,8 @@ sealed class SecurityMode {
 
 - `connect(peer)` is **idempotent**. If a session exists with state in `{Connecting, Handshaking, Connected, Reconnecting}`, the existing instance is returned. Otherwise a new one is created.
 - `P2pSession.send` is **safe under concurrent calls**. Writes are serialized via an internal `Mutex`.
-- `P2pSession.incoming` is a **hot `SharedFlow`** with `replay = 0`, `extraBufferCapacity = 64`, `onBufferOverflow = SUSPEND`. Subscribe immediately after `connect()` or accept — late subscribers miss earlier messages.
-- `close()` transitions: `Connected → Closing → Closed`. ACK/keepalive stops, underlying connection releases.
+- `P2pSession.incoming` is a **hot `SharedFlow`** with `replay = 0`, `extraBufferCapacity = 64`, `onBufferOverflow = SUSPEND`. Subscribe immediately after `connect()` or accept — late subscribers miss earlier messages. For an **incoming** session this window is inherent (decision #13b, 2026-07-04): the session is created by the remote's dial, so its first messages race the app's subscription — a peer that sends immediately after connecting can deliver a message before any collector is attached, and that message is dropped. Recommended pattern: subscribe to a fresh session's flows before sending on it, and have the dialing side wait for an app-level ready/greeting reply (or apply a short grace delay) before its first real payload.
+- `close()` transitions directly `Connected → Closed`; `Closing` is a reserved `ConnectionState` constant and is not emitted by the current implementation (decision #10a, 2026-07-04). ACK/keepalive stops, underlying connection releases.
 - A failed session emits `Failed` and is removed from `sessions` (after retention or immediately, see below).
 - If `ReconnectPolicy.Enabled` is configured, the session transitions to `Reconnecting` and retries up to `maxAttempts` with `retryDelayMillis` between attempts. On exhaustion it becomes `Failed`.
 - Closed/Failed sessions are removed from `P2pKit.sessions` after they emit their terminal state.
@@ -1006,6 +1013,12 @@ sealed class P2pError(message: String? = null, cause: Throwable? = null) : Excep
     ) : P2pError("Transport $transportKind failed to start: $reason", underlying)
 }
 ```
+
+**`send()`/`sendFile()` error boundary (decision #12a, 2026-07-04):** an
+unexpected transport-level failure crossing the `send()`/`sendFile()` boundary
+surfaces as `P2pError.ConnectionFailed` with the original exception preserved
+as `cause`; `CancellationException` and already-typed `P2pError`s pass through
+unchanged.
 
 Fallback rules:
 

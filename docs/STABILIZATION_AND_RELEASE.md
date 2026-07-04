@@ -237,6 +237,14 @@ A4 passes on hardware.
       pinned empty by `MessageMetadataContractTest` (P1-06), and real
       transmission is scheduled as the post-RC `metadata-wire` milestone
       (C4). The RC must not tag with this line undecided (DOCA-14).
+- [x] **Decision box — `P2pPermission.ChangeWifiState` disambiguation (C:54;
+      decision #4a): DECIDED, deferral recorded, 2026-07-04.** The A09
+      re-verification confirmed the enum member has a single Android mapping
+      today — the provisioning sidecar's `CHANGE_WIFI_STATE`; core stopped
+      mapping it to `CHANGE_WIFI_MULTICAST_STATE` in the AUDIT-2026-06
+      permission-gate fix — so the C:54 deferral is assessed sound and no
+      enum rework is warranted. Revisit only if a second platform mapping
+      for the member appears.
 - [ ] Tag `v0.6.0-rc1` (or chosen RC id) and capture the device-matrix logs.
 
 ### C4 — Post-RC milestone: `metadata-wire` (from decision #3, recorded 2026-07-04)
