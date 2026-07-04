@@ -10,6 +10,7 @@ import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -60,7 +61,7 @@ class ReconnectPolicyTest {
         name: String,
         policy: ReconnectPolicy,
         outgoingFactory: () -> RawConnection
-    ): P2pKit = P2pKit.create {
+    ): P2pKit = createTestKit {
         appId = AppId("com.example.test")
         deviceName = name
         keepAlive {
@@ -76,7 +77,7 @@ class ReconnectPolicyTest {
     }
 
     private fun incomingKit(name: String, preStaged: List<RawConnection>): P2pKit =
-        P2pKit.create {
+        createTestKit {
             appId = AppId("com.example.test")
             deviceName = name
             keepAlive {

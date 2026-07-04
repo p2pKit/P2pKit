@@ -2,12 +2,12 @@ package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.P2pError
-import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.permission.NoOpP2pPermissionManager
 import dev.p2pkit.core.permission.P2pPermission
 import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.FakeDiscoveryTransport
+import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
@@ -64,7 +64,7 @@ class PermissionGateTest {
             // (NoOp on the JVM/iOS targets this common test runs on; the
             // Android default reports the same empty set — see the manual
             // recipe in the class KDoc).
-            val kit = P2pKit.create {
+            val kit = createTestKit {
                 appId = AppId("permission-gate-test")
                 deviceName = "Default"
                 transports { register(FixedTransportFactory(FakeDataTransport(), discovery)) }
@@ -88,7 +88,7 @@ class PermissionGateTest {
     fun missingRuntimePermissionStillGatesBothEntryPoints() {
         runBlocking {
             val discovery = FakeDiscoveryTransport()
-            val kit = P2pKit.create {
+            val kit = createTestKit {
                 appId = AppId("permission-gate-test")
                 deviceName = "Gated"
                 // Mirrors the provisioning sidecar: a real runtime permission
@@ -115,7 +115,7 @@ class PermissionGateTest {
     fun requiredButGrantedPermissionsDoNotGate() {
         runBlocking {
             val discovery = FakeDiscoveryTransport()
-            val kit = P2pKit.create {
+            val kit = createTestKit {
                 appId = AppId("permission-gate-test")
                 deviceName = "Granted"
                 permissionManager = FixedPermissionManager(

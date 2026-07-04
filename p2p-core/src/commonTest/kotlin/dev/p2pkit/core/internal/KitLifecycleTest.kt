@@ -8,6 +8,7 @@ import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
@@ -59,7 +60,7 @@ class KitLifecycleTest {
     fun stopClosesDataTransportAndStopsDiscoveryAdvertising() {
         runBlocking {
             val transport = TrackingTransport()
-            val kit = P2pKit.create {
+            val kit = createTestKit {
                 appId = AppId("lifecycle-test")
                 deviceName = "Test"
                 transports { register(TrackingFactory(transport)) }
@@ -83,7 +84,7 @@ class KitLifecycleTest {
     fun freshKitAfterStopIsIndependent() {
         runBlocking {
             val first = TrackingTransport()
-            val k1 = P2pKit.create {
+            val k1 = createTestKit {
                 appId = AppId("indep-test")
                 deviceName = "First"
                 transports { register(TrackingFactory(first)) }
@@ -95,7 +96,7 @@ class KitLifecycleTest {
             // After stopping the first kit, a brand-new kit with a separate
             // transport should not see any state leak from the first.
             val second = TrackingTransport()
-            val k2 = P2pKit.create {
+            val k2 = createTestKit {
                 appId = AppId("indep-test")
                 deviceName = "Second"
                 transports { register(TrackingFactory(second)) }
@@ -124,7 +125,7 @@ class KitLifecycleTest {
     fun stopCompletesWhenATransportStartHangs() {
         runBlocking {
             val transport = HungStartTransport()
-            val kit = P2pKit.create {
+            val kit = createTestKit {
                 appId = AppId("stop-hang-test")
                 deviceName = "Test"
                 transports { register(HungStartFactory(transport)) }
@@ -166,7 +167,7 @@ class KitLifecycleTest {
     fun startDrivesIdleThroughStartingToRunning() {
         runBlocking {
             val transport = HungStartTransport()
-            val kit = P2pKit.create {
+            val kit = createTestKit {
                 appId = AppId("state-machine-test")
                 deviceName = "Test"
                 transports { register(HungStartFactory(transport)) }
@@ -202,7 +203,7 @@ class KitLifecycleTest {
             val transport = FakeDataTransport()
             val bindRefusal = IllegalStateException("simulated OS bind refusal")
             transport.startFailure = bindRefusal
-            val kit = P2pKit.create {
+            val kit = createTestKit {
                 appId = AppId("bind-failure-test")
                 deviceName = "Test"
                 transports { register(DataOnlyFactory(transport)) }
@@ -239,7 +240,7 @@ class KitLifecycleTest {
     fun successfulReadvertiseClearsLatchedFailed() {
         runBlocking {
             val transport = TrackingTransport()
-            val kit = P2pKit.create {
+            val kit = createTestKit {
                 appId = AppId("readvertise-test")
                 deviceName = "Test"
                 transports { register(TrackingFactory(transport)) }
@@ -277,7 +278,7 @@ class KitLifecycleTest {
     fun cancellingStartMidBindPropagatesCancellationAndDoesNotLatchFailed() {
         runBlocking {
             val transport = HungStartTransport()
-            val kit = P2pKit.create {
+            val kit = createTestKit {
                 appId = AppId("cancel-start-test")
                 deviceName = "Test"
                 transports { register(HungStartFactory(transport)) }
@@ -333,7 +334,7 @@ class KitLifecycleTest {
         runBlocking {
             val transport = TrackingTransport()
             val observer = MutexHeldObserver()
-            val kit = P2pKit.create {
+            val kit = createTestKit {
                 appId = AppId("bounded-stop-observer-test")
                 deviceName = "Test"
                 lifecycle { networkPathObserver = observer }
@@ -379,7 +380,7 @@ class KitLifecycleTest {
         runBlocking {
             val transport = GatedCloseTransport()
             val observer = YieldingCloseObserver()
-            val kit = P2pKit.create {
+            val kit = createTestKit {
                 appId = AppId("cancelled-stop-test")
                 deviceName = "Test"
                 lifecycle { networkPathObserver = observer }

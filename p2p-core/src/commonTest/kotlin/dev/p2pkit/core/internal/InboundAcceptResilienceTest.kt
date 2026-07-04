@@ -11,6 +11,7 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.RecordingLogger
+import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -54,7 +55,7 @@ class InboundAcceptResilienceTest {
     private val setupFailedFragment = "Incoming session setup failed"
 
     private fun outgoingKit(name: String, outgoing: RawConnection): P2pKit =
-        P2pKit.create {
+        createTestKit {
             appId = AppId("com.example.test")
             deviceName = name
             keepAlive {
@@ -70,7 +71,7 @@ class InboundAcceptResilienceTest {
         name: String,
         transport: FakeDataTransport,
         recordingLogger: RecordingLogger
-    ): P2pKit = P2pKit.create {
+    ): P2pKit = createTestKit {
         appId = AppId("com.example.test")
         deviceName = name
         logger = recordingLogger

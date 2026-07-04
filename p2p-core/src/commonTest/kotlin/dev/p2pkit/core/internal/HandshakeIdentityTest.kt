@@ -10,6 +10,7 @@ import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -41,7 +42,7 @@ import kotlin.test.assertTrue
 class HandshakeIdentityTest {
 
     private fun outgoingKit(localId: String, outgoing: RawConnection): P2pKit =
-        P2pKit.create {
+        createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Alice"
             peerIdStorage = InMemoryPeerIdStorage(seed = PeerId(localId))
@@ -55,7 +56,7 @@ class HandshakeIdentityTest {
         }
 
     private fun incomingKit(localId: String, incoming: RawConnection): P2pKit =
-        P2pKit.create {
+        createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Bob"
             // The remote announces THIS id in its HELLO.

@@ -99,13 +99,18 @@ internal class SessionManager(
      */
     private val refreshDiscovery: suspend () -> Unit = {},
     /**
-     * Test-only (#19): when `true`, [SessionStore.checkInvariants] throws
-     * on a detected bookkeeping violation instead of `logger.warn`ing —
-     * the suites run with a NoOp/quiet logger, so warn-only enforcement
-     * would let a store regression pass every test silently.
+     * Test-only (#19 / 2026-07 TST-9, decision #15a): when `true`,
+     * [SessionStore.checkInvariants] throws on a detected bookkeeping
+     * violation instead of `logger.warn`ing — the suites run with a
+     * NoOp/quiet logger, so warn-only enforcement would let a store
+     * regression pass every test silently.
      *
-     * Default `false` = production behavior (log-don't-crash);
-     * [P2pKitImpl] never sets it.
+     * Default `false` = production behavior (log-don't-crash). [P2pKitImpl]
+     * forwards its own `strictSessionInvariants` constructor parameter here,
+     * which itself defaults to `false` and is only ever set through the
+     * internal [dev.p2pkit.core.dsl.P2pKitBuilder.strictSessionInvariants]
+     * knob (enabled by the commonTest `createTestKit` fixture) — so every
+     * production construction path still resolves to `false`.
      */
     private val strictInvariants: Boolean = false
 ) {
@@ -119,6 +124,17 @@ internal class SessionManager(
      */
     private val store = SessionStore(logger, strictInvariants = strictInvariants)
     val sessions: StateFlow<List<P2pSession>> = store.sessions
+
+    /**
+     * TEST-ONLY seam (#19 / 2026-07 P1-03) — never call from production
+     * code. Forwards to [SessionStore.forceInvariantViolationForTest] so
+     * the strict-invariants meta-test can force a known-bad bookkeeping
+     * state inside a kit-built store and assert the [strictInvariants]
+     * enforcement (throw vs warn) end to end.
+     */
+    internal suspend fun forceStoreInvariantViolationForTest(session: P2pSession) {
+        store.forceInvariantViolationForTest(session)
+    }
 
     private val _incomingSessions = MutableSharedFlow<P2pSession>(
         replay = 0,

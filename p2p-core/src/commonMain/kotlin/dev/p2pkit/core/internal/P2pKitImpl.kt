@@ -73,7 +73,16 @@ internal class P2pKitImpl(
     private val logger: P2pLogger,
     private val clock: () -> Long,
     parentJob: Job?,
-    private val pathObserver: NetworkPathObserver
+    private val pathObserver: NetworkPathObserver,
+    /**
+     * Test-only (#19 / 2026-07 TST-9, decision #15a): forwarded to
+     * [SessionManager] → [SessionStore] so bookkeeping-invariant violations
+     * throw instead of `logger.warn`ing. Production default `false`
+     * (log-don't-crash); set only through the internal
+     * [dev.p2pkit.core.dsl.P2pKitBuilder.strictSessionInvariants] knob,
+     * which the commonTest `createTestKit` fixture enables.
+     */
+    private val strictSessionInvariants: Boolean = false
 ) : P2pKit {
 
     private val internalJob = SupervisorJob(parent = parentJob)
@@ -193,7 +202,8 @@ internal class P2pKitImpl(
                             )
                         }
                 }
-            }
+            },
+            strictInvariants = strictSessionInvariants
         )
         peerRegistry.start()
         sessionManager.startAcceptingIncoming(dataTransports)
@@ -563,6 +573,19 @@ internal class P2pKitImpl(
         if (missing.isNotEmpty()) throw P2pError.PermissionMissing(missing)
     }
 
+    /**
+     * TEST-ONLY seam (#19 / 2026-07 P1-03) — never call from production
+     * code. Forwards to [SessionManager.forceStoreInvariantViolationForTest]
+     * so the strict-invariants meta-test can prove that a bookkeeping
+     * violation inside a **kit-built** store throws under
+     * [strictSessionInvariants] (and only warns under the production
+     * default), validating the builder → kit → manager → store threading
+     * end to end.
+     */
+    internal suspend fun forceSessionStoreInvariantViolationForTest(session: P2pSession) {
+        sessionManager.forceStoreInvariantViolationForTest(session)
+    }
+
     private companion object {
         /**
          * How long [stop] waits to take [startMutex] from a concurrent
@@ -603,7 +626,8 @@ internal fun newP2pKit(
     logger: P2pLogger,
     peerIdStorageOverride: PeerIdStorage? = null,
     networkPathObserverOverride: NetworkPathObserver? = null,
-    permissionManagerOverride: dev.p2pkit.core.permission.P2pPermissionManager? = null
+    permissionManagerOverride: dev.p2pkit.core.permission.P2pPermissionManager? = null,
+    strictSessionInvariants: Boolean = false
 ): P2pKit {
     val peerIdStorage = peerIdStorageOverride ?: defaultPeerIdStorage(appId, logger)
     val pathObserver = networkPathObserverOverride ?: defaultNetworkPathObserver(logger)
@@ -626,6 +650,7 @@ internal fun newP2pKit(
         logger = logger,
         clock = ::systemTimeMillis,
         parentJob = null,
-        pathObserver = pathObserver
+        pathObserver = pathObserver,
+        strictSessionInvariants = strictSessionInvariants
     )
 }

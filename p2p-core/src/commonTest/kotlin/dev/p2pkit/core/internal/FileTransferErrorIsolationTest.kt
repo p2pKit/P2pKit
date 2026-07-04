@@ -10,6 +10,7 @@ import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
@@ -46,7 +47,7 @@ import kotlin.test.assertTrue
 class FileTransferErrorIsolationTest {
 
     private fun outgoingKit(name: String, outgoing: RawConnection): P2pKit =
-        P2pKit.create {
+        createTestKit {
             appId = AppId("com.example.ft")
             deviceName = name
             keepAlive {
@@ -63,7 +64,7 @@ class FileTransferErrorIsolationTest {
         }
 
     private fun incomingKit(name: String, incoming: RawConnection): P2pKit =
-        P2pKit.create {
+        createTestKit {
             appId = AppId("com.example.ft")
             deviceName = name
             keepAlive {

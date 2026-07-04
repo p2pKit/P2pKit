@@ -2,7 +2,6 @@ package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
-import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -11,6 +10,7 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.FakeDiscoveryTransport
+import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.PeerEvent
@@ -72,7 +72,7 @@ class SessionReconnectRotationTest {
         val bobV1 = InternalPeer(publicPeer = bobPeer, transportHints = hintsV1)
         val bobV2 = InternalPeer(publicPeer = bobPeer, transportHints = hintsV2)
 
-        val alice = P2pKit.create {
+        val alice = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Alice"
             keepAlive {
@@ -95,7 +95,7 @@ class SessionReconnectRotationTest {
                 register(RotationTestFactory(aliceData, aliceDiscovery))
             }
         }
-        val bob = P2pKit.create {
+        val bob = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Bob"
             // Match the dialed id ("bob-id") so the outgoing handshake's peerId
@@ -179,7 +179,7 @@ class SessionReconnectRotationTest {
         val hintsV1 = listOf(TransportHint(TransportKind.LAN, host = "10.0.0.5", port = 4000))
         val bobV1 = InternalPeer(publicPeer = bobPeer, transportHints = hintsV1)
 
-        val alice = P2pKit.create {
+        val alice = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Alice"
             keepAlive {
@@ -196,7 +196,7 @@ class SessionReconnectRotationTest {
                 register(RotationTestFactory(aliceData, aliceDiscovery))
             }
         }
-        val bob = P2pKit.create {
+        val bob = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Bob"
             // Match the dialed id ("bob-id") so the outgoing handshake's peerId
@@ -287,7 +287,7 @@ class SessionReconnectRotationTest {
         val hintsV1 = listOf(TransportHint(TransportKind.LAN, host = "10.0.0.5", port = 4000))
         val bobV1 = InternalPeer(publicPeer = bobPeer, transportHints = hintsV1)
 
-        val alice = P2pKit.create {
+        val alice = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Alice"
             keepAlive {
@@ -304,7 +304,7 @@ class SessionReconnectRotationTest {
                 register(RotationTestFactory(aliceData, aliceDiscovery))
             }
         }
-        val bob = P2pKit.create {
+        val bob = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Bob"
             // Match the dialed id ("bob-id") so the outgoing handshake's peerId

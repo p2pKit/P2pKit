@@ -18,6 +18,7 @@ import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.SnapshotList
+import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transfer.isTerminal
@@ -59,7 +60,7 @@ import kotlin.test.assertTrue
 class FileTransferFlowTest {
 
     private fun outgoingKit(name: String, outgoing: RawConnection, configureFileTransfer: Boolean = false): P2pKit =
-        P2pKit.create {
+        createTestKit {
             appId = AppId("com.example.ft")
             deviceName = name
             keepAlive {
@@ -84,7 +85,7 @@ class FileTransferFlowTest {
         }
 
     private fun incomingKit(name: String, incoming: RawConnection, configureFileTransfer: Boolean = false): P2pKit =
-        P2pKit.create {
+        createTestKit {
             appId = AppId("com.example.ft")
             deviceName = name
             keepAlive {

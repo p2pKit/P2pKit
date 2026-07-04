@@ -80,6 +80,19 @@ public class P2pKitBuilder internal constructor() {
      */
     public var permissionManager: P2pPermissionManager? = null
 
+    /**
+     * **Internal, test-only** (#19 / 2026-07 TST-9, decision #15a) — never set
+     * from production code. When `true`, the kit's `SessionStore` throws
+     * [IllegalStateException] on a detected bookkeeping-invariant violation
+     * instead of `logger.warn`ing, so a store regression fails the suite
+     * loudly rather than vanishing into a NoOp logger. Threaded via
+     * [dev.p2pkit.core.internal.newP2pKit] →
+     * `P2pKitImpl` → `SessionManager` → `SessionStore`. The production
+     * default stays `false` (log-don't-crash); kit-level behavioral suites
+     * opt in through the commonTest `createTestKit` fixture. Not public API.
+     */
+    internal var strictSessionInvariants: Boolean = false
+
     public fun transports(block: TransportsBuilder.() -> Unit) {
         transportsBuilder.apply(block)
     }
@@ -143,7 +156,8 @@ public class P2pKitBuilder internal constructor() {
             logger = logger,
             peerIdStorageOverride = peerIdStorage,
             networkPathObserverOverride = networkPathObserver,
-            permissionManagerOverride = permissionManager
+            permissionManagerOverride = permissionManager,
+            strictSessionInvariants = strictSessionInvariants
         )
     }
 }

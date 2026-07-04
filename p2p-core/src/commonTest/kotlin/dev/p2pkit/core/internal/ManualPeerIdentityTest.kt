@@ -16,6 +16,7 @@ import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.UnsupportedNetworkProvisioningManager
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -70,7 +71,7 @@ class ManualPeerIdentityTest {
         localId: String,
         transport: FakeDataTransport,
         capture: RegistrarCapture? = null
-    ): P2pKit = P2pKit.create {
+    ): P2pKit = createTestKit {
         appId = AppId("com.example.manualtest")
         deviceName = "Alice"
         peerIdStorage = InMemoryPeerIdStorage(seed = PeerId(localId))
@@ -87,7 +88,7 @@ class ManualPeerIdentityTest {
     }
 
     private fun remoteKit(localId: String, incoming: RawConnection): P2pKit =
-        P2pKit.create {
+        createTestKit {
             appId = AppId("com.example.manualtest")
             deviceName = "Bob"
             // The remote announces THIS id in its HELLO.
