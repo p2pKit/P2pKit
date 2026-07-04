@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.launchIn
@@ -147,6 +148,26 @@ internal class SessionManager(
         for (transport in transports) {
             transport.incomingConnections()
                 .onEach { connection -> handleIncoming(connection) }
+                // AUDIT-2026-07 (CON-3): a transport terminating its incoming
+                // flow with a cause (e.g. a server-socket accept error while
+                // the transport is not closed) previously escaped this
+                // collector as an uncaught exception into the kit scope —
+                // crashing Android host apps via the default handler — and
+                // silently ended inbound acceptance for the kit's lifetime.
+                // Surface it through the injectable logger instead. Defined
+                // post-failure behavior: inbound acceptance on THIS transport
+                // stays down until a later transport start()/rebind re-serves
+                // its accept loop (the nullable-StateFlow server-socket design
+                // supports that); a bounded re-collect is a tracked follow-up,
+                // deliberately not added here. Per-connection setup failures
+                // are unaffected — [handleIncoming] already isolates them, so
+                // the collector keeps accepting subsequent peers.
+                // CancellationException is rethrown, never swallowed, so
+                // kit shutdown still tears the collector down promptly.
+                .catch { e ->
+                    if (e is CancellationException) throw e
+                    logger.warn("inbound acceptance ended for ${transport.type}", e)
+                }
                 .launchIn(scope)
         }
     }

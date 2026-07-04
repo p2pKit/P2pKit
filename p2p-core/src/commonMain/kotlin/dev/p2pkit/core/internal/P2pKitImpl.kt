@@ -34,6 +34,7 @@ import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -76,7 +77,19 @@ internal class P2pKitImpl(
 ) : P2pKit {
 
     private val internalJob = SupervisorJob(parent = parentJob)
-    private val scope = CoroutineScope(Dispatchers.Default + internalJob)
+
+    // AUDIT-2026-07 (CON-3 rider, ARCH-4): kit-scope CoroutineExceptionHandler.
+    // The SupervisorJob already keeps sibling coroutines alive, but an uncaught
+    // failure in any internal collector previously escalated to the platform's
+    // default handler — which terminates the host process on Android. Route it
+    // to the injectable logger instead: crash prevention / defense-in-depth
+    // behind the per-collector handling (e.g. startAcceptingIncoming's catch).
+    // CancellationException never reaches a CoroutineExceptionHandler, so
+    // cancellation semantics are untouched.
+    private val uncaughtHandler = CoroutineExceptionHandler { _, e ->
+        logger.error("P2pKit internal coroutine failed uncaught", e)
+    }
+    private val scope = CoroutineScope(Dispatchers.Default + internalJob + uncaughtHandler)
 
     override val networkProvisioning: NetworkProvisioningManager
 
