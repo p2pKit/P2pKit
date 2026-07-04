@@ -518,7 +518,18 @@ internal class AndroidLanDiscoveryTransport(
 
         override fun serviceRemoved(event: ServiceEvent) {
             val info = event.info ?: return
-            val pid = info.getPropertyString(LanConstants.TXT_PEER_ID) ?: return
+            // AUDIT-2026-07 (RBS-1): validate the TXT pid before it can
+            // reach the throwing PeerId constructor, and gate the lost
+            // path on appId like the resolved path below — a malformed
+            // or other-app record is skipped inside the JmDNS callback
+            // instead of propagating an exception through it. Mirrors
+            // JvmLanDiscoveryTransport.serviceRemoved.
+            val pid = validDiscoveryPeerIdOrNull(info.getPropertyString(LanConstants.TXT_PEER_ID))
+            if (pid == null) {
+                Log.d(TAG, "serviceRemoved: TXT pid missing or blank — skipping record")
+                return
+            }
+            if (info.getPropertyString(LanConstants.TXT_APP_ID) != registration.appId.value) return
             if (pid == registration.localPeerId.value) return
             Log.d(TAG, "serviceRemoved: pid=${pid.take(8)} — emitting PeerEvent.Lost")
             _events.tryEmit(PeerEvent.Lost(PeerId(pid)))
@@ -526,7 +537,13 @@ internal class AndroidLanDiscoveryTransport(
 
         override fun serviceResolved(event: ServiceEvent) {
             val info = event.info ?: return
-            val pid = info.getPropertyString(LanConstants.TXT_PEER_ID) ?: return
+            // AUDIT-2026-07 (RBS-1): a blank pid must be skipped here, not
+            // thrown from PeerId() inside the JmDNS callback.
+            val pid = validDiscoveryPeerIdOrNull(info.getPropertyString(LanConstants.TXT_PEER_ID))
+                ?: run {
+                    Log.d(TAG, "serviceResolved: TXT pid missing or blank — skipping record")
+                    return
+                }
             val app = info.getPropertyString(LanConstants.TXT_APP_ID) ?: return
             if (pid == registration.localPeerId.value) return
             if (app != registration.appId.value) return

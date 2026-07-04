@@ -2,6 +2,7 @@ package dev.p2pkit.transport.lan
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -115,6 +116,43 @@ class IosBonjourTest {
         val record = IosBonjour.mapToTxtRecord(withExtra)
         val decoded = IosBonjour.txtRecordToMap(record)
         assertEquals(withExtra, decoded)
+    }
+
+    @Test
+    fun blankPeerIdValueIsRejectedByDiscoveryValidation() {
+        // AUDIT-2026-07 (RBS-1) / P1-25 iOS leg: a same-service-type
+        // advertiser can publish a whitespace-only pid value. It survives the
+        // real nw_txt_record round-trip verbatim, so the discovery transport
+        // must drop the record via validDiscoveryPeerIdOrNull (emitPeer and
+        // emitLost both funnel through it) instead of letting PeerId() throw
+        // across the nw_browser callback boundary.
+        val malformed = mapOf(
+            LanConstants.TXT_PEER_ID to " ",
+            LanConstants.TXT_APP_ID to "p2pkit-test"
+        )
+        val decoded = IosBonjour.txtRecordToMap(IosBonjour.mapToTxtRecord(malformed))
+        assertEquals(" ", decoded[LanConstants.TXT_PEER_ID])
+        assertNull(validDiscoveryPeerIdOrNull(decoded[LanConstants.TXT_PEER_ID]))
+    }
+
+    @Test
+    fun emptyPeerIdValueIsRejectedAndConformingPeerIdAccepted() {
+        // Key-present-empty-value and key-without-value both decode to ""
+        // (see txtRecordToMap) — the validation guard must reject that
+        // shape too, while a conforming pid passes through untouched.
+        val malformed = mapOf(LanConstants.TXT_PEER_ID to "")
+        val decoded = IosBonjour.txtRecordToMap(IosBonjour.mapToTxtRecord(malformed))
+        assertEquals("", decoded[LanConstants.TXT_PEER_ID])
+        assertNull(validDiscoveryPeerIdOrNull(decoded[LanConstants.TXT_PEER_ID]))
+
+        val conforming = mapOf(
+            LanConstants.TXT_PEER_ID to "11111111-2222-3333-4444-555555555555"
+        )
+        val conformingDecoded = IosBonjour.txtRecordToMap(IosBonjour.mapToTxtRecord(conforming))
+        assertEquals(
+            "11111111-2222-3333-4444-555555555555",
+            validDiscoveryPeerIdOrNull(conformingDecoded[LanConstants.TXT_PEER_ID])
+        )
     }
 
     @Test

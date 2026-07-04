@@ -68,3 +68,23 @@ internal object LanConstants {
      */
     const val TCP_CONNECT_TIMEOUT_MS: Int = 5_000
 }
+
+/**
+ * AUDIT-2026-07 (RBS-1): input validation for the `pid` value of a discovery
+ * TXT record, shared by the found and lost paths of the JVM, Android, and
+ * iOS discovery transports (the three must stay behavior-identical).
+ *
+ * [dev.p2pkit.core.PeerId] rejects blank values with an exception, and every
+ * discovery callback constructs a [dev.p2pkit.core.PeerId] from this TXT
+ * value — so a malformed record from a non-conforming same-service-type
+ * advertiser must be dropped inside the platform callback, never thrown
+ * across it (on iOS a throw would cross the `nw_browser` callback boundary;
+ * on JVM/Android it would surface untyped on a JmDNS listener thread).
+ *
+ * Returns [rawPid] unchanged when it is usable (present and non-blank), or
+ * `null` when the record must be skipped. Values are deliberately NOT
+ * trimmed or otherwise normalized — identity handling for conforming peers
+ * is unchanged; this is a validation guard only.
+ */
+internal fun validDiscoveryPeerIdOrNull(rawPid: String?): String? =
+    rawPid?.takeUnless { it.isBlank() }

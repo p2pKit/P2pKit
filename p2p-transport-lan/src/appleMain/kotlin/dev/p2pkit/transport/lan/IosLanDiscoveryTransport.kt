@@ -599,10 +599,12 @@ internal class IosLanDiscoveryTransport(
         val attrs = IosBonjour.txtRecordToMap(txt)
         IosLanDebug.log("browse", "emitPeer: txt=$attrs (isUpdate=$isUpdate)")
 
-        val pid = attrs[LanConstants.TXT_PEER_ID]
+        // AUDIT-2026-07 (RBS-1): a blank pid must be skipped here, not
+        // thrown from PeerId() across the nw_browser callback boundary.
+        val pid = validDiscoveryPeerIdOrNull(attrs[LanConstants.TXT_PEER_ID])
         val app = attrs[LanConstants.TXT_APP_ID]
         if (pid == null) {
-            IosLanDebug.log("browse", "emitPeer: filter — missing TXT_PEER_ID")
+            IosLanDebug.log("browse", "emitPeer: filter — TXT_PEER_ID missing or blank")
             return
         }
         if (app == null) {
@@ -655,9 +657,19 @@ internal class IosLanDiscoveryTransport(
 
     private fun emitLost(result: nw_browse_result_t) {
         val txt = nw_browse_result_copy_txt_record_object(result)
-        val pid = IosBonjour.txtRecordToMap(txt)[LanConstants.TXT_PEER_ID]
+        val attrs = IosBonjour.txtRecordToMap(txt)
+        // AUDIT-2026-07 (RBS-1): validate the TXT pid before the lost path
+        // can construct PeerId, and gate on appId like emitPeer — a
+        // malformed or other-app record is skipped inside the browse
+        // callback instead of propagating an exception through it.
+        val pid = validDiscoveryPeerIdOrNull(attrs[LanConstants.TXT_PEER_ID])
         if (pid == null) {
-            IosLanDebug.log("browse", "emitLost: TXT had no peer id — skip")
+            IosLanDebug.log("browse", "emitLost: TXT peer id missing or blank — skip")
+            return
+        }
+        val app = attrs[LanConstants.TXT_APP_ID]
+        if (app != transportContext.appId.value) {
+            IosLanDebug.log("browse", "emitLost: filter — appId missing or mismatch (peer=$app)")
             return
         }
         emitLostById(pid)
@@ -672,6 +684,11 @@ internal class IosLanDiscoveryTransport(
      */
     private fun emitLostById(pid: String) {
         if (pid == transportContext.localPeerId.value) return
+        // AUDIT-2026-07 (RBS-1): both callers validate their input (emitLost
+        // from the raw TXT record, the announce-loop prune from entries that
+        // were validated on insert), but a blank pid must never reach the
+        // throwing PeerId constructor from this shared path.
+        if (validDiscoveryPeerIdOrNull(pid) == null) return
         val peerId = PeerId(pid)
         announceCache.update { it - pid }
         endpointRegistry.remove(peerId)
