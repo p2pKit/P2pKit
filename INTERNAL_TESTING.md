@@ -393,6 +393,24 @@ The wire format is additionally pinned by §K.1 plus the §A Android ↔ JVM rec
 - Compile-time crash mentioning `Kotlin_Interop_refFromObjC` on a void block: a new `nw_*` block macro slipped into the iOS code path. Wrap it in a static-inline helper in `src/nativeInterop/cinterop/p2pkit_nw.h` so the void-block global never round-trips through Kotlin/Native (rationale documented in that file's header comment).
 - Discovery never resolves: Bonjour on the simulator can be flaky on some macOS versions when the host firewall is strict. `sudo lsof -nP -i UDP:5353` should show `mDNSResponder` listening; `dns-sd -B _p2pkit._tcp local.` should list every peer.
 
+### K.3 — Simulator install provenance (2026-07, IOSB-3 / P1-30 / P1-31)
+
+`./gradlew :iosApp:runIosSimulator` (which drives `scripts/run-ios-app.sh`) now builds into a **repo-local DerivedData** at `iosApp/build/DerivedData` and installs the bundle from the fixed path `iosApp/build/DerivedData/Build/Products/Debug-iphonesimulator/p2pkit-sample.app` — never from a `find` over the global `~/Library/Developer/Xcode/DerivedData`, which with multiple checkouts/worktrees could silently install a stale bundle from a different tree. The script also self-checks two provenance gates and fails loudly on either:
+
+- **P1-30 (built-bundle plist keys):** after `xcodebuild`, the built `.app`'s Info.plist must contain `NSLocalNetworkUsageDescription` and `NSBonjourServices` with `_p2pkit._tcp` (the keys iOS 14+ requires for Bonjour; missing keys = the documented zero-discovery failure mode). The keys must live in `iosApp/project.yml`'s `info.properties` block — xcodegen regenerates the project, so keys added anywhere else are silently dropped.
+- **P1-31 (installed bundle is THIS build):** after `simctl install`, the script resolves the installed container via `xcrun simctl get_app_container <UDID> dev.p2pkit.sample` and requires the installed executable's SHA-256 to match the one just built under this checkout's `iosApp/build/DerivedData`.
+
+**Manual verification recipe (P1-31), for any smoke-matrix run whose result you intend to record:**
+
+```bash
+./gradlew :iosApp:runIosSimulator          # expect "[ios-run] Provenance OK: ..." in the output
+xcrun simctl get_app_container booted dev.p2pkit.sample
+shasum -a 256 "$(xcrun simctl get_app_container booted dev.p2pkit.sample)/p2pkit-sample" \
+       iosApp/build/DerivedData/Build/Products/Debug-iphonesimulator/p2pkit-sample.app/p2pkit-sample
+```
+
+The two SHA-256 lines must be identical, and the second path must sit under **the checkout you invoked the build from**. If they differ, the simulator is running some other build — erase and rerun (`xcrun simctl uninstall booted dev.p2pkit.sample`, then `runIosSimulator` again) before recording any result. This complements the pre-build XCFramework stamp gate in `iosApp/scripts/check-xcframework.sh` (which pins the *framework* sources to HEAD); K.3 pins the *app bundle* actually installed on the simulator.
+
 ---
 
 ## 2. Windows Defender Firewall
