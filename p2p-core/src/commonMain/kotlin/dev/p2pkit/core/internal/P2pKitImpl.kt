@@ -276,7 +276,22 @@ internal class P2pKitImpl(
                 _state.value = P2pState.Starting
             }
             for (transport in dataTransports) {
-                val r = runCatching { transport.start() }.getOrElse { Result.failure(it) }
+                // AUDIT-2026-07 (ARCH-1): rethrow cancellation before any
+                // wrapping or latching. The previous `runCatching` captured
+                // CancellationException too, so a caller cancelled mid-bind
+                // (a routine host-lifecycle event, e.g. an Android scope
+                // cancelling `kit.start()`) had its CE converted into
+                // TransportStartFailed, `startResult` latched as failure, and
+                // the public state corrupted to Failed. On cancellation we
+                // leave `startResult` and `_state` untouched (still Starting)
+                // so a subsequent start() retries cleanly.
+                val r = try {
+                    transport.start()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    Result.failure(e)
+                }
                 if (r.isFailure) {
                     val cause = r.exceptionOrNull()
                     val failed = P2pError.TransportStartFailed(
@@ -310,9 +325,15 @@ internal class P2pKitImpl(
             // Best-effort path observer startup. A failure here is logged
             // but never propagates — `networkPathStatus` simply stays at
             // [NetworkPathStatus.Unknown] and the SDK behaves as if no
-            // observer is wired up.
-            runCatching { pathObserver.start() }.onFailure {
-                logger.warn("NetworkPathObserver.start() failed; path-change recovery disabled for this session", it)
+            // observer is wired up. Cancellation of the calling coroutine is
+            // NOT a failure, though: rethrow it instead of logging it away
+            // (AUDIT-2026-07 (ARCH-1), same shape as the bind loop above).
+            try {
+                pathObserver.start()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                logger.warn("NetworkPathObserver.start() failed; path-change recovery disabled for this session", e)
             }
             // Subscribe SessionManager to path changes. Done after the
             // observer starts so [SessionManager.applyPathChange] sees the
@@ -473,15 +494,45 @@ internal class P2pKitImpl(
                 )
                 teardownBoundResources()
             }
-        }
 
-        // Provisioning managers attach their scope to internalJob; the
-        // internalJob.cancel() below fires their invokeOnCompletion teardown
-        // (e.g. AndroidNetworkProvisioningManager releases its LocalOnlyHotspot
-        // reservation and unbinds the joined network there).
-        runCatching { pathObserver.close() }
-        internalJob.cancel()
-        _state.value = P2pState.Stopped
+            // AUDIT-2026-07 (ARCH-2): this tail previously ran OUTSIDE the
+            // NonCancellable block and unbounded, with two failure shapes:
+            // a caller cancelled mid-teardown aborted `pathObserver.close()`
+            // at its first suspension point (the platform observer leaked and
+            // Stopped was never latched by this call), and a close() parked
+            // on the observer's internal mutex (e.g. one still held by a hung
+            // observer start()) parked stop() forever. Keep it inside
+            // NonCancellable and bound the observer close, mirroring the
+            // bounded startMutex acquisition above (AUDIT-2026-06 pattern).
+            //
+            // Provisioning managers attach their scope to internalJob; the
+            // internalJob.cancel() below fires their invokeOnCompletion
+            // teardown (e.g. AndroidNetworkProvisioningManager releases its
+            // LocalOnlyHotspot reservation and unbinds the joined network
+            // there).
+            val observerClosed = withTimeoutOrNull(OBSERVER_CLOSE_TIMEOUT_MS) {
+                try {
+                    pathObserver.close()
+                } catch (e: CancellationException) {
+                    // Only the bounding timeout's own cancellation can reach
+                    // here (this block is NonCancellable from the outside);
+                    // rethrow so withTimeoutOrNull reports it as `null`.
+                    throw e
+                } catch (e: Throwable) {
+                    logger.warn("NetworkPathObserver.close() failed during stop()", e)
+                }
+                true
+            } ?: false
+            if (!observerClosed) {
+                logger.warn(
+                    "stop(): NetworkPathObserver.close() did not complete within " +
+                        "${OBSERVER_CLOSE_TIMEOUT_MS}ms; abandoning it (its platform monitor " +
+                        "may stay attached until process exit)"
+                )
+            }
+            internalJob.cancel()
+            _state.value = P2pState.Stopped
+        }
     }
 
     /**
@@ -521,6 +572,14 @@ internal class P2pKitImpl(
          * stop-hang fix).
          */
         const val STOP_START_MUTEX_TIMEOUT_MS: Long = 5_000
+
+        /**
+         * How long [stop] waits for [NetworkPathObserver.close] before
+         * abandoning it. A healthy observer detaches in microseconds; only
+         * one parked on its own internal state (e.g. a mutex still held by a
+         * hung `start()`) reaches this bound (AUDIT-2026-07 (ARCH-2)).
+         */
+        const val OBSERVER_CLOSE_TIMEOUT_MS: Long = 5_000
     }
 }
 
