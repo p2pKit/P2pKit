@@ -67,13 +67,18 @@ import dev.p2pkit.core.protocol.FrameTrace
 import dev.p2pkit.transport.lan.JvmLanDiag
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.ExperimentalP2pApi
+import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerAuthorizationPolicy
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.ReconnectPolicy
+import dev.p2pkit.core.SecurityMode
+import dev.p2pkit.core.dsl.jvmSecureIdentityStore
 import dev.p2pkit.core.provisioning.ManualConnectionInfo
 import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transfer.P2pFileTransfer
@@ -162,6 +167,7 @@ private fun P2pKitSampleApp() {
  * live [connectedSessions] snapshot; targeted sends use any subset of
  * peer ids in [targetedPeerIds].
  */
+@OptIn(ExplicitSecurityRisk::class)
 private class DesktopP2pState(private val appScope: CoroutineScope) {
 
     // --- identity / config -------------------------------------------------
@@ -293,6 +299,12 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         val newKit = P2pKit.create {
             appId = AppId(effectiveAppId)
             this.deviceName = this@DesktopP2pState.deviceName
+            jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
+            security {
+                mode = SecurityMode.AuthenticatedV2(
+                    PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+                )
+            }
             transports { lan() }
             networkProvisioning { jvm() }
             lifecycle {
@@ -409,7 +421,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     }
 
     /**
-     * Manual-IP fallback: parses "host:port" and dials it via the
+     * Manual-IP fallback: parses "host:port fingerprint" and dials it via the
      * provisioning module's [createManualPeer]. Used when mDNS is blocked.
      */
     @OptIn(ExperimentalP2pApi::class)
@@ -423,7 +435,14 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             appendSystemMessage("manual: dial already in progress")
             return
         }
-        val parts = input.trim().split(':', limit = 2)
+        val manualParts = input.trim().split(Regex("\\s+"), limit = 2)
+        val endpoint = manualParts.getOrNull(0).orEmpty()
+        val fingerprint = manualParts.getOrNull(1)?.let(PeerFingerprint::parseOrNull)
+        if (fingerprint == null) {
+            appendSystemMessage("manual: expected host:port followed by a full p2f1 fingerprint")
+            return
+        }
+        val parts = endpoint.split(':', limit = 2)
         val host = parts.getOrNull(0)?.trim().orEmpty()
         val portStr = parts.getOrNull(1)?.trim().orEmpty()
         if (host.isEmpty()) {
@@ -445,7 +464,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         scope.launch {
             try {
                 val synthetic = runCatchingCancellable {
-                    currentKit.networkProvisioning.createManualPeer(host, port)
+                    currentKit.networkProvisioning.createManualPeer(host, port, fingerprint)
                 }.getOrElse {
                     System.err.println("[p2pkit WARN] manual createManualPeer failed: ${it.message}")
                     appendSystemMessage("manual: createManualPeer failed: ${it.message ?: it::class.simpleName}")
@@ -1699,7 +1718,7 @@ private fun ManualPeerSection(
         OutlinedTextField(
             value = input,
             onValueChange = { input = it },
-            label = { Text("Connect host:port") },
+            label = { Text("Connect host:port p2f1-fingerprint") },
             singleLine = true,
             enabled = !isManualDialing,
             modifier = Modifier.weight(1f).padding(end = Dimens.ItemGap)

@@ -41,6 +41,7 @@ import platform.Foundation.timeIntervalSince1970
  *   handle N > 2. Catches stupid bugs like accidentally indexing on
  *   `peers.first()` somewhere.
  */
+@Suppress("DEPRECATION")
 class IosLanLifecycleTest {
 
     private val unique: String =
@@ -52,6 +53,7 @@ class IosLanLifecycleTest {
     private fun newKit(name: String): P2pKit = P2pKit.create {
         appId = AppId(unique)
         deviceName = name
+        security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
         keepAlive {
             pingIntervalMillis = 60_000
             timeoutMillis = 120_000
@@ -237,6 +239,7 @@ class IosLanLifecycleTest {
         val kit = P2pKit.create {
             appId = AppId(unique)
             deviceName = name
+            security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000

@@ -38,6 +38,14 @@ public interface P2pSession {
 
     public val peer: Peer
 
+    /**
+     * Cryptographically verified identity, or a null fingerprint in explicit
+     * legacy mode. The default preserves source compatibility for third-party
+     * test/session implementations; SDK-created secure sessions always
+     * override it with the authenticated identity.
+     */
+    public val peerIdentity: PeerIdentity get() = PeerIdentity(peer.id)
+
     public val state: StateFlow<ConnectionState>
 
     public val incoming: SharedFlow<P2pMessage>

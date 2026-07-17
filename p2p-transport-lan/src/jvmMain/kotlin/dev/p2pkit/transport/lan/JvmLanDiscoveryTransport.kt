@@ -82,22 +82,25 @@ internal class JvmLanDiscoveryTransport(
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) = lock.withLock {
         ensureJmdns()
         if (advertising) return@withLock
+        val properties = mutableMapOf(
+            LanConstants.TXT_PEER_ID to registration.localPeerId.value,
+            LanConstants.TXT_APP_ID to registration.appId.value,
+            LanConstants.TXT_DEVICE_NAME to localPeer.deviceName,
+            LanConstants.TXT_PLATFORM to localPeer.platform.name,
+            LanConstants.TXT_CAPABILITIES to localPeer.supportedTransports.joinToString(",") { it.name },
+            LanConstants.TXT_PROTOCOL_VERSION to registration.protocolVersion.toString()
+        ).apply {
+            registration.fingerprint?.let { put(LanConstants.TXT_FINGERPRINT, it.value) }
+        }
         val info = ServiceInfo.create(
-            LanConstants.SERVICE_TYPE_JMDNS,
+            registration.serviceTypeJmdns,
             // Service instance name — must be unique on the network. Using the
             // local peer id satisfies that; some browsers display it.
             registration.localPeerId.value,
             registration.tcpPort,
             /* weight = */ 0,
             /* priority = */ 0,
-            mapOf(
-                LanConstants.TXT_PEER_ID to registration.localPeerId.value,
-                LanConstants.TXT_APP_ID to registration.appId.value,
-                LanConstants.TXT_DEVICE_NAME to localPeer.deviceName,
-                LanConstants.TXT_PLATFORM to localPeer.platform.name,
-                LanConstants.TXT_CAPABILITIES to localPeer.supportedTransports.joinToString(",") { it.name },
-                LanConstants.TXT_PROTOCOL_VERSION to LanConstants.PROTOCOL_VERSION.toString()
-            )
+            properties
         )
         try {
             withContext(Dispatchers.IO) { jmdns!!.registerService(info) }
@@ -147,7 +150,7 @@ internal class JvmLanDiscoveryTransport(
         val l = buildServiceListener()
         try {
             withContext(Dispatchers.IO) {
-                jmdns!!.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, l)
+                jmdns!!.addServiceListener(registration.serviceTypeJmdns, l)
             }
         } catch (e: Throwable) {
             // AUDIT-2026-07 (DSC-13): mirror startAdvertising — close the
@@ -212,7 +215,7 @@ internal class JvmLanDiscoveryTransport(
         if (!discovering) return@withLock
         val handle = jmdns ?: return@withLock
         val cached = withContext(Dispatchers.IO) {
-            runCatching { handle.list(LanConstants.SERVICE_TYPE_JMDNS, JMDNS_LIST_SNAPSHOT_TIMEOUT_MS) }
+            runCatching { handle.list(registration.serviceTypeJmdns, JMDNS_LIST_SNAPSHOT_TIMEOUT_MS) }
                 .getOrDefault(emptyArray())
         }
         var reemitted = 0
@@ -239,6 +242,11 @@ internal class JvmLanDiscoveryTransport(
         val app = info.getPropertyString(LanConstants.TXT_APP_ID) ?: return null
         if (pid == registration.localPeerId.value) return null
         if (app != registration.appId.value) return null
+        val security = validateLanDiscoverySecurityMetadata(
+            profile = registration.securityProfile,
+            protocolVersion = info.getPropertyString(LanConstants.TXT_PROTOCOL_VERSION),
+            fingerprint = info.getPropertyString(LanConstants.TXT_FINGERPRINT)
+        ) ?: return null
 
         val name = info.getPropertyString(LanConstants.TXT_DEVICE_NAME) ?: pid
         val plat = info.getPropertyString(LanConstants.TXT_PLATFORM)
@@ -260,7 +268,8 @@ internal class JvmLanDiscoveryTransport(
             ),
             transportHints = listOf(
                 TransportHint(type = TransportKind.LAN, host = host, port = port)
-            )
+            ),
+            authenticationHint = security.authenticationHint
         )
     }
 
@@ -285,6 +294,12 @@ internal class JvmLanDiscoveryTransport(
                 }
                 if (info.getPropertyString(LanConstants.TXT_APP_ID) != registration.appId.value) return
                 if (pid == registration.localPeerId.value) return
+                if (validateLanDiscoverySecurityMetadata(
+                        profile = registration.securityProfile,
+                        protocolVersion = info.getPropertyString(LanConstants.TXT_PROTOCOL_VERSION),
+                        fingerprint = info.getPropertyString(LanConstants.TXT_FINGERPRINT)
+                    ) == null
+                ) return
                 JvmLanDiag.log("browse", "serviceRemoved pid=${pid.take(8)} — emitting PeerEvent.Lost")
                 _events.tryEmit(PeerEvent.Lost(PeerId(pid)))
             }
@@ -301,6 +316,11 @@ internal class JvmLanDiscoveryTransport(
                 val app = info.getPropertyString(LanConstants.TXT_APP_ID) ?: return
                 if (pid == registration.localPeerId.value) return
                 if (app != registration.appId.value) return
+                val security = validateLanDiscoverySecurityMetadata(
+                    profile = registration.securityProfile,
+                    protocolVersion = info.getPropertyString(LanConstants.TXT_PROTOCOL_VERSION),
+                    fingerprint = info.getPropertyString(LanConstants.TXT_FINGERPRINT)
+                ) ?: return
 
                 val name = info.getPropertyString(LanConstants.TXT_DEVICE_NAME) ?: pid
                 val plat = info.getPropertyString(LanConstants.TXT_PLATFORM)
@@ -336,7 +356,8 @@ internal class JvmLanDiscoveryTransport(
                     ),
                     transportHints = listOf(
                         TransportHint(type = TransportKind.LAN, host = host, port = port)
-                    )
+                    ),
+                    authenticationHint = security.authenticationHint
                 )
                 JvmLanDiag.log(
                     "browse",
@@ -377,7 +398,7 @@ internal class JvmLanDiscoveryTransport(
         val fresh = buildServiceListener()
         try {
             withContext(Dispatchers.IO) {
-                handle.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, fresh)
+                handle.addServiceListener(registration.serviceTypeJmdns, fresh)
             }
         } catch (e: CancellationException) {
             // The add may still have completed on the IO thread before the
@@ -385,7 +406,7 @@ internal class JvmLanDiscoveryTransport(
             // a cancelled refresh cannot leak a duplicate. The old listener
             // was never removed — discovery keeps working either way.
             withContext(NonCancellable + Dispatchers.IO) {
-                runCatching { handle.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, fresh) }
+                runCatching { handle.removeServiceListener(registration.serviceTypeJmdns, fresh) }
             }
             throw e
         } catch (e: Throwable) {
@@ -400,10 +421,10 @@ internal class JvmLanDiscoveryTransport(
         }
         listener = fresh
         withContext(Dispatchers.IO) {
-            runCatching { handle.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, old) }
+            runCatching { handle.removeServiceListener(registration.serviceTypeJmdns, old) }
         }
         val cached = withContext(Dispatchers.IO) {
-            runCatching { handle.list(LanConstants.SERVICE_TYPE_JMDNS, JMDNS_LIST_SNAPSHOT_TIMEOUT_MS) }
+            runCatching { handle.list(registration.serviceTypeJmdns, JMDNS_LIST_SNAPSHOT_TIMEOUT_MS) }
                 .getOrDefault(emptyArray())
         }
         cached.forEach { info ->
@@ -424,7 +445,7 @@ internal class JvmLanDiscoveryTransport(
         val l = listener
         if (l != null) {
             withContext(Dispatchers.IO) {
-                runCatching { jmdns?.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, l) }
+                runCatching { jmdns?.removeServiceListener(registration.serviceTypeJmdns, l) }
             }
         }
         listener = null

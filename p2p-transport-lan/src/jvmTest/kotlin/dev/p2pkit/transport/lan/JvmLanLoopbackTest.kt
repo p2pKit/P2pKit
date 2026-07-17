@@ -4,6 +4,10 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
+import dev.p2pkit.core.ExplicitSecurityRisk
+import dev.p2pkit.core.PeerAuthorizationPolicy
+import dev.p2pkit.core.SecurityMode
+import dev.p2pkit.core.dsl.jvmSecureIdentityStore
 import dev.p2pkit.core.transfer.FileTransferState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -41,6 +45,7 @@ import org.junit.Assume
  * 224.0.0.251). Most desktops are fine; corporate or hardened networks may
  * block multicast even on loopback. Allow up to 30 s for discovery.
  */
+@OptIn(ExplicitSecurityRisk::class)
 class JvmLanLoopbackTest {
 
     private val unique = "p2pkit-itest-${System.currentTimeMillis()}"
@@ -67,6 +72,12 @@ class JvmLanLoopbackTest {
     private fun newKit(name: String): P2pKit = P2pKit.create {
         appId = AppId(unique)
         deviceName = name
+        jvmSecureIdentityStore(InMemoryTestJvmSecureIdentityStore())
+        security {
+            mode = SecurityMode.AuthenticatedV2(
+                PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+            )
+        }
         keepAlive {
             pingIntervalMillis = 60_000
             timeoutMillis = 120_000

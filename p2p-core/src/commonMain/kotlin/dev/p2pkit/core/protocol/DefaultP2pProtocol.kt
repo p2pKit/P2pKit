@@ -16,7 +16,8 @@ internal class DefaultP2pProtocol(
     private val chunker: Chunker = Chunker(),
     private val clock: () -> Long,
     private val random: Random = Random.Default,
-    private val logger: P2pLogger = P2pLogger.NoOp
+    private val logger: P2pLogger = P2pLogger.NoOp,
+    private val version: Byte = ProtocolConstants.LEGACY_VERSION
 ) : P2pProtocol {
 
     override suspend fun sendMessage(connection: RawConnection, message: P2pMessage) {
@@ -100,8 +101,9 @@ internal class DefaultP2pProtocol(
      * exactly one TX line per frame, matching the RX line in [events].
      */
     private suspend fun writeFrame(connection: RawConnection, frame: Frame) {
-        FrameTrace.emit { "TX ${frameDesc(frame)}" }
-        connection.write(FrameCodec.encode(frame))
+        val versioned = frame.withVersion(version)
+        FrameTrace.emit { "TX ${frameDesc(versioned)}" }
+        connection.write(FrameCodec.encode(versioned))
     }
 
     private fun frameDesc(frame: Frame): String {
@@ -119,7 +121,7 @@ internal class DefaultP2pProtocol(
     }
 
     override fun events(connection: RawConnection): Flow<ProtocolEvent> = flow {
-        val reader = FrameReader(logger)
+        val reader = FrameReader(logger, expectedVersion = version)
         val reassembler = Reassembler(clock = clock)
         connection.read().collect { bytes ->
             // Reclaim partial multi-chunk messages that went idle: eviction is

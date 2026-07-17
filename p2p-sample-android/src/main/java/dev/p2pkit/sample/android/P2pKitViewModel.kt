@@ -22,7 +22,10 @@ import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.ExperimentalP2pApi
+import dev.p2pkit.core.ExplicitSecurityRisk
+import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.ReconnectPolicy
+import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.permission.P2pPermission
 import dev.p2pkit.core.provisioning.JoinNetworkResult
 import dev.p2pkit.core.provisioning.LocalNetworkConfig
@@ -71,6 +74,7 @@ import java.io.OutputStream
  * Lifecycle survives Activity recreation (rotation, dark-mode, locale, …).
  * Process death is out of scope.
  */
+@OptIn(ExplicitSecurityRisk::class)
 class P2pKitViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- identity ----------------------------------------------------------
@@ -278,6 +282,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val newKit = P2pKit.create {
             appId = AppId(APP_ID)
             this.deviceName = this@P2pKitViewModel.deviceName
+            security {
+                mode = SecurityMode.AuthenticatedV2(
+                    PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+                )
+            }
             transports { lan(ctx) }
             // Sample-only tuning. SDK defaults are pingIntervalMillis=10_000 /
             // timeoutMillis=30_000 — appropriate for general-purpose / battery-

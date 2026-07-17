@@ -1,8 +1,12 @@
 package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
+import dev.p2pkit.core.transport.TransportContext
+import dev.p2pkit.core.transport.PeerAuthenticationHint
+import dev.p2pkit.core.transport.TransportSecurityProfile
 
 /**
  * Identity advertised over mDNS plus the bound TCP port, shared between each
@@ -26,20 +30,64 @@ internal class LanServiceRegistration(
     val localPeerId: PeerId,
     val deviceName: String,
     val platform: Platform,
+    val securityProfile: TransportSecurityProfile = TransportSecurityProfile.LegacyPlaintextV1,
+    val fingerprint: PeerFingerprint? = null,
     var tcpPort: Int = 0
+) {
+    init {
+        require(
+            (securityProfile == TransportSecurityProfile.AuthenticatedV2) == (fingerprint != null)
+        ) {
+            "Authenticated v2 LAN registration requires a fingerprint; legacy plaintext must not advertise one"
+        }
+    }
+
+    val serviceTypeJmdns: String get() = LanConstants.serviceTypeJmdns(securityProfile)
+    val protocolVersion: Int get() = LanConstants.protocolVersion(securityProfile)
+}
+
+/** Validated security portion of a LAN TXT record. */
+internal data class LanDiscoverySecurityMetadata(
+    val authenticationHint: PeerAuthenticationHint?
 )
+
+/**
+ * Require a TXT record to match the whole-kit wire profile before publishing
+ * it. The v2 fingerprint is discovery input only: authentication still has to
+ * prove possession of the corresponding private key, and authorization is
+ * evaluated after that proof.
+ */
+internal fun validateLanDiscoverySecurityMetadata(
+    profile: TransportSecurityProfile,
+    protocolVersion: String?,
+    fingerprint: String?
+): LanDiscoverySecurityMetadata? {
+    if (protocolVersion != LanConstants.protocolVersion(profile).toString()) return null
+    return when (profile) {
+        TransportSecurityProfile.AuthenticatedV2 -> {
+            val parsed = fingerprint?.let(PeerFingerprint::parseOrNull) ?: return null
+            LanDiscoverySecurityMetadata(PeerAuthenticationHint.UntrustedDiscoveryClaim(parsed))
+        }
+        TransportSecurityProfile.LegacyPlaintextV1 -> {
+            if (fingerprint != null) return null
+            LanDiscoverySecurityMetadata(authenticationHint = null)
+        }
+    }
+}
 
 /** Wire-level constants shared by the JVM and Android implementations. */
 internal object LanConstants {
     /** JmDNS-style service type. Used by [JvmLanDiscoveryTransport]. */
-    const val SERVICE_TYPE_JMDNS: String = "_p2pkit._tcp.local."
+    const val LEGACY_SERVICE_TYPE_JMDNS: String = "_p2pkit._tcp.local."
+    const val SECURE_SERVICE_TYPE_JMDNS: String = "_p2pkit2._tcp.local."
 
     /**
      * Bonjour service type for iOS `nw_advertise_descriptor` and
      * `nw_browse_descriptor`. No trailing dot — Apple's API expects the
      * canonical form. Wire-identical to the JmDNS string above.
      */
-    const val SERVICE_TYPE_BONJOUR: String = "_p2pkit._tcp"
+    const val LEGACY_SERVICE_TYPE_BONJOUR: String = "_p2pkit._tcp"
+    const val SECURE_SERVICE_TYPE_BONJOUR: String = "_p2pkit2._tcp"
 
     // TXT record keys. Both platforms must use the same keys.
     const val TXT_PEER_ID: String = "pid"
@@ -48,9 +96,26 @@ internal object LanConstants {
     const val TXT_PLATFORM: String = "plat"
     const val TXT_CAPABILITIES: String = "caps"
     const val TXT_PROTOCOL_VERSION: String = "pv"
+    const val TXT_FINGERPRINT: String = "fp"
 
     /** Wire protocol version. Must match `ProtocolConstants.VERSION` in :p2p-core. */
-    const val PROTOCOL_VERSION: Int = 1
+    const val LEGACY_PROTOCOL_VERSION: Int = 1
+    const val SECURE_PROTOCOL_VERSION: Int = 2
+
+    fun serviceTypeJmdns(profile: TransportSecurityProfile): String = when (profile) {
+        TransportSecurityProfile.AuthenticatedV2 -> SECURE_SERVICE_TYPE_JMDNS
+        TransportSecurityProfile.LegacyPlaintextV1 -> LEGACY_SERVICE_TYPE_JMDNS
+    }
+
+    fun serviceTypeBonjour(profile: TransportSecurityProfile): String = when (profile) {
+        TransportSecurityProfile.AuthenticatedV2 -> SECURE_SERVICE_TYPE_BONJOUR
+        TransportSecurityProfile.LegacyPlaintextV1 -> LEGACY_SERVICE_TYPE_BONJOUR
+    }
+
+    fun protocolVersion(profile: TransportSecurityProfile): Int = when (profile) {
+        TransportSecurityProfile.AuthenticatedV2 -> SECURE_PROTOCOL_VERSION
+        TransportSecurityProfile.LegacyPlaintextV1 -> LEGACY_PROTOCOL_VERSION
+    }
 
     /**
      * Per-attempt TCP connect timeout used by the JVM and Android data
@@ -83,6 +148,12 @@ internal object LanConstants {
      */
     const val PEER_REANNOUNCE_INTERVAL_MS: Long = 5_000
 }
+
+internal val TransportContext.lanServiceTypeBonjour: String
+    get() = LanConstants.serviceTypeBonjour(securityProfile)
+
+internal val TransportContext.lanProtocolVersion: Int
+    get() = LanConstants.protocolVersion(securityProfile)
 
 /**
  * AUDIT-2026-07 (RBS-1): input validation for the `pid` value of a discovery

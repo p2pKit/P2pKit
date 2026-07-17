@@ -1,7 +1,9 @@
 package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.ExperimentalP2pApi
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
@@ -9,7 +11,9 @@ import dev.p2pkit.core.provisioning.ManualPeerRegistrar
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.PeerEvent
+import dev.p2pkit.core.transport.PeerAuthenticationHint
 import dev.p2pkit.core.transport.PeerOrigin
+import dev.p2pkit.core.transport.TransportSecurityProfile
 import dev.p2pkit.core.transport.TransportHint
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -45,7 +49,9 @@ internal class PeerRegistry(
     private val scope: CoroutineScope,
     private val clock: () -> Long,
     private val staleTimeoutMillis: Long = DEFAULT_STALE_TIMEOUT_MS,
-    private val evictionPollMillis: Long = DEFAULT_EVICTION_POLL_MS
+    private val evictionPollMillis: Long = DEFAULT_EVICTION_POLL_MS,
+    private val securityProfile: TransportSecurityProfile = TransportSecurityProfile.LegacyPlaintextV1,
+    private val peerIdFromFingerprint: ((PeerFingerprint) -> PeerId)? = null
 ) : ManualPeerRegistrar {
 
     private val tracked: MutableStateFlow<Map<PeerId, TrackedPeer>> = MutableStateFlow(emptyMap())
@@ -79,9 +85,11 @@ internal class PeerRegistry(
     internal fun processEvent(event: PeerEvent) {
         tracked.update { current ->
             when (event) {
-                is PeerEvent.Found -> current + (event.peer.publicPeer.id to TrackedPeer(event.peer, clock()))
-                is PeerEvent.Updated -> current + (event.peer.publicPeer.id to TrackedPeer(event.peer, clock()))
-                is PeerEvent.Lost -> current - event.peerId
+                is PeerEvent.Found -> current.upsertDiscoveredPeer(event.peer)
+                is PeerEvent.Updated -> current.upsertDiscoveredPeer(event.peer)
+                is PeerEvent.Lost -> {
+                    if (current[event.peerId]?.isManual == true) current else current - event.peerId
+                }
             }
         }
         publishPeers()
@@ -90,6 +98,26 @@ internal class PeerRegistry(
     private fun publishPeers() {
         val newList = tracked.value.values.map { it.internalPeer.publicPeer }
         if (_peers.value != newList) _peers.value = newList
+    }
+
+    /** A discovery claim can refresh routing, but it can never erase an application-supplied manual pin. */
+    private fun Map<PeerId, TrackedPeer>.upsertDiscoveredPeer(
+        discovered: InternalPeer
+    ): Map<PeerId, TrackedPeer> {
+        val peerId = discovered.publicPeer.id
+        val previous = this[peerId]
+        val retainedPin = previous?.internalPeer?.authenticationHint as?
+            PeerAuthenticationHint.TrustedApplicationPin
+        val merged = if (previous?.isManual == true && retainedPin != null) {
+            discovered.copy(
+                transportHints = (previous.internalPeer.transportHints + discovered.transportHints).distinct(),
+                origin = PeerOrigin.Manual,
+                authenticationHint = retainedPin
+            )
+        } else {
+            discovered
+        }
+        return this + (peerId to TrackedPeer(merged, clock()))
     }
 
     internal fun evictStalePeers() {
@@ -110,10 +138,32 @@ internal class PeerRegistry(
         host: String,
         port: Int,
         kind: TransportKind,
-        deviceName: String?
+        deviceName: String?,
+        expectedFingerprint: PeerFingerprint?
     ): Peer {
         require(host.isNotBlank()) { "host must not be blank" }
         require(port in 1..65_535) { "port out of range: $port" }
+        val authenticatedPeerId = when (securityProfile) {
+            TransportSecurityProfile.AuthenticatedV2 -> {
+                val fingerprint = expectedFingerprint
+                    ?: throw P2pError.SecurityConfigurationInvalid(
+                        "Secure manual peer registration requires an out-of-band fingerprint"
+                    )
+                val derivePeerId = peerIdFromFingerprint
+                    ?: throw P2pError.SecurityConfigurationInvalid(
+                        "Secure manual peer identity derivation is unavailable"
+                    )
+                derivePeerId(fingerprint)
+            }
+            TransportSecurityProfile.LegacyPlaintextV1 -> {
+                if (expectedFingerprint != null) {
+                    throw P2pError.SecurityConfigurationInvalid(
+                        "Legacy plaintext manual peers cannot authenticate a fingerprint"
+                    )
+                }
+                null
+            }
+        }
 
         // Dedup by (host, port, kind): repeated registrations of the same
         // endpoint reuse the existing synthetic peer instead of minting a
@@ -126,7 +176,7 @@ internal class PeerRegistry(
         val existing = tracked.value.values.firstOrNull { t ->
             t.isManual && t.internalPeer.transportHints.any {
                 it.type == kind && it.host == host && it.port == port
-            }
+            } && (authenticatedPeerId == null || t.internalPeer.publicPeer.id == authenticatedPeerId)
         }
         if (existing != null) {
             val existingPeer = existing.internalPeer.publicPeer
@@ -148,10 +198,10 @@ internal class PeerRegistry(
             return refreshedInternal.publicPeer
         }
 
-        val syntheticId = PeerId("manual-${Uuid.random()}")
+        val peerId = authenticatedPeerId ?: PeerId("manual-${Uuid.random()}")
         val displayName = deviceName?.takeIf { it.isNotBlank() } ?: "manual:$host:$port"
         val publicPeer = Peer(
-            id = syntheticId,
+            id = peerId,
             name = displayName,
             platform = Platform.UNKNOWN,
             supportedTransports = setOf(kind)
@@ -161,9 +211,21 @@ internal class PeerRegistry(
             transportHints = listOf(TransportHint(type = kind, host = host, port = port)),
             // Explicit provenance: SessionManager keys its manual-peer HELLO
             // handling off this flag, never off the "manual-" id prefix.
-            origin = PeerOrigin.Manual
+            origin = PeerOrigin.Manual,
+            authenticationHint = expectedFingerprint?.let(PeerAuthenticationHint::TrustedApplicationPin)
         )
-        tracked.update { current -> current + (syntheticId to TrackedPeer(internal, clock())) }
+        tracked.update { current ->
+            val withoutSupersededEndpoint = if (authenticatedPeerId == null) {
+                current
+            } else {
+                current.filterValues { trackedPeer ->
+                    !trackedPeer.isManual || trackedPeer.internalPeer.transportHints.none {
+                        it.type == kind && it.host == host && it.port == port
+                    }
+                }
+            }
+            withoutSupersededEndpoint + (peerId to TrackedPeer(internal, clock()))
+        }
         publishPeers()
         return publicPeer
     }

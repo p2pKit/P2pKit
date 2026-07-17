@@ -10,6 +10,7 @@ import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.internal.PeerIdStorage
+import dev.p2pkit.core.internal.SecureIdentityStorage
 import dev.p2pkit.core.internal.newP2pKit
 import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
@@ -48,7 +49,7 @@ public class P2pKitBuilder internal constructor() {
     internal var reconnectPolicy: ReconnectPolicy = ReconnectPolicy.Disabled
     internal var backgroundPolicy: BackgroundPolicy = BackgroundPolicy.CloseActiveSessions
     internal var appKilledPolicy: AppKilledPolicy = AppKilledPolicy.NoPersistenceForMvp
-    internal var securityMode: SecurityMode = SecurityMode.NoneForMvp
+    internal var securityMode: SecurityMode = SecurityMode.AuthenticatedV2()
     internal var networkProvisioning: NetworkProvisioningConfig = NetworkProvisioningConfig()
     internal var networkProvisioningFactory: NetworkProvisioningFactory? = null
     internal var fileTransfer: FileTransferConfig = FileTransferConfig()
@@ -69,6 +70,9 @@ public class P2pKitBuilder internal constructor() {
      * `P2pKitAndroid.initialize(context)` wasn't called).
      */
     internal var peerIdStorage: PeerIdStorage? = null
+
+    /** Platform-protected secure-v2 identity store selected by platform DSL. */
+    internal var secureIdentityStorage: SecureIdentityStorage? = null
 
     /**
      * Optional host-provided [P2pPermissionManager]. When `null`, the kit uses
@@ -162,6 +166,7 @@ public class P2pKitBuilder internal constructor() {
             fileTransferConfig = fileTransfer,
             logger = logger,
             peerIdStorageOverride = peerIdStorage,
+            secureIdentityStorageOverride = secureIdentityStorage,
             networkPathObserverOverride = networkPathObserver,
             permissionManagerOverride = permissionManager,
             strictSessionInvariants = strictSessionInvariants

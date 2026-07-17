@@ -85,6 +85,41 @@ class FrameCodecTest {
     }
 
     @Test
+    fun decodeRejectsUnexpectedHeaderVersion() {
+        val encoded = FrameCodec.encode(
+            Frame(PacketType.PING, 0, id(), 0, 1, ByteArray(0), version = 99)
+        )
+
+        val error = assertFailsWith<P2pError.VersionMismatch> {
+            FrameCodec.decode(encoded, expectedVersion = ProtocolConstants.SECURE_VERSION)
+        }
+
+        assertEquals(ProtocolConstants.SECURE_VERSION.toInt(), error.localVersion)
+        assertEquals(99, error.remoteVersion)
+    }
+
+    @Test
+    fun secureVersionRoundTripsOnlyWhenExplicitlyExpected() {
+        val frame = Frame(
+            PacketType.PING,
+            0,
+            id(),
+            0,
+            1,
+            ByteArray(0),
+            version = ProtocolConstants.SECURE_VERSION
+        )
+
+        assertEquals(
+            frame,
+            FrameCodec.decode(
+                FrameCodec.encode(frame),
+                expectedVersion = ProtocolConstants.SECURE_VERSION
+            )
+        )
+    }
+
+    @Test
     fun decodeRejectsTooShort() {
         val tiny = ByteArray(ProtocolConstants.HEADER_SIZE - 1)
         assertFailsWith<P2pError.ProtocolError> { FrameCodec.decode(tiny) }

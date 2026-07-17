@@ -7,10 +7,12 @@ import dev.p2pkit.core.transport.RawConnection
 /**
  * Performs the handshake that turns a [RawConnection] into a [SecureConnection].
  *
- * In v0.1 the only implementation is [NoOpSecurityManager], which returns a
- * passthrough wrapper. The interface is the extension point for future
- * encryption modes (pairing code, QR code) without changing the public API.
+ * Deprecated pre-v2 extension point. It cannot safely own the sole raw reader
+ * because its contract requires an unauthenticated [Peer] up front. Built-in
+ * secure v2 is established internally before protocol parsing and never calls
+ * this interface.
  */
+@Deprecated("Built-in authenticated v2 security is selected through SecurityMode")
 public interface SecurityManager {
     public suspend fun performHandshake(connection: RawConnection, peer: Peer): SecureConnection
 }
@@ -27,12 +29,15 @@ public interface SecureConnection : RawConnection {
 }
 
 /**
- * Default v0.1 security manager. Returns a passthrough wrapper around the
- * incoming raw connection with no encryption and a null public-key fingerprint.
+ * Deprecated plaintext passthrough retained only for source migration of the
+ * old extension point. It is not the kit default and is never selected by the
+ * authenticated-v2 engine.
  */
+@Deprecated("Plaintext passthrough is available only through SecurityMode.NoneForMvp")
+@Suppress("DEPRECATION")
 public class NoOpSecurityManager : SecurityManager {
     override suspend fun performHandshake(connection: RawConnection, peer: Peer): SecureConnection =
-        PassthroughSecureConnection(connection, PeerIdentity(peer.id, publicKeyFingerprint = null))
+        PassthroughSecureConnection(connection, PeerIdentity(peer.id, fingerprint = null))
 }
 
 internal class PassthroughSecureConnection(

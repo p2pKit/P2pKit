@@ -4,6 +4,7 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
+import dev.p2pkit.core.dsl.jvmSecureIdentityStore
 import dev.p2pkit.core.transport.PeerEvent
 import java.io.File
 import java.net.Inet4Address
@@ -241,6 +242,7 @@ class JvmLanDiscoveryHeartbeatTest {
     private fun newKit(name: String): P2pKit = P2pKit.create {
         appId = AppId(unique)
         deviceName = name
+        jvmSecureIdentityStore(InMemoryTestJvmSecureIdentityStore())
         transports {
             lan()
         }
@@ -269,7 +271,7 @@ class JvmLanDiscoveryHeartbeatTest {
         pid: String,
         app: String
     ): ServiceInfo = ServiceInfo.create(
-        LanConstants.SERVICE_TYPE_JMDNS,
+        LanConstants.LEGACY_SERVICE_TYPE_JMDNS,
         instanceName,
         port,
         /* weight = */ 0,
@@ -280,7 +282,7 @@ class JvmLanDiscoveryHeartbeatTest {
             LanConstants.TXT_DEVICE_NAME to instanceName,
             LanConstants.TXT_PLATFORM to Platform.JVM_DESKTOP.name,
             LanConstants.TXT_CAPABILITIES to "LAN",
-            LanConstants.TXT_PROTOCOL_VERSION to LanConstants.PROTOCOL_VERSION.toString()
+            LanConstants.TXT_PROTOCOL_VERSION to LanConstants.LEGACY_PROTOCOL_VERSION.toString()
         )
     )
 

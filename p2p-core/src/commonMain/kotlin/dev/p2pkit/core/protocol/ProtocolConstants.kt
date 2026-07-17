@@ -9,8 +9,17 @@ internal object ProtocolConstants {
     const val MAGIC_2: Byte = 0x32
     const val MAGIC_3: Byte = 0x4B
 
-    /** Current protocol major version. */
-    const val VERSION: Byte = 1
+    /** Explicit plaintext migration-profile major. */
+    const val LEGACY_VERSION: Byte = 1
+
+    /** Authenticated/encrypted profile major. */
+    const val SECURE_VERSION: Byte = 2
+
+    /**
+     * Backward-compatible alias for code constructing legacy frames directly.
+     * Production protocols select their version explicitly.
+     */
+    const val VERSION: Byte = LEGACY_VERSION
 
     /** Bytes in the fixed-size frame header (everything before the payload). */
     const val HEADER_SIZE: Int = 36

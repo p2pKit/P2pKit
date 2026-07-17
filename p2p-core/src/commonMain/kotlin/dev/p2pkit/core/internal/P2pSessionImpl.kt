@@ -7,6 +7,7 @@ import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerIdentity
 import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.transfer.FileTransferConfig
@@ -100,6 +101,7 @@ internal data class SessionRegistration(
 internal class P2pSessionImpl(
     override val id: String,
     override val peer: Peer,
+    override val peerIdentity: PeerIdentity = PeerIdentity(peer.id),
     initialConnection: RawConnection,
     initialEvents: ReceiveChannel<ProtocolEvent>,
     private val protocol: P2pProtocol,

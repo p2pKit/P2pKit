@@ -1,0 +1,760 @@
+# P2pKit remediation master tracker
+
+Created: 2026-07-17
+
+Source register: `P2PKIT_FULL_CODE_REVIEW_2026-07-17.md`
+
+Baseline commit: `6a05ccd04fcb6fb8106ed47941618fb6bcfd3fa6`
+
+Working branch: `remediation/full-register-2026-07`
+
+## Purpose and non-negotiable rules
+
+This is the mutable execution record for remediating the source review. The source review is evidence and must not be edited as a substitute for fixing code. The pre-existing `.review-2026-07/` directory and `DEFERRED_ITEMS_REGISTER_2026-07.md` are user-owned and remain outside this program.
+
+The register contains exactly 150 unique findings and 54 separately listed test gaps. No row may be deleted, silently merged, downgraded, or marked irrelevant. A shared architectural fix may cover multiple rows only when the shared root cause is recorded before implementation and every row receives independent acceptance and verification evidence.
+
+Statuses have these meanings:
+
+- `Planned`: inventoried, but the finding-specific analysis and implementation have not started.
+- `In Progress`: the current finding/group is being analyzed, implemented, reviewed, or verified.
+- `Implemented`: the root fix and required tests exist locally, but all acceptance gates have not passed.
+- `Verified`: every acceptance criterion passed from the focused committed state, the committed diff was reviewed, required checks were rerun, and the focused commit was pushed.
+- `Blocked`: a concrete product decision, breaking-change approval, physical-device result, credential, or external service is required. Evidence and the exact unblock condition must be recorded.
+
+`Verified` is deliberately stricter than “tests passed once.” A row needs a plan, changed-file ledger, regression tests, exact commands/results, compatibility notes, focused commit hash, pushed branch, and post-commit verification. Test retries must demonstrate determinism; they may not hide failures by weakening assertions, accepting multiple terminal outcomes, increasing timeouts, or adding arbitrary delays.
+
+Operating safeguards:
+
+- Do not advance to a new finding while the active finding is partially implemented, unverified, or has an unresolved regression. A documented `Blocked` boundary ends that unit without pretending it is complete.
+- A finding believed invalid or already fixed remains open until concrete code/test evidence is recorded and the owner explicitly approves closure.
+- Never rewrite history, force-push, destructively clean the repository, or delete existing/user work. Stage only the focused finding's files.
+- Preserve `CancellationException`; do not silently swallow failures, hide warnings, skip required checks, or replace real platform evidence with mocks.
+- Breaking API/protocol/security decisions, unavailable hardware, credentials, and external release actions stop before mutation and require explicit authority.
+- A blocked unit blocks only itself and genuinely dependent units. Record its IDs, evidence, attempts, options, recommendation, consequences, and exact unblock request; continue every dependency-ready independent unit. Consolidate unresolved owner decisions only when no ready unblocked work remains.
+
+## Baseline inventory
+
+| Register | Count |
+| --- | ---: |
+| CORE | 30 |
+| PROTO | 8 |
+| FILE | 15 |
+| LAN | 26 |
+| PROV-A | 12 |
+| PROV-D | 5 |
+| SAMPLE | 39 |
+| BUILD | 15 |
+| Findings total | 150 |
+| Explicit test gaps | 54 |
+
+Current finding state: 148 `Planned`, 0 `In Progress`, 2 `Implemented` (`CORE-06`, `CORE-07`), 0 `Verified`, 0 `Blocked`. SEC-01 was approved with storage A on 2026-07-17 and is locally implemented. Final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
+
+### Baseline gate evidence and reusable command catalog
+
+The following failures are preserved from the source review baseline; they were not rerun while creating this documentation-only tracker:
+
+| Gate | Baseline result at `6a05ccd` |
+| --- | --- |
+| `./gradlew :p2p-sample-android:lintDebug` | Red: one `CoarseFineLocation` error and three warnings |
+| Forced `:p2p-core:jvmTest` | 258 tests, one failure: `FileTransferFlowTest.cancelMidStreamPropagatesToReceiver`; sender was `Completed`, required `Cancelled` |
+| `:p2p-core:iosSimulatorArm64Test` | 243 tests, one 3,500 ms timeout: `SessionReconnectRotationTest.reconnectUsesRefreshedHintsAfterPeerRegistryUpdate` |
+| `:p2p-transport-lan:iosSimulatorArm64Test` | 37 tests, two 30-second timeouts: `IosLanLifecycleTest.peerLostEventFiresWhenPeerStops` and `advertiseStopRestartProducesObservablePeerChurn`; one diagnostic intentionally skipped |
+| Compiler/test hygiene | Existing ungated ExperimentalCoroutinesApi, deprecated multicast API, and Android nullable type warnings |
+
+Every finding record must replace placeholders with exact commands. The standard escalation ladder is:
+
+1. Run the smallest named test/class/task proving the regression.
+2. Run the complete affected source-set/module test and compile tasks.
+3. Run every affected JVM, Android, iOS simulator/device, KMP, sample, lint/static, publication, and integration target.
+4. Repeat concurrency/timing tests with deterministic synchronization from the committed state.
+5. Run repository-wide `check` plus the separate Android lint, publication-artifact, XCFramework/Xcode, and external-consumer gates; record every task and result rather than writing only “full gate passed.”
+
+### Per-finding execution-record template
+
+Copy this template below the active unit before implementation and fill every field:
+
+| Field | Required content |
+| --- | --- |
+| Finding/group | IDs, raw severities, why any grouping shares one root cause |
+| Status | Planned / In Progress / Implemented / Verified / Blocked |
+| Root cause/reproduction | Current-code evidence and deterministic reproduction result |
+| Affected surface | Files, components, modules, targets/platforms, public contracts |
+| Compatibility/migration | Source, binary, runtime, wire, data, security, rollout implications |
+| Plan/cleanup | Long-term design, ownership, cancellation, rollback, failure behavior |
+| Acceptance criteria | Precise independently testable results for every finding/gap conjunct |
+| Files changed | Exhaustive focused diff ledger |
+| Tests added/updated | Exact test names and why each fails before the fix |
+| Commands/results | Exact commands, counts, failures/warnings/skips, repeat evidence |
+| Diff review | External-PR-style review result, equivalent-implementation search, regressions checked |
+| Remaining risks | None, or concrete residual risk/blocker without downgrading |
+| Source control | Branch, focused commit hash/message, pushed remote/ref, committed diff review |
+| Post-commit verification | Commands rerun from committed state and exact results |
+
+## Dependency-ordered execution plan
+
+The order below is a dependency graph, not permission to combine every row in a wave into one commit. Each execution unit remains focused; independent findings get independent commits.
+
+| Order | Unit | Scope | Why it is ordered here | Gate before advancing |
+| ---: | --- | --- | --- | --- |
+| 0 | GOV-01 | Tracker/baseline; test-foundation findings CORE-30 and gap LAN-T11 are executed before the affected suites | Establishes traceability and deterministic test infrastructure before source fixes | 150 findings/54 gaps reconciled; baseline gate catalog preserved; fixture isolation completed before dependent work |
+| 1 | SEC-01 | CORE-06, CORE-07 | Security must own the sole raw byte stream and determines identity/wire/public compatibility; coupled prerequisites remain separately assigned as recorded below | Explicit approval of all SEC-01 decisions; implementation resumes after focused prerequisite sub-units |
+| 2 | REL-REMOTE-01 | BUILD-02 | High release blocker is actionable locally even though real upload is external | Portal choice/configuration and local dry-run complete; ENV-07 alone retains credentialed upload evidence |
+| 3 | REL-ABI-01 | BUILD-01; gaps CORE-T13, PS-T09 | Public artifacts must be independently consumable before new public security/API dependencies land | Temp-published JVM/Android/KMP/iOS consumers compile with correct API scopes |
+| 4 | LIF-SES-01 | CORE-01, CORE-03, CORE-08, CORE-09, CORE-10, CORE-11, CORE-12, CORE-13, CORE-16, CORE-23, CORE-24; gaps CORE-T01, CORE-T02, CORE-T07, CORE-T08, CORE-T09, CORE-T10 | Terminal generation, connect ownership, setup deadline, inbound recovery, and close contract underpin later systems | Exact cancellation/rollback/bounded cleanup results; CORE-13 follows approved SEC-01 setup order; CORE-24 API decision approved |
+| 5 | PEER-CTRL-01 | CORE-02, CORE-04, CORE-05, CORE-14, CORE-15, CORE-17, CORE-27, CORE-28; gaps CORE-T03, CORE-T04, CORE-T05, CORE-T06 | Correct aggregation/arbitration/control plane/state/public values precede higher layers | Multi-source/direction/backpressure/monotonic tests prove one precise result |
+| 6 | ID-01 | CORE-18, CORE-19, CORE-20, CORE-21, CORE-29, SAMPLE-35; gap CORE-T11 | Secure identity depends on collision-safe, concurrent, stable, atomic persistence and per-sample isolation | All CORE-T11 conjuncts pass, including concurrent first creation; approved migration/key contract implemented |
+| 7 | PATH-PERM-01 | CORE-22, CORE-25, CORE-26; gap CORE-T12 | Path generation/cleanup and Android permission defaults precede provisioning | Platform observer lifecycle/generation and permission matrix pass |
+| 8 | PROV-A-HIGH-01 | PROV-A03 | Mixed Medium/High lifecycle race is sequenced at its maximum severity after core lifecycle prerequisites | Concurrent close/start/join has one owner/result; real-platform proof remains linked through PS-T01 |
+| 9 | PARSE-01 | PROTO-01, PROTO-02, PROTO-03, PROTO-04, PROTO-05, PROTO-06, PROTO-07, PROTO-08; gaps PT-T01, PT-T02, PT-T03, PT-T04, PT-T05, PT-T21 | Parser/version/API decisions precede hostile records and transfer protocol changes | Linear work, early/version/type validation, strict text/structure, isolated diagnostics, metadata contract, fuzz/property gates |
+| 10 | XFER-01 | FILE-01, FILE-02, FILE-03, FILE-05, FILE-06, FILE-07, FILE-08, FILE-09, FILE-10, FILE-11, FILE-12, FILE-14, FILE-15; gaps PT-T06, PT-T07, PT-T08, PT-T09, PT-T10, PT-T11, PT-T12, PT-T13, PT-T14, PT-T15, PT-T17, PT-T19, PT-T20 | Transactional ownership/state is prerequisite to durability protocol and sample receives | Deterministic cancellation/timeouts/sink serialization/release/boundaries/platform metadata; FILE-04/PT-T16 are not claimed here |
+| 11 | XFER-PROTO-01 | FILE-04, FILE-13; gaps PT-T16, PT-T18 | Receiver acknowledgement and digest intentionally alter the wire contract | Approved protocol revision; durability/integrity failures produce one exact sender result |
+| 12 | SAMPLE-HIGH-01 | SAMPLE-01, SAMPLE-02, SAMPLE-03, SAMPLE-04 | High sample data-integrity/security/availability work immediately follows completed transfer dependencies | Failure propagation, atomic names, consent/quota/free-space, bounded binary history proven |
+| 13 | LAN-LIFE-01 | LAN-01, LAN-02, LAN-03, LAN-04, LAN-05, LAN-06, LAN-07, LAN-08, LAN-09, LAN-10, LAN-11, LAN-12, LAN-23, LAN-24, LAN-25, LAN-26; gaps LAN-T02, LAN-T03, LAN-T04, LAN-T05, LAN-T06, LAN-T10 | Resource ownership/admission/cancellation/recovery precede selection/trust work | Repeated JVM/Android/Apple lifecycle gates; no ghost, stale, unbounded, or undrained resource |
+| 14 | LAN-NET-01 | LAN-13, LAN-14, LAN-15, LAN-16, LAN-17, LAN-18, LAN-19, LAN-20, LAN-22; gaps LAN-T01, LAN-T07, LAN-T08, LAN-T09 | Network selection/liveness/schema/trust/permissions/diagnostics build on sound lifecycle | All hostile-record and platform-selection conjuncts pass; hardware criteria remain explicit |
+| 15 | PROV-A-01 | PROV-A01, PROV-A02, PROV-A04, PROV-A05, PROV-A06, PROV-A07, PROV-A08, PROV-A09, PROV-A10, PROV-A11, PROV-A12; gaps PS-T01, PS-T02 | Remaining Android provisioning builds on fixed PROV-A03 lifecycle ownership | Fake plus real callback/permission/LinkProperties/process-binding tests pass |
+| 16 | PROV-D-01 | PROV-D01, PROV-D02, PROV-D03, PROV-D04, PROV-D05; gap PS-T03 | Desktop provisioning validation/interface behavior and test isolation | Boundary/ranking/fatal propagation/global-state restoration tests pass |
+| 17 | SAMPLE-XFER-01 | SAMPLE-05, SAMPLE-06, SAMPLE-07, SAMPLE-12, SAMPLE-13, SAMPLE-14, SAMPLE-15, SAMPLE-22, SAMPLE-23, SAMPLE-24, SAMPLE-34; gaps PS-T06, PS-T07, PS-T08 | Remaining sample transfer/path/history changes consume fixed transfer APIs | Every conjunct for desktop/Swift/path tests passes; partial files/resources are cleaned deterministically |
+| 18 | SAMPLE-LIFE-01 | SAMPLE-08, SAMPLE-09, SAMPLE-10, SAMPLE-11, SAMPLE-16, SAMPLE-17, SAMPLE-18, SAMPLE-19, SAMPLE-20, SAMPLE-21, SAMPLE-25, SAMPLE-26, SAMPLE-27, SAMPLE-28, SAMPLE-29, SAMPLE-30, SAMPLE-31, SAMPLE-32, SAMPLE-33, SAMPLE-36, SAMPLE-37, SAMPLE-38, SAMPLE-39; gaps PS-T04, PS-T05 | Lifecycle/CLI/UI/permission/logging/consumer correctness after library contracts settle | Full Android sample tests and every CLI collector/shutdown conjunct; all samples build/lint |
+| 19 | REL-PROV-01 | BUILD-03, BUILD-07, BUILD-09, BUILD-10, BUILD-11, BUILD-12, LAN-21 | Reproducibility/provenance/XCFramework/launcher work follows stable source/artifact flow | Repeat builds deterministic; declared outputs and scripts behave under deletion/concurrency |
+| 20 | REL-GATE-01 | BUILD-08, BUILD-14, BUILD-15 | Deterministic repository gate blockers/warnings must be removed, not waived | Android lint and warning/static gates are green |
+| 21 | REL-SUPPLY-01 | BUILD-04, BUILD-05, BUILD-06, BUILD-13 | Publication validation, wrapper, supply-chain and release maintenance close after artifact shape stabilizes | Wrapper/checksums/signatures/scopes/archives/CI/locks/SBOM/ABI/release policy validated |
+| 22 | FINAL-01 | All 150 findings, all 54 gaps, ENV-01, ENV-02, ENV-03, ENV-04, ENV-05, ENV-06, ENV-07 | Repository-wide closure only after every focused unit | Repeated full gate green; physical-device/two-machine/hostile-network/external release evidence complete; every row Verified |
+
+### Known external and decision boundaries
+
+- SEC-01's security, wire, migration, and storage-A decisions were approved and frozen on 2026-07-17. Implementation is active; only external professional cryptographic audit and physical-device/hostile-network certification remain blocked release evidence.
+- FILE-04/FILE-13 require a completion/digest wire-protocol decision; they cannot be declared compatible by silently reinterpreting existing frames.
+- PROV-A12, parts of LAN-T01/LAN-T07, and FINAL-01 require physical Android/Apple devices or platform instrumentation that may not be available locally.
+- BUILD-02 requires release-service configuration and ultimately external credentials; credentials must never be committed.
+- Remote publication, signing identity, vulnerability-service results, two-machine validation, and hostile-network certification remain explicit external evidence, not inferred from unit tests.
+
+## Finding traceability register
+
+The `Unit/dependencies` column identifies ordering, not automatic commit grouping. `Plan/code`, `Tests`, `Commit/push`, and `Verification` must be replaced with links or exact evidence as work progresses.
+
+### Core runtime, API, identity, and sessions (30)
+
+| ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| CORE-01 | High | Stop does not serialize terminal lifecycle with ongoing operations | LIF-SES-01 | Planned | — | CORE-T01 | — | — |
+| CORE-02 | High | PeerRegistry is not a correct multi-transport aggregator | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T03 | — | — |
+| CORE-03 | High | Cancelled connect can poison coalescing and leak a live session | LIF-SES-01 | Planned | — | CORE-T02 | — | — |
+| CORE-04 | High | Application receive backpressure blocks protocol controls | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T05 | — | — |
+| CORE-05 | High | Duplicate arbitration treats every active duplicate as simultaneous-open | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T04 | — | — |
+| CORE-06 | High security limitation | Identity is unauthenticated and traffic plaintext | SEC-01 | Implemented | Authenticated v2 is the default; explicit deprecated legacy only | Noise/KAT, identity, raw-confidentiality, authorization, integration, LAN loopback | Pending focused SEC-01 commit | Local platform/module gates pass; external certification remains |
+| CORE-07 | Medium architecture | Security extension cannot safely implement encryption | SEC-01 | Implemented | Security owns the sole raw reader before protocol construction | Single-collector, cancellation, close-once, encrypted-HELLO tests | Pending focused SEC-01 commit | Local platform/module gates pass; external certification remains |
+| CORE-08 | Medium | SessionStore reads mutable HashMap without mutex | LIF-SES-01 | Planned | — | Concurrency regression | — | — |
+| CORE-09 | Medium | Remotely terminated sessions retain active child Job | LIF-SES-01 | Planned | — | CORE-T07 | — | — |
+| CORE-10 | Medium | Public sessions can retain terminal entries after stop | LIF-SES-01 | Planned | — | CORE-T08 | — | — |
+| CORE-11 | Medium | Partial startup/advertising/discovery is not rolled back | LIF-SES-01 | Planned | — | CORE-T09 | — | — |
+| CORE-12 | Medium | Teardown can report success while resources remain open | LIF-SES-01 | Planned | — | CORE-T10 | — | — |
+| CORE-13 | Medium | Inbound setup timeout excludes operations that can hang | LIF-SES-01 after SEC-01 decision | Planned | — | Full-transaction deadline tests | — | — |
+| CORE-14 | Medium | Keepalive uses wall clock and misses exact deadline | PEER-CTRL-01 | Planned | — | CORE-T06 | — | — |
+| CORE-15 | Medium | Global P2pState hides independent feature failures | PEER-CTRL-01 lifecycle/state follow-up | Planned | — | Feature-state tests | — | — |
+| CORE-16 | Medium | One incoming-flow exception permanently disables a transport | LIF-SES-01 inbound recovery | Planned | — | Recollection/backoff tests | — | — |
+| CORE-17 | Medium | Public values expose mutable backing storage | PEER-CTRL-01 before parser/transfer finalization | Planned | — | Mutation/ownership tests | — | — |
+| CORE-18 | Medium | Distinct AppIds collide in persistent identity storage | ID-01 after SEC-01 decision | Planned | — | CORE-T11 | — | — |
+| CORE-19 | Medium | First-use PeerId creation is not concurrency-safe | ID-01 after SEC-01 decision | Planned | — | CORE-T11 | — | — |
+| CORE-20 | Medium | Persistence failure breaks same-instance identity stability | ID-01 after SEC-01 decision | Planned | — | CORE-T11 | — | — |
+| CORE-21 | Medium | Android/JVM identity fallback can truncate durable value | ID-01 after SEC-01 decision | Planned | — | CORE-T11 | — | — |
+| CORE-22 | Medium | Android/iOS path observers retain stale state/cleanup ownership | PATH-PERM-01 | Planned | — | CORE-T12 | — | — |
+| CORE-23 | Medium | New session can miss authoritative Unsatisfied path state | LIF-SES-01 | Planned | — | Registration/path race | — | — |
+| CORE-24 | Medium API gap | NetworkProvisioningManager has no close contract | LIF-SES-01 before provisioning | Planned | — | Close contract/ABI tests | — | — |
+| CORE-25 | Low | Android permission diagnostics omit two declared requirements | PATH-PERM-01 | Planned | — | Permission matrix | — | — |
+| CORE-26 | Low limitation | Android defaults to no-op path observer | PATH-PERM-01 | Planned | — | Default wiring test | — | — |
+| CORE-27 | Low API mismatch | Factories cannot express discovery-only transport | PEER-CTRL-01 | Planned | — | Factory/API tests | — | — |
+| CORE-28 | Low | Builder validation is incomplete | PEER-CTRL-01 | Planned | — | Boundary/duplicate tests | — | — |
+| CORE-29 | Low | JVM identity fallback can silently use working directory | ID-01 | Planned | — | Property/path failure tests | — | — |
+| CORE-30 | Low | Test fixtures hide important race conditions | GOV-01 test foundation | Planned | — | Fixture meta-tests | — | — |
+
+### Protocol and messaging (8)
+
+| ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| PROTO-01 | High availability | FrameReader performs quadratic copying | PARSE-01 | Planned | — | PT-T01/PT-T21 | — | — |
+| PROTO-02 | Medium | Frame header version is ignored | SEC-01 dependency; PARSE-01 | Planned | — | PT-T02 | — | — |
+| PROTO-03 | Medium security/availability | Packet-specific size limits are absent | PARSE-01 | Planned | — | PT-T03/PT-T05 | — | — |
+| PROTO-04 | Medium | Control/chunk structures are too permissive | PARSE-01 before XFER-01 | Planned | — | PT-T02/PT-T04/PT-T07 | — | — |
+| PROTO-05 | Medium | Diagnostics can change protocol behavior | PARSE-01 | Planned | — | Throwing trace tests | — | — |
+| PROTO-06 | Low | Remote text accepts invalid/canonicalization-hostile data | PARSE-01 | Planned | — | PT-T04/PT-T05 | — | — |
+| PROTO-07 | Low | Malformed/unknown frames can flood logs | PARSE-01 | Planned | — | PT-T03 | — | — |
+| PROTO-08 | Low API surprise | P2pMessage metadata is never transmitted | PARSE-01 after SEC-01 | Planned | — | Versioned envelope/contract tests | — | — |
+
+### File transfer (15)
+
+| ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| FILE-01 | High | Cancellation during accept can orphan accepted transfer/sink | XFER-01 after LIF-SES-01/PARSE-01 | Planned | — | PT-T09 | — | — |
+| FILE-02 | High availability | Accepted inbound transfers have no idle/overall timeout | XFER-01 | Planned | — | PT-T08/PT-T14 | — | — |
+| FILE-03 | High data race | Receive, finish, and cancel race on sink | XFER-01 | Planned | — | PT-T10 | — | — |
+| FILE-04 | High data-integrity contract | Sender completes before receiver durability | XFER-PROTO-01 after XFER-01 | Planned | — | PT-T16 | — | Protocol decision required before implementation |
+| FILE-05 | Medium | Actionable offers disappear or arrive stale/out of order | XFER-01 | Planned | — | PT-T13 | — | — |
+| FILE-06 | Medium | Offer timeout starts before offer is writable/observable | XFER-01 | Planned | — | PT-T12 | — | — |
+| FILE-07 | Medium | Timeout terminal states are nondeterministic | XFER-01 | Planned | — | PT-T14 | — | — |
+| FILE-08 | Medium | User I/O runs under global dispatcher mutex | XFER-01 | Planned | — | PT-T11 | — | — |
+| FILE-09 | Medium | Terminal handles retain sources/sinks | XFER-01 | Planned | — | PT-T17 | — | — |
+| FILE-10 | Medium | Chunk arithmetic can overflow valid configuration | XFER-01 | Planned | — | PT-T06 | — | — |
+| FILE-11 | Medium API | Transfer failures use misleading errors and lose causes | XFER-01/API review | Planned | — | Typed cause-preservation tests | — | — |
+| FILE-12 | Medium | Progress can advance after terminal state | XFER-01 | Planned | — | PT-T15 | — | — |
+| FILE-13 | Low integrity | Byte count checked but content is not | XFER-PROTO-01 after SEC-01 | Planned | — | PT-T18 | — | Protocol decision required before implementation |
+| FILE-14 | Low | Transfer ID collision overwrites ownership | XFER-01 | Planned | — | PT-T19 | — | — |
+| FILE-15 | Low | Platform file helpers lack snapshot semantics | XFER-01/platform follow-up | Planned | — | PT-T20 | — | — |
+
+### LAN transport (26)
+
+| ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| LAN-01 | High | Cancellation leaks ghost JmDNS service/listener | LAN-LIFE-01 after LIF-SES-01 | Planned | — | LAN-T02 | — | — |
+| LAN-02 | High | Failed restoration committed as successful rebind | LAN-LIFE-01 | Planned | — | Restoration transaction tests | — | — |
+| LAN-03 | High | Apple browser/listener failure can pin ghost peers permanently | LAN-LIFE-01 | Planned | — | LAN-T07 | — | — |
+| LAN-04 | High availability | Apple inbound connection buffering is unbounded | LAN-LIFE-01 | Planned | — | LAN-T07/LAN-T08 | — | — |
+| LAN-05 | Medium | Cancelled JVM/Android outbound connect can orphan a socket | LAN-LIFE-01 | Planned | — | LAN-T04 | — | — |
+| LAN-06 | Medium | Cancelled Apple connect leaves NWConnection active | LAN-LIFE-01 | Planned | — | LAN-T04 | — | — |
+| LAN-07 | Medium | Fatal JVM/Android accept-loop exit leaves a stale advertised port | LAN-LIFE-01 | Planned | — | LAN-T06 | — | — |
+| LAN-08 | Medium | Ordinary write failure leaves raw connection connected | LAN-LIFE-01 | Planned | — | LAN-T05 | — | — |
+| LAN-09 | Medium | Raw-read cancellation does not unblock I/O | LAN-LIFE-01 | Planned | — | Cancellation tests all targets | — | — |
+| LAN-10 | Medium | Cleanup failure discards ownership | LAN-LIFE-01 | Planned | — | LAN-T03 | — | — |
+| LAN-11 | Medium | Apple listener start/close races and retains stale state | LAN-LIFE-01 | Planned | — | LAN-T07/LAN-T10 | — | — |
+| LAN-12 | Medium | Apple cache pruning can delete fresh rediscovery | LAN-LIFE-01 | Planned | — | LAN-T07 | — | — |
+| LAN-13 | Medium | Network rotation support incomplete on every platform | LAN-NET-01 after LAN-LIFE-01 | Planned | — | LAN-T01/LAN-T07 | — | — |
+| LAN-14 | Medium | Synthetic cache heartbeat treats presence as liveness | LAN-NET-01 | Planned | — | TTL/liveness tests | — | — |
+| LAN-15 | Medium | Local TXT values unbounded and failures silent | LAN-NET-01 | Planned | — | LAN-T08 | — | — |
+| LAN-16 | Medium security | Discovery records trusted too broadly | SEC-01 dependency; LAN-NET-01 | Planned | — | LAN-T08 | — | — |
+| LAN-17 | Medium | Apple discovers AWDL endpoints data path may reject | LAN-NET-01 | Planned | — | LAN-T07/device check | — | — |
+| LAN-18 | Medium | Only one advertised address is retained | LAN-NET-01 | Planned | — | LAN-T08 | — | — |
+| LAN-19 | Low | Library manifests omit normal network permissions | LAN-NET-01 | Planned | — | Manifest-consumer merge tests | — | — |
+| LAN-20 | Low | Apple packaging denial has weak diagnostics | LAN-NET-01 | Planned | — | Packaging/preflight tests | — | — |
+| LAN-21 | Low | Provenance stamp may become unknown/missing | REL-PROV-01 with BUILD-07 | Planned | — | Declared-output tests | — | — |
+| LAN-22 | Low | Diagnostics accept peer control characters | LAN-NET-01 | Planned | — | Sanitization/retention tests | — | — |
+| LAN-23 | Low | Terminal close retains listener ports/references | LAN-LIFE-01 | Planned | — | Repeated close/state tests | — | — |
+| LAN-24 | Low race | Apple queued writer can run after close | LAN-LIFE-01 | Planned | — | Write-close interleaving test | — | — |
+| LAN-25 | Medium | Retry budget carries into genuinely new network | LAN-LIFE-01 | Planned | — | Per-target generation tests | — | — |
+| LAN-26 | Low concurrency risk | Rebind scheduling is unsynchronized | LAN-LIFE-01 | Planned | — | LAN-T03 | — | — |
+
+### Android network provisioning (12)
+
+| ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| PROV-A01 | Medium | Start can return Failed while hotspot remains live | PROV-A-01 after CORE-24/LIF-SES-01 | Planned | — | Transaction/state tests | — | — |
+| PROV-A02 | Medium | Start allowed after parent cancellation | PROV-A-01 | Planned | — | Closed-parent tests | — | — |
+| PROV-A03 | Medium/High race | Close not serialized with start/join | PROV-A-HIGH-01 | Planned | — | Concurrent lifecycle tests/PS-T01 | — | — |
+| PROV-A04 | Medium | Hotspot callback cancellation can lose a reservation handle | PROV-A-01 | Planned | — | PS-T01 | — | — |
+| PROV-A05 | Medium | Join callback cancellation can leak process binding | PROV-A-01 | Planned | — | PS-T01/PS-T02 | — | — |
+| PROV-A06 | Medium | bindProcessToNetwork result/exception ignored | PROV-A-01 | Planned | — | PS-T01 | — | — |
+| PROV-A07 | Medium | Queued onAvailable can rebind after handle close | PROV-A-01 | Planned | — | PS-T01 | — | — |
+| PROV-A08 | Medium | Process binding has no global ownership arbitration | PROV-A-01 | Planned | — | PS-T02 | — | — |
+| PROV-A09 | Medium | Joined snapshot enumerates unrelated interfaces | PROV-A-01 | Planned | — | LinkProperties tests/device test | — | — |
+| PROV-A10 | Medium | Normal-permission failures absent/misdiagnosed | PROV-A-01 | Planned | — | PS-T01 | — | — |
+| PROV-A11 | Low | Capability/input validation is shallow | PROV-A-01 | Planned | — | SDK/hardware/input matrix | — | — |
+| PROV-A12 | Test gap | Real Android callbacks are untested | PROV-A-01 | Planned | — | PS-T01/PS-T02 | — | Requires Android instrumentation evidence |
+
+### Desktop provisioning (5)
+
+| ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| PROV-D01 | Medium | pollIntervalMillis is not validated | PROV-D-01 | Planned | — | PS-T03 | — | — |
+| PROV-D02 | Medium/Low | Interface scan can report unreachable addresses as Wi-Fi | PROV-D-01 | Planned | — | PS-T03 | — | — |
+| PROV-D03 | Low | Broad Throwable catch can hide fatal errors | PROV-D-01 | Planned | — | Cancellation/fatal propagation tests | — | — |
+| PROV-D04 | Low | Tests allow null manual result without proving behavior | PROV-D-01 | Planned | — | Strengthened deterministic test | — | — |
+| PROV-D05 | Low | Tests mutate process-global properties | PROV-D-01/GOV-01 | Planned | — | Isolation/restoration tests | — | — |
+
+### Sample applications (39)
+
+| ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SAMPLE-01 | High data integrity | iOS suppresses sink write failure | SAMPLE-HIGH-01 after XFER-01 | Planned | — | PS-T07 | — | — |
+| SAMPLE-02 | High data integrity | iOS same-name destination is non-atomic | SAMPLE-HIGH-01 after XFER-01 | Planned | — | PS-T07 | — | — |
+| SAMPLE-03 | High availability/security | Every sample auto-accepts untrusted files | SAMPLE-HIGH-01 after XFER-01 | Planned | — | Consent/quota/free-space tests | — | — |
+| SAMPLE-04 | High availability | Android retains binary payloads in UI history | SAMPLE-HIGH-01 after XFER-01 | Planned | — | PS-T04/byte-budget tests | — | — |
+| SAMPLE-05 | Medium | Failed/cancelled incoming transfers retain partial files everywhere | SAMPLE-XFER-01 | Planned | — | PS-T07/partial cleanup all samples | — | — |
+| SAMPLE-06 | Medium | Desktop UI/Android leak stream during accept cancellation | SAMPLE-XFER-01 | Planned | — | PS-T06 | — | — |
+| SAMPLE-07 | Medium | Android/CLI transfer collectors never terminate | SAMPLE-XFER-01 | Planned | — | PS-T04/PS-T05 | — | — |
+| SAMPLE-08 | Medium | P2pKit.create failure wedges GUI Start | SAMPLE-LIFE-01 after LIF-SES-01 | Planned | — | PS-T06 | — | — |
+| SAMPLE-09 | Medium | Desktop UI can overlap old/new kits | SAMPLE-LIFE-01 | Planned | — | PS-T06 | — | — |
+| SAMPLE-10 | Medium | Stop failure swallowed after ownership discarded | SAMPLE-LIFE-01 | Planned | — | PS-T06 | — | — |
+| SAMPLE-11 | Medium | CLI exceptions bypass shutdown | SAMPLE-LIFE-01 | Planned | — | PS-T05 | — | — |
+| SAMPLE-12 | Medium | iOS stops watchers/sinks before SDK writers quiesce | SAMPLE-XFER-01 | Planned | — | PS-T07 | — | — |
+| SAMPLE-13 | Medium | Swift flow adapters spawn unstructured Tasks | SAMPLE-XFER-01 | Planned | — | PS-T07 | — | — |
+| SAMPLE-14 | Medium data loss | Android collision cap can return occupied file | SAMPLE-XFER-01 | Planned | — | PS-T04/PS-T08 | — | — |
+| SAMPLE-15 | Medium path isolation | Remote peer-name dot segments escape sender directory | SAMPLE-XFER-01 | Planned | — | PS-T08 | — | — |
+| SAMPLE-16 | Medium | Android sample omits CHANGE_NETWORK_STATE | SAMPLE-LIFE-01/PROV-A-01 | Planned | — | Manifest/lint tests | — | — |
+| SAMPLE-17 | Medium | Android lint fails due missing coarse location | SAMPLE-LIFE-01 | Planned | — | lintDebug/permission tests | — | — |
+| SAMPLE-18 | Medium | CLI option parsing can turn options into identity | SAMPLE-LIFE-01 | Planned | — | PS-T05 | — | — |
+| SAMPLE-19 | Medium | CLI first-match targeting is ambiguous | SAMPLE-LIFE-01 | Planned | — | PS-T05 | — | — |
+| SAMPLE-20 | Medium | Manual IPv6 parsing rejects common local addresses | SAMPLE-LIFE-01/LAN-NET-01 | Planned | — | PS-T08 | — | — |
+| SAMPLE-21 | Medium | KMP demo leaks session on send failure | SAMPLE-LIFE-01 | Planned | — | PS-T09 | — | — |
+| SAMPLE-22 | Medium | Desktop accept failure leaves empty claimed file | SAMPLE-XFER-01 | Planned | — | PS-T06 | — | — |
+| SAMPLE-23 | Medium | iOS transfer history is unbounded | SAMPLE-XFER-01 | Planned | — | PS-T07 | — | — |
+| SAMPLE-24 | Medium | GUI text histories are count-, not byte-bounded | SAMPLE-XFER-01 | Planned | — | PS-T06/PS-T07 | — | — |
+| SAMPLE-25 | Low | Rapid advertise/discover toggles race stale UI booleans | SAMPLE-LIFE-01 | Planned | — | Intent serialization tests | — | — |
+| SAMPLE-26 | Low | Android labels connecting/reconnecting as connected | SAMPLE-LIFE-01 | Planned | — | UI state mapping test | — | — |
+| SAMPLE-27 | Low | Permission diagnostic failure becomes “nothing missing” | SAMPLE-LIFE-01 | Planned | — | Diagnostic failure test | — | — |
+| SAMPLE-28 | Low security UX | Android displays credentials in clear text | SAMPLE-LIFE-01 | Planned | — | UI semantics/screenshot policy check | — | — |
+| SAMPLE-29 | Low security | Desktop logs do not consistently sanitize terminal controls | SAMPLE-LIFE-01 | Planned | — | Control-character tests | — | — |
+| SAMPLE-30 | Low | iOS PeerRow equality suppresses updates | SAMPLE-LIFE-01 | Planned | — | Equality/update test | — | — |
+| SAMPLE-31 | Low | iOS cross-check diagnostics flood normal state | SAMPLE-LIFE-01 | Planned | — | Log-rate/state test | — | — |
+| SAMPLE-32 | Low | Unknown transfer state is permanently nonterminal | SAMPLE-LIFE-01 | Planned | — | Future-enum bounded failure test | — | — |
+| SAMPLE-33 | Low | Desktop cleanup uses disposing scope | SAMPLE-LIFE-01 | Planned | — | Window disposal cleanup test | — | — |
+| SAMPLE-34 | Low | Unique-file helpers are duplicated/divergently unsafe | SAMPLE-XFER-01 | Planned | — | PS-T04/PS-T06/PS-T08 | — | — |
+| SAMPLE-35 | Low | Alice/Bob run configs share PeerId | ID-01 | Planned | — | Two-profile launch config test | — | — |
+| SAMPLE-36 | Medium | Android reports Running after partial startup | SAMPLE-LIFE-01 after LIF-SES-01 | Planned | — | Partial feature start test | — | — |
+| SAMPLE-37 | Low | CLI reports close success after failure | SAMPLE-LIFE-01 | Planned | — | PS-T05 | — | — |
+| SAMPLE-38 | Low | CLI stops kit before cancelling app jobs | SAMPLE-LIFE-01 | Planned | — | PS-T05 | — | — |
+| SAMPLE-39 | Low | Android onCleared cleanup has no durable owner | SAMPLE-LIFE-01 | Planned | — | PS-T04 | — | — |
+
+### Build, publication, tooling, and configuration (15)
+
+| ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| BUILD-01 | High | Published compile dependency metadata is wrong | REL-ABI-01 | Planned | — | CORE-T13/external consumers | — | — |
+| BUILD-02 | High release blocker | No remote publication target exists | REL-REMOTE-01 | Planned | — | Dry-run/staged bundle validation | — | External credentials/service needed for final proof |
+| BUILD-03 | Medium | BuildInfo defeats incremental/reproducible builds | REL-PROV-01 | Planned | — | Double-build/reproducibility tests | — | — |
+| BUILD-04 | Medium | Publication gate can pass invalid release | REL-SUPPLY-01 after BUILD-01/BUILD-02 | Planned | — | Invalid-scope/signature/archive fixtures | — | — |
+| BUILD-05 | Medium | Gradle wrapper components are version-skewed | REL-SUPPLY-01 | Planned | — | Wrapper validation/checksums | — | — |
+| BUILD-06 | Medium | Supply-chain/release automation controls absent | REL-SUPPLY-01 | Planned | — | CI/verification/lock/SBOM policy gates | — | External scanners/signing may be required |
+| BUILD-07 | Medium | XCFramework stamp is undeclared/mis-targeted side effect | REL-PROV-01 with LAN-21 | Planned | — | Declared output/incremental tests | — | — |
+| BUILD-08 | Medium | Android sample manifest fails project check | REL-GATE-01 after SAMPLE-LIFE-01 | Planned | — | lintDebug | — | — |
+| BUILD-09 | Low | iOS launcher uses predictable/shared paths and name-first selection | REL-PROV-01 | Planned | — | Script syntax/concurrency/device selection tests | — | — |
+| BUILD-10 | Low | Nested Gradle/Xcode preflight duplicates framework work | REL-PROV-01 | Planned | — | Invocation-count/incremental test | — | — |
+| BUILD-11 | Low | Dirty-tree provenance ignores untracked inputs | REL-PROV-01 | Planned | — | Provenance fixture tests | — | — |
+| BUILD-12 | Low | Provenance exposes local/volatile build information | REL-PROV-01 with BUILD-03 | Planned | — | Artifact content/reproducibility tests | — | — |
+| BUILD-13 | Low | Release usability/maintenance gaps | REL-SUPPLY-01 | Planned | — | Javadoc/POM/tag/run-config gates | — | — |
+| BUILD-14 | Low | Compiler/test hygiene warnings are not gated | REL-GATE-01 | Planned | — | Warnings-as-errors/static gates | — | — |
+| BUILD-15 | Low | Android lint reports three additional warnings | REL-GATE-01 after SAMPLE-LIFE-01 | Planned | — | lintDebug warning-free | — | — |
+
+## Explicit test-gap register (54)
+
+Each row represents one bullet from “Missing or weak tests to add” in the source review. A gap may close with the same focused commit as its linked finding, but receives its own result/evidence.
+
+### Core lifecycle/session/identity gaps (13)
+
+| Gap ID | Required coverage | Linked findings | Status | Test files/evidence | Commit/push | Verification |
+| --- | --- | --- | --- | --- | --- | --- |
+| CORE-T01 | Stop racing connect, advertising, discovery, and delayed observer start | CORE-01 | Planned | — | — | — |
+| CORE-T02 | Cancellation at every outgoing-connect suspension, then successful retry | CORE-03 | Planned | — | — | — |
+| CORE-T03 | Two discovery transports contribute/lose same PeerId | CORE-02 | Planned | — | — | — |
+| CORE-T04 | Repeated same-direction inbound arbitration | CORE-05 | Planned | — | — | — |
+| CORE-T05 | Slow message subscriber while PONG/CLOSE arrives | CORE-04 | Planned | — | — | — |
+| CORE-T06 | Exact keepalive deadline and monotonic clock jumps | CORE-14 | Planned | — | — | — |
+| CORE-T07 | Session child Job completes after remote termination | CORE-09 | Planned | — | — | — |
+| CORE-T08 | Public sessions empty after stop independent of watcher schedule | CORE-10 | Planned | — | — | — |
+| CORE-T09 | Partial multi-transport startup rollback | CORE-11 | Planned | — | — | — |
+| CORE-T10 | Throwing and permanently hung close operations | CORE-12 | Planned | — | — | — |
+| CORE-T11 | Identity sanitizer collisions, concurrent first creation, persistence failure, and atomic replacement | CORE-18, CORE-19, CORE-20, CORE-21 | Planned | — | — | — |
+| CORE-T12 | Path observer close/restart, stale callbacks, unregister failure, generation gating | CORE-22, CORE-23 | Planned | — | — | — |
+| CORE-T13 | Clean external consumer compilation from published temp repository | BUILD-01 | Planned | — | — | — |
+
+### Protocol and transfer gaps (21)
+
+| Gap ID | Required coverage | Linked findings | Status | Test files/evidence | Commit/push | Verification |
+| --- | --- | --- | --- | --- | --- | --- |
+| PT-T01 | FrameReader fragmented/batched complexity and early bad-magic rejection | PROTO-01 | Planned | — | — | — |
+| PT-T02 | Header-version mismatch and every packet-type structural invariant | PROTO-02, PROTO-04 | Planned | — | — | — |
+| PT-T03 | Large HELLO/OFFER/control payload attacks and log flooding | PROTO-03, PROTO-07 | Planned | — | — | — |
+| PT-T04 | Strict malformed UTF-8 and invalid flags/LAST | PROTO-04, PROTO-06 | Planned | — | — | — |
+| PT-T05 | Outbound name/MIME/reason limits | PROTO-03, PROTO-06 | Planned | — | — | — |
+| PT-T06 | 2 GiB with chunk size 1 and Long overflow boundaries | FILE-10 | Planned | — | — | — |
+| PT-T07 | Empty FILE_DATA, changing totalChunks, invalid LAST, data after full size | PROTO-04, FILE-02 | Planned | — | — | — |
+| PT-T08 | Accepted-transfer idle exhaustion and all 64 admission slots exhausted | FILE-02 | Planned | — | — | — |
+| PT-T09 | Cancellation during accept mutex wait and FILE_ACCEPT write | FILE-01 | Planned | — | — | — |
+| PT-T10 | Cancel/close racing sink write/finish | FILE-03 | Planned | — | — | — |
+| PT-T11 | Blocking/reentrant source close and sink flush | FILE-08 | Planned | — | — | — |
+| PT-T12 | Timer scheduling before map registration, wire write, and offer emission | FILE-06 | Planned | — | — | — |
+| PT-T13 | Ordered multiple offers and no emission after terminal | FILE-05 | Planned | — | — | — |
+| PT-T14 | One exact timeout authority/state on both peers | FILE-02, FILE-07 | Planned | — | — | — |
+| PT-T15 | Byte progress frozen after terminal | FILE-12 | Planned | — | — | — |
+| PT-T16 | Sender result when receiver flush/durability fails | FILE-04 | Planned | — | — | — |
+| PT-T17 | Source/sink references released after every terminal outcome | FILE-09 | Planned | — | — | — |
+| PT-T18 | Source mutation/digest mismatch | FILE-13 | Planned | — | — | — |
+| PT-T19 | Deterministic transfer-ID collision | FILE-14 | Planned | — | — | — |
+| PT-T20 | Android hostile/null/negative provider metadata | FILE-15 | Planned | — | — | — |
+| PT-T21 | Fuzz/property tests for codec, reader, reassembler, and transfer transitions | PROTO-01, PROTO-04, FILE-01, FILE-02, FILE-03, FILE-05, FILE-07, FILE-12 | Planned | — | — | — |
+
+### LAN gaps (11)
+
+| Gap ID | Required coverage | Linked findings | Status | Test files/evidence | Commit/push | Verification |
+| --- | --- | --- | --- | --- | --- | --- |
+| LAN-T01 | Android instrumentation for multicast locks, callback ordering, network rotation, permissions, unregister failure, process binding, and IPv6 | LAN-10, LAN-13, LAN-19 | Planned | — | — | Physical/emulated Android required |
+| LAN-T02 | Partial-completion cancellation for service/listener registration | LAN-01 | Planned | — | — | — |
+| LAN-T03 | Unregister/remove/close failures and concurrent rebind scheduling | LAN-10, LAN-26 | Planned | — | — | — |
+| LAN-T04 | Outbound-connect cancellation on JVM, Android, Apple | LAN-05, LAN-06 | Planned | — | — | — |
+| LAN-T05 | Normal write IOException reaches terminal state | LAN-08 | Planned | — | — | — |
+| LAN-T06 | Restart/re-advertise after fatal accept failure | LAN-07 | Planned | — | — | — |
+| LAN-T07 | Apple browser/listener recovery, start-close race, parent cancellation, inbound flood/drain, cache-prune race, same-type path rotation, and AWDL | LAN-03, LAN-04, LAN-11, LAN-12, LAN-13, LAN-17 | Planned | — | — | Simulator plus physical Apple evidence required where applicable |
+| LAN-T08 | Oversized TXT, unsupported pv, control characters, duplicate-PID spoof, off-subnet hosts, alternate address candidates, and connection flood | LAN-04, LAN-15, LAN-16, LAN-18, LAN-22 | Planned | — | — | Hostile-network/device evidence partly required |
+| LAN-T09 | Replace global replay-count assertions with per-test baselines | LAN test fixtures | Planned | — | — | — |
+| LAN-T10 | Prove old Apple listener descriptors released, not merely new port differs | LAN-11, LAN-23 | Planned | — | — | Apple platform evidence required |
+| LAN-T11 | Isolate tests that mutate user.home, JmDNS properties, and NSUserDefaults | CORE-18, CORE-19, CORE-20, CORE-21, CORE-30, PROV-D05, LAN tests | Planned | — | — | — |
+
+### Provisioning and sample gaps (9)
+
+| Gap ID | Required coverage | Linked findings | Status | Test files/evidence | Commit/push | Verification |
+| --- | --- | --- | --- | --- | --- | --- |
+| PS-T01 | Real Android provisioning callback/cancellation and permission behavior | PROV-A01, PROV-A02, PROV-A03, PROV-A04, PROV-A05, PROV-A06, PROV-A07, PROV-A09, PROV-A10, PROV-A12 | Planned | — | — | Android instrumentation required |
+| PS-T02 | Process-wide binding ownership across managers | PROV-A05, PROV-A08, PROV-A12 | Planned | — | — | Android instrumentation required |
+| PS-T03 | Desktop poll boundaries and interface ranking | PROV-D01, PROV-D02 | Planned | — | — | — |
+| PS-T04 | Android sample unit/instrumentation tests | SAMPLE-03, SAMPLE-04, SAMPLE-05, SAMPLE-06, SAMPLE-07, SAMPLE-08, SAMPLE-10, SAMPLE-14, SAMPLE-15, SAMPLE-16, SAMPLE-17, SAMPLE-25, SAMPLE-26, SAMPLE-27, SAMPLE-28, SAMPLE-34, SAMPLE-36, SAMPLE-39, BUILD-08, BUILD-15 | Planned | — | — | Android instrumentation required |
+| PS-T05 | CLI option parsing, target ambiguity, shutdown finally, and terminal collector cleanup | SAMPLE-07, SAMPLE-11, SAMPLE-18, SAMPLE-19, SAMPLE-37, SAMPLE-38 | Planned | — | — | — |
+| PS-T06 | Desktop GUI create/stop races, accept cancellation, and byte-budgeted history | SAMPLE-06, SAMPLE-08, SAMPLE-09, SAMPLE-10, SAMPLE-22, SAMPLE-24, SAMPLE-33, SAMPLE-34 | Planned | — | — | — |
+| PS-T07 | Swift sink failure, atomic filename collision, partial-file cleanup, and unstructured collector cancellation | SAMPLE-01, SAMPLE-02, SAMPLE-05, SAMPLE-12, SAMPLE-13, SAMPLE-23, SAMPLE-24 | Planned | — | — | Apple test target/device where applicable |
+| PS-T08 | Dot-segment names and scoped IPv6 on every sample | SAMPLE-15, SAMPLE-20, SAMPLE-34 | Planned | — | — | — |
+| PS-T09 | KMP Android runtime consumer and iOS consumer target | SAMPLE-21, BUILD-01 | Planned | — | — | Android/Apple targets required |
+
+## External-validation register
+
+These seven boundaries were explicitly excluded from the original local review. They are additional final acceptance evidence, not part of the 54 test-gap count and not grounds for silently closing a finding.
+
+| ID | Required evidence | Status | Unblock/evidence |
+| --- | --- | --- | --- |
+| ENV-01 | Physical Android and Apple device tests | Blocked | Compatible devices and test deployment path required |
+| ENV-02 | Two-machine and hostile-network hardware validation | Blocked | At least two hosts/devices plus controlled hostile-network harness required |
+| ENV-03 | Simulator app launch and UI automation | Planned | Add/run platform UI targets after sample fixes |
+| ENV-04 | iOS X64 execution on compatible host | Blocked | x86_64 Apple host/runtime required |
+| ENV-05 | Force-enable and resolve ignored Apple diagnostic test | Planned | Run when LAN lifecycle foundation is fixed |
+| ENV-06 | Third-party dependency CVE/advisory scan | Planned | Select/configure and run a current advisory scanner; record a concrete blocker only if one is encountered |
+| ENV-07 | Real remote Central/Portal upload | Blocked | Approved portal, signing identity, namespace access, and CI credentials required |
+
+## Current execution record: SEC-01
+
+### Scope and status
+
+| Field | Value |
+| --- | --- |
+| Primary findings | CORE-06 (High security limitation), CORE-07 (Medium architecture) |
+| Status | Implemented; local SEC acceptance tests pass, external/repository-wide certification gates remain |
+| Confirmed on | `6a05ccd04fcb6fb8106ed47941618fb6bcfd3fa6` |
+| Source changes | Complete for SEC-01: provider dependencies, canonical identity/storage records, platform storage, Noise v2 engine, strict frame versioning, transport security profile, segregated LAN discovery, manual pinning, and sample migration |
+| Approval | Owner approved SEC-01 and storage A on 2026-07-17; provider selection remains an implementation review, not an owner-policy blocker |
+| Tightly coupled findings | CORE-13, CORE-18, CORE-19, CORE-20, CORE-21, PROTO-02, authentication portion of LAN-16; each keeps its own row/acceptance/commit evidence |
+| Related but independently closable | PROTO-03, PROTO-04, PROTO-06, LAN-15, remaining LAN-16 concerns, FILE-13 |
+
+### Reproduction evidence and root cause
+
+The findings are confirmed in the current branch:
+
+- `p2p-core/src/commonMain/kotlin/dev/p2pkit/core/Config.kt:79` exposes only `SecurityMode.NoneForMvp`.
+- `p2p-core/src/commonMain/kotlin/dev/p2pkit/core/dsl/Builders.kt:51` defaults to it, but `p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt:68` marks the value unused and line 118 always installs `NoOpSecurityManager`.
+- `p2p-core/src/commonMain/kotlin/dev/p2pkit/core/security/SecurityManager.kt:33` merely delegates the raw stream and constructs `PeerIdentity` from an unverified `Peer`. `SecureConnection.peerIdentity` is not consumed elsewhere.
+- `p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt:406` launches `protocol.events(rawConnection)` first. It parses plaintext HELLO, trusts/resolves the peer, and only then calls `security.performHandshake` at line 485.
+- `p2p-core/src/commonMain/kotlin/dev/p2pkit/core/transport/RawConnection.kt:18` explicitly allows exactly one byte-flow collector. A real security layer cannot take over that stream after the parser has started, while an encrypted wrapper would be bypassed by the existing reader.
+- `SessionManager.kt:451` compares only attacker-controlled HELLO strings for outgoing sessions; line 466 explicitly accepts any non-local claimed PeerId inbound. PeerIds are visible through discovery, and manual peers intentionally bypass the expected-ID comparison.
+- JVM/Android LAN use ordinary sockets and Apple constructs non-TLS Network.framework parameters. This is acceptable only as a byte-stream substrate if core encrypts above it; today core does not.
+- Existing `HandshakeIdentityTest`, `ManualPeerIdentityTest`, and `HandshakeTest` prove claimed-string/plaintext behavior only. There is no key-possession, confidentiality, integrity, replay, downgrade, tamper, or sole-reader security test.
+
+The root cause is ordering and identity ownership, not just the absence of a cipher. The public security contract requires a `Peer` before authentication, while a trustworthy inbound `Peer` cannot exist until authentication. The protocol parser already owns the one raw reader before the extension point runs. Consequently the current extension API cannot be implemented securely.
+
+### Security impact
+
+Current LAN participants can passively read the TCP/data connection, including HELLO identity metadata, messages, file bytes, and control frames. AppId, PeerId, device name, endpoint, and traffic timing/length are also exposed separately by current mDNS discovery; encrypting the data connection does not make discovery private. An active participant knowing the public app ID can claim another visible PeerId, occupy or churn its session slot, or impersonate a manual endpoint. There is no cryptographic confidentiality, integrity, replay protection, authenticated identity, forward secrecy, authorization, or downgrade protection.
+
+### Proposed long-term architecture
+
+Subject to the decisions below, the recommended architecture is transport-independent authenticated encryption in `p2p-core`; LAN TCP remains a plain byte-stream carrier:
+
+1. Open or accept a `RawConnection` and assign an explicit initiator/responder role.
+2. Start one bounded setup deadline before the first security byte is written.
+3. A v2 security engine becomes the sole owner/collector of `RawConnection.read()` for the connection lifetime.
+4. Run a vetted authenticated key exchange with one canonical shared context—protocol name/version, AppId, and an identical direction tuple—bound into its transcript/prologue. Initiator/responder behavior comes from the handshake state machine; the two sides must not hash different local-role strings.
+5. Return a bounded, backpressured secure record stream plus authenticated remote public-key identity.
+6. Only then start `DefaultP2pProtocol.events()` on decrypted bytes and exchange HELLO inside encryption.
+7. Derive/bind `PeerId` through a versioned, domain-separated hash of one canonical raw public-key encoding; validate HELLO metadata against that identity.
+8. Apply the approved authorization policy and publish/register the session only after all security, HELLO, expected-peer, lifecycle-generation, and capacity checks commit.
+9. On reconnect, require the same authenticated key before rearming the existing public session.
+
+The preferred wire design is a vetted implementation of a Noise-style authenticated handshake, provisionally `Noise_XX_25519_ChaChaPoly_SHA256` for unknown/manual peers, with a pinned expected-key path only when prior trust/pairing supplies one. Unauthenticated discovery may nominate an expected fingerprint hint that the authenticated key must match, but it never creates a pin or authorization. Cryptographic primitives must not be implemented in this repository. Exact provider suitability requires a focused dependency review covering implementation provenance, independent review/audit status, KMP interoperability and platform parity, maintenance and release/CVE response, license, entropy/CSPRNG integration, constant-time/side-channel posture, known-answer vectors, publication impact, and proof that released artifacts contain the reviewed implementation.
+
+There must be a distinct secure preface/protocol major, strict handshake and record size bounds, monotonic nonces, authenticated record framing, counter exhaustion handling, and no automatic plaintext fallback. General application-frame limits and validation remain separate PROTO findings.
+
+If legacy mode remains, it is a whole-kit explicit configuration with segregated discovery capability/advertisement and listener behavior. A secure kit never selects plaintext from attacker-controlled TXT data, and a secure listener closes a legacy preface with uniform bounded behavior rather than detailed plaintext diagnostics.
+
+Standards basis: the [official Noise Protocol Framework](https://noiseprotocol.org/noise.pdf) limits Noise messages, treats remote static-key acceptability as an application decision beyond proof of possession, and warns that negotiation not bound into the prologue can enable rollback. Those constraints are why authorization remains a separate explicit policy and why protocol/security selection must be transcript-bound rather than opportunistically negotiated.
+
+### Expected implementation surface
+
+The exact file list will be finalized after the decisions, but the current architectural surface is:
+
+- Core public/API: `Config.kt`, `Identity.kt`, `Errors.kt`, `P2pKit.kt`, `P2pSession.kt`, `dsl/Builders.kt`, and the security package.
+- Core orchestration: `internal/P2pKitImpl.kt`, `internal/SessionManager.kt`, `internal/Handshake.kt`, local identity/key storage, and reconnect/session commit paths.
+- Wire: `protocol/ProtocolConstants.kt`, `HelloPayload.kt`, version enforcement in `FrameCodec.kt`/`FrameReader.kt`, plus new bounded secure-handshake/record code.
+- Transport contract: `transport/RawConnection.kt` ownership documentation; the external transport SPI should remain a byte stream unless provider review proves a necessary break.
+- LAN discovery: common TXT schema and JVM/Android/Apple encode/decode validation if security capability/fingerprint hints are advertised. Discovery hints never establish identity by themselves.
+- Manual provisioning: `provisioning/ManualPeerRegistrar.kt`, `NetworkProvisioningTypes.kt`, `NetworkProvisioningFactory.kt`, unsupported/platform managers, Android/desktop sidecars, and all manual-peer tests. A fingerprint, trust token, or pending authenticated identity necessarily changes these contracts.
+- Build/publication: `gradle/libs.versions.toml`, `p2p-core/build.gradle.kts`, POM/module metadata, ABI baselines, and external-consumer checks.
+- Consumers: samples and KMP/Swift bridges where secure defaults, authorization callbacks, pairing, or migration must be configured.
+
+### Lifecycle, concurrency, cleanup, and performance contract
+
+- One deadline covers security exchange, secure-stream creation, encrypted HELLO write/read, identity/metadata validation, and session commit. It includes previously unbounded first writes and security implementations (CORE-13).
+- `CancellationException` propagates unchanged. Cancellation, authentication failure, protocol failure, or timeout cancels security reader/record jobs, closes secure/raw ownership exactly once, performs bounded `NonCancellable` cleanup, releases the inbound permit, and publishes no session.
+- Authentication failure never falls back to plaintext or reconnects under another identity.
+- One owner reads the raw connection. Bounded ciphertext and plaintext queues apply backpressure; no unbounded handshake/record buffer or task is allowed.
+- Secure record writes and nonce allocation are serialized inside the secure stream regardless of which session/control/file producer calls it. Authentication failure atomically terminalizes both directions, discards queued plaintext, and prevents every later record from being processed or reusing a nonce.
+- No socket/session/key ownership is committed after terminal kit generation. Simultaneous-open and reconnect roles must be deterministic.
+- Long-term key creation is atomic across concurrent instances where the platform permits; persistence corruption/failure fails closed according to the approved contract and never silently rotates identity mid-instance.
+- CSPRNG failure is fatal. Private/session keys are never logged or exposed through public models, and temporary key material is cleared where Kotlin/platform runtime semantics permit.
+- If interactive authorization is selected, it is not allowed to consume the security-setup deadline or one of the 16 pre-handshake permits indefinitely. It needs a separately bounded/capped pending-authorization state, cancellation-safe callback contract, timeout, denial result, and terminal cleanup.
+
+### API, binary, wire, migration, and cross-platform implications
+
+- The current public `SecurityManager.performHandshake(connection, peer)` contract is unusable and must be deprecated/replaced or break in the next major API. It needs role, expected authenticated identity, local identity, deadline/cancellation ownership, and authorization outcome before `Peer` creation.
+- Making secure mode the default changes runtime behavior. Removing `NoneForMvp` is an immediate source/runtime break; retaining it as deprecated explicit opt-in preserves a migration escape hatch but must never be negotiated automatically.
+- A secure preface and major protocol version intentionally break wire compatibility with plaintext v1 in secure mode.
+- A key-derived PeerId changes existing persisted UUID identities once. Preserving an old UUID cannot retroactively authenticate it without an independently trusted binding; a migration must not claim otherwise.
+- Key storage design must distinguish exportable software X25519 key bytes wrapped/stored by Keychain/Keystore, non-exportable keys operated through platform APIs, and hardware-backed keys. A common Noise provider may require raw private bytes, so provider and storage choices are one decision rather than independent promises.
+- Key lifecycle must define per-AppId versus device-global identity, backup/restore and uninstall behavior, rotation, compromise/revocation, corruption/lost-key recovery, and orphaned backup state. Android restored data can outlive a Keystore key; iOS Keychain lifetime differs from `NSUserDefaults`.
+- `P2pKit.create` currently loads identity synchronously, exposes `localPeerId` immediately, and constructs transports with it. Secure key loading/generation must either preserve that blocking construction contract explicitly or introduce a documented public construction/start/identity migration.
+- Android Keystore, iOS Keychain, and the approved JVM key-protection policy affect persistence behavior and tests. All platforms must emit the identical secure wire protocol and pass common known-answer/interoperability vectors.
+- If pinning or TOFU exists, its authorization store needs an AppId namespace, atomic/concurrent decisions, denial persistence policy, revocation/reset, key-change handling, and deterministic behavior when callbacks are absent, throw, or are cancelled.
+- A crypto dependency may enter public metadata depending on the final API shape; BUILD-01 external-consumer checks must catch the resulting scope.
+
+### Coupled-finding ownership and commit boundaries
+
+SEC-01 is an architectural program, not permission for one large commit. After approval it is split into focused prerequisite/implementation commits:
+
+| Sub-unit | Finding ownership | Required order |
+| --- | --- | --- |
+| SEC-ID-01 | CORE-18, CORE-19, CORE-20, CORE-21: collision-safe atomic cryptographic identity storage and migration | Before secure sessions consume long-term keys |
+| SEC-WIRE-01 | PROTO-02: explicit secure major/preface and frame-version validation | Before secure v2 interoperability is claimed |
+| SEC-SETUP-01 | CORE-13: one bounded setup transaction including security and encrypted HELLO | With/before SessionManager secure-stream commit |
+| SEC-CORE-01 | CORE-06/CORE-07: secure-stream architecture, authenticated identity, authorization, no downgrade | After the preceding contracts are defined |
+| SEC-LAN-AUTH-01 | Authentication portion of LAN-16: discovery is only an untrusted routing/hint source | Verified with secure core; remaining LAN-16 address/ownership/log concerns stay in LAN-NET-01 |
+
+Each row is committed, tested, and marked independently. SEC-01 cannot be Verified until these coupled rows are individually Verified, but their separate units are not double-owned or silently closed by the CORE-06/CORE-07 commit.
+
+### Required tests
+
+Security and wire tests:
+
+- Secure message and file round trips across supported targets.
+- Captured raw data-connection bytes contain none of AppId, identifiers, names, message text, or file bytes; repeated equal plaintext produces different ciphertext. A separate test/documented threat limit confirms current mDNS discovery metadata remains observable.
+- PeerId is bound to key possession; inbound/outgoing victim-ID claims fail.
+- An attacker may copy a victim's mDNS PeerId/endpoint/fingerprint hint but cannot complete a session without the victim private key; advertising a new attacker-owned identity follows the selected authorization policy.
+- Tampered authentication tag, replay, reorder, truncation, oversized security message/record, wrong app, wrong key, wrong role, and wrong protocol version each produce one precise local typed outcome and close. Pre-authentication peer-visible behavior stays uniform—a bounded close without detailed plaintext diagnostics—so failures do not become an oracle.
+- Secure mode rejects plaintext v1 without downgrade; explicit legacy mode, if retained, works only when both endpoints explicitly select it.
+- A fake that fails on a second `RawConnection.read()` proves security plus session traffic uses one raw collector.
+- Reconnect accepts the same key and rejects an attacker at a refreshed endpoint; simultaneous-open role resolution is deterministic.
+- Manual connections follow the approved high-entropy pin/QR, PAKE, approval, TOFU, or accept-any policy exactly; no test treats a low-entropy code as a raw PSK.
+- Canonical public-key encoding, domain-separated PeerId derivation, handshake transcript, record encryption, and cross-platform key parsing have fixed interoperability vectors.
+- Authorization tests cover absent/throwing/cancelled callbacks, concurrent decisions, timeout, denial, revocation, key change, reset, and capacity exhaustion if an interactive/persistent trust mode is approved.
+
+Lifecycle tests:
+
+- Cancellation at every security read/write/key-exchange/HELLO/commit suspension leaves no job, socket, permit, pending connect, or session.
+- Stalled initial write/security implementation is bounded by the single setup deadline.
+- Pre-handshake capacity returns after every failure and repeated failed-then-successful connects remain leak-free.
+
+Identity storage and platform tests:
+
+- Stable fingerprint across restart; collision-prone AppIds remain distinct.
+- Concurrent first creation produces one key/identity, persistence failure follows one explicit contract, writes are atomic, corrupted keys fail closed, and migration is deterministic.
+- Backup without the corresponding platform key, uninstall/reinstall, rotation, compromise/revocation, lost/corrupt key, and orphaned authorization data follow the approved lifecycle on each platform.
+- Common known-answer/interop vectors run on JVM, Android, and Apple; secure LAN loopback runs on JVM/Apple simulator and physical Android/Apple before final verification.
+- Samples/KMP/Swift compile with the approved trust configuration; temp-published external consumers compile; ABI/API changes are reviewed.
+
+### Acceptance criteria
+
+SEC-01 cannot be marked Verified until all of the following are true:
+
+- No application protocol parser reads raw bytes before authenticated security succeeds.
+- Every non-explicit-legacy session is encrypted and integrity protected with no downgrade path.
+- Session identity is derived from and verified against authenticated key material.
+- Unknown/manual peer admission follows the approved authorization policy.
+- Entire setup and cleanup are bounded, cancellation-correct, and leak-free.
+- Identity/key persistence is collision-safe, stable, atomic, and fails closed.
+- JVM, Android, and Apple implementations interoperate on one versioned wire format.
+- All targeted, module, cross-platform, consumer, repeated concurrency, full-repository, physical-device, and hostile-network gates pass.
+- Public API/wire compatibility and one-time identity migration are recorded for consumers.
+- Documented threat limits are accurate: this design does not hide mDNS metadata or traffic timing/length, prevent endpoint-advertisement DoS, authorize an unknown key by itself, or protect a compromised local private key.
+
+### Approved owner decisions
+
+The owner approved this package on 2026-07-17:
+
+1. Authenticated encryption is mandatory by default; retain `NoneForMvp` only as deprecated whole-kit migration opt-in with segregated advertisement/listener behavior and never an automatic fallback.
+2. Introduce secure protocol major v2 with a distinct preface; reject plaintext v1 uniformly in secure mode.
+3. Use versioned, domain-separated, key-derived self-certifying PeerIds and accept a documented one-time identity change from legacy UUIDs.
+4. Reject unknown identities by default. For the first secure release, support high-entropy fingerprint/QR pinning and a separately explicit “accept any authenticated same-AppId identity” policy. Do not market AppId as authorization. Defer short human-entered pairing codes until a named PAKE is chosen; never use a low-entropy code directly as a Noise PSK.
+5. Decide whether interactive approval is required. Recommended initial scope is preconfigured pin/QR or explicit accept-any, avoiding a human callback inside connection setup. If interactive approval is required now, approve a separate bounded/capped pending-authorization state and UI-safe callback contract.
+6. Manual IP requires a high-entropy pinned fingerprint/QR or the approved pending-identity flow; synthetic IDs are not authenticated identities.
+7. Replace/deprecate the current `SecurityManager` API with a role-aware v2 contract and built-in audited secure engines. Do not extend P2pKit's security guarantee to arbitrary custom crypto providers; any future custom-engine SPI must be explicitly experimental/unsafe and separately threat-modeled.
+8. Approve a focused vetted KMP provider review against the expanded criteria above; no repository-local cryptographic primitives.
+9. Decide storage capability with the provider: exportable wrapped software keys versus non-exportable platform-operated keys and whether hardware backing is mandatory. Also approve the JVM at-rest protection policy. Persistence/CSPRNG failure fails closed.
+10. Use a per-AppId long-term identity by default and explicitly approve backup/restore, uninstall, rotation, revocation, corruption/lost-key recovery, and authorization-store lifecycle behavior.
+11. Preserve synchronous `P2pKit.create` and immediate `localPeerId` for the smallest API change, with the existing off-main-thread requirement, or approve a breaking suspending/lazy construction and nullable/stateful identity contract. The recommendation for this remediation is to preserve the current construction shape unless provider constraints make that unsafe.
+12. Approve the focused sub-unit ownership table above so CORE-13, CORE-18, CORE-19, CORE-20, CORE-21, PROTO-02, and LAN-16 receive their own commits/evidence while remaining prerequisites to SEC-01 closure.
+
+### SEC-01 implementation contract freeze — Frozen 2026-07-17
+
+The provider, platform-store, and protocol reviews independently agreed that this contract is implementable. This section is now the normative SEC-01 implementation contract; production edits may proceed only within it. Any change to the fixed suite, identity derivation, authorization semantics, legacy separation, persistent record format, or failure matrix requires a new recorded owner decision before dependent code changes.
+
+#### Protocol version and negotiation
+
+- Secure mode is application protocol 2.0. The only suite is `Noise_XX_25519_ChaChaPoly_SHA256` with suite ID `0x01`; there is no algorithm list, IK/PSK variant, or suite agility in v2. The initiator is always the transport dialer and the responder is always the accepted connection.
+- Each side uses this exact 16-byte preface: offsets 0..3 ASCII `P2KS`; offset 4 preface format `0x01`; offset 5 application major `0x02`; offset 6 minor `0x00`; offset 7 suite `0x01`; offset 8 role (`0x01` initiator, `0x02` responder); offset 9 flags `0x00`; offsets 10..15 reserved zero. The initiator writes first, the responder validates then writes its responder preface, and the initiator validates it. Every field is exact.
+- Secure v2 has no downgrade-capable negotiation. A secure endpoint accepts only the exact v2 preface/suite it is configured to implement. Missing, legacy, malformed, or unknown prefaces receive a uniform bounded close with no detailed plaintext error.
+- `SecurityMode.NoneForMvp` remains source-compatible but deprecated and must be selected explicitly for the whole kit. It uses the existing plaintext protocol/frame major 1. A kit never switches mode from discovery TXT, peer input, handshake failure, retry, or reconnect.
+- Secure LAN advertises/browses `_p2pkit2._tcp`; explicit legacy advertises/browses `_p2pkit._tcp`. The discovery protocol/fingerprint values remain untrusted usability/routing claims and never authorize a peer or select a weaker mode. A kit never enables both namespaces.
+- Both sides use this byte-identical Noise prologue: ASCII `dev.p2pkit.secure-channel.v2\0`, then U16BE exact UTF-8 AppId byte length, exact AppId UTF-8 bytes, initiator preface, responder preface. AppId UTF-8 is bounded before allocation and is neither normalized nor sent separately in plaintext on the data connection.
+- Noise messages have an unsigned U16BE length prefix, empty application payload, and exact body lengths 32, 96, and 64 bytes for XX messages 1, 2, and 3. The initiator authorizes the responder static key after message 2 and before revealing its static in message 3; the responder authorizes after message 3. Split maps cipher state 1 to initiator-to-responder and state 2 to responder-to-initiator.
+- After `Split`, records are `U16BE(ciphertextLength) || NoiseTransportCiphertext` with zero-length Noise associated data. Plaintext is segmented at 16,384 bytes; valid ciphertext lengths are 16 through 16,400 bytes. This deliberately follows the standard Noise transport cipher instead of inventing length-header associated data.
+- Secure record writes, encryption, and nonce allocation are serialized. Ciphertext records are processed strictly in order. Nonces use the Noise ChaChaPoly encoding and may never wrap; authentication failure, invalid length, truncation, replay/reorder, EOF mid-record, or counter exhaustion atomically closes both directions and discards queued plaintext.
+- Directional nonces are implicit `0` through `2^64 - 2`; the maximum unsigned value is never used and v2 performs no rekey. A fresh handshake is required before exhaustion.
+- One bounded security-owned raw pump starts before preface parsing and remains the only collector of `RawConnection.read()`. It hands a bounded segmented input from the sequential handshake decoder to the sequential record decoder without a second collector. A bounded plaintext channel propagates application backpressure to the socket.
+- The application `DefaultP2pProtocol` reader is created only over the decrypted `SecureConnection` after Noise and authorization succeed. HELLO, frame headers, controls, messages, and files are inside encryption.
+- Inner HELLO and every frame use major 2 and are rejected immediately on any other header/payload version. Legacy mode uses major 1. Version checks occur as soon as the fixed header is available.
+
+#### Cryptographic identity and fingerprint format
+
+- Each AppId has one independent long-term X25519 static keypair. The canonical public-key encoding is the 32-byte raw RFC 7748 u-coordinate; provider-specific DER/PEM encodings never enter identity derivation or the wire.
+- `fingerprintDigest = SHA-256(ASCII("dev.p2pkit.x25519-fingerprint.v1\0") || rawPublicKey32)`.
+- `peerIdDigest = SHA-256(ASCII("dev.p2pkit.peer-id.v2\0") || U16BE(appIdUtf8.length) || appIdUtf8 || fingerprintDigest)`.
+- The canonical fingerprint is `p2f1-` plus lowercase unpadded Base32 of the full 32-byte fingerprint digest. The canonical PeerId is `p2id2-` plus lowercase unpadded Base32 of the full 32-byte PeerId digest. Neither authorization value is truncated; decoded digest comparisons are constant-time.
+- The Noise static key proves possession; the derived PeerId must exactly equal the encrypted HELLO PeerId and the expected discovery/manual hint. Copied mDNS identifiers cannot authenticate without the corresponding private key.
+- `appBinding = p2a1- || Base32LowerNoPad(SHA-256(ASCII("dev.p2pkit.app-binding.v1\0") || U16BE(appIdUtf8.length) || appIdUtf8))`. The exact QR text is `p2pkit:v2:<appBinding>:<fingerprint>`. Parsing requires exactly four colon-separated fields, canonical prefixes/lengths/characters, and an AppId binding equal to the local exact AppId. QR data is only a high-entropy pin transport; no low-entropy code or raw-PSK mode exists.
+- Private keys, wrapping keys, handshake/session keys, decrypted queued data, and full fingerprints are never logged. CSPRNG/key-generation failure is fatal. Temporary key bytes are cleared where the runtime permits.
+
+#### Authorization and manual peers
+
+- Unknown authenticated identities are rejected by default.
+- Built-in authorization modes are: reject unknown (the default), a static/configured set or trusted store of full v2 fingerprints, a per-connect/manual full fingerprint, and an explicitly selected `AcceptAnyAuthenticatedSameApp` mode. Same AppId is scoping, not authorization. There is no interactive approval callback, TOFU, or human-entered code in this first implementation.
+- Outgoing discovered connections must authenticate the exact key-derived PeerId advertised by the selected peer. Inbound identities must satisfy the configured authorization mode before HELLO/session publication.
+- Secure manual-IP registration requires an expected v2 fingerprint and derives its real expected PeerId from the exact AppId plus fingerprint. The synthetic manual identity path is legacy-only. Existing no-fingerprint manual APIs remain for source compatibility but fail with a typed security-configuration error when the kit is secure.
+- Reconnect permanently retains and authenticates the initially established fingerprint even under accept-any before rearming the existing session. A refreshed endpoint can change routing only, never identity. Simultaneous-open arbitration occurs only after both candidates are authenticated.
+
+#### Identity migration and rollback
+
+- Secure v2 uses a new identity-store namespace and never overwrites/deletes the existing UUID `peer-id` storage. First secure construction creates a new key-derived PeerId, so consumers must treat the device as a new authenticated identity and re-pin it. No claim is made that the legacy UUID was cryptographically bound.
+- Successful secure creation is atomic: all concurrent constructors for one AppId return the same committed key. A losing creator discards its uncommitted material and reloads the winner.
+- Downgrading application configuration to explicit legacy mode resumes the untouched legacy UUID and v1 wire behavior; it does not translate pins or delete v2 keys. Re-enabling secure mode returns to the same v2 identity. Rollback is therefore operationally possible but always an explicit security downgrade.
+- Old binaries interoperate only when the new binary explicitly selects legacy mode. Secure-v2 and legacy-v1 endpoints do not connect. There is no dual listener, fallback retry, opportunistic mode, or same-session upgrade.
+- Secure identity material is per-AppId and device-local. Android secure files live in no-backup storage; iOS uses a device-only Keychain accessibility class; neither identity is restored to another device. JVM persistence behavior is defined by the injected store.
+
+#### Storage A and failure behavior
+
+- The canonical inner identity record is exactly 104 bytes: magic ASCII `P2KI` (4), schema `0x01` (1), algorithm X25519 `0x01` (1), zero flags U16BE (2), full 32-byte AppId namespace hash (32), raw private key (32), raw public key (32). `namespaceHash = SHA-256(ASCII("dev.p2pkit.identity-namespace.v2\0") || U16BE(appIdUtf8.length) || appIdUtf8)`. Unknown magic/schema/algorithm/flags, wrong namespace, wrong length, trailing bytes, or public/private mismatch is corruption.
+- Every load derives the public key again from the private key and compares it with the record. A store returns only a durable, reread, fully validated winner. Generated and losing private arrays are cleared best-effort.
+
+- Android stores the inner record only as AES-256-GCM ciphertext at `noBackupFilesDir/p2pkit/identity-v2/<full-namespace-hash>/identity.blob`. The non-exportable wrapping key alias is `dev.p2pkit.identity.v2.<full-namespace-hash>` in Android Keystore. The exact strict outer blob is ASCII `P2KB` (4), schema `0x01` (1), AES-GCM algorithm `0x01` (1), zero flags U16BE (2), namespace hash (32), IV length `0x0c` (1), ciphertext length U16BE (2), random IV (12), and ciphertext/tag (120 for the 104-byte inner record). The fixed header through ciphertext length is AAD. A process lock plus cross-process file lock and `AtomicFile` commit protect creation.
+- Android's state matrix is exact: blob absent/alias absent creates; present/present decrypts and validates; present/absent is permanent key loss; absent/present is incomplete creation/storage damage; malformed/tag failure is corruption. Only an alias created by a currently failing first transaction may be cleaned up; no state silently regenerates.
+- iOS stores the 104-byte record as a non-synchronizable generic-password Keychain item: service `dev.p2pkit.identity.v2`, account full namespace hash, default access group, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. `SecItemAdd` duplicate means reload the winner. The strict nonsecret marker is exactly 72 bytes: ASCII `P2KM` (4), schema `0x01` (1), X25519 algorithm `0x01` (1), zero flags U16BE (2), namespace hash (32), fingerprint digest (32). It is atomically stored under Application Support and excluded from backup.
+- iOS's state matrix is exact: item plus matching marker is valid; marker without item is key loss; item without marker is a recoverable interrupted commit/reinstall and recreates the marker after validation; both absent creates; any mismatch/corruption fails closed. `errSecInteractionNotAllowed`/before-first-unlock is retry-after-unlock and never rotates identity.
+- JVM secure mode requires an injected synchronous `JvmSecureIdentityStore` with `read`, durable cross-process atomic `putIfAbsent` returning the durable winner, and durable idempotent `delete`. It stores the opaque 104-byte record and is responsible for confidentiality/integrity at rest. Core supplies no silently plaintext “secure” default; absence fails before any transport factory. Tests may use a loudly named in-memory test store; samples must make development-only storage explicit and must not describe it as production protection.
+- Existing mobile PeerId-storage fallbacks are legacy-only. Secure mode never falls back to UUID, plaintext file, `NSUserDefaults`, in-memory identity, regenerated key, or legacy mode.
+- First-use absence creates and atomically commits a key. Once any v2-store marker/item exists, unreadable, undecryptable, missing-key, corrupt, or inconsistent material is `KeyLostOrCorrupt`: fail closed, preserve evidence, and never auto-rotate.
+- Key loss has no implicit recovery. Recovery requires an explicit destructive reset operation initiated by the application/owner, which deletes only the selected AppId's v2 local identity and generates a different PeerId on the next construction. The durable reset marker is exactly 40 bytes: ASCII `P2KR` (4), schema `0x01` (1), local-identity-reset action `0x01` (1), zero flags U16BE (2), namespace hash (32). It is committed before deletion; interrupted reset is completed only by the next explicit maintenance call, never by ordinary construction. The reset API reports the identity-change/re-pinning consequence, rejects a known live in-process kit, documents its cross-process exclusivity precondition, keeps configured remote pins by default, and never runs from connection error handling.
+- A failed initial persistence writes no usable kit and exposes no process-local transient identity. Private material from failed/losing creation is discarded/cleared. Store exceptions retain their cause without including secrets.
+- On Android uninstall/clear-data, both no-backup ciphertext and Keystore alias are expected to disappear. If restored ciphertext exists without its wrapping key, construction fails closed. On iOS, device-only Keychain material may survive reinstall on the same device according to OS behavior, but never migrates to another device; explicit reset rotates it. JVM lifecycle follows the host store contract.
+
+#### Provider freeze and assurance boundary
+
+- Common code uses `cryptography-core:0.6.0` only as a primitive API. JVM and Android explicitly instantiate `CryptographyProvider.JDK(BouncyCastleProvider())` using `cryptography-provider-jdk:0.6.0` and `bcprov-jdk18on:1.85`. Apple explicitly instantiates `CryptographyProvider.CryptoKit` using `cryptography-provider-cryptokit:0.6.0` and the `dev.whyoleg.cryptography` 0.6.0 linker plugin.
+- The engine never uses `CryptographyProvider.Default`, service/provider discovery, the optimal provider, or application-installed provider ordering. Provider types remain internal and publication metadata must not leak them into the public ABI.
+- The repository implements the strict Noise state machine but no cryptographic primitive. It follows the official Noise specification and is tested against official/Cacophony vectors plus RFC/provider KATs. All-zero X25519 output is independently rejected with a fixed-work accumulator. Owned key/chaining buffers are wiped best-effort, without claiming JVM/Swift/provider copies are erasable.
+- No suitable maintained KMP Noise implementation was found. `cryptography-kotlin` 0.6.0's X25519/ChaCha adapters and the repository's Noise state machine have no identified independent professional audit. Local implementation may proceed, but external cryptographic design/code audit, physical API-24/device interoperability, and hostile-network validation remain mandatory production-release gates. SEC-01 must not be presented as production-security certification without them.
+
+#### Compatibility acceptance matrix
+
+| Local | Remote | Required result |
+| --- | --- | --- |
+| Secure v2 | Secure v2, same AppId, authorized correct key | Authenticated encrypted session; frame/HELLO major 2 |
+| Secure v2 | Secure v2, different AppId | Uniform authentication/setup failure; no session/publication |
+| Secure v2 | Secure v2, copied victim discovery ID but attacker key | Exact local identity-mismatch failure; uniform peer-visible close |
+| Secure v2 | Secure v2, valid but unknown key under default policy | Typed unauthorized failure; no session/publication |
+| Secure v2 | Legacy v1 or old 0.6.x | Uniform bounded close; no fallback or second dial |
+| Legacy v1 explicit | Legacy v1 explicit or old 0.6.x | Existing plaintext interoperability preserved |
+| Legacy v1 explicit | Secure v2 | Incompatible close; secure endpoint never downgrades |
+| Secure v2 after legacy upgrade | Previously known legacy UUID peer | New key-derived identity; explicit re-pin required |
+| Explicit rollback to legacy | Old peer | Old UUID/v1 behavior resumes; v2 identity remains stored for re-upgrade |
+
+Compatibility is accepted only when source/API compatibility for explicit legacy callers, binary metadata, public transport SPI, manual-IP overloads/errors, discovery filtering, cross-platform known-answer vectors, sole-reader ownership, raw-wire confidentiality, key-store failure matrix, migration/rollback matrix, and the full test/build/publication gate all pass. Network encryption does not promise mDNS privacy, traffic-shape privacy, authorization of unknown keys, endpoint-advertisement availability, or protection after local private-key compromise.
+
+Implementation is authorized. The exact protocol negotiation, migration/rollback, secure-store/key-loss behavior, provider selection, and compatibility acceptance contract above is frozen and reviewed.
+
+### SEC-01 analysis commands and exact results
+
+No compile/test command had been run at the contract-freeze checkpoint because no production source was yet modified. The prior owner-decision blocker is resolved; implementation and verification evidence is appended here as each focused SEC sub-unit proceeds. Existing red repository gates remain recorded in the baseline table and are not attributed to the security changes without reproduction.
+
+| Command/check | Exact result |
+| --- | --- |
+| `git branch --show-current; git rev-parse HEAD; git rev-parse origin/main` | Branch `remediation/full-register-2026-07`; HEAD and `origin/main` both `6a05ccd04fcb6fb8106ed47941618fb6bcfd3fa6` |
+| `rg -n "SecurityMode\|SecurityManager\|SecureConnection\|performHandshake" p2p-core/src` | Confirmed only `NoneForMvp`, always-installed no-op manager, unusable public extension ordering, and no consumer of authenticated `peerIdentity` |
+| `sed`/`nl` inspection of `Config.kt`, `Identity.kt`, `Builders.kt`, `SecurityManager.kt`, `Handshake.kt`, `RawConnection.kt`, `P2pKitImpl.kt`, `SessionManager.kt`, protocol files, and security/identity tests | Confirmed sole raw reader starts at `SessionManager.kt:406` and security runs only at line 485 after plaintext identity parsing |
+| `rg` inspection of LAN socket/Apple parameter implementations | Confirmed plain byte-stream transports; Apple explicitly uses non-TLS Network.framework parameters |
+| Official Noise specification review | Confirmed key possession is not authorization, negotiation must be transcript/prologue-bound against rollback, records/messages are bounded, and nonce/application termination responsibilities must be specified |
+| Independent SEC-01 protocol/store/provider reviews | Frozen 16-byte preface and standard Noise record profile; frozen Android/iOS/JVM state matrices; explicit CryptoKit and JDK+Bouncy Castle providers; no provider-selection blocker |
+| Tracker finding-set comparison | 150 finding rows exactly match the 150 source IDs; no omissions/duplicates |
+| Tracker gap/phase comparison | 54 gap rows; execution plan assigns 150 findings and 54 gaps exactly once; no omissions/duplicates or range shorthand |
+
+### SEC-01 implementation and review result — 2026-07-18
+
+#### Confirmed root cause and implemented correction
+
+The implementation confirmed the analysis above: plaintext HELLO parsing owned the sole raw reader before the old public security hook ran, so identity was attacker-controlled and no encryption wrapper could safely take ownership. The correction makes `SecurityMode.AuthenticatedV2` the default and moves the complete Noise exchange ahead of construction of `DefaultP2pProtocol`. A security-owned pump is now the only collector of the raw connection for its lifetime; the application parser sees only authenticated decrypted bytes. `NoneForMvp` remains an explicitly selected, deprecated whole-kit v1 migration mode with no negotiation or fallback.
+
+The v2 implementation includes the frozen preface/prologue, Noise XX state machine, bounded authenticated records, exact AppId/key-derived identity validation, reject-unknown/pinned/explicit accept-any authorization, reconnect key pinning, encrypted HELLO major 2, strict frame-major validation, full-fingerprint manual IP registration, secure/legacy Bonjour namespace separation, and typed failure results. A PR-style ownership review found and corrected one double-close path: after secure setup begins the security engine owns and closes raw exactly once; `SessionManager` closes raw directly only for legacy setup. The regression test now asserts the exact close count.
+
+Storage A is implemented with the frozen inner record and reset marker. Android uses AES-GCM with a non-exportable Keystore wrapping key and no-backup atomic ciphertext; Apple uses a device-only nonsynchronizable Keychain item plus atomic nonsecret marker; JVM requires an injected `JvmSecureIdentityStore` and has no plaintext production default. Loads rederive and compare the public key, concurrent creation selects one durable reread winner, corrupt/lost material fails closed, cancellation is preserved, and explicit reset is rejected while a kit owns the identity.
+
+#### Files and components changed
+
+The focused diff contains 92 status entries before expansion of newly added directories. The exact authoritative file ledger is the focused commit's `git show --name-status`; the implementation surface is:
+
+- dependency/provider configuration: `gradle/libs.versions.toml`, `p2p-core/build.gradle.kts`;
+- public core/API and DSL: `Config.kt`, `Errors.kt`, `Identity.kt`, `P2pKit.kt`, `P2pSession.kt`, `dsl/Builders.kt`, and the public `security/` additions;
+- core ownership/orchestration: `Handshake.kt`, `P2pKitImpl.kt`, `P2pSessionImpl.kt`, `PeerRegistry.kt`, `SessionManager.kt`, transport internal/factory contracts, secure identity factories, and the new `internal/security/` Noise/record engine;
+- wire: `DefaultP2pProtocol.kt`, `Frame.kt`, `FrameCodec.kt`, `FrameReader.kt`, `HelloPayload.kt`, and `ProtocolConstants.kt`;
+- platform identity/provider implementations: Android secure storage/provider, iOS Keychain storage/CryptoKit provider, and JVM injected-store adapter/JDK+Bouncy Castle provider;
+- manual provisioning: common registrar/types/factories plus Android, desktop, and Apple managers;
+- LAN discovery/security profile: common `Lan.kt`; JVM, Android, and Apple discovery/DSL implementations and their tests;
+- consumers: Android, desktop CLI, desktop UI, KMP JVM/Android, and Swift sample configuration, plus clearly named JVM development-only in-memory sample stores;
+- tests: new common Noise, wire, identity, engine, and end-to-end secure-session suites; JVM store/provider tests; iOS Keychain tests; LAN secure loopback/record tests; provisioning secure manual-loopback tests; legacy fixture updates.
+
+No original review report, deferred register, `.review-2026-07/` content, or unrelated user file is part of this unit.
+
+#### Tests added or strengthened
+
+- Noise/KAT: exact Cacophony `Noise_XX_25519_ChaChaPoly_SHA256` handshake flights, handshake hash, and bidirectional transport ciphertext; canonical Base32/RFC vectors; frozen provider/identity derivation values; all-zero DH and nonce/authentication terminal behavior.
+- Wire/records: exact v2 preface and prologue, every unsupported field, length/allocation boundaries, exact XX flight sizes, fragmented/batched records, early invalid-length rejection, truncation, one raw collector, no legacy fallback, and initiator-static non-disclosure on rejected responder identity.
+- Authentication/authorization: default reject unknown, configured pins, caller-owned pin-set snapshot/immutability, per-connect pin, explicit accept-any, wrong AppId/key/PeerId/fingerprint, copied victim identity, encrypted HELLO, raw-wire confidentiality, manual pin requirement, reconnect pin retention, and explicit legacy incompatibility.
+- Lifecycle: cancellation during blocked Noise write, exact raw close count, pending-connect removal, retry after cancellation, setup cleanup, immutable authenticated identities, and live-use reset exclusion.
+- Storage: exact 104/72/40-byte formats, strict corrupt-field rejection, AppId collision independence, atomic/concurrent first creation, durable-winner reread, persistence failure/cancellation, mismatch/key loss/interrupted reset, private-array clearing, iOS Keychain/marker state matrix, and absent JVM-store fail-closed behavior.
+- Integration: real JVM mDNS/TCP secure text/binary/file loopback, real desktop manual-IP secure loopback, common JVM/Apple fake-raw secure sessions, sample/KMP/Swift compilation, and publication assembly.
+
+#### Verification commands and exact results
+
+| Command/check | Result |
+| --- | --- |
+| Focused `:p2p-core:jvmTest` security/identity/session suites | Pass; the final post-review run includes `SecureSessionIntegrationTest`, all internal security tests, and all public security tests |
+| `:p2p-core:jvmTest` | 336 tests, 0 failures/errors/skips after the final authorization-snapshot regression |
+| `:p2p-core:iosSimulatorArm64Test` | 317 tests, 0 failures/errors/skips after the final authorization-snapshot regression; the previously reported reconnect timeout did not reproduce |
+| `:p2p-core:compileAndroidMain`, iOS simulator compilation/test linkage | Pass |
+| Secure session integration repeated three consecutive forced runs | All three pass with deterministic subscription barriers |
+| `:p2p-transport-lan:jvmTest` | 55 tests pass, including real secure mDNS/TCP/message/file loopback |
+| Android host provisioning tests and desktop provisioning tests | Pass; desktop includes real secure manual-IP loopback |
+| Desktop CLI/UI classes, KMP JVM tests/Android compile, Android sample assemble | Pass |
+| Release `P2pKitShared` XCFramework and Swift simulator sample build with signing disabled | Pass; Xcode `BUILD SUCCEEDED` |
+| `scripts/check-publish-artifacts.sh` | Pass; all 15 publications contain primary, sources, Javadoc, POM, and Gradle module artifacts |
+| `git diff --check` | Pass |
+| Final `./gradlew check` | Red only on registered non-SEC baselines: Android sample lint has 1 `CoarseFineLocation` error plus 3 warnings (`SAMPLE-17`/`BUILD-08`), and Apple LAN has 40 tests with the same 2 lifecycle timeouts plus 1 intentional skip (`LAN-03`/LAN lifecycle unit). Core JVM and iOS security tests pass within the run. Existing `ExperimentalCoroutinesApi` test warnings remain `BUILD-14`. |
+
+#### Compatibility, migration, and remaining risk
+
+This is an intentional runtime/wire security change: secure v2 is the default and does not interoperate with v1. Existing source callers can explicitly select deprecated `NoneForMvp` to resume the untouched UUID/v1 identity and wire behavior; there is no automatic fallback. First secure use creates a new key-derived identity and requires re-pinning. Full fingerprints/QRs are required for secure manual IP unless an explicit authorization policy permits the identity. Public transports remain byte-stream providers; security ownership is internal to core. Crypto providers remain implementation dependencies rather than public ABI types.
+
+SEC-01 is `Implemented`, not `Verified`. The exact remaining gates are: independent professional review of the repository Noise state machine and provider integration; physical API-24+ Android Keystore and Android/Apple cross-device secure LAN interoperability; two-machine hostile-network/tamper/resource validation; and a green full repository gate after the independently tracked Android lint and Apple LAN lifecycle failures are fixed. These gates do not justify weakening or bypassing the secure default, but they prohibit a production-security claim.
+
+#### Diff review conclusion
+
+The final local review checked reader ownership, secure/raw close ownership, cancellation propagation, pending-connect cleanup, setup deadlines, record bounds/backpressure, nonce serialization/exhaustion, identity immutability and key clearing, reset/live-use exclusion, discovery downgrade separation, manual pinning, reconnect identity retention, provider selection, sample call sites, legacy-only call sites, and equivalent platform implementations. No new SEC-01 correctness defect remains in the local diff. The pre-existing full-gate failures and external assurance boundaries above remain explicit and are not waived.
+
+## Execution log
+
+| Date | Unit | Action | Result |
+| --- | --- | --- | --- |
+| 2026-07-17 | GOV-01 | Created isolated remediation branch and reconciled source register | Branch `remediation/full-register-2026-07`; 150 unique finding IDs, 54 unique gap rows |
+| 2026-07-17 | SEC-01 | Read referenced implementation/tests and reproduced CORE-06/CORE-07 architecture | Confirmed; no source changes; blocked at mandated breaking security/protocol decision |
+| 2026-07-17 | GOV-01/SEC-01 | Independent tracker and security-plan reviews, correction pass, mechanical revalidation | Phase allocation is exactly 150/54; tables valid; all security-review corrections addressed |
+| 2026-07-17 | SEC-01 | Owner approved secure protocol v2 and storage A; protocol, provider, and platform-store reviews completed | Decision blocker cleared; exact contract frozen; production implementation authorized |
+| 2026-07-18 | SEC-01 | Implemented authenticated secure v2, Storage A, migration/authorization/manual-pin/LAN separation, platform providers, samples, and regression suites | Local targeted, full core JVM/iOS, LAN JVM, provisioning, sample, XCFramework/Swift, and publication checks pass |
+| 2026-07-18 | SEC-01/full gate | Ran `./gradlew check` after final ownership correction | SEC paths pass; gate remains red only for the registered Android lint error and two Apple LAN lifecycle timeouts; external security/device/network certification still required |

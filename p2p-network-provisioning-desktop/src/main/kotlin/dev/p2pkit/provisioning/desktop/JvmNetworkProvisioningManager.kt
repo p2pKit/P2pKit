@@ -3,6 +3,7 @@ package dev.p2pkit.provisioning.desktop
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.provisioning.JoinNetworkResult
 import dev.p2pkit.core.provisioning.LocalNetworkConfig
 import dev.p2pkit.core.provisioning.LocalNetworkResult
@@ -100,14 +101,34 @@ public class JvmNetworkProvisioningManager(
             port = port,
             appId = ctx.appId,
             peerId = ctx.localPeerId,
-            deviceName = ctx.localDeviceName
+            deviceName = ctx.localDeviceName,
+            fingerprint = ctx.localFingerprint,
+            pairingQr = ctx.localPairingQr
         )
     }
 
     @ExperimentalP2pApi
+    @Deprecated(
+        message = "Secure manual-IP connections require an expected fingerprint. Use the fingerprint overload.",
+        replaceWith = ReplaceWith("createManualPeer(host, port, expectedFingerprint)")
+    )
     override suspend fun createManualPeer(host: String, port: Int): Peer {
         ctx.logger.info("provisioning: createManualPeer host=$host port=$port")
         return ctx.manualPeerRegistrar.registerManualPeer(host = host, port = port)
+    }
+
+    @ExperimentalP2pApi
+    override suspend fun createManualPeer(
+        host: String,
+        port: Int,
+        expectedFingerprint: PeerFingerprint
+    ): Peer {
+        ctx.logger.info("provisioning: createManualPeer host=$host port=$port with authenticated pin")
+        return ctx.manualPeerRegistrar.registerManualPeer(
+            host = host,
+            port = port,
+            expectedFingerprint = expectedFingerprint
+        )
     }
 
     /** Cancels the background polling loop. Called by [P2pKit.stop]'s scope cancellation indirectly. */

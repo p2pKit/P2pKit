@@ -58,6 +58,7 @@ import kotlin.test.assertTrue
  * No mDNS — endpoints travel through stub [DiscoveryTransport]s, keeping
  * the test deterministic (same harness as [JvmLanAcceptLoopResilienceTest]).
  */
+@Suppress("DEPRECATION")
 class JvmLanAdmissionControlTest {
 
     private val unique = "p2pkit-itest-admission-${System.currentTimeMillis()}"
@@ -225,6 +226,7 @@ class JvmLanAdmissionControlTest {
             P2pKit.create {
                 appId = AppId(unique)
                 deviceName = name
+                security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
                 logger = kitLogger
                 keepAlive {
                     pingIntervalMillis = 60_000

@@ -2,6 +2,33 @@ package dev.p2pkit.core
 
 import dev.p2pkit.core.permission.P2pPermission
 
+/** Why the local secure identity could not be loaded or created. */
+public enum class LocalIdentityFailureKind {
+    STORE_NOT_CONFIGURED,
+    TEMPORARILY_UNAVAILABLE,
+    DEVICE_LOCKED,
+    PERMISSION_OR_ENTITLEMENT_DENIED,
+    KEY_MATERIAL_LOST,
+    KEY_INVALIDATED,
+    INCOMPLETE_CREATION,
+    CORRUPT_RECORD,
+    PERSISTENCE_FAILED,
+    CRYPTO_PROVIDER_UNAVAILABLE,
+    KEY_GENERATION_FAILED,
+    STORE_CONTRACT_VIOLATION,
+    LIVE_IDENTITY_IN_USE,
+    RESET_PENDING
+}
+
+/** The only safe next action after a [LocalIdentityFailureKind]. */
+public enum class LocalIdentityRecovery {
+    RETRY,
+    RETRY_AFTER_DEVICE_UNLOCK,
+    CONFIGURE_STORE,
+    FIX_PLATFORM_CONFIGURATION,
+    EXPLICIT_RESET_REQUIRED
+}
+
 /**
  * Typed errors thrown by the P2pKit public API.
  *
@@ -13,6 +40,24 @@ import dev.p2pkit.core.permission.P2pPermission
  * `createManualPeer` on the `Unsupported` provisioning manager.
  */
 public sealed class P2pError(message: String? = null, cause: Throwable? = null) : Exception(message, cause) {
+
+    /**
+     * Secure local identity was unavailable during synchronous kit creation.
+     *
+     * No transient identity is returned and no transport is constructed.
+     * In particular, loss or corruption never silently rotates the identity;
+     * [LocalIdentityRecovery.EXPLICIT_RESET_REQUIRED] requires an application-
+     * initiated destructive reset and subsequent peer re-pinning.
+     */
+    public data class LocalIdentityUnavailable(
+        val kind: LocalIdentityFailureKind,
+        val recovery: LocalIdentityRecovery,
+        val reason: String
+    ) : P2pError("Local secure identity unavailable ($kind): $reason") {
+        internal var underlying: Throwable? = null
+
+        override val cause: Throwable? get() = underlying
+    }
 
     /** No registered transport reported it could reach this peer. */
     public data class NoTransportAvailable(val peer: Peer) :
@@ -54,6 +99,21 @@ public sealed class P2pError(message: String? = null, cause: Throwable? = null) 
 
     /** Peer rejected the HELLO handshake (typically appId mismatch). */
     public data class HandshakeRejected(val reason: String) : P2pError(reason)
+
+    /** Secure preface, Noise key exchange, record authentication, or key proof failed. */
+    public data class AuthenticationFailed(val reason: String) : P2pError(reason) {
+        internal var underlying: Throwable? = null
+        override val cause: Throwable? get() = underlying
+    }
+
+    /** The remote proved a key that the configured authorization policy did not admit. */
+    public data class AuthorizationRejected(val reason: String) : P2pError(reason)
+
+    /** Secure mode was invoked without a required pin, store, or compatible peer identity. */
+    public data class SecurityConfigurationInvalid(val reason: String) : P2pError(reason)
+
+    /** The authenticated key-derived identity did not match the selected peer or encrypted HELLO. */
+    public data class AuthenticatedIdentityMismatch(val reason: String) : P2pError(reason)
 
     /** Peer advertised an incompatible protocol major version. */
     public data class VersionMismatch(val localVersion: Int, val remoteVersion: Int) :

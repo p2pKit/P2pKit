@@ -100,6 +100,20 @@ class FrameReaderTest {
     }
 
     @Test
+    fun unexpectedVersionIsRejectedFromHeaderAlone() {
+        val reader = FrameReader(expectedVersion = ProtocolConstants.SECURE_VERSION)
+        val header = FrameCodec.encode(
+            frame(0).withVersion(ProtocolConstants.LEGACY_VERSION)
+        ).copyOfRange(0, ProtocolConstants.HEADER_SIZE)
+        FrameCodec.writeIntBE(header, 32, ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES)
+
+        val error = assertFailsWith<P2pError.VersionMismatch> { reader.feed(header) }
+
+        assertEquals(ProtocolConstants.SECURE_VERSION.toInt(), error.localVersion)
+        assertEquals(ProtocolConstants.LEGACY_VERSION.toInt(), error.remoteVersion)
+    }
+
+    @Test
     fun emptyFeedReturnsEmpty() {
         val reader = FrameReader()
         assertTrue(reader.feed(ByteArray(0)).isEmpty())

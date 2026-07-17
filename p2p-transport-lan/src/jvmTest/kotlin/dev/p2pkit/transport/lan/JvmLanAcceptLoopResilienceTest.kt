@@ -56,6 +56,7 @@ import kotlin.test.assertTrue
  *     surfaced through the injectable logger; the kit survives — established
  *     sessions keep working — and shutdown still completes promptly.
  */
+@Suppress("DEPRECATION")
 class JvmLanAcceptLoopResilienceTest {
 
     private val unique = "p2pkit-itest-accept-${System.currentTimeMillis()}"
@@ -193,6 +194,7 @@ class JvmLanAcceptLoopResilienceTest {
             P2pKit.create {
                 appId = AppId(unique)
                 deviceName = name
+                security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
                 logger = kitLogger
                 keepAlive {
                     pingIntervalMillis = 60_000

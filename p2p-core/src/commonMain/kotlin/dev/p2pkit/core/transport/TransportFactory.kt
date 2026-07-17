@@ -2,7 +2,17 @@ package dev.p2pkit.core.transport
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.PeerId
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.Platform
+
+/** Immutable wire/discovery profile selected for the whole kit. */
+public enum class TransportSecurityProfile {
+    /** Authenticated Noise protocol v2 and the secure discovery namespace. */
+    AuthenticatedV2,
+
+    /** Explicit deprecated plaintext protocol v1 migration profile. */
+    LegacyPlaintextV1
+}
 
 /**
  * Information P2pKit hands to a [TransportFactory] when constructing transports.
@@ -13,7 +23,10 @@ public data class TransportContext(
     val appId: AppId,
     val localPeerId: PeerId,
     val deviceName: String,
-    val platform: Platform
+    val platform: Platform,
+    val securityProfile: TransportSecurityProfile = TransportSecurityProfile.LegacyPlaintextV1,
+    /** Full local fingerprint in secure mode; never an authorization decision. */
+    val localFingerprint: PeerFingerprint? = null
 )
 
 /**

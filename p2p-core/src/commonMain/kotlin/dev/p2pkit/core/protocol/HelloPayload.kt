@@ -19,7 +19,7 @@ internal data class HelloPayload(
     val deviceName: String,
     val platform: String,
     val supportedTransports: List<String>,
-    val protocolVersion: Int = ProtocolConstants.VERSION.toInt()
+    val protocolVersion: Int = ProtocolConstants.LEGACY_VERSION.toInt()
 ) {
     companion object {
         private val json = Json {

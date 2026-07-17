@@ -2,7 +2,10 @@ package dev.p2pkit.sample.kmp
 
 import android.content.Context
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.PeerAuthorizationPolicy
+import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.android.P2pKitAndroid
 import dev.p2pkit.transport.lan.lan
 
@@ -24,12 +27,18 @@ public fun initP2pKitAndroid(context: Context) {
     P2pKitAndroid.initialize(app)
 }
 
+@OptIn(ExplicitSecurityRisk::class)
 public actual fun createP2pKit(appId: String, deviceName: String): P2pKit {
     val ctx = applicationContext
         ?: error("Call initP2pKitAndroid(applicationContext) from Application.onCreate() first.")
     return P2pKit.create {
         this.appId = AppId(appId)
         this.deviceName = deviceName
+        security {
+            mode = SecurityMode.AuthenticatedV2(
+                PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+            )
+        }
         transports { lan(ctx) }
     }
 }

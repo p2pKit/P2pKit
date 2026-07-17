@@ -2,6 +2,7 @@ package dev.p2pkit.core.provisioning
 
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.TransportKind
 
 /**
@@ -50,6 +51,7 @@ public interface ManualPeerRegistrar {
         host: String,
         port: Int,
         kind: TransportKind = TransportKind.LAN,
-        deviceName: String? = null
+        deviceName: String? = null,
+        expectedFingerprint: PeerFingerprint? = null
     ): Peer
 }

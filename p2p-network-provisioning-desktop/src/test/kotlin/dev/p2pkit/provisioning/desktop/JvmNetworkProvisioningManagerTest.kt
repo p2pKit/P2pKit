@@ -6,6 +6,7 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
@@ -100,6 +101,7 @@ class JvmNetworkProvisioningManagerTest {
     }
 
     @OptIn(ExperimentalP2pApi::class)
+    @Suppress("DEPRECATION")
     @Test
     fun createManualPeerDelegatesToRegistrar() = runBlocking<Unit> {
         val registrar = RecordingRegistrar()
@@ -126,7 +128,8 @@ private class RecordingRegistrar : ManualPeerRegistrar {
         host: String,
         port: Int,
         kind: TransportKind,
-        deviceName: String?
+        deviceName: String?,
+        expectedFingerprint: PeerFingerprint?
     ): Peer {
         calls += Call(host, port, kind, deviceName)
         return Peer(

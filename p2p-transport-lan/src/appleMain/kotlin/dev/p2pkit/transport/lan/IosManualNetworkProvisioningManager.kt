@@ -2,6 +2,7 @@ package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.dsl.NetworkProvisioningConfigBuilder
 import dev.p2pkit.core.provisioning.JoinNetworkResult
 import dev.p2pkit.core.provisioning.LocalNetworkConfig
@@ -94,15 +95,36 @@ public class IosManualNetworkProvisioningManager internal constructor(
             port = port,
             appId = ctx.appId,
             peerId = ctx.localPeerId,
-            deviceName = ctx.localDeviceName
+            deviceName = ctx.localDeviceName,
+            fingerprint = ctx.localFingerprint,
+            pairingQr = ctx.localPairingQr
         )
     }
 
     @OptIn(ExperimentalP2pApi::class)
+    @Deprecated(
+        message = "Secure manual-IP connections require an expected fingerprint. Use the fingerprint overload.",
+        replaceWith = ReplaceWith("createManualPeer(host, port, expectedFingerprint)")
+    )
     override suspend fun createManualPeer(host: String, port: Int): Peer {
         ctx.logger.info("provisioning: createManualPeer host=$host port=$port")
         IosLanDebug.log("provision", "createManualPeer host=$host port=$port")
         return ctx.manualPeerRegistrar.registerManualPeer(host = host, port = port)
+    }
+
+    @ExperimentalP2pApi
+    override suspend fun createManualPeer(
+        host: String,
+        port: Int,
+        expectedFingerprint: PeerFingerprint
+    ): Peer {
+        ctx.logger.info("provisioning: createManualPeer host=$host port=$port with authenticated pin")
+        IosLanDebug.log("provision", "createManualPeer host=$host port=$port with authenticated pin")
+        return ctx.manualPeerRegistrar.registerManualPeer(
+            host = host,
+            port = port,
+            expectedFingerprint = expectedFingerprint
+        )
     }
 }
 

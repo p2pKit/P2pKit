@@ -1,8 +1,10 @@
 package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.InternalPeer
@@ -33,6 +35,8 @@ import kotlin.test.assertTrue
  * Uses a tracking [PeerIdStorage] so the assertion is "the kit loaded my
  * storage" (not just "the storage happens to be deterministic").
  */
+@OptIn(ExplicitSecurityRisk::class)
+@Suppress("DEPRECATION")
 class PeerIdPersistenceIntegrationTest {
 
     private val tempDir: File = Files.createTempDirectory("p2pkit-pidpersist-itest").toFile()
@@ -51,6 +55,7 @@ class PeerIdPersistenceIntegrationTest {
             this.appId = appId
             deviceName = "First"
             peerIdStorage = kitOneStorage
+            security { mode = SecurityMode.NoneForMvp }
             transports { register(NoopFactory) }
         }
         runBlocking { kitOne.stop() }
@@ -62,6 +67,7 @@ class PeerIdPersistenceIntegrationTest {
             this.appId = appId
             deviceName = "Second"
             peerIdStorage = kitTwoStorage
+            security { mode = SecurityMode.NoneForMvp }
             transports { register(NoopFactory) }
         }
         runBlocking { kitTwo.stop() }
@@ -87,6 +93,7 @@ class PeerIdPersistenceIntegrationTest {
             appId = AppId("tracking-test")
             deviceName = "Tracker"
             peerIdStorage = tracking
+            security { mode = SecurityMode.NoneForMvp }
             transports { register(NoopFactory) }
         }
         runBlocking { kit.stop() }
@@ -102,12 +109,14 @@ class PeerIdPersistenceIntegrationTest {
             appId = AppId("app-A")
             deviceName = "A"
             peerIdStorage = storageA
+            security { mode = SecurityMode.NoneForMvp }
             transports { register(NoopFactory) }
         }
         val kitB = P2pKit.create {
             appId = AppId("app-B")
             deviceName = "B"
             peerIdStorage = storageB
+            security { mode = SecurityMode.NoneForMvp }
             transports { register(NoopFactory) }
         }
         try {

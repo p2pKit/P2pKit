@@ -3,8 +3,12 @@ package dev.p2pkit.provisioning.desktop
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.ExperimentalP2pApi
+import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
+import dev.p2pkit.core.PeerAuthorizationPolicy
+import dev.p2pkit.core.SecurityMode
+import dev.p2pkit.core.dsl.jvmSecureIdentityStore
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
@@ -25,6 +29,7 @@ import kotlin.test.assertNotNull
  * `ManualConnectionInfo`, Bob calls `createManualPeer` + `connect`, and the
  * session opens directly.
  */
+@OptIn(ExplicitSecurityRisk::class)
 class ManualIpLoopbackTest {
 
     private val kits = mutableListOf<P2pKit>()
@@ -53,6 +58,12 @@ class ManualIpLoopbackTest {
             P2pKit.create {
                 appId = AppId("com.example.manual-ip")
                 deviceName = name
+                jvmSecureIdentityStore(InMemoryTestJvmSecureIdentityStore())
+                security {
+                    mode = SecurityMode.AuthenticatedV2(
+                        PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+                    )
+                }
                 transports { lan() }
                 networkProvisioning { jvm() }
             }
@@ -89,7 +100,8 @@ class ManualIpLoopbackTest {
 
         val syntheticPeer = bob.networkProvisioning.createManualPeer(
             host = targetHost,
-            port = targetPort
+            port = targetPort,
+            expectedFingerprint = assertNotNull(aliceInfo.fingerprint)
         )
 
         // Subscribe BEFORE connect so we don't miss Alice's incoming-session emission.
@@ -103,6 +115,7 @@ class ManualIpLoopbackTest {
         val incoming = withTimeout(10_000) { incomingDeferred.await() }
 
         assertEquals(ConnectionState.Connected, outgoing.state.value)
+        assertEquals(aliceInfo.fingerprint, outgoing.peerIdentity.fingerprint)
 
         // Round-trip a Text message in each direction.
         val incomingMessageDeferred = async {

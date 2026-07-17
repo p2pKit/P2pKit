@@ -14,12 +14,22 @@ internal class Frame(
     val chunkIndex: Int,
     val totalChunks: Int,
     val payload: ByteArray,
-    val version: Byte = ProtocolConstants.VERSION
+    val version: Byte = ProtocolConstants.LEGACY_VERSION
 ) {
 
     val needsAck: Boolean get() = (flags.toInt() and FrameFlags.NEEDS_ACK) != 0
     val isLastChunk: Boolean get() = (flags.toInt() and FrameFlags.LAST_CHUNK) != 0
     val isText: Boolean get() = (flags.toInt() and FrameFlags.IS_TEXT) != 0
+
+    fun withVersion(value: Byte): Frame = if (version == value) this else Frame(
+        type = type,
+        flags = flags,
+        messageId = messageId,
+        chunkIndex = chunkIndex,
+        totalChunks = totalChunks,
+        payload = payload,
+        version = value
+    )
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

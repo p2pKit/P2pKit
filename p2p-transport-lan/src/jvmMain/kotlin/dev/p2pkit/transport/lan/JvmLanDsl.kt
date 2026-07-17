@@ -37,7 +37,9 @@ internal object JvmLanTransportFactory : TransportFactory {
             appId = context.appId,
             localPeerId = context.localPeerId,
             deviceName = context.deviceName,
-            platform = context.platform
+            platform = context.platform,
+            securityProfile = context.securityProfile,
+            fingerprint = context.localFingerprint
         )
         return TransportPair(
             data = JvmLanDataTransport(registration),

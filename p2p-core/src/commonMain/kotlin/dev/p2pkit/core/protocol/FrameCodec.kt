@@ -55,7 +55,10 @@ internal object FrameCodec {
      * truncated frame, unknown packet type, invalid chunk indices, negative
      * payload length).
      */
-    fun decode(bytes: ByteArray): Frame {
+    fun decode(
+        bytes: ByteArray,
+        expectedVersion: Byte = ProtocolConstants.LEGACY_VERSION
+    ): Frame {
         if (bytes.size < ProtocolConstants.HEADER_SIZE) {
             throw P2pError.ProtocolError(
                 "Frame too short: ${bytes.size} bytes (need at least ${ProtocolConstants.HEADER_SIZE})"
@@ -70,6 +73,12 @@ internal object FrameCodec {
         }
 
         val version = bytes[4]
+        if (version != expectedVersion) {
+            throw P2pError.VersionMismatch(
+                localVersion = expectedVersion.toUByte().toInt(),
+                remoteVersion = version.toUByte().toInt()
+            )
+        }
         val typeCode = bytes[5]
         val flags = bytes[6]
         // bytes[7] reserved — deliberately NOT validated on decode (encode

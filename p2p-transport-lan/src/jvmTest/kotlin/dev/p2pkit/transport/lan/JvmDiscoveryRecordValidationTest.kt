@@ -207,7 +207,7 @@ class JvmDiscoveryRecordValidationTest {
         app: String,
         deviceName: String
     ): ServiceInfo = ServiceInfo.create(
-        LanConstants.SERVICE_TYPE_JMDNS,
+        LanConstants.LEGACY_SERVICE_TYPE_JMDNS,
         instanceName,
         port,
         /* weight = */ 0,
@@ -218,7 +218,7 @@ class JvmDiscoveryRecordValidationTest {
             LanConstants.TXT_DEVICE_NAME to deviceName,
             LanConstants.TXT_PLATFORM to Platform.JVM_DESKTOP.name,
             LanConstants.TXT_CAPABILITIES to "LAN",
-            LanConstants.TXT_PROTOCOL_VERSION to LanConstants.PROTOCOL_VERSION.toString()
+            LanConstants.TXT_PROTOCOL_VERSION to LanConstants.LEGACY_PROTOCOL_VERSION.toString()
         )
     )
 

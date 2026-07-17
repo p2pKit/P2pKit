@@ -3,6 +3,7 @@ package dev.p2pkit.core.provisioning
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import kotlinx.coroutines.Job
 
@@ -57,6 +58,10 @@ public class ProvisioningContext public constructor(
     public val logger: P2pLogger,
     public val lanTcpPort: () -> Int?,
     public val manualPeerRegistrar: ManualPeerRegistrar,
+    /** Local v2 fingerprint, or `null` for explicit legacy plaintext mode. */
+    public val localFingerprint: PeerFingerprint? = null,
+    /** Canonical AppId-bound pairing QR, or `null` in legacy mode. */
+    public val localPairingQr: String? = null,
     /**
      * Parent [Job] the manager should attach its scope to so the kit's
      * `stop()` automatically tears the manager down (cancels callbacks,

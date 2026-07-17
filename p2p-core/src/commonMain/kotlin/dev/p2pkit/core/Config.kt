@@ -76,8 +76,56 @@ public sealed class AppKilledPolicy {
     public data object NoPersistenceForMvp : AppKilledPolicy()
 }
 
-/** Security mode for the SDK. v0.1 ships only [NoneForMvp]; see Spec §18 for future. */
+/**
+ * Whole-kit security profile.
+ *
+ * A kit never negotiates this value with a peer. In particular, a failed
+ * authenticated handshake is terminal and is never retried as plaintext.
+ */
 public sealed class SecurityMode {
-    /** No encryption, no pairing. Connections are plain TCP. */
+    /**
+     * Authenticated protocol v2. Traffic is protected by the fixed
+     * `Noise_XX_25519_ChaChaPoly_SHA256` profile and peer identity is bound to
+     * possession of a persistent X25519 key.
+     */
+    public data class AuthenticatedV2(
+        val authorization: PeerAuthorizationPolicy = PeerAuthorizationPolicy.RejectUnknown
+    ) : SecurityMode()
+
+    /**
+     * Deprecated migration profile: protocol v1 with no encryption or peer
+     * authentication. Both endpoints must select it explicitly.
+     */
+    @Deprecated(
+        message = "Plaintext protocol v1 is unauthenticated. Use AuthenticatedV2 and configure peer authorization.",
+        replaceWith = ReplaceWith("SecurityMode.AuthenticatedV2()")
+    )
     public data object NoneForMvp : SecurityMode()
 }
+
+/** Authorization applied after the remote proves possession of its X25519 key. */
+public sealed interface PeerAuthorizationPolicy {
+    /** Reject every identity that is not supplied as a per-connect/manual pin. */
+    public data object RejectUnknown : PeerAuthorizationPolicy
+
+    /** Admit only the complete, high-entropy fingerprints in [fingerprints]. */
+    public data class PinnedOnly(
+        val fingerprints: Set<PeerFingerprint>
+    ) : PeerAuthorizationPolicy
+
+    /**
+     * Admit any authenticated key whose handshake is bound to the same exact
+     * AppId. AppId scopes a product; it is not an authorization secret.
+     */
+    @ExplicitSecurityRisk
+    public data object AcceptAnyAuthenticatedSameApp : PeerAuthorizationPolicy
+}
+
+/** Marks APIs that deliberately weaken peer admission and require explicit opt-in. */
+@RequiresOptIn(
+    message = "This policy authenticates transport keys but does not restrict which same-AppId peer may connect.",
+    level = RequiresOptIn.Level.WARNING
+)
+@Retention(AnnotationRetention.BINARY)
+@Target(AnnotationTarget.CLASS, AnnotationTarget.PROPERTY, AnnotationTarget.FUNCTION)
+public annotation class ExplicitSecurityRisk

@@ -1,8 +1,12 @@
 package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.PeerId
+import dev.p2pkit.core.transport.PeerAuthenticationHint
+import dev.p2pkit.core.transport.TransportSecurityProfile
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 /**
@@ -67,5 +71,70 @@ class PeerRecordValidationTest {
                 "guard/constructor disagreement on bytes=${sample.encodeToByteArray().toList()}"
             )
         }
+    }
+
+    @Test
+    fun secureRecordRequiresExactV2AndCanonicalFingerprint() {
+        val fingerprint = "p2f1-${"a".repeat(52)}"
+        val metadata = validateLanDiscoverySecurityMetadata(
+            profile = TransportSecurityProfile.AuthenticatedV2,
+            protocolVersion = "2",
+            fingerprint = fingerprint
+        )
+
+        val claim = assertIs<PeerAuthenticationHint.UntrustedDiscoveryClaim>(
+            metadata?.authenticationHint
+        )
+        assertEquals(fingerprint, claim.fingerprint.value)
+    }
+
+    @Test
+    fun secureRecordRejectsMissingMalformedOrWrongVersionMetadata() {
+        assertNull(
+            validateLanDiscoverySecurityMetadata(
+                TransportSecurityProfile.AuthenticatedV2,
+                protocolVersion = "2",
+                fingerprint = null
+            )
+        )
+        assertNull(
+            validateLanDiscoverySecurityMetadata(
+                TransportSecurityProfile.AuthenticatedV2,
+                protocolVersion = "2",
+                fingerprint = "p2f1-not-canonical"
+            )
+        )
+        assertNull(
+            validateLanDiscoverySecurityMetadata(
+                TransportSecurityProfile.AuthenticatedV2,
+                protocolVersion = "1",
+                fingerprint = "p2f1-${"a".repeat(52)}"
+            )
+        )
+    }
+
+    @Test
+    fun legacyRecordAcceptsOnlyExactV1WithoutFingerprint() {
+        val valid = validateLanDiscoverySecurityMetadata(
+            TransportSecurityProfile.LegacyPlaintextV1,
+            protocolVersion = "1",
+            fingerprint = null
+        )
+        assertNotNull(valid)
+        assertEquals(null, valid.authenticationHint)
+        assertNull(
+            validateLanDiscoverySecurityMetadata(
+                TransportSecurityProfile.LegacyPlaintextV1,
+                protocolVersion = "2",
+                fingerprint = null
+            )
+        )
+        assertNull(
+            validateLanDiscoverySecurityMetadata(
+                TransportSecurityProfile.LegacyPlaintextV1,
+                protocolVersion = "1",
+                fingerprint = "p2f1-${"a".repeat(52)}"
+            )
+        )
     }
 }

@@ -2,6 +2,7 @@ package dev.p2pkit.core.provisioning
 
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerFingerprint
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,8 +39,19 @@ public class UnsupportedNetworkProvisioningManager : NetworkProvisioningManager 
     override suspend fun getManualConnectionInfo(): ManualConnectionInfo? = null
 
     @ExperimentalP2pApi
+    @Deprecated(
+        message = "Secure manual-IP connections require an expected fingerprint. Use the fingerprint overload.",
+        replaceWith = ReplaceWith("createManualPeer(host, port, expectedFingerprint)")
+    )
     override suspend fun createManualPeer(host: String, port: Int): Peer =
         throw UnsupportedOperationException(NOT_IN_V01)
+
+    @ExperimentalP2pApi
+    override suspend fun createManualPeer(
+        host: String,
+        port: Int,
+        expectedFingerprint: PeerFingerprint
+    ): Peer = throw UnsupportedOperationException(NOT_IN_V01)
 
     private companion object {
         const val NOT_IN_V01 = "Network provisioning is planned for v0.2 and not implemented in v0.1."

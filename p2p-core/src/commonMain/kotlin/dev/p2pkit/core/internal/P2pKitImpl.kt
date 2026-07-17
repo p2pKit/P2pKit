@@ -12,20 +12,27 @@ import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
+import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.core.protocol.DefaultP2pProtocol
+import dev.p2pkit.core.protocol.ProtocolConstants
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
 import dev.p2pkit.core.provisioning.NetworkProvisioningFactory
 import dev.p2pkit.core.provisioning.NetworkProvisioningManager
 import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.UnsupportedNetworkProvisioningManager
-import dev.p2pkit.core.security.NoOpSecurityManager
-import dev.p2pkit.core.security.SecurityManager
+import dev.p2pkit.core.security.LocalSecureIdentity
+import dev.p2pkit.core.security.PlatformSecurityCryptography
+import dev.p2pkit.core.security.SecureIdentityService
+import dev.p2pkit.core.security.platformSecurityCryptography
+import dev.p2pkit.core.internal.security.AuthenticatedV2SecurityEngine
+import dev.p2pkit.core.internal.security.noise.SECURE_V2_MAX_APP_ID_UTF8_BYTES
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.DiscoveryTransport
@@ -33,6 +40,7 @@ import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
+import dev.p2pkit.core.transport.TransportSecurityProfile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -40,6 +48,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -55,17 +64,22 @@ import kotlinx.coroutines.withTimeoutOrNull
  * [dev.p2pkit.core.dsl.P2pKitBuilder].
  */
 @OptIn(dev.p2pkit.core.ExperimentalP2pApi::class)
+@Suppress("DEPRECATION")
 internal class P2pKitImpl(
     override val appId: AppId,
     private val deviceName: String,
     private val localPlatform: Platform,
     override val localPeerId: PeerId,
+    private val localSecureIdentity: LocalSecureIdentity?,
+    private val secureIdentityService: SecureIdentityService?,
+    private val secureIdentityUsage: SecureIdentityUsage?,
+    private val securityCryptography: PlatformSecurityCryptography?,
     private val transportFactories: List<TransportFactory>,
     private val keepAlive: KeepAliveConfig,
     private val reconnectPolicy: ReconnectPolicy,
     private val backgroundPolicy: BackgroundPolicy,
     @Suppress("unused") private val appKilledPolicy: AppKilledPolicy,
-    @Suppress("unused") private val securityMode: SecurityMode,
+    private val securityMode: SecurityMode,
     private val provisioningConfig: NetworkProvisioningConfig,
     private val provisioningFactory: NetworkProvisioningFactory?,
     private val fileTransferConfig: FileTransferConfig,
@@ -104,6 +118,15 @@ internal class P2pKitImpl(
 
     override val localDeviceName: String get() = deviceName
 
+    override val localFingerprint: PeerFingerprint? get() = localSecureIdentity?.fingerprint
+
+    override val localPairingQr: String? = localSecureIdentity?.let { identity ->
+        checkNotNull(secureIdentityService).pairingQr(appId, identity.fingerprint)
+    }
+
+    override fun parsePeerPairingQr(value: String): PeerFingerprint? =
+        secureIdentityService?.parsePairingQr(appId, value)
+
     override val networkPathStatus: StateFlow<NetworkPathStatus>
         get() = pathObserver.status
 
@@ -115,8 +138,18 @@ internal class P2pKitImpl(
     private val discoveryTransports: List<DiscoveryTransport>
 
     private val transportManager: TransportManager
-    private val security: SecurityManager = NoOpSecurityManager()
-    private val protocol = DefaultP2pProtocol(clock = clock, logger = logger)
+    private val securityProfile: TransportSecurityProfile = when (securityMode) {
+        is SecurityMode.AuthenticatedV2 -> TransportSecurityProfile.AuthenticatedV2
+        SecurityMode.NoneForMvp -> TransportSecurityProfile.LegacyPlaintextV1
+    }
+    private val protocol = DefaultP2pProtocol(
+        clock = clock,
+        logger = logger,
+        version = when (securityProfile) {
+            TransportSecurityProfile.AuthenticatedV2 -> ProtocolConstants.SECURE_VERSION
+            TransportSecurityProfile.LegacyPlaintextV1 -> ProtocolConstants.LEGACY_VERSION
+        }
+    )
     private val sessionManager: SessionManager
 
     private val peerRegistry: PeerRegistry
@@ -156,7 +189,9 @@ internal class P2pKitImpl(
             appId = appId,
             localPeerId = localPeerId,
             deviceName = deviceName,
-            platform = localPlatform
+            platform = localPlatform,
+            securityProfile = securityProfile,
+            localFingerprint = localFingerprint
         )
         transports = transportFactories.map { factory ->
             val pair = factory.build(ctx)
@@ -170,13 +205,19 @@ internal class P2pKitImpl(
         peerRegistry = PeerRegistry(
             discoveryTransports = discoveryTransports,
             scope = scope,
-            clock = clock
+            clock = clock,
+            securityProfile = securityProfile,
+            peerIdFromFingerprint = secureIdentityService?.let { service ->
+                { fingerprint -> service.peerId(appId, fingerprint) }
+            }
         )
         sessionManager = SessionManager(
             scope = scope,
             transportManager = transportManager,
             protocol = protocol,
-            security = security,
+            securityMode = securityMode,
+            localSecureIdentity = localSecureIdentity,
+            authenticatedSecurity = securityCryptography?.let(::AuthenticatedV2SecurityEngine),
             keepAlive = keepAlive,
             reconnectPolicy = reconnectPolicy,
             localAppId = appId,
@@ -229,6 +270,8 @@ internal class P2pKitImpl(
                     logger = logger,
                     lanTcpPort = { lanEndpoint?.tcpPort?.value },
                     manualPeerRegistrar = peerRegistry,
+                    localFingerprint = localFingerprint,
+                    localPairingQr = localPairingQr,
                     parentJob = internalJob
                 )
                 runCatching { factory.build(ctx) }.getOrElse { e ->
@@ -370,7 +413,9 @@ internal class P2pKitImpl(
                 deviceName = deviceName,
                 platform = localPlatform,
                 appId = appId,
-                supportedTransports = supportedTransportKinds
+                supportedTransports = supportedTransportKinds,
+                securityProfile = securityProfile,
+                fingerprint = localFingerprint
             )
             for (transport in discoveryTransports) {
                 transport.startAdvertising(localInfo)
@@ -426,6 +471,18 @@ internal class P2pKitImpl(
     }
 
     override suspend fun connect(peer: Peer): P2pSession {
+        return connectInternal(peer, expectedFingerprint = null)
+    }
+
+    override suspend fun connect(
+        peer: Peer,
+        expectedFingerprint: PeerFingerprint
+    ): P2pSession = connectInternal(peer, expectedFingerprint)
+
+    private suspend fun connectInternal(
+        peer: Peer,
+        expectedFingerprint: PeerFingerprint?
+    ): P2pSession {
         ensureStarted()
         val internalPeer = peerRegistry.internalPeer(peer.id)
             ?: dev.p2pkit.core.transport.InternalPeer(
@@ -434,7 +491,7 @@ internal class P2pKitImpl(
                     dev.p2pkit.core.transport.TransportHint(type = it)
                 }
             )
-        return sessionManager.connect(peer, internalPeer)
+        return sessionManager.connect(peer, internalPeer, expectedFingerprint)
     }
 
     override fun lastSeen(peerId: PeerId): Long? = peerRegistry.lastSeen(peerId)
@@ -469,7 +526,13 @@ internal class P2pKitImpl(
         // so the instance cannot be revived — the `stopped` flag makes any
         // subsequent lifecycle call fail loudly (IllegalStateException) instead
         // of latching onto a dead scope and silently no-op'ing.
-        if (stopped) return
+        if (stopped) {
+            // A previous bounded teardown may have left a non-cooperative
+            // child alive and therefore deliberately retained the identity
+            // lease. Repeated stop is an opportunity to finish that cleanup.
+            withContext(NonCancellable) { finishIdentityOwnershipTeardown() }
+            return
+        }
         // NonCancellable: `stopped` latches at entry, so if the caller's
         // coroutine were cancelled mid-teardown the kit would be permanently
         // half-stopped (transports bound, scope alive) with every later
@@ -477,6 +540,7 @@ internal class P2pKitImpl(
         // wrapped so one bad session cannot abort the rest of teardown
         // (AUDIT-2026-06 fix).
         withContext(NonCancellable) {
+            try {
             // Latch BEFORE anything that can suspend: ensureStarted re-checks
             // `stopped` after its bind loop, so even the lock-less fallback
             // below cannot be raced by a late Running/startResult latch.
@@ -540,9 +604,27 @@ internal class P2pKitImpl(
                         "may stay attached until process exit)"
                 )
             }
-            internalJob.cancel()
-            _state.value = P2pState.Stopped
+            } finally {
+                finishIdentityOwnershipTeardown()
+                _state.value = P2pState.Stopped
+            }
         }
+    }
+
+    /**
+     * Clear the in-memory private key immediately, but release destructive
+     * reset exclusion only after every kit child has terminated. If a broken
+     * child ignores cancellation, retaining the idempotent usage token is the
+     * required fail-closed behavior; a later stop() call retries the join.
+     */
+    private suspend fun finishIdentityOwnershipTeardown() {
+        localSecureIdentity?.clearPrivate()
+        internalJob.cancel()
+        val childrenStopped = withTimeoutOrNull(INTERNAL_JOB_CLOSE_TIMEOUT_MS) {
+            internalJob.cancelAndJoin()
+            true
+        } ?: false
+        if (childrenStopped) secureIdentityUsage?.release()
     }
 
     /**
@@ -603,6 +685,9 @@ internal class P2pKitImpl(
          * hung `start()`) reaches this bound (AUDIT-2026-07 (ARCH-2)).
          */
         const val OBSERVER_CLOSE_TIMEOUT_MS: Long = 5_000
+
+        /** Bound before fail-closed retention of the destructive-reset lease. */
+        const val INTERNAL_JOB_CLOSE_TIMEOUT_MS: Long = 5_000
     }
 }
 
@@ -625,32 +710,100 @@ internal fun newP2pKit(
     fileTransferConfig: FileTransferConfig,
     logger: P2pLogger,
     peerIdStorageOverride: PeerIdStorage? = null,
+    secureIdentityStorageOverride: SecureIdentityStorage? = null,
     networkPathObserverOverride: NetworkPathObserver? = null,
     permissionManagerOverride: dev.p2pkit.core.permission.P2pPermissionManager? = null,
     strictSessionInvariants: Boolean = false
 ): P2pKit {
-    val peerIdStorage = peerIdStorageOverride ?: defaultPeerIdStorage(appId, logger)
-    val pathObserver = networkPathObserverOverride ?: defaultNetworkPathObserver(logger)
-    val permissionManager = permissionManagerOverride ?: defaultPlatformPermissionManager(logger)
-    return P2pKitImpl(
-        appId = appId,
-        deviceName = deviceName,
-        localPlatform = currentPlatform(),
-        localPeerId = peerIdStorage.loadOrGenerate(),
-        transportFactories = transportFactories,
-        keepAlive = keepAlive,
-        reconnectPolicy = reconnectPolicy,
-        backgroundPolicy = backgroundPolicy,
-        appKilledPolicy = appKilledPolicy,
-        securityMode = securityMode,
-        provisioningConfig = provisioningConfig,
-        provisioningFactory = provisioningFactory,
-        fileTransferConfig = fileTransferConfig,
-        permissions = permissionManager,
-        logger = logger,
-        clock = ::systemTimeMillis,
-        parentJob = null,
-        pathObserver = pathObserver,
-        strictSessionInvariants = strictSessionInvariants
+    // Authorization is a whole-kit security decision. Snapshot caller-owned
+    // collections before any identity or transport becomes observable so a
+    // later mutation cannot silently change which remote keys are admitted.
+    val frozenSecurityMode = securityMode.snapshotForKitOwnership()
+    val secureIdentityService: SecureIdentityService?
+    val secureIdentityUsage: SecureIdentityUsage?
+    val secureIdentity: LocalSecureIdentity?
+    val cryptography: PlatformSecurityCryptography?
+    val localPeerId: PeerId
+
+    @Suppress("DEPRECATION")
+    when (frozenSecurityMode) {
+        is SecurityMode.AuthenticatedV2 -> {
+            val appIdByteCount = appId.value.encodeToByteArray().size
+            if (appIdByteCount > SECURE_V2_MAX_APP_ID_UTF8_BYTES) {
+                throw P2pError.SecurityConfigurationInvalid(
+                    "Secure v2 AppId UTF-8 length exceeds $SECURE_V2_MAX_APP_ID_UTF8_BYTES bytes"
+                )
+            }
+            cryptography = platformSecurityCryptography()
+            val secureIdentityStorage = secureIdentityStorageOverride
+                ?: defaultSecureIdentityStorage(appId, logger)
+            secureIdentityService = SecureIdentityService(cryptography, secureIdentityStorage)
+            val usage = secureIdentityService.acquireUsage(appId)
+            val identity = try {
+                secureIdentityService.loadOrCreate(appId)
+            } catch (cause: Throwable) {
+                usage.release()
+                throw cause
+            }
+            secureIdentityUsage = usage
+            secureIdentity = identity
+            localPeerId = identity.peerId
+        }
+        SecurityMode.NoneForMvp -> {
+            cryptography = null
+            secureIdentityService = null
+            secureIdentityUsage = null
+            secureIdentity = null
+            val peerIdStorage = peerIdStorageOverride ?: defaultPeerIdStorage(appId, logger)
+            localPeerId = peerIdStorage.loadOrGenerate()
+        }
+    }
+    return try {
+        val pathObserver = networkPathObserverOverride ?: defaultNetworkPathObserver(logger)
+        val permissionManager = permissionManagerOverride ?: defaultPlatformPermissionManager(logger)
+        P2pKitImpl(
+            appId = appId,
+            deviceName = deviceName,
+            localPlatform = currentPlatform(),
+            localPeerId = localPeerId,
+            localSecureIdentity = secureIdentity,
+            secureIdentityService = secureIdentityService,
+            secureIdentityUsage = secureIdentityUsage,
+            securityCryptography = cryptography,
+            transportFactories = transportFactories,
+            keepAlive = keepAlive,
+            reconnectPolicy = reconnectPolicy,
+            backgroundPolicy = backgroundPolicy,
+            appKilledPolicy = appKilledPolicy,
+            securityMode = frozenSecurityMode,
+            provisioningConfig = provisioningConfig,
+            provisioningFactory = provisioningFactory,
+            fileTransferConfig = fileTransferConfig,
+            permissions = permissionManager,
+            logger = logger,
+            clock = ::systemTimeMillis,
+            parentJob = null,
+            pathObserver = pathObserver,
+            strictSessionInvariants = strictSessionInvariants
+        )
+    } catch (cause: Throwable) {
+        secureIdentity?.clearPrivate()
+        secureIdentityUsage?.release()
+        throw cause
+    }
+}
+
+@Suppress("DEPRECATION")
+@OptIn(dev.p2pkit.core.ExplicitSecurityRisk::class)
+private fun SecurityMode.snapshotForKitOwnership(): SecurityMode = when (this) {
+    is SecurityMode.AuthenticatedV2 -> copy(
+        authorization = when (val policy = authorization) {
+            is PeerAuthorizationPolicy.PinnedOnly -> policy.copy(
+                fingerprints = policy.fingerprints.toSet()
+            )
+            PeerAuthorizationPolicy.RejectUnknown -> policy
+            PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp -> policy
+        }
     )
+    SecurityMode.NoneForMvp -> this
 }

@@ -2,13 +2,18 @@ package dev.p2pkit.sample.desktop
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerAuthorizationPolicy
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.ReconnectPolicy
+import dev.p2pkit.core.SecurityMode
+import dev.p2pkit.core.dsl.jvmSecureIdentityStore
 import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transfer.sendFile
 import dev.p2pkit.core.protocol.FrameTrace
@@ -56,7 +61,7 @@ import java.util.concurrent.ConcurrentHashMap
  * - `send <text>`                 — broadcast to every active session
  * - `to <id-or-name> <text>`      — targeted send to one peer
  * - `close <id-or-name>`          — close one session
- * - `manual <host>:<port>`        — connect by IP without mDNS (manual-IP fallback);
+ * - `manual <host>:<port> <fingerprint>` — connect by IP without mDNS;
  *                                   uses the JVM provisioning module to register
  *                                   a synthetic peer and then dials it
  * - `sendfile <id-or-name> <path>` — stream a file from disk to one peer
@@ -69,6 +74,7 @@ import java.util.concurrent.ConcurrentHashMap
  * `<name> (n).<ext>` instead of overwriting. State transitions print as
  * `[file …]` lines.
  */
+@OptIn(ExplicitSecurityRisk::class)
 fun main(args: Array<String>) {
     // Filter the optional `reconnect=` token from the positional args before
     // assigning device name, mirroring the appId guard below — otherwise
@@ -99,10 +105,20 @@ fun main(args: Array<String>) {
             "frameTypes=${FrameTrace.enabled} bytes=${JvmLanDiag.traceFrames} " +
             "(grep 'P2pKitLAN' + 'P2pKitFRAME'; pass trace=off / trace=frames to change)"
     )
+    System.err.println(
+        "[P2pKit CLI] DEVELOPMENT SECURITY: accepting any authenticated same-AppId peer; " +
+            "identity storage is process-local and must be replaced in production."
+    )
 
     val p2p = P2pKit.create {
         this.appId = appId
         this.deviceName = deviceName
+        jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
+        security {
+            mode = SecurityMode.AuthenticatedV2(
+                PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+            )
+        }
         transports { lan() }
         lifecycle { reconnectPolicy = reconnect }
         networkProvisioning { jvm() }
@@ -271,17 +287,25 @@ private suspend fun repl(
             "info", "state" -> printInfo(p2p, sessions, advertising, discovering, autoMesh)
 
             "manual" -> {
+                val manualParts = arg.trim().split(Regex("\\s+"), limit = 2)
+                val endpoint = manualParts.getOrNull(0).orEmpty()
+                val fingerprintText = manualParts.getOrNull(1).orEmpty()
+                val expectedFingerprint = PeerFingerprint.parseOrNull(fingerprintText)
+                if (expectedFingerprint == null) {
+                    println("usage: manual <host>:<port> <full-p2f1-fingerprint>")
+                    continue
+                }
                 // AUDIT-2026-06 (A-G9-samples-desktop-ios-18): the input used to
                 // be split at the FIRST colon, which truncated IPv6 literals
                 // (e.g. `fe80::1:9000`) at their first colon even though the
                 // host check below claims IPv6 support. Split at the LAST colon
                 // instead, and accept the unambiguous `[v6-literal]:port`
                 // bracket form too.
-                val sep = arg.lastIndexOf(':')
-                val host = (if (sep >= 0) arg.substring(0, sep) else arg)
+                val sep = endpoint.lastIndexOf(':')
+                val host = (if (sep >= 0) endpoint.substring(0, sep) else endpoint)
                     .trim()
                     .removeSurrounding("[", "]")
-                val portToken = if (sep >= 0) arg.substring(sep + 1).trim() else null
+                val portToken = if (sep >= 0) endpoint.substring(sep + 1).trim() else null
                 val port = portToken?.toIntOrNull()
                 if (host.isEmpty()) {
                     println("usage: manual <host>:<port>  (host is empty)")
@@ -300,7 +324,13 @@ private suspend fun repl(
                 }
                 scope.launch {
                     @OptIn(ExperimentalP2pApi::class)
-                    val synthetic = runCatching { p2p.networkProvisioning.createManualPeer(host, port) }
+                    val synthetic = runCatching {
+                        p2p.networkProvisioning.createManualPeer(
+                            host,
+                            port,
+                            expectedFingerprint
+                        )
+                    }
                         .getOrElse {
                             System.err.println("manual createManualPeer failed: ${it.message}")
                             return@launch

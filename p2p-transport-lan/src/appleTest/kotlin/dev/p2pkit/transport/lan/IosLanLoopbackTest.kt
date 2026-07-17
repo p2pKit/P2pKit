@@ -38,6 +38,7 @@ import platform.Foundation.timeIntervalSince1970
  * fresh UUID. Once the kit captures its id during construction, later
  * defaults edits don't affect it.
  */
+@Suppress("DEPRECATION")
 class IosLanLoopbackTest {
 
     private val unique: String =
@@ -49,6 +50,7 @@ class IosLanLoopbackTest {
     private fun newKit(name: String): P2pKit = P2pKit.create {
         appId = AppId(unique)
         deviceName = name
+        security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
         keepAlive {
             pingIntervalMillis = 60_000
             timeoutMillis = 120_000

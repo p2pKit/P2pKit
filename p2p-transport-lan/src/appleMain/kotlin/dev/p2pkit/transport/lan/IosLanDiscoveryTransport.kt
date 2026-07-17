@@ -238,7 +238,7 @@ internal class IosLanDiscoveryTransport(
         if (browser != null) return@withLock
         IosLanDebug.log(
             "browse",
-            "startDiscovery: type=${LanConstants.SERVICE_TYPE_BONJOUR} app=${transportContext.appId.value} localPid=${transportContext.localPeerId.value.take(8)}"
+            "startDiscovery: type=${transportContext.lanServiceTypeBonjour} app=${transportContext.appId.value} localPid=${transportContext.localPeerId.value.take(8)}"
         )
         discoveryStartedByHost = true
         createBrowserLocked()
@@ -477,7 +477,7 @@ internal class IosLanDiscoveryTransport(
         // generation are ghost candidates until this browser re-adds them.
         browserGeneration++
         val descriptor = nw_browse_descriptor_create_bonjour_service(
-            type = LanConstants.SERVICE_TYPE_BONJOUR,
+            type = transportContext.lanServiceTypeBonjour,
             domain = null
         )
         nw_browse_descriptor_set_include_txt_record(descriptor, true)
@@ -546,20 +546,23 @@ internal class IosLanDiscoveryTransport(
     private fun buildAdvertiseDescriptor(localPeer: LocalPeerInfo): nw_advertise_descriptor_t {
         val descriptor = nw_advertise_descriptor_create_bonjour_service(
             name = localPeer.peerId.value,
-            type = LanConstants.SERVICE_TYPE_BONJOUR,
+            type = transportContext.lanServiceTypeBonjour,
             domain = null
         ) ?: error("nw_advertise_descriptor_create_bonjour_service returned null")
         nw_advertise_descriptor_set_no_auto_rename(descriptor, true)
 
+        val properties = mutableMapOf(
+            LanConstants.TXT_PEER_ID to localPeer.peerId.value,
+            LanConstants.TXT_APP_ID to localPeer.appId.value,
+            LanConstants.TXT_DEVICE_NAME to localPeer.deviceName,
+            LanConstants.TXT_PLATFORM to localPeer.platform.name,
+            LanConstants.TXT_CAPABILITIES to localPeer.supportedTransports.joinToString(",") { it.name },
+            LanConstants.TXT_PROTOCOL_VERSION to transportContext.lanProtocolVersion.toString()
+        ).apply {
+            transportContext.localFingerprint?.let { put(LanConstants.TXT_FINGERPRINT, it.value) }
+        }
         val txt = IosBonjour.mapToTxtRecord(
-            mapOf(
-                LanConstants.TXT_PEER_ID to localPeer.peerId.value,
-                LanConstants.TXT_APP_ID to localPeer.appId.value,
-                LanConstants.TXT_DEVICE_NAME to localPeer.deviceName,
-                LanConstants.TXT_PLATFORM to localPeer.platform.name,
-                LanConstants.TXT_CAPABILITIES to localPeer.supportedTransports.joinToString(",") { it.name },
-                LanConstants.TXT_PROTOCOL_VERSION to LanConstants.PROTOCOL_VERSION.toString()
-            )
+            properties
         )
         nw_advertise_descriptor_set_txt_record_object(descriptor, txt)
         return descriptor
@@ -622,6 +625,15 @@ internal class IosLanDiscoveryTransport(
             )
             return
         }
+        val security = validateLanDiscoverySecurityMetadata(
+            profile = transportContext.securityProfile,
+            protocolVersion = attrs[LanConstants.TXT_PROTOCOL_VERSION],
+            fingerprint = attrs[LanConstants.TXT_FINGERPRINT]
+        )
+        if (security == null) {
+            IosLanDebug.log("browse", "emitPeer: filter — invalid security metadata")
+            return
+        }
 
         val name = attrs[LanConstants.TXT_DEVICE_NAME] ?: pid
         val platform = attrs[LanConstants.TXT_PLATFORM]
@@ -643,7 +655,8 @@ internal class IosLanDiscoveryTransport(
                 platform = platform,
                 supportedTransports = capabilities
             ),
-            transportHints = listOf(TransportHint(type = TransportKind.LAN))
+            transportHints = listOf(TransportHint(type = TransportKind.LAN)),
+            authenticationHint = security.authenticationHint
         )
         // AUDIT-2026-06 (#8): stamp the entry with the generation that
         // confirmed it. A live peer re-added by a replacement browser gets
@@ -672,6 +685,12 @@ internal class IosLanDiscoveryTransport(
             IosLanDebug.log("browse", "emitLost: filter — appId missing or mismatch (peer=$app)")
             return
         }
+        if (validateLanDiscoverySecurityMetadata(
+                profile = transportContext.securityProfile,
+                protocolVersion = attrs[LanConstants.TXT_PROTOCOL_VERSION],
+                fingerprint = attrs[LanConstants.TXT_FINGERPRINT]
+            ) == null
+        ) return
         emitLostById(pid)
     }
 

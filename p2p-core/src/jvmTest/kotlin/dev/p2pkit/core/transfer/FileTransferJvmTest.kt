@@ -1,10 +1,12 @@
 package dev.p2pkit.core.transfer
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
+import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.internal.InMemoryPeerIdStorage
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
@@ -30,6 +32,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 
+@OptIn(ExplicitSecurityRisk::class)
+@Suppress("DEPRECATION")
 class FileTransferJvmTest {
 
     private val tempFiles: MutableList<File> = mutableListOf()
@@ -43,6 +47,7 @@ class FileTransferJvmTest {
     private fun outgoingKit(name: String, outgoing: RawConnection): P2pKit = P2pKit.create {
         appId = AppId("com.example.jvm-ft")
         deviceName = name
+        security { mode = SecurityMode.NoneForMvp }
         keepAlive {
             pingIntervalMillis = 60_000
             timeoutMillis = 120_000
@@ -55,6 +60,7 @@ class FileTransferJvmTest {
     private fun incomingKit(name: String, incoming: RawConnection): P2pKit = P2pKit.create {
         appId = AppId("com.example.jvm-ft")
         deviceName = name
+        security { mode = SecurityMode.NoneForMvp }
         // Match the dialed id ("bob-id") so the outgoing handshake's peerId
         // verification passes (mirrors production discovery).
         peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))

@@ -4,6 +4,7 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.NetworkProvisioningError
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import kotlin.jvm.JvmInline
 import kotlinx.coroutines.flow.Flow
@@ -39,7 +40,20 @@ public interface NetworkProvisioningManager {
 
     @ExperimentalP2pApi
     @Throws(Exception::class)
+    @Deprecated(
+        message = "Secure manual-IP connections require an expected fingerprint. Use the fingerprint overload.",
+        replaceWith = ReplaceWith("createManualPeer(host, port, expectedFingerprint)")
+    )
     public suspend fun createManualPeer(host: String, port: Int): Peer
+
+    /** Register a manual endpoint pinned to an out-of-band v2 identity. */
+    @ExperimentalP2pApi
+    @Throws(Exception::class)
+    public suspend fun createManualPeer(
+        host: String,
+        port: Int,
+        expectedFingerprint: PeerFingerprint
+    ): Peer
 }
 
 /** Provisioning manager's own lifecycle, distinct from the underlying network. */
@@ -134,7 +148,11 @@ public data class ManualConnectionInfo(
     val port: Int,
     val appId: AppId,
     val peerId: PeerId,
-    val deviceName: String
+    val deviceName: String,
+    /** Local authenticated identity to exchange out of band in secure v2. */
+    val fingerprint: PeerFingerprint? = null,
+    /** Canonical AppId-bound QR payload carrying [fingerprint], when secure. */
+    val pairingQr: String? = null
 )
 
 /** Configuration hints for [NetworkProvisioningManager.startLocalNetwork]. */
@@ -149,4 +167,3 @@ public data class NetworkProvisioningConfig(
     val enableWifiJoin: Boolean = false,
     val enableManualIpFallback: Boolean = true
 )
-

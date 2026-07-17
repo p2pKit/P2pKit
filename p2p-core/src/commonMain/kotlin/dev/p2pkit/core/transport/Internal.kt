@@ -2,6 +2,7 @@ package dev.p2pkit.core.transport
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
@@ -36,8 +37,26 @@ public data class InternalPeer(
     val publicPeer: Peer,
     val transportHints: List<TransportHint>,
     /** How this entry entered the registry. Defaults to [PeerOrigin.Discovered]. */
-    val origin: PeerOrigin = PeerOrigin.Discovered
+    val origin: PeerOrigin = PeerOrigin.Discovered,
+    /** Authentication information with explicit provenance. */
+    val authenticationHint: PeerAuthenticationHint? = null
 )
+
+/**
+ * A fingerprint associated with a routing candidate. Discovery claims remain
+ * untrusted; only an application/manual pin may authorize a key.
+ */
+public sealed interface PeerAuthenticationHint {
+    public val fingerprint: PeerFingerprint
+
+    public data class UntrustedDiscoveryClaim(
+        override val fingerprint: PeerFingerprint
+    ) : PeerAuthenticationHint
+
+    public data class TrustedApplicationPin(
+        override val fingerprint: PeerFingerprint
+    ) : PeerAuthenticationHint
+}
 
 /**
  * Reach information for a single transport.
@@ -61,7 +80,9 @@ public data class LocalPeerInfo(
     val deviceName: String,
     val platform: Platform,
     val appId: AppId,
-    val supportedTransports: Set<TransportKind>
+    val supportedTransports: Set<TransportKind>,
+    val securityProfile: TransportSecurityProfile = TransportSecurityProfile.LegacyPlaintextV1,
+    val fingerprint: PeerFingerprint? = null
 )
 
 /** Discovery events emitted by a [DiscoveryTransport]; aggregated by `PeerRegistry`. */

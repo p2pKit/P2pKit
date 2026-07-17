@@ -26,6 +26,7 @@ import platform.Foundation.NSUserDefaults
  * version of this comment suggested `-Dkotlin.native.tests.ignored=false`,
  * which is consumed nowhere and cannot reach the simulator-hosted binary.)
  */
+@Suppress("DEPRECATION")
 class IosLanDiagnosticTest {
 
     @Test
@@ -41,6 +42,7 @@ class IosLanDiagnosticTest {
             val kit = P2pKit.create {
                 appId = AppId(appIdValue)
                 deviceName = "iOSDiagnostic"
+                security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
                 transports { lan() }
             }
             try {

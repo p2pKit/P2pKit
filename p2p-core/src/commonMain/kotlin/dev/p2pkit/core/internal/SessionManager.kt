@@ -9,22 +9,33 @@ import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
+import dev.p2pkit.core.PeerIdentity
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.ReconnectPolicy
+import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.internal.security.AuthenticatedV2SecurityEngine
+import dev.p2pkit.core.internal.security.noise.NoiseRole
 import dev.p2pkit.core.protocol.P2pProtocol
+import dev.p2pkit.core.protocol.ProtocolConstants
 import dev.p2pkit.core.protocol.ProtocolEvent
-import dev.p2pkit.core.security.SecurityManager
+import dev.p2pkit.core.security.LocalSecureIdentity
+import dev.p2pkit.core.security.SecureConnection
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.PeerAuthenticationHint
 import dev.p2pkit.core.transport.PeerOrigin
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -41,6 +52,8 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -50,8 +63,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  *   - Open outgoing sessions on [connect] (idempotent: returns an existing
  *     active session for the same peer rather than spawning a duplicate).
  *   - Accept inbound connections from each registered [DataTransport].
- *   - Run the HELLO handshake on both directions.
- *   - Wrap connections with the configured [SecurityManager].
+ *   - Establish the selected whole-kit security profile before HELLO parsing.
+ *   - Run the HELLO handshake on both directions over that selected stream.
  *   - Publish accepted sessions on [incomingSessions] and track every active
  *     session in [sessions].
  *   - When [ReconnectPolicy.Enabled] is configured, wire a per-session
@@ -64,7 +77,9 @@ internal class SessionManager(
     private val scope: CoroutineScope,
     private val transportManager: TransportManager,
     private val protocol: P2pProtocol,
-    private val security: SecurityManager,
+    private val securityMode: SecurityMode,
+    private val localSecureIdentity: LocalSecureIdentity?,
+    private val authenticatedSecurity: AuthenticatedV2SecurityEngine?,
     private val keepAlive: KeepAliveConfig,
     private val reconnectPolicy: ReconnectPolicy,
     private val localAppId: AppId,
@@ -202,47 +217,149 @@ internal class SessionManager(
         }
     }
 
-    suspend fun connect(peer: Peer, internalPeer: InternalPeer): P2pSession {
-        // Atomic decision delegated to the store: return an existing active
-        // session, wait on someone else's in-flight connect, or become the
-        // connector. The actual `await` / connect work runs OUTSIDE the
-        // store's mutex (the decision is short-held, the work is not).
-        return when (val decision = store.startOrJoin(peer.id)) {
-            is ConnectDecision.Existing -> decision.session
-            is ConnectDecision.JoinPending -> decision.deferred.await()
-            is ConnectDecision.BecomeConnector ->
-                performConnect(peer, internalPeer, decision.deferred)
+    suspend fun connect(
+        peer: Peer,
+        internalPeer: InternalPeer,
+        expectedFingerprint: PeerFingerprint? = null
+    ): P2pSession {
+        val effectiveFingerprint = resolveTrustedFingerprint(
+            internalPeer = internalPeer,
+            explicitFingerprint = expectedFingerprint
+        )
+        var mayRetryAfterDifferentAuthorization = effectiveFingerprint != null
+        while (true) {
+            // Atomic decision delegated to the store: return an existing active
+            // session, wait on someone else's in-flight connect, or become the
+            // connector. The actual `await` / connect work runs OUTSIDE the
+            // store's mutex (the decision is short-held, the work is not).
+            when (val decision = store.startOrJoin(peer.id)) {
+                is ConnectDecision.Existing ->
+                    return decision.session.requireFingerprint(effectiveFingerprint)
+                is ConnectDecision.JoinPending -> {
+                    val joined = try {
+                        decision.deferred.await()
+                    } catch (cause: Throwable) {
+                        // A concurrent unpinned/wrong-pinned attempt does not
+                        // get to erase this caller's explicit authorization.
+                        // performConnect removes the pending slot before it
+                        // completes the deferred, so this one bounded retry
+                        // cannot rejoin the failed attempt.
+                        val authorizationSpecificFailure =
+                            cause is P2pError.AuthorizationRejected ||
+                                cause is P2pError.AuthenticatedIdentityMismatch
+                        if (mayRetryAfterDifferentAuthorization && authorizationSpecificFailure) {
+                            mayRetryAfterDifferentAuthorization = false
+                            continue
+                        }
+                        throw cause
+                    }
+                    return joined.requireFingerprint(effectiveFingerprint)
+                }
+                is ConnectDecision.BecomeConnector ->
+                    return performConnect(
+                        peer = peer,
+                        internalPeer = internalPeer,
+                        expectedFingerprint = effectiveFingerprint,
+                        deferred = decision.deferred
+                    )
+            }
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun resolveTrustedFingerprint(
+        internalPeer: InternalPeer,
+        explicitFingerprint: PeerFingerprint?
+    ): PeerFingerprint? {
+        val applicationPin = (internalPeer.authenticationHint as?
+            PeerAuthenticationHint.TrustedApplicationPin)?.fingerprint
+        if (explicitFingerprint != null && applicationPin != null &&
+            explicitFingerprint != applicationPin
+        ) {
+            throw P2pError.AuthenticatedIdentityMismatch(
+                "The explicit fingerprint conflicts with the stored application pin"
+            )
+        }
+
+        return when (securityMode) {
+            is SecurityMode.AuthenticatedV2 -> {
+                val resolved = explicitFingerprint ?: applicationPin
+                if (internalPeer.origin == PeerOrigin.Manual && resolved == null) {
+                    throw P2pError.SecurityConfigurationInvalid(
+                        "Secure manual-IP connections require an out-of-band fingerprint"
+                    )
+                }
+                resolved
+            }
+            SecurityMode.NoneForMvp -> {
+                if (explicitFingerprint != null || applicationPin != null) {
+                    throw P2pError.SecurityConfigurationInvalid(
+                        "A fingerprint cannot be authenticated by legacy plaintext mode"
+                    )
+                }
+                null
+            }
+        }
+    }
+
+    private fun P2pSession.requireFingerprint(
+        expectedFingerprint: PeerFingerprint?
+    ): P2pSession {
+        if (expectedFingerprint != null && peerIdentity.fingerprint != expectedFingerprint) {
+            throw P2pError.AuthenticatedIdentityMismatch(
+                "The existing session has a different authenticated identity"
+            )
+        }
+        return this
     }
 
     private suspend fun performConnect(
         peer: Peer,
         internalPeer: InternalPeer,
+        expectedFingerprint: PeerFingerprint?,
         deferred: CompletableDeferred<P2pSession>
     ): P2pSession {
+        var completedSession: P2pSession? = null
+        var failure: Throwable? = null
         try {
             val transport = transportManager.selectBestTransport(internalPeer)
             val rawConnection = try {
                 transport.connect(internalPeer)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: P2pError) {
                 throw e
             } catch (e: Throwable) {
-                throw P2pError.ConnectionFailed("Transport connect failed: ${e.message}")
+                throw P2pError.ConnectionFailed("Transport connect failed: ${e.message}").also {
+                    it.underlying = e
+                }
             }
             val session = setupSession(
                 rawConnection = rawConnection,
                 expectedPeer = peer,
+                expectedFingerprint = expectedFingerprint,
                 isIncoming = false,
                 internalPeerForReconnect = internalPeer,
                 isManualPeer = internalPeer.origin == PeerOrigin.Manual
             )
-            deferred.complete(session)
+            completedSession = session
             return session
         } catch (e: Throwable) {
-            deferred.completeExceptionally(e)
+            failure = e
             throw e
         } finally {
-            store.endPending(peer.id, deferred)
+            // Pending ownership must be removed even when this coroutine is
+            // already cancelled. Complete waiters only after removal so a
+            // pinned waiter can never observe and rejoin a stale attempt.
+            withContext(NonCancellable) {
+                store.endPending(peer.id, deferred)
+                val cause = failure
+                if (cause == null) {
+                    deferred.complete(checkNotNull(completedSession))
+                } else {
+                    deferred.completeExceptionally(cause)
+                }
+            }
         }
     }
 
@@ -284,6 +401,7 @@ internal class SessionManager(
                 setupSession(
                     rawConnection = connection,
                     expectedPeer = null,
+                    expectedFingerprint = null,
                     isIncoming = true,
                     internalPeerForReconnect = null,
                     isManualPeer = false,
@@ -309,6 +427,7 @@ internal class SessionManager(
     private suspend fun setupSession(
         rawConnection: RawConnection,
         expectedPeer: Peer?,
+        expectedFingerprint: PeerFingerprint?,
         isIncoming: Boolean,
         internalPeerForReconnect: InternalPeer?,
         isManualPeer: Boolean = false,
@@ -323,7 +442,13 @@ internal class SessionManager(
         onHandshakeSettled: (() -> Unit)? = null
     ): P2pSession {
         val handshake = try {
-            runHandshake(rawConnection, expectedPeer, isManualPeer)
+            runHandshake(
+                rawConnection = rawConnection,
+                expectedPeer = expectedPeer,
+                expectedFingerprint = expectedFingerprint,
+                isManualPeer = isManualPeer,
+                isIncoming = isIncoming
+            )
         } finally {
             onHandshakeSettled?.invoke()
         }
@@ -331,6 +456,7 @@ internal class SessionManager(
         val session = P2pSessionImpl(
             id = "${if (isIncoming) "in" else "out"}-${handshake.resolvedPeer.id.value}-${clock()}",
             peer = handshake.resolvedPeer,
+            peerIdentity = handshake.peerIdentity,
             initialConnection = handshake.secureConnection,
             initialEvents = handshake.events,
             protocol = protocol,
@@ -351,6 +477,7 @@ internal class SessionManager(
             if (policy is ReconnectPolicy.Enabled) {
                 session.reconnectHandler = SessionReconnectHandler(
                     expectedPeer = handshake.resolvedPeer,
+                    expectedIdentity = handshake.peerIdentity,
                     originalInternalPeer = internalPeerForReconnect,
                     policy = policy
                 )
@@ -383,140 +510,216 @@ internal class SessionManager(
     }
 
     /**
-     * Runs the HELLO handshake (and security wrap) on a freshly-dialled or
-     * freshly-accepted [rawConnection]. Returns everything the session needs
-     * to start consuming events. On any failure, closes the connection and
-     * cancels the reader job before propagating.
-     *
-     * @param isManualPeer True when [expectedPeer] is a synthetic manual peer
-     *   ([PeerOrigin.Manual], minted by `registerManualPeer` from a
-     *   user-supplied host:port). Threaded down from the dialed
-     *   [InternalPeer]'s provenance — never inferred from the id string.
+     * Establishes the whole-kit security profile and then performs HELLO over
+     * that stream. The sole protocol reader is deliberately created only after
+     * authenticated v2 succeeds; it can never consume or bypass raw Noise
+     * bytes. One deadline covers preface, Noise, encrypted HELLO, validation,
+     * and publication inputs.
      */
+    @Suppress("DEPRECATION")
     private suspend fun runHandshake(
         rawConnection: RawConnection,
         expectedPeer: Peer?,
-        isManualPeer: Boolean
+        expectedFingerprint: PeerFingerprint?,
+        isManualPeer: Boolean,
+        isIncoming: Boolean
     ): HandshakeOutputs {
-        // Bounded so a peer flooding frames (or a slow local consumer) applies
-        // TCP backpressure instead of growing an unbounded in-memory queue —
-        // an UNLIMITED channel here was a remote-driven OOM vector
-        // (AUDIT-2026-06 fix). 256 events absorb normal bursts; when full the
-        // reader suspends and the kernel stops reading the socket.
-        val eventChannel = Channel<ProtocolEvent>(capacity = 256)
-        val readerJob = scope.launch {
-            try {
-                protocol.events(rawConnection).collect { event ->
-                    eventChannel.send(event)
-                }
-                eventChannel.close()
-            } catch (e: CancellationException) {
-                eventChannel.close()
-                throw e
-            } catch (e: Throwable) {
-                eventChannel.close(e)
-            }
-        }
+        var selectedConnection: RawConnection? = null
+        var eventChannel: Channel<ProtocolEvent>? = null
+        var readerJob: Job? = null
 
         try {
-            val peerHello = performHandshake(
-                protocol = protocol,
-                connection = rawConnection,
-                events = eventChannel,
-                localAppId = localAppId,
-                localPeerId = localPeerId,
-                localDeviceName = localDeviceName,
-                localPlatform = localPlatform,
-                localTransports = localTransports
-            )
-            // Identity check for OUTGOING connects: we dialed a specific peer
-            // (expectedPeer) at a discovery-supplied host:port. Any LAN device
-            // can answer on that address (spoof / race), so verify the remote's
-            // claimed PeerId in its HELLO matches who we intended to reach;
-            // otherwise we'd register a stranger under the expected peer's id.
-            // Under NoneForMvp this closes the accidental/active host:port-race
-            // case (full protection needs the security handshake).
-            //
-            // Synthetic manual peers are exempt: the caller only knows
-            // host:port, the placeholder id can never match the remote's real
-            // persisted PeerId, and rejecting would make every manual-IP
-            // fallback connect fail. Detection is provenance-based
-            // ([PeerOrigin.Manual] threaded down from the dialed InternalPeer)
-            // — never the "manual-" id-prefix, which a discovered peer could
-            // mimic to dodge this check (AUDIT-2026-06 fix, hardened 2026-07).
-            // The session keeps the DIALED manual identity (see resolvedPeer
-            // below) so repeat connect(manualPeer) calls resolve to the same
-            // registered session instead of churning a healthy one.
-            val isManual = isManualPeer
-            if (expectedPeer != null && !isManual &&
-                peerHello.peerId != expectedPeer.id.value
-            ) {
-                runCatching { protocol.sendError(rawConnection, "peerId mismatch") }
-                throw P2pError.HandshakeRejected(
-                    "peerId mismatch: expected ${expectedPeer.id.value} but remote announced ${peerHello.peerId}"
+            return withTimeout(DEFAULT_HANDSHAKE_TIMEOUT_MS) {
+                val protocolVersion: Byte
+                val peerIdentityBeforeHello: PeerIdentity?
+                selectedConnection = when (val mode = securityMode) {
+                    is SecurityMode.AuthenticatedV2 -> {
+                        protocolVersion = ProtocolConstants.SECURE_VERSION
+                        val identity = checkNotNull(localSecureIdentity) {
+                            "Authenticated v2 requires a loaded local identity"
+                        }
+                        val engine = checkNotNull(authenticatedSecurity) {
+                            "Authenticated v2 requires the built-in security engine"
+                        }
+                        engine.establish(
+                            rawConnection = rawConnection,
+                            parentScope = scope,
+                            role = if (isIncoming) NoiseRole.Responder else NoiseRole.Initiator,
+                            appId = localAppId,
+                            localIdentity = identity,
+                            authorization = mode.authorization,
+                            expectedPeerId = expectedPeer?.id,
+                            expectedFingerprint = expectedFingerprint
+                        ).also { secure ->
+                            peerIdentityBeforeHello = secure.peerIdentity
+                        }
+                    }
+                    SecurityMode.NoneForMvp -> {
+                        protocolVersion = ProtocolConstants.LEGACY_VERSION
+                        peerIdentityBeforeHello = null
+                        rawConnection
+                    }
+                }
+
+                // Bounded protocol queue. In secure mode this is the first and
+                // only reader ever created above the raw transport pump.
+                val channel = Channel<ProtocolEvent>(capacity = 256)
+                eventChannel = channel
+                val connection = checkNotNull(selectedConnection)
+                val launchedReader = scope.launch {
+                    try {
+                        protocol.events(connection).collect { event -> channel.send(event) }
+                        channel.close()
+                    } catch (e: CancellationException) {
+                        channel.close()
+                        throw e
+                    } catch (e: Throwable) {
+                        channel.close(e)
+                    }
+                }
+                readerJob = launchedReader
+
+                val peerHello = performHandshake(
+                    protocol = protocol,
+                    connection = connection,
+                    events = channel,
+                    localAppId = localAppId,
+                    localPeerId = localPeerId,
+                    localDeviceName = localDeviceName,
+                    localPlatform = localPlatform,
+                    localTransports = localTransports,
+                    protocolVersion = protocolVersion,
+                    handshakeTimeoutMillis = DEFAULT_HANDSHAKE_TIMEOUT_MS
+                )
+
+                val peerIdentity = when (securityMode) {
+                    is SecurityMode.AuthenticatedV2 -> {
+                        val authenticated = checkNotNull(peerIdentityBeforeHello)
+                        if (peerHello.peerId != authenticated.peerId.value) {
+                            runCatching { protocol.sendError(connection, "authenticated identity mismatch") }
+                            throw P2pError.AuthenticatedIdentityMismatch(
+                                "Encrypted HELLO did not match the authenticated key-derived identity"
+                            )
+                        }
+                        authenticated
+                    }
+                    SecurityMode.NoneForMvp -> PeerIdentity(PeerId(peerHello.peerId), null)
+                }
+
+                if (peerIdentity.peerId == localPeerId) {
+                    runCatching { protocol.sendError(connection, "peer identity collision with local") }
+                    throw if (securityMode is SecurityMode.AuthenticatedV2) {
+                        P2pError.AuthenticatedIdentityMismatch(
+                            "Remote authenticated as the local identity"
+                        )
+                    } else {
+                        P2pError.HandshakeRejected("Remote HELLO claims our own peerId")
+                    }
+                }
+
+                val helloPeer = peerHello.toPeer()
+                val resolvedPeer = when (securityMode) {
+                    is SecurityMode.AuthenticatedV2 -> helloPeer.copy(id = peerIdentity.peerId)
+                    SecurityMode.NoneForMvp -> {
+                        if (expectedPeer != null && !isManualPeer &&
+                            peerHello.peerId != expectedPeer.id.value
+                        ) {
+                            runCatching { protocol.sendError(connection, "peerId mismatch") }
+                            throw P2pError.HandshakeRejected(
+                                "Remote HELLO peerId mismatch for the selected peer"
+                            )
+                        }
+                        if (expectedPeer == null) helloPeer else expectedPeer
+                    }
+                }
+
+                HandshakeOutputs(
+                    secureConnection = connection,
+                    events = channel,
+                    readerJob = launchedReader,
+                    resolvedPeer = resolvedPeer,
+                    peerIdentity = peerIdentity
                 )
             }
-            // Cheap inbound guard: reject a HELLO that claims OUR OWN peerId
-            // (impossible by construction from an honest peer; a spoof would
-            // poison the byPeer slot / simultaneous-open tie-break).
-            if (peerHello.peerId == localPeerId.value) {
-                runCatching { protocol.sendError(rawConnection, "peerId collision with local") }
-                throw P2pError.HandshakeRejected("remote announced our own peerId ${peerHello.peerId}")
+        } catch (e: TimeoutCancellationException) {
+            cleanupHandshake(rawConnection, selectedConnection, readerJob)?.let(e::addSuppressed)
+            throw if (securityMode is SecurityMode.AuthenticatedV2) {
+                P2pError.AuthenticationFailed(
+                    "Authenticated protocol v2 setup timed out after $DEFAULT_HANDSHAKE_TIMEOUT_MS ms"
+                ).also { it.underlying = e }
+            } else {
+                P2pError.HandshakeRejected(
+                    "Plaintext HELLO timed out after $DEFAULT_HANDSHAKE_TIMEOUT_MS ms"
+                )
             }
-            // TODO(encryption-milestone): INBOUND peerId is otherwise still
-            // trusted at face value here — a rogue LAN peer sharing the appId
-            // can claim any *other* peerId and hijack that peer's session slot.
-            // Full identity verification (binding peerId to a key) is deferred
-            // to the SecurityManager/encryption milestone; under
-            // SecurityMode.NoneForMvp the LAN is the trust boundary. See
-            // AUDIT_REPORT_2026-06.md "inbound HELLO peerId never verified".
-            // Outgoing sessions ALWAYS keep the dialed identity — discovered
-            // peers because the mismatch check above proved it equals the
-            // HELLO id, manual peers because the synthetic id is what the
-            // caller holds and re-dials (adopting the HELLO id here broke
-            // connect() idempotency: the session registered under the remote's
-            // id, so the next connect(manualPeer) missed it, dialed again, and
-            // tore down the healthy session via Replaced arbitration). Only
-            // incoming sessions, which have no dialed identity, adopt the
-            // remote's HELLO identity.
-            val resolvedPeer = if (expectedPeer == null) peerHello.toPeer() else expectedPeer
-            // Security wrap — no-op in v0.1 (NoOpSecurityManager returns a
-            // passthrough), but keeps the future encryption hook open.
-            val secureConnection = security.performHandshake(rawConnection, resolvedPeer)
-            return HandshakeOutputs(
-                secureConnection = secureConnection,
-                events = eventChannel,
-                readerJob = readerJob,
-                resolvedPeer = resolvedPeer
-            )
         } catch (e: CancellationException) {
-            readerJob.cancel()
-            runCatching { rawConnection.close() }
+            cleanupHandshake(rawConnection, selectedConnection, readerJob)?.let(e::addSuppressed)
             throw e
         } catch (e: P2pError) {
-            // Already typed (HandshakeRejected / VersionMismatch from
-            // performHandshake, or the peerId checks above) — surface as-is.
-            readerJob.cancel()
-            runCatching { rawConnection.close() }
+            cleanupHandshake(rawConnection, selectedConnection, readerJob)?.let(e::addSuppressed)
             throw e
         } catch (e: Throwable) {
-            // AUDIT-2026-06: raw handshake-phase failures previously escaped
-            // connect() un-typed — e.g. a write error from sendHello, or the
-            // reader closing the events channel with an IOException that
-            // surfaces out of events.receive(). Wrap them so callers only ever
-            // see a documented P2pError, mirroring the transport-connect wrap
-            // in performConnect.
-            readerJob.cancel()
-            runCatching { rawConnection.close() }
-            throw P2pError.ConnectionFailed("Handshake failed: ${e.message}")
+            cleanupHandshake(rawConnection, selectedConnection, readerJob)?.let(e::addSuppressed)
+            throw if (securityMode is SecurityMode.AuthenticatedV2) {
+                P2pError.AuthenticationFailed(
+                    "Authenticated protocol v2 setup failed"
+                ).also { it.underlying = e }
+            } else {
+                P2pError.ConnectionFailed("Plaintext HELLO failed: ${e.message}").also {
+                    it.underlying = e
+                }
+            }
         }
+    }
+
+    private suspend fun cleanupHandshake(
+        rawConnection: RawConnection,
+        selectedConnection: RawConnection?,
+        readerJob: Job?
+    ): Throwable? = withContext(NonCancellable) {
+        var cleanupFailure: Throwable? = null
+        readerJob?.cancel()
+        // Before a secure stream is returned, AuthenticatedV2SecurityEngine
+        // exclusively owns and closes rawConnection on every failure. Closing
+        // it again here would violate close-once transport contracts.
+        val connectionToClose = selectedConnection ?: rawConnection.takeIf {
+            securityMode !is SecurityMode.AuthenticatedV2
+        }
+        if (connectionToClose != null) {
+            val closed = withTimeoutOrNull(HANDSHAKE_CLEANUP_TIMEOUT_MS) {
+                try {
+                    connectionToClose.close()
+                } catch (cause: Throwable) {
+                    cleanupFailure = cause
+                }
+                true
+            } ?: false
+            if (!closed && cleanupFailure == null) {
+                cleanupFailure = IllegalStateException(
+                    "Handshake connection cleanup exceeded $HANDSHAKE_CLEANUP_TIMEOUT_MS ms"
+                )
+            }
+        }
+        val joined = withTimeoutOrNull(HANDSHAKE_CLEANUP_TIMEOUT_MS) {
+            readerJob?.cancelAndJoin()
+            true
+        } ?: false
+        if (!joined) {
+            val timeout = IllegalStateException(
+                "Handshake reader cleanup exceeded $HANDSHAKE_CLEANUP_TIMEOUT_MS ms"
+            )
+            if (cleanupFailure == null) cleanupFailure = timeout
+            else cleanupFailure?.addSuppressed(timeout)
+        }
+        cleanupFailure
     }
 
     private data class HandshakeOutputs(
         val secureConnection: RawConnection,
         val events: ReceiveChannel<ProtocolEvent>,
         val readerJob: Job,
-        val resolvedPeer: Peer
+        val resolvedPeer: Peer,
+        val peerIdentity: PeerIdentity
     )
 
     /**
@@ -544,6 +747,7 @@ internal class SessionManager(
      */
     private inner class SessionReconnectHandler(
         private val expectedPeer: Peer,
+        private val expectedIdentity: PeerIdentity,
         private val originalInternalPeer: InternalPeer,
         private val policy: ReconnectPolicy.Enabled
     ) : ReconnectHandler {
@@ -656,9 +860,13 @@ internal class SessionManager(
                         // session's re-handshake keeps the mismatch exemption
                         // (the remote's HELLO can never equal the synthetic id).
                         runHandshake(
-                            raw,
+                            rawConnection = raw,
                             expectedPeer = expectedPeer,
-                            isManualPeer = originalInternalPeer.origin == PeerOrigin.Manual
+                            // Every reconnect is pinned to the key authenticated
+                            // by the first session, even under AcceptAny.
+                            expectedFingerprint = expectedIdentity.fingerprint,
+                            isManualPeer = originalInternalPeer.origin == PeerOrigin.Manual,
+                            isIncoming = false
                         )
                     }
 
@@ -925,6 +1133,9 @@ internal class SessionManager(
  * ample headroom.
  */
 internal const val MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS: Int = 16
+
+/** Per-resource bound used only while rolling back an incomplete handshake. */
+internal const val HANDSHAKE_CLEANUP_TIMEOUT_MS: Long = 2_000
 
 /**
  * AUDIT-2026-07 (SEC-1, decision #9a): upper bound on total concurrently

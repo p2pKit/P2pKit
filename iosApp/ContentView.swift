@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var draft: String = "hi from iPhone"
     @State private var manualHost: String = ""
     @State private var manualPort: String = ""
+    @State private var manualPairingQr: String = ""
     @State private var logLines: [LogLine] = []
     @State private var nextLogId: Int = 0
     @State private var showLog: Bool = true
@@ -73,7 +74,7 @@ struct ContentView: View {
     // the number-pad (which has no return key on iOS 15) can be dismissed via
     // a keyboard-toolbar Done button.
     private enum FocusField: Hashable {
-        case deviceName, manualHost, manualPort, draft
+        case deviceName, manualHost, manualPort, manualPairingQr, draft
     }
     @FocusState private var focusedField: FocusField?
 
@@ -354,6 +355,12 @@ struct ContentView: View {
                 .disabled(isManualDialing)
                 .focused($focusedField, equals: .manualPort)
         }
+        TextField("Peer pairing QR text (p2pkit:v2:…)", text: $manualPairingQr)
+            .textFieldStyle(.roundedBorder)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .disabled(isManualDialing)
+            .focused($focusedField, equals: .manualPairingQr)
         Button(isManualDialing ? "Dialing…" : "Dial manual peer") {
             Task { await dialManual() }
         }
@@ -363,7 +370,8 @@ struct ContentView: View {
             isManualDialing ||
             isStopping ||
             manualHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-            manualPort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            manualPort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            manualPairingQr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
     }
 
@@ -632,32 +640,38 @@ struct ContentView: View {
         }
         diag("ui", probeEpoch)
 
-        // Build the kit. P2pKitCompanion.create is not marked @Throws on
-        // the Kotlin side, so a synchronous failure during transport init
-        // (e.g., listener binds with port=0) will crash the process —
-        // that's an SDK-side gap tracked separately and not fixable from
-        // sample code alone.
-        let built = P2pKitCompanion.shared.create { (builder: P2pKitBuilder) in
-            builder.appId = "p2pkit-desktop-sample"
-            builder.deviceName = name
-            builder.transports { (tx: TransportsBuilder) in
-                tx.lan()
+        let built: P2pKit
+        do {
+            built = try P2pKitCompanion.shared.create { (builder: P2pKitBuilder) in
+                builder.appId = "p2pkit-desktop-sample"
+                builder.deviceName = name
+                // Development harness policy: encryption and authenticated
+                // key possession stay mandatory, but any identity scoped to
+                // this exact AppId is admitted. Production apps should use a
+                // full fingerprint/QR pin policy.
+                builder.security { (security: SecurityConfigBuilder) in
+                    security.mode = SecurityMode.AuthenticatedV2(
+                        authorization: PeerAuthorizationPolicyAcceptAnyAuthenticatedSameApp.shared
+                    )
+                }
+                builder.transports { (tx: TransportsBuilder) in
+                    tx.lan()
+                }
+                // Sample-only tuning. SDK defaults are
+                // pingIntervalMillis=10_000 / timeoutMillis=30_000.
+                builder.keepAlive { (kaBuilder: KeepAliveConfigBuilder) in
+                    kaBuilder.pingIntervalMillis = 2_000
+                    kaBuilder.timeoutMillis = 6_000
+                }
+                builder.networkProvisioning { (np: NetworkProvisioningConfigBuilder) in
+                    np.iosManualIp()
+                }
             }
-            // Sample-only tuning. SDK defaults are pingIntervalMillis=10_000 /
-            // timeoutMillis=30_000 — appropriate for general-purpose /
-            // battery-conscious apps. The values below are tuned for
-            // interactive / real-time use (e.g. local-multiplayer games)
-            // where ~6s disconnect detection matters more than the ~24s
-            // of extra background pings per session. Apps consuming this
-            // library can pick their own values via the same
-            // `keepAlive { ... }` block.
-            builder.keepAlive { (kaBuilder: KeepAliveConfigBuilder) in
-                kaBuilder.pingIntervalMillis = 2_000
-                kaBuilder.timeoutMillis = 6_000
-            }
-            builder.networkProvisioning { (np: NetworkProvisioningConfigBuilder) in
-                np.iosManualIp()
-            }
+        } catch {
+            status = "Create failed: \(error.localizedDescription)"
+            errorBanner = "Could not load the secure local identity: \(error.localizedDescription)"
+            diag("kit", "create FAILED: \(error.localizedDescription)")
+            return
         }
         self.kit = built
         self.localPeerId = "\(built.localPeerId)"
@@ -1154,6 +1168,7 @@ struct ContentView: View {
 
         let host = manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
         let portStr = manualPort.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pairingQr = manualPairingQr.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !host.isEmpty else {
             diag("ui", "Dial ABORT — empty host")
@@ -1178,6 +1193,11 @@ struct ContentView: View {
             errorBanner = "Host contains invalid characters."
             return
         }
+        guard let expectedFingerprint = k.parsePeerPairingQr(value: pairingQr) else {
+            diag("ui", "Dial ABORT — invalid or other-AppId pairing QR")
+            errorBanner = "Enter the peer's full pairing QR text for this AppId."
+            return
+        }
 
         isManualDialing = true
         // AUDIT-2026-06 (B-G9-samples-desktop-ios-03): with attachCollectors
@@ -1188,7 +1208,11 @@ struct ContentView: View {
         appendMessage("manual: createManualPeer host=\(host) port=\(portInt)", kind: .info)
         diag("ui", "calling networkProvisioning.createManualPeer(\(host):\(portInt))")
         do {
-            let peer = try await k.networkProvisioning.createManualPeer(host: host, port: portInt)
+            let peer = try await k.networkProvisioning.createManualPeer(
+                host: host,
+                port: portInt,
+                expectedFingerprint: expectedFingerprint
+            )
             diag("ui", "createManualPeer returned: id=\(peer.id) name=\(peer.name)")
             appendMessage("manual: created \(peer.name) (\(peer.id))", kind: .info)
             diag("ui", "calling kit.connect on synthetic peer \(peer.id)")

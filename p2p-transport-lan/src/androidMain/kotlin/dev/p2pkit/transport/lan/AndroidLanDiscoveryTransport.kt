@@ -227,7 +227,7 @@ internal class AndroidLanDiscoveryTransport(
         val fresh = buildServiceListener(handle)
         try {
             withContext(Dispatchers.IO) {
-                handle.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, fresh)
+                handle.addServiceListener(registration.serviceTypeJmdns, fresh)
             }
         } catch (e: CancellationException) {
             // The add may still have completed on the IO thread before the
@@ -235,7 +235,7 @@ internal class AndroidLanDiscoveryTransport(
             // a cancelled refresh cannot leak a duplicate. The old listener
             // was never removed — discovery keeps working either way.
             withContext(NonCancellable + Dispatchers.IO) {
-                runCatching { handle.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, fresh) }
+                runCatching { handle.removeServiceListener(registration.serviceTypeJmdns, fresh) }
             }
             throw e
         } catch (e: Throwable) {
@@ -248,7 +248,7 @@ internal class AndroidLanDiscoveryTransport(
         commit(fresh)
         withContext(Dispatchers.IO) {
             runCatching {
-                handle.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, old as ServiceListener)
+                handle.removeServiceListener(registration.serviceTypeJmdns, old as ServiceListener)
             }
         }
 
@@ -259,7 +259,7 @@ internal class AndroidLanDiscoveryTransport(
         // snapshot timeout (AUDIT-2026-06 fix). requestServiceInfo(...,
         // persistent=true) then invalidates each entry and re-resolves.
         val cached = withContext(Dispatchers.IO) {
-            runCatching { handle.list(LanConstants.SERVICE_TYPE_JMDNS, 200L) }
+            runCatching { handle.list(registration.serviceTypeJmdns, 200L) }
                 .getOrDefault(emptyArray())
         }
         var forced = 0
@@ -330,12 +330,12 @@ internal class AndroidLanDiscoveryTransport(
 
             override fun addListenerBlocking(handle: JmDNS): Any {
                 val l = buildServiceListener(handle)
-                handle.addServiceListener(LanConstants.SERVICE_TYPE_JMDNS, l)
+                handle.addServiceListener(registration.serviceTypeJmdns, l)
                 return l
             }
 
             override fun removeListenerBlocking(handle: JmDNS, token: Any) {
-                handle.removeServiceListener(LanConstants.SERVICE_TYPE_JMDNS, token as ServiceListener)
+                handle.removeServiceListener(registration.serviceTypeJmdns, token as ServiceListener)
             }
 
             override fun reemitCachedPeersBlocking(handle: JmDNS) {
@@ -347,7 +347,7 @@ internal class AndroidLanDiscoveryTransport(
                 // step 2 — so no added multicast; the B:317 snapshot-latency
                 // deferral is untouched). Mirrors
                 // JvmLanDiscoveryTransport.reemitCachedPeers.
-                val cached = runCatching { handle.list(LanConstants.SERVICE_TYPE_JMDNS, 200L) }
+                val cached = runCatching { handle.list(registration.serviceTypeJmdns, 200L) }
                     .getOrDefault(emptyArray())
                 var reemitted = 0
                 cached.forEach { info ->
@@ -425,25 +425,29 @@ internal class AndroidLanDiscoveryTransport(
     // Service info / listener builders
     // ──────────────────────────────────────────────────────────────────
 
-    private fun buildServiceInfo(localPeer: LocalPeerInfo): ServiceInfo =
-        ServiceInfo.create(
-            LanConstants.SERVICE_TYPE_JMDNS,
+    private fun buildServiceInfo(localPeer: LocalPeerInfo): ServiceInfo {
+        val properties = mutableMapOf(
+            LanConstants.TXT_PEER_ID to registration.localPeerId.value,
+            LanConstants.TXT_APP_ID to registration.appId.value,
+            LanConstants.TXT_DEVICE_NAME to localPeer.deviceName,
+            LanConstants.TXT_PLATFORM to localPeer.platform.name,
+            LanConstants.TXT_CAPABILITIES to
+                localPeer.supportedTransports.joinToString(",") { it.name },
+            LanConstants.TXT_PROTOCOL_VERSION to registration.protocolVersion.toString()
+        ).apply {
+            registration.fingerprint?.let { put(LanConstants.TXT_FINGERPRINT, it.value) }
+        }
+        return ServiceInfo.create(
+            registration.serviceTypeJmdns,
             // Service instance name — must be unique on the network. Using
             // the local peer id satisfies that; some browsers display it.
             registration.localPeerId.value,
             registration.tcpPort,
             /* weight = */ 0,
             /* priority = */ 0,
-            mapOf(
-                LanConstants.TXT_PEER_ID to registration.localPeerId.value,
-                LanConstants.TXT_APP_ID to registration.appId.value,
-                LanConstants.TXT_DEVICE_NAME to localPeer.deviceName,
-                LanConstants.TXT_PLATFORM to localPeer.platform.name,
-                LanConstants.TXT_CAPABILITIES to
-                    localPeer.supportedTransports.joinToString(",") { it.name },
-                LanConstants.TXT_PROTOCOL_VERSION to LanConstants.PROTOCOL_VERSION.toString()
-            )
+            properties
         )
+    }
 
     /**
      * Builds a fresh [ServiceListener] for [handle]. A new instance is
@@ -486,6 +490,12 @@ internal class AndroidLanDiscoveryTransport(
             }
             if (info.getPropertyString(LanConstants.TXT_APP_ID) != registration.appId.value) return
             if (pid == registration.localPeerId.value) return
+            if (validateLanDiscoverySecurityMetadata(
+                    profile = registration.securityProfile,
+                    protocolVersion = info.getPropertyString(LanConstants.TXT_PROTOCOL_VERSION),
+                    fingerprint = info.getPropertyString(LanConstants.TXT_FINGERPRINT)
+                ) == null
+            ) return
             Log.d(TAG, "serviceRemoved: pid=${pid.take(8)} — emitting PeerEvent.Lost")
             _events.tryEmit(PeerEvent.Lost(PeerId(pid)))
         }
@@ -502,6 +512,11 @@ internal class AndroidLanDiscoveryTransport(
             val app = info.getPropertyString(LanConstants.TXT_APP_ID) ?: return
             if (pid == registration.localPeerId.value) return
             if (app != registration.appId.value) return
+            val security = validateLanDiscoverySecurityMetadata(
+                profile = registration.securityProfile,
+                protocolVersion = info.getPropertyString(LanConstants.TXT_PROTOCOL_VERSION),
+                fingerprint = info.getPropertyString(LanConstants.TXT_FINGERPRINT)
+            ) ?: return
 
             val name = info.getPropertyString(LanConstants.TXT_DEVICE_NAME) ?: pid
             val plat = info.getPropertyString(LanConstants.TXT_PLATFORM)
@@ -543,7 +558,8 @@ internal class AndroidLanDiscoveryTransport(
                 ),
                 transportHints = listOf(
                     TransportHint(type = TransportKind.LAN, host = host, port = port)
-                )
+                ),
+                authenticationHint = security.authenticationHint
             )
             Log.d(
                 TAG,
@@ -569,6 +585,11 @@ internal class AndroidLanDiscoveryTransport(
         val app = info.getPropertyString(LanConstants.TXT_APP_ID) ?: return null
         if (pid == registration.localPeerId.value) return null
         if (app != registration.appId.value) return null
+        val security = validateLanDiscoverySecurityMetadata(
+            profile = registration.securityProfile,
+            protocolVersion = info.getPropertyString(LanConstants.TXT_PROTOCOL_VERSION),
+            fingerprint = info.getPropertyString(LanConstants.TXT_FINGERPRINT)
+        ) ?: return null
 
         val name = info.getPropertyString(LanConstants.TXT_DEVICE_NAME) ?: pid
         val plat = info.getPropertyString(LanConstants.TXT_PLATFORM)
@@ -590,7 +611,8 @@ internal class AndroidLanDiscoveryTransport(
             ),
             transportHints = listOf(
                 TransportHint(type = TransportKind.LAN, host = host, port = port)
-            )
+            ),
+            authenticationHint = security.authenticationHint
         )
     }
 

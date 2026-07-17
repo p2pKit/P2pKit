@@ -2,12 +2,14 @@ package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
+import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.RecordingLogger
@@ -41,14 +43,17 @@ import kotlin.test.assertTrue
  *     [IllegalStateException] when the kit is built via the strict test
  *     fixture — so a store regression fails a behavioral suite loudly;
  *  2. the same violation only `logger.warn`s (never throws) when the kit is
- *     built via plain [P2pKit.create] — pinning that the production default
- *     is unchanged by the wiring.
+ *     built via plain [P2pKit.create] with the explicit legacy migration
+ *     mode — pinning the production invariant disposition independently from
+ *     the authenticated-v2 default and its JVM secure-store requirement.
  *
  * The violation is forced through the TEST-ONLY seam chain
  * ([P2pKitImpl.forceSessionStoreInvariantViolationForTest]) because the
  * store's public mutators maintain the invariants and cannot produce one
  * (see [SessionStore.forceInvariantViolationForTest]).
  */
+@OptIn(ExplicitSecurityRisk::class)
+@Suppress("DEPRECATION")
 class KitStrictInvariantsTest {
 
     @Test
@@ -76,12 +81,13 @@ class KitStrictInvariantsTest {
     }
 
     @Test
-    fun plainKitKeepsProductionWarnOnlyDefault() = runBlocking {
+    fun explicitLegacyKitKeepsProductionWarnOnlyInvariantDisposition() = runBlocking {
         val logger = RecordingLogger()
         val kit = P2pKit.create {
             appId = AppId("com.example.test")
             deviceName = "DefaultKit"
             this.logger = logger
+            security { mode = SecurityMode.NoneForMvp }
             transports { register(KitFactoryFor(FakeDataTransport())) }
         }
         try {

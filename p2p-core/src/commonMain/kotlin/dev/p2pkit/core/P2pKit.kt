@@ -58,16 +58,31 @@ public interface P2pKit {
     public val localDeviceName: String
 
     /**
-     * Stable identity of this device for the current [appId]. Persists across
-     * process restarts on platforms that ship a default [dev.p2pkit.core.internal.PeerIdStorage]
-     * (JVM, Android with `P2pKitAndroid.initialize(context)`, iOS via
-     * `NSUserDefaults`). Other peers will recognise the same device by this id.
+     * Stable identity of this device for the current [appId]. In authenticated
+     * v2 it is derived from the persistent secure key held by the platform
+     * secure identity store. JVM hosts must inject a
+     * `JvmSecureIdentityStore`; Android uses Keystore-wrapped no-backup
+     * storage, and Apple uses a device-only Keychain item. Explicit legacy
+     * mode continues to use the pre-v2 UUID storage.
      *
      * The id is intentionally exposed read-only — apps should never construct
      * or override it directly. Test apps display this to verify persistence;
-     * production apps may include it in support logs.
+     * production apps may include it in support logs. Resetting or losing the
+     * secure key produces a different id and requires remote peers to re-pin.
      */
     public val localPeerId: PeerId
+
+    /** Canonical local X25519 fingerprint in secure v2; null only in explicit legacy mode. */
+    public val localFingerprint: PeerFingerprint?
+
+    /** AppId-bound canonical pairing QR text in secure v2; null in legacy mode. */
+    public val localPairingQr: String?
+
+    /**
+     * Parse and validate a pairing QR against this kit's exact AppId.
+     * Returns null for malformed, non-canonical, other-AppId, or legacy input.
+     */
+    public fun parsePeerPairingQr(value: String): PeerFingerprint?
 
     /** Global lifecycle of this P2pKit instance. */
     public val state: StateFlow<P2pState>
@@ -168,6 +183,13 @@ public interface P2pKit {
     @Throws(Exception::class)
     public suspend fun connect(peer: Peer): P2pSession
 
+    /** Connect while requiring this exact out-of-band authenticated fingerprint. */
+    @Throws(Exception::class)
+    public suspend fun connect(
+        peer: Peer,
+        expectedFingerprint: PeerFingerprint
+    ): P2pSession
+
     /** Last time the peer with [peerId] was observed by discovery, in epoch milliseconds. */
     public fun lastSeen(peerId: PeerId): Long?
 
@@ -194,6 +216,7 @@ public interface P2pKit {
          *
          * The implementation is provided by `dev.p2pkit.core.internal.P2pKitImpl`.
          */
+        @Throws(Exception::class)
         public fun create(block: P2pKitBuilder.() -> Unit): P2pKit {
             val builder = P2pKitBuilder().apply(block)
             return builder.build()

@@ -33,6 +33,7 @@ internal suspend fun performHandshake(
     localDeviceName: String,
     localPlatform: Platform,
     localTransports: Set<TransportKind>,
+    protocolVersion: Byte = ProtocolConstants.LEGACY_VERSION,
     handshakeTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS
 ): HelloPayload {
 
@@ -42,7 +43,7 @@ internal suspend fun performHandshake(
         deviceName = localDeviceName,
         platform = localPlatform.name,
         supportedTransports = localTransports.map { it.name },
-        protocolVersion = ProtocolConstants.VERSION.toInt()
+        protocolVersion = protocolVersion.toUByte().toInt()
     )
     protocol.sendHello(connection, localHello)
 
@@ -66,10 +67,10 @@ internal suspend fun performHandshake(
             "appId mismatch: local=${localAppId.value} remote=${peerHello.appId}"
         )
     }
-    if (peerHello.protocolVersion != ProtocolConstants.VERSION.toInt()) {
+    if (peerHello.protocolVersion != protocolVersion.toUByte().toInt()) {
         runCatching { protocol.sendError(connection, "protocol version mismatch") }
         throw P2pError.VersionMismatch(
-            localVersion = ProtocolConstants.VERSION.toInt(),
+            localVersion = protocolVersion.toUByte().toInt(),
             remoteVersion = peerHello.protocolVersion
         )
     }

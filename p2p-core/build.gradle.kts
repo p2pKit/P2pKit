@@ -4,7 +4,15 @@ plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.android.kmp.library)
+    alias(libs.plugins.cryptography)
     `maven-publish`
+}
+
+cryptography {
+    // cryptography-kotlin's CryptoKit provider is implemented through Swift
+    // interop. Resolve the active Xcode toolchain rather than baking in an
+    // /Applications/Xcode.app linker path.
+    configureSwiftLinkerOpts = true
 }
 
 // V0.4-PROVENANCE (L1): generate a BuildInfo Kotlin object containing the
@@ -98,8 +106,20 @@ kotlin {
             dependencies {
                 implementation(libs.kotlinx.coroutines.core)
                 implementation(libs.kotlinx.serialization.json)
+                implementation(libs.cryptography.core)
                 api(libs.kotlinx.io.core)
             }
+        }
+        jvmMain.dependencies {
+            implementation(libs.cryptography.provider.jdk)
+            implementation(libs.bouncycastle.provider)
+        }
+        androidMain.dependencies {
+            implementation(libs.cryptography.provider.jdk)
+            implementation(libs.bouncycastle.provider)
+        }
+        iosMain.dependencies {
+            implementation(libs.cryptography.provider.cryptokit)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))

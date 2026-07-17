@@ -18,7 +18,8 @@ import dev.p2pkit.core.P2pLogger
  *   frames were dropped because of [UnknownPacketTypeException].
  */
 internal class FrameReader(
-    private val logger: P2pLogger = P2pLogger.NoOp
+    private val logger: P2pLogger = P2pLogger.NoOp,
+    private val expectedVersion: Byte = ProtocolConstants.LEGACY_VERSION
 ) {
 
     private var buffer: ByteArray = EMPTY
@@ -46,6 +47,23 @@ internal class FrameReader(
         val out = mutableListOf<Frame>()
         while (true) {
             if (buffer.size < ProtocolConstants.HEADER_SIZE) break
+            // Validate fixed-header identity as soon as it is available. A
+            // hostile peer cannot make us buffer its declared payload before
+            // a bad magic/version is noticed.
+            if (buffer[0] != ProtocolConstants.MAGIC_0 ||
+                buffer[1] != ProtocolConstants.MAGIC_1 ||
+                buffer[2] != ProtocolConstants.MAGIC_2 ||
+                buffer[3] != ProtocolConstants.MAGIC_3
+            ) {
+                throw P2pError.ProtocolError("Bad magic bytes")
+            }
+            val remoteVersion = buffer[4]
+            if (remoteVersion != expectedVersion) {
+                throw P2pError.VersionMismatch(
+                    localVersion = expectedVersion.toUByte().toInt(),
+                    remoteVersion = remoteVersion.toUByte().toInt()
+                )
+            }
             val payloadLen = FrameCodec.readIntBE(buffer, 32)
             if (payloadLen < 0) {
                 throw P2pError.ProtocolError("Negative payload length in header: $payloadLen")
@@ -67,7 +85,7 @@ internal class FrameReader(
 
             val frameBytes = buffer.copyOfRange(0, frameSize)
             try {
-                out.add(FrameCodec.decode(frameBytes))
+                out.add(FrameCodec.decode(frameBytes, expectedVersion))
             } catch (e: UnknownPacketTypeException) {
                 // Spec §17: ignore + log warn, do not close the session.
                 skippedUnknownFrames++
