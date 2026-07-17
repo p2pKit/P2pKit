@@ -48,7 +48,7 @@ Operating safeguards:
 | Findings total | 150 |
 | Explicit test gaps | 54 |
 
-Current finding state: 145 `Planned`, 0 `In Progress`, 3 `Implemented` (`CORE-01`, `CORE-06`, `CORE-07`), 1 `Verified` (`BUILD-01`), 1 `Blocked` (`BUILD-02`). SEC-01 was approved with storage A on 2026-07-17, implemented, committed, and pushed. Its final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
+Current finding state: 145 `Planned`, 0 `In Progress`, 2 `Implemented` (`CORE-06`, `CORE-07`), 2 `Verified` (`CORE-01`, `BUILD-01`), 1 `Blocked` (`BUILD-02`). SEC-01 was approved with storage A on 2026-07-17, implemented, committed, and pushed. Its final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
 
 ### Baseline gate evidence and reusable command catalog
 
@@ -137,7 +137,7 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 
 | ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| CORE-01 | High | Stop does not serialize terminal lifecycle with ongoing operations | LIF-GEN-01 (first LIF-SES-01 slice) | Implemented | Terminal generation gate, stale-resource compensation, atomic session-registration commit | CORE-T01 | Pending focused commit | 342 JVM + 323 iOS tests green; Android main compiles; committed-state verification pending |
+| CORE-01 | High | Stop does not serialize terminal lifecycle with ongoing operations | LIF-GEN-01 (first LIF-SES-01 slice) | Verified | Terminal generation gate, stale-resource compensation, atomic session-registration commit | CORE-T01 | `a4e0bb0`; tracker evidence pending push | Focused committed suite + iOS Simulator + Android compilation pass; only registered FILE-04 full-JVM baseline remains |
 | CORE-02 | High | PeerRegistry is not a correct multi-transport aggregator | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T03 | — | — |
 | CORE-03 | High | Cancelled connect can poison coalescing and leak a live session | LIF-SES-01 | Planned | — | CORE-T02 | — | — |
 | CORE-04 | High | Application receive backpressure blocks protocol controls | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T05 | — | — |
@@ -331,7 +331,7 @@ Each row represents one bullet from “Missing or weak tests to add” in the so
 
 | Gap ID | Required coverage | Linked findings | Status | Test files/evidence | Commit/push | Verification |
 | --- | --- | --- | --- | --- | --- | --- |
-| CORE-T01 | Stop racing connect, advertising, discovery, and delayed observer start | CORE-01 | Implemented | Six deterministic races in `KitLifecycleTest`; existing parked data-start test retained | Pending focused commit | 342 JVM + 323 iOS tests green; three forced focused repeats green |
+| CORE-T01 | Stop racing connect, advertising, discovery, and delayed observer start | CORE-01 | Verified | Six deterministic races in `KitLifecycleTest`; existing parked data-start test retained | `a4e0bb0`; tracker evidence pending push | Focused committed suite passes; three forced pre-commit repeats green |
 | CORE-T02 | Cancellation at every outgoing-connect suspension, then successful retry | CORE-03 | Planned | — | — | — |
 | CORE-T03 | Two discovery transports contribute/lose same PeerId | CORE-02 | Planned | — | — | — |
 | CORE-T04 | Repeated same-direction inbound arbitration | CORE-05 | Planned | — | — | — |
@@ -949,7 +949,7 @@ Acceptance criteria:
 
 ### Implementation and review result
 
-Status: `Implemented`; focused commit and committed-state verification are pending.
+Status: `Verified`; implementation commit `a4e0bb0` and committed-state checks complete.
 
 Confirmed root cause: the kit previously serialized only part of startup. The terminal Boolean was not an operation token, state writes were not lifecycle commits, and session registration happened after `stop()` took its active-session snapshot. A platform call that ignored or narrowly outran cancellation could therefore create a resource or publish state after terminal teardown.
 
@@ -1010,7 +1010,9 @@ Compatibility and remaining risk:
 
 - Calls linearized before terminal generation invalidation may succeed and are then included in teardown; calls losing the generation fail with the existing post-stop `IllegalStateException` contract. There is no automatic retry or fallback.
 - Incoming session pressure now has a precise bounded refusal at publication capacity rather than allowing setup to block the terminal lifecycle commit. The refused session is removed from the store and closed.
-- Full repository verification is not green because the independently registered FILE-04/SAMPLE-17/BUILD-08 and Apple LAN failures remain. CORE-01 will be marked `Verified` only after the focused commit is created, reviewed, rerun from committed state, and pushed.
+- Full repository verification is not green because the independently registered FILE-04/SAMPLE-17/BUILD-08 and Apple LAN failures remain. They do not intersect the lifecycle paths or invalidate the focused committed-state evidence.
+
+Committed-state evidence for `a4e0bb0`: `git show --check` passed; the focused JVM `KitLifecycleTest` suite passed under `--rerun-tasks`; the complete iOS Simulator ARM64 suite and Android main compilation passed under `--rerun-tasks`. The forced full JVM suite reproduced only FILE-04 (`cancelMidStreamPropagatesToReceiver`, 342 tests/1 failure), exactly matching the registered baseline and leaving all CORE-01 tests green.
 
 ## Execution log
 
@@ -1029,3 +1031,4 @@ Compatibility and remaining risk:
 | 2026-07-18 | REL-ABI-01/source control | Created focused commit and reran the isolated consumer gate from committed state | Commit `8f15d75`; clean committed diff; BUILD-01/CORE-T13 verified; JVM/Android/KMP/iOS consumer matrix passes |
 | 2026-07-18 | LIF-GEN-01 | Reviewed current lifecycle/session code and deterministic interleavings; froze focused plan before source changes | CORE-01 confirmed in late advertise/discover/connect/observer commits; CORE-T01 in progress; CORE-11 explicitly remains separate |
 | 2026-07-18 | LIF-GEN-01 | Implemented terminal generation commits, stale-resource compensation, atomic session registration, and six deterministic races; reviewed every equivalent path | CORE-01/CORE-T01 implemented; full core JVM/iOS and Android compilation green; independent repository baselines unchanged |
+| 2026-07-18 | LIF-GEN-01/source control | Created `a4e0bb0` and reran focused JVM plus complete iOS Simulator/Android checks from committed state | CORE-01/CORE-T01 verified; forced full JVM reproduced only the registered FILE-04 failure |
