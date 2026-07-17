@@ -142,8 +142,8 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 | CORE-03 | High | Cancelled connect can poison coalescing and leak a live session | LIF-SES-01 | Planned | — | CORE-T02 | — | — |
 | CORE-04 | High | Application receive backpressure blocks protocol controls | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T05 | — | — |
 | CORE-05 | High | Duplicate arbitration treats every active duplicate as simultaneous-open | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T04 | — | — |
-| CORE-06 | High security limitation | Identity is unauthenticated and traffic plaintext | SEC-01 | Implemented | Authenticated v2 is the default; explicit deprecated legacy only | Noise/KAT, identity, raw-confidentiality, authorization, integration, LAN loopback | Pending focused SEC-01 commit | Local platform/module gates pass; external certification remains |
-| CORE-07 | Medium architecture | Security extension cannot safely implement encryption | SEC-01 | Implemented | Security owns the sole raw reader before protocol construction | Single-collector, cancellation, close-once, encrypted-HELLO tests | Pending focused SEC-01 commit | Local platform/module gates pass; external certification remains |
+| CORE-06 | High security limitation | Identity is unauthenticated and traffic plaintext | SEC-01 | Implemented | Authenticated v2 is the default; explicit deprecated legacy only | Noise/KAT, identity, raw-confidentiality, authorization, integration, LAN loopback | `b79c9ba`, pushed to `origin/remediation/full-register-2026-07` | Local platform/module gates pass; external certification remains |
+| CORE-07 | Medium architecture | Security extension cannot safely implement encryption | SEC-01 | Implemented | Security owns the sole raw reader before protocol construction | Single-collector, cancellation, close-once, encrypted-HELLO tests | `b79c9ba`, pushed to `origin/remediation/full-register-2026-07` | Local platform/module gates pass; external certification remains |
 | CORE-08 | Medium | SessionStore reads mutable HashMap without mutex | LIF-SES-01 | Planned | — | Concurrency regression | — | — |
 | CORE-09 | Medium | Remotely terminated sessions retain active child Job | LIF-SES-01 | Planned | — | CORE-T07 | — | — |
 | CORE-10 | Medium | Public sessions can retain terminal entries after stop | LIF-SES-01 | Planned | — | CORE-T08 | — | — |
@@ -748,6 +748,14 @@ SEC-01 is `Implemented`, not `Verified`. The exact remaining gates are: independ
 
 The final local review checked reader ownership, secure/raw close ownership, cancellation propagation, pending-connect cleanup, setup deadlines, record bounds/backpressure, nonce serialization/exhaustion, identity immutability and key clearing, reset/live-use exclusion, discovery downgrade separation, manual pinning, reconnect identity retention, provider selection, sample call sites, legacy-only call sites, and equivalent platform implementations. No new SEC-01 correctness defect remains in the local diff. The pre-existing full-gate failures and external assurance boundaries above remain explicit and are not waived.
 
+#### Source control and post-commit verification
+
+- Branch: `remediation/full-register-2026-07`.
+- Focused implementation commit: `b79c9ba` (`SEC-01: add authenticated protocol v2 and protected identities`), 109 files, 10,996 insertions, 326 deletions.
+- Committed diff review: `git show --check --stat --oneline b79c9ba` passed; the only remaining worktree entries were the expressly excluded untracked review/deferred files.
+- Post-commit gate: `./gradlew :p2p-core:jvmTest :p2p-core:iosSimulatorArm64Test` passed from `b79c9ba` in 1m 5s; 336 JVM and 317 iOS-simulator tests passed. Only the separately registered `BUILD-14` test opt-in warnings were emitted.
+- Push: `b79c9ba` pushed successfully to `origin/remediation/full-register-2026-07` on 2026-07-18. The remote reported that the repository has moved to `https://github.com/p2pKit/P2pKit.git`; the configured `origin` accepted the branch and now tracks it.
+
 ## Execution log
 
 | Date | Unit | Action | Result |
@@ -758,3 +766,4 @@ The final local review checked reader ownership, secure/raw close ownership, can
 | 2026-07-17 | SEC-01 | Owner approved secure protocol v2 and storage A; protocol, provider, and platform-store reviews completed | Decision blocker cleared; exact contract frozen; production implementation authorized |
 | 2026-07-18 | SEC-01 | Implemented authenticated secure v2, Storage A, migration/authorization/manual-pin/LAN separation, platform providers, samples, and regression suites | Local targeted, full core JVM/iOS, LAN JVM, provisioning, sample, XCFramework/Swift, and publication checks pass |
 | 2026-07-18 | SEC-01/full gate | Ran `./gradlew check` after final ownership correction | SEC paths pass; gate remains red only for the registered Android lint error and two Apple LAN lifecycle timeouts; external security/device/network certification still required |
+| 2026-07-18 | SEC-01/source control | Reviewed, committed, reran core JVM/iOS from committed state, and pushed | Implementation commit `b79c9ba`; post-commit 336 JVM + 317 iOS tests pass; pushed branch tracks origin |
