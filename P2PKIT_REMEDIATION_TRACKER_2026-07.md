@@ -48,7 +48,7 @@ Operating safeguards:
 | Findings total | 150 |
 | Explicit test gaps | 54 |
 
-Current finding state: 148 `Planned`, 0 `In Progress`, 2 `Implemented` (`CORE-06`, `CORE-07`), 0 `Verified`, 0 `Blocked`. SEC-01 was approved with storage A on 2026-07-17 and is locally implemented. Final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
+Current finding state: 147 `Planned`, 0 `In Progress`, 2 `Implemented` (`CORE-06`, `CORE-07`), 0 `Verified`, 1 `Blocked` (`BUILD-02`). SEC-01 was approved with storage A on 2026-07-17 and is locally implemented. Final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
 
 ### Baseline gate evidence and reusable command catalog
 
@@ -308,7 +308,7 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 | ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | BUILD-01 | High | Published compile dependency metadata is wrong | REL-ABI-01 | Planned | — | CORE-T13/external consumers | — | — |
-| BUILD-02 | High release blocker | No remote publication target exists | REL-REMOTE-01 | Planned | — | Dry-run/staged bundle validation | — | External credentials/service needed for final proof |
+| BUILD-02 | High release blocker | No remote publication target exists | REL-REMOTE-01 | Blocked | Analysis complete; Portal workflow/namespace decision required | Local artifact shape passes; bundle/upload path awaits decision | Pending tracker-only blocker commit | Blocked on namespace type, workflow choice, and credentials; ENV-07 retains live upload proof |
 | BUILD-03 | Medium | BuildInfo defeats incremental/reproducible builds | REL-PROV-01 | Planned | — | Double-build/reproducibility tests | — | — |
 | BUILD-04 | Medium | Publication gate can pass invalid release | REL-SUPPLY-01 after BUILD-01/BUILD-02 | Planned | — | Invalid-scope/signature/archive fixtures | — | — |
 | BUILD-05 | Medium | Gradle wrapper components are version-skewed | REL-SUPPLY-01 | Planned | — | Wrapper validation/checksums | — | — |
@@ -415,7 +415,7 @@ These seven boundaries were explicitly excluded from the original local review. 
 | ENV-06 | Third-party dependency CVE/advisory scan | Planned | Select/configure and run a current advisory scanner; record a concrete blocker only if one is encountered |
 | ENV-07 | Real remote Central/Portal upload | Blocked | Approved portal, signing identity, namespace access, and CI credentials required |
 
-## Current execution record: SEC-01
+## Execution record: SEC-01
 
 ### Scope and status
 
@@ -756,6 +756,47 @@ The final local review checked reader ownership, secure/raw close ownership, can
 - Post-commit gate: `./gradlew :p2p-core:jvmTest :p2p-core:iosSimulatorArm64Test` passed from `b79c9ba` in 1m 5s; 336 JVM and 317 iOS-simulator tests passed. Only the separately registered `BUILD-14` test opt-in warnings were emitted.
 - Push: `b79c9ba` pushed successfully to `origin/remediation/full-register-2026-07` on 2026-07-18. The remote reported that the repository has moved to `https://github.com/p2pKit/P2pKit.git`; the configured `origin` accepted the branch and now tracks it.
 
+## Execution record: REL-REMOTE-01
+
+### Finding, status, and confirmed root cause
+
+| Field | Value |
+| --- | --- |
+| Finding | BUILD-02 — High release blocker — no remote publication target |
+| Status | Blocked after analysis; no release behavior was guessed or modified |
+| Confirmed root cause | All four library modules apply `maven-publish` and local conditional signing, but no `publishing.repositories`, Central bundle assembly/upload task, Portal status/release task, or CI credential contract exists. Only `publishToMavenLocal` is executable. |
+| Affected surfaces | Root/module Gradle publication configuration, release bundle/check scripts, CI secret contract, `dev.p2pkit` namespace ownership, signing identity, and Central deployment policy |
+| Dependent evidence | ENV-07 live remote upload; FINAL-01 release proof. REL-ABI-01 and other source units remain independent and are not blocked. |
+
+### Analysis and attempted work
+
+- Inspected root and all module publication/signing configuration, `gradle.properties`, and `scripts/check-publish-artifacts.sh`. No remote repository or Portal integration exists; the property file explicitly records that limitation.
+- The existing local checker successfully assembled all 15 publication shapes during SEC-01, but it does not create the exact signed/checksummed Central bundle or exercise upload/status/drop/release behavior.
+- Verified the current official service contract. Sonatype states that there is currently no official Gradle Portal plugin; supported choices are a Maven plugin, a Maven-layout bundle uploaded through the Portal/Publisher API, the Portal OSSRH Staging API for applicable existing namespaces, or unsupported community Gradle plugins. See [official Gradle guidance](https://central.sonatype.org/publish/publish-portal-gradle/), [Publisher API](https://central.sonatype.org/publish/publish-portal-api/), [bundle layout](https://central.sonatype.org/publish/publish-portal-upload/), and [artifact/signature/checksum requirements](https://central.sonatype.org/publish/requirements/).
+- No token, namespace dashboard state, signing key, or release authorization was accessed or requested. No upload was attempted because Central releases are immutable and the repository does not yet know whether `dev.p2pkit` is a Portal or legacy OSSRH namespace.
+
+### Exact blocker and required owner resources
+
+The owner must provide one policy decision and later CI-held resources:
+
+1. Confirm whether `dev.p2pkit` is verified in the Central Portal, and whether it appears as a **Central Portal namespace** or **OSSRH namespace**.
+2. Approve the publication path. Recommended: repository-owned deterministic Maven-layout bundle assembly plus the first-party Portal Publisher API, initially `USER_MANAGED`. This avoids trusting an unsupported third-party Gradle publication plugin and prevents a valid CI build from irreversibly auto-publishing before owner review.
+3. Confirm whether releases remain `USER_MANAGED` or become `AUTOMATIC` after validation. Automatic release shortens the pipeline but turns a credentialed CI invocation into an irreversible publish action.
+4. Provide only through CI secrets when live validation is authorized: Portal token username/password, ASCII-armored signing private key/password, and the verified namespace/account access. No secret belongs in Git, Gradle properties committed to the repository, logs, or the tracker.
+
+Realistic alternatives and consequences:
+
+- Portal Publisher API + repository-owned bundle (**recommended**): smallest trust surface and exact local bundle dry-run; requires maintaining a small uploader/status client or CI script and checksum/signature validation.
+- Portal OSSRH Staging API: reuses Gradle `maven-publish`, but is appropriate only if the namespace/account state supports that workflow and requires staging cleanup/status integration.
+- Community Gradle/JReleaser plugin: less custom code, but adds a release-critical third-party plugin not supported by Sonatype; it requires separate provenance, maintenance, and supply-chain approval.
+- Manual Portal upload: simple for rare releases but weakens repeatability/auditability and leaves BUILD-02's automated release path incomplete.
+
+Precise owner reply format for the later consolidated decision package:
+
+`REL-REMOTE-01: namespace=PORTAL|OSSRH; path=PORTAL_API_BUNDLE|OSSRH_STAGING|COMMUNITY_PLUGIN|MANUAL; release=USER_MANAGED|AUTOMATIC; live_credentials=AVAILABLE_IN_CI|NOT_YET`
+
+Until that reply is supplied, only REL-REMOTE-01, ENV-07, and their genuinely dependent final-release proof are blocked. No assumptions from this unit may constrain REL-ABI-01 or other dependency-ready remediation.
+
 ## Execution log
 
 | Date | Unit | Action | Result |
@@ -767,3 +808,4 @@ The final local review checked reader ownership, secure/raw close ownership, can
 | 2026-07-18 | SEC-01 | Implemented authenticated secure v2, Storage A, migration/authorization/manual-pin/LAN separation, platform providers, samples, and regression suites | Local targeted, full core JVM/iOS, LAN JVM, provisioning, sample, XCFramework/Swift, and publication checks pass |
 | 2026-07-18 | SEC-01/full gate | Ran `./gradlew check` after final ownership correction | SEC paths pass; gate remains red only for the registered Android lint error and two Apple LAN lifecycle timeouts; external security/device/network certification still required |
 | 2026-07-18 | SEC-01/source control | Reviewed, committed, reran core JVM/iOS from committed state, and pushed | Implementation commit `b79c9ba`; post-commit 336 JVM + 317 iOS tests pass; pushed branch tracks origin |
+| 2026-07-18 | REL-REMOTE-01 | Inspected local publication configuration and current official Central paths | BUILD-02 confirmed; unit blocked only on namespace/workflow/release policy and later CI credentials; independent work continues |
