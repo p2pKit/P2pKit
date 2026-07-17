@@ -15,11 +15,11 @@ java {
 }
 
 dependencies {
-    implementation(project(":p2p-core"))
-    implementation(project(":p2p-transport-lan"))
-    implementation(libs.kotlinx.coroutines.core)
+    api(project(":p2p-core"))
+    api(libs.kotlinx.coroutines.core)
 
     testImplementation(kotlin("test"))
+    testImplementation(project(":p2p-transport-lan"))
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.kotlinx.coroutines.core)
 }

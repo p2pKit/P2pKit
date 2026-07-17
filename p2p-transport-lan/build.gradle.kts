@@ -62,7 +62,7 @@ kotlin {
             // P2pSession, …) on their compile classpath, which the transport's
             // own public `lan()` DSL returns; `implementation` would hide them.
             api(project(":p2p-core"))
-            implementation(libs.kotlinx.coroutines.core)
+            api(libs.kotlinx.coroutines.core)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))

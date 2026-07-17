@@ -104,7 +104,7 @@ kotlin {
         commonMain {
             kotlin.srcDir(generateBuildInfo)
             dependencies {
-                implementation(libs.kotlinx.coroutines.core)
+                api(libs.kotlinx.coroutines.core)
                 implementation(libs.kotlinx.serialization.json)
                 implementation(libs.cryptography.core)
                 api(libs.kotlinx.io.core)

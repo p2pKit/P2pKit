@@ -48,7 +48,7 @@ Operating safeguards:
 | Findings total | 150 |
 | Explicit test gaps | 54 |
 
-Current finding state: 147 `Planned`, 0 `In Progress`, 2 `Implemented` (`CORE-06`, `CORE-07`), 0 `Verified`, 1 `Blocked` (`BUILD-02`). SEC-01 was approved with storage A on 2026-07-17 and is locally implemented. Final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
+Current finding state: 146 `Planned`, 0 `In Progress`, 3 `Implemented` (`CORE-06`, `CORE-07`, `BUILD-01`), 0 `Verified`, 1 `Blocked` (`BUILD-02`). SEC-01 was approved with storage A on 2026-07-17 and is locally implemented. Final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
 
 ### Baseline gate evidence and reusable command catalog
 
@@ -307,7 +307,7 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 
 | ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| BUILD-01 | High | Published compile dependency metadata is wrong | REL-ABI-01 | Planned | — | CORE-T13/external consumers | — | — |
+| BUILD-01 | High | Published compile dependency metadata is wrong | REL-ABI-01 | Implemented | Correct API scopes; desktop LAN test-only | CORE-T13 isolated published consumers pass | Pending focused commit | POM/module/API variant and all platform consumers pass |
 | BUILD-02 | High release blocker | No remote publication target exists | REL-REMOTE-01 | Blocked | Analysis complete; Portal workflow/namespace decision required | Local artifact shape passes; bundle/upload path awaits decision | Pending tracker-only blocker commit | Blocked on namespace type, workflow choice, and credentials; ENV-07 retains live upload proof |
 | BUILD-03 | Medium | BuildInfo defeats incremental/reproducible builds | REL-PROV-01 | Planned | — | Double-build/reproducibility tests | — | — |
 | BUILD-04 | Medium | Publication gate can pass invalid release | REL-SUPPLY-01 after BUILD-01/BUILD-02 | Planned | — | Invalid-scope/signature/archive fixtures | — | — |
@@ -343,7 +343,7 @@ Each row represents one bullet from “Missing or weak tests to add” in the so
 | CORE-T10 | Throwing and permanently hung close operations | CORE-12 | Planned | — | — | — |
 | CORE-T11 | Identity sanitizer collisions, concurrent first creation, persistence failure, and atomic replacement | CORE-18, CORE-19, CORE-20, CORE-21 | Planned | — | — | — |
 | CORE-T12 | Path observer close/restart, stale callbacks, unregister failure, generation gating | CORE-22, CORE-23 | Planned | — | — | — |
-| CORE-T13 | Clean external consumer compilation from published temp repository | BUILD-01 | Planned | — | — | — |
+| CORE-T13 | Clean external consumer compilation from published temp repository | BUILD-01 | Implemented | `scripts/check-published-consumers.sh` | JVM/Android/KMP/iOS pass | Pending focused commit |
 
 ### Protocol and transfer gaps (21)
 
@@ -399,7 +399,7 @@ Each row represents one bullet from “Missing or weak tests to add” in the so
 | PS-T06 | Desktop GUI create/stop races, accept cancellation, and byte-budgeted history | SAMPLE-06, SAMPLE-08, SAMPLE-09, SAMPLE-10, SAMPLE-22, SAMPLE-24, SAMPLE-33, SAMPLE-34 | Planned | — | — | — |
 | PS-T07 | Swift sink failure, atomic filename collision, partial-file cleanup, and unstructured collector cancellation | SAMPLE-01, SAMPLE-02, SAMPLE-05, SAMPLE-12, SAMPLE-13, SAMPLE-23, SAMPLE-24 | Planned | — | — | Apple test target/device where applicable |
 | PS-T08 | Dot-segment names and scoped IPv6 on every sample | SAMPLE-15, SAMPLE-20, SAMPLE-34 | Planned | — | — | — |
-| PS-T09 | KMP Android runtime consumer and iOS consumer target | SAMPLE-21, BUILD-01 | Planned | — | — | Android/Apple targets required |
+| PS-T09 | KMP Android runtime consumer and iOS consumer target | SAMPLE-21, BUILD-01 | Planned | BUILD-01 publication-consumer conjunct implemented; SAMPLE-21 runtime/device conjunct remains | KMP Android/iOS compile consumer passes | — | Physical/runtime portion remains |
 
 ## External-validation register
 
@@ -797,6 +797,96 @@ Precise owner reply format for the later consolidated decision package:
 
 Until that reply is supplied, only REL-REMOTE-01, ENV-07, and their genuinely dependent final-release proof are blocked. No assumptions from this unit may constrain REL-ABI-01 or other dependency-ready remediation.
 
+## Current execution record: REL-ABI-01
+
+### Analysis and confirmed reproduction
+
+| Field | Value |
+| --- | --- |
+| Finding/gaps | BUILD-01 (High), CORE-T13, and the publication-consumer portion of PS-T09 |
+| Status | In Progress; analysis and plan complete, no implementation edit made before this record |
+| Root cause | Gradle `implementation` was used for dependencies whose types occur in public Kotlin metadata. Generated target POMs therefore mark them runtime and Gradle API variants omit them entirely. |
+| Affected modules | `p2p-core`, `p2p-transport-lan`, Android provisioning, desktop provisioning; every published JVM/Android/KMP/iOS target and downstream Kotlin/Java consumer |
+| Public dependencies | Core exposes coroutines `Flow`/`SharedFlow`/`StateFlow`/`Job` and kotlinx-io `RawSource`/`RawSink`; LAN exposes core types and direct coroutine diagnostics/implementations; both provisioning sidecars expose core provisioning types and coroutine flow types. Crypto/serialization/JmDNS/provider types remain internal and must stay runtime/implementation. |
+
+Generated metadata reproduces the defect exactly:
+
+- `p2p-core` JVM/Android POMs publish coroutines at runtime and API variants list only kotlinx-io/stdlib, even though core's public API contains coroutine types.
+- LAN JVM/Android POMs correctly publish core at compile but publish coroutines at runtime; API variants omit coroutines even though `JvmLanDiag.events` and Apple diagnostics expose `SharedFlow` directly.
+- Android provisioning publishes both core and coroutines at runtime and its API variant lists neither.
+- Desktop provisioning publishes core, LAN, and coroutines at runtime and its API variant lists none. Production desktop code does not import LAN; LAN is used only by `ManualIpLoopbackTest`, so that dependency is both incorrectly scoped and unnecessarily shipped.
+- The KMP root POMs flatten dependencies to runtime as a Kotlin publication convention; the authoritative Gradle module target variants still must carry correct API dependencies, and Maven target POMs must use compile scope.
+
+### Comprehensive implementation plan
+
+1. Change `p2p-core` common coroutines from `implementation` to `api`; retain kotlinx-io as `api`; keep serialization, cryptography core/providers, and Bouncy Castle internal.
+2. Change LAN common coroutines to `api`; keep core as `api`; keep JmDNS internal.
+3. Change Android provisioning core and coroutines to `api`.
+4. Change desktop provisioning core and coroutines to `api`; move LAN from production `implementation` to `testImplementation` because only its test loopback uses it.
+5. Add a repository-owned external-consumer gate that publishes to a throwaway Maven repository, creates isolated builds outside the composite/project dependency graph, and compiles consumers that declare only one published top-level artifact. Cover core JVM, LAN JVM, desktop provisioning JVM, Android provisioning, KMP common/JVM, and iOS simulator publication consumption. Do not add the transitive dependencies explicitly in the consumer; that would hide this regression.
+6. Assert generated POM/API-variant scopes so a consumer compilation cannot accidentally pass because another test dependency supplies the missing library.
+7. Run targeted metadata generation/consumer gates, all four affected module tests/compiles, Android/KMP/iOS consumer compilation, publication shape validation, samples, and the full repository gate. Repeat the clean consumer gate from committed state.
+
+Expected files: the four module `build.gradle.kts` files; one new isolated publication-consumer check script and its generated inline fixtures; tracker updates. No production Kotlin source or public signature should change.
+
+Compatibility and risk: this is source/binary compatible and only adds required transitive compile dependencies. Consumer classpaths become correct and slightly more explicit. Runtime artifacts/versions do not change. Moving desktop LAN to test-only removes an erroneous runtime dependency from that sidecar; applications needing LAN already select the LAN transport separately. The external-consumer test must use a throwaway repository/directory and never write credentials or publish remotely.
+
+Cleanup/rollback: the gate uses `mktemp`, traps cleanup, and does not touch `~/.m2`. A failed nested build preserves only ordinary module `build/` diagnostics until the script exits; no external state changes. Rollback is the focused build-script/test-script commit only.
+
+Acceptance criteria:
+
+- Generated JVM/Android target POMs classify every public ABI dependency as compile and every implementation-only dependency as runtime.
+- Gradle module API variants include core/coroutines/kotlinx-io exactly where public ABI requires them and exclude serialization, crypto providers, Bouncy Castle, JmDNS, and desktop's test-only LAN.
+- Fresh isolated consumers compile without directly declaring transitive ABI dependencies for JVM, Android, KMP common/JVM, and iOS simulator targets.
+- Existing module/platform/sample/publication tests pass; no warning is introduced.
+- Full gate has no new failure; any existing unrelated baseline remains exact and separately owned.
+
+### Implementation, tests, and diff review result
+
+Implementation is complete in five focused files:
+
+- `p2p-core/build.gradle.kts`: coroutines is now `api`; kotlinx-io remains `api`; serialization and every security provider remain `implementation`.
+- `p2p-transport-lan/build.gradle.kts`: coroutines is now `api` alongside core; JmDNS remains `implementation`.
+- `p2p-network-provisioning-android/build.gradle.kts`: core and coroutines are now `api`.
+- `p2p-network-provisioning-desktop/build.gradle.kts`: core and coroutines are now `api`; LAN moved from production to `testImplementation`.
+- `scripts/check-published-consumers.sh`: new executable, isolated, cleanup-safe publication consumer gate.
+
+The new gate publishes all modules to an `mktemp` Maven repository, asserts exact target-POM scopes, confirms desktop does not publish LAN, generates fresh projects outside the repository dependency graph, and compiles:
+
+- a core-only JVM consumer using `StateFlow` and `RawSink`;
+- a LAN-only JVM consumer using direct LAN `SharedFlow` plus transitive core types;
+- a desktop-provisioning-only JVM consumer using transitive core/coroutine types;
+- an Android-library consumer depending only on the Android provisioning AAR;
+- a KMP LAN consumer for common, JVM, Android, and iOS simulator source sets.
+
+The gate deliberately does not declare core, coroutines, or kotlinx-io directly where they must arrive transitively. Review caught and removed an initial fixture weakness where LAN could have masked Android provisioning metadata; Android provisioning now has its own isolated module. It also imports only `sdk.dir` into the temporary project when Android environment variables are absent, never copies other local properties, removes the entire validated `mktemp` directory through a quoted trap, and performs no remote publication.
+
+Regenerated API variants now contain:
+
+- core JVM/Android: coroutines, kotlinx-io, stdlib;
+- LAN JVM: core, coroutines, stdlib;
+- Android provisioning: core, coroutines, stdlib;
+- desktop provisioning: core, coroutines, stdlib and no LAN.
+
+Serialization, cryptography core/providers, Bouncy Castle, and JmDNS remain runtime-only. No production source/public signature changed, and no equivalent module retained the wrong scope.
+
+### Verification results before commit
+
+| Command/check | Exact result |
+| --- | --- |
+| `bash -n scripts/check-published-consumers.sh` | Pass |
+| `scripts/check-published-consumers.sh` | Pass; exact POM assertions plus isolated core JVM, LAN JVM, desktop JVM, Android provisioning, KMP JVM/Android/iOS simulator consumers |
+| Generated target module JSON review with `jq` | API variants contain exactly the required public dependencies listed above |
+| Affected module command: core JVM/iOS/Android, LAN JVM/Android/iOS compile, Android/desktop provisioning tests | Pass; core JVM 336/336, core iOS 317/317, LAN JVM 55/55, Android provisioning 18/18, desktop provisioning 6/6 |
+| `:p2p-transport-lan:iosSimulatorArm64Test` | Registered baseline unchanged: 40 tests, 2 lifecycle timeouts, 1 intentional skip |
+| `scripts/check-publish-artifacts.sh` | Pass; all 15 publication rows |
+| `./gradlew check` | No new failure. Same registered baseline only: Android sample lint 1 error/3 warnings and Apple LAN 2 lifecycle timeouts/1 skip; existing BUILD-14 test opt-in warnings remain. |
+| `git diff --check` | Pass |
+
+Compatibility: source/binary/runtime behavior is unchanged. Published consumers now receive required compile dependencies; desktop provisioning loses only an unused production LAN runtime edge and retains it for its loopback test. Remaining PS-T09 physical/runtime SAMPLE-21 work is not claimed by this build-only unit.
+
+Status remains `Implemented` until the focused commit is created and the isolated consumer gate is rerun from committed state. Then BUILD-01/CORE-T13 may become `Verified`; the unrelated repository baselines do not invalidate the exact publication metadata acceptance criteria and remain owned by their registered units.
+
 ## Execution log
 
 | Date | Unit | Action | Result |
@@ -809,3 +899,5 @@ Until that reply is supplied, only REL-REMOTE-01, ENV-07, and their genuinely de
 | 2026-07-18 | SEC-01/full gate | Ran `./gradlew check` after final ownership correction | SEC paths pass; gate remains red only for the registered Android lint error and two Apple LAN lifecycle timeouts; external security/device/network certification still required |
 | 2026-07-18 | SEC-01/source control | Reviewed, committed, reran core JVM/iOS from committed state, and pushed | Implementation commit `b79c9ba`; post-commit 336 JVM + 317 iOS tests pass; pushed branch tracks origin |
 | 2026-07-18 | REL-REMOTE-01 | Inspected local publication configuration and current official Central paths | BUILD-02 confirmed; unit blocked only on namespace/workflow/release policy and later CI credentials; independent work continues |
+| 2026-07-18 | REL-ABI-01 | Inspected all public ABI imports plus generated POM/module variants and froze the implementation/test plan | BUILD-01 reproduced in core, LAN, and both provisioning sidecars; no source edit made before analysis completion |
+| 2026-07-18 | REL-ABI-01 | Corrected API scopes, removed desktop's runtime LAN edge, added isolated consumer matrix, reviewed metadata, and ran all local gates | BUILD-01/CORE-T13 implemented; exact consumer and artifact gates pass; full-gate baselines unchanged |

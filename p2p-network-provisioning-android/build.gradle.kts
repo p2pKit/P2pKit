@@ -16,8 +16,8 @@ kotlin {
 
     sourceSets {
         androidMain.dependencies {
-            implementation(project(":p2p-core"))
-            implementation(libs.kotlinx.coroutines.core)
+            api(project(":p2p-core"))
+            api(libs.kotlinx.coroutines.core)
         }
         getByName("androidHostTest").dependencies {
             implementation(kotlin("test"))
