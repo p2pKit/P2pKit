@@ -48,7 +48,7 @@ Operating safeguards:
 | Findings total | 150 |
 | Explicit test gaps | 54 |
 
-Current finding state: 146 `Planned`, 0 `In Progress`, 3 `Implemented` (`CORE-06`, `CORE-07`, `BUILD-01`), 0 `Verified`, 1 `Blocked` (`BUILD-02`). SEC-01 was approved with storage A on 2026-07-17 and is locally implemented. Final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
+Current finding state: 146 `Planned`, 0 `In Progress`, 2 `Implemented` (`CORE-06`, `CORE-07`), 1 `Verified` (`BUILD-01`), 1 `Blocked` (`BUILD-02`). SEC-01 was approved with storage A on 2026-07-17, implemented, committed, and pushed. Its final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
 
 ### Baseline gate evidence and reusable command catalog
 
@@ -307,7 +307,7 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 
 | ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| BUILD-01 | High | Published compile dependency metadata is wrong | REL-ABI-01 | Implemented | Correct API scopes; desktop LAN test-only | CORE-T13 isolated published consumers pass | Pending focused commit | POM/module/API variant and all platform consumers pass |
+| BUILD-01 | High | Published compile dependency metadata is wrong | REL-ABI-01 | Verified | Correct API scopes; desktop LAN test-only | CORE-T13 isolated published consumers pass | `8f15d75`; pushed with tracker evidence | POM/module/API variant and all platform consumers pass from committed state |
 | BUILD-02 | High release blocker | No remote publication target exists | REL-REMOTE-01 | Blocked | Analysis complete; Portal workflow/namespace decision required | Local artifact shape passes; bundle/upload path awaits decision | Pending tracker-only blocker commit | Blocked on namespace type, workflow choice, and credentials; ENV-07 retains live upload proof |
 | BUILD-03 | Medium | BuildInfo defeats incremental/reproducible builds | REL-PROV-01 | Planned | — | Double-build/reproducibility tests | — | — |
 | BUILD-04 | Medium | Publication gate can pass invalid release | REL-SUPPLY-01 after BUILD-01/BUILD-02 | Planned | — | Invalid-scope/signature/archive fixtures | — | — |
@@ -343,7 +343,7 @@ Each row represents one bullet from “Missing or weak tests to add” in the so
 | CORE-T10 | Throwing and permanently hung close operations | CORE-12 | Planned | — | — | — |
 | CORE-T11 | Identity sanitizer collisions, concurrent first creation, persistence failure, and atomic replacement | CORE-18, CORE-19, CORE-20, CORE-21 | Planned | — | — | — |
 | CORE-T12 | Path observer close/restart, stale callbacks, unregister failure, generation gating | CORE-22, CORE-23 | Planned | — | — | — |
-| CORE-T13 | Clean external consumer compilation from published temp repository | BUILD-01 | Implemented | `scripts/check-published-consumers.sh` | JVM/Android/KMP/iOS pass | Pending focused commit |
+| CORE-T13 | Clean external consumer compilation from published temp repository | BUILD-01 | Verified | `scripts/check-published-consumers.sh` | `8f15d75`; pushed with tracker evidence | JVM/Android/KMP/iOS pass from committed state |
 
 ### Protocol and transfer gaps (21)
 
@@ -885,7 +885,11 @@ Serialization, cryptography core/providers, Bouncy Castle, and JmDNS remain runt
 
 Compatibility: source/binary/runtime behavior is unchanged. Published consumers now receive required compile dependencies; desktop provisioning loses only an unused production LAN runtime edge and retains it for its loopback test. Remaining PS-T09 physical/runtime SAMPLE-21 work is not claimed by this build-only unit.
 
-Status remains `Implemented` until the focused commit is created and the isolated consumer gate is rerun from committed state. Then BUILD-01/CORE-T13 may become `Verified`; the unrelated repository baselines do not invalidate the exact publication metadata acceptance criteria and remain owned by their registered units.
+### Source control and committed-state verification
+
+The focused implementation is commit `8f15d75` (`BUILD-01: publish public ABI dependencies correctly`) on branch `remediation/full-register-2026-07`. `git show --check --stat --oneline 8f15d75` reports a clean six-file diff limited to the four affected Gradle modules, the new consumer gate, and this tracker. The committed-state rerun of `scripts/check-published-consumers.sh` passed every exact POM assertion and isolated JVM, Android, KMP, and iOS simulator consumer.
+
+BUILD-01 and CORE-T13 are therefore `Verified`. The unrelated registered Android lint and Apple LAN baselines remain owned by their existing remediation units and do not weaken this unit's exact publication-metadata acceptance criteria. PS-T09 remains `Planned` because its SAMPLE-21 runtime/device conjunct is independent and incomplete.
 
 ## Execution log
 
@@ -901,3 +905,4 @@ Status remains `Implemented` until the focused commit is created and the isolate
 | 2026-07-18 | REL-REMOTE-01 | Inspected local publication configuration and current official Central paths | BUILD-02 confirmed; unit blocked only on namespace/workflow/release policy and later CI credentials; independent work continues |
 | 2026-07-18 | REL-ABI-01 | Inspected all public ABI imports plus generated POM/module variants and froze the implementation/test plan | BUILD-01 reproduced in core, LAN, and both provisioning sidecars; no source edit made before analysis completion |
 | 2026-07-18 | REL-ABI-01 | Corrected API scopes, removed desktop's runtime LAN edge, added isolated consumer matrix, reviewed metadata, and ran all local gates | BUILD-01/CORE-T13 implemented; exact consumer and artifact gates pass; full-gate baselines unchanged |
+| 2026-07-18 | REL-ABI-01/source control | Created focused commit and reran the isolated consumer gate from committed state | Commit `8f15d75`; clean committed diff; BUILD-01/CORE-T13 verified; JVM/Android/KMP/iOS consumer matrix passes |
