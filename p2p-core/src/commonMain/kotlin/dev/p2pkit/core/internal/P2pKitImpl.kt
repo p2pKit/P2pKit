@@ -42,6 +42,7 @@ import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportSecurityProfile
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
@@ -172,6 +173,14 @@ internal class P2pKitImpl(
     @kotlin.concurrent.Volatile
     private var stopped: Boolean = false
 
+    /**
+     * Short commit gate shared by every public lifecycle operation and
+     * session registration. Platform work never runs while this mutex is held.
+     */
+    private val lifecycleMutex = Mutex()
+    private var lifecycleGeneration: Long = 0L
+    private val stopCompletion = CompletableDeferred<Unit>()
+
     init {
         // V0.4-PROVENANCE (L2): emit framework identity to BOTH the
         // user-supplied P2pLogger (visible to samples that wire it) AND
@@ -228,6 +237,19 @@ internal class P2pKitImpl(
             clock = clock,
             logger = logger,
             fileTransferConfig = fileTransferConfig,
+            lifecycleGate = object : SessionLifecycleGate {
+                override suspend fun isActive(expectedGeneration: Long?): Boolean =
+                    lifecycleMutex.withLock {
+                        lifecycleIsActiveLocked(expectedGeneration)
+                    }
+
+                override suspend fun <T : Any> commit(
+                    expectedGeneration: Long?,
+                    block: suspend () -> T
+                ): T? = lifecycleMutex.withLock {
+                    if (lifecycleIsActiveLocked(expectedGeneration)) block() else null
+                }
+            },
             peerLookup = peerRegistry::internalPeer,
             refreshDiscovery = {
                 // V0.4-DISCOVERY-REFRESH: fan out to every registered
@@ -298,7 +320,8 @@ internal class P2pKitImpl(
     override val sessions: StateFlow<List<P2pSession>> get() = sessionManager.sessions
 
     override suspend fun start() {
-        ensureStarted()
+        val generation = beginLifecycleOperation()
+        ensureStarted(generation)
     }
 
     /**
@@ -313,20 +336,26 @@ internal class P2pKitImpl(
      * transport's [DataTransport.type] so the caller can show which medium
      * failed without inspecting the cause's class.
      */
-    private suspend fun ensureStarted() {
-        if (stopped) throw IllegalStateException("P2pKit has been stopped; create a new instance")
+    private suspend fun ensureStarted(generation: Long) {
+        requireLifecycleActive(generation)
         startResult?.let { prior ->
             if (prior.isSuccess) return
         }
         startMutex.withLock {
-            if (stopped) throw IllegalStateException("P2pKit has been stopped; create a new instance")
+            requireLifecycleActive(generation)
             startResult?.let { prior ->
                 if (prior.isSuccess) return
             }
-            // Drive the documented lifecycle: Idle/Failed -> Starting on the
-            // first (or retried) start attempt.
-            if (_state.value == P2pState.Idle || _state.value is P2pState.Failed) {
-                _state.value = P2pState.Starting
+            // Drive Idle/Failed -> Starting as a generation commit. stop()
+            // either observes this first and advances to Stopping, or wins
+            // first and rejects the write; Starting can never overwrite it.
+            val startingCommitted = commitLifecycle(generation) {
+                if (_state.value == P2pState.Idle || _state.value is P2pState.Failed) {
+                    _state.value = P2pState.Starting
+                }
+            }
+            if (!startingCommitted) {
+                throw lifecycleStoppedFailure()
             }
             for (transport in dataTransports) {
                 // AUDIT-2026-07 (ARCH-1): rethrow cancellation before any
@@ -341,9 +370,22 @@ internal class P2pKitImpl(
                 val r = try {
                     transport.start()
                 } catch (e: CancellationException) {
+                    if (!isLifecycleActive(generation)) {
+                        cleanupLateStart(
+                            observerMayHaveStarted = false,
+                            dataMayHaveStartedLate = true
+                        )
+                    }
                     throw e
                 } catch (e: Throwable) {
                     Result.failure(e)
+                }
+                if (!isLifecycleActive(generation)) {
+                    cleanupLateStart(
+                        observerMayHaveStarted = false,
+                        dataMayHaveStartedLate = true
+                    )
+                    throw lifecycleStoppedFailure()
                 }
                 if (r.isFailure) {
                     val cause = r.exceptionOrNull()
@@ -352,13 +394,17 @@ internal class P2pKitImpl(
                         reason = cause?.message ?: "transport.start() returned failure",
                         underlying = cause
                     )
-                    startResult = Result.failure(failed)
-                    // Surface the documented terminal Failed state (Errors.kt
-                    // claims TransportStartFailed surfaces through the lifecycle)
-                    // — unless stop() ran meanwhile via its mutex-starvation
-                    // fallback (see below): Stopped must not be overwritten by
-                    // a late Failed (AUDIT-2026-06).
-                    if (!stopped) _state.value = P2pState.Failed(failed)
+                    val committed = commitLifecycle(generation) {
+                        startResult = Result.failure(failed)
+                        _state.value = P2pState.Failed(failed)
+                    }
+                    if (!committed) {
+                        cleanupLateStart(
+                            observerMayHaveStarted = false,
+                            dataMayHaveStartedLate = true
+                        )
+                        throw lifecycleStoppedFailure()
+                    }
                     throw failed
                 }
             }
@@ -369,10 +415,11 @@ internal class P2pKitImpl(
             // never latch startResult=success or flip (back) to Running.
             // Close whatever this bind loop just (re)opened; transport
             // close() is idempotent for the ones stop() already closed.
-            if (stopped) {
-                for (transport in dataTransports) {
-                    runCatching { transport.close() }
-                }
+            if (!isLifecycleActive(generation)) {
+                cleanupLateStart(
+                    observerMayHaveStarted = false,
+                    dataMayHaveStartedLate = true
+                )
                 throw IllegalStateException("P2pKit has been stopped; create a new instance")
             }
             // Best-effort path observer startup. A failure here is logged
@@ -384,29 +431,42 @@ internal class P2pKitImpl(
             try {
                 pathObserver.start()
             } catch (e: CancellationException) {
+                if (!isLifecycleActive(generation)) {
+                    cleanupLateStart(
+                        observerMayHaveStarted = true,
+                        dataMayHaveStartedLate = false
+                    )
+                }
                 throw e
             } catch (e: Throwable) {
                 logger.warn("NetworkPathObserver.start() failed; path-change recovery disabled for this session", e)
             }
-            // Subscribe SessionManager to path changes. Done after the
-            // observer starts so [SessionManager.applyPathChange] sees the
-            // observer's initial emission. We launch on the kit's internal
-            // scope so the subscription tears down with kit.stop().
-            scope.launch {
-                pathObserver.status.collect { status ->
-                    sessionManager.applyPathChange(status)
+            val committed = commitLifecycle(generation) {
+                // Subscribe SessionManager to path changes only while the
+                // generation is still active. stop() cannot latch terminal
+                // between this check and the final Running publication.
+                scope.launch {
+                    pathObserver.status.collect { status ->
+                        sessionManager.applyPathChange(status)
+                    }
                 }
+                startResult = Result.success(Unit)
+                _state.value = P2pState.Running
             }
-            startResult = Result.success(Unit)
-            // Successful start reaches Running, regardless of which entry point
-            // (start / startAdvertising / startDiscovery / connect) triggered it.
-            _state.value = P2pState.Running
+            if (!committed) {
+                cleanupLateStart(
+                    observerMayHaveStarted = true,
+                    dataMayHaveStartedLate = false
+                )
+                throw lifecycleStoppedFailure()
+            }
         }
     }
 
     override suspend fun startAdvertising() {
+        val generation = beginLifecycleOperation()
         ensurePermissions()
-        ensureStarted()
+        ensureStarted(generation)
         try {
             val localInfo = LocalPeerInfo(
                 peerId = localPeerId,
@@ -418,22 +478,40 @@ internal class P2pKitImpl(
                 fingerprint = localFingerprint
             )
             for (transport in discoveryTransports) {
+                requireLifecycleActive(generation)
                 transport.startAdvertising(localInfo)
+                if (!isLifecycleActive(generation)) throw lifecycleStoppedFailure()
             }
-            // A successful (re)advertise must clear a previously latched
-            // Failed: ensureStarted's success fast-path never re-runs the
-            // Running transition, so without this the kit reported Failed
-            // forever even though everything works (AUDIT-2026-06 fix).
-            if (_state.value is P2pState.Failed) _state.value = P2pState.Running
         } catch (e: CancellationException) {
+            if (!isLifecycleActive(generation)) {
+                cleanupLateDiscoveryOperation("advertising") { it.stopAdvertising() }
+            }
             throw e
         } catch (e: Throwable) {
+            if (!isLifecycleActive(generation)) {
+                cleanupLateDiscoveryOperation("advertising") { it.stopAdvertising() }
+                throw lifecycleStoppedFailure()
+            }
             // A partial advertise failure must not leave state stuck — surface
             // it as Failed (consistent with the ensureStarted bind-failure path).
             val err = if (e is P2pError) e
             else P2pError.ConnectionFailed("startAdvertising failed: ${e.message ?: e::class.simpleName}")
-            _state.value = P2pState.Failed(err)
+            if (!commitLifecycle(generation) { _state.value = P2pState.Failed(err) }) {
+                cleanupLateDiscoveryOperation("advertising") {
+                    it.stopAdvertising()
+                }
+                throw lifecycleStoppedFailure()
+            }
             throw err
+        }
+        val committed = commitLifecycle(generation) {
+            if (_state.value is P2pState.Failed) _state.value = P2pState.Running
+        }
+        if (!committed) {
+            cleanupLateDiscoveryOperation("advertising") {
+                it.stopAdvertising()
+            }
+            throw lifecycleStoppedFailure()
         }
     }
 
@@ -444,23 +522,46 @@ internal class P2pKitImpl(
     }
 
     override suspend fun startDiscovery() {
+        val generation = beginLifecycleOperation()
         ensurePermissions()
-        ensureStarted()
+        ensureStarted(generation)
         try {
             for (transport in discoveryTransports) {
+                requireLifecycleActive(generation)
                 transport.startDiscovery()
+                if (!isLifecycleActive(generation)) throw lifecycleStoppedFailure()
             }
-            if (_state.value is P2pState.Failed) _state.value = P2pState.Running
         } catch (e: CancellationException) {
+            if (!isLifecycleActive(generation)) {
+                cleanupLateDiscoveryOperation("discovery") { it.stopDiscovery() }
+            }
             throw e
         } catch (e: Throwable) {
+            if (!isLifecycleActive(generation)) {
+                cleanupLateDiscoveryOperation("discovery") { it.stopDiscovery() }
+                throw lifecycleStoppedFailure()
+            }
             // Mirror startAdvertising: surface a typed error instead of
             // letting a raw platform exception escape the public API
             // (AUDIT-2026-06 fix).
             val err = if (e is P2pError) e
             else P2pError.ConnectionFailed("startDiscovery failed: ${e.message ?: e::class.simpleName}")
-            _state.value = P2pState.Failed(err)
+            if (!commitLifecycle(generation) { _state.value = P2pState.Failed(err) }) {
+                cleanupLateDiscoveryOperation("discovery") {
+                    it.stopDiscovery()
+                }
+                throw lifecycleStoppedFailure()
+            }
             throw err
+        }
+        val committed = commitLifecycle(generation) {
+            if (_state.value is P2pState.Failed) _state.value = P2pState.Running
+        }
+        if (!committed) {
+            cleanupLateDiscoveryOperation("discovery") {
+                it.stopDiscovery()
+            }
+            throw lifecycleStoppedFailure()
         }
     }
 
@@ -483,7 +584,8 @@ internal class P2pKitImpl(
         peer: Peer,
         expectedFingerprint: PeerFingerprint?
     ): P2pSession {
-        ensureStarted()
+        val generation = beginLifecycleOperation()
+        ensureStarted(generation)
         val internalPeer = peerRegistry.internalPeer(peer.id)
             ?: dev.p2pkit.core.transport.InternalPeer(
                 publicPeer = peer,
@@ -491,7 +593,12 @@ internal class P2pKitImpl(
                     dev.p2pkit.core.transport.TransportHint(type = it)
                 }
             )
-        return sessionManager.connect(peer, internalPeer, expectedFingerprint)
+        return sessionManager.connect(
+            peer = peer,
+            internalPeer = internalPeer,
+            expectedFingerprint = expectedFingerprint,
+            lifecycleGeneration = generation
+        )
     }
 
     override fun lastSeen(peerId: PeerId): Long? = peerRegistry.lastSeen(peerId)
@@ -521,16 +628,32 @@ internal class P2pKitImpl(
     }
 
     override suspend fun stop() {
-        // Terminal & idempotent. internalJob.cancel() below permanently kills
-        // the scope that powers SessionManager / PeerRegistry / accept loops,
-        // so the instance cannot be revived — the `stopped` flag makes any
-        // subsequent lifecycle call fail loudly (IllegalStateException) instead
-        // of latching onto a dead scope and silently no-op'ing.
-        if (stopped) {
-            // A previous bounded teardown may have left a non-cooperative
-            // child alive and therefore deliberately retained the identity
-            // lease. Repeated stop is an opportunity to finish that cleanup.
-            withContext(NonCancellable) { finishIdentityOwnershipTeardown() }
+        val ownsTeardown = withContext(NonCancellable) {
+            lifecycleMutex.withLock {
+                if (stopped) {
+                    false
+                } else {
+                    // The generation changes before any resource snapshot.
+                    // Late operations can finish platform work, but cannot
+                    // publish and must execute their compensating cleanup.
+                    stopped = true
+                    lifecycleGeneration += 1
+                    _state.value = P2pState.Stopping
+                    true
+                }
+            }
+        }
+        if (!ownsTeardown) {
+            // Idempotent concurrent callers observe completion of the same
+            // teardown instead of returning while the first caller still owns
+            // live resources.
+            withContext(NonCancellable) {
+                stopCompletion.await()
+                // Preserve the secure-identity fail-closed retry contract: if
+                // the leader retained the lease because a child ignored its
+                // bound, a later idempotent stop gets another bounded join.
+                finishIdentityOwnershipTeardown()
+            }
             return
         }
         // NonCancellable: `stopped` latches at entry, so if the caller's
@@ -541,11 +664,6 @@ internal class P2pKitImpl(
         // (AUDIT-2026-06 fix).
         withContext(NonCancellable) {
             try {
-            // Latch BEFORE anything that can suspend: ensureStarted re-checks
-            // `stopped` after its bind loop, so even the lock-less fallback
-            // below cannot be raced by a late Running/startResult latch.
-            stopped = true
-            _state.value = P2pState.Stopping
             // startMutex: a concurrent ensureStarted mid-bind must not
             // interleave with teardown (it could keep binding transports
             // after we closed them, then latch Running/startResult-success
@@ -605,9 +723,90 @@ internal class P2pKitImpl(
                 )
             }
             } finally {
-                finishIdentityOwnershipTeardown()
-                _state.value = P2pState.Stopped
+                try {
+                    finishIdentityOwnershipTeardown()
+                } finally {
+                    _state.value = P2pState.Stopped
+                    stopCompletion.complete(Unit)
+                }
             }
+        }
+    }
+
+    private suspend fun beginLifecycleOperation(): Long = lifecycleMutex.withLock {
+        if (stopped) throw lifecycleStoppedFailure()
+        lifecycleGeneration
+    }
+
+    private suspend fun requireLifecycleActive(expectedGeneration: Long) {
+        if (!isLifecycleActive(expectedGeneration)) throw lifecycleStoppedFailure()
+    }
+
+    private suspend fun isLifecycleActive(expectedGeneration: Long?): Boolean =
+        lifecycleMutex.withLock {
+            lifecycleIsActiveLocked(expectedGeneration)
+        }
+
+    private fun lifecycleIsActiveLocked(expectedGeneration: Long?): Boolean =
+        !stopped && (expectedGeneration == null || expectedGeneration == lifecycleGeneration)
+
+    private suspend fun commitLifecycle(
+        expectedGeneration: Long,
+        block: () -> Unit
+    ): Boolean = lifecycleMutex.withLock {
+        if (!lifecycleIsActiveLocked(expectedGeneration)) return@withLock false
+        block()
+        true
+    }
+
+    private fun lifecycleStoppedFailure(): IllegalStateException =
+        IllegalStateException("P2pKit has been stopped; create a new instance")
+
+    private suspend fun cleanupLateStart(
+        observerMayHaveStarted: Boolean,
+        dataMayHaveStartedLate: Boolean
+    ) {
+        withContext(NonCancellable) {
+            if (observerMayHaveStarted) {
+                cleanupStaleResource("network path observer") { pathObserver.close() }
+            }
+            if (dataMayHaveStartedLate) {
+                for (transport in dataTransports.asReversed()) {
+                    cleanupStaleResource("${transport.type} data transport") { transport.close() }
+                }
+            }
+        }
+    }
+
+    private suspend fun cleanupLateDiscoveryOperation(
+        operation: String,
+        cleanup: suspend (DiscoveryTransport) -> Unit
+    ) {
+        withContext(NonCancellable) {
+            for (transport in discoveryTransports.asReversed()) {
+                cleanupStaleResource("${transport.type} $operation") { cleanup(transport) }
+            }
+        }
+    }
+
+    private suspend fun cleanupStaleResource(
+        label: String,
+        cleanup: suspend () -> Unit
+    ) {
+        val completed = try {
+            withTimeoutOrNull(STALE_OPERATION_CLEANUP_TIMEOUT_MS) {
+                cleanup()
+                true
+            } ?: false
+        } catch (e: Throwable) {
+            logger.warn("Late lifecycle cleanup failed for $label", e)
+            return
+        }
+        if (!completed) {
+            logger.warn(
+                "Late lifecycle cleanup for $label exceeded " +
+                    "$STALE_OPERATION_CLEANUP_TIMEOUT_MS ms"
+            )
         }
     }
 
@@ -688,6 +887,9 @@ internal class P2pKitImpl(
 
         /** Bound before fail-closed retention of the destructive-reset lease. */
         const val INTERNAL_JOB_CLOSE_TIMEOUT_MS: Long = 5_000
+
+        /** Bound for each resource created by an operation that lost its generation. */
+        const val STALE_OPERATION_CLEANUP_TIMEOUT_MS: Long = 2_000
     }
 }
 

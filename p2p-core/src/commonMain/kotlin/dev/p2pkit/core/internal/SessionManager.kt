@@ -57,6 +57,20 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
+ * Serializes the short session-publication commit with the owning kit's
+ * terminal lifecycle transition. Expensive dial, handshake, and close work
+ * always runs outside this gate.
+ */
+internal interface SessionLifecycleGate {
+    public suspend fun isActive(expectedGeneration: Long?): Boolean
+
+    public suspend fun <T : Any> commit(
+        expectedGeneration: Long?,
+        block: suspend () -> T
+    ): T?
+}
+
+/**
  * Owns the lifecycle of every active [P2pSession].
  *
  * Responsibilities:
@@ -90,6 +104,7 @@ internal class SessionManager(
     private val clock: () -> Long,
     private val logger: P2pLogger,
     private val fileTransferConfig: FileTransferConfig = FileTransferConfig(),
+    private val lifecycleGate: SessionLifecycleGate,
     /**
      * Lock-free best-effort lookup of the latest [InternalPeer] known to
      * [PeerRegistry] for a given [PeerId]. Read by [SessionReconnectHandler]
@@ -220,7 +235,8 @@ internal class SessionManager(
     suspend fun connect(
         peer: Peer,
         internalPeer: InternalPeer,
-        expectedFingerprint: PeerFingerprint? = null
+        expectedFingerprint: PeerFingerprint? = null,
+        lifecycleGeneration: Long
     ): P2pSession {
         val effectiveFingerprint = resolveTrustedFingerprint(
             internalPeer = internalPeer,
@@ -228,13 +244,18 @@ internal class SessionManager(
         )
         var mayRetryAfterDifferentAuthorization = effectiveFingerprint != null
         while (true) {
+            if (!lifecycleGate.isActive(lifecycleGeneration)) {
+                throw lifecycleStoppedFailure()
+            }
             // Atomic decision delegated to the store: return an existing active
             // session, wait on someone else's in-flight connect, or become the
             // connector. The actual `await` / connect work runs OUTSIDE the
             // store's mutex (the decision is short-held, the work is not).
             when (val decision = store.startOrJoin(peer.id)) {
                 is ConnectDecision.Existing ->
-                    return decision.session.requireFingerprint(effectiveFingerprint)
+                    return decision.session
+                        .requireFingerprint(effectiveFingerprint)
+                        .requireActiveLifecycle(lifecycleGeneration)
                 is ConnectDecision.JoinPending -> {
                     val joined = try {
                         decision.deferred.await()
@@ -253,14 +274,17 @@ internal class SessionManager(
                         }
                         throw cause
                     }
-                    return joined.requireFingerprint(effectiveFingerprint)
+                    return joined
+                        .requireFingerprint(effectiveFingerprint)
+                        .requireActiveLifecycle(lifecycleGeneration)
                 }
                 is ConnectDecision.BecomeConnector ->
                     return performConnect(
                         peer = peer,
                         internalPeer = internalPeer,
                         expectedFingerprint = effectiveFingerprint,
-                        deferred = decision.deferred
+                        deferred = decision.deferred,
+                        lifecycleGeneration = lifecycleGeneration
                     )
             }
         }
@@ -313,16 +337,32 @@ internal class SessionManager(
         return this
     }
 
+    private suspend fun P2pSession.requireActiveLifecycle(
+        lifecycleGeneration: Long
+    ): P2pSession {
+        if (!lifecycleGate.isActive(lifecycleGeneration)) {
+            throw lifecycleStoppedFailure()
+        }
+        return this
+    }
+
     private suspend fun performConnect(
         peer: Peer,
         internalPeer: InternalPeer,
         expectedFingerprint: PeerFingerprint?,
-        deferred: CompletableDeferred<P2pSession>
+        deferred: CompletableDeferred<P2pSession>,
+        lifecycleGeneration: Long
     ): P2pSession {
         var completedSession: P2pSession? = null
         var failure: Throwable? = null
         try {
+            if (!lifecycleGate.isActive(lifecycleGeneration)) {
+                throw lifecycleStoppedFailure()
+            }
             val transport = transportManager.selectBestTransport(internalPeer)
+            if (!lifecycleGate.isActive(lifecycleGeneration)) {
+                throw lifecycleStoppedFailure()
+            }
             val rawConnection = try {
                 transport.connect(internalPeer)
             } catch (e: CancellationException) {
@@ -334,13 +374,18 @@ internal class SessionManager(
                     it.underlying = e
                 }
             }
+            if (!lifecycleGate.isActive(lifecycleGeneration)) {
+                closeUncommittedConnection(rawConnection)
+                throw lifecycleStoppedFailure()
+            }
             val session = setupSession(
                 rawConnection = rawConnection,
                 expectedPeer = peer,
                 expectedFingerprint = expectedFingerprint,
                 isIncoming = false,
                 internalPeerForReconnect = internalPeer,
-                isManualPeer = internalPeer.origin == PeerOrigin.Manual
+                isManualPeer = internalPeer.origin == PeerOrigin.Manual,
+                lifecycleGeneration = lifecycleGeneration
             )
             completedSession = session
             return session
@@ -405,6 +450,7 @@ internal class SessionManager(
                     isIncoming = true,
                     internalPeerForReconnect = null,
                     isManualPeer = false,
+                    lifecycleGeneration = null,
                     onHandshakeSettled = releaseOnce
                 )
             } catch (e: CancellationException) {
@@ -431,6 +477,7 @@ internal class SessionManager(
         isIncoming: Boolean,
         internalPeerForReconnect: InternalPeer?,
         isManualPeer: Boolean = false,
+        lifecycleGeneration: Long?,
         /**
          * AUDIT-2026-07 (SEC-1): invoked exactly once, from the `finally`
          * below, the moment the handshake settles — on success AND on every
@@ -485,29 +532,83 @@ internal class SessionManager(
         }
 
         session.start()
-        val outcome = registerSession(handshake.resolvedPeer.id, session, isIncoming = isIncoming)
+        val committed = lifecycleGate.commit(lifecycleGeneration) {
+            val outcome = registerSession(
+                handshake.resolvedPeer.id,
+                session,
+                isIncoming = isIncoming
+            )
 
-        // Outgoing callers receive the winner via performConnect's deferred so
-        // a rejected new session never leaks back to app code as a "live"
-        // session. Incoming subscribers (P2pKit.incomingSessions) only see
-        // sessions we actually kept.
-        val resultSession = when (outcome) {
-            is RegisterOutcome.Accepted -> outcome.session
-            is RegisterOutcome.Replaced -> outcome.winner
-            is RegisterOutcome.Rejected -> outcome.winner
-            // AUDIT-2026-07 (SEC-1): total-session bound refusal — the new
-            // session was never registered and is being closed by
-            // [registerSession]; return it to the (incoming-only) caller,
-            // which discards it. Never surfaced on [incomingSessions].
-            is RegisterOutcome.RefusedAtCapacity -> outcome.session
+            // Outgoing callers receive the winner via performConnect's deferred
+            // so a rejected new session never leaks back to app code as a
+            // "live" session. Incoming subscribers only see sessions admitted
+            // by the same atomic lifecycle commit as the public sessions flow.
+            val resultSession = when (outcome) {
+                is RegisterOutcome.Accepted -> outcome.session
+                is RegisterOutcome.Replaced -> outcome.winner
+                is RegisterOutcome.Rejected -> outcome.winner
+                is RegisterOutcome.RefusedAtCapacity -> outcome.session
+            }
+            val published = if (isIncoming &&
+                (outcome is RegisterOutcome.Accepted || outcome is RegisterOutcome.Replaced)
+            ) {
+                _incomingSessions.tryEmit(resultSession)
+            } else {
+                true
+            }
+            CommittedSession(resultSession, published)
         }
-        if (isIncoming &&
-            (outcome is RegisterOutcome.Accepted || outcome is RegisterOutcome.Replaced)
-        ) {
-            _incomingSessions.emit(resultSession)
+        if (committed == null) {
+            closeUncommittedSession(session)
+            throw lifecycleStoppedFailure()
         }
-        return resultSession
+        if (!committed.published) {
+            store.removeIfMatches(handshake.resolvedPeer.id, committed.resultSession)
+            closeUncommittedSession(committed.resultSession)
+            throw P2pError.ConnectionFailed(
+                "Incoming session publication capacity was exhausted"
+            )
+        }
+        return committed.resultSession
     }
+
+    private suspend fun closeUncommittedSession(session: P2pSession) {
+        withContext(NonCancellable) {
+            val closed = withTimeoutOrNull(SESSION_COMMIT_CLEANUP_TIMEOUT_MS) {
+                session.close()
+                true
+            } ?: false
+            if (!closed) {
+                logger.warn(
+                    "Uncommitted session cleanup exceeded " +
+                        "$SESSION_COMMIT_CLEANUP_TIMEOUT_MS ms"
+                )
+            }
+        }
+    }
+
+    private suspend fun closeUncommittedConnection(connection: RawConnection) {
+        withContext(NonCancellable) {
+            val closed = withTimeoutOrNull(SESSION_COMMIT_CLEANUP_TIMEOUT_MS) {
+                connection.close()
+                true
+            } ?: false
+            if (!closed) {
+                logger.warn(
+                    "Uncommitted connection cleanup exceeded " +
+                        "$SESSION_COMMIT_CLEANUP_TIMEOUT_MS ms"
+                )
+            }
+        }
+    }
+
+    private fun lifecycleStoppedFailure(): IllegalStateException =
+        IllegalStateException("P2pKit stopped before the session could be committed")
+
+    private data class CommittedSession(
+        val resultSession: P2pSession,
+        val published: Boolean
+    )
 
     /**
      * Establishes the whole-kit security profile and then performs HELLO over
@@ -1136,6 +1237,9 @@ internal const val MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS: Int = 16
 
 /** Per-resource bound used only while rolling back an incomplete handshake. */
 internal const val HANDSHAKE_CLEANUP_TIMEOUT_MS: Long = 2_000
+
+/** Per-session bound used when terminal lifecycle rejects registration. */
+internal const val SESSION_COMMIT_CLEANUP_TIMEOUT_MS: Long = 2_000
 
 /**
  * AUDIT-2026-07 (SEC-1, decision #9a): upper bound on total concurrently

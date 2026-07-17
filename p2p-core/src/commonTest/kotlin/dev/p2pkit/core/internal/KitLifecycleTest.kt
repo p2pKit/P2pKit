@@ -1,12 +1,17 @@
 package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.NetworkPathObserver
 import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pState
+import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerId
+import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.DataTransport
@@ -30,6 +35,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -409,6 +415,229 @@ class KitLifecycleTest {
             )
         }
     }
+
+    @Test
+    fun lateAdvertisingCompletionIsRolledBackAfterStop() = runBlocking {
+        val transport = GatedDiscoveryTransport()
+        val kit = createTestKit {
+            appId = AppId("late-advertising-test")
+            deviceName = "Test"
+            transports { register(GatedDiscoveryFactory(transport)) }
+        }
+        kit.start()
+
+        var failure: Throwable? = null
+        val advertiser = launch {
+            try {
+                kit.startAdvertising()
+            } catch (e: Throwable) {
+                failure = e
+            }
+        }
+        transport.advertisingEntered.await()
+
+        kit.stop()
+        assertEquals(P2pState.Stopped, kit.state.value)
+        transport.releaseAdvertising.complete(Unit)
+        withTimeout(5_000) { advertiser.join() }
+
+        assertIs<IllegalStateException>(failure)
+        assertEquals(
+            2,
+            transport.stopAdvertisingCalls,
+            "stop must close the in-flight resource and its late completion must compensate again"
+        )
+        assertEquals(P2pState.Stopped, kit.state.value)
+    }
+
+    @Test
+    fun lateDiscoveryCompletionIsRolledBackAfterStop() = runBlocking {
+        val transport = GatedDiscoveryTransport()
+        val kit = createTestKit {
+            appId = AppId("late-discovery-test")
+            deviceName = "Test"
+            transports { register(GatedDiscoveryFactory(transport)) }
+        }
+        kit.start()
+
+        var failure: Throwable? = null
+        val discoverer = launch {
+            try {
+                kit.startDiscovery()
+            } catch (e: Throwable) {
+                failure = e
+            }
+        }
+        transport.discoveryEntered.await()
+
+        kit.stop()
+        assertEquals(P2pState.Stopped, kit.state.value)
+        transport.releaseDiscovery.complete(Unit)
+        withTimeout(5_000) { discoverer.join() }
+
+        assertIs<IllegalStateException>(failure)
+        assertEquals(2, transport.stopDiscoveryCalls)
+        assertEquals(P2pState.Stopped, kit.state.value)
+    }
+
+    @Test
+    fun observerThatReturnsAfterStopCannotResurrectKit() = runBlocking {
+        val transport = TrackingTransport()
+        val observer = LateReturningObserver()
+        val kit = createTestKit {
+            appId = AppId("late-observer-test")
+            deviceName = "Test"
+            lifecycle { networkPathObserver = observer }
+            transports { register(TrackingFactory(transport)) }
+        }
+
+        var failure: Throwable? = null
+        val starter = launch {
+            try {
+                kit.start()
+            } catch (e: Throwable) {
+                failure = e
+            }
+        }
+        observer.startEntered.await()
+
+        withTimeout(15_000) { kit.stop() }
+        assertEquals(P2pState.Stopped, kit.state.value)
+        observer.releaseStart.complete(Unit)
+        withTimeout(5_000) { starter.join() }
+
+        assertIs<IllegalStateException>(failure)
+        assertEquals(
+            2,
+            observer.closeCalls,
+            "terminal teardown and the late-start compensation must both close idempotently"
+        )
+        assertEquals(P2pState.Stopped, kit.state.value)
+    }
+
+    @Test
+    fun outgoingConnectThatReturnsAfterStopCannotPublishSession() = runBlocking {
+        val pair = FakeConnectionPair()
+        val aliceTransport = GatedConnectTransport(pair.a)
+        val bobTransport = FakeDataTransport(preStagedIncoming = listOf(pair.b))
+        val alice = createTestKit {
+            appId = AppId("late-connect-test")
+            deviceName = "Alice"
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
+            transports { register(GatedConnectFactory(aliceTransport)) }
+        }
+        val bob = createTestKit {
+            appId = AppId("late-connect-test")
+            deviceName = "Bob"
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
+            transports { register(DataOnlyFactory(bobTransport)) }
+        }
+        try {
+            alice.start()
+            bob.start()
+            val target = Peer(
+                id = PeerId("bob-id"),
+                name = "Bob",
+                platform = Platform.JVM_DESKTOP,
+                supportedTransports = setOf(TransportKind.LAN)
+            )
+            var failure: Throwable? = null
+            val connector = launch {
+                try {
+                    alice.connect(target)
+                } catch (e: Throwable) {
+                    failure = e
+                }
+            }
+            aliceTransport.connectEntered.await()
+
+            alice.stop()
+            aliceTransport.releaseConnect.complete(Unit)
+            withTimeout(5_000) { connector.join() }
+
+            assertIs<IllegalStateException>(failure, "connect must fail with the terminal lifecycle error")
+            assertEquals(
+                ConnectionState.Closed,
+                pair.a.state.value,
+                "the raw connection created after stop must be closed before protocol setup"
+            )
+            assertTrue(alice.sessions.value.isEmpty(), "a late connection must never enter public sessions")
+            assertEquals(P2pState.Stopped, alice.state.value)
+        } finally {
+            aliceTransport.releaseConnect.complete(Unit)
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
+    fun sessionCommittedBeforeStopIsIncludedInTeardown() = runBlocking {
+        val pair = FakeConnectionPair()
+        val aliceTransport = FakeDataTransport(outgoingConnection = { pair.a })
+        val bobTransport = FakeDataTransport(preStagedIncoming = listOf(pair.b))
+        val alice = createTestKit {
+            appId = AppId("committed-session-stop-test")
+            deviceName = "Alice"
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
+            transports { register(DataOnlyFactory(aliceTransport)) }
+        }
+        val bob = createTestKit {
+            appId = AppId("committed-session-stop-test")
+            deviceName = "Bob"
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
+            transports { register(DataOnlyFactory(bobTransport)) }
+        }
+        try {
+            val session = withTimeout(5_000) {
+                alice.connect(
+                    Peer(
+                        id = PeerId("bob-id"),
+                        name = "Bob",
+                        platform = Platform.JVM_DESKTOP,
+                        supportedTransports = setOf(TransportKind.LAN)
+                    )
+                )
+            }
+            assertEquals(ConnectionState.Connected, session.state.value)
+
+            alice.stop()
+
+            assertEquals(
+                ConnectionState.Closed,
+                session.state.value,
+                "a registration committed before the terminal gate must be in stop's snapshot"
+            )
+            assertEquals(P2pState.Stopped, alice.state.value)
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
+    fun concurrentStopCallersJoinOneTeardown() = runBlocking {
+        val transport = GatedCloseTransport()
+        val kit = createTestKit {
+            appId = AppId("concurrent-stop-test")
+            deviceName = "Test"
+            transports { register(GatedCloseFactory(transport)) }
+        }
+        kit.start()
+
+        val first = launch { kit.stop() }
+        transport.closeEntered.await()
+        val second = launch { kit.stop() }
+        yield()
+        assertFalse(second.isCompleted, "a follower stop must wait for the leader's teardown")
+
+        transport.releaseClose.complete(Unit)
+        withTimeout(5_000) {
+            first.join()
+            second.join()
+        }
+        assertEquals(1, transport.closeCalls)
+        assertEquals(P2pState.Stopped, kit.state.value)
+    }
 }
 
 /**
@@ -516,6 +745,108 @@ private class DataOnlyFactory(private val transport: DataTransport) : TransportF
         TransportPair(data = transport, discovery = null)
 }
 
+private class GatedDiscoveryTransport : DataTransport, DiscoveryTransport {
+    override val type: TransportKind = TransportKind.LAN
+    override val priority: Int = 100
+
+    val advertisingEntered = CompletableDeferred<Unit>()
+    val releaseAdvertising = CompletableDeferred<Unit>()
+    val discoveryEntered = CompletableDeferred<Unit>()
+    val releaseDiscovery = CompletableDeferred<Unit>()
+
+    @Volatile var stopAdvertisingCalls: Int = 0
+    @Volatile var stopDiscoveryCalls: Int = 0
+
+    private val incoming = Channel<RawConnection>(Channel.UNLIMITED)
+    private val peerEvents = MutableSharedFlow<PeerEvent>(extraBufferCapacity = 1)
+
+    override fun canConnect(peer: InternalPeer): Boolean = false
+    override suspend fun connect(peer: InternalPeer): RawConnection =
+        error("GatedDiscoveryTransport does not connect")
+    override fun incomingConnections(): Flow<RawConnection> = incoming.receiveAsFlow()
+    override suspend fun close() {
+        incoming.close()
+    }
+
+    override val events: Flow<PeerEvent> = peerEvents.asSharedFlow()
+
+    override suspend fun startAdvertising(localPeer: LocalPeerInfo) {
+        advertisingEntered.complete(Unit)
+        releaseAdvertising.await()
+    }
+
+    override suspend fun stopAdvertising() {
+        stopAdvertisingCalls += 1
+    }
+
+    override suspend fun startDiscovery() {
+        discoveryEntered.complete(Unit)
+        releaseDiscovery.await()
+    }
+
+    override suspend fun stopDiscovery() {
+        stopDiscoveryCalls += 1
+    }
+}
+
+private class GatedDiscoveryFactory(
+    private val transport: GatedDiscoveryTransport
+) : TransportFactory {
+    override fun build(context: TransportContext): TransportPair =
+        TransportPair(data = transport, discovery = transport)
+}
+
+private class GatedConnectTransport(
+    private val lateConnection: RawConnection
+) : DataTransport {
+    override val type: TransportKind = TransportKind.LAN
+    override val priority: Int = 100
+
+    val connectEntered = CompletableDeferred<Unit>()
+    val releaseConnect = CompletableDeferred<Unit>()
+    private val incoming = Channel<RawConnection>(Channel.UNLIMITED)
+
+    override fun canConnect(peer: InternalPeer): Boolean = true
+
+    override suspend fun connect(peer: InternalPeer): RawConnection {
+        connectEntered.complete(Unit)
+        releaseConnect.await()
+        return lateConnection
+    }
+
+    override fun incomingConnections(): Flow<RawConnection> = incoming.receiveAsFlow()
+
+    override suspend fun close() {
+        incoming.close()
+    }
+}
+
+private class GatedConnectFactory(
+    private val transport: GatedConnectTransport
+) : TransportFactory {
+    override fun build(context: TransportContext): TransportPair =
+        TransportPair(data = transport, discovery = null)
+}
+
+private class LateReturningObserver : NetworkPathObserver {
+    private val _status = MutableStateFlow<NetworkPathStatus>(NetworkPathStatus.Unknown)
+    override val status: StateFlow<NetworkPathStatus> = _status.asStateFlow()
+
+    val startEntered = CompletableDeferred<Unit>()
+    val releaseStart = CompletableDeferred<Unit>()
+    private val closeCallCount = MutableStateFlow(0)
+    val closeCalls: Int get() = closeCallCount.value
+
+    override suspend fun start() {
+        startEntered.complete(Unit)
+        releaseStart.await()
+    }
+
+    override suspend fun close() {
+        closeCallCount.update { it + 1 }
+    }
+}
+
 /**
  * [NetworkPathObserver] modeling the shipped Android/iOS observers' shape:
  * `start()` and `close()` serialize on one internal mutex. `start()` parks
@@ -580,6 +911,8 @@ private class GatedCloseTransport : DataTransport {
     override val priority: Int = 100
 
     @Volatile var dataClosed: Boolean = false
+    private val closeCallCount = MutableStateFlow(0)
+    val closeCalls: Int get() = closeCallCount.value
 
     /** Completed by [close] the moment it is entered (teardown is now mid-flight). */
     val closeEntered = CompletableDeferred<Unit>()
@@ -596,6 +929,7 @@ private class GatedCloseTransport : DataTransport {
     override fun incomingConnections(): Flow<RawConnection> = incomingChannel.receiveAsFlow()
 
     override suspend fun close() {
+        closeCallCount.update { it + 1 }
         closeEntered.complete(Unit)
         releaseClose.await()
         dataClosed = true

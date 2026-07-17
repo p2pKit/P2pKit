@@ -48,7 +48,7 @@ Operating safeguards:
 | Findings total | 150 |
 | Explicit test gaps | 54 |
 
-Current finding state: 146 `Planned`, 0 `In Progress`, 2 `Implemented` (`CORE-06`, `CORE-07`), 1 `Verified` (`BUILD-01`), 1 `Blocked` (`BUILD-02`). SEC-01 was approved with storage A on 2026-07-17, implemented, committed, and pushed. Its final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
+Current finding state: 145 `Planned`, 0 `In Progress`, 3 `Implemented` (`CORE-01`, `CORE-06`, `CORE-07`), 1 `Verified` (`BUILD-01`), 1 `Blocked` (`BUILD-02`). SEC-01 was approved with storage A on 2026-07-17, implemented, committed, and pushed. Its final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
 
 ### Baseline gate evidence and reusable command catalog
 
@@ -137,7 +137,7 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 
 | ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| CORE-01 | High | Stop does not serialize terminal lifecycle with ongoing operations | LIF-SES-01 | Planned | — | CORE-T01 | — | — |
+| CORE-01 | High | Stop does not serialize terminal lifecycle with ongoing operations | LIF-GEN-01 (first LIF-SES-01 slice) | Implemented | Terminal generation gate, stale-resource compensation, atomic session-registration commit | CORE-T01 | Pending focused commit | 342 JVM + 323 iOS tests green; Android main compiles; committed-state verification pending |
 | CORE-02 | High | PeerRegistry is not a correct multi-transport aggregator | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T03 | — | — |
 | CORE-03 | High | Cancelled connect can poison coalescing and leak a live session | LIF-SES-01 | Planned | — | CORE-T02 | — | — |
 | CORE-04 | High | Application receive backpressure blocks protocol controls | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T05 | — | — |
@@ -331,7 +331,7 @@ Each row represents one bullet from “Missing or weak tests to add” in the so
 
 | Gap ID | Required coverage | Linked findings | Status | Test files/evidence | Commit/push | Verification |
 | --- | --- | --- | --- | --- | --- | --- |
-| CORE-T01 | Stop racing connect, advertising, discovery, and delayed observer start | CORE-01 | Planned | — | — | — |
+| CORE-T01 | Stop racing connect, advertising, discovery, and delayed observer start | CORE-01 | Implemented | Six deterministic races in `KitLifecycleTest`; existing parked data-start test retained | Pending focused commit | 342 JVM + 323 iOS tests green; three forced focused repeats green |
 | CORE-T02 | Cancellation at every outgoing-connect suspension, then successful retry | CORE-03 | Planned | — | — | — |
 | CORE-T03 | Two discovery transports contribute/lose same PeerId | CORE-02 | Planned | — | — | — |
 | CORE-T04 | Repeated same-direction inbound arbitration | CORE-05 | Planned | — | — | — |
@@ -891,6 +891,127 @@ The focused implementation is commit `8f15d75` (`BUILD-01: publish public ABI de
 
 BUILD-01 and CORE-T13 are therefore `Verified`. The unrelated registered Android lint and Apple LAN baselines remain owned by their existing remediation units and do not weaken this unit's exact publication-metadata acceptance criteria. PS-T09 remains `Planned` because its SAMPLE-21 runtime/device conjunct is independent and incomplete.
 
+## Current execution record: LIF-GEN-01
+
+### Analysis and confirmed reproduction
+
+| Field | Value |
+| --- | --- |
+| Finding/gap | CORE-01 (High) and CORE-T01 |
+| Status | In Progress; current code and tests reviewed and implementation plan frozen before source modification |
+| Root cause | `ensureStarted()` serializes only data-transport binding. `startAdvertising()`, `startDiscovery()`, and `connect()` perform resource creation and final publication outside that mutex. `stop()` latches a Boolean and closes a point-in-time snapshot, but there is no operation generation carried through the late commit. The observer-start path also checks `stopped` before, but not after, the suspending observer call. |
+| Affected components | `P2pKitImpl` lifecycle/state/observer logic; `SessionManager` outgoing and inbound registration boundary; discovery transports on every platform; all data transports used by outgoing connect; public `state`, `sessions`, and `incomingSessions` observations |
+| Public/API compatibility | No public signature or wire-protocol change is required. The terminal contract becomes stricter: an operation that loses the race to `stop()` fails with the same post-stop `IllegalStateException` family and cannot publish or relatch state. |
+
+The defect is still deterministically reachable on the current branch:
+
+1. Advertising/discovery call `ensureStarted()`, then suspend in a discovery transport outside `startMutex`. `stop()` can set `Stopped` and invoke the corresponding stop method; the original start then returns late and either leaves the platform resource reopened or writes `Running`/`Failed` after terminal shutdown.
+2. Outgoing `connect()` calls `ensureStarted()`, then performs transport dial, secure v2 setup, `session.start()`, and `SessionStore.tryRegister()` outside the kit lifecycle lock. `stop()` can take `activeSnapshot()` before registration; the late session is then added to the public `sessions` flow after teardown.
+3. `ensureStarted()` rechecks `stopped` after data binding but not after suspending `pathObserver.start()`. If stop's bounded fallback finishes while observer start is blocked, the late starter launches the collector, latches `startResult`, and writes `Running` over `Stopped`.
+4. Existing `KitLifecycleTest` covers a hung data-transport start and cancelled observer start, but deliberately cancels the late observer instead of releasing it, and has no stop race for advertising, discovery, or connect. CORE-T01 is therefore open.
+
+### Comprehensive implementation plan
+
+1. Introduce one private lifecycle generation gate in `P2pKitImpl`. Every public start/advertise/discover/connect operation captures the current generation before creating resources. `stop()` atomically makes the generation terminal before taking snapshots or closing resources. Concurrent `stop()` callers join one completion signal rather than starting overlapping teardown or returning while the leader is incomplete.
+2. Thread the captured generation through `ensureStarted()`. Validate it under the gate before the start fast path, after every suspending data-transport bind, after observer startup, and at the final `startResult`/`Running` commit. A late observer start must execute bounded non-cancellable close and a late data bind must close terminal resources; neither may launch a collector or mutate terminal state.
+3. Gate advertising/discovery success and failure state commits by generation. If terminal stop wins while a platform start is suspended, run the matching stop operation in bounded non-cancellable cleanup before returning the terminal lifecycle failure. Preserve `CancellationException` exactly when cancellation, rather than terminal invalidation, is the cause. Do not use this slice to claim ordinary multi-transport failure rollback; that remains CORE-11/CORE-T09 because retry-safe data-transport rollback needs a separate transport lifecycle decision.
+4. Add an internal session-registration commit callback to `SessionManager`. Outgoing setup carries the exact kit generation; inbound setup requires only a currently active kit. `SessionStore.tryRegister()` and the accepted incoming publication decision execute only when the kit gate admits the commit. If rejected, close the uncommitted session in bounded non-cancellable cleanup and fail setup. If registration wins first, stop acquires the gate afterward and its session snapshot necessarily includes the committed session.
+5. Recheck the generation before returning an existing/coalesced outgoing session. If stop already won, do not return a stale terminal handle. Preserve the existing coalescing, secure handshake, duplicate arbitration, capacity, and reconnect behavior.
+6. Review every lifecycle state write and every `SessionManager` registration path for an equivalent late commit. No test timeout will be increased and no assertion will allow multiple terminal outcomes.
+
+Expected files: `p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt`, `SessionManager.kt`, `KitLifecycleTest.kt`, a focused common test fixture/test file if connect needs separation, and this tracker. No platform implementation or public interface is expected to change.
+
+Concurrency/cleanup rules:
+
+- The lifecycle mutex is never held across platform transport dial/start/stop, cryptography, raw I/O, or session close. It is held only for generation checks and the short atomic registration/state commit.
+- Stale resource cleanup runs in `NonCancellable`, is individually bounded, logs failures, and never converts an original caller cancellation into a lifecycle success.
+- `stop()` remains terminal and idempotent. Only one caller owns teardown; followers await its completion. A non-cooperative platform operation can exceed the stop bound, but its later completion cannot commit and must immediately execute stale cleanup.
+- Lock ordering is lifecycle gate before the short `SessionStore` registration lock only at commit; no store path calls back into the lifecycle gate. Session/resource close occurs after releasing both locks.
+
+Tests to add/update:
+
+- stop while advertising start is parked: release it after `Stopped`; assert precise terminal failure, compensating stop, and permanent `Stopped` state;
+- the equivalent discovery race;
+- stop while a data-transport start is parked and then released (retain existing coverage, assert generation cleanup path);
+- stop while path-observer start is parked, then release rather than cancel; assert no collector/state resurrection and observer cleanup;
+- stop while outgoing transport connect is parked, then finish a real secure handshake; assert the connection/session is closed, `sessions` stays empty, and connect fails precisely;
+- registration winning immediately before stop: assert stop observes/closes it and `sessions` is empty on return;
+- concurrent stop callers: both complete only after the same teardown and resources close once where the contract permits counting;
+- repeat the race suite to demonstrate deterministic synchronization without sleeps.
+
+Acceptance criteria:
+
+- No state write after terminal stop can produce `Running` or `Failed`.
+- No outgoing or inbound session can enter public session state after the terminal generation is latched; a registration committed first is included in stop cleanup.
+- Any advertising/discovery/observer/data resource that completes after losing the generation race is compensatingly closed/stopped before that operation returns.
+- Cancellation remains a `CancellationException`; lifecycle invalidation has one precise post-stop failure; no errors are swallowed silently.
+- All new CORE-T01 tests, full core JVM/iOS tests, affected Android compilation, samples/publication checks, and the repository gate show no new failure or warning. Existing independently registered baselines remain exact until their units are fixed.
+
+### Implementation and review result
+
+Status: `Implemented`; focused commit and committed-state verification are pending.
+
+Confirmed root cause: the kit previously serialized only part of startup. The terminal Boolean was not an operation token, state writes were not lifecycle commits, and session registration happened after `stop()` took its active-session snapshot. A platform call that ignored or narrowly outran cancellation could therefore create a resource or publish state after terminal teardown.
+
+Implementation:
+
+- `P2pKitImpl` now owns one lifecycle mutex, monotonically changing generation, and one teardown completion signal. Every public start/advertise/discover/connect operation captures the generation; `stop()` atomically invalidates it and publishes `Stopping` before any resource snapshot.
+- `Starting`, `Running`, and `Failed` writes are generation-checked commits. Data-transport and path-observer startup recheck after every suspending resource boundary. A stale completion performs individually bounded, logged, `NonCancellable` compensation before returning.
+- Advertising and discovery validate before and after each transport. If terminal stop wins, the matching stop operation is applied across the transport set in reverse order, and neither success nor failure can overwrite `Stopped`.
+- `SessionManager` receives an internal lifecycle gate. Outgoing dial ownership is rechecked immediately after transport return, and an uncommitted raw connection is closed before protocol setup. Session-store registration and accepted-incoming publication admission are one lifecycle commit, so either registration precedes stop and is present in its snapshot, or the candidate is rejected and closed.
+- Existing/coalesced outgoing sessions are checked against the caller's captured generation before return. Concurrent `stop()` followers now wait for the leader's complete teardown rather than returning while resources remain live.
+- Stale connection/session/resource cleanup is bounded at 2,000 ms per resource and logs timeout/failure. No public API, binary ABI, stored identity, security mode, protocol frame, or wire-version change was made.
+
+Files changed:
+
+- `p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt`
+- `p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt`
+- `p2p-core/src/commonTest/kotlin/dev/p2pkit/core/internal/KitLifecycleTest.kt`
+- `P2PKIT_REMEDIATION_TRACKER_2026-07.md`
+
+Tests added:
+
+1. `lateAdvertisingCompletionIsRolledBackAfterStop`
+2. `lateDiscoveryCompletionIsRolledBackAfterStop`
+3. `observerThatReturnsAfterStopCannotResurrectKit`
+4. `outgoingConnectThatReturnsAfterStopCannotPublishSession`
+5. `sessionCommittedBeforeStopIsIncludedInTeardown`
+6. `concurrentStopCallersJoinOneTeardown`
+
+All new races use `CompletableDeferred` entry/release gates. They contain no arbitrary delay, relaxed terminal outcome, retry, or increased production/test timeout. The pre-existing `stopCompletesWhenATransportStartHangs` continues to cover the data-start boundary released after terminal stop.
+
+External-PR review:
+
+- Every lifecycle state write was searched. Non-terminal writes are now inside generation commits; only the stop leader writes `Stopping`/`Stopped`.
+- Every `SessionManager` registration path, including inbound setup, goes through the lifecycle gate. The gate/store lock order is one-way; store code does not acquire the lifecycle gate. Platform start/dial/close, cryptography, protocol I/O, and session close do not run while the lifecycle mutex is held.
+- Registration's store mutation is short and cancellation-safe: mutex acquisition happens before mutation, and the mutation body has no suspension. Loser/capacity session closes remain launched after store mutation. Incoming publication uses the already bounded flow capacity; exhaustion now removes and closes the candidate explicitly instead of suspending while holding the lifecycle commit.
+- Equivalent implementations were searched in startup, discovery, observer, outgoing and incoming session setup. No platform source implements a second kit-level registration/state commit.
+- Ordinary partial startup rollback without terminal stop remains CORE-11/CORE-T09. Store cleanup after all sessions close remains CORE-10. Prompt-cancellation ownership inside individual platform transports remains in the relevant LAN/provisioning findings. None is claimed fixed by this unit.
+
+### Pre-commit verification evidence
+
+| Command/check | Exact result |
+| --- | --- |
+| Focused `KitLifecycleTest` JVM suite during implementation | Passed after the late-connect regression test first exposed raw connection setup proceeding after terminal stop; the lifecycle check was moved directly after dial ownership transfer and the suite then passed |
+| Six focused lifecycle tests, forced three times | All three runs passed with deterministic gates and one precise outcome per race |
+| `./gradlew :p2p-core:jvmTest :p2p-core:iosSimulatorArm64Test :p2p-core:compileAndroidMain` | `BUILD SUCCESSFUL`; JVM 342 tests, iOS Simulator ARM64 323 tests, zero failures/errors/skips; Android common/main compilation passed |
+| `./gradlew check` | Reached the exact registered independent baselines: `FileTransferFlowTest.cancelMidStreamPropagatesToReceiver` expected `Cancelled` but observed `Completed`; Android lint reported the registered `CoarseFineLocation` error plus three registered warnings. No CORE-01 test failed |
+| `./gradlew :p2p-transport-lan:iosSimulatorArm64Test` | Reproduced the registered Apple LAN baseline exactly: 40 tests, two lifecycle timeouts, one intentionally skipped diagnostic |
+| `scripts/check-publish-artifacts.sh` | Passed all 15 publication rows |
+| `scripts/check-published-consumers.sh` | Passed isolated JVM, Android, KMP, and iOS consumer builds |
+| `./gradlew :p2p-transport-lan:assembleP2pKitSharedReleaseXCFramework` | `BUILD SUCCESSFUL`; release XCFramework assembled |
+| `xcodegen generate` | Passed |
+| Isolated Swift sample `xcodebuild` using `build/DerivedDataCore01` | Exit 0 with code signing disabled for generic iOS Simulator. A preceding reuse of the default build database reported a lock after an ambiguous verbose invocation; isolation proved this was concurrent DerivedData ownership, not a source failure |
+| `git diff --check` | Passed |
+
+The first attempted Android task name, `compileDebugKotlinAndroid`, does not exist in this multiplatform module; this was a command-selection diagnostic, not a product failure. It was corrected to the module's authoritative `compileAndroidMain` task, which passed. Existing `ExperimentalCoroutinesApi` warnings in unrelated core tests are registered under BUILD-14; the new lifecycle test file introduced no warning.
+
+Compatibility and remaining risk:
+
+- Calls linearized before terminal generation invalidation may succeed and are then included in teardown; calls losing the generation fail with the existing post-stop `IllegalStateException` contract. There is no automatic retry or fallback.
+- Incoming session pressure now has a precise bounded refusal at publication capacity rather than allowing setup to block the terminal lifecycle commit. The refused session is removed from the store and closed.
+- Full repository verification is not green because the independently registered FILE-04/SAMPLE-17/BUILD-08 and Apple LAN failures remain. CORE-01 will be marked `Verified` only after the focused commit is created, reviewed, rerun from committed state, and pushed.
+
 ## Execution log
 
 | Date | Unit | Action | Result |
@@ -906,3 +1027,5 @@ BUILD-01 and CORE-T13 are therefore `Verified`. The unrelated registered Android
 | 2026-07-18 | REL-ABI-01 | Inspected all public ABI imports plus generated POM/module variants and froze the implementation/test plan | BUILD-01 reproduced in core, LAN, and both provisioning sidecars; no source edit made before analysis completion |
 | 2026-07-18 | REL-ABI-01 | Corrected API scopes, removed desktop's runtime LAN edge, added isolated consumer matrix, reviewed metadata, and ran all local gates | BUILD-01/CORE-T13 implemented; exact consumer and artifact gates pass; full-gate baselines unchanged |
 | 2026-07-18 | REL-ABI-01/source control | Created focused commit and reran the isolated consumer gate from committed state | Commit `8f15d75`; clean committed diff; BUILD-01/CORE-T13 verified; JVM/Android/KMP/iOS consumer matrix passes |
+| 2026-07-18 | LIF-GEN-01 | Reviewed current lifecycle/session code and deterministic interleavings; froze focused plan before source changes | CORE-01 confirmed in late advertise/discover/connect/observer commits; CORE-T01 in progress; CORE-11 explicitly remains separate |
+| 2026-07-18 | LIF-GEN-01 | Implemented terminal generation commits, stale-resource compensation, atomic session registration, and six deterministic races; reviewed every equivalent path | CORE-01/CORE-T01 implemented; full core JVM/iOS and Android compilation green; independent repository baselines unchanged |
