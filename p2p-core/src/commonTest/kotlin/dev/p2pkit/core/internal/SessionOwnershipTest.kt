@@ -45,7 +45,9 @@ class SessionOwnershipTest {
         )
         try {
             alice.start()
-            val incoming = async { withTimeout(5_000) { bob.incomingSessions.first() } }
+            val incoming = async(start = CoroutineStart.UNDISPATCHED) {
+                withTimeout(5_000) { bob.incomingSessions.first() }
+            }
             bob.start()
 
             val target = targetPeer()
@@ -191,7 +193,9 @@ class SessionOwnershipTest {
             )
             assertTrue(bob.sessions.value.isEmpty())
 
-            val incoming = async { withTimeout(5_000) { bob.incomingSessions.first() } }
+            val incoming = async(start = CoroutineStart.UNDISPATCHED) {
+                withTimeout(5_000) { bob.incomingSessions.first() }
+            }
             bobTransport.emitIncoming(successPair.b)
             val outgoing = withTimeout(5_000) { alice.connect(targetPeer()) }
             assertEquals(ConnectionState.Connected, outgoing.state.value)
