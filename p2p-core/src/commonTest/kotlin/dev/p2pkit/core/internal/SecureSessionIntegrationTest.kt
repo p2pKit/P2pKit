@@ -139,6 +139,41 @@ class SecureSessionIntegrationTest {
     }
 
     @Test
+    fun secureSetupDeadlineIncludesInitialPrefaceWriteAndClosesRaw() = runBlocking {
+        val appId = AppId("secure.session.full-setup-timeout")
+        val blockedPair = FakeConnectionPair()
+        blockedPair.a.writeLatencyMillis = 10_000
+        val alice = secureKit(
+            appId,
+            "Alice",
+            MemorySecureIdentityStorage(),
+            FakeDataTransport(outgoingConnection = { blockedPair.a }),
+            PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp,
+            setupTimeoutMillis = 100
+        )
+        try {
+            val failure = assertFailsWith<P2pError.AuthenticationFailed> {
+                withTimeout(5_000) {
+                    alice.connect(
+                        Peer(
+                            id = PeerId("unresponsive-secure-peer"),
+                            name = "Unresponsive peer",
+                            platform = Platform.JVM_DESKTOP,
+                            supportedTransports = setOf(TransportKind.LAN)
+                        )
+                    )
+                }
+            }
+            assertTrue(failure.message.orEmpty().contains("timed out after 100 ms"))
+            assertEquals(1, blockedPair.a.writeAttempts)
+            assertEquals(ConnectionState.Closed, blockedPair.a.state.value)
+            assertTrue(alice.sessions.value.isEmpty())
+        } finally {
+            alice.stop()
+        }
+    }
+
+    @Test
     fun reconnectRemainsPinnedToTheInitiallyAuthenticatedIdentity() = runBlocking {
         val appId = AppId("secure.session.reconnect-pin")
         val firstPair = FakeConnectionPair()
@@ -472,11 +507,13 @@ class SecureSessionIntegrationTest {
         store: SecureIdentityStorage,
         transport: FakeDataTransport,
         authorization: PeerAuthorizationPolicy,
-        reconnect: ReconnectPolicy = ReconnectPolicy.Disabled
+        reconnect: ReconnectPolicy = ReconnectPolicy.Disabled,
+        setupTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS
     ): P2pKit = P2pKit.create {
         this.appId = appId
         deviceName = name
         secureIdentityStorage = store
+        sessionSetupTimeoutMillis = setupTimeoutMillis
         security { mode = SecurityMode.AuthenticatedV2(authorization) }
         lifecycle { reconnectPolicy = reconnect }
         keepAlive {
@@ -511,6 +548,7 @@ class SecureSessionIntegrationTest {
         platform = Platform.JVM_DESKTOP,
         supportedTransports = setOf(TransportKind.LAN)
     )
+
 }
 
 private class SecureSessionFactory(

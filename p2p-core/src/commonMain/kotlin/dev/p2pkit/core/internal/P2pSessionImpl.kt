@@ -328,7 +328,10 @@ internal class P2pSessionImpl(
             val s = _state.value
             s == ConnectionState.Closed || s == ConnectionState.Failed
         }
-        if (alreadyTerminal) return
+        if (alreadyTerminal) {
+            sessionJob.join()
+            return
+        }
 
         // Best-effort CLOSE frame BEFORE we tear the wire down. Must happen
         // before [transitionToTerminal] cancels the epoch — once the epoch
@@ -360,13 +363,9 @@ internal class P2pSessionImpl(
         transitionToTerminal(ConnectionState.Closed, "user close()")
         closeSend.cancel()
 
-        // Additionally tear down the rest of the session — primarily the
-        // reconnect handler if one is still mid-dial. Only [close] does
-        // this, because failure paths cannot: they are themselves called
-        // from coroutines that are children of [sessionJob], and cancelling
-        // their own ancestor would prevent the cleanup from completing.
-        // [close] runs from outside [sessionJob] (the kit's scope or a
-        // user-controlled scope), so the cancelAndJoin is safe.
+        // transitionToTerminal cancels the runtime only after all terminal
+        // cleanup has completed. Join it here so close() retains its strong
+        // synchronous teardown contract.
         sessionJob.cancelAndJoin()
     }
 
@@ -451,11 +450,6 @@ internal class P2pSessionImpl(
      *      the post-condition and crash early if a future refactor breaks it.
      *
      * **What this method does NOT do:**
-     *   - It does not cancel the session-wide [sessionJob]. The failure
-     *     paths cannot — they are called from coroutines that are themselves
-     *     children of `sessionJob`. Only the user-initiated [close] (which
-     *     runs from outside `sessionJob`) does the additional
-     *     `sessionJob.cancelAndJoin` step after this method returns.
      *   - It does not send a CLOSE frame on the wire. Only `close()` does
      *     that, before calling this method.
      *
@@ -514,6 +508,25 @@ internal class P2pSessionImpl(
         check(ej == null || ej.isCancelled) {
             "I-terminal-epoch: epochJob still alive after transition to ${target.name}"
         }
+
+        // This is deliberately last. Remote failure paths run inside a child
+        // of sessionJob, so cancelling earlier would interrupt their own
+        // resource cleanup. Cancellation is non-suspending and the completed
+        // post-conditions above remain observable before this method returns.
+        sessionJob.cancel(CancellationException("Session $id reached ${target.name}: $cause"))
+    }
+
+    internal val runtimeJobIsActiveForTest: Boolean
+        get() = sessionJob.isActive
+
+    internal suspend fun awaitRuntimeTerminationForTest() {
+        sessionJob.join()
+    }
+
+    /** Roll back a session that never crossed the public ownership commit. */
+    internal suspend fun abortUncommitted() {
+        transitionToTerminal(ConnectionState.Closed, "uncommitted session rollback")
+        sessionJob.join()
     }
 
     /**

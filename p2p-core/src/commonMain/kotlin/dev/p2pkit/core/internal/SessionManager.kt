@@ -36,6 +36,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -105,6 +107,10 @@ internal class SessionManager(
     private val logger: P2pLogger,
     private val fileTransferConfig: FileTransferConfig = FileTransferConfig(),
     private val lifecycleGate: SessionLifecycleGate,
+    private val setupTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
+    private val beforeSessionCommitForTest: (suspend () -> Unit)? = null,
+    private val afterOutgoingConnectForTest: (suspend () -> Unit)? = null,
+    private val beforeTerminalWatcherRemovalForTest: (suspend () -> Unit)? = null,
     /**
      * Lock-free best-effort lookup of the latest [InternalPeer] known to
      * [PeerRegistry] for a given [PeerId]. Read by [SessionReconnectHandler]
@@ -145,6 +151,10 @@ internal class SessionManager(
      */
     private val strictInvariants: Boolean = false
 ) {
+
+    init {
+        require(setupTimeoutMillis > 0L) { "setupTimeoutMillis must be > 0" }
+    }
 
     /**
      * Single source of truth for session bookkeeping — owns the byPeer
@@ -203,6 +213,9 @@ internal class SessionManager(
      * (AUDIT-2026-06 fix).
      */
     private val pathSatisfiedGeneration = MutableStateFlow(0)
+    private val authoritativePath = MutableStateFlow(
+        AuthoritativePath(NetworkPathStatus.Unknown, generation = 0L)
+    )
 
     fun startAcceptingIncoming(transports: List<DataTransport>) {
         for (transport in transports) {
@@ -354,6 +367,7 @@ internal class SessionManager(
         lifecycleGeneration: Long
     ): P2pSession {
         var completedSession: P2pSession? = null
+        var uncommittedConnection: RawConnection? = null
         var failure: Throwable? = null
         try {
             if (!lifecycleGate.isActive(lifecycleGeneration)) {
@@ -374,10 +388,15 @@ internal class SessionManager(
                     it.underlying = e
                 }
             }
+            uncommittedConnection = rawConnection
+            afterOutgoingConnectForTest?.invoke()
+            currentCoroutineContext().ensureActive()
             if (!lifecycleGate.isActive(lifecycleGeneration)) {
-                closeUncommittedConnection(rawConnection)
                 throw lifecycleStoppedFailure()
             }
+            // setupSession owns rawConnection from this point and closes it
+            // on every pre-registration failure/cancellation path.
+            uncommittedConnection = null
             val session = setupSession(
                 rawConnection = rawConnection,
                 expectedPeer = peer,
@@ -393,16 +412,28 @@ internal class SessionManager(
             failure = e
             throw e
         } finally {
+            val connectionToClose = uncommittedConnection
+            if (connectionToClose != null) {
+                try {
+                    closeUncommittedConnection(connectionToClose)
+                } catch (cleanupFailure: Throwable) {
+                    failure?.addSuppressed(cleanupFailure)
+                        ?: logger.warn("Uncommitted outgoing connection cleanup failed", cleanupFailure)
+                }
+            }
             // Pending ownership must be removed even when this coroutine is
             // already cancelled. Complete waiters only after removal so a
             // pinned waiter can never observe and rejoin a stale attempt.
             withContext(NonCancellable) {
-                store.endPending(peer.id, deferred)
-                val cause = failure
-                if (cause == null) {
-                    deferred.complete(checkNotNull(completedSession))
-                } else {
-                    deferred.completeExceptionally(cause)
+                try {
+                    store.endPending(peer.id, deferred)
+                } finally {
+                    val cause = failure
+                    if (cause == null) {
+                        deferred.complete(checkNotNull(completedSession))
+                    } else {
+                        deferred.completeExceptionally(cause)
+                    }
                 }
             }
         }
@@ -531,51 +562,68 @@ internal class SessionManager(
             }
         }
 
-        session.start()
-        val committed = lifecycleGate.commit(lifecycleGeneration) {
-            val outcome = registerSession(
-                handshake.resolvedPeer.id,
-                session,
-                isIncoming = isIncoming
-            )
+        var sessionOwnershipTransferred = false
+        try {
+            session.start()
+            currentCoroutineContext().ensureActive()
+            beforeSessionCommitForTest?.invoke()
+            currentCoroutineContext().ensureActive()
+            val committed = lifecycleGate.commit(lifecycleGeneration) {
+                val outcome = registerSession(
+                    handshake.resolvedPeer.id,
+                    session,
+                    isIncoming = isIncoming
+                )
 
-            // Outgoing callers receive the winner via performConnect's deferred
-            // so a rejected new session never leaks back to app code as a
-            // "live" session. Incoming subscribers only see sessions admitted
-            // by the same atomic lifecycle commit as the public sessions flow.
-            val resultSession = when (outcome) {
-                is RegisterOutcome.Accepted -> outcome.session
-                is RegisterOutcome.Replaced -> outcome.winner
-                is RegisterOutcome.Rejected -> outcome.winner
-                is RegisterOutcome.RefusedAtCapacity -> outcome.session
+                // Outgoing callers receive the winner via performConnect's deferred
+                // so a rejected new session never leaks back to app code as a
+                // "live" session. Incoming subscribers only see sessions admitted
+                // by the same atomic lifecycle commit as the public sessions flow.
+                val resultSession = when (outcome) {
+                    is RegisterOutcome.Accepted -> outcome.session
+                    is RegisterOutcome.Replaced -> outcome.winner
+                    is RegisterOutcome.Rejected -> outcome.winner
+                    is RegisterOutcome.RefusedAtCapacity -> outcome.session
+                }
+                val published = if (isIncoming &&
+                    (outcome is RegisterOutcome.Accepted || outcome is RegisterOutcome.Replaced)
+                ) {
+                    _incomingSessions.tryEmit(resultSession)
+                } else {
+                    true
+                }
+                CommittedSession(resultSession, published)
             }
-            val published = if (isIncoming &&
-                (outcome is RegisterOutcome.Accepted || outcome is RegisterOutcome.Replaced)
-            ) {
-                _incomingSessions.tryEmit(resultSession)
-            } else {
-                true
+            if (committed == null) throw lifecycleStoppedFailure()
+            sessionOwnershipTransferred = true
+            if (!committed.published) {
+                withContext(NonCancellable) {
+                    store.removeIfMatches(handshake.resolvedPeer.id, committed.resultSession)
+                    closeUncommittedSession(committed.resultSession)
+                }
+                throw P2pError.ConnectionFailed(
+                    "Incoming session publication capacity was exhausted"
+                )
             }
-            CommittedSession(resultSession, published)
+            applyAuthoritativePathAfterRegistration(committed.resultSession)
+            return committed.resultSession
+        } finally {
+            if (!sessionOwnershipTransferred) closeUncommittedSession(session)
         }
-        if (committed == null) {
-            closeUncommittedSession(session)
-            throw lifecycleStoppedFailure()
-        }
-        if (!committed.published) {
-            store.removeIfMatches(handshake.resolvedPeer.id, committed.resultSession)
-            closeUncommittedSession(committed.resultSession)
-            throw P2pError.ConnectionFailed(
-                "Incoming session publication capacity was exhausted"
-            )
-        }
-        return committed.resultSession
     }
 
     private suspend fun closeUncommittedSession(session: P2pSession) {
         withContext(NonCancellable) {
             val closed = withTimeoutOrNull(SESSION_COMMIT_CLEANUP_TIMEOUT_MS) {
-                session.close()
+                try {
+                    if (session is P2pSessionImpl) {
+                        session.abortUncommitted()
+                    } else {
+                        session.close()
+                    }
+                } catch (error: Throwable) {
+                    logger.warn("Uncommitted session cleanup failed", error)
+                }
                 true
             } ?: false
             if (!closed) {
@@ -590,7 +638,11 @@ internal class SessionManager(
     private suspend fun closeUncommittedConnection(connection: RawConnection) {
         withContext(NonCancellable) {
             val closed = withTimeoutOrNull(SESSION_COMMIT_CLEANUP_TIMEOUT_MS) {
-                connection.close()
+                try {
+                    connection.close()
+                } catch (error: Throwable) {
+                    logger.warn("Uncommitted connection cleanup failed", error)
+                }
                 true
             } ?: false
             if (!closed) {
@@ -630,7 +682,7 @@ internal class SessionManager(
         var readerJob: Job? = null
 
         try {
-            return withTimeout(DEFAULT_HANDSHAKE_TIMEOUT_MS) {
+            return withTimeout(setupTimeoutMillis) {
                 val protocolVersion: Byte
                 val peerIdentityBeforeHello: PeerIdentity?
                 selectedConnection = when (val mode = securityMode) {
@@ -690,7 +742,7 @@ internal class SessionManager(
                     localPlatform = localPlatform,
                     localTransports = localTransports,
                     protocolVersion = protocolVersion,
-                    handshakeTimeoutMillis = DEFAULT_HANDSHAKE_TIMEOUT_MS
+                    handshakeTimeoutMillis = setupTimeoutMillis
                 )
 
                 val peerIdentity = when (securityMode) {
@@ -746,11 +798,11 @@ internal class SessionManager(
             cleanupHandshake(rawConnection, selectedConnection, readerJob)?.let(e::addSuppressed)
             throw if (securityMode is SecurityMode.AuthenticatedV2) {
                 P2pError.AuthenticationFailed(
-                    "Authenticated protocol v2 setup timed out after $DEFAULT_HANDSHAKE_TIMEOUT_MS ms"
+                    "Authenticated protocol v2 setup timed out after $setupTimeoutMillis ms"
                 ).also { it.underlying = e }
             } else {
                 P2pError.HandshakeRejected(
-                    "Plaintext HELLO timed out after $DEFAULT_HANDSHAKE_TIMEOUT_MS ms"
+                    "Plaintext HELLO timed out after $setupTimeoutMillis ms"
                 )
             }
         } catch (e: CancellationException) {
@@ -1163,6 +1215,7 @@ internal class SessionManager(
     private fun watchForTerminal(peerId: PeerId, session: P2pSession) {
         scope.launch {
             session.state.first { it == ConnectionState.Closed || it == ConnectionState.Failed }
+            beforeTerminalWatcherRemovalForTest?.invoke()
             store.removeIfMatches(peerId, session)
         }
     }
@@ -1170,7 +1223,39 @@ internal class SessionManager(
     suspend fun closeAllSessions() {
         val snapshot = store.activeSnapshot()
         for (session in snapshot) {
-            runCatching { session.close() }
+            try {
+                session.close()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                logger.warn("Session ${session.id} close failed", error)
+            }
+        }
+    }
+
+    /** Terminal kit shutdown: detach public state before watcher scope cancellation. */
+    suspend fun shutdownAllSessions() {
+        val snapshot = store.drainForShutdown()
+        snapshot.pending.forEach { pending ->
+            pending.completeExceptionally(lifecycleStoppedFailure())
+        }
+        for (session in snapshot.sessions) {
+            try {
+                session.close()
+            } catch (error: Throwable) {
+                logger.warn("Session ${session.id} shutdown close failed", error)
+            }
+        }
+    }
+
+    private suspend fun applyAuthoritativePathAfterRegistration(session: P2pSession) {
+        withContext(NonCancellable) {
+            val observed = authoritativePath.value
+            if (observed.status == NetworkPathStatus.Unsatisfied &&
+                authoritativePath.value == observed
+            ) {
+                (session as? P2pSessionImpl)?.notifyPathLost()
+            }
         }
     }
 
@@ -1193,11 +1278,13 @@ internal class SessionManager(
      *   on platforms with no observer wired up.
      */
     fun applyPathChange(status: NetworkPathStatus) {
+        val authority = publishAuthoritativePath(status)
         when (status) {
             NetworkPathStatus.Unsatisfied -> {
                 scope.launch {
                     val toNotify = store.activeSnapshot()
                     for (s in toNotify) {
+                        if (authoritativePath.value != authority) return@launch
                         (s as? P2pSessionImpl)?.notifyPathLost()
                     }
                 }
@@ -1206,6 +1293,14 @@ internal class SessionManager(
                 pathSatisfiedGeneration.update { it + 1 }
             }
             NetworkPathStatus.Unknown -> { /* no action */ }
+        }
+    }
+
+    private fun publishAuthoritativePath(status: NetworkPathStatus): AuthoritativePath {
+        while (true) {
+            val previous = authoritativePath.value
+            val next = AuthoritativePath(status, previous.generation + 1L)
+            if (authoritativePath.compareAndSet(previous, next)) return next
         }
     }
 
@@ -1240,6 +1335,11 @@ internal const val HANDSHAKE_CLEANUP_TIMEOUT_MS: Long = 2_000
 
 /** Per-session bound used when terminal lifecycle rejects registration. */
 internal const val SESSION_COMMIT_CLEANUP_TIMEOUT_MS: Long = 2_000
+
+private data class AuthoritativePath(
+    val status: NetworkPathStatus,
+    val generation: Long
+)
 
 /**
  * AUDIT-2026-07 (SEC-1, decision #9a): upper bound on total concurrently

@@ -15,6 +15,10 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.RawSource
 import kotlin.test.Test
@@ -41,6 +45,42 @@ import kotlin.test.assertTrue
  *  3. a valid mutation sequence never false-positives under strict mode.
  */
 class SessionStoreInvariantTest {
+
+    @Test
+    fun registrationLookupIsSafeDuringConcurrentMutation() = runTest {
+        val store = SessionStore(P2pLogger.NoOp, strictInvariants = true)
+        val peer = syntheticPeer("peer-concurrent", "Concurrent")
+        val probe = StubSession(peer = peer, id = "probe")
+        val finished = CompletableDeferred<Unit>()
+
+        coroutineScope {
+            val readers = List(4) {
+                launch(Dispatchers.Default) {
+                    while (!finished.isCompleted) {
+                        store.registrationOf(probe)
+                    }
+                }
+            }
+            repeat(2_000) { index ->
+                val candidate = StubSession(peer = peer, id = "session-$index")
+                assertIs<RegisterOutcome.Accepted>(
+                    store.tryRegister(
+                        peerId = peer.id,
+                        session = candidate,
+                        isIncoming = false,
+                        localPeerIdValue = "local"
+                    )
+                )
+                assertEquals(candidate.id, store.registrationOf(candidate).activeSessionId)
+                store.removeIfMatches(peer.id, candidate)
+            }
+            finished.complete(Unit)
+            readers.forEach { it.join() }
+        }
+
+        assertEquals(null, store.registrationOf(probe).activeSessionId)
+        assertTrue(store.sessions.value.isEmpty())
+    }
 
     @Test
     fun strictModeThrowsOnForcedInconsistency() = runTest {

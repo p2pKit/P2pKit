@@ -97,7 +97,11 @@ internal class P2pKitImpl(
      * [dev.p2pkit.core.dsl.P2pKitBuilder.strictSessionInvariants] knob,
      * which the commonTest `createTestKit` fixture enables.
      */
-    private val strictSessionInvariants: Boolean = false
+    private val strictSessionInvariants: Boolean = false,
+    private val sessionSetupTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
+    private val beforeSessionCommitForTest: (suspend () -> Unit)? = null,
+    private val afterOutgoingConnectForTest: (suspend () -> Unit)? = null,
+    private val beforeTerminalWatcherRemovalForTest: (suspend () -> Unit)? = null
 ) : P2pKit {
 
     private val internalJob = SupervisorJob(parent = parentJob)
@@ -237,6 +241,10 @@ internal class P2pKitImpl(
             clock = clock,
             logger = logger,
             fileTransferConfig = fileTransferConfig,
+            setupTimeoutMillis = sessionSetupTimeoutMillis,
+            beforeSessionCommitForTest = beforeSessionCommitForTest,
+            afterOutgoingConnectForTest = afterOutgoingConnectForTest,
+            beforeTerminalWatcherRemovalForTest = beforeTerminalWatcherRemovalForTest,
             lifecycleGate = object : SessionLifecycleGate {
                 override suspend fun isActive(expectedGeneration: Long?): Boolean =
                     lifecycleMutex.withLock {
@@ -836,7 +844,7 @@ internal class P2pKitImpl(
     private suspend fun teardownBoundResources() {
         runCatching { stopAdvertising() }
         runCatching { stopDiscovery() }
-        runCatching { sessionManager.closeAllSessions() }
+        runCatching { sessionManager.shutdownAllSessions() }
         for (transport in dataTransports) {
             runCatching { transport.close() }
         }
@@ -915,7 +923,11 @@ internal fun newP2pKit(
     secureIdentityStorageOverride: SecureIdentityStorage? = null,
     networkPathObserverOverride: NetworkPathObserver? = null,
     permissionManagerOverride: dev.p2pkit.core.permission.P2pPermissionManager? = null,
-    strictSessionInvariants: Boolean = false
+    strictSessionInvariants: Boolean = false,
+    sessionSetupTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
+    beforeSessionCommitForTest: (suspend () -> Unit)? = null,
+    afterOutgoingConnectForTest: (suspend () -> Unit)? = null,
+    beforeTerminalWatcherRemovalForTest: (suspend () -> Unit)? = null
 ): P2pKit {
     // Authorization is a whole-kit security decision. Snapshot caller-owned
     // collections before any identity or transport becomes observable so a
@@ -986,7 +998,11 @@ internal fun newP2pKit(
             clock = ::systemTimeMillis,
             parentJob = null,
             pathObserver = pathObserver,
-            strictSessionInvariants = strictSessionInvariants
+            strictSessionInvariants = strictSessionInvariants,
+            sessionSetupTimeoutMillis = sessionSetupTimeoutMillis,
+            beforeSessionCommitForTest = beforeSessionCommitForTest,
+            afterOutgoingConnectForTest = afterOutgoingConnectForTest,
+            beforeTerminalWatcherRemovalForTest = beforeTerminalWatcherRemovalForTest
         )
     } catch (cause: Throwable) {
         secureIdentity?.clearPrivate()

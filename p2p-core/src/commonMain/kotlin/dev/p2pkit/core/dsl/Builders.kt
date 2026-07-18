@@ -11,6 +11,7 @@ import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.internal.PeerIdStorage
 import dev.p2pkit.core.internal.SecureIdentityStorage
+import dev.p2pkit.core.internal.DEFAULT_HANDSHAKE_TIMEOUT_MS
 import dev.p2pkit.core.internal.newP2pKit
 import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
@@ -104,6 +105,18 @@ public class P2pKitBuilder internal constructor() {
      */
     internal var strictSessionInvariants: Boolean = false
 
+    /** Internal test seam; production always keeps the protocol setup deadline. */
+    internal var sessionSetupTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS
+
+    /** Internal deterministic cancellation seam immediately before session commit. */
+    internal var beforeSessionCommitForTest: (suspend () -> Unit)? = null
+
+    /** Internal deterministic cancellation seam after dial ownership transfers. */
+    internal var afterOutgoingConnectForTest: (suspend () -> Unit)? = null
+
+    /** Internal seam used to prove shutdown does not depend on watcher scheduling. */
+    internal var beforeTerminalWatcherRemovalForTest: (suspend () -> Unit)? = null
+
     public fun transports(block: TransportsBuilder.() -> Unit) {
         transportsBuilder.apply(block)
     }
@@ -169,7 +182,11 @@ public class P2pKitBuilder internal constructor() {
             secureIdentityStorageOverride = secureIdentityStorage,
             networkPathObserverOverride = networkPathObserver,
             permissionManagerOverride = permissionManager,
-            strictSessionInvariants = strictSessionInvariants
+            strictSessionInvariants = strictSessionInvariants,
+            sessionSetupTimeoutMillis = sessionSetupTimeoutMillis,
+            beforeSessionCommitForTest = beforeSessionCommitForTest,
+            afterOutgoingConnectForTest = afterOutgoingConnectForTest,
+            beforeTerminalWatcherRemovalForTest = beforeTerminalWatcherRemovalForTest
         )
     }
 }

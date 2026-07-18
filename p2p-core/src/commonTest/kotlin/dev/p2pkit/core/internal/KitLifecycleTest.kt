@@ -573,12 +573,18 @@ class KitLifecycleTest {
     @Test
     fun sessionCommittedBeforeStopIsIncludedInTeardown() = runBlocking {
         val pair = FakeConnectionPair()
+        val watcherEntered = CompletableDeferred<Unit>()
+        val releaseWatcher = CompletableDeferred<Unit>()
         val aliceTransport = FakeDataTransport(outgoingConnection = { pair.a })
         val bobTransport = FakeDataTransport(preStagedIncoming = listOf(pair.b))
         val alice = createTestKit {
             appId = AppId("committed-session-stop-test")
             deviceName = "Alice"
             peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
+            beforeTerminalWatcherRemovalForTest = {
+                watcherEntered.complete(Unit)
+                releaseWatcher.await()
+            }
             transports { register(DataOnlyFactory(aliceTransport)) }
         }
         val bob = createTestKit {
@@ -600,6 +606,14 @@ class KitLifecycleTest {
             }
             assertEquals(ConnectionState.Connected, session.state.value)
 
+            session.close()
+            watcherEntered.await()
+            assertEquals(
+                listOf(session),
+                alice.sessions.value,
+                "the parked watcher must leave the terminal entry published before stop"
+            )
+
             alice.stop()
 
             assertEquals(
@@ -607,8 +621,13 @@ class KitLifecycleTest {
                 session.state.value,
                 "a registration committed before the terminal gate must be in stop's snapshot"
             )
+            assertTrue(
+                alice.sessions.value.isEmpty(),
+                "stop must atomically empty public sessions before its watcher scope is cancelled"
+            )
             assertEquals(P2pState.Stopped, alice.state.value)
         } finally {
+            releaseWatcher.complete(Unit)
             alice.stop()
             bob.stop()
         }

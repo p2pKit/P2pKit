@@ -145,6 +145,48 @@ class NetworkPathRecoveryTest {
     }
 
     @Test
+    fun newlyRegisteredSessionReceivesRetainedUnsatisfiedPathWithoutReEmission() =
+        runBlocking<Unit> {
+            val firstPair = FakeConnectionPair()
+            val secondPair = FakeConnectionPair()
+            val outgoing = ArrayDeque<RawConnection>().apply {
+                add(firstPair.a)
+                add(secondPair.a)
+            }
+            val fake = FakeNetworkPathObserver(initial = NetworkPathStatus.Satisfied)
+            val alice = outgoingKit(
+                "Alice",
+                ReconnectPolicy.Disabled,
+                fake
+            ) { outgoing.removeFirstOrNull() ?: error("unexpected extra dial") }
+            val bob = incomingKit("Bob", listOf(firstPair.b, secondPair.b))
+            try {
+                val first = withTimeout(5_000) { alice.connect(targetPeer()) }
+                assertEquals(ConnectionState.Connected, first.state.value)
+
+                fake.emit(NetworkPathStatus.Unsatisfied)
+                assertEquals(
+                    ConnectionState.Failed,
+                    withTimeout(5_000) { first.state.first { it == ConnectionState.Failed } }
+                )
+
+                // Do not emit path state again. A StateFlow will not re-emit
+                // the same value, so registration must consume the manager's
+                // retained authority rather than relying on the prior event.
+                val second = withTimeout(5_000) { alice.connect(targetPeer()) }
+                assertEquals(
+                    ConnectionState.Failed,
+                    withTimeout(5_000) { second.state.first { it == ConnectionState.Failed } },
+                    "a new session must not become Connected while the retained path is Unsatisfied"
+                )
+                assertTrue(outgoing.isEmpty(), "both queued connections must have been consumed")
+            } finally {
+                alice.stop()
+                bob.stop()
+            }
+        }
+
+    @Test
     fun pathSatisfiedWakesParkedReconnectHandlerBeforeDelayExpires() = runBlocking<Unit> {
         // Two pairs: the first breaks, the second is what the retry will reach.
         // The retry delay is set to a value (5 s) that's deliberately longer

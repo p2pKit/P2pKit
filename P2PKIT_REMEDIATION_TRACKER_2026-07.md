@@ -48,7 +48,7 @@ Operating safeguards:
 | Findings total | 150 |
 | Explicit test gaps | 54 |
 
-Current finding state: 140 `Planned`, 0 `In Progress`, 2 `Implemented` (`CORE-06`, `CORE-07`), 7 `Verified` (`CORE-01`, `CORE-18`, `CORE-19`, `CORE-20`, `CORE-21`, `CORE-29`, `BUILD-01`), 1 `Blocked` (`BUILD-02`). SEC-01 was approved with storage A on 2026-07-17, implemented, committed, and pushed. Its final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
+Current finding state: 134 `Planned`, 0 `In Progress`, 2 `Implemented` (`CORE-06`, `CORE-07`), 13 `Verified` (`CORE-01`, `CORE-03`, `CORE-08`, `CORE-09`, `CORE-10`, `CORE-13`, `CORE-18`, `CORE-19`, `CORE-20`, `CORE-21`, `CORE-23`, `CORE-29`, `BUILD-01`), 1 `Blocked` (`BUILD-02`). SEC-01 was approved with storage A on 2026-07-17, implemented, committed, and pushed. Its final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
 
 ### Baseline gate evidence and reusable command catalog
 
@@ -139,17 +139,17 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | CORE-01 | High | Stop does not serialize terminal lifecycle with ongoing operations | LIF-GEN-01 (first LIF-SES-01 slice) | Verified | Terminal generation gate, stale-resource compensation, atomic session-registration commit | CORE-T01 | `a4e0bb0`; tracker evidence pending push | Focused committed suite + iOS Simulator + Android compilation pass; only registered FILE-04 full-JVM baseline remains |
 | CORE-02 | High | PeerRegistry is not a correct multi-transport aggregator | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T03 | — | — |
-| CORE-03 | High | Cancelled connect can poison coalescing and leak a live session | LIF-SES-01 | Planned | — | CORE-T02 | — | — |
+| CORE-03 | High | Cancelled connect can poison coalescing and leak a live session | CORE-SESSION-01 | Verified | Transactional raw/session/pending ownership with forced rollback before commit | CORE-T02 | CORE-SESSION-01 implementation commit (pending hash) | Dial/HELLO/security/pre-commit cancellation and exact retry pass on JVM/iOS |
 | CORE-04 | High | Application receive backpressure blocks protocol controls | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T05 | — | — |
 | CORE-05 | High | Duplicate arbitration treats every active duplicate as simultaneous-open | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T04 | — | — |
 | CORE-06 | High security limitation | Identity is unauthenticated and traffic plaintext | SEC-01 | Implemented | Authenticated v2 is the default; explicit deprecated legacy only | Noise/KAT, identity, raw-confidentiality, authorization, integration, LAN loopback | `b79c9ba`, pushed to `origin/remediation/full-register-2026-07` | Local platform/module gates pass; external certification remains |
 | CORE-07 | Medium architecture | Security extension cannot safely implement encryption | SEC-01 | Implemented | Security owns the sole raw reader before protocol construction | Single-collector, cancellation, close-once, encrypted-HELLO tests | `b79c9ba`, pushed to `origin/remediation/full-register-2026-07` | Local platform/module gates pass; external certification remains |
-| CORE-08 | Medium | SessionStore reads mutable HashMap without mutex | LIF-SES-01 | Planned | — | Concurrency regression | — | — |
-| CORE-09 | Medium | Remotely terminated sessions retain active child Job | LIF-SES-01 | Planned | — | CORE-T07 | — | — |
-| CORE-10 | Medium | Public sessions can retain terminal entries after stop | LIF-SES-01 | Planned | — | CORE-T08 | — | — |
+| CORE-08 | Medium | SessionStore reads mutable HashMap without mutex | CORE-SESSION-01 | Verified | Immutable published registration snapshot | Concurrent read/mutation regression | CORE-SESSION-01 implementation commit (pending hash) | 2,000 mutations with four concurrent readers; repeated JVM + iOS pass |
+| CORE-09 | Medium | Remotely terminated sessions retain active child Job | CORE-SESSION-01 | Verified | Cancel session runtime after terminal resource cleanup | CORE-T07 | CORE-SESSION-01 implementation commit (pending hash) | Exact remote CLOSE and failure job-completion tests pass on JVM/iOS |
+| CORE-10 | Medium | Public sessions can retain terminal entries after stop | CORE-SESSION-01 | Verified | Atomic store shutdown drain before watcher cancellation | CORE-T08 | CORE-SESSION-01 implementation commit (pending hash) | stop returns with exact empty public sessions; JVM/iOS pass |
 | CORE-11 | Medium | Partial startup/advertising/discovery is not rolled back | LIF-SES-01 | Planned | — | CORE-T09 | — | — |
 | CORE-12 | Medium | Teardown can report success while resources remain open | LIF-SES-01 | Planned | — | CORE-T10 | — | — |
-| CORE-13 | Medium | Inbound setup timeout excludes operations that can hang | LIF-SES-01 after SEC-01 decision | Planned | — | Full-transaction deadline tests | — | — |
+| CORE-13 | Medium | Inbound setup timeout excludes operations that can hang | CORE-SESSION-01 | Verified | One outer deadline covers secure preface/security/HELLO; timeout closes raw and releases inbound admission | Full-transaction deadline tests | CORE-SESSION-01 implementation commit (pending hash) | Secure/legacy outbound and idle-inbound deadline+retry pass on JVM/iOS |
 | CORE-14 | Medium | Keepalive uses wall clock and misses exact deadline | PEER-CTRL-01 | Planned | — | CORE-T06 | — | — |
 | CORE-15 | Medium | Global P2pState hides independent feature failures | PEER-CTRL-01 lifecycle/state follow-up | Planned | — | Feature-state tests | — | — |
 | CORE-16 | Medium | One incoming-flow exception permanently disables a transport | LIF-SES-01 inbound recovery | Planned | — | Recollection/backoff tests | — | — |
@@ -159,7 +159,7 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 | CORE-20 | Medium | Persistence failure breaks same-instance identity stability | ID-STORE-01 | Verified | Instance memoization on every outcome | CORE-T11 | `ee69d09`, pushed | JVM/iOS failure tests pass |
 | CORE-21 | Medium | Android/JVM identity fallback can truncate durable value | ID-STORE-01 | Verified | Android AtomicFile + JVM fsync/atomic move | CORE-T11 | `ee69d09`, pushed | JVM atomic/migration suite + Android compile pass |
 | CORE-22 | Medium | Android/iOS path observers retain stale state/cleanup ownership | PATH-PERM-01 | Planned | — | CORE-T12 | — | — |
-| CORE-23 | Medium | New session can miss authoritative Unsatisfied path state | LIF-SES-01 | Planned | — | Registration/path race | — | — |
+| CORE-23 | Medium | New session can miss authoritative Unsatisfied path state | CORE-SESSION-01 | Verified | Retained versioned path authority applied after every registration | Registration after prior `Unsatisfied` without re-emission | CORE-SESSION-01 implementation commit (pending hash) | Exact Failed outcome passes on JVM/iOS |
 | CORE-24 | Medium API gap | NetworkProvisioningManager has no close contract | LIF-SES-01 before provisioning | Planned | — | Close contract/ABI tests | — | — |
 | CORE-25 | Low | Android permission diagnostics omit two declared requirements | PATH-PERM-01 | Planned | — | Permission matrix | — | — |
 | CORE-26 | Low limitation | Android defaults to no-op path observer | PATH-PERM-01 | Planned | — | Default wiring test | — | — |
@@ -332,13 +332,13 @@ Each row represents one bullet from “Missing or weak tests to add” in the so
 | Gap ID | Required coverage | Linked findings | Status | Test files/evidence | Commit/push | Verification |
 | --- | --- | --- | --- | --- | --- | --- |
 | CORE-T01 | Stop racing connect, advertising, discovery, and delayed observer start | CORE-01 | Verified | Six deterministic races in `KitLifecycleTest`; existing parked data-start test retained | `a4e0bb0`; tracker evidence pending push | Focused committed suite passes; three forced pre-commit repeats green |
-| CORE-T02 | Cancellation at every outgoing-connect suspension, then successful retry | CORE-03 | Planned | — | — | — |
+| CORE-T02 | Cancellation at every outgoing-connect suspension, then successful retry | CORE-03 | Verified | `SessionOwnershipTest`, `SessionFlowTest`, secure integration: dial, coalesced wait, HELLO/security write, pre-commit | CORE-SESSION-01 implementation commit (pending hash) | Three forced JVM repeats plus focused iOS pass |
 | CORE-T03 | Two discovery transports contribute/lose same PeerId | CORE-02 | Planned | — | — | — |
 | CORE-T04 | Repeated same-direction inbound arbitration | CORE-05 | Planned | — | — | — |
 | CORE-T05 | Slow message subscriber while PONG/CLOSE arrives | CORE-04 | Planned | — | — | — |
 | CORE-T06 | Exact keepalive deadline and monotonic clock jumps | CORE-14 | Planned | — | — | — |
-| CORE-T07 | Session child Job completes after remote termination | CORE-09 | Planned | — | — | — |
-| CORE-T08 | Public sessions empty after stop independent of watcher schedule | CORE-10 | Planned | — | — | — |
+| CORE-T07 | Session child Job completes after remote termination | CORE-09 | Verified | `SessionFlowTest` exact CLOSE/failure runtime joins | CORE-SESSION-01 implementation commit (pending hash) | JVM/iOS pass |
+| CORE-T08 | Public sessions empty after stop independent of watcher schedule | CORE-10 | Verified | `KitLifecycleTest.sessionCommittedBeforeStopIsIncludedInTeardown` | CORE-SESSION-01 implementation commit (pending hash) | JVM/iOS pass |
 | CORE-T09 | Partial multi-transport startup rollback | CORE-11 | Planned | — | — | — |
 | CORE-T10 | Throwing and permanently hung close operations | CORE-12 | Planned | — | — | — |
 | CORE-T11 | Identity sanitizer collisions, concurrent first creation, persistence failure, and atomic replacement | CORE-18, CORE-19, CORE-20, CORE-21 | Verified | JVM process/thread/failure/migration tests + iOS bucket tests | `ee69d09`, pushed | Focused tests pass; committed full JVM 351/351 green |
@@ -1032,6 +1032,22 @@ Verification: focused JVM storage and kit-persistence suites pass; contention pa
 
 Committed/pushed evidence: `ee69d09` is on `origin/remediation/full-register-2026-07`; forced committed-state JVM core (351 tests), isolated iOS identity tests, Android main compilation, and affected Apple LAN test compilation all pass.
 
+## Completed batch: CORE-SESSION-01 — session ownership and terminal state
+
+| Item | Concise plan |
+| --- | --- |
+| Findings/gaps | CORE-03, CORE-08, CORE-09, CORE-10, CORE-13, CORE-23; CORE-T02, CORE-T07, CORE-T08 |
+| Root causes | Raw/session ownership is not represented through every cancellable connect boundary; registration diagnostics read a concurrently mutated map; terminal cleanup does not terminate the session-wide job; stop relies on asynchronous watchers; path state is an event rather than retained authority. SEC-01 already moved security and initial HELLO inside one outer deadline, but lacks a focused regression. |
+| Implementation | Make connector ownership transactional with non-cancellable close and pending completion; publish an immutable registration map; add atomic store shutdown drain; cancel the session runtime only after terminal resource cleanup; retain versioned path state and apply it to every registration; inject only an internal setup-timeout test value while keeping the production constant. |
+| Main files | `SessionManager`, `SessionStore`, `P2pSessionImpl`, `P2pKitImpl`/internal builder timeout threading, focused session/path/handshake tests. |
+| Tests | Cancellation during dial return, HELLO/security setup, and registration wait followed by exact successful retry; concurrent registration diagnostics; remote CLOSE/failure job termination; stop with watcher deliberately unable to run; hung initial write/security bounded by the outer deadline; registration racing retained `Unsatisfied`. |
+| Compatibility | No public API or wire change. Cancellation remains `CancellationException`; stop empties public state earlier; a session created while the authoritative path is unsatisfied may enter reconnect/failure before `connect()` returns, which is the intended correction. |
+| Acceptance | No stale pending slot or unowned raw/session after cancellation; waiters get one exact result; no mutable-map data race; terminal jobs become inactive; stop returns with empty sessions independent of watchers; all setup phases obey one deadline; no session misses retained path loss. |
+
+Implementation result: connector/raw/session ownership is transactional through cancellation; pending cleanup is non-cancellable; uncommitted sessions use forced terminal rollback; diagnostics read an immutable map; terminal cleanup cancels the session runtime last; shutdown atomically drains public/store state; setup uses one outer deadline; network-path authority is retained and applied to every registration. No public API or wire format changed.
+
+Verification: focused JVM and iOS Simulator suites pass; timing-sensitive JVM tests passed three forced repeats; complete `p2p-core` suites are 359/359 JVM and 334/334 iOS Simulator; Android main and iOS tests compile. Only the pre-existing BUILD-14 opt-in warnings were emitted. Source diff review found and corrected the post-commit suspension before these final runs.
+
 ## Execution log
 
 | Date | Unit | Action | Result |
@@ -1052,3 +1068,5 @@ Committed/pushed evidence: `ee69d09` is on `origin/remediation/full-register-202
 | 2026-07-18 | LIF-GEN-01/source control | Created `a4e0bb0` and reran focused JVM plus complete iOS Simulator/Android checks from committed state | CORE-01/CORE-T01 verified; forced full JVM reproduced only the registered FILE-04 failure |
 | 2026-07-18 | ID-STORE-01 | Implemented collision-safe namespaces, transactional cross-process creation, atomic persistence, failure memoization, rollback migration, and JVM root validation | CORE-18/19/20/21/29 and CORE-T11 implemented; JVM 351/351 green; iOS focused green; Android/Apple compile green |
 | 2026-07-18 | ID-STORE-01/source control | Committed, forced affected checks from committed state, and pushed `ee69d09` | CORE-18/19/20/21/29 and CORE-T11 verified on `remediation/full-register-2026-07` |
+| 2026-07-18 | CORE-SESSION-01 | Implemented transactional connect ownership, immutable store publication, terminal runtime completion, atomic shutdown drain, full setup deadline, and retained path authority | CORE-03/08/09/10/13/23 and CORE-T02/T07/T08 verified locally |
+| 2026-07-18 | CORE-SESSION-01/verification | Ran focused JVM/iOS, three forced concurrency repeats, complete core JVM/iOS, and Android compilation; reviewed the full batch diff | 359 JVM + 334 iOS tests pass; Android compiles; no new warning/failure |

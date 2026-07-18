@@ -60,6 +60,9 @@ internal class SessionStore(
     private val byPeer: MutableMap<PeerId, P2pSession> = mutableMapOf()
     private val pending: MutableMap<PeerId, CompletableDeferred<P2pSession>> = mutableMapOf()
 
+    /** Immutable publication used by non-suspending diagnostic lookups. */
+    private val registrationSnapshot = MutableStateFlow<Map<PeerId, P2pSession>>(emptyMap())
+
     private val _sessions = MutableStateFlow<List<P2pSession>>(emptyList())
     val sessions: StateFlow<List<P2pSession>> = _sessions.asStateFlow()
 
@@ -89,6 +92,7 @@ internal class SessionStore(
         if (existing != null) {
             byPeer.remove(peerId)
             _sessions.value = _sessions.value.filter { it !== existing }
+            publishRegistrationSnapshotLocked()
         }
         val inFlight = pending[peerId]
         val decision = if (inFlight != null) {
@@ -189,6 +193,7 @@ internal class SessionStore(
             }
             RegisterOutcome.Accepted(session = session)
         }
+        publishRegistrationSnapshotLocked()
         checkInvariants("tryRegister")
         outcome
     }
@@ -203,6 +208,7 @@ internal class SessionStore(
     suspend fun removeIfMatches(peerId: PeerId, session: P2pSession): Unit = mutex.withLock {
         if (byPeer[peerId] === session) byPeer.remove(peerId)
         _sessions.value = _sessions.value.filter { it !== session }
+        publishRegistrationSnapshotLocked()
         checkInvariants("removeIfMatches")
     }
 
@@ -216,18 +222,38 @@ internal class SessionStore(
     }
 
     /**
+     * Atomically detach every public/active session and pending connector
+     * before kit shutdown cancels terminal watchers. Resource close and
+     * deferred completion happen outside [mutex] in [SessionManager].
+     */
+    suspend fun drainForShutdown(): SessionShutdownSnapshot = mutex.withLock {
+        val sessionsToClose = mutableListOf<P2pSession>()
+        fun addByIdentity(candidate: P2pSession) {
+            if (sessionsToClose.none { it === candidate }) sessionsToClose += candidate
+        }
+        _sessions.value.forEach(::addByIdentity)
+        byPeer.values.forEach(::addByIdentity)
+        val pendingToFail = pending.values.toList()
+        byPeer.clear()
+        pending.clear()
+        _sessions.value = emptyList()
+        publishRegistrationSnapshotLocked()
+        checkInvariants("drainForShutdown")
+        SessionShutdownSnapshot(sessionsToClose, pendingToFail)
+    }
+
+    /**
      * Lock-free best-effort lookup of a session's registration. Read by
      * [P2pSessionImpl.routeEvents] before each `Message` emit to detect
      * zombie emissions — sessions still pumping messages into the public
      * incoming flow after they've been evicted/replaced in the store.
      *
-     * Diagnostics-only — does NOT take [mutex]. A microsecond-stale read
-     * is fine; what matters is steady-state divergence (the session
-     * keeps emitting but is gone from both maps for many emissions in a
-     * row), which the zombie watchdog logs as a ZOMBIE warning.
+     * Diagnostics-only — does NOT take [mutex]. It reads an immutable map
+     * published under the same mutex as every [byPeer] mutation, so the
+     * snapshot may be briefly stale but can never race a mutable-map write.
      */
     fun registrationOf(session: P2pSession): SessionRegistration {
-        val current = byPeer[session.peer.id]
+        val current = registrationSnapshot.value[session.peer.id]
         return SessionRegistration(
             activeSessionId = current?.id,
             isInPublicList = _sessions.value.any { it === session }
@@ -312,8 +338,13 @@ internal class SessionStore(
      */
     internal suspend fun forceInvariantViolationForTest(session: P2pSession): Unit = mutex.withLock {
         byPeer[session.peer.id] = session
+        publishRegistrationSnapshotLocked()
         // Deliberately NOT added to _sessions — that is the violation.
         checkInvariants("forceInvariantViolationForTest")
+    }
+
+    private fun publishRegistrationSnapshotLocked() {
+        registrationSnapshot.value = byPeer.toMap()
     }
 
     companion object {
@@ -360,3 +391,8 @@ internal sealed class RegisterOutcome {
      */
     data class RefusedAtCapacity(val session: P2pSession) : RegisterOutcome()
 }
+
+internal data class SessionShutdownSnapshot(
+    val sessions: List<P2pSession>,
+    val pending: List<CompletableDeferred<P2pSession>>
+)

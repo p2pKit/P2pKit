@@ -16,11 +16,20 @@ import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
+import kotlin.concurrent.atomics.AtomicInt
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -28,6 +37,7 @@ import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -235,6 +245,12 @@ class SessionFlowTest {
                 ConnectionState.Closed, finalState,
                 "a received CLOSE frame must yield exactly Closed on the receiving side"
             )
+            val incomingImpl = assertIs<P2pSessionImpl>(incomingSession)
+            withTimeout(5_000) { incomingImpl.awaitRuntimeTerminationForTest() }
+            assertTrue(
+                !incomingImpl.runtimeJobIsActiveForTest,
+                "remote CLOSE must terminate the session-wide runtime job"
+            )
         } finally {
             alice.stop()
             bob.stop()
@@ -274,9 +290,121 @@ class SessionFlowTest {
                 "an incoming session must deterministically reach Failed on abrupt remote " +
                     "termination — never the clean-Closed outcome, never Reconnecting"
             )
+            val incomingImpl = assertIs<P2pSessionImpl>(incomingSession)
+            withTimeout(5_000) { incomingImpl.awaitRuntimeTerminationForTest() }
+            assertTrue(
+                !incomingImpl.runtimeJobIsActiveForTest,
+                "remote failure must terminate the session-wide runtime job"
+            )
         } finally {
             alice.stop()
             bob.stop()
+        }
+    }
+
+    @Test
+    fun cancelledConnectorReleasesPendingAndRawThenRetrySucceeds() = runBlocking {
+        val appId = AppId("cancelled-connector-retry")
+        val blockedPair = FakeConnectionPair()
+        val blocked = CancellableFirstWriteConnection(blockedPair.a)
+        val retryPair = FakeConnectionPair()
+        val outgoing = ArrayDeque<RawConnection>().apply {
+            add(blocked)
+            add(retryPair.a)
+        }
+        val transport = FakeDataTransport(outgoingConnection = {
+            outgoing.removeFirstOrNull() ?: error("unexpected extra dial")
+        })
+        val alice = createTestKit {
+            this.appId = appId
+            deviceName = "Alice"
+            peerIdStorage = InMemoryPeerIdStorage(PeerId("alice-id"))
+            transports { register(FactoryFor(transport)) }
+        }
+        val bob = incomingKitWithConnections(appId, listOf(retryPair.b))
+        val target = syntheticPeer("bob-id", "Bob")
+        try {
+            alice.start()
+            bob.start()
+            val connector = async { alice.connect(target) }
+            withTimeout(5_000) { blocked.writeEntered.await() }
+
+            // With an already-started kit, UNDISPATCHED reaches the shared
+            // pending deferred before returning to this coroutine.
+            val waiter = async(start = CoroutineStart.UNDISPATCHED) { alice.connect(target) }
+            assertEquals(1, transport.connectCalls.size)
+
+            connector.cancel(CancellationException("cancel connector"))
+            val connectorFailure = assertFailsWith<CancellationException> { connector.await() }
+            val waiterFailure = assertFailsWith<CancellationException> { waiter.await() }
+            assertEquals("cancel connector", connectorFailure.message)
+            assertEquals("cancel connector", waiterFailure.message)
+            assertEquals(1, blocked.closeCalls)
+            assertEquals(ConnectionState.Closed, blocked.state.value)
+            assertTrue(alice.sessions.value.isEmpty())
+
+            val retried = withTimeout(5_000) { alice.connect(target) }
+            assertEquals(ConnectionState.Connected, retried.state.value)
+            assertEquals(2, transport.connectCalls.size)
+            assertEquals(listOf(retried), alice.sessions.value)
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
+    fun wholeSetupDeadlineClosesStalledRawAndRetrySucceeds() = runBlocking {
+        val appId = AppId("whole-setup-deadline")
+        val stalled = SetupStalledConnection()
+        val retryPair = FakeConnectionPair()
+        val outgoing = ArrayDeque<RawConnection>().apply {
+            add(stalled)
+            add(retryPair.a)
+        }
+        val transport = FakeDataTransport(outgoingConnection = {
+            outgoing.removeFirstOrNull() ?: error("unexpected extra dial")
+        })
+        val alice = createTestKit {
+            this.appId = appId
+            deviceName = "Alice"
+            peerIdStorage = InMemoryPeerIdStorage(PeerId("alice-id"))
+            sessionSetupTimeoutMillis = 100
+            transports { register(FactoryFor(transport)) }
+        }
+        val bob = incomingKitWithConnections(appId, listOf(retryPair.b))
+        val target = syntheticPeer("bob-id", "Bob")
+        try {
+            bob.start()
+            assertFailsWith<dev.p2pkit.core.P2pError.HandshakeRejected> {
+                withTimeout(5_000) { alice.connect(target) }
+            }
+            assertEquals(ConnectionState.Closed, stalled.state.value)
+            assertEquals(1, stalled.closeCalls)
+            assertTrue(alice.sessions.value.isEmpty())
+
+            val retried = withTimeout(5_000) { alice.connect(target) }
+            assertEquals(ConnectionState.Connected, retried.state.value)
+            assertEquals(2, transport.connectCalls.size)
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    private fun incomingKitWithConnections(
+        appId: AppId,
+        incoming: List<RawConnection>
+    ): P2pKit = createTestKit {
+        this.appId = appId
+        deviceName = "Bob"
+        peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
+        keepAlive {
+            pingIntervalMillis = 60_000
+            timeoutMillis = 120_000
+        }
+        transports {
+            register(FactoryFor(FakeDataTransport(preStagedIncoming = incoming)))
         }
     }
 
@@ -308,6 +436,48 @@ class SessionFlowTest {
         platform = Platform.JVM_DESKTOP,
         supportedTransports = setOf(TransportKind.LAN)
     )
+}
+
+@OptIn(ExperimentalAtomicApi::class)
+private class CancellableFirstWriteConnection(
+    private val delegate: RawConnection
+) : RawConnection {
+    val writeEntered = CompletableDeferred<Unit>()
+    private val release = CompletableDeferred<Unit>()
+    private val closeCounter = AtomicInt(0)
+    val closeCalls: Int get() = closeCounter.load()
+    override val state: StateFlow<ConnectionState> get() = delegate.state
+
+    override suspend fun write(bytes: ByteArray) {
+        writeEntered.complete(Unit)
+        release.await()
+        delegate.write(bytes)
+    }
+
+    override fun read(): Flow<ByteArray> = delegate.read()
+
+    override suspend fun close() {
+        closeCounter.addAndFetch(1)
+        release.complete(Unit)
+        delegate.close()
+    }
+}
+
+@OptIn(ExperimentalAtomicApi::class)
+private class SetupStalledConnection : RawConnection {
+    private val _state = MutableStateFlow(ConnectionState.Connected)
+    private val closeCounter = AtomicInt(0)
+    val closeCalls: Int get() = closeCounter.load()
+    override val state: StateFlow<ConnectionState> = _state.asStateFlow()
+
+    override suspend fun write(bytes: ByteArray): Unit = awaitCancellation()
+
+    override fun read(): Flow<ByteArray> = flow { awaitCancellation() }
+
+    override suspend fun close() {
+        closeCounter.addAndFetch(1)
+        _state.value = ConnectionState.Closed
+    }
 }
 
 private class FactoryFor(private val transport: FakeDataTransport) : TransportFactory {
