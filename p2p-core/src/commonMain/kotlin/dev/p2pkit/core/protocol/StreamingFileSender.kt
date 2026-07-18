@@ -32,7 +32,11 @@ internal fun streamFileData(
     if (sizeBytes == 0L) return@flow
 
     val source = rawSource.buffered()
-    val total = ((sizeBytes + chunkSizeBytes - 1) / chunkSizeBytes).toInt()
+    val totalLong = 1L + (sizeBytes - 1L) / chunkSizeBytes.toLong()
+    require(totalLong <= Int.MAX_VALUE.toLong()) {
+        "Transfer requires $totalLong chunks; the wire format supports at most ${Int.MAX_VALUE}"
+    }
+    val total = totalLong.toInt()
     var sent = 0L
     var index = 0
     while (sent < sizeBytes) {

@@ -21,6 +21,7 @@ import dev.p2pkit.core.testfixtures.SnapshotList
 import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.core.transfer.outgoingOfferWatchdogMillis
 import dev.p2pkit.core.transfer.isTerminal
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
@@ -30,33 +31,44 @@ import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlinx.io.Buffer
 import kotlinx.io.IOException
 import kotlinx.io.RawSource
+import kotlinx.io.RawSink
 import kotlinx.io.readByteArray
 import kotlinx.io.write
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class FileTransferFlowTest {
 
     private fun outgoingKit(name: String, outgoing: RawConnection, configureFileTransfer: Boolean = false): P2pKit =
@@ -312,10 +324,8 @@ class FileTransferFlowTest {
             val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
             val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            // We deliberately don't subscribe to incomingFiles or call accept,
-            // so both sender (200ms) and receiver (200ms) timeouts will fire.
-            // Whichever fires first decides the terminal state. The receiver
-            // typically wins (its FILE_REJECT path), so we expect Rejected.
+            // The receiver is the normal unanswered-offer timeout authority;
+            // the sender watchdog has a response grace and cannot race it.
             val transfer = outgoing.sendFile(
                 name = "x",
                 sizeBytes = 16L,
@@ -323,13 +333,10 @@ class FileTransferFlowTest {
                 source = Buffer().apply { write(ByteArray(16)) }
             )
             val terminal = withTimeout(5_000) {
-                transfer.state.first { it is FileTransferState.Cancelled || it is FileTransferState.Rejected }
+                transfer.state.first { it.isTerminal() }
             }
-            // Either outcome is acceptable; the key is that we transitioned terminal.
-            assertTrue(
-                terminal is FileTransferState.Cancelled || terminal is FileTransferState.Rejected,
-                "Expected terminal Cancelled or Rejected, got $terminal"
-            )
+            val rejected = assertIs<FileTransferState.Rejected>(terminal)
+            assertEquals("timeout", rejected.reason)
             // Sanity: incomingSession was not closed by this — file transfer
             // failures don't kill the data session.
             assertEquals(dev.p2pkit.core.ConnectionState.Connected, incomingSession.state.value)
@@ -970,10 +977,308 @@ class FileTransferFlowTest {
         }
     }
 
+    @Test
+    fun acceptCancellationRollsBackReceiverAndNotifiesPeer() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol().apply { gateAccept = true }
+        val dispatcher = directDispatcher(scope, protocol)
+        try {
+            val subscribed = CompletableDeferred<Unit>()
+            val offerDeferred = async(start = CoroutineStart.UNDISPATCHED) {
+                dispatcher.incomingFiles
+                    .onSubscription { subscribed.complete(Unit) }
+                    .first()
+            }
+            subscribed.await()
+            val id = MessageId.random(Random(91))
+            dispatcher.onFileOffer(id, FileOfferPayload("cancel.bin", 8L))
+            val offer = offerDeferred.await() as IncomingFileSession
+
+            val accepting = async { offer.accept(Buffer()) }
+            protocol.acceptStarted.await()
+            accepting.cancelAndJoin()
+
+            assertIs<FileTransferState.Cancelled>(offer.state.value)
+            assertFalse(offer.retainsReceiver(), "cancelled accept must release its receiver reference")
+            assertEquals(id, protocol.fileCancels.single().first)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun acceptedIdleDeadlineIsExactAndPositiveProgressRearmsIt() = runTest {
+        val protocol = RecordingFileProtocol()
+        val dispatcher = directDispatcher(
+            backgroundScope,
+            protocol,
+            FileTransferConfig(maxFileSizeBytes = 2L, offerTimeoutMillis = 100L, chunkSizeBytes = 1)
+        )
+        val offerDeferred = async(start = CoroutineStart.UNDISPATCHED) {
+            dispatcher.incomingFiles.first()
+        }
+        val id = MessageId.random(Random(92))
+        dispatcher.onFileOffer(id, FileOfferPayload("idle.bin", 2L))
+        runCurrent()
+        val offer = offerDeferred.await() as IncomingFileSession
+        offer.accept(Buffer())
+
+        advanceTimeBy(60L)
+        dispatcher.onFileData(
+            Frame(
+                type = dev.p2pkit.core.protocol.PacketType.FILE_DATA,
+                flags = 0,
+                messageId = id,
+                chunkIndex = 0,
+                totalChunks = 2,
+                payload = byteArrayOf(1)
+            )
+        )
+        advanceTimeBy(99L)
+        runCurrent()
+        assertFalse(offer.state.value.isTerminal())
+        advanceTimeBy(1L)
+        runCurrent()
+        val cancelled = assertIs<FileTransferState.Cancelled>(offer.state.value)
+        assertTrue(cancelled.reason?.startsWith("idle transfer timeout") == true)
+        assertEquals(id, protocol.fileCancels.single().first)
+        assertFalse(offer.retainsReceiver())
+    }
+
+    @Test
+    fun overallDeadlineWinsDespiteContinuousPositiveProgress() = runTest {
+        val protocol = RecordingFileProtocol()
+        val dispatcher = directDispatcher(
+            backgroundScope,
+            protocol,
+            FileTransferConfig(maxFileSizeBytes = 100L, offerTimeoutMillis = 10L, chunkSizeBytes = 1)
+        )
+        val offerDeferred = async(start = CoroutineStart.UNDISPATCHED) {
+            dispatcher.incomingFiles.first()
+        }
+        val id = MessageId.random(Random(93))
+        dispatcher.onFileOffer(id, FileOfferPayload("overall.bin", 100L))
+        runCurrent()
+        val offer = offerDeferred.await() as IncomingFileSession
+        offer.accept(Buffer())
+
+        repeat(22) { index ->
+            advanceTimeBy(9L)
+            dispatcher.onFileData(
+                Frame(
+                    type = dev.p2pkit.core.protocol.PacketType.FILE_DATA,
+                    flags = 0,
+                    messageId = id,
+                    chunkIndex = index,
+                    totalChunks = 100,
+                    payload = byteArrayOf(index.toByte())
+                )
+            )
+        }
+        assertFalse(offer.state.value.isTerminal())
+        advanceTimeBy(2L)
+        runCurrent()
+        val cancelled = assertIs<FileTransferState.Cancelled>(offer.state.value)
+        assertTrue(cancelled.reason?.startsWith("overall transfer timeout") == true)
+    }
+
+    @Test
+    fun duplicateTransferIdsCannotOverwriteExistingOwnership() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol()
+        val constantRandom = object : Random() {
+            override fun nextBits(bitCount: Int): Int = 0
+        }
+        val dispatcher = directDispatcher(scope, protocol, random = constantRandom)
+        try {
+            val firstSource = CloseTrackingSource(Buffer().apply { write(ByteArray(1)) })
+            val secondSource = CloseTrackingSource(Buffer().apply { write(ByteArray(1)) })
+            val first = dispatcher.sendFile("first.bin", 1L, null, firstSource)
+            val failure = assertFailsWith<P2pError.ConnectionFailed> {
+                dispatcher.sendFile("second.bin", 1L, null, secondSource)
+            }
+            assertTrue(failure.reason.contains("unique transfer id"))
+            assertEquals(1, protocol.fileOffers.size)
+            assertEquals(1, secondSource.closeCount)
+            first.cancel("cleanup")
+            assertEquals(1, firstSource.closeCount)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun rejectAfterAcceptCannotRegressOrTerminateStreamingTransfer() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol().apply { gateDataFrames = true }
+        val dispatcher = directDispatcher(
+            scope,
+            protocol,
+            FileTransferConfig(offerTimeoutMillis = 60_000L, chunkSizeBytes = 16)
+        )
+        try {
+            val transfer = dispatcher.sendFile(
+                "transition.bin",
+                16L,
+                null,
+                Buffer().apply { write(ByteArray(16)) }
+            )
+            val id = protocol.fileOffers.single()
+            dispatcher.onFileAccept(id)
+            withTimeout(5_000) { while (protocol.fileData.isEmpty()) yield() }
+            dispatcher.onFileReject(id, "late reject")
+            assertFalse(transfer.state.value is FileTransferState.Rejected)
+            protocol.dataFrameReleases.send(Unit)
+            assertIs<FileTransferState.Completed>(
+                withTimeout(5_000) { transfer.state.first { it.isTerminal() } }
+            )
+        } finally {
+            scope.cancel()
+        }
+        Unit
+    }
+
+    @Test
+    fun terminalStateFreezesProgressAndReleasesSource() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol().apply { gateDataFrames = true }
+        val dispatcher = directDispatcher(
+            scope,
+            protocol,
+            FileTransferConfig(offerTimeoutMillis = 60_000L, chunkSizeBytes = 16)
+        )
+        try {
+            val source = CloseTrackingSource(Buffer().apply { write(ByteArray(16)) })
+            val transfer = dispatcher.sendFile("freeze.bin", 16L, null, source) as OutgoingFileTransferImpl
+            dispatcher.onFileAccept(protocol.fileOffers.single())
+            withTimeout(5_000) { while (protocol.fileData.isEmpty()) yield() }
+            transfer.cancel("stop before write commit")
+            assertIs<FileTransferState.Cancelled>(transfer.state.value)
+            assertEquals(0L, transfer.bytesTransferred.value)
+            assertFalse(transfer.retainsSource())
+            assertEquals(1, source.closeCount)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun sinkWriteAndCancellationAreSerializedPerTransfer() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol()
+        val dispatcher = directDispatcher(scope, protocol)
+        try {
+            val offerDeferred = async(start = CoroutineStart.UNDISPATCHED) {
+                dispatcher.incomingFiles.first()
+            }
+            val id = MessageId.random(Random(94))
+            val payload = ByteArray(64 * 1024) { 7 }
+            dispatcher.onFileOffer(id, FileOfferPayload("serialized.bin", payload.size.toLong()))
+            val offer = offerDeferred.await() as IncomingFileSession
+            val sink = GatedSink()
+            offer.accept(sink)
+
+            val data = async(Dispatchers.Default) {
+                dispatcher.onFileData(
+                    Frame(
+                        type = dev.p2pkit.core.protocol.PacketType.FILE_DATA,
+                        flags = dev.p2pkit.core.protocol.FrameFlags.LAST_CHUNK.toByte(),
+                        messageId = id,
+                        chunkIndex = 0,
+                        totalChunks = 1,
+                        payload = payload
+                    )
+                )
+            }
+            sink.entered.await()
+            val cancellation = async(start = CoroutineStart.UNDISPATCHED) {
+                offer.cancel("concurrent cancel")
+            }
+            assertFalse(cancellation.isCompleted, "cancel must wait for the active sink operation")
+            sink.release.complete(Unit)
+            data.await()
+            cancellation.await()
+
+            assertIs<FileTransferState.Cancelled>(offer.state.value)
+            assertFalse(offer.retainsReceiver())
+            assertEquals(payload.size.toLong(), offer.bytesTransferred.value)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun stalledAcceptedCapacityIsReleasedByIdleDeadlines() = runTest {
+        val protocol = RecordingFileProtocol()
+        val config = FileTransferConfig(
+            maxFileSizeBytes = 64L,
+            chunkSizeBytes = 1,
+            offerTimeoutMillis = 100L
+        )
+        val dispatcher = directDispatcher(backgroundScope, protocol, config)
+        val delivered = Channel<IncomingFileSession>(Channel.UNLIMITED)
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            dispatcher.incomingFiles.collect { delivered.send(it as IncomingFileSession) }
+        }
+        val accepted = mutableListOf<IncomingFileSession>()
+        repeat(64) { index ->
+            val id = MessageId.random(Random(1_000 + index))
+            dispatcher.onFileOffer(id, FileOfferPayload("stalled-$index.bin", 1L))
+            runCurrent()
+            delivered.receive().also {
+                it.accept(Buffer())
+                accepted += it
+            }
+        }
+        val overflowId = MessageId.random(Random(2_000))
+        dispatcher.onFileOffer(overflowId, FileOfferPayload("overflow.bin", 1L))
+        runCurrent()
+        assertEquals(overflowId, protocol.fileRejects.single())
+
+        advanceTimeBy(100L)
+        runCurrent()
+        assertTrue(accepted.all { it.state.value is FileTransferState.Cancelled })
+        assertTrue(accepted.all { !it.retainsReceiver() })
+
+        val replacementId = MessageId.random(Random(2_001))
+        dispatcher.onFileOffer(replacementId, FileOfferPayload("replacement.bin", 1L))
+        runCurrent()
+        assertEquals(replacementId, delivered.receive().transferId)
+    }
+
+    @Test
+    fun outgoingOfferWatchdogStartsOnlyAfterWireWriteCompletes() = runTest {
+        val protocol = RecordingFileProtocol().apply { gateOffer = true }
+        val config = FileTransferConfig(
+            maxFileSizeBytes = 8L,
+            chunkSizeBytes = 1,
+            offerTimeoutMillis = 100L
+        )
+        val dispatcher = directDispatcher(backgroundScope, protocol, config)
+        val sending = async {
+            dispatcher.sendFile("gated-offer.bin", 1L, null, Buffer().apply { writeByte(1) })
+        }
+        protocol.offerStarted.await()
+        advanceTimeBy(config.outgoingOfferWatchdogMillis * 2L)
+        runCurrent()
+        assertFalse(sending.isCompleted, "watchdog cannot run before FILE_OFFER write returns")
+
+        protocol.offerRelease.complete(Unit)
+        runCurrent()
+        val transfer = sending.await()
+        advanceTimeBy(config.outgoingOfferWatchdogMillis - 1L)
+        runCurrent()
+        assertFalse(transfer.state.value.isTerminal())
+        advanceTimeBy(1L)
+        runCurrent()
+        assertIs<FileTransferState.Cancelled>(transfer.state.value)
+    }
+
     private fun directDispatcher(
         scope: CoroutineScope,
         protocol: P2pProtocol,
-        config: FileTransferConfig = FileTransferConfig(offerTimeoutMillis = 60_000)
+        config: FileTransferConfig = FileTransferConfig(offerTimeoutMillis = 60_000),
+        random: Random = Random(42)
     ): FileTransferDispatcher {
         val pair = FakeConnectionPair()
         return FileTransferDispatcher(
@@ -984,10 +1289,24 @@ class FileTransferFlowTest {
             sendMutex = Mutex(),
             config = config,
             scope = scope,
-            random = Random(42),
+            random = random,
             logger = P2pLogger.NoOp
         )
     }
+}
+
+private class GatedSink : RawSink {
+    val entered = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+
+    override fun write(source: Buffer, byteCount: Long) {
+        entered.complete(Unit)
+        runBlocking { release.await() }
+        source.skip(byteCount)
+    }
+
+    override fun flush() {}
+    override fun close() {}
 }
 
 /**
@@ -1044,6 +1363,12 @@ private class RecordingFileProtocol : P2pProtocol {
 
     /** When non-null, [sendFileOffer] throws it instead of recording (offer-write-failure injection). */
     var offerFailure: Throwable? = null
+    var gateOffer: Boolean = false
+    val offerStarted = CompletableDeferred<Unit>()
+    val offerRelease = CompletableDeferred<Unit>()
+    var gateAccept: Boolean = false
+    val acceptStarted = CompletableDeferred<Unit>()
+    val acceptReleases = Channel<Unit>(Channel.UNLIMITED)
 
     /**
      * When true, each [sendFileDataFrame] records its frame and then parks
@@ -1062,10 +1387,19 @@ private class RecordingFileProtocol : P2pProtocol {
 
     override suspend fun sendFileOffer(connection: RawConnection, transferId: MessageId, offer: FileOfferPayload) {
         offerFailure?.let { throw it }
+        if (gateOffer) {
+            offerStarted.complete(Unit)
+            offerRelease.await()
+        }
         fileOffers.add(transferId)
     }
 
-    override suspend fun sendFileAccept(connection: RawConnection, transferId: MessageId) {}
+    override suspend fun sendFileAccept(connection: RawConnection, transferId: MessageId) {
+        if (gateAccept) {
+            acceptStarted.complete(Unit)
+            acceptReleases.receive()
+        }
+    }
 
     override suspend fun sendFileReject(connection: RawConnection, transferId: MessageId, reason: String?) {
         fileRejects.add(transferId)

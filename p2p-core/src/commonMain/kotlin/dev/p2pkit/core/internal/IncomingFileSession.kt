@@ -12,6 +12,8 @@ import kotlin.concurrent.Volatile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.io.RawSink
 
 /**
@@ -20,8 +22,10 @@ import kotlinx.io.RawSink
  * `accept`) and then as [P2pFileTransfer] (after `accept`); the state flow
  * survives the transition so observers see one continuous lifecycle.
  *
- * `accept` returns `this` cast to [P2pFileTransfer]. The dispatcher's lock
- * serializes [setReceiver] / [setState] / [recordBytesReceived] calls.
+ * `accept` returns `this` cast to [P2pFileTransfer]. A per-transfer mutex
+ * serializes sink write/finalize/abort and the associated progress/state
+ * commits. The dispatcher map lock is deliberately never held across these
+ * operations because the sink is application-controlled I/O.
  */
 internal class IncomingFileSession(
     override val peer: Peer,
@@ -40,9 +44,10 @@ internal class IncomingFileSession(
     private val _bytes = MutableStateFlow(0L)
     override val bytesTransferred: StateFlow<Long> = _bytes.asStateFlow()
 
+    private val operationLock = Mutex()
+
     @Volatile
-    internal var receiver: StreamingFileReceiver? = null
-        private set
+    private var receiver: StreamingFileReceiver? = null
 
     override suspend fun accept(sink: RawSink): P2pFileTransfer = dispatcher.acceptOffer(this, sink)
 
@@ -54,33 +59,51 @@ internal class IncomingFileSession(
         dispatcher.cancelIncoming(this, reason)
     }
 
-    internal fun setReceiver(r: StreamingFileReceiver) {
-        receiver = r
+    internal suspend fun installReceiver(sink: RawSink): Boolean = operationLock.withLock {
+        if (_state.value.isTerminal()) return@withLock false
+        check(receiver == null) { "Offer $id already owns a receiver" }
+        receiver = StreamingFileReceiver(transferId, sizeBytes, sink)
+        _state.value = FileTransferState.Accepted
+        true
     }
 
-    internal fun setState(newState: FileTransferState) {
-        // Terminal states are final — see OutgoingFileTransferImpl
-        // (AUDIT-2026-06 fix).
-        updateUnlessTerminal { newState }
-    }
-
-    internal fun recordBytesReceived(total: Long) {
+    /** Returns null when a terminal transition already won the race. */
+    internal suspend fun acceptData(frame: dev.p2pkit.core.protocol.Frame): Long? = operationLock.withLock {
+        if (_state.value.isTerminal()) return@withLock null
+        val ownedReceiver = receiver
+            ?: throw P2pError.ProtocolError("FILE_DATA for $transferId arrived before acceptance committed")
+        val total = ownedReceiver.acceptDataChunk(frame)
         _bytes.value = total
-        if (sizeBytes > 0) {
+        if (sizeBytes > 0L) {
             val progress = (total.toDouble() / sizeBytes.toDouble()).coerceIn(0.0, 1.0).toFloat()
-            updateUnlessTerminal { FileTransferState.Sending(progress) }
+            _state.value = FileTransferState.Sending(progress)
         }
+        total
     }
 
-    internal fun markFailed(error: P2pError) {
-        updateUnlessTerminal { FileTransferState.Failed(error) }
+    /** Flush and complete under the same gate used by writes and abort. */
+    internal suspend fun finishReceiver(): Boolean = operationLock.withLock {
+        if (_state.value.isTerminal()) return@withLock false
+        val ownedReceiver = receiver
+            ?: throw P2pError.ProtocolError("FILE_DONE for $transferId arrived before acceptance committed")
+        ownedReceiver.finish()
+        receiver = null
+        _state.value = FileTransferState.Completed
+        true
     }
 
-    private inline fun updateUnlessTerminal(next: () -> FileTransferState) {
-        while (true) {
-            val cur = _state.value
-            if (cur.isTerminal()) return
-            if (_state.compareAndSet(cur, next())) return
+    internal suspend fun setState(newState: FileTransferState): Boolean = operationLock.withLock {
+        if (_state.value.isTerminal()) return@withLock false
+        _state.value = newState
+        if (newState.isTerminal()) {
+            receiver?.abort()
+            receiver = null
         }
+        true
     }
+
+    internal suspend fun markFailed(error: P2pError): Boolean =
+        setState(FileTransferState.Failed(error))
+
+    internal fun retainsReceiver(): Boolean = receiver != null
 }

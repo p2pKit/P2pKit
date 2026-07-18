@@ -9,6 +9,8 @@ import dev.p2pkit.core.transfer.isTerminal
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.io.RawSource
 
 /**
@@ -16,8 +18,9 @@ import kotlinx.io.RawSource
  * [FileTransferDispatcher.sendFile]; mutated by the dispatcher as state
  * transitions happen. The public surface is the [P2pFileTransfer] interface.
  *
- * State transitions are guarded by the dispatcher's lock — direct callers of
- * [setState] / [recordBytesSent] are expected to hold it.
+ * State/progress transitions use a per-transfer mutex. Source ownership is an
+ * atomic nullable reference so terminal cleanup never needs the dispatcher's
+ * global ownership lock and the terminal handle cannot retain the source.
  */
 internal class OutgoingFileTransferImpl(
     override val peer: Peer,
@@ -25,7 +28,7 @@ internal class OutgoingFileTransferImpl(
     override val sizeBytes: Long,
     override val mimeType: String?,
     val transferId: MessageId,
-    val source: RawSource,
+    source: RawSource,
     private val dispatcher: FileTransferDispatcher
 ) : P2pFileTransfer {
 
@@ -37,69 +40,49 @@ internal class OutgoingFileTransferImpl(
     private val _bytes = MutableStateFlow(0L)
     override val bytesTransferred: StateFlow<Long> = _bytes.asStateFlow()
 
-    // AUDIT-2026-07 (FIL-1): close-once latch for [source]. The kit owns the
-    // caller's RawSource (sendFile KDoc contract); the close used to be done
-    // only by a watcher coroutine on the session scope, which session teardown
-    // cancels before it can observe the terminal state — leaking the source.
-    // The guaranteed close now runs synchronously at the transition INTO a
-    // terminal state (every terminal path funnels through
-    // [updateUnlessTerminal]); the watcher remains only as a backstop, and
-    // both paths go through this idempotent guard.
-    private val sourceClosed = MutableStateFlow(false)
+    private val lifecycleLock = Mutex()
+    private val sourceRef = MutableStateFlow<RawSource?>(source)
 
     internal fun closeSourceOnce() {
-        if (sourceClosed.compareAndSet(expect = false, update = true)) {
-            runCatching { source.close() }
+        while (true) {
+            val owned = sourceRef.value ?: return
+            if (sourceRef.compareAndSet(owned, null)) {
+                runCatching { owned.close() }
+                return
+            }
         }
     }
+
+    internal fun sourceOrThrow(): RawSource =
+        sourceRef.value ?: throw IllegalStateException("Transfer $id no longer owns its source")
+
+    internal fun retainsSource(): Boolean = sourceRef.value != null
 
     override suspend fun cancel(reason: String?) {
         dispatcher.cancelOutgoing(this, reason)
     }
 
-    internal fun setState(newState: FileTransferState) {
-        // Terminal states are final: contending paths (offer timeout vs
-        // FILE_ACCEPT, remote FILE_CANCEL vs streamer completion) must not
-        // overwrite them — the KDoc'd lock discipline was never actually
-        // applied by all callers (AUDIT-2026-06 fix).
-        updateUnlessTerminal { newState }
+    internal suspend fun setState(newState: FileTransferState): Boolean {
+        val changed = lifecycleLock.withLock {
+            if (_state.value.isTerminal()) return@withLock false
+            _state.value = newState
+            true
+        }
+        if (changed && newState.isTerminal()) closeSourceOnce()
+        return changed
     }
 
-    internal fun recordBytesSent(delta: Int) {
-        val total = _bytes.updateAndGet { it + delta }
-        if (sizeBytes > 0) {
+    internal suspend fun recordBytesSent(delta: Int): Boolean = lifecycleLock.withLock {
+        if (_state.value.isTerminal()) return@withLock false
+        val total = _bytes.value + delta.toLong()
+        _bytes.value = total
+        if (sizeBytes > 0L) {
             val progress = (total.toDouble() / sizeBytes.toDouble()).coerceIn(0.0, 1.0).toFloat()
-            updateUnlessTerminal { FileTransferState.Sending(progress) }
+            _state.value = FileTransferState.Sending(progress)
         }
+        true
     }
 
-    internal fun markFailed(error: P2pError) {
-        updateUnlessTerminal { FileTransferState.Failed(error) }
-    }
-
-    private inline fun updateUnlessTerminal(next: () -> FileTransferState) {
-        while (true) {
-            val cur = _state.value
-            if (cur.isTerminal()) return
-            val candidate = next()
-            if (_state.compareAndSet(cur, candidate)) {
-                // AUDIT-2026-07 (FIL-1): the winning transition into a terminal
-                // state is the one guaranteed-to-run cleanup point for the
-                // source — it covers every terminal path (Completed / Rejected
-                // / Cancelled / Failed, including closeAll's markFailed during
-                // session teardown) and, unlike the watcher coroutine, cannot
-                // be cancelled out from under the transfer.
-                if (candidate.isTerminal()) closeSourceOnce()
-                return
-            }
-        }
-    }
-}
-
-private inline fun MutableStateFlow<Long>.updateAndGet(transform: (Long) -> Long): Long {
-    while (true) {
-        val current = value
-        val next = transform(current)
-        if (compareAndSet(current, next)) return next
-    }
+    internal suspend fun markFailed(error: P2pError): Boolean =
+        setState(FileTransferState.Failed(error))
 }

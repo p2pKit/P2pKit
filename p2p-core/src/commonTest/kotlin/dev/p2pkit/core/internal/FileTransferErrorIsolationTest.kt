@@ -123,7 +123,7 @@ class FileTransferErrorIsolationTest {
             val msgDeferred = async {
                 incomingSession.incoming.onSubscription { msgReady.complete(Unit) }.first()
             }
-            msgReady.await()
+            withTimeout(5_000) { msgReady.await() }
 
             val offersReady = CompletableDeferred<Unit>()
             val offersDeferred = async {
@@ -132,7 +132,7 @@ class FileTransferErrorIsolationTest {
                     .take(2)
                     .toList()
             }
-            offersReady.await()
+            withTimeout(5_000) { offersReady.await() }
 
             // Two concurrent transfers: "bad.bin" lands in a sink whose flush
             // throws during finish(); "good.bin" must be unaffected.

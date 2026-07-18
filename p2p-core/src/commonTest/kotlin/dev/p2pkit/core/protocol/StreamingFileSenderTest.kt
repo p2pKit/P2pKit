@@ -1,5 +1,6 @@
 package dev.p2pkit.core.protocol
 
+import dev.p2pkit.core.transfer.FileTransferConfig
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.Buffer
@@ -8,6 +9,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class StreamingFileSenderTest {
@@ -27,6 +29,28 @@ class StreamingFileSenderTest {
                 chunkSizeBytes = 64
             ).toList()
             assertTrue(frames.isEmpty(), "Expected zero frames for empty file, got ${frames.size}")
+        }
+    }
+
+    @Test
+    fun chunkCountOverflowIsRejectedBeforeReadingSource() = runTest {
+        assertFailsWith<IllegalArgumentException> {
+            streamFileData(
+                transferId = id(),
+                rawSource = bufferOf(byteArrayOf(1)),
+                sizeBytes = Int.MAX_VALUE.toLong() + 1L,
+                chunkSizeBytes = 1
+            ).toList()
+        }
+    }
+
+    @Test
+    fun configurationRejectsAChunkCountTheWireCannotRepresent() {
+        assertFailsWith<IllegalArgumentException> {
+            FileTransferConfig(
+                maxFileSizeBytes = Int.MAX_VALUE.toLong() + 1L,
+                chunkSizeBytes = 1
+            )
         }
     }
 

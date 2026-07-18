@@ -48,7 +48,7 @@ Operating safeguards:
 | Findings total | 150 |
 | Explicit test gaps | 54 |
 
-Current finding state: 126 `Planned`, 1 `In Progress` (`PROTO-04`, transfer-transition conjunct assigned to `XFER-01`), 2 `Implemented` (`CORE-06`, `CORE-07`), 19 `Verified` (`CORE-01`, `CORE-03`, `CORE-08`, `CORE-09`, `CORE-10`, `CORE-13`, `CORE-18`, `CORE-19`, `CORE-20`, `CORE-21`, `CORE-23`, `CORE-29`, `PROTO-01`, `PROTO-02`, `PROTO-03`, `PROTO-05`, `PROTO-06`, `PROTO-07`, `BUILD-01`), 2 `Blocked` (`PROTO-08`, `BUILD-02`). SEC-01 was approved with storage A on 2026-07-17, implemented, committed, and pushed. Its final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
+Current finding state: 113 `Planned`, 13 `Implemented`, 19 `Verified`, and 5 `Blocked`. XFER-01 locally implements `PROTO-04`, `FILE-01/02/03/07/08/09/10/12/14/15`; `FILE-05/06/11` are isolated at documented public-API decisions. SEC-01 remains implemented but externally gated by cryptographic audit, physical interoperability, hostile-network validation, and the final green repository gate.
 
 ### Baseline gate evidence and reusable command catalog
 
@@ -175,7 +175,7 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 | PROTO-01 | High availability | FrameReader performs quadratic copying | PARSE-01 | Verified | Reusable one-frame buffer; header-first allocation; in-place window decode; no tail copies | PT-T01/PT-T21 parser portion | `aa3ac0c`; pushed with batch | Linear relocation/property tests pass JVM/iOS; exact committed state green |
 | PROTO-02 | Medium | Frame header version is ignored | SEC-01 dependency; PARSE-01 | Verified | Reader and direct codec reject a mismatched major from the fixed header | PT-T02 | `aa3ac0c`; pushed with batch | Secure-v2/legacy-v1 version tests pass with no fallback |
 | PROTO-03 | Medium security/availability | Packet-specific size limits are absent | PARSE-01 | Verified | Header-time per-packet caps plus outbound codec/payload validation | PT-T03/PT-T05 | `aa3ac0c`; pushed with batch | HELLO/OFFER/reason/data/empty-control/unknown cap boundaries pass JVM/iOS |
-| PROTO-04 | Medium | Control/chunk structures are too permissive | PARSE-01 before XFER-01 | In Progress | Central packet structural validator; stable DATA flags/LAST; FILE_DATA empty/total/LAST checks implemented | PT-T02/PT-T04/PT-T07 | `aa3ac0c`; parser portion committed | ACCEPT/REJECT transfer transition table remains in XFER-01; finding not closed |
+| PROTO-04 | Medium | Control/chunk structures are too permissive | PARSE-01 before XFER-01 | Implemented | Central structural validator plus transfer phase table; REJECT after ACCEPT/streaming is ignored as invalid | PT-T02/PT-T04/PT-T07 | `aa3ac0c`; XFER commit pending | Parser and exact transition regressions pass JVM/iOS |
 | PROTO-05 | Medium | Diagnostics can change protocol behavior | PARSE-01 | Verified | Throwing trace/logger sinks are isolated and disabled; cancellation is preserved | Throwing trace tests | `aa3ac0c`; pushed with batch | Protocol PING still delivered after throwing trace; exact committed JVM/iOS pass |
 | PROTO-06 | Low | Remote text accepts invalid/canonicalization-hostile data | PARSE-01 | Verified | Strict UTF-8/Unicode; bounded nonblank control-safe text; leaf file names; exact reason/null distinction | PT-T04/PT-T05 | `aa3ac0c`, `6171588`; pushed with batch | Inbound/outbound malformed UTF-8, controls, bidi, separators, dot segments, blank and boundaries pass |
 | PROTO-07 | Low | Malformed/unknown frames can flood logs | PARSE-01 | Verified | Four-message burst plus one suppression summary per fixed category/connection | PT-T03 | `aa3ac0c`; pushed with batch | 100 hostile frames produce exactly five warnings and delivery continues |
@@ -185,21 +185,21 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 
 | ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| FILE-01 | High | Cancellation during accept can orphan accepted transfer/sink | XFER-01 after LIF-SES-01/PARSE-01 | Planned | — | PT-T09 | — | — |
-| FILE-02 | High availability | Accepted inbound transfers have no idle/overall timeout | XFER-01 | Planned | — | PT-T08/PT-T14 | — | — |
-| FILE-03 | High data race | Receive, finish, and cancel race on sink | XFER-01 | Planned | — | PT-T10 | — | — |
+| FILE-01 | High | Cancellation during accept can orphan accepted transfer/sink | XFER-01 after LIF-SES-01/PARSE-01 | Implemented | Transactional accept with bounded write and non-cancellable compensating cancel/receiver release | PT-T09 | XFER commit pending | Deterministic gated FILE_ACCEPT cancellation passes JVM/iOS |
+| FILE-02 | High availability | Accepted inbound transfers have no idle/overall timeout | XFER-01 | Implemented | Positive-progress idle deadline, fixed overall deadline, 64-slot release | PT-T08/PT-T14 | XFER commit pending | Exact virtual-time and full-capacity regressions pass |
+| FILE-03 | High data race | Receive, finish, and cancel race on sink | XFER-01 | Implemented | Per-transfer operation mutex serializes write/finish/terminal release outside map lock | PT-T10 | XFER commit pending | Gated sink proves cancel waits and terminal cleanup is ordered |
 | FILE-04 | High data-integrity contract | Sender completes before receiver durability | XFER-PROTO-01 after XFER-01 | Planned | — | PT-T16 | — | Protocol decision required before implementation |
-| FILE-05 | Medium | Actionable offers disappear or arrive stale/out of order | XFER-01 | Planned | — | PT-T13 | — | — |
-| FILE-06 | Medium | Offer timeout starts before offer is writable/observable | XFER-01 | Planned | — | PT-T12 | — | — |
-| FILE-07 | Medium | Timeout terminal states are nondeterministic | XFER-01 | Planned | — | PT-T14 | — | — |
-| FILE-08 | Medium | User I/O runs under global dispatcher mutex | XFER-01 | Planned | — | PT-T11 | — | — |
-| FILE-09 | Medium | Terminal handles retain sources/sinks | XFER-01 | Planned | — | PT-T17 | — | — |
-| FILE-10 | Medium | Chunk arithmetic can overflow valid configuration | XFER-01 | Planned | — | PT-T06 | — | — |
-| FILE-11 | Medium API | Transfer failures use misleading errors and lose causes | XFER-01/API review | Planned | — | Typed cause-preservation tests | — | — |
-| FILE-12 | Medium | Progress can advance after terminal state | XFER-01 | Planned | — | PT-T15 | — | — |
+| FILE-05 | Medium | Actionable offers disappear or arrive stale/out of order | XFER-OFFER-API-01 | Blocked | Requires retained pending-offer state API; `SharedFlow` replay cannot remove stale entries without duplicate live emissions | PT-T13 | — | Owner API decision recorded below; independent transfer work continued |
+| FILE-06 | Medium | Offer timeout starts before offer is writable/observable | XFER-01 + XFER-OFFER-API-01 | Blocked | Sender watchdog now starts after wire write; receiver observability requires retained-offer API | PT-T12 | XFER sender portion pending | Exact gated-write regression passes; receiver conjunct waits on FILE-05 decision |
+| FILE-07 | Medium | Timeout terminal states are nondeterministic | XFER-01 | Implemented | Receiver normal timeout precedes a grace-delayed sender safety watchdog; exact REJECT result | PT-T14 | XFER commit pending | End-to-end test asserts only `Rejected("timeout")` |
+| FILE-08 | Medium | User I/O runs under global dispatcher mutex | XFER-01 | Implemented | Map lock only transfers ownership; source/sink work uses per-transfer gate outside it | PT-T11 | XFER commit pending | Blocking sink/cancel regression and diff review pass |
+| FILE-09 | Medium | Terminal handles retain sources/sinks | XFER-01 | Implemented | Atomic nullable source plus serialized nullable receiver cleared on all terminal paths | PT-T17 | XFER commit pending | Completed/cancelled/failed matrix plus internal retention assertions pass |
+| FILE-10 | Medium | Chunk arithmetic can overflow valid configuration | XFER-01 | Implemented | Subtraction-based Long arithmetic and explicit Int chunk-count configuration/send bounds | PT-T06 | XFER commit pending | Overflow rejected before source read; boundary tests pass |
+| FILE-11 | Medium API | Transfer failures use misleading errors and lose causes | XFER-ERROR-API-01 | Blocked | Unexpected causes are preserved; correct public transfer error subtypes change sealed exhaustiveness | Typed cause-preservation tests | — | Owner API decision recorded below |
+| FILE-12 | Medium | Progress can advance after terminal state | XFER-01 | Implemented | State/byte commits share per-transfer mutex; terminal state freezes progress | PT-T15 | XFER commit pending | Gated outgoing and concurrent incoming regressions pass |
 | FILE-13 | Low integrity | Byte count checked but content is not | XFER-PROTO-01 after SEC-01 | Planned | — | PT-T18 | — | Protocol decision required before implementation |
-| FILE-14 | Low | Transfer ID collision overwrites ownership | XFER-01 | Planned | — | PT-T19 | — | — |
-| FILE-15 | Low | Platform file helpers lack snapshot semantics | XFER-01/platform follow-up | Planned | — | PT-T20 | — | — |
+| FILE-14 | Low | Transfer ID collision overwrites ownership | XFER-01 | Implemented | Bounded unique allocation under lock across both maps; failure closes uncommitted source | PT-T19 | XFER commit pending | Constant-random collision regression passes |
+| FILE-15 | Low | Platform file helpers lack snapshot semantics | XFER-01/platform follow-up | Implemented | JVM descriptor-size snapshot; Android descriptor/query consistency, negative rejection, descriptor ownership | PT-T20 | XFER commit pending | JVM tests and Android compile pass; hostile real-provider instrumentation remains external |
 
 ### LAN transport (26)
 
@@ -354,21 +354,21 @@ Each row represents one bullet from “Missing or weak tests to add” in the so
 | PT-T03 | Large HELLO/OFFER/control payload attacks and log flooding | PROTO-03, PROTO-07 | Verified | Header-only cap attacks and bounded-log assertions | `aa3ac0c` | Exact boundaries and 100-frame flood pass |
 | PT-T04 | Strict malformed UTF-8 and invalid flags/LAST | PROTO-04, PROTO-06 | Verified | Strict text decoders plus DATA/FILE_DATA flag and LAST invariants | `aa3ac0c` | JVM/iOS pass |
 | PT-T05 | Outbound name/MIME/reason limits | PROTO-03, PROTO-06 | Verified | Encoder/send-path character and UTF-8 byte boundaries | `aa3ac0c`, `6171588` | Exact committed JVM/iOS pass |
-| PT-T06 | 2 GiB with chunk size 1 and Long overflow boundaries | FILE-10 | Planned | — | — | — |
-| PT-T07 | Empty FILE_DATA, changing totalChunks, invalid LAST, data after full size | PROTO-04, FILE-02 | In Progress | All four parser/streaming-receiver conjuncts implemented in PARSE-01; dispatcher-level post-terminal proof remains in XFER-01 | `aa3ac0c` | Common JVM/iOS receiver tests pass; final closure stays with transfer state machine |
-| PT-T08 | Accepted-transfer idle exhaustion and all 64 admission slots exhausted | FILE-02 | Planned | — | — | — |
-| PT-T09 | Cancellation during accept mutex wait and FILE_ACCEPT write | FILE-01 | Planned | — | — | — |
-| PT-T10 | Cancel/close racing sink write/finish | FILE-03 | Planned | — | — | — |
-| PT-T11 | Blocking/reentrant source close and sink flush | FILE-08 | Planned | — | — | — |
-| PT-T12 | Timer scheduling before map registration, wire write, and offer emission | FILE-06 | Planned | — | — | — |
-| PT-T13 | Ordered multiple offers and no emission after terminal | FILE-05 | Planned | — | — | — |
-| PT-T14 | One exact timeout authority/state on both peers | FILE-02, FILE-07 | Planned | — | — | — |
-| PT-T15 | Byte progress frozen after terminal | FILE-12 | Planned | — | — | — |
+| PT-T06 | 2 GiB with chunk size 1 and Long overflow boundaries | FILE-10 | Implemented | Configuration and sender pre-read overflow tests | XFER commit pending | JVM/iOS pass |
+| PT-T07 | Empty FILE_DATA, changing totalChunks, invalid LAST, data after full size | PROTO-04, FILE-02 | Implemented | Parser invariants plus dispatcher terminal/transition tests | `aa3ac0c`; XFER pending | JVM/iOS pass |
+| PT-T08 | Accepted-transfer idle exhaustion and all 64 admission slots exhausted | FILE-02 | Implemented | Exact idle reset/overall bound and 64 accepted-slot release | XFER commit pending | Virtual-time JVM/iOS pass |
+| PT-T09 | Cancellation during accept mutex wait and FILE_ACCEPT write | FILE-01 | Implemented | Gated accept cancellation with compensating cancel/reference assertion | XFER commit pending | JVM/iOS pass |
+| PT-T10 | Cancel/close racing sink write/finish | FILE-03 | Implemented | Gated sink write proves per-transfer serialization | XFER commit pending | JVM/iOS pass |
+| PT-T11 | Blocking/reentrant source close and sink flush | FILE-08 | Implemented | Ownership/I/O moved outside map lock; gated sink regression | XFER commit pending | Diff review + JVM/iOS pass |
+| PT-T12 | Timer scheduling before map registration, wire write, and offer emission | FILE-06 | Blocked | Sender gated-write origin proven; receiver emission/retention conjunct needs XFER-OFFER-API-01 | XFER sender portion pending | Exact virtual-time sender test passes |
+| PT-T13 | Ordered multiple offers and no emission after terminal | FILE-05 | Blocked | Requires XFER-OFFER-API-01 retained pending-state contract | — | Owner decision recorded |
+| PT-T14 | One exact timeout authority/state on both peers | FILE-02, FILE-07 | Implemented | Receiver authority + delayed sender watchdog; exact end-to-end REJECT | XFER commit pending | JVM/iOS pass |
+| PT-T15 | Byte progress frozen after terminal | FILE-12 | Implemented | Gated outgoing and serialized incoming byte commits | XFER commit pending | JVM/iOS pass |
 | PT-T16 | Sender result when receiver flush/durability fails | FILE-04 | Planned | — | — | — |
-| PT-T17 | Source/sink references released after every terminal outcome | FILE-09 | Planned | — | — | — |
+| PT-T17 | Source/sink references released after every terminal outcome | FILE-09 | Implemented | Close-once matrix plus nullable source/receiver retention assertions | XFER commit pending | JVM/iOS pass |
 | PT-T18 | Source mutation/digest mismatch | FILE-13 | Planned | — | — | — |
-| PT-T19 | Deterministic transfer-ID collision | FILE-14 | Planned | — | — | — |
-| PT-T20 | Android hostile/null/negative provider metadata | FILE-15 | Planned | — | — | — |
+| PT-T19 | Deterministic transfer-ID collision | FILE-14 | Implemented | Constant-random collision cannot overwrite and closes second source | XFER commit pending | JVM/iOS pass |
+| PT-T20 | Android hostile/null/negative provider metadata | FILE-15 | In Progress | Production validation implemented; real provider/instrumentation proof unavailable locally | XFER commit pending | Android compile passes; external Android test remains |
 | PT-T21 | Fuzz/property tests for codec, reader, reassembler, and transfer transitions | PROTO-01, PROTO-04, FILE-01, FILE-02, FILE-03, FILE-05, FILE-07, FILE-12 | In Progress | Deterministic randomized codec/reader/reassembler portion complete; transfer transition properties stay with XFER-01 | `aa3ac0c` parser portion | Parser property suite passed three forced JVM repeats and iOS; transfer portion open |
 
 ### LAN gaps (11)
@@ -1079,6 +1079,16 @@ Remaining: `PROTO-04` stays `In Progress` solely for the ACCEPT/REJECT dispatche
 
 `PROTO-08` blocker record: `P2pMessage.metadata` is public but absent from both legacy-v1 and secure-v2 message encoding. Work attempted: confirmed `Chunker` serializes only text/binary bytes and `Reassembler` constructs messages without metadata; existing tests pin the omission. Recommended option: add an authenticated versioned secure-v2 application-message envelope and keep explicit legacy migration mode metadata-free; this changes the secure-v2 message payload contract and needs owner approval. Alternatives: remove/deprecate metadata (source/API compatibility cost), or explicitly document it as local-only (preserves the surprising contract and does not resolve the finding). Required later reply: `Approve PARSE-META-01 envelope` or an explicitly chosen alternative. This decision unblocks `PROTO-08` and its envelope/compatibility tests only; it does not block XFER-01 or other local batches.
 
+`XFER-OFFER-API-01` blocker (`FILE-05`, receiver conjunct of `FILE-06`, `PT-T12`, `PT-T13`): the public surface is `SharedFlow<P2pFileOffer>`. Replay can retain offers while no subscriber exists, but cannot selectively remove terminal entries; rebuilding replay broadcasts duplicates to existing collectors. A custom implementation cannot fulfill kotlinx.coroutines' `onSubscription` contract through public APIs. Attempted state-backed implementation reproduced that contract failure deterministically and was removed. Recommended option: add an authoritative `StateFlow<List<P2pFileOffer>> pendingFileOffers`, deprecate the lossy event flow, and migrate samples; this is an additive interface/API change but affects third-party `P2pSession` implementers and ABI. Alternatives: change `incomingFiles` directly to `StateFlow<List<...>>` (cleaner, breaking source/API), or accept stale/duplicate replay (does not resolve the finding). Exact reply: `Approve XFER-OFFER-API-01 pendingFileOffers`. This unblocks only the listed offer-delivery rows and dependent samples.
+
+`XFER-ERROR-API-01` blocker (`FILE-11`): causes are now retained on unexpected transport/source/sink failures, but using `ConnectionFailed` for local I/O and session-closing `ProtocolError` for isolated transfer violations remains misleading. Recommended option: add public `FileTransferIoFailed` and `FileTransferProtocolError` `P2pError` subtypes with causes. This is binary-additive but can break exhaustive source `when` expressions over the sealed hierarchy. Alternatives: make `P2pError` non-sealed (larger source contract change), or retain generic errors (does not resolve the finding). Exact reply: `Approve XFER-ERROR-API-01 typed errors`. This unblocks `FILE-11` and its external-consumer compatibility tests only.
+
+### XFER-01 concise implementation record
+
+Scope implemented locally: `PROTO-04`, `FILE-01/02/03/07/08/09/10/12/14/15` and the implemented portions of `PT-T06..12`, `PT-T14/15/17/19/20`. Root change: dispatcher maps now own only phase/timer references; each transfer serializes state, progress, and source/sink ownership independently. Acceptance has bounded transactional compensation, accepted transfers have progress-sensitive idle plus overall deadlines, timeout roles are ordered, chunk arithmetic is bounded, IDs cannot overwrite, and platform helpers measure the opened resource. Public constructor/wire behavior is unchanged; the only observable runtime changes are deterministic timeout/cancellation/error cleanup and stricter invalid-configuration rejection.
+
+Changed components: `FileTransferDispatcher`, incoming/outgoing handles, streaming sender/receiver, `FileTransferConfig`, Android/JVM helpers, common/JVM regression tests. Acceptance: no user I/O under the dispatcher map lock; cancellation preserves `CancellationException`; terminal state freezes progress and clears references; conforming unanswered offers have one exact sender state; all focused tests pass three forced repeats plus full JVM/iOS and Android/iOS compilation. Remaining local decision-independent risk: FILE-04 durability acknowledgement still permits the known completion/cancel race and is not claimed here.
+
 ## Execution log
 
 | Date | Unit | Action | Result |
@@ -1104,3 +1114,5 @@ Remaining: `PROTO-04` stays `In Progress` solely for the ACCEPT/REJECT dispatche
 | 2026-07-18 | CORE-SESSION-01/committed state | Exact verification exposed a replay-zero test collector race; replaced eager `async` scheduling with `CoroutineStart.UNDISPATCHED` and did not alter timeouts/retries | `SessionOwnershipTest` passed three forced JVM repeats, focused iOS, and Android compile at `82a9b41`; both commits pushed |
 | 2026-07-18 | PARSE-01 | Replaced quadratic reader, centralized per-packet caps/shape, enforced strict canonical text, isolated diagnostics, and added deterministic properties | `PROTO-01/02/03/05/06/07`, `PT-T01..05` verified; parser portions of `PROTO-04`, `PT-T07`, `PT-T21` committed |
 | 2026-07-18 | PARSE-01/verification | Ran focused/full JVM and iOS, Android/iOS compiles, three forced repeats, ABI task, exact committed-state worktrees, and repository `check` | Core JVM 389/389 and iOS 364/364; repository gate failed only registered LAN iOS and Android lint baselines |
+| 2026-07-18 | XFER-01 | Refactored transfer ownership, acceptance compensation, deadlines, arithmetic, progress, collision handling, and platform snapshots; isolated two API decisions | Complete core JVM 401/401 green; focused transfer iOS green; complete iOS run exposed three unrelated registered lifecycle/reconnect flakes and each passed an isolated forced rerun; Android/iOS device compilation green |
+| 2026-07-18 | XFER-01/determinism | Added gated accept/sink/write, exact virtual-time, 64-slot, transition, collision and retention regressions | Seven timing/concurrency tests passed three forced JVM repeats; updated focused iOS suite passes |

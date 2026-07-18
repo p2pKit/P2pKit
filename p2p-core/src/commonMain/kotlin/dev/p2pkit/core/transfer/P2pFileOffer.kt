@@ -11,10 +11,9 @@ import kotlinx.io.RawSink
  * The receiver must respond by calling either [accept] (which provides a
  * [RawSink] for the bytes) or [reject]. If neither is called within the
  * configured `offerTimeoutMillis` (default 30 s), the offer is auto-rejected
- * with reason `"timeout"` — this receive-side transfer terminalizes as
- * [FileTransferState.Rejected], while the sender's side of the same event
- * terminalizes as [FileTransferState.Cancelled] with the offer-timeout
- * message (decision #11a).
+ * with reason `"timeout"`; both sides terminalize as
+ * [FileTransferState.Rejected]. A later sender watchdog exists only for an
+ * unresponsive/non-conforming receiver that sends no decision.
  */
 public interface P2pFileOffer {
 

@@ -2,9 +2,12 @@ package dev.p2pkit.core.transfer
 
 import android.content.ContentResolver
 import android.content.Context
+import android.content.res.AssetFileDescriptor
 import android.net.Uri
 import android.provider.OpenableColumns
 import dev.p2pkit.core.P2pSession
+import kotlinx.io.Buffer
+import kotlinx.io.RawSource
 import kotlinx.io.asSource
 
 /**
@@ -27,15 +30,26 @@ import kotlinx.io.asSource
  */
 public suspend fun P2pSession.sendFile(context: Context, uri: Uri): P2pFileTransfer {
     val cr = context.contentResolver
-    val (displayName, sizeBytes, mimeType) = queryUriMetadata(cr, uri)
-    val resolvedSize = sizeBytes
-        ?: throw IllegalArgumentException(
-            "Cannot determine size for $uri. The ContentResolver did not return a SIZE column. " +
-                "Save the document to a temporary File and use sendFile(file) instead."
-        )
-    val stream = cr.openInputStream(uri)
+    val descriptor = cr.openAssetFileDescriptor(uri, "r")
         ?: throw IllegalArgumentException("Cannot open URI for reading: $uri")
-    val source = stream.asSource()
+    val (displayName, queriedSize, mimeType) = try {
+        queryUriMetadata(cr, uri)
+    } catch (e: Throwable) {
+        runCatching { descriptor.close() }
+        throw e
+    }
+    val resolvedSize = try {
+        resolveStableSize(uri, queriedSize, descriptor.length)
+    } catch (e: Throwable) {
+        runCatching { descriptor.close() }
+        throw e
+    }
+    val source = try {
+        AssetFileRawSource(descriptor, descriptor.createInputStream().asSource())
+    } catch (e: Throwable) {
+        runCatching { descriptor.close() }
+        throw e
+    }
     return try {
         sendFile(
             name = displayName,
@@ -46,6 +60,38 @@ public suspend fun P2pSession.sendFile(context: Context, uri: Uri): P2pFileTrans
     } catch (e: Throwable) {
         runCatching { source.close() }
         throw e
+    }
+}
+
+internal fun resolveStableSize(uri: Uri, queriedSize: Long?, descriptorSize: Long): Long {
+    require(queriedSize == null || queriedSize >= 0L) {
+        "ContentResolver returned a negative SIZE for $uri: $queriedSize"
+    }
+    val openedSize = descriptorSize.takeIf { it >= 0L }
+    if (queriedSize != null && openedSize != null && queriedSize != openedSize) {
+        throw IllegalArgumentException(
+            "Document size changed while opening $uri: metadata=$queriedSize descriptor=$openedSize"
+        )
+    }
+    return openedSize ?: queriedSize ?: throw IllegalArgumentException(
+        "Cannot determine size for $uri from either the opened descriptor or SIZE metadata. " +
+            "Save the document to a temporary File first."
+    )
+}
+
+private class AssetFileRawSource(
+    private val descriptor: AssetFileDescriptor,
+    private val delegate: RawSource
+) : RawSource {
+    override fun readAtMostTo(sink: Buffer, byteCount: Long): Long =
+        delegate.readAtMostTo(sink, byteCount)
+
+    override fun close() {
+        try {
+            delegate.close()
+        } finally {
+            descriptor.close()
+        }
     }
 }
 

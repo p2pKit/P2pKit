@@ -14,8 +14,9 @@ import java.io.File
  * Cancelled, Failed) — the caller does not need to manage it.
  *
  * The transfer's [P2pFileTransfer.name] is `file.name`, and `sizeBytes` is
- * `file.length()` measured at the time of this call. The MIME type is not
- * inferred; pass [P2pSession.sendFile] directly if you have one to set.
+ * measured from the opened file descriptor. This avoids a path-stat/open race;
+ * mutation after the descriptor is opened is outside the snapshot contract and
+ * causes the transfer to fail if the promised byte count can no longer be read.
  *
  * @throws IllegalArgumentException if [file] does not exist or is not a regular file
  */
@@ -25,9 +26,11 @@ public suspend fun P2pSession.sendFile(file: File): P2pFileTransfer {
     val stream = file.inputStream()
     val source = stream.asSource()
     return try {
+        val openedSize = stream.channel.size()
+        require(openedSize >= 0L) { "Cannot determine opened file size: ${file.absolutePath}" }
         sendFile(
             name = file.name,
-            sizeBytes = file.length(),
+            sizeBytes = openedSize,
             mimeType = null,
             source = source
         )

@@ -27,7 +27,7 @@ internal class StreamingFileReceiver(
         require(sizeBytes >= 0) { "sizeBytes must be non-negative, got $sizeBytes" }
     }
 
-    private val sink: Sink = rawSink.buffered()
+    private var sink: Sink? = rawSink.buffered()
     private var bytesWritten: Long = 0
     private var nextExpectedIndex: Int = 0
     private var expectedTotalChunks: Int? = null
@@ -70,19 +70,21 @@ internal class StreamingFileReceiver(
                     "chunkIndex=$nextExpectedIndex, got ${frame.chunkIndex}"
             )
         }
-        val newTotal = bytesWritten + frame.payload.size
-        if (newTotal > sizeBytes) {
+        val payloadSize = frame.payload.size.toLong()
+        if (payloadSize > sizeBytes - bytesWritten) {
             throw P2pError.ProtocolError(
                 "FILE_DATA for $transferId exceeds advertised size " +
-                    "$sizeBytes (would reach $newTotal)"
+                    "$sizeBytes (already received $bytesWritten, next chunk is $payloadSize)"
             )
         }
+        val newTotal = bytesWritten + payloadSize
         if (frame.isLastChunk != (newTotal == sizeBytes)) {
             throw P2pError.ProtocolError(
                 "FILE_DATA LAST_CHUNK does not match advertised size for $transferId"
             )
         }
-        sink.write(frame.payload)
+        checkNotNull(sink) { "Receiver for $transferId no longer owns a sink" }
+            .write(frame.payload)
         bytesWritten = newTotal
         nextExpectedIndex++
         return bytesWritten
@@ -100,17 +102,21 @@ internal class StreamingFileReceiver(
                     "$sizeBytes bytes; transfer is incomplete"
             )
         }
-        sink.flush()
+        val ownedSink = checkNotNull(sink) { "Receiver for $transferId no longer owns a sink" }
+        ownedSink.flush()
         closed = true
+        sink = null
     }
 
-    /** Best-effort cleanup on cancel/reject; safe to call repeatedly. */
+    /**
+     * Drop buffered partial data and release the sink reference on
+     * cancel/reject. The caller owns the RawSink and decides whether to flush,
+     * close, or delete it; abort must not run user I/O or race a writer.
+     */
     fun abort() {
         if (closed) return
         closed = true
-        // The caller (session dispatcher) owns the sink — they decide whether
-        // to close/delete it. Just flush whatever we've written.
-        runCatching { sink.flush() }
+        sink = null
     }
 
     fun isComplete(): Boolean = bytesWritten == sizeBytes

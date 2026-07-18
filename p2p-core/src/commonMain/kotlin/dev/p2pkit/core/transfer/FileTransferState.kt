@@ -13,12 +13,9 @@ import dev.p2pkit.core.P2pError
  * offer goes unanswered past `offerTimeoutMillis` (reason `"timeout"`);
  * `Cancelled` if either side aborts the transfer in flight.
  *
- * **Unanswered-offer asymmetry (decision #11a, 2026-07-04):** when an offer
- * times out unanswered, the receiver's transfer terminalizes as
- * `Rejected("timeout")` while the sender's terminalizes as `Cancelled` with
- * the offer-timeout message (`"offer not accepted within <ms>ms"`, from the
- * sender's own local timer) — the two sides of the same event reach
- * different terminal states.
+ * A conforming receiver is the unanswered-offer timeout authority: both sides
+ * reach `Rejected("timeout")`. The sender also has a later safety watchdog for
+ * an unresponsive/non-conforming peer; that local-only path is [Cancelled].
  *
  * Progress in [Sending] is `bytesTransferred / sizeBytes` clamped to `0.0..1.0`.
  */
@@ -39,18 +36,15 @@ public sealed class FileTransferState {
     /**
      * Receiver declined the offer — explicitly via [P2pFileOffer.reject], or
      * by the receive-side auto-reject when the offer goes unanswered past
-     * `offerTimeoutMillis` (reason `"timeout"`). On an unanswered offer this
-     * is the **receiver's** terminal state; the sender sees [Cancelled]
-     * (decision #11a).
+     * `offerTimeoutMillis` (reason `"timeout"`). A conforming sender observes
+     * the same rejection.
      */
     public data class Rejected(val reason: String?) : FileTransferState()
 
     /**
-     * Either side cancelled mid-transfer. Also the **sender's** terminal
-     * state for an unanswered offer: the sender's local timer fires with
-     * reason `"offer not accepted within <ms>ms"` while the receiver's side
-     * of the same event terminalizes as [Rejected] with reason `"timeout"`
-     * (decision #11a, 2026-07-04).
+     * Either side cancelled mid-transfer. A sender also reaches this state if
+     * its grace-delayed response watchdog expires because the remote peer did
+     * not provide the required accept/reject response.
      */
     public data class Cancelled(val reason: String?) : FileTransferState()
 
