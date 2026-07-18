@@ -48,7 +48,7 @@ Operating safeguards:
 | Findings total | 150 |
 | Explicit test gaps | 54 |
 
-Current finding state: 134 `Planned`, 0 `In Progress`, 2 `Implemented` (`CORE-06`, `CORE-07`), 13 `Verified` (`CORE-01`, `CORE-03`, `CORE-08`, `CORE-09`, `CORE-10`, `CORE-13`, `CORE-18`, `CORE-19`, `CORE-20`, `CORE-21`, `CORE-23`, `CORE-29`, `BUILD-01`), 1 `Blocked` (`BUILD-02`). SEC-01 was approved with storage A on 2026-07-17, implemented, committed, and pushed. Its final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
+Current finding state: 126 `Planned`, 1 `In Progress` (`PROTO-04`, transfer-transition conjunct assigned to `XFER-01`), 2 `Implemented` (`CORE-06`, `CORE-07`), 19 `Verified` (`CORE-01`, `CORE-03`, `CORE-08`, `CORE-09`, `CORE-10`, `CORE-13`, `CORE-18`, `CORE-19`, `CORE-20`, `CORE-21`, `CORE-23`, `CORE-29`, `PROTO-01`, `PROTO-02`, `PROTO-03`, `PROTO-05`, `PROTO-06`, `PROTO-07`, `BUILD-01`), 2 `Blocked` (`PROTO-08`, `BUILD-02`). SEC-01 was approved with storage A on 2026-07-17, implemented, committed, and pushed. Its final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
 
 ### Baseline gate evidence and reusable command catalog
 
@@ -139,17 +139,17 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | CORE-01 | High | Stop does not serialize terminal lifecycle with ongoing operations | LIF-GEN-01 (first LIF-SES-01 slice) | Verified | Terminal generation gate, stale-resource compensation, atomic session-registration commit | CORE-T01 | `a4e0bb0`; tracker evidence pending push | Focused committed suite + iOS Simulator + Android compilation pass; only registered FILE-04 full-JVM baseline remains |
 | CORE-02 | High | PeerRegistry is not a correct multi-transport aggregator | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T03 | — | — |
-| CORE-03 | High | Cancelled connect can poison coalescing and leak a live session | CORE-SESSION-01 | Verified | Transactional raw/session/pending ownership with forced rollback before commit | CORE-T02 | CORE-SESSION-01 implementation commit (pending hash) | Dial/HELLO/security/pre-commit cancellation and exact retry pass on JVM/iOS |
+| CORE-03 | High | Cancelled connect can poison coalescing and leak a live session | CORE-SESSION-01 | Verified | Transactional raw/session/pending ownership with forced rollback before commit | CORE-T02 | `68934be`; test follow-up `82a9b41`; pushed | Dial/HELLO/security/pre-commit cancellation and exact retry pass on JVM/iOS |
 | CORE-04 | High | Application receive backpressure blocks protocol controls | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T05 | — | — |
 | CORE-05 | High | Duplicate arbitration treats every active duplicate as simultaneous-open | PEER-CTRL-01 after LIF-SES-01 | Planned | — | CORE-T04 | — | — |
 | CORE-06 | High security limitation | Identity is unauthenticated and traffic plaintext | SEC-01 | Implemented | Authenticated v2 is the default; explicit deprecated legacy only | Noise/KAT, identity, raw-confidentiality, authorization, integration, LAN loopback | `b79c9ba`, pushed to `origin/remediation/full-register-2026-07` | Local platform/module gates pass; external certification remains |
 | CORE-07 | Medium architecture | Security extension cannot safely implement encryption | SEC-01 | Implemented | Security owns the sole raw reader before protocol construction | Single-collector, cancellation, close-once, encrypted-HELLO tests | `b79c9ba`, pushed to `origin/remediation/full-register-2026-07` | Local platform/module gates pass; external certification remains |
-| CORE-08 | Medium | SessionStore reads mutable HashMap without mutex | CORE-SESSION-01 | Verified | Immutable published registration snapshot | Concurrent read/mutation regression | CORE-SESSION-01 implementation commit (pending hash) | 2,000 mutations with four concurrent readers; repeated JVM + iOS pass |
-| CORE-09 | Medium | Remotely terminated sessions retain active child Job | CORE-SESSION-01 | Verified | Cancel session runtime after terminal resource cleanup | CORE-T07 | CORE-SESSION-01 implementation commit (pending hash) | Exact remote CLOSE and failure job-completion tests pass on JVM/iOS |
-| CORE-10 | Medium | Public sessions can retain terminal entries after stop | CORE-SESSION-01 | Verified | Atomic store shutdown drain before watcher cancellation | CORE-T08 | CORE-SESSION-01 implementation commit (pending hash) | stop returns with exact empty public sessions; JVM/iOS pass |
+| CORE-08 | Medium | SessionStore reads mutable HashMap without mutex | CORE-SESSION-01 | Verified | Immutable published registration snapshot | Concurrent read/mutation regression | `68934be`; pushed | 2,000 mutations with four concurrent readers; repeated JVM + iOS pass |
+| CORE-09 | Medium | Remotely terminated sessions retain active child Job | CORE-SESSION-01 | Verified | Cancel session runtime after terminal resource cleanup | CORE-T07 | `68934be`; pushed | Exact remote CLOSE and failure job-completion tests pass on JVM/iOS |
+| CORE-10 | Medium | Public sessions can retain terminal entries after stop | CORE-SESSION-01 | Verified | Atomic store shutdown drain before watcher cancellation | CORE-T08 | `68934be`; test follow-up `82a9b41`; pushed | stop returns with exact empty public sessions; JVM/iOS pass |
 | CORE-11 | Medium | Partial startup/advertising/discovery is not rolled back | LIF-SES-01 | Planned | — | CORE-T09 | — | — |
 | CORE-12 | Medium | Teardown can report success while resources remain open | LIF-SES-01 | Planned | — | CORE-T10 | — | — |
-| CORE-13 | Medium | Inbound setup timeout excludes operations that can hang | CORE-SESSION-01 | Verified | One outer deadline covers secure preface/security/HELLO; timeout closes raw and releases inbound admission | Full-transaction deadline tests | CORE-SESSION-01 implementation commit (pending hash) | Secure/legacy outbound and idle-inbound deadline+retry pass on JVM/iOS |
+| CORE-13 | Medium | Inbound setup timeout excludes operations that can hang | CORE-SESSION-01 | Verified | One outer deadline covers secure preface/security/HELLO; timeout closes raw and releases inbound admission | Full-transaction deadline tests | `68934be`; test follow-up `82a9b41`; pushed | Secure/legacy outbound and idle-inbound deadline+retry pass on JVM/iOS |
 | CORE-14 | Medium | Keepalive uses wall clock and misses exact deadline | PEER-CTRL-01 | Planned | — | CORE-T06 | — | — |
 | CORE-15 | Medium | Global P2pState hides independent feature failures | PEER-CTRL-01 lifecycle/state follow-up | Planned | — | Feature-state tests | — | — |
 | CORE-16 | Medium | One incoming-flow exception permanently disables a transport | LIF-SES-01 inbound recovery | Planned | — | Recollection/backoff tests | — | — |
@@ -159,7 +159,7 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 | CORE-20 | Medium | Persistence failure breaks same-instance identity stability | ID-STORE-01 | Verified | Instance memoization on every outcome | CORE-T11 | `ee69d09`, pushed | JVM/iOS failure tests pass |
 | CORE-21 | Medium | Android/JVM identity fallback can truncate durable value | ID-STORE-01 | Verified | Android AtomicFile + JVM fsync/atomic move | CORE-T11 | `ee69d09`, pushed | JVM atomic/migration suite + Android compile pass |
 | CORE-22 | Medium | Android/iOS path observers retain stale state/cleanup ownership | PATH-PERM-01 | Planned | — | CORE-T12 | — | — |
-| CORE-23 | Medium | New session can miss authoritative Unsatisfied path state | CORE-SESSION-01 | Verified | Retained versioned path authority applied after every registration | Registration after prior `Unsatisfied` without re-emission | CORE-SESSION-01 implementation commit (pending hash) | Exact Failed outcome passes on JVM/iOS |
+| CORE-23 | Medium | New session can miss authoritative Unsatisfied path state | CORE-SESSION-01 | Verified | Retained versioned path authority applied after every registration | Registration after prior `Unsatisfied` without re-emission | `68934be`; pushed | Exact Failed outcome passes on JVM/iOS |
 | CORE-24 | Medium API gap | NetworkProvisioningManager has no close contract | LIF-SES-01 before provisioning | Planned | — | Close contract/ABI tests | — | — |
 | CORE-25 | Low | Android permission diagnostics omit two declared requirements | PATH-PERM-01 | Planned | — | Permission matrix | — | — |
 | CORE-26 | Low limitation | Android defaults to no-op path observer | PATH-PERM-01 | Planned | — | Default wiring test | — | — |
@@ -172,14 +172,14 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 
 | ID | Severity | Finding | Unit/dependencies | Status | Plan/code | Tests | Commit/push | Verification |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| PROTO-01 | High availability | FrameReader performs quadratic copying | PARSE-01 | Planned | — | PT-T01/PT-T21 | — | — |
-| PROTO-02 | Medium | Frame header version is ignored | SEC-01 dependency; PARSE-01 | Planned | — | PT-T02 | — | — |
-| PROTO-03 | Medium security/availability | Packet-specific size limits are absent | PARSE-01 | Planned | — | PT-T03/PT-T05 | — | — |
-| PROTO-04 | Medium | Control/chunk structures are too permissive | PARSE-01 before XFER-01 | Planned | — | PT-T02/PT-T04/PT-T07 | — | — |
-| PROTO-05 | Medium | Diagnostics can change protocol behavior | PARSE-01 | Planned | — | Throwing trace tests | — | — |
-| PROTO-06 | Low | Remote text accepts invalid/canonicalization-hostile data | PARSE-01 | Planned | — | PT-T04/PT-T05 | — | — |
-| PROTO-07 | Low | Malformed/unknown frames can flood logs | PARSE-01 | Planned | — | PT-T03 | — | — |
-| PROTO-08 | Low API surprise | P2pMessage metadata is never transmitted | PARSE-01 after SEC-01 | Planned | — | Versioned envelope/contract tests | — | — |
+| PROTO-01 | High availability | FrameReader performs quadratic copying | PARSE-01 | Verified | Reusable one-frame buffer; header-first allocation; in-place window decode; no tail copies | PT-T01/PT-T21 parser portion | `aa3ac0c`; pushed with batch | Linear relocation/property tests pass JVM/iOS; exact committed state green |
+| PROTO-02 | Medium | Frame header version is ignored | SEC-01 dependency; PARSE-01 | Verified | Reader and direct codec reject a mismatched major from the fixed header | PT-T02 | `aa3ac0c`; pushed with batch | Secure-v2/legacy-v1 version tests pass with no fallback |
+| PROTO-03 | Medium security/availability | Packet-specific size limits are absent | PARSE-01 | Verified | Header-time per-packet caps plus outbound codec/payload validation | PT-T03/PT-T05 | `aa3ac0c`; pushed with batch | HELLO/OFFER/reason/data/empty-control/unknown cap boundaries pass JVM/iOS |
+| PROTO-04 | Medium | Control/chunk structures are too permissive | PARSE-01 before XFER-01 | In Progress | Central packet structural validator; stable DATA flags/LAST; FILE_DATA empty/total/LAST checks implemented | PT-T02/PT-T04/PT-T07 | `aa3ac0c`; parser portion committed | ACCEPT/REJECT transfer transition table remains in XFER-01; finding not closed |
+| PROTO-05 | Medium | Diagnostics can change protocol behavior | PARSE-01 | Verified | Throwing trace/logger sinks are isolated and disabled; cancellation is preserved | Throwing trace tests | `aa3ac0c`; pushed with batch | Protocol PING still delivered after throwing trace; exact committed JVM/iOS pass |
+| PROTO-06 | Low | Remote text accepts invalid/canonicalization-hostile data | PARSE-01 | Verified | Strict UTF-8/Unicode; bounded nonblank control-safe text; leaf file names; exact reason/null distinction | PT-T04/PT-T05 | `aa3ac0c`, `6171588`; pushed with batch | Inbound/outbound malformed UTF-8, controls, bidi, separators, dot segments, blank and boundaries pass |
+| PROTO-07 | Low | Malformed/unknown frames can flood logs | PARSE-01 | Verified | Four-message burst plus one suppression summary per fixed category/connection | PT-T03 | `aa3ac0c`; pushed with batch | 100 hostile frames produce exactly five warnings and delivery continues |
+| PROTO-08 | Low API surprise | P2pMessage metadata is never transmitted | PARSE-META-01 after SEC-01 | Blocked | Requires an explicit public/API and secure-v2 envelope choice; no silent removal or incompatible wire reinterpretation | Versioned envelope/contract tests | — | Owner decision package deferred until no independent work remains |
 
 ### File transfer (15)
 
@@ -332,13 +332,13 @@ Each row represents one bullet from “Missing or weak tests to add” in the so
 | Gap ID | Required coverage | Linked findings | Status | Test files/evidence | Commit/push | Verification |
 | --- | --- | --- | --- | --- | --- | --- |
 | CORE-T01 | Stop racing connect, advertising, discovery, and delayed observer start | CORE-01 | Verified | Six deterministic races in `KitLifecycleTest`; existing parked data-start test retained | `a4e0bb0`; tracker evidence pending push | Focused committed suite passes; three forced pre-commit repeats green |
-| CORE-T02 | Cancellation at every outgoing-connect suspension, then successful retry | CORE-03 | Verified | `SessionOwnershipTest`, `SessionFlowTest`, secure integration: dial, coalesced wait, HELLO/security write, pre-commit | CORE-SESSION-01 implementation commit (pending hash) | Three forced JVM repeats plus focused iOS pass |
+| CORE-T02 | Cancellation at every outgoing-connect suspension, then successful retry | CORE-03 | Verified | `SessionOwnershipTest`, `SessionFlowTest`, secure integration: dial, coalesced wait, HELLO/security write, pre-commit | `68934be`; test follow-up `82a9b41`; pushed | Three exact committed-state JVM repeats plus focused iOS and Android compile pass |
 | CORE-T03 | Two discovery transports contribute/lose same PeerId | CORE-02 | Planned | — | — | — |
 | CORE-T04 | Repeated same-direction inbound arbitration | CORE-05 | Planned | — | — | — |
 | CORE-T05 | Slow message subscriber while PONG/CLOSE arrives | CORE-04 | Planned | — | — | — |
 | CORE-T06 | Exact keepalive deadline and monotonic clock jumps | CORE-14 | Planned | — | — | — |
-| CORE-T07 | Session child Job completes after remote termination | CORE-09 | Verified | `SessionFlowTest` exact CLOSE/failure runtime joins | CORE-SESSION-01 implementation commit (pending hash) | JVM/iOS pass |
-| CORE-T08 | Public sessions empty after stop independent of watcher schedule | CORE-10 | Verified | `KitLifecycleTest.sessionCommittedBeforeStopIsIncludedInTeardown` | CORE-SESSION-01 implementation commit (pending hash) | JVM/iOS pass |
+| CORE-T07 | Session child Job completes after remote termination | CORE-09 | Verified | `SessionFlowTest` exact CLOSE/failure runtime joins | `68934be`; pushed | JVM/iOS pass |
+| CORE-T08 | Public sessions empty after stop independent of watcher schedule | CORE-10 | Verified | `KitLifecycleTest.sessionCommittedBeforeStopIsIncludedInTeardown` | `68934be`; test follow-up `82a9b41`; pushed | JVM/iOS pass |
 | CORE-T09 | Partial multi-transport startup rollback | CORE-11 | Planned | — | — | — |
 | CORE-T10 | Throwing and permanently hung close operations | CORE-12 | Planned | — | — | — |
 | CORE-T11 | Identity sanitizer collisions, concurrent first creation, persistence failure, and atomic replacement | CORE-18, CORE-19, CORE-20, CORE-21 | Verified | JVM process/thread/failure/migration tests + iOS bucket tests | `ee69d09`, pushed | Focused tests pass; committed full JVM 351/351 green |
@@ -349,13 +349,13 @@ Each row represents one bullet from “Missing or weak tests to add” in the so
 
 | Gap ID | Required coverage | Linked findings | Status | Test files/evidence | Commit/push | Verification |
 | --- | --- | --- | --- | --- | --- | --- |
-| PT-T01 | FrameReader fragmented/batched complexity and early bad-magic rejection | PROTO-01 | Planned | — | — | — |
-| PT-T02 | Header-version mismatch and every packet-type structural invariant | PROTO-02, PROTO-04 | Planned | — | — | — |
-| PT-T03 | Large HELLO/OFFER/control payload attacks and log flooding | PROTO-03, PROTO-07 | Planned | — | — | — |
-| PT-T04 | Strict malformed UTF-8 and invalid flags/LAST | PROTO-04, PROTO-06 | Planned | — | — | — |
-| PT-T05 | Outbound name/MIME/reason limits | PROTO-03, PROTO-06 | Planned | — | — | — |
+| PT-T01 | FrameReader fragmented/batched complexity and early bad-magic rejection | PROTO-01 | Verified | Linear relocation and early-header regression suite | `aa3ac0c` | Three forced JVM repeats plus exact committed JVM/iOS pass |
+| PT-T02 | Header-version mismatch and every packet-type structural invariant | PROTO-02, PROTO-04 | Verified | Table-driven known-packet invariant matrix and early version/shape rejection | `aa3ac0c` | Exact committed JVM/iOS pass |
+| PT-T03 | Large HELLO/OFFER/control payload attacks and log flooding | PROTO-03, PROTO-07 | Verified | Header-only cap attacks and bounded-log assertions | `aa3ac0c` | Exact boundaries and 100-frame flood pass |
+| PT-T04 | Strict malformed UTF-8 and invalid flags/LAST | PROTO-04, PROTO-06 | Verified | Strict text decoders plus DATA/FILE_DATA flag and LAST invariants | `aa3ac0c` | JVM/iOS pass |
+| PT-T05 | Outbound name/MIME/reason limits | PROTO-03, PROTO-06 | Verified | Encoder/send-path character and UTF-8 byte boundaries | `aa3ac0c`, `6171588` | Exact committed JVM/iOS pass |
 | PT-T06 | 2 GiB with chunk size 1 and Long overflow boundaries | FILE-10 | Planned | — | — | — |
-| PT-T07 | Empty FILE_DATA, changing totalChunks, invalid LAST, data after full size | PROTO-04, FILE-02 | Planned | — | — | — |
+| PT-T07 | Empty FILE_DATA, changing totalChunks, invalid LAST, data after full size | PROTO-04, FILE-02 | In Progress | All four parser/streaming-receiver conjuncts implemented in PARSE-01; dispatcher-level post-terminal proof remains in XFER-01 | `aa3ac0c` | Common JVM/iOS receiver tests pass; final closure stays with transfer state machine |
 | PT-T08 | Accepted-transfer idle exhaustion and all 64 admission slots exhausted | FILE-02 | Planned | — | — | — |
 | PT-T09 | Cancellation during accept mutex wait and FILE_ACCEPT write | FILE-01 | Planned | — | — | — |
 | PT-T10 | Cancel/close racing sink write/finish | FILE-03 | Planned | — | — | — |
@@ -369,7 +369,7 @@ Each row represents one bullet from “Missing or weak tests to add” in the so
 | PT-T18 | Source mutation/digest mismatch | FILE-13 | Planned | — | — | — |
 | PT-T19 | Deterministic transfer-ID collision | FILE-14 | Planned | — | — | — |
 | PT-T20 | Android hostile/null/negative provider metadata | FILE-15 | Planned | — | — | — |
-| PT-T21 | Fuzz/property tests for codec, reader, reassembler, and transfer transitions | PROTO-01, PROTO-04, FILE-01, FILE-02, FILE-03, FILE-05, FILE-07, FILE-12 | Planned | — | — | — |
+| PT-T21 | Fuzz/property tests for codec, reader, reassembler, and transfer transitions | PROTO-01, PROTO-04, FILE-01, FILE-02, FILE-03, FILE-05, FILE-07, FILE-12 | In Progress | Deterministic randomized codec/reader/reassembler portion complete; transfer transition properties stay with XFER-01 | `aa3ac0c` parser portion | Parser property suite passed three forced JVM repeats and iOS; transfer portion open |
 
 ### LAN gaps (11)
 
@@ -1046,7 +1046,38 @@ Committed/pushed evidence: `ee69d09` is on `origin/remediation/full-register-202
 
 Implementation result: connector/raw/session ownership is transactional through cancellation; pending cleanup is non-cancellable; uncommitted sessions use forced terminal rollback; diagnostics read an immutable map; terminal cleanup cancels the session runtime last; shutdown atomically drains public/store state; setup uses one outer deadline; network-path authority is retained and applied to every registration. No public API or wire format changed.
 
-Verification: focused JVM and iOS Simulator suites pass; timing-sensitive JVM tests passed three forced repeats; complete `p2p-core` suites are 359/359 JVM and 334/334 iOS Simulator; Android main and iOS tests compile. Only the pre-existing BUILD-14 opt-in warnings were emitted. Source diff review found and corrected the post-commit suspension before these final runs.
+Verification: focused JVM suites passed three times; the complete pre-final-hook JVM suite was 358/358 and the final post-dial cancellation test passed on JVM/iOS. The final forced JVM gate reproduced only the registered FILE-04 race; no CORE-SESSION-01 test failed. A later full JVM and full iOS run with the final source both passed. Exact committed-state verification at `82a9b41` found and corrected a replay-zero test-subscription race without changing timeouts; `SessionOwnershipTest` then passed three forced JVM repeats, focused iOS Simulator, and Android compilation. Only registered BUILD-14 warnings were emitted. Commits `68934be` and `82a9b41` are pushed on `remediation/full-register-2026-07`.
+
+## Completed batch: PARSE-01 — bounded protocol parser and validation
+
+Scope: `PROTO-01` through `PROTO-07` and the parser portions of `PT-T01` through `PT-T05`/`PT-T21`. `PROTO-08` is split into `PARSE-META-01` and blocked because removing public metadata or adding a versioned secure-v2 envelope is a product/API/wire decision. The transfer transition portion of `PROTO-04`/`PT-T07` remains assigned to `XFER-01`.
+
+Concise plan:
+
+- Root causes: repeated whole-buffer/tail copies; generic-only payload cap; dispersed structural checks; permissive UTF-8/text validation; trace/log callbacks on the protocol path.
+- Implementation: reusable cursor buffer with in-place decode; header-time per-packet caps; one encoder/decoder structural validator; strict bounded text codecs; stable DATA flags/LAST checks; trace isolation; rate-limited peer-controlled warnings.
+- Main files: `ProtocolConstants`, `FrameCodec`, `FrameReader`, `DefaultP2pProtocol`, `HelloPayload`, `FileOfferPayload`, `Reassembler`, `FrameTrace`, and their common tests.
+- Tests: fragmented/batched linear-work accounting, early header rejection, all packet invariant/cap boundaries, strict malformed UTF-8, outbound text boundaries, throwing trace, bounded logs, and deterministic randomized codec/reader/reassembler streams.
+- Compatibility: secure-v2 and explicit legacy-v1 framing remain version-specific with no fallback; unknown packet types remain skippable for forward compatibility. Newly rejected frames were already malformed or exceeded newly documented limits. No public API/wire field is added in this batch.
+- Acceptance: no payload-sized allocation before header validation; relocation work is linear in input; every known packet is validated before delivery; malformed text cannot be canonicalized silently; diagnostics cannot fail I/O or grow with attacker frame count; focused common JVM/iOS tests and affected target compiles pass.
+
+Implementation/review result: commits `aa3ac0c` and `6171588` implement the parser/text portion and were reviewed as a 21-file protocol-only batch plus a six-file canonical-text follow-up. The reader buffers only the fixed header before validation, reuses one frame buffer, decodes from an offset window, and never copies an accumulated tail. Packet caps/shape rules are centralized and shared by encoder, direct decoder, and streaming reader. Known text is strict UTF-8 with invalid local Unicode rejected before encoding. Trace/log failures cannot alter protocol I/O, while `CancellationException` is preserved. Equivalent protocol decode/encode sites were searched; no second parser remained unchanged. Public ABI signatures and secure-v2/explicit-legacy framing are unchanged.
+
+Tests added/strengthened: linear relocation and early header rejection, packet-family cap/shape tables, strict UTF-8/local Unicode/control/bidi/path/blank/boundary cases, stable DATA flags/LAST, FILE_DATA empty/total/LAST/post-size rules, throwing trace, bounded malformed/unknown logs, and deterministic randomized 500-frame fragmentation plus randomized reassembly.
+
+Verification:
+
+- Focused protocol JVM suite passed after the initial run exposed and corrected two assertion-message mismatches; no assertion was weakened.
+- Final complete affected-module run: JVM `389/389`, iOS Simulator `364/364`; Android main and iOS Arm64 compilation passed.
+- Parser/codec/reader/reassembler subset passed three forced JVM repeats.
+- Exact committed state at `aa3ac0c`: full JVM `389/389`, focused iOS protocol `134/134`, Android/iOS device compilation passed.
+- Exact final tip at `6171588`: full JVM plus focused iOS protocol passed; Android/iOS device compilation passed.
+- `checkKotlinAbi` completed with the repository's ABI comparison task skipped by its own configuration; manual/public-diff review found no signature change.
+- Repository-wide `./gradlew check --offline` reached and passed core, provisioning, desktop/sample, and KMP work, then failed only the registered unrelated baselines: LAN iOS `40` tests with the same two lifecycle timeouts and one intentional skip, and Android sample lint with the same `CoarseFineLocation` error plus three warnings. No PARSE-01 test failed and no new warning was introduced.
+
+Remaining: `PROTO-04` stays `In Progress` solely for the ACCEPT/REJECT dispatcher transition assigned to XFER-01. `PT-T07` and `PT-T21` stay open for their dispatcher/transfer-transition conjuncts. `PROTO-08` remains separately blocked on the metadata API/wire decision.
+
+`PROTO-08` blocker record: `P2pMessage.metadata` is public but absent from both legacy-v1 and secure-v2 message encoding. Work attempted: confirmed `Chunker` serializes only text/binary bytes and `Reassembler` constructs messages without metadata; existing tests pin the omission. Recommended option: add an authenticated versioned secure-v2 application-message envelope and keep explicit legacy migration mode metadata-free; this changes the secure-v2 message payload contract and needs owner approval. Alternatives: remove/deprecate metadata (source/API compatibility cost), or explicitly document it as local-only (preserves the surprising contract and does not resolve the finding). Required later reply: `Approve PARSE-META-01 envelope` or an explicitly chosen alternative. This decision unblocks `PROTO-08` and its envelope/compatibility tests only; it does not block XFER-01 or other local batches.
 
 ## Execution log
 
@@ -1069,4 +1100,7 @@ Verification: focused JVM and iOS Simulator suites pass; timing-sensitive JVM te
 | 2026-07-18 | ID-STORE-01 | Implemented collision-safe namespaces, transactional cross-process creation, atomic persistence, failure memoization, rollback migration, and JVM root validation | CORE-18/19/20/21/29 and CORE-T11 implemented; JVM 351/351 green; iOS focused green; Android/Apple compile green |
 | 2026-07-18 | ID-STORE-01/source control | Committed, forced affected checks from committed state, and pushed `ee69d09` | CORE-18/19/20/21/29 and CORE-T11 verified on `remediation/full-register-2026-07` |
 | 2026-07-18 | CORE-SESSION-01 | Implemented transactional connect ownership, immutable store publication, terminal runtime completion, atomic shutdown drain, full setup deadline, and retained path authority | CORE-03/08/09/10/13/23 and CORE-T02/T07/T08 verified locally |
-| 2026-07-18 | CORE-SESSION-01/verification | Ran focused JVM/iOS, three forced concurrency repeats, complete core JVM/iOS, and Android compilation; reviewed the full batch diff | 359 JVM + 334 iOS tests pass; Android compiles; no new warning/failure |
+| 2026-07-18 | CORE-SESSION-01/verification | Ran focused JVM/iOS, three concurrency repeats, complete core JVM/iOS, and cross-platform compilation; reviewed the full batch diff | Batch tests green; complete pre-final-hook JVM 358/358 and iOS 334/334; final hook test 4/4 per platform; forced JVM reproduced only FILE-04 |
+| 2026-07-18 | CORE-SESSION-01/committed state | Exact verification exposed a replay-zero test collector race; replaced eager `async` scheduling with `CoroutineStart.UNDISPATCHED` and did not alter timeouts/retries | `SessionOwnershipTest` passed three forced JVM repeats, focused iOS, and Android compile at `82a9b41`; both commits pushed |
+| 2026-07-18 | PARSE-01 | Replaced quadratic reader, centralized per-packet caps/shape, enforced strict canonical text, isolated diagnostics, and added deterministic properties | `PROTO-01/02/03/05/06/07`, `PT-T01..05` verified; parser portions of `PROTO-04`, `PT-T07`, `PT-T21` committed |
+| 2026-07-18 | PARSE-01/verification | Ran focused/full JVM and iOS, Android/iOS compiles, three forced repeats, ABI task, exact committed-state worktrees, and repository `check` | Core JVM 389/389 and iOS 364/364; repository gate failed only registered LAN iOS and Android lint baselines |
