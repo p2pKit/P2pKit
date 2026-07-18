@@ -38,6 +38,7 @@ class IosLanDiagnosticTest {
             //     ./p2p-sample-desktop ... → appId = "p2pkit-desktop-sample"
             val appIdValue = "p2pkit-desktop-sample"
             NSUserDefaults.standardUserDefaults.removeObjectForKey("dev.p2pkit.peerId.$appIdValue")
+            NSUserDefaults.standardUserDefaults.removeObjectForKey("dev.p2pkit.peerId.v2.$appIdValue")
 
             val kit = P2pKit.create {
                 appId = AppId(appIdValue)
@@ -61,6 +62,7 @@ class IosLanDiagnosticTest {
                 kit.stop()
                 println("DIAG: kit stopped")
                 NSUserDefaults.standardUserDefaults.removeObjectForKey("dev.p2pkit.peerId.$appIdValue")
+                NSUserDefaults.standardUserDefaults.removeObjectForKey("dev.p2pkit.peerId.v2.$appIdValue")
             }
         }
     }

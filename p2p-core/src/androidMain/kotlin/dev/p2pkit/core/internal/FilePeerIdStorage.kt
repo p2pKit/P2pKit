@@ -1,15 +1,19 @@
 package dev.p2pkit.core.internal
 
+import android.util.AtomicFile
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.PeerId
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.io.RandomAccessFile
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
 /**
- * Android copy of the JVM [FilePeerIdStorage]. Same `java.io.File` semantics;
- * duplicated because :p2p-core does not ship a `jvmAndroidMain` intermediate
- * source set in v0.2. If/when one is added, the two copies converge.
+ * Android counterpart of the JVM [FilePeerIdStorage]. It uses the same hashed
+ * namespace and process/file-lock transaction, with [AtomicFile] providing
+ * Android's crash-safe replacement semantics.
  */
 internal class FilePeerIdStorage(
     rootDir: File,
@@ -17,22 +21,49 @@ internal class FilePeerIdStorage(
     private val logger: P2pLogger
 ) : PeerIdStorage {
 
-    private val storageDir: File = File(File(rootDir, "p2pkit"), sanitizeAppIdForFilesystem(rawAppId))
+    private val legacySegment = sanitizeAppIdForFilesystem(rawAppId)
+    private val storageDir: File =
+        File(File(File(rootDir, "p2pkit"), "peer-id-v2"), peerIdStorageKey(rawAppId))
     private val storageFile: File = File(storageDir, "peer-id")
+    private val atomicStorage = AtomicFile(storageFile)
+    private val lockFile = File(storageDir, "peer-id.lock")
+    private val previousFile = File(File(File(rootDir, "p2pkit"), legacySegment), "peer-id")
+    private val processLock: Any = processLockFor(storageFile.absolutePath)
+
+    @Volatile
+    private var cached: PeerId? = null
 
     internal val storagePath: String get() = storageFile.absolutePath
 
     override fun loadOrGenerate(): PeerId {
-        readExistingOrNull()?.let { return it }
-        return generateAndPersist()
+        cached?.let { return it }
+        return synchronized(processLock) {
+            cached?.let { return@synchronized it }
+            val resolved = try {
+                withStorageLock {
+                    readIdFromAtomic()
+                        ?: migrateLegacyOrNull()
+                        ?: generateAndPersistLocked()
+                }
+            } catch (error: Exception) {
+                logger.warn(
+                    "Failed to lock persistent PeerId storage at ${storageFile.absolutePath}; " +
+                        "using a process-local identity for this storage instance",
+                    error
+                )
+                readIdFromAtomic() ?: readIdFrom(previousFile) ?: newPeerId()
+            }
+            cached = resolved
+            resolved
+        }
     }
 
-    private fun readExistingOrNull(): PeerId? {
-        if (!storageFile.exists()) return null
+    private fun readIdFromAtomic(): PeerId? {
+        if (!storageFile.exists() && !File(storageFile.path + ".bak").exists()) return null
         return try {
-            val content = storageFile.readText().trim()
+            val content = atomicStorage.openRead().bufferedReader().use { it.readText() }.trim()
             if (content.isBlank()) null else PeerId(content)
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             logger.warn(
                 "Failed to read persistent PeerId from ${storageFile.absolutePath}; will regenerate",
                 e
@@ -41,24 +72,97 @@ internal class FilePeerIdStorage(
         }
     }
 
+    private fun readIdFrom(file: File): PeerId? {
+        if (!file.exists()) return null
+        return try {
+            val content = file.readText().trim()
+            if (content.isBlank()) null else PeerId(content)
+        } catch (error: Exception) {
+            logger.warn("Failed to read legacy PeerId from ${file.absolutePath}", error)
+            null
+        }
+    }
+
+    private fun migrateLegacyOrNull(): PeerId? {
+        val legacy = readIdFrom(previousFile) ?: return null
+        logger.warn(
+            "Migrating persistent PeerId from legacy ${previousFile.absolutePath} " +
+                "to ${storageFile.absolutePath}"
+        )
+        persistOrLog(legacy)
+        return legacy
+    }
+
     @OptIn(ExperimentalUuidApi::class)
-    private fun generateAndPersist(): PeerId {
-        val fresh = PeerId(Uuid.random().toString())
+    private fun newPeerId(): PeerId = PeerId(Uuid.random().toString())
+
+    private fun generateAndPersistLocked(): PeerId {
+        val fresh = newPeerId()
+        persistOrLog(fresh)
+        return readIdFromAtomic() ?: fresh
+    }
+
+    private fun persistOrLog(id: PeerId) {
         try {
-            storageDir.mkdirs()
-            val tmp = File(storageDir, "peer-id.tmp")
-            tmp.writeText(fresh.value)
-            if (!tmp.renameTo(storageFile)) {
-                storageFile.writeText(fresh.value)
-                tmp.delete()
-            }
-        } catch (e: Throwable) {
+            persistAtomic(id)
+        } catch (e: Exception) {
             logger.warn(
-                "Failed to persist PeerId to ${storageFile.absolutePath}; PeerId will not survive restart",
+                "Failed to atomically persist PeerId to ${storageFile.absolutePath}; " +
+                    "the returned PeerId remains stable for this storage instance only",
                 e
             )
         }
-        return fresh
+    }
+
+    private fun persistAtomic(id: PeerId) {
+        ensureStorageDirectory()
+        var output: FileOutputStream? = null
+        try {
+            val stream = atomicStorage.startWrite()
+            output = stream
+            stream.write(id.value.encodeToByteArray())
+            atomicStorage.finishWrite(stream)
+            output = null
+        } catch (error: Exception) {
+            output?.let { stream ->
+                try {
+                    atomicStorage.failWrite(stream)
+                } catch (cleanupFailure: Exception) {
+                    error.addSuppressed(cleanupFailure)
+                }
+            }
+            throw error
+        }
+        val durable = readIdFromAtomic()
+            ?: throw IOException("Atomic PeerId replacement did not produce a readable target")
+        if (durable != id) throw IOException("Atomic PeerId replacement committed a different value")
+    }
+
+    private fun <T> withStorageLock(block: () -> T): T {
+        ensureStorageDirectory()
+        return RandomAccessFile(lockFile, "rw").use { randomAccess ->
+            randomAccess.channel.use { channel ->
+                channel.lock().use { block() }
+            }
+        }
+    }
+
+    private fun ensureStorageDirectory() {
+        if (!storageDir.isDirectory && !storageDir.mkdirs()) {
+            throw IOException("Could not create PeerId storage directory ${storageDir.absolutePath}")
+        }
+        if (!storageDir.isDirectory) {
+            throw IOException("PeerId storage path is not a directory: ${storageDir.absolutePath}")
+        }
+    }
+
+    private companion object {
+        private val processLocksGuard = Any()
+        private val processLocks = mutableMapOf<String, Any>()
+
+        fun processLockFor(path: String): Any = synchronized(processLocksGuard) {
+            processLocks.getOrPut(path) { Any() }
+        }
     }
 }
 

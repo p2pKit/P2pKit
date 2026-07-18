@@ -44,6 +44,7 @@ class IosLanLoopbackTest {
     private val unique: String =
         "p2pkit-ios-itest-${NSDate().timeIntervalSince1970.toLong()}"
     private val peerIdKey: String = "dev.p2pkit.peerId.$unique"
+    private val peerIdV2Key: String = "dev.p2pkit.peerId.v2.$unique"
 
     private val toStop: MutableList<P2pKit> = mutableListOf()
 
@@ -62,6 +63,7 @@ class IosLanLoopbackTest {
 
     private fun removeStoredPeerId() {
         NSUserDefaults.standardUserDefaults.removeObjectForKey(peerIdKey)
+        NSUserDefaults.standardUserDefaults.removeObjectForKey(peerIdV2Key)
     }
 
     private suspend fun startAndAdvertise(name: String): P2pKit {

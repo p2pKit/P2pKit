@@ -25,9 +25,10 @@ internal interface PeerIdStorage {
 /**
  * Selects the default [PeerIdStorage] for the current platform.
  *
- * - JVM: file under `~/.p2pkit/<sanitized-appId>/peer-id`.
+ * - JVM: file under `~/.p2pkit/peer-id-v2/<full-appId-hash>/peer-id`.
  * - Android (after `P2pKitAndroid.initialize(context)`): file under
- *   `<filesDir>/p2pkit/<sanitized-appId>/peer-id`.
+ *   `<filesDir>/p2pkit/peer-id-v2/<full-appId-hash>/peer-id`.
+ * - iOS: a full-AppId-hash entry in a collision-safe NSUserDefaults bucket.
  * - Android (without init): an [InMemoryPeerIdStorage] fallback plus a
  *   `logger.warn` so the behaviour is loud.
  */
