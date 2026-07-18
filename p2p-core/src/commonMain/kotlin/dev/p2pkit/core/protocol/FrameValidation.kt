@@ -94,7 +94,16 @@ internal object FrameValidation {
                 payloadLength = payloadLength
             )
 
-            PacketType.ERROR, PacketType.FILE_REJECT, PacketType.FILE_CANCEL -> singletonViolation(
+            PacketType.ERROR -> singletonViolation(
+                type = type,
+                bits = bits,
+                chunkIndex = chunkIndex,
+                totalChunks = totalChunks,
+                payloadLength = payloadLength,
+                requirePayload = true
+            )
+
+            PacketType.FILE_REJECT, PacketType.FILE_CANCEL -> singletonViolation(
                 type = type,
                 bits = bits,
                 chunkIndex = chunkIndex,

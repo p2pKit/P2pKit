@@ -57,7 +57,13 @@ internal data class HelloPayload(
         private fun validate(payload: HelloPayload) {
             validateWireText(payload.appId, "HELLO appId", MAX_FIELD_LEN, MAX_FIELD_UTF8_BYTES, true)
             validateWireText(payload.peerId, "HELLO peerId", MAX_FIELD_LEN, MAX_FIELD_UTF8_BYTES, true)
-            validateWireText(payload.deviceName, "HELLO deviceName", MAX_FIELD_LEN, MAX_FIELD_UTF8_BYTES)
+            validateWireText(
+                payload.deviceName,
+                "HELLO deviceName",
+                MAX_FIELD_LEN,
+                MAX_FIELD_UTF8_BYTES,
+                true
+            )
             validateWireText(payload.platform, "HELLO platform", MAX_FIELD_LEN, MAX_FIELD_UTF8_BYTES, true)
             require(payload.supportedTransports.size <= MAX_TRANSPORTS) {
                 "HELLO advertised too many transports: ${payload.supportedTransports.size}"

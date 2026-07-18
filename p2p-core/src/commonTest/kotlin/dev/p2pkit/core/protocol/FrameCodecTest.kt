@@ -308,6 +308,16 @@ class FrameCodecTest {
             byteArrayOf(1)
         )
         assertFailsWith<IllegalArgumentException> { FrameCodec.encode(invalidAck) }
+
+        val emptyError = Frame(
+            PacketType.ERROR,
+            FrameFlags.LAST_CHUNK.toByte(),
+            id(),
+            0,
+            1,
+            ByteArray(0)
+        )
+        assertFailsWith<IllegalArgumentException> { FrameCodec.encode(emptyError) }
     }
 
     @Test

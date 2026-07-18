@@ -337,6 +337,12 @@ class DefaultP2pProtocolTest {
                 protocol.sendError(pair.a, "$atLimit!")
             }
             assertFailsWith<IllegalArgumentException> {
+                protocol.sendError(pair.a, "")
+            }
+            assertFailsWith<IllegalArgumentException> {
+                protocol.sendFileReject(pair.a, MessageId.random(rng), "   ")
+            }
+            assertFailsWith<IllegalArgumentException> {
                 protocol.sendFileCancel(pair.a, MessageId.random(rng), "bad\nreason")
             }
         }

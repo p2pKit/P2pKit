@@ -234,7 +234,8 @@ private fun encodeReason(value: String, field: String): ByteArray {
         value = value,
         field = field,
         maxChars = ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
-        maxUtf8Bytes = ProtocolConstants.MAX_REASON_PAYLOAD_BYTES
+        maxUtf8Bytes = ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
+        requireNonBlank = true
     )
     return value.encodeToByteArray()
 }
@@ -251,7 +252,8 @@ private fun ByteArray.decodeReason(field: String): String {
                 value = it,
                 field = field,
                 maxChars = ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
-                maxUtf8Bytes = ProtocolConstants.MAX_REASON_PAYLOAD_BYTES
+                maxUtf8Bytes = ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
+                requireNonBlank = true
             )
         }
     } catch (failure: IllegalArgumentException) {

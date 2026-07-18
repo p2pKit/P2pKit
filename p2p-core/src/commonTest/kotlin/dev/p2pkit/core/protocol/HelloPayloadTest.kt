@@ -132,6 +132,14 @@ class HelloPayloadTest {
         assertTrue(err.message!!.contains("peerId"), "got: ${err.message}")
     }
 
+    @Test
+    fun blankDeviceNameIsRejected() {
+        val failure = assertFailsWith<IllegalArgumentException> {
+            HelloPayload.encode(payload(deviceName = "  "))
+        }
+        assertTrue(failure.message!!.contains("deviceName"))
+    }
+
     /** Fields at exactly MAX_FIELD_LEN (512) chars pass; the guard is a bound, not a shorter heuristic. */
     @Test
     fun fieldsAtMaxLenAreAccepted() {
