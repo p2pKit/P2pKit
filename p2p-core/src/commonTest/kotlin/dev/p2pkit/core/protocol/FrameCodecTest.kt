@@ -12,6 +12,24 @@ class FrameCodecTest {
     private val rng = Random(42)
     private fun id() = MessageId.random(rng)
 
+    private fun validFrame(type: PacketType): Frame {
+        val payload = when (type) {
+            PacketType.HELLO, PacketType.FILE_OFFER -> byteArrayOf(1)
+            PacketType.DATA, PacketType.FILE_DATA -> byteArrayOf(1, 2, 3)
+            PacketType.ERROR, PacketType.FILE_REJECT, PacketType.FILE_CANCEL -> "reason".encodeToByteArray()
+            PacketType.ACK, PacketType.PING, PacketType.PONG, PacketType.CLOSE,
+            PacketType.FILE_ACCEPT, PacketType.FILE_DONE -> ByteArray(0)
+        }
+        return Frame(
+            type = type,
+            flags = FrameFlags.LAST_CHUNK.toByte(),
+            messageId = id(),
+            chunkIndex = 0,
+            totalChunks = 1,
+            payload = payload
+        )
+    }
+
     @Test
     fun roundTripDataFrame() {
         val payload = "hello, p2pkit".encodeToByteArray()
@@ -33,14 +51,7 @@ class FrameCodecTest {
     @Test
     fun roundTripEveryPacketType() {
         for (type in PacketType.entries) {
-            val frame = Frame(
-                type = type,
-                flags = FrameFlags.LAST_CHUNK.toByte(),
-                messageId = id(),
-                chunkIndex = 0,
-                totalChunks = 1,
-                payload = byteArrayOf(1, 2, 3)
-            )
+            val frame = validFrame(type)
             val decoded = FrameCodec.decode(FrameCodec.encode(frame))
             assertEquals(type, decoded.type, "Round-trip failed for $type")
             assertEquals(frame, decoded)
@@ -51,7 +62,7 @@ class FrameCodecTest {
     fun emptyPayloadIsValid() {
         val frame = Frame(
             type = PacketType.ACK,
-            flags = 0,
+            flags = FrameFlags.LAST_CHUNK.toByte(),
             messageId = id(),
             chunkIndex = 0,
             totalChunks = 1,
@@ -65,7 +76,7 @@ class FrameCodecTest {
     @Test
     fun magicBytesAreCorrect() {
         val encoded = FrameCodec.encode(
-            Frame(PacketType.HELLO, 0, id(), 0, 1, ByteArray(0))
+            Frame(PacketType.HELLO, FrameFlags.LAST_CHUNK.toByte(), id(), 0, 1, byteArrayOf(1))
         )
         // Magic = 'P' 'P' '2' 'K'
         assertEquals(0x50.toByte(), encoded[0])
@@ -78,7 +89,7 @@ class FrameCodecTest {
 
     @Test
     fun decodeRejectsBadMagic() {
-        val good = FrameCodec.encode(Frame(PacketType.PING, 0, id(), 0, 1, ByteArray(0)))
+        val good = FrameCodec.encode(validFrame(PacketType.PING))
         good[0] = 0x00
         val err = assertFailsWith<P2pError.ProtocolError> { FrameCodec.decode(good) }
         assertTrue(err.message!!.contains("magic", ignoreCase = true))
@@ -87,7 +98,7 @@ class FrameCodecTest {
     @Test
     fun decodeRejectsUnexpectedHeaderVersion() {
         val encoded = FrameCodec.encode(
-            Frame(PacketType.PING, 0, id(), 0, 1, ByteArray(0), version = 99)
+            validFrame(PacketType.PING).withVersion(99)
         )
 
         val error = assertFailsWith<P2pError.VersionMismatch> {
@@ -102,7 +113,7 @@ class FrameCodecTest {
     fun secureVersionRoundTripsOnlyWhenExplicitlyExpected() {
         val frame = Frame(
             PacketType.PING,
-            0,
+            FrameFlags.LAST_CHUNK.toByte(),
             id(),
             0,
             1,
@@ -144,7 +155,7 @@ class FrameCodecTest {
 
     @Test
     fun decodeThrowsUnknownPacketTypeForUnrecognizedTypeCode() {
-        val encoded = FrameCodec.encode(Frame(PacketType.PING, 0, id(), 0, 1, ByteArray(0)))
+        val encoded = FrameCodec.encode(validFrame(PacketType.PING))
         encoded[5] = 0x7F // bogus type code
         val err = assertFailsWith<UnknownPacketTypeException> { FrameCodec.decode(encoded) }
         assertEquals(0x7F.toByte(), err.typeCode)
@@ -153,7 +164,7 @@ class FrameCodecTest {
     @Test
     fun decodeRejectsInvalidChunkIndex() {
         val encoded = FrameCodec.encode(
-            Frame(PacketType.DATA, FrameFlags.LAST_CHUNK.toByte(), id(), 0, 2, ByteArray(4))
+            Frame(PacketType.DATA, 0, id(), 0, 2, ByteArray(4))
         )
         // Overwrite chunk_index to be >= totalChunks.
         FrameCodec.writeIntBE(encoded, 24, 5)
@@ -213,5 +224,121 @@ class FrameCodecTest {
         assertTrue(decoded.needsAck)
         assertTrue(decoded.isLastChunk)
         assertTrue(decoded.isText)
+    }
+
+    @Test
+    fun everySingletonControlRejectsInvalidFlagsIndicesAndPayload() {
+        val singletonTypes = listOf(
+            PacketType.HELLO,
+            PacketType.PING,
+            PacketType.PONG,
+            PacketType.ERROR,
+            PacketType.CLOSE,
+            PacketType.FILE_OFFER,
+            PacketType.FILE_ACCEPT,
+            PacketType.FILE_REJECT,
+            PacketType.FILE_DONE,
+            PacketType.FILE_CANCEL
+        )
+
+        for (type in singletonTypes) {
+            val valid = FrameCodec.encode(validFrame(type))
+            val invalidFlags = valid.copyOf().also { it[6] = 0 }
+            assertFailsWith<P2pError.ProtocolError>("$type flags") {
+                FrameCodec.decode(invalidFlags)
+            }
+
+            val invalidTotal = valid.copyOf().also { FrameCodec.writeIntBE(it, 28, 2) }
+            assertFailsWith<P2pError.ProtocolError>("$type totalChunks") {
+                FrameCodec.decode(invalidTotal)
+            }
+        }
+
+        for (type in listOf(
+            PacketType.PING,
+            PacketType.PONG,
+            PacketType.CLOSE,
+            PacketType.FILE_ACCEPT,
+            PacketType.FILE_DONE
+        )) {
+            val invalidPayloadHeader = FrameCodec.encode(validFrame(type)).copyOf()
+            FrameCodec.writeIntBE(invalidPayloadHeader, 32, 1)
+            assertFailsWith<P2pError.ProtocolError>("$type payload") {
+                FrameCodec.decode(invalidPayloadHeader)
+            }
+        }
+    }
+
+    @Test
+    fun dataAndFileDataRequireExactLastPlacementAndKnownFlags() {
+        val earlyLast = Frame(
+            PacketType.DATA,
+            FrameFlags.LAST_CHUNK.toByte(),
+            id(),
+            0,
+            2,
+            byteArrayOf(1)
+        )
+        assertFailsWith<IllegalArgumentException> { FrameCodec.encode(earlyLast) }
+
+        val missingLast = Frame(PacketType.DATA, 0, id(), 0, 1, byteArrayOf(1))
+        assertFailsWith<IllegalArgumentException> { FrameCodec.encode(missingLast) }
+
+        val unknownFlag = validFrame(PacketType.DATA).let {
+            Frame(it.type, 0x40, it.messageId, it.chunkIndex, it.totalChunks, it.payload)
+        }
+        assertFailsWith<IllegalArgumentException> { FrameCodec.encode(unknownFlag) }
+
+        val emptyFileData = Frame(
+            PacketType.FILE_DATA,
+            FrameFlags.LAST_CHUNK.toByte(),
+            id(),
+            0,
+            1,
+            ByteArray(0)
+        )
+        assertFailsWith<IllegalArgumentException> { FrameCodec.encode(emptyFileData) }
+
+        val invalidAck = Frame(
+            PacketType.ACK,
+            0,
+            id(),
+            0,
+            1,
+            byteArrayOf(1)
+        )
+        assertFailsWith<IllegalArgumentException> { FrameCodec.encode(invalidAck) }
+    }
+
+    @Test
+    fun reservedByteAndTrailingBytesAreRejected() {
+        val reserved = FrameCodec.encode(validFrame(PacketType.PING)).also { it[7] = 1 }
+        assertFailsWith<P2pError.ProtocolError> { FrameCodec.decode(reserved) }
+
+        val trailing = FrameCodec.encode(validFrame(PacketType.PING)) + byteArrayOf(1)
+        assertFailsWith<P2pError.ProtocolError> { FrameCodec.decode(trailing) }
+    }
+
+    @Test
+    fun packetSpecificEncodeLimitsAreEnforced() {
+        val oversizedReason = Frame(
+            PacketType.ERROR,
+            FrameFlags.LAST_CHUNK.toByte(),
+            id(),
+            0,
+            1,
+            ByteArray(ProtocolConstants.MAX_REASON_PAYLOAD_BYTES + 1)
+        )
+        assertFailsWith<IllegalArgumentException> { FrameCodec.encode(oversizedReason) }
+
+        val oversizedData = Frame(
+            PacketType.DATA,
+            FrameFlags.LAST_CHUNK.toByte(),
+            id(),
+            0,
+            1,
+            ByteArray(ProtocolConstants.MAX_DATA_FRAME_PAYLOAD_BYTES + 1)
+        )
+        assertFailsWith<IllegalArgumentException> { FrameCodec.encode(oversizedData) }
     }
 }

@@ -118,15 +118,17 @@ class HelloPayloadTest {
 
     @Test
     fun blankAppIdIsRejected() {
-        val bytes = HelloPayload.encode(payload(appId = "   "))
-        val err = assertFailsWith<IllegalArgumentException> { HelloPayload.decode(bytes) }
+        val err = assertFailsWith<IllegalArgumentException> {
+            HelloPayload.encode(payload(appId = "   "))
+        }
         assertTrue(err.message!!.contains("appId"), "got: ${err.message}")
     }
 
     @Test
     fun blankPeerIdIsRejected() {
-        val bytes = HelloPayload.encode(payload(peerId = " "))
-        val err = assertFailsWith<IllegalArgumentException> { HelloPayload.decode(bytes) }
+        val err = assertFailsWith<IllegalArgumentException> {
+            HelloPayload.encode(payload(peerId = " "))
+        }
         assertTrue(err.message!!.contains("peerId"), "got: ${err.message}")
     }
 
@@ -154,20 +156,23 @@ class HelloPayloadTest {
 
     @Test
     fun appIdOverMaxLenIsRejected() {
-        val bytes = HelloPayload.encode(payload(appId = "a".repeat(HelloPayload.MAX_FIELD_LEN + 1)))
-        assertFailsWith<IllegalArgumentException> { HelloPayload.decode(bytes) }
+        assertFailsWith<IllegalArgumentException> {
+            HelloPayload.encode(payload(appId = "a".repeat(HelloPayload.MAX_FIELD_LEN + 1)))
+        }
     }
 
     @Test
     fun peerIdOverMaxLenIsRejected() {
-        val bytes = HelloPayload.encode(payload(peerId = "a".repeat(HelloPayload.MAX_FIELD_LEN + 1)))
-        assertFailsWith<IllegalArgumentException> { HelloPayload.decode(bytes) }
+        assertFailsWith<IllegalArgumentException> {
+            HelloPayload.encode(payload(peerId = "a".repeat(HelloPayload.MAX_FIELD_LEN + 1)))
+        }
     }
 
     @Test
     fun deviceNameOverMaxLenIsRejected() {
-        val bytes = HelloPayload.encode(payload(deviceName = "a".repeat(HelloPayload.MAX_FIELD_LEN + 1)))
-        val err = assertFailsWith<IllegalArgumentException> { HelloPayload.decode(bytes) }
+        val err = assertFailsWith<IllegalArgumentException> {
+            HelloPayload.encode(payload(deviceName = "a".repeat(HelloPayload.MAX_FIELD_LEN + 1)))
+        }
         assertTrue(err.message!!.contains("deviceName"), "got: ${err.message}")
     }
 
@@ -221,12 +226,45 @@ class HelloPayloadTest {
                 HelloPayload.encode(payload(supportedTransports = listOf("LAN", oneOver)))
             )
         }
-        assertTrue(err.message!!.contains("transport"), "got: ${err.message}")
+        assertTrue(err.message!!.contains("transport", ignoreCase = true), "got: ${err.message}")
 
         assertFailsWith<IllegalArgumentException> {
             HelloPayload.decode(
                 HelloPayload.encode(payload(supportedTransports = listOf("t".repeat(100_000))))
             )
+        }
+    }
+
+    @Test
+    fun malformedUtf8IsRejectedWithoutReplacement() {
+        val invalid = byteArrayOf(0x7B, 0x22, 0xC3.toByte(), 0x28, 0x22, 0x7D)
+
+        val failure = assertFailsWith<IllegalArgumentException> { HelloPayload.decode(invalid) }
+
+        assertTrue(failure.message!!.contains("UTF-8"))
+    }
+
+    @Test
+    fun controlCharactersAreRejectedOnEncodeAndDecode() {
+        assertFailsWith<IllegalArgumentException> {
+            HelloPayload.encode(payload(deviceName = "safe\u202Etxt"))
+        }
+        val inbound = """{
+            "appId":"com.example",
+            "peerId":"p1",
+            "deviceName":"bad\u0000name",
+            "platform":"JVM_DESKTOP",
+            "supportedTransports":["LAN"],
+            "protocolVersion":1
+        }""".trimIndent().encodeToByteArray()
+
+        assertFailsWith<IllegalArgumentException> { HelloPayload.decode(inbound) }
+    }
+
+    @Test
+    fun invalidLocalUnicodeIsRejectedBeforeJsonEncoding() {
+        assertFailsWith<IllegalArgumentException> {
+            HelloPayload.encode(payload(deviceName = "bad\uD800value"))
         }
     }
 }

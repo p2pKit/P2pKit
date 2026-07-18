@@ -30,6 +30,19 @@ internal object FrameCodec {
      */
     fun encode(frame: Frame): ByteArray {
         val payloadLen = frame.payload.size
+        require(payloadLen <= ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES) {
+            "${frame.type} payload length $payloadLen exceeds universal maximum " +
+                "${ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES}"
+        }
+        val violation = FrameValidation.violation(
+            type = frame.type,
+            flags = frame.flags,
+            reserved = 0,
+            chunkIndex = frame.chunkIndex,
+            totalChunks = frame.totalChunks,
+            payloadLength = payloadLen
+        )
+        require(violation == null) { violation ?: "invalid frame" }
         val out = ByteArray(ProtocolConstants.HEADER_SIZE + payloadLen)
         out[0] = ProtocolConstants.MAGIC_0
         out[1] = ProtocolConstants.MAGIC_1
@@ -51,45 +64,60 @@ internal object FrameCodec {
      * Decode a single complete frame from [bytes]. The input must hold the
      * full header *and* the full payload — see [FrameReader] for streaming.
      *
-     * Throws [P2pError.ProtocolError] for any structural problem (bad magic,
-     * truncated frame, unknown packet type, invalid chunk indices, negative
-     * payload length).
+     * Throws [P2pError.ProtocolError] for structural problems (bad magic,
+     * truncation, invalid flags/indices, or invalid declared size) and
+     * [UnknownPacketTypeException] for an otherwise complete bounded frame
+     * whose type is not defined by this protocol major.
      */
     fun decode(
         bytes: ByteArray,
         expectedVersion: Byte = ProtocolConstants.LEGACY_VERSION
+    ): Frame = decode(
+        bytes = bytes,
+        offset = 0,
+        length = bytes.size,
+        expectedVersion = expectedVersion
+    )
+
+    /** Decode one exact frame from a window without copying the enclosing stream buffer. */
+    internal fun decode(
+        bytes: ByteArray,
+        offset: Int,
+        length: Int,
+        expectedVersion: Byte
     ): Frame {
-        if (bytes.size < ProtocolConstants.HEADER_SIZE) {
+        if (offset < 0 || length < 0 || offset > bytes.size - length) {
             throw P2pError.ProtocolError(
-                "Frame too short: ${bytes.size} bytes (need at least ${ProtocolConstants.HEADER_SIZE})"
+                "Invalid frame window: offset=$offset length=$length bytes=${bytes.size}"
             )
         }
-        if (bytes[0] != ProtocolConstants.MAGIC_0 ||
-            bytes[1] != ProtocolConstants.MAGIC_1 ||
-            bytes[2] != ProtocolConstants.MAGIC_2 ||
-            bytes[3] != ProtocolConstants.MAGIC_3
+        if (length < ProtocolConstants.HEADER_SIZE) {
+            throw P2pError.ProtocolError(
+                "Frame too short: $length bytes (need at least ${ProtocolConstants.HEADER_SIZE})"
+            )
+        }
+        if (bytes[offset] != ProtocolConstants.MAGIC_0 ||
+            bytes[offset + 1] != ProtocolConstants.MAGIC_1 ||
+            bytes[offset + 2] != ProtocolConstants.MAGIC_2 ||
+            bytes[offset + 3] != ProtocolConstants.MAGIC_3
         ) {
             throw P2pError.ProtocolError("Bad magic bytes")
         }
 
-        val version = bytes[4]
+        val version = bytes[offset + 4]
         if (version != expectedVersion) {
             throw P2pError.VersionMismatch(
                 localVersion = expectedVersion.toUByte().toInt(),
                 remoteVersion = version.toUByte().toInt()
             )
         }
-        val typeCode = bytes[5]
-        val flags = bytes[6]
-        // bytes[7] reserved — deliberately NOT validated on decode (encode
-        // always writes 0). Same forward-compat stance as the unused upper
-        // bits of the flags byte: a future protocol revision may assign
-        // meaning to them, and old decoders must not reject such frames.
-
-        val messageId = MessageId(bytes.copyOfRange(8, 8 + MessageId.SIZE))
-        val chunkIndex = readIntBE(bytes, 24)
-        val totalChunks = readIntBE(bytes, 28)
-        val payloadLen = readIntBE(bytes, 32)
+        val typeCode = bytes[offset + 5]
+        val type = PacketType.fromCode(typeCode)
+        val flags = bytes[offset + 6]
+        val reserved = bytes[offset + 7]
+        val chunkIndex = readIntBE(bytes, offset + 24)
+        val totalChunks = readIntBE(bytes, offset + 28)
+        val payloadLen = readIntBE(bytes, offset + 32)
 
         if (payloadLen < 0) {
             throw P2pError.ProtocolError("Negative payload length: $payloadLen")
@@ -99,23 +127,42 @@ internal object FrameCodec {
                 "Payload length $payloadLen exceeds maximum ${ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES}"
             )
         }
-        if (totalChunks <= 0) {
-            throw P2pError.ProtocolError("Invalid totalChunks: $totalChunks")
-        }
-        if (chunkIndex < 0 || chunkIndex >= totalChunks) {
-            throw P2pError.ProtocolError("chunkIndex out of range: $chunkIndex (totalChunks=$totalChunks)")
-        }
-        val frameEnd = ProtocolConstants.HEADER_SIZE + payloadLen
-        if (bytes.size < frameEnd) {
+        val typeMaximum = FrameValidation.maxPayloadBytes(type)
+        if (payloadLen > typeMaximum) {
+            val packet = type?.name ?: "unknown packet 0x${typeCode.toUByte().toString(16)}"
             throw P2pError.ProtocolError(
-                "Truncated frame: header says payload=$payloadLen but only " +
-                    "${bytes.size - ProtocolConstants.HEADER_SIZE} bytes follow"
+                "$packet payload length $payloadLen exceeds maximum $typeMaximum"
             )
         }
-        val type = PacketType.fromCode(typeCode)
-            ?: throw UnknownPacketTypeException(typeCode)
+        if (type != null) {
+            val violation = FrameValidation.violation(
+                type = type,
+                flags = flags,
+                reserved = reserved,
+                chunkIndex = chunkIndex,
+                totalChunks = totalChunks,
+                payloadLength = payloadLen
+            )
+            if (violation != null) throw P2pError.ProtocolError(violation)
+        }
 
-        val payload = bytes.copyOfRange(ProtocolConstants.HEADER_SIZE, frameEnd)
+        val frameLength = ProtocolConstants.HEADER_SIZE + payloadLen
+        if (length < frameLength) {
+            throw P2pError.ProtocolError(
+                "Truncated frame: header says payload=$payloadLen but only " +
+                    "${length - ProtocolConstants.HEADER_SIZE} bytes follow"
+            )
+        }
+        if (length != frameLength) {
+            throw P2pError.ProtocolError(
+                "Frame window has ${length - frameLength} trailing bytes"
+            )
+        }
+        if (type == null) throw UnknownPacketTypeException(typeCode)
+
+        val messageId = MessageId(bytes.copyOfRange(offset + 8, offset + 8 + MessageId.SIZE))
+        val payloadStart = offset + ProtocolConstants.HEADER_SIZE
+        val payload = bytes.copyOfRange(payloadStart, payloadStart + payloadLen)
         return Frame(type, flags, messageId, chunkIndex, totalChunks, payload, version)
     }
 

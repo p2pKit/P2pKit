@@ -15,6 +15,21 @@ class ReassemblerTest {
 
     private val chunker = Chunker(chunkSize = 8, random = Random(123))
 
+    private fun dataFrame(
+        id: MessageId,
+        index: Int,
+        total: Int,
+        payload: ByteArray,
+        isText: Boolean = false,
+        needsAck: Boolean = false
+    ): Frame {
+        var flags = 0
+        if (index == total - 1) flags = flags or FrameFlags.LAST_CHUNK
+        if (isText) flags = flags or FrameFlags.IS_TEXT
+        if (needsAck) flags = flags or FrameFlags.NEEDS_ACK
+        return Frame(PacketType.DATA, flags.toByte(), id, index, total, payload)
+    }
+
     @Test
     fun singleFrameYieldsMessageImmediately() {
         val reassembler = Reassembler(clock = { 0L })
@@ -71,6 +86,54 @@ class ReassemblerTest {
         }
         assertIs<P2pMessage.Text>(result)
         assertEquals(text, result.value)
+    }
+
+    @Test
+    fun semanticFlagsMustRemainStableAcrossChunks() {
+        val reassembler = Reassembler(clock = { 0L })
+        val id = MessageId.random(Random(321))
+        assertNull(reassembler.accept(dataFrame(id, 0, 2, byteArrayOf(1), isText = true)))
+
+        assertFailsWith<P2pError.ProtocolError> {
+            reassembler.accept(dataFrame(id, 1, 2, byteArrayOf(2), isText = false))
+        }
+
+        assertEquals(0, reassembler.pendingCount())
+    }
+
+    @Test
+    fun lastFlagMustMatchFinalChunk() {
+        val reassembler = Reassembler(clock = { 0L })
+        val id = MessageId.random(Random(322))
+        val invalid = Frame(
+            PacketType.DATA,
+            FrameFlags.LAST_CHUNK.toByte(),
+            id,
+            0,
+            2,
+            byteArrayOf(1)
+        )
+
+        assertFailsWith<P2pError.ProtocolError> { reassembler.accept(invalid) }
+        assertEquals(0, reassembler.pendingCount())
+    }
+
+    @Test
+    fun malformedUtf8TextIsRejectedWithoutReplacement() {
+        val reassembler = Reassembler(clock = { 0L })
+        val invalidUtf8 = byteArrayOf(0xC3.toByte(), 0x28)
+
+        assertFailsWith<P2pError.ProtocolError> {
+            reassembler.accept(
+                dataFrame(
+                    id = MessageId.random(Random(323)),
+                    index = 0,
+                    total = 1,
+                    payload = invalidUtf8,
+                    isText = true
+                )
+            )
+        }
     }
 
     @Test
@@ -134,8 +197,8 @@ class ReassemblerTest {
     fun mismatchedTotalChunksThrowsProtocolError() {
         val reassembler = Reassembler(clock = { 0L })
         val id = MessageId.random(Random(99))
-        val a = Frame(PacketType.DATA, 0, id, 0, totalChunks = 3, payload = byteArrayOf(1))
-        val b = Frame(PacketType.DATA, 0, id, 1, totalChunks = 5, payload = byteArrayOf(2))
+        val a = dataFrame(id, 0, 3, byteArrayOf(1))
+        val b = dataFrame(id, 1, 5, byteArrayOf(2))
 
         assertNull(reassembler.accept(a))
         assertFailsWith<P2pError.ProtocolError> { reassembler.accept(b) }
@@ -152,7 +215,7 @@ class ReassemblerTest {
 
         assertNull(
             reassembler.accept(
-                Frame(PacketType.DATA, 0, id, 0, totalChunks = 2, payload = ByteArray(threeMiB))
+                dataFrame(id, 0, 2, ByteArray(threeMiB))
             )
         )
 
@@ -160,7 +223,7 @@ class ReassemblerTest {
         // the stored bytes without being counted against MAX_PAYLOAD_BYTES.
         assertFailsWith<P2pError.ProtocolError> {
             reassembler.accept(
-                Frame(PacketType.DATA, 0, id, 0, totalChunks = 2, payload = ByteArray(4 * 1024 * 1024))
+                dataFrame(id, 0, 2, ByteArray(4 * 1024 * 1024))
             )
         }
 
@@ -169,7 +232,7 @@ class ReassemblerTest {
         // MAX_PAYLOAD_BYTES (a counted or stored duplicate would either throw
         // here or change the delivered size).
         val message = reassembler.accept(
-            Frame(PacketType.DATA, 0, id, 1, totalChunks = 2, payload = ByteArray(oneMiB))
+            dataFrame(id, 1, 2, ByteArray(oneMiB))
         )
         assertIs<P2pMessage.Binary>(message)
         assertEquals(threeMiB + oneMiB, message.bytes.size)
@@ -181,7 +244,7 @@ class ReassemblerTest {
         val reassembler = Reassembler(clock = { 0L })
         val id = MessageId.random(Random(11))
         assertNull(
-            reassembler.accept(Frame(PacketType.DATA, 0, id, 0, totalChunks = 3, payload = byteArrayOf(1)))
+            reassembler.accept(dataFrame(id, 0, 3, byteArrayOf(1)))
         )
 
         assertFailsWith<P2pError.ProtocolError> {
@@ -199,7 +262,7 @@ class ReassemblerTest {
 
         // Exactly at the cap: delivered.
         val atCap = reassembler.accept(
-            Frame(PacketType.DATA, 0, MessageId.random(Random(1)), 0, totalChunks = 1, payload = ByteArray(cap))
+            dataFrame(MessageId.random(Random(1)), 0, 1, ByteArray(cap))
         )
         assertIs<P2pMessage.Binary>(atCap)
         assertEquals(cap, atCap.bytes.size)
@@ -208,7 +271,7 @@ class ReassemblerTest {
         // message cap (the codec accepts frames up to MAX_FRAME_PAYLOAD_BYTES).
         assertFailsWith<P2pError.ProtocolError> {
             reassembler.accept(
-                Frame(PacketType.DATA, 0, MessageId.random(Random(2)), 0, totalChunks = 1, payload = ByteArray(cap + 1))
+                dataFrame(MessageId.random(Random(2)), 0, 1, ByteArray(cap + 1))
             )
         }
         assertEquals(0, reassembler.pendingCount())
@@ -225,7 +288,7 @@ class ReassemblerTest {
         val ids = List(4) { MessageId.random(rng) }
         for (id in ids) {
             assertNull(
-                reassembler.accept(Frame(PacketType.DATA, 0, id, 0, totalChunks = 2, payload = chunk0))
+                reassembler.accept(dataFrame(id, 0, 2, chunk0))
             )
         }
         assertEquals(4, reassembler.pendingCount())
@@ -233,7 +296,7 @@ class ReassemblerTest {
         // A fifth partial's 65-byte chunk pushes the aggregate one byte over the cap.
         assertFailsWith<P2pError.ProtocolError> {
             reassembler.accept(
-                Frame(PacketType.DATA, 0, MessageId.random(rng), 0, totalChunks = 2, payload = ByteArray(65))
+                dataFrame(MessageId.random(rng), 0, 2, ByteArray(65))
             )
         }
         // The offending message was discarded; the earlier partials are untouched.
@@ -242,7 +305,7 @@ class ReassemblerTest {
         // Completing a partial releases its budget: chunk 1 finishes ids[0] at
         // exactly MAX_PAYLOAD_BYTES...
         val done = reassembler.accept(
-            Frame(PacketType.DATA, 0, ids[0], 1, totalChunks = 2, payload = ByteArray(16))
+            dataFrame(ids[0], 1, 2, ByteArray(16))
         )
         assertIs<P2pMessage.Binary>(done)
         assertEquals(perMessageCap, done.bytes.size)
@@ -251,7 +314,7 @@ class ReassemblerTest {
         // ...so an equally large new partial fits under the aggregate cap again.
         assertNull(
             reassembler.accept(
-                Frame(PacketType.DATA, 0, MessageId.random(rng), 0, totalChunks = 2, payload = chunk0)
+                dataFrame(MessageId.random(rng), 0, 2, chunk0)
             )
         )
         assertEquals(4, reassembler.pendingCount())

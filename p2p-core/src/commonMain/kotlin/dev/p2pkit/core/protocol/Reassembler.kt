@@ -29,6 +29,7 @@ internal class Reassembler(
     private data class Pending(
         val totalChunks: Int,
         val isText: Boolean,
+        val needsAck: Boolean,
         val chunks: MutableMap<Int, ByteArray>,
         val firstSeenMillis: Long,
         var lastSeenMillis: Long,
@@ -51,6 +52,14 @@ internal class Reassembler(
      */
     fun accept(frame: Frame): P2pMessage? {
         if (frame.type != PacketType.DATA) return null
+        FrameValidation.violation(
+            type = frame.type,
+            flags = frame.flags,
+            reserved = 0,
+            chunkIndex = frame.chunkIndex,
+            totalChunks = frame.totalChunks,
+            payloadLength = frame.payload.size
+        )?.let { throw P2pError.ProtocolError(it) }
 
         // Single-frame fast path — no state to keep, but the message-size cap
         // still applies; without this check a single frame between
@@ -89,6 +98,7 @@ internal class Reassembler(
             Pending(
                 totalChunks = frame.totalChunks,
                 isText = frame.isText,
+                needsAck = frame.needsAck,
                 chunks = mutableMapOf(),
                 firstSeenMillis = now,
                 lastSeenMillis = now
@@ -99,6 +109,13 @@ internal class Reassembler(
             throw P2pError.ProtocolError(
                 "Mismatched totalChunks for messageId=${frame.messageId}: " +
                     "first saw ${state.totalChunks}, now ${frame.totalChunks}"
+            )
+        }
+        if (state.isText != frame.isText || state.needsAck != frame.needsAck) {
+            removePending(frame.messageId)
+            throw P2pError.ProtocolError(
+                "Mismatched DATA flags for messageId=${frame.messageId}: " +
+                    "IS_TEXT and NEEDS_ACK must remain stable"
             )
         }
         // A well-behaved sender never repeats or invents chunk indices, so a
@@ -179,7 +196,12 @@ internal class Reassembler(
         pending.remove(id)?.let { totalPendingBytes -= it.bufferedBytes }
     }
 
-    private fun decodePayload(bytes: ByteArray, isText: Boolean): P2pMessage =
-        if (isText) P2pMessage.Text(bytes.decodeToString())
-        else P2pMessage.Binary(bytes)
+    private fun decodePayload(bytes: ByteArray, isText: Boolean): P2pMessage {
+        if (!isText) return P2pMessage.Binary(bytes)
+        return try {
+            P2pMessage.Text(bytes.decodeStrictUtf8("DATA text payload"))
+        } catch (failure: IllegalArgumentException) {
+            throw P2pError.ProtocolError(failure.message ?: "DATA text payload is invalid")
+        }
+    }
 }

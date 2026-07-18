@@ -41,6 +41,21 @@ internal object ProtocolConstants {
      */
     const val MAX_FRAME_PAYLOAD_BYTES: Int = 8 * 1024 * 1024
 
+    /** Maximum payload for a forward-compatible packet type unknown to this major implementation. */
+    const val MAX_UNKNOWN_PACKET_PAYLOAD_BYTES: Int = 64 * 1024
+
+    /** HELLO is bounded before JSON parsing; this includes all identity and transport fields. */
+    const val MAX_HELLO_PAYLOAD_BYTES: Int = 96 * 1024
+
+    /** FILE_OFFER is bounded before JSON parsing. */
+    const val MAX_FILE_OFFER_PAYLOAD_BYTES: Int = 32 * 1024
+
+    /** ERROR / FILE_REJECT / FILE_CANCEL reason payload bound. */
+    const val MAX_REASON_PAYLOAD_BYTES: Int = 1024
+
+    /** Maximum DATA or FILE_DATA chunk carried by one frame. */
+    const val MAX_DATA_FRAME_PAYLOAD_BYTES: Int = 4 * 1024 * 1024
+
     /**
      * Largest [Frame.totalChunks] a peer may advertise for a multi-chunk DATA
      * message. Well-behaved senders chunk at [DEFAULT_CHUNK_SIZE] (64 KiB), so a

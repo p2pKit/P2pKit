@@ -30,6 +30,7 @@ internal class StreamingFileReceiver(
     private val sink: Sink = rawSink.buffered()
     private var bytesWritten: Long = 0
     private var nextExpectedIndex: Int = 0
+    private var expectedTotalChunks: Int? = null
     private var closed: Boolean = false
 
     val bytesReceived: Long get() = bytesWritten
@@ -46,6 +47,23 @@ internal class StreamingFileReceiver(
         require(frame.messageId == transferId) {
             "Frame messageId ${frame.messageId} != transfer $transferId"
         }
+        FrameValidation.violation(
+            type = frame.type,
+            flags = frame.flags,
+            reserved = 0,
+            chunkIndex = frame.chunkIndex,
+            totalChunks = frame.totalChunks,
+            payloadLength = frame.payload.size
+        )?.let { throw P2pError.ProtocolError(it) }
+        val establishedTotal = expectedTotalChunks
+        if (establishedTotal == null) {
+            expectedTotalChunks = frame.totalChunks
+        } else if (establishedTotal != frame.totalChunks) {
+            throw P2pError.ProtocolError(
+                "FILE_DATA totalChunks changed for $transferId: " +
+                    "$establishedTotal to ${frame.totalChunks}"
+            )
+        }
         if (frame.chunkIndex != nextExpectedIndex) {
             throw P2pError.ProtocolError(
                 "Out-of-order FILE_DATA for $transferId: expected " +
@@ -57,6 +75,11 @@ internal class StreamingFileReceiver(
             throw P2pError.ProtocolError(
                 "FILE_DATA for $transferId exceeds advertised size " +
                     "$sizeBytes (would reach $newTotal)"
+            )
+        }
+        if (frame.isLastChunk != (newTotal == sizeBytes)) {
+            throw P2pError.ProtocolError(
+                "FILE_DATA LAST_CHUNK does not match advertised size for $transferId"
             )
         }
         sink.write(frame.payload)

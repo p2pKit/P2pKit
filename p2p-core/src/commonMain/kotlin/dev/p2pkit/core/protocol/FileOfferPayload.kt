@@ -28,27 +28,58 @@ internal data class FileOfferPayload(
         /** Max accepted length (chars) for the peer-supplied file name. */
         const val MAX_NAME_LEN: Int = 4096
 
+        /** Maximum UTF-8 bytes for the peer-supplied file name. */
+        const val MAX_NAME_UTF8_BYTES: Int = MAX_NAME_LEN * 4
+
         /** Max accepted length (chars) for the peer-supplied MIME type. */
         const val MAX_MIME_LEN: Int = 255
 
-        fun encode(payload: FileOfferPayload): ByteArray =
-            json.encodeToString(serializer(), payload).encodeToByteArray()
+        fun encode(payload: FileOfferPayload): ByteArray {
+            validate(payload)
+            val encoded = json.encodeToString(serializer(), payload).encodeToByteArray()
+            require(encoded.size <= ProtocolConstants.MAX_FILE_OFFER_PAYLOAD_BYTES) {
+                "FILE_OFFER payload ${encoded.size} exceeds " +
+                    "${ProtocolConstants.MAX_FILE_OFFER_PAYLOAD_BYTES} bytes"
+            }
+            return encoded
+        }
 
         fun decode(bytes: ByteArray): FileOfferPayload {
-            val payload = json.decodeFromString(serializer(), bytes.decodeToString())
-            // Validate untrusted peer-supplied fields. The caller
-            // (DefaultP2pProtocol.decodeEvent) treats a thrown error as a
-            // malformed frame and skips it.
+            require(bytes.size <= ProtocolConstants.MAX_FILE_OFFER_PAYLOAD_BYTES) {
+                "FILE_OFFER payload ${bytes.size} exceeds " +
+                    "${ProtocolConstants.MAX_FILE_OFFER_PAYLOAD_BYTES} bytes"
+            }
+            val payload = json.decodeFromString(serializer(), bytes.decodeStrictUtf8("FILE_OFFER payload"))
+            validate(payload)
+            return payload
+        }
+
+        private fun validate(payload: FileOfferPayload) {
             require(payload.sizeBytes >= 0) {
                 "FILE_OFFER sizeBytes must be non-negative, got ${payload.sizeBytes}"
             }
-            require(payload.name.length <= MAX_NAME_LEN) {
-                "FILE_OFFER name too long: ${payload.name.length} > $MAX_NAME_LEN"
+            validateWireText(
+                payload.name,
+                "FILE_OFFER name",
+                MAX_NAME_LEN,
+                MAX_NAME_UTF8_BYTES,
+                requireNonBlank = true
+            )
+            require(payload.name != "." && payload.name != "..") {
+                "FILE_OFFER name must not be a dot segment"
             }
-            require((payload.mimeType?.length ?: 0) <= MAX_MIME_LEN) {
-                "FILE_OFFER mimeType too long: ${payload.mimeType?.length} > $MAX_MIME_LEN"
+            require('/' !in payload.name && '\\' !in payload.name) {
+                "FILE_OFFER name must be a single path component"
             }
-            return payload
+            payload.mimeType?.let {
+                validateWireText(
+                    it,
+                    "FILE_OFFER mimeType",
+                    MAX_MIME_LEN,
+                    MAX_MIME_LEN,
+                    requireNonBlank = true
+                )
+            }
         }
     }
 }

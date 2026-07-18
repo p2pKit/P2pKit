@@ -1,8 +1,10 @@
 package dev.p2pkit.core.protocol
 
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.transport.RawConnection
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlin.random.Random
@@ -44,7 +46,7 @@ internal class DefaultP2pProtocol(
     }
 
     override suspend fun sendError(connection: RawConnection, reason: String) {
-        writeFrame(connection, controlFrame(PacketType.ERROR, reason.encodeToByteArray()))
+        writeFrame(connection, controlFrame(PacketType.ERROR, encodeReason(reason, "ERROR reason")))
     }
 
     override suspend fun sendFileOffer(
@@ -71,7 +73,7 @@ internal class DefaultP2pProtocol(
         transferId: MessageId,
         reason: String?
     ) {
-        val payload = reason?.encodeToByteArray() ?: EMPTY
+        val payload = reason?.let { encodeReason(it, "FILE_REJECT reason") } ?: EMPTY
         writeFrame(connection, controlFrame(PacketType.FILE_REJECT, messageId = transferId, payload = payload))
     }
 
@@ -91,7 +93,7 @@ internal class DefaultP2pProtocol(
         transferId: MessageId,
         reason: String?
     ) {
-        val payload = reason?.encodeToByteArray() ?: EMPTY
+        val payload = reason?.let { encodeReason(it, "FILE_CANCEL reason") } ?: EMPTY
         writeFrame(connection, controlFrame(PacketType.FILE_CANCEL, messageId = transferId, payload = payload))
     }
 
@@ -123,6 +125,7 @@ internal class DefaultP2pProtocol(
     override fun events(connection: RawConnection): Flow<ProtocolEvent> = flow {
         val reader = FrameReader(logger, expectedVersion = version)
         val reassembler = Reassembler(clock = clock)
+        val warnings = PeerWarningLimiter(logger)
         connection.read().collect { bytes ->
             // Reclaim partial multi-chunk messages that went idle: eviction is
             // by inactivity (no new chunk within the reassembly timeout), not
@@ -135,13 +138,17 @@ internal class DefaultP2pProtocol(
             val frames = reader.feed(bytes)
             for (frame in frames) {
                 FrameTrace.emit { "RX ${frameDesc(frame)}" }
-                val event = decodeEvent(frame, reassembler)
+                val event = decodeEvent(frame, reassembler, warnings)
                 if (event != null) emit(event)
             }
         }
     }
 
-    private fun decodeEvent(frame: Frame, reassembler: Reassembler): ProtocolEvent? {
+    private fun decodeEvent(
+        frame: Frame,
+        reassembler: Reassembler,
+        warnings: PeerWarningLimiter
+    ): ProtocolEvent? {
         return when (frame.type) {
             PacketType.DATA -> {
                 val message = reassembler.accept(frame) ?: return null
@@ -153,8 +160,14 @@ internal class DefaultP2pProtocol(
                 // an unhandled error). Skip + warn, mirroring the unknown-packet
                 // policy; during the handshake a missing HELLO simply times out
                 // and surfaces as a clean HandshakeRejected.
-                val payload = runCatching { HelloPayload.decode(frame.payload) }.getOrElse { e ->
-                    logger.warn("Skipping malformed HELLO frame: ${e.message ?: e::class.simpleName}")
+                val payload = try {
+                    HelloPayload.decode(frame.payload)
+                } catch (failure: Exception) {
+                    if (failure is CancellationException) throw failure
+                    warnings.warn(
+                        key = "HELLO",
+                        message = "Skipping malformed HELLO frame: ${failure.safeDiagnosticDetail()}"
+                    )
                     return null
                 }
                 ProtocolEvent.Hello(payload)
@@ -163,7 +176,7 @@ internal class DefaultP2pProtocol(
             PacketType.PONG -> ProtocolEvent.Pong
             PacketType.CLOSE -> ProtocolEvent.Close
             PacketType.ERROR -> {
-                val reason = frame.payload.decodeReasonCapped()
+                val reason = frame.payload.decodeReason("ERROR reason")
                 ProtocolEvent.PeerError(reason)
             }
             PacketType.ACK -> ProtocolEvent.Ack(frame.messageId, frame.chunkIndex)
@@ -172,21 +185,27 @@ internal class DefaultP2pProtocol(
                 // SerializationException escape into routeEvents. A hostile peer
                 // could otherwise resend a bad FILE_OFFER after every reconnect
                 // to drive a reconnect loop.
-                val payload = runCatching { FileOfferPayload.decode(frame.payload) }.getOrElse { e ->
-                    logger.warn("Skipping malformed FILE_OFFER frame: ${e.message ?: e::class.simpleName}")
+                val payload = try {
+                    FileOfferPayload.decode(frame.payload)
+                } catch (failure: Exception) {
+                    if (failure is CancellationException) throw failure
+                    warnings.warn(
+                        key = "FILE_OFFER",
+                        message = "Skipping malformed FILE_OFFER frame: ${failure.safeDiagnosticDetail()}"
+                    )
                     return null
                 }
                 ProtocolEvent.FileOffer(frame.messageId, payload)
             }
             PacketType.FILE_ACCEPT -> ProtocolEvent.FileAccept(frame.messageId)
             PacketType.FILE_REJECT -> {
-                val reason = if (frame.payload.isEmpty()) null else frame.payload.decodeReasonCapped()
+                val reason = if (frame.payload.isEmpty()) null else frame.payload.decodeReason("FILE_REJECT reason")
                 ProtocolEvent.FileReject(frame.messageId, reason)
             }
             PacketType.FILE_DATA -> ProtocolEvent.FileData(frame)
             PacketType.FILE_DONE -> ProtocolEvent.FileDone(frame.messageId)
             PacketType.FILE_CANCEL -> {
-                val reason = if (frame.payload.isEmpty()) null else frame.payload.decodeReasonCapped()
+                val reason = if (frame.payload.isEmpty()) null else frame.payload.decodeReason("FILE_CANCEL reason")
                 ProtocolEvent.FileCancel(frame.messageId, reason)
             }
         }
@@ -210,12 +229,57 @@ internal class DefaultP2pProtocol(
     }
 }
 
-/**
- * Reason strings (ERROR / FILE_REJECT / FILE_CANCEL) are remote-controlled and
- * were previously decoded uncapped — up to the 8 MiB frame limit per frame.
- * Cap them like every other untrusted string field (AUDIT-2026-06 fix).
- */
-private fun ByteArray.decodeReasonCapped(maxBytes: Int = 1024): String {
-    if (size <= maxBytes) return decodeToString()
-    return copyOfRange(0, maxBytes).decodeToString() + "… [truncated ${size - maxBytes} bytes]"
+private fun encodeReason(value: String, field: String): ByteArray {
+    validateWireText(
+        value = value,
+        field = field,
+        maxChars = ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
+        maxUtf8Bytes = ProtocolConstants.MAX_REASON_PAYLOAD_BYTES
+    )
+    return value.encodeToByteArray()
+}
+
+private fun ByteArray.decodeReason(field: String): String {
+    if (size > ProtocolConstants.MAX_REASON_PAYLOAD_BYTES) {
+        throw P2pError.ProtocolError(
+            "$field exceeds ${ProtocolConstants.MAX_REASON_PAYLOAD_BYTES} bytes"
+        )
+    }
+    return try {
+        decodeStrictUtf8(field).also {
+            validateWireText(
+                value = it,
+                field = field,
+                maxChars = ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
+                maxUtf8Bytes = ProtocolConstants.MAX_REASON_PAYLOAD_BYTES
+            )
+        }
+    } catch (failure: IllegalArgumentException) {
+        throw P2pError.ProtocolError(failure.message ?: "$field is invalid")
+    }
+}
+
+/** Fixed-category limiter: attacker-controlled invalid bodies can produce at most five logs/category. */
+private class PeerWarningLimiter(private val logger: P2pLogger) {
+    private val counts: MutableMap<String, Int> = mutableMapOf()
+
+    fun warn(key: String, message: String) {
+        val count = (counts[key] ?: 0) + 1
+        counts[key] = count
+        val emitted = when {
+            count <= WARNING_BURST -> message
+            count == WARNING_BURST + 1 -> "Further malformed $key warnings suppressed for this connection"
+            else -> return
+        }
+        try {
+            logger.warn(emitted)
+        } catch (failure: Exception) {
+            if (failure is CancellationException) throw failure
+            // A diagnostic sink does not own protocol or connection failure.
+        }
+    }
+
+    private companion object {
+        const val WARNING_BURST: Int = 4
+    }
 }

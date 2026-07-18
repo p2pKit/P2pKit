@@ -1,6 +1,7 @@
 package dev.p2pkit.core.protocol
 
 import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.testfixtures.RecordingLogger
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -11,8 +12,8 @@ class FrameReaderTest {
 
     private val rng = Random(7)
 
-    private fun frame(payloadSize: Int, type: PacketType = PacketType.DATA): Frame = Frame(
-        type = type,
+    private fun frame(payloadSize: Int): Frame = Frame(
+        type = PacketType.DATA,
         flags = FrameFlags.LAST_CHUNK.toByte(),
         messageId = MessageId.random(rng),
         chunkIndex = 0,
@@ -34,7 +35,7 @@ class FrameReaderTest {
     fun feedingTwoBackToBackFramesYieldsBoth() {
         val reader = FrameReader()
         val a = frame(8)
-        val b = frame(32, PacketType.ACK)
+        val b = frame(32)
         val combined = FrameCodec.encode(a) + FrameCodec.encode(b)
         val out = reader.feed(combined)
         assertEquals(2, out.size)
@@ -146,15 +147,15 @@ class FrameReaderTest {
 
     /**
      * Boundary companion: a declared length of exactly
-     * [ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES] is within the bound — the
+     * [ProtocolConstants.MAX_DATA_FRAME_PAYLOAD_BYTES] is within the DATA bound — the
      * reader accepts the header and waits (buffering only the header bytes it
      * was given) for the payload to arrive.
      */
     @Test
-    fun maxDeclaredPayloadLengthIsAcceptedAtTheBoundary() {
+    fun maxDeclaredDataPayloadLengthIsAcceptedAtTheBoundary() {
         val reader = FrameReader()
         val headerOnly = FrameCodec.encode(frame(0)).copyOfRange(0, ProtocolConstants.HEADER_SIZE)
-        FrameCodec.writeIntBE(headerOnly, 32, ProtocolConstants.MAX_FRAME_PAYLOAD_BYTES)
+        FrameCodec.writeIntBE(headerOnly, 32, ProtocolConstants.MAX_DATA_FRAME_PAYLOAD_BYTES)
 
         val out = reader.feed(headerOnly)
 
@@ -169,7 +170,7 @@ class FrameReaderTest {
         val validBytes = FrameCodec.encode(valid)
 
         // Build a frame with a deliberately bogus packet type code.
-        val unknown = FrameCodec.encode(frame(8, PacketType.PING)).copyOf()
+        val unknown = FrameCodec.encode(frame(8)).copyOf()
         unknown[5] = 0x7F
 
         // Feed [valid][unknown][valid] in one shot.
@@ -183,5 +184,124 @@ class FrameReaderTest {
         assertEquals(1, reader.skippedUnknownFrames)
         // Buffer fully consumed.
         assertEquals(0, reader.bufferedBytes())
+    }
+
+    @Test
+    fun fragmentedLargeFrameUsesLinearRelocationWork() {
+        val reader = FrameReader()
+        val original = frame(256 * 1024)
+        val encoded = FrameCodec.encode(original)
+        val decoded = mutableListOf<Frame>()
+
+        var offset = 0
+        while (offset < encoded.size) {
+            val end = minOf(encoded.size, offset + 7)
+            decoded += reader.feed(encoded.copyOfRange(offset, end))
+            offset = end
+        }
+
+        assertEquals(listOf(original), decoded)
+        assertTrue(
+            reader.relocatedBytes <= encoded.size.toLong() * 2,
+            "buffer growth relocated ${reader.relocatedBytes} bytes for ${encoded.size} input bytes"
+        )
+    }
+
+    @Test
+    fun packetSpecificLimitIsRejectedFromHeaderAlone() {
+        val hello = Frame(
+            PacketType.HELLO,
+            FrameFlags.LAST_CHUNK.toByte(),
+            MessageId.random(rng),
+            0,
+            1,
+            byteArrayOf(1)
+        )
+        val header = FrameCodec.encode(hello).copyOfRange(0, ProtocolConstants.HEADER_SIZE)
+        FrameCodec.writeIntBE(header, 32, ProtocolConstants.MAX_HELLO_PAYLOAD_BYTES + 1)
+
+        val failure = assertFailsWith<P2pError.ProtocolError> { FrameReader().feed(header) }
+
+        assertTrue(failure.message!!.contains("HELLO"))
+    }
+
+    @Test
+    fun allPacketFamiliesEnforceTheirDeclaredLimitFromTheHeader() {
+        val cases = listOf(
+            PacketType.FILE_OFFER to ProtocolConstants.MAX_FILE_OFFER_PAYLOAD_BYTES,
+            PacketType.ERROR to ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
+            PacketType.FILE_REJECT to ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
+            PacketType.DATA to ProtocolConstants.MAX_DATA_FRAME_PAYLOAD_BYTES,
+            PacketType.FILE_DATA to ProtocolConstants.MAX_DATA_FRAME_PAYLOAD_BYTES,
+            PacketType.ACK to 0,
+            PacketType.PING to 0,
+            PacketType.FILE_ACCEPT to 0
+        )
+        for ((type, maximum) in cases) {
+            val payload = when (type) {
+                PacketType.FILE_OFFER, PacketType.ERROR, PacketType.FILE_REJECT,
+                PacketType.DATA, PacketType.FILE_DATA -> byteArrayOf(1)
+                else -> ByteArray(0)
+            }
+            val valid = Frame(
+                type,
+                FrameFlags.LAST_CHUNK.toByte(),
+                MessageId.random(rng),
+                0,
+                1,
+                payload
+            )
+            val header = FrameCodec.encode(valid).copyOfRange(0, ProtocolConstants.HEADER_SIZE)
+            FrameCodec.writeIntBE(header, 32, maximum + 1)
+
+            val failure = assertFailsWith<P2pError.ProtocolError>(type.name) {
+                FrameReader().feed(header)
+            }
+            assertTrue(failure.message!!.contains(type.name))
+        }
+    }
+
+    @Test
+    fun unknownPacketPayloadIsCappedFromHeaderForForwardCompatibility() {
+        val header = FrameCodec.encode(frame(0)).copyOfRange(0, ProtocolConstants.HEADER_SIZE)
+        header[5] = 0x7F
+        FrameCodec.writeIntBE(header, 32, ProtocolConstants.MAX_UNKNOWN_PACKET_PAYLOAD_BYTES + 1)
+
+        val failure = assertFailsWith<P2pError.ProtocolError> { FrameReader().feed(header) }
+
+        assertTrue(failure.message!!.contains("unknown packet"))
+    }
+
+    @Test
+    fun invalidControlShapeIsRejectedFromHeaderAlone() {
+        val ping = Frame(
+            PacketType.PING,
+            FrameFlags.LAST_CHUNK.toByte(),
+            MessageId.random(rng),
+            0,
+            1,
+            ByteArray(0)
+        )
+        val header = FrameCodec.encode(ping).copyOfRange(0, ProtocolConstants.HEADER_SIZE)
+        header[6] = 0
+
+        val failure = assertFailsWith<P2pError.ProtocolError> { FrameReader().feed(header) }
+
+        assertTrue(failure.message!!.contains("flags"))
+    }
+
+    @Test
+    fun unknownPacketWarningsAreBoundedPerConnection() {
+        val logger = RecordingLogger()
+        val reader = FrameReader(logger)
+        val unknown = FrameCodec.encode(frame(1)).also { it[5] = 0x7F }
+        val input = ByteArray(unknown.size * 100)
+        repeat(100) { index -> unknown.copyInto(input, index * unknown.size) }
+
+        assertTrue(reader.feed(input).isEmpty())
+
+        assertEquals(100, reader.skippedUnknownFrames)
+        assertEquals(5, logger.warnings.size)
+        assertTrue(logger.warnings.last().contains("suppressed"))
     }
 }

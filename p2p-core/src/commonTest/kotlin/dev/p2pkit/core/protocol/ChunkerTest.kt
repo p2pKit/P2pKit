@@ -146,4 +146,13 @@ class ChunkerTest {
         assertEquals(100L, err.maxBytes)
         assertEquals(101L, err.actualBytes)
     }
+
+    @Test
+    fun invalidLocalUnicodeIsRejectedInsteadOfReplaced() {
+        val chunker = Chunker(random = Random(0))
+
+        assertFailsWith<IllegalArgumentException> {
+            chunker.chunk(P2pMessage.Text("bad\uD800value"))
+        }
+    }
 }

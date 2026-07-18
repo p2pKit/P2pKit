@@ -109,4 +109,43 @@ class StreamingFileReceiverTest {
             recv.acceptDataChunk(bogus)
         }
     }
+
+    @Test
+    fun emptyChunkAndInvalidLastPlacementAreRejectedBeforeSinkWrite() {
+        val transferId = id()
+        val sink = Buffer()
+        val recv = StreamingFileReceiver(transferId, 10L, sink)
+
+        assertFailsWith<P2pError.ProtocolError> {
+            recv.acceptDataChunk(dataFrame(transferId, 0, 1, ByteArray(0)))
+        }
+        assertFailsWith<P2pError.ProtocolError> {
+            recv.acceptDataChunk(dataFrame(transferId, 0, 2, ByteArray(5), isLast = true))
+        }
+
+        assertEquals(0L, recv.bytesReceived)
+        assertEquals(0L, sink.size)
+    }
+
+    @Test
+    fun totalChunksCannotChangeMidTransfer() {
+        val transferId = id()
+        val recv = StreamingFileReceiver(transferId, 10L, Buffer())
+        recv.acceptDataChunk(dataFrame(transferId, 0, 2, ByteArray(5)))
+
+        assertFailsWith<P2pError.ProtocolError> {
+            recv.acceptDataChunk(dataFrame(transferId, 1, 3, ByteArray(5), isLast = false))
+        }
+    }
+
+    @Test
+    fun reachingAdvertisedSizeRequiresLastAndRejectsFurtherData() {
+        val transferId = id()
+        val recv = StreamingFileReceiver(transferId, 5L, Buffer())
+        recv.acceptDataChunk(dataFrame(transferId, 0, 1, ByteArray(5)))
+
+        assertFailsWith<P2pError.ProtocolError> {
+            recv.acceptDataChunk(dataFrame(transferId, 1, 2, byteArrayOf(1)))
+        }
+    }
 }

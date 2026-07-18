@@ -30,41 +30,50 @@ internal data class HelloPayload(
         /** Max accepted length (chars) for an untrusted HELLO string field. */
         const val MAX_FIELD_LEN: Int = 512
 
+        /** UTF-8 bound for one HELLO string field. */
+        const val MAX_FIELD_UTF8_BYTES: Int = MAX_FIELD_LEN * 4
+
         /** Max number of advertised transport tags accepted from a peer. */
         const val MAX_TRANSPORTS: Int = 32
 
-        fun encode(payload: HelloPayload): ByteArray =
-            json.encodeToString(serializer(), payload).encodeToByteArray()
+        fun encode(payload: HelloPayload): ByteArray {
+            validate(payload)
+            val encoded = json.encodeToString(serializer(), payload).encodeToByteArray()
+            require(encoded.size <= ProtocolConstants.MAX_HELLO_PAYLOAD_BYTES) {
+                "HELLO payload ${encoded.size} exceeds ${ProtocolConstants.MAX_HELLO_PAYLOAD_BYTES} bytes"
+            }
+            return encoded
+        }
 
         fun decode(bytes: ByteArray): HelloPayload {
-            val payload = json.decodeFromString(serializer(), bytes.decodeToString())
-            // Validate untrusted peer-supplied fields before they flow into
-            // PeerId / session id / the published Peer. A thrown error is
-            // treated as a malformed HELLO frame and skipped by the caller.
-            require(payload.appId.isNotBlank() && payload.appId.length <= MAX_FIELD_LEN) {
-                "HELLO appId blank or too long"
+            require(bytes.size <= ProtocolConstants.MAX_HELLO_PAYLOAD_BYTES) {
+                "HELLO payload ${bytes.size} exceeds ${ProtocolConstants.MAX_HELLO_PAYLOAD_BYTES} bytes"
             }
-            require(payload.peerId.isNotBlank() && payload.peerId.length <= MAX_FIELD_LEN) {
-                "HELLO peerId blank or too long"
-            }
-            require(payload.deviceName.length <= MAX_FIELD_LEN) {
-                "HELLO deviceName too long: ${payload.deviceName.length} > $MAX_FIELD_LEN"
-            }
-            // AUDIT-2026-07 (SEC-1 rider, P1-18): `platform` and each
-            // per-transport tag are bounded like every other untrusted HELLO
-            // string field. Conforming peers send short enum names, so the
-            // generous MAX_FIELD_LEN bound is never hit by a real peer.
-            require(payload.platform.length <= MAX_FIELD_LEN) {
-                "HELLO platform too long: ${payload.platform.length} > $MAX_FIELD_LEN"
-            }
+            val payload = json.decodeFromString(serializer(), bytes.decodeStrictUtf8("HELLO payload"))
+            validate(payload)
+            return payload
+        }
+
+        private fun validate(payload: HelloPayload) {
+            validateWireText(payload.appId, "HELLO appId", MAX_FIELD_LEN, MAX_FIELD_UTF8_BYTES, true)
+            validateWireText(payload.peerId, "HELLO peerId", MAX_FIELD_LEN, MAX_FIELD_UTF8_BYTES, true)
+            validateWireText(payload.deviceName, "HELLO deviceName", MAX_FIELD_LEN, MAX_FIELD_UTF8_BYTES)
+            validateWireText(payload.platform, "HELLO platform", MAX_FIELD_LEN, MAX_FIELD_UTF8_BYTES, true)
             require(payload.supportedTransports.size <= MAX_TRANSPORTS) {
                 "HELLO advertised too many transports: ${payload.supportedTransports.size}"
             }
-            require(payload.supportedTransports.all { it.length <= MAX_FIELD_LEN }) {
-                "HELLO transport tag too long: " +
-                    "${payload.supportedTransports.maxOf { it.length }} > $MAX_FIELD_LEN"
+            payload.supportedTransports.forEachIndexed { index, transport ->
+                validateWireText(
+                    transport,
+                    "HELLO supportedTransports[$index]",
+                    MAX_FIELD_LEN,
+                    MAX_FIELD_UTF8_BYTES,
+                    true
+                )
             }
-            return payload
+            require(payload.protocolVersion in 1..255) {
+                "HELLO protocolVersion must be in 1..255, got ${payload.protocolVersion}"
+            }
         }
     }
 }

@@ -1,5 +1,6 @@
 package dev.p2pkit.core.protocol
 
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.RecordingLogger
@@ -16,6 +17,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -240,15 +242,14 @@ class DefaultP2pProtocolTest {
             try {
                 val deferred = scope.async { protocol.events(pair.b).take(1).toList() }
                 // Valid JSON that fails the decode-side input-validation guards (blank peerId).
-                val invalidBody = HelloPayload.encode(
-                    HelloPayload(
-                        appId = "com.example",
-                        peerId = " ",
-                        deviceName = "D",
-                        platform = "ANDROID",
-                        supportedTransports = listOf("LAN")
-                    )
-                )
+                val invalidBody = """{
+                    "appId":"com.example",
+                    "peerId":" ",
+                    "deviceName":"D",
+                    "platform":"ANDROID",
+                    "supportedTransports":["LAN"],
+                    "protocolVersion":1
+                }""".trimIndent().encodeToByteArray()
                 pair.a.write(FrameCodec.encode(rawControlFrame(PacketType.HELLO, invalidBody)))
                 protocol.sendPing(pair.a)
 
@@ -304,7 +305,7 @@ class DefaultP2pProtocolTest {
             try {
                 val deferred = scope.async { protocol.events(pair.b).take(1).toList() }
                 // Valid JSON that fails the decode guards (negative sizeBytes).
-                val invalidBody = FileOfferPayload.encode(FileOfferPayload(name = "x", sizeBytes = -1))
+                val invalidBody = """{"name":"x","sizeBytes":-1,"mimeType":null}""".encodeToByteArray()
                 pair.a.write(FrameCodec.encode(rawControlFrame(PacketType.FILE_OFFER, invalidBody)))
                 val transferId = MessageId.random(rng)
                 val validOffer = FileOfferPayload(name = "ok.bin", sizeBytes = 42)
@@ -318,6 +319,101 @@ class DefaultP2pProtocolTest {
                     logger.warnings.any { it.contains("malformed FILE_OFFER") },
                     "Expected a malformed-FILE_OFFER warn diagnostic, got: ${logger.warnings}"
                 )
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
+
+    @Test
+    fun outboundReasonLimitsAreEnforcedExactly() {
+        runBlocking {
+            val pair = FakeConnectionPair()
+            val protocol = protocol()
+            val atLimit = "a".repeat(ProtocolConstants.MAX_REASON_PAYLOAD_BYTES)
+
+            protocol.sendError(pair.a, atLimit)
+            assertFailsWith<IllegalArgumentException> {
+                protocol.sendError(pair.a, "$atLimit!")
+            }
+            assertFailsWith<IllegalArgumentException> {
+                protocol.sendFileCancel(pair.a, MessageId.random(rng), "bad\nreason")
+            }
+        }
+    }
+
+    @Test
+    fun malformedReasonUtf8IsAProtocolError() {
+        runBlocking {
+            val pair = FakeConnectionPair()
+            val protocol = protocol()
+            val scope = newScope()
+            try {
+                val result = scope.async { protocol.events(pair.b).first() }
+                pair.a.write(
+                    FrameCodec.encode(
+                        rawControlFrame(
+                            PacketType.ERROR,
+                            byteArrayOf(0xC3.toByte(), 0x28)
+                        )
+                    )
+                )
+
+                assertFailsWith<P2pError.ProtocolError> { result.await() }
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
+
+    @Test
+    fun throwingFrameTraceCannotFailProtocolIo() {
+        runBlocking {
+            val previousEnabled = FrameTrace.enabled
+            val previousSink = FrameTrace.sink
+            try {
+                FrameTrace.sink = { error("trace failed") }
+                FrameTrace.enabled = true
+                val pair = FakeConnectionPair()
+                val protocol = protocol()
+                val scope = newScope()
+                try {
+                    val event = scope.async { protocol.events(pair.b).first() }
+                    protocol.sendPing(pair.a)
+
+                    assertEquals(ProtocolEvent.Ping, event.await())
+                    assertTrue(!FrameTrace.enabled)
+                } finally {
+                    scope.cancel()
+                }
+            } finally {
+                FrameTrace.sink = previousSink
+                FrameTrace.enabled = previousEnabled
+            }
+        }
+    }
+
+    @Test
+    fun malformedBodyWarningsAreBoundedPerConnection() {
+        runBlocking {
+            val pair = FakeConnectionPair()
+            val logger = RecordingLogger()
+            val protocol = DefaultP2pProtocol(clock = { 0L }, logger = logger)
+            val scope = newScope()
+            try {
+                val event = scope.async { protocol.events(pair.b).first() }
+                repeat(100) {
+                    pair.a.write(
+                        FrameCodec.encode(
+                            rawControlFrame(PacketType.HELLO, "not-json".encodeToByteArray())
+                        )
+                    )
+                }
+                protocol.sendPing(pair.a)
+
+                assertEquals(ProtocolEvent.Ping, event.await())
+                assertEquals(5, logger.warnings.size)
+                assertTrue(logger.warnings.last().contains("suppressed"))
             } finally {
                 scope.cancel()
             }

@@ -27,7 +27,14 @@ internal class Chunker(
 
     fun chunk(message: P2pMessage, needsAck: Boolean = false): List<Frame> {
         val (bytes, isText) = when (message) {
-            is P2pMessage.Text -> message.value.encodeToByteArray() to true
+            is P2pMessage.Text -> {
+                val encoded = try {
+                    message.value.encodeToByteArray(throwOnInvalidSequence = true)
+                } catch (failure: Exception) {
+                    throw IllegalArgumentException("Text message contains an invalid Unicode sequence", failure)
+                }
+                encoded to true
+            }
             is P2pMessage.Binary -> message.bytes to false
         }
         if (bytes.size.toLong() > maxPayloadBytes) {
