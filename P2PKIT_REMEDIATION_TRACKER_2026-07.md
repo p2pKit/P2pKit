@@ -48,7 +48,7 @@ Operating safeguards:
 | Findings total | 150 |
 | Explicit test gaps | 54 |
 
-Current finding state: 140 `Planned`, 0 `In Progress`, 7 `Implemented` (`CORE-06`, `CORE-07`, `CORE-18`, `CORE-19`, `CORE-20`, `CORE-21`, `CORE-29`), 2 `Verified` (`CORE-01`, `BUILD-01`), 1 `Blocked` (`BUILD-02`). SEC-01 was approved with storage A on 2026-07-17, implemented, committed, and pushed. Its final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
+Current finding state: 140 `Planned`, 0 `In Progress`, 2 `Implemented` (`CORE-06`, `CORE-07`), 7 `Verified` (`CORE-01`, `CORE-18`, `CORE-19`, `CORE-20`, `CORE-21`, `CORE-29`, `BUILD-01`), 1 `Blocked` (`BUILD-02`). SEC-01 was approved with storage A on 2026-07-17, implemented, committed, and pushed. Its final `Verified` status remains gated by the external cryptographic audit, physical Android/Apple interoperability, hostile-network/two-machine validation, and a green repository-wide gate.
 
 ### Baseline gate evidence and reusable command catalog
 
@@ -154,10 +154,10 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 | CORE-15 | Medium | Global P2pState hides independent feature failures | PEER-CTRL-01 lifecycle/state follow-up | Planned | — | Feature-state tests | — | — |
 | CORE-16 | Medium | One incoming-flow exception permanently disables a transport | LIF-SES-01 inbound recovery | Planned | — | Recollection/backoff tests | — | — |
 | CORE-17 | Medium | Public values expose mutable backing storage | PEER-CTRL-01 before parser/transfer finalization | Planned | — | Mutation/ownership tests | — | — |
-| CORE-18 | Medium | Distinct AppIds collide in persistent identity storage | ID-STORE-01 | Implemented | Full AppId hash namespace + rollback-safe migration | CORE-T11 | Pending batch commit | Focused/platform tests pass |
-| CORE-19 | Medium | First-use PeerId creation is not concurrency-safe | ID-STORE-01 | Implemented | Process/cross-process commit lock + reread winner | CORE-T11 | Pending batch commit | 16-thread + four-process tests pass repeatedly |
-| CORE-20 | Medium | Persistence failure breaks same-instance identity stability | ID-STORE-01 | Implemented | Instance memoization on every outcome | CORE-T11 | Pending batch commit | JVM/iOS failure tests pass |
-| CORE-21 | Medium | Android/JVM identity fallback can truncate durable value | ID-STORE-01 | Implemented | Android AtomicFile + JVM fsync/atomic move | CORE-T11 | Pending batch commit | JVM atomic/migration suite + Android compile pass |
+| CORE-18 | Medium | Distinct AppIds collide in persistent identity storage | ID-STORE-01 | Verified | Full AppId hash namespace + rollback-safe migration | CORE-T11 | `ee69d09`, pushed | Focused/platform tests pass |
+| CORE-19 | Medium | First-use PeerId creation is not concurrency-safe | ID-STORE-01 | Verified | Process/cross-process commit lock + reread winner | CORE-T11 | `ee69d09`, pushed | 16-thread + four-process tests pass repeatedly |
+| CORE-20 | Medium | Persistence failure breaks same-instance identity stability | ID-STORE-01 | Verified | Instance memoization on every outcome | CORE-T11 | `ee69d09`, pushed | JVM/iOS failure tests pass |
+| CORE-21 | Medium | Android/JVM identity fallback can truncate durable value | ID-STORE-01 | Verified | Android AtomicFile + JVM fsync/atomic move | CORE-T11 | `ee69d09`, pushed | JVM atomic/migration suite + Android compile pass |
 | CORE-22 | Medium | Android/iOS path observers retain stale state/cleanup ownership | PATH-PERM-01 | Planned | — | CORE-T12 | — | — |
 | CORE-23 | Medium | New session can miss authoritative Unsatisfied path state | LIF-SES-01 | Planned | — | Registration/path race | — | — |
 | CORE-24 | Medium API gap | NetworkProvisioningManager has no close contract | LIF-SES-01 before provisioning | Planned | — | Close contract/ABI tests | — | — |
@@ -165,7 +165,7 @@ The `Unit/dependencies` column identifies ordering, not automatic commit groupin
 | CORE-26 | Low limitation | Android defaults to no-op path observer | PATH-PERM-01 | Planned | — | Default wiring test | — | — |
 | CORE-27 | Low API mismatch | Factories cannot express discovery-only transport | PEER-CTRL-01 | Planned | — | Factory/API tests | — | — |
 | CORE-28 | Low | Builder validation is incomplete | PEER-CTRL-01 | Planned | — | Boundary/duplicate tests | — | — |
-| CORE-29 | Low | JVM identity fallback can silently use working directory | ID-STORE-01 | Implemented | Validate home/temp roots; explicit failure if none | Property/path failure tests | Pending batch commit | Blank/invalid property tests pass |
+| CORE-29 | Low | JVM identity fallback can silently use working directory | ID-STORE-01 | Verified | Validate home/temp roots; explicit failure if none | Property/path failure tests | `ee69d09`, pushed | Blank/invalid property tests pass |
 | CORE-30 | Low | Test fixtures hide important race conditions | GOV-01 test foundation | Planned | — | Fixture meta-tests | — | — |
 
 ### Protocol and messaging (8)
@@ -341,7 +341,7 @@ Each row represents one bullet from “Missing or weak tests to add” in the so
 | CORE-T08 | Public sessions empty after stop independent of watcher schedule | CORE-10 | Planned | — | — | — |
 | CORE-T09 | Partial multi-transport startup rollback | CORE-11 | Planned | — | — | — |
 | CORE-T10 | Throwing and permanently hung close operations | CORE-12 | Planned | — | — | — |
-| CORE-T11 | Identity sanitizer collisions, concurrent first creation, persistence failure, and atomic replacement | CORE-18, CORE-19, CORE-20, CORE-21 | Implemented | JVM process/thread/failure/migration tests + iOS bucket tests | Pending batch commit | Focused tests pass; full JVM 351/351 green |
+| CORE-T11 | Identity sanitizer collisions, concurrent first creation, persistence failure, and atomic replacement | CORE-18, CORE-19, CORE-20, CORE-21 | Verified | JVM process/thread/failure/migration tests + iOS bucket tests | `ee69d09`, pushed | Focused tests pass; committed full JVM 351/351 green |
 | CORE-T12 | Path observer close/restart, stale callbacks, unregister failure, generation gating | CORE-22, CORE-23 | Planned | — | — | — |
 | CORE-T13 | Clean external consumer compilation from published temp repository | BUILD-01 | Verified | `scripts/check-published-consumers.sh` | `8f15d75`; pushed with tracker evidence | JVM/Android/KMP/iOS pass from committed state |
 
@@ -1030,6 +1030,8 @@ Implementation result: full UTF-16 AppId hashing (including malformed-surrogate 
 
 Verification: focused JVM storage and kit-persistence suites pass; contention passed in three executions including 16 threads and four child JVM processes; complete JVM core is 351/351 green; isolated iOS storage tests pass; Android main and affected Apple LAN tests compile. The complete iOS run executed 326 tests and reproduced only the registered `SessionReconnectRotationTest` timeout; no identity test failed. Existing BUILD-14 warnings are unchanged.
 
+Committed/pushed evidence: `ee69d09` is on `origin/remediation/full-register-2026-07`; forced committed-state JVM core (351 tests), isolated iOS identity tests, Android main compilation, and affected Apple LAN test compilation all pass.
+
 ## Execution log
 
 | Date | Unit | Action | Result |
@@ -1049,3 +1051,4 @@ Verification: focused JVM storage and kit-persistence suites pass; contention pa
 | 2026-07-18 | LIF-GEN-01 | Implemented terminal generation commits, stale-resource compensation, atomic session registration, and six deterministic races; reviewed every equivalent path | CORE-01/CORE-T01 implemented; full core JVM/iOS and Android compilation green; independent repository baselines unchanged |
 | 2026-07-18 | LIF-GEN-01/source control | Created `a4e0bb0` and reran focused JVM plus complete iOS Simulator/Android checks from committed state | CORE-01/CORE-T01 verified; forced full JVM reproduced only the registered FILE-04 failure |
 | 2026-07-18 | ID-STORE-01 | Implemented collision-safe namespaces, transactional cross-process creation, atomic persistence, failure memoization, rollback migration, and JVM root validation | CORE-18/19/20/21/29 and CORE-T11 implemented; JVM 351/351 green; iOS focused green; Android/Apple compile green |
+| 2026-07-18 | ID-STORE-01/source control | Committed, forced affected checks from committed state, and pushed `ee69d09` | CORE-18/19/20/21/29 and CORE-T11 verified on `remediation/full-register-2026-07` |
