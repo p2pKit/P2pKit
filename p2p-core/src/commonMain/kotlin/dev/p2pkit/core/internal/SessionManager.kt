@@ -104,6 +104,7 @@ internal class SessionManager(
     private val localPlatform: Platform,
     private val localTransports: Set<TransportKind>,
     private val clock: () -> Long,
+    private val monotonicClock: () -> Long = clock,
     private val logger: P2pLogger,
     private val fileTransferConfig: FileTransferConfig = FileTransferConfig(),
     private val lifecycleGate: SessionLifecycleGate,
@@ -541,6 +542,7 @@ internal class SessionManager(
             parentScope = scope,
             keepAlive = keepAlive,
             clock = clock,
+            monotonicClock = monotonicClock,
             logger = logger,
             fileTransferConfig = fileTransferConfig,
             lookupRegistration = store::registrationOf

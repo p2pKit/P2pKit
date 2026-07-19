@@ -23,7 +23,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.delay
@@ -98,6 +98,11 @@ internal data class SessionRegistration(
     val isInPublicList: Boolean
 )
 
+private data class QueuedApplicationMessage(
+    val message: P2pMessage,
+    val payloadBytes: Long
+)
+
 internal class P2pSessionImpl(
     override val id: String,
     override val peer: Peer,
@@ -108,6 +113,7 @@ internal class P2pSessionImpl(
     private val parentScope: CoroutineScope,
     private val keepAlive: KeepAliveConfig,
     private val clock: () -> Long,
+    private val monotonicClock: () -> Long = clock,
     private val logger: P2pLogger,
     private val fileTransferConfig: FileTransferConfig = FileTransferConfig(),
     private val random: Random = Random.Default,
@@ -131,15 +137,17 @@ internal class P2pSessionImpl(
     private val _state = MutableStateFlow(ConnectionState.Connected)
     override val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
-    private val _incoming = MutableSharedFlow<P2pMessage>(
-        replay = 0,
-        extraBufferCapacity = 64,
-        onBufferOverflow = BufferOverflow.SUSPEND
-    )
+    private val _incoming = MutableSharedFlow<P2pMessage>(replay = 0)
     override val incoming: SharedFlow<P2pMessage> = _incoming.asSharedFlow()
 
+    /* Protocol control never waits for an application collector. */
+    private val applicationMessages = Channel<QueuedApplicationMessage>(Channel.UNLIMITED)
+    private val applicationMessageQueueLock = Mutex()
+    private var queuedApplicationMessages: Int = 0
+    private var queuedApplicationBytes: Long = 0L
+
     private val sendMutex = Mutex()
-    private val lastPongAt = MutableStateFlow(clock())
+    private val lastPongAt = MutableStateFlow(monotonicClock())
 
     /**
      * Lock guarding [connection], [events], [epochJob], and the
@@ -184,6 +192,7 @@ internal class P2pSessionImpl(
         get() = fileTransferDispatcher.incomingFiles
 
     fun start() {
+        scope.launch { deliverApplicationMessages() }
         startEpoch()
     }
 
@@ -195,7 +204,7 @@ internal class P2pSessionImpl(
         // the same epoch's connection. Rearm replaces `connection` and
         // cancels the epoch; new loops then see the new ref.
         val epochConnection = connection
-        lastPongAt.value = clock()
+        lastPongAt.value = monotonicClock()
         epochScope.launch { routeEvents(events) }
         epochScope.launch { keepAliveLoop(epochConnection) }
         epochScope.launch { observeRawState(epochConnection) }
@@ -490,6 +499,9 @@ internal class P2pSessionImpl(
                     fileTransferDispatcher.closeAll("session $id ${target.name}: $cause")
                 }
             }
+            // Drops queued application payloads and releases their backing
+            // storage before the terminal session can be retained by a host.
+            applicationMessages.cancel()
             // Cancel the epoch — stops routeEvents, keepAliveLoop, and the
             // parked observeRawState. Guarantees no further _incoming.emit.
             epochJob?.cancel()
@@ -514,6 +526,41 @@ internal class P2pSessionImpl(
         // resource cleanup. Cancellation is non-suspending and the completed
         // post-conditions above remain observable before this method returns.
         sessionJob.cancel(CancellationException("Session $id reached ${target.name}: $cause"))
+    }
+
+    private suspend fun enqueueApplicationMessage(message: P2pMessage): Boolean {
+        val messageBytes = message.payloadSizeBytes()
+        return applicationMessageQueueLock.withLock {
+            if (
+                queuedApplicationMessages >= MAX_QUEUED_APPLICATION_MESSAGES ||
+                messageBytes > MAX_QUEUED_APPLICATION_BYTES - queuedApplicationBytes
+            ) {
+                return@withLock false
+            }
+            queuedApplicationMessages += 1
+            queuedApplicationBytes += messageBytes
+            val sent = applicationMessages.trySend(QueuedApplicationMessage(message, messageBytes))
+            if (sent.isFailure) {
+                queuedApplicationMessages -= 1
+                queuedApplicationBytes -= messageBytes
+            }
+            sent.isSuccess
+        }
+    }
+
+    private suspend fun deliverApplicationMessages() {
+        for (queued in applicationMessages) {
+            applicationMessageQueueLock.withLock {
+                queuedApplicationMessages -= 1
+                queuedApplicationBytes -= queued.payloadBytes
+            }
+            _incoming.emit(queued.message)
+        }
+    }
+
+    private fun P2pMessage.payloadSizeBytes(): Long = when (this) {
+        is P2pMessage.Text -> value.encodeToByteArray().size.toLong()
+        is P2pMessage.Binary -> payloadSizeBytes.toLong()
     }
 
     internal val runtimeJobIsActiveForTest: Boolean
@@ -595,14 +642,25 @@ internal class P2pSessionImpl(
                                 )
                             }
                         }
-                        _incoming.emit(event.message)
+                        if (!enqueueApplicationMessage(event.message)) {
+                            logger.warn(
+                                "Session $id: application receive backlog exceeded " +
+                                    "$MAX_QUEUED_APPLICATION_MESSAGES messages / " +
+                                    "$MAX_QUEUED_APPLICATION_BYTES bytes"
+                            )
+                            transitionToTerminal(
+                                ConnectionState.Failed,
+                                "application receive backlog exceeded"
+                            )
+                            return
+                        }
                     }
                     is ProtocolEvent.Ping -> {
                         runCatching {
                             sendMutex.withLock { protocol.sendPong(connection) }
                         }.onFailure { logger.warn("Session $id: failed to send PONG", it) }
                     }
-                    is ProtocolEvent.Pong -> lastPongAt.value = clock()
+                    is ProtocolEvent.Pong -> lastPongAt.value = monotonicClock()
                     is ProtocolEvent.Hello -> {
                         logger.debug("Session $id: ignoring late HELLO")
                     }
@@ -667,8 +725,8 @@ internal class P2pSessionImpl(
             // only after the send let a stuck writer disable keep-alive — and
             // close()/stop() behind the same mutex — forever
             // (AUDIT-2026-06 fix).
-            val sincePongBeforeSend = clock() - lastPongAt.value
-            if (sincePongBeforeSend > keepAlive.timeoutMillis) {
+            val sincePongBeforeSend = monotonicClock() - lastPongAt.value
+            if (sincePongBeforeSend >= keepAlive.timeoutMillis) {
                 logger.warn(
                     "Session $id: no PONG received for $sincePongBeforeSend ms " +
                         "(timeout=${keepAlive.timeoutMillis} ms; checked before PING send)"
@@ -685,8 +743,8 @@ internal class P2pSessionImpl(
                 onConnectionLost("PING send failed: ${e.message ?: e::class.simpleName}")
                 return
             }
-            val sinceLastPong = clock() - lastPongAt.value
-            if (sinceLastPong > keepAlive.timeoutMillis) {
+            val sinceLastPong = monotonicClock() - lastPongAt.value
+            if (sinceLastPong >= keepAlive.timeoutMillis) {
                 logger.warn(
                     "Session $id: no PONG received for $sinceLastPong ms " +
                         "(timeout=${keepAlive.timeoutMillis} ms)"
@@ -820,6 +878,9 @@ internal class P2pSessionImpl(
          * inside [transitionToTerminal] (see the comment in [close]).
          */
         const val CLOSE_FRAME_TIMEOUT_MS: Long = 2_000
+
+        const val MAX_QUEUED_APPLICATION_MESSAGES: Int = 64
+        const val MAX_QUEUED_APPLICATION_BYTES: Long = 8L * 1024L * 1024L
 
         /**
          * Threshold for the stuck-Reconnecting watchdog. Generous enough to

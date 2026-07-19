@@ -3,6 +3,7 @@ package dev.p2pkit.core.internal
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.KeepAliveConfig
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -11,6 +12,9 @@ import dev.p2pkit.core.protocol.DefaultP2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -42,7 +46,161 @@ import kotlin.test.assertTrue
  * `testScheduler.currentTime`, so keep-alive cadence and deadlines are exact
  * virtual-time arithmetic — no wall-clock waits, no scheduling jitter.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class KeepAliveTest {
+
+    @Test
+    fun slowMessageSubscriberDoesNotBlockPongOrRemoteClose() = runTest {
+        val pair = FakeConnectionPair()
+        val protocol = DefaultP2pProtocol(clock = { testScheduler.currentTime })
+        val supervisor = SupervisorJob()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + supervisor)
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
+        val session = P2pSessionImpl(
+            id = "control-plane-backpressure",
+            peer = Peer(
+                PeerId("slow-subscriber"),
+                "Slow",
+                Platform.JVM_DESKTOP,
+                setOf(TransportKind.LAN)
+            ),
+            initialConnection = pair.a,
+            initialEvents = events,
+            protocol = protocol,
+            parentScope = scope,
+            keepAlive = KeepAliveConfig(60_000, 120_000),
+            clock = { testScheduler.currentTime },
+            logger = P2pLogger.NoOp
+        )
+        session.start()
+
+        val firstDelivered = CompletableDeferred<Unit>()
+        val releaseSubscriber = CompletableDeferred<Unit>()
+        val subscriber = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            session.incoming.collect {
+                firstDelivered.complete(Unit)
+                releaseSubscriber.await()
+            }
+        }
+        val outbound = Channel<ProtocolEvent>(Channel.UNLIMITED)
+        val decoder = scope.launch {
+            protocol.events(pair.b).collect { outbound.send(it) }
+        }
+
+        try {
+            events.send(ProtocolEvent.Message(P2pMessage.Text("first")))
+            firstDelivered.await()
+            // The delivery coroutine parks on this second message while the
+            // protocol router remains free to process control events.
+            events.send(ProtocolEvent.Message(P2pMessage.Text("second")))
+            events.send(ProtocolEvent.Ping)
+            assertEquals(ProtocolEvent.Pong, withTimeout(3_000) { outbound.receive() })
+
+            events.send(ProtocolEvent.Close)
+            assertEquals(
+                ConnectionState.Closed,
+                withTimeout(3_000) { session.state.first { it == ConnectionState.Closed } }
+            )
+        } finally {
+            releaseSubscriber.complete(Unit)
+            subscriber.cancel()
+            decoder.cancel()
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun applicationBacklogIsByteBoundedAndFailsInsteadOfDropping() = runTest {
+        val pair = FakeConnectionPair()
+        val protocol = DefaultP2pProtocol(clock = { testScheduler.currentTime })
+        val supervisor = SupervisorJob()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + supervisor)
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
+        val session = P2pSessionImpl(
+            id = "bounded-application-backlog",
+            peer = Peer(PeerId("bounded-peer"), "Bounded", Platform.JVM_DESKTOP, setOf(TransportKind.LAN)),
+            initialConnection = pair.a,
+            initialEvents = events,
+            protocol = protocol,
+            parentScope = scope,
+            keepAlive = KeepAliveConfig(60_000, 120_000),
+            clock = { testScheduler.currentTime },
+            logger = P2pLogger.NoOp
+        )
+        session.start()
+
+        val firstDelivered = CompletableDeferred<Unit>()
+        val releaseSubscriber = CompletableDeferred<Unit>()
+        val subscriber = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            session.incoming.collect {
+                firstDelivered.complete(Unit)
+                releaseSubscriber.await()
+            }
+        }
+        try {
+            events.send(ProtocolEvent.Message(P2pMessage.Text("block delivery")))
+            firstDelivered.await()
+            val maximumMessage = P2pMessage.Binary(ByteArray(4 * 1024 * 1024))
+            events.send(ProtocolEvent.Message(maximumMessage))
+            events.send(ProtocolEvent.Message(maximumMessage))
+            events.send(ProtocolEvent.Message(P2pMessage.Binary(byteArrayOf(1))))
+
+            assertEquals(
+                ConnectionState.Failed,
+                withTimeout(3_000) { session.state.first { it == ConnectionState.Failed } }
+            )
+        } finally {
+            releaseSubscriber.complete(Unit)
+            subscriber.cancel()
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun keepAliveUsesMonotonicClockAndFailsAtExactDeadline() = runTest {
+        val pair = FakeConnectionPair()
+        val protocol = DefaultP2pProtocol(clock = { testScheduler.currentTime })
+        val supervisor = SupervisorJob()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + supervisor)
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
+        var wallClock = 10_000L
+        val session = P2pSessionImpl(
+            id = "monotonic-deadline",
+            peer = Peer(
+                PeerId("monotonic-peer"),
+                "Monotonic",
+                Platform.JVM_DESKTOP,
+                setOf(TransportKind.LAN)
+            ),
+            initialConnection = pair.a,
+            initialEvents = events,
+            protocol = protocol,
+            parentScope = scope,
+            keepAlive = KeepAliveConfig(pingIntervalMillis = 50, timeoutMillis = 150),
+            clock = { wallClock },
+            monotonicClock = { testScheduler.currentTime },
+            logger = P2pLogger.NoOp
+        )
+        session.start()
+
+        try {
+            wallClock = Long.MAX_VALUE
+            testScheduler.advanceTimeBy(50)
+            testScheduler.runCurrent()
+            assertEquals(ConnectionState.Connected, session.state.value)
+
+            wallClock = Long.MIN_VALUE
+            testScheduler.advanceTimeBy(99)
+            testScheduler.runCurrent()
+            assertEquals(ConnectionState.Connected, session.state.value)
+
+            testScheduler.advanceTimeBy(1)
+            testScheduler.runCurrent()
+            assertEquals(ConnectionState.Failed, session.state.value)
+        } finally {
+            supervisor.cancel()
+        }
+    }
 
     @Test
     fun sessionTransitionsToFailedWhenNoPongArrivesWithinTimeout() {

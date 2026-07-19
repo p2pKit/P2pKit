@@ -14,6 +14,8 @@ import dev.p2pkit.core.internal.SecureIdentityStorage
 import dev.p2pkit.core.internal.DEFAULT_HANDSHAKE_TIMEOUT_MS
 import dev.p2pkit.core.internal.newP2pKit
 import dev.p2pkit.core.permission.P2pPermissionManager
+import dev.p2pkit.core.protocol.HelloPayload
+import dev.p2pkit.core.protocol.validateWireText
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
 import dev.p2pkit.core.provisioning.NetworkProvisioningFactory
 import dev.p2pkit.core.transfer.FileTransferConfig
@@ -162,6 +164,13 @@ public class P2pKitBuilder internal constructor() {
     internal fun build(): P2pKit {
         val resolvedAppId = appId ?: error("appId must be set on the P2pKit builder")
         val resolvedName = deviceName ?: error("deviceName must be set on the P2pKit builder")
+        validateWireText(
+            resolvedName,
+            "deviceName",
+            HelloPayload.MAX_FIELD_LEN,
+            HelloPayload.MAX_FIELD_UTF8_BYTES,
+            requireNonBlank = true
+        )
         check(transportsBuilder.factories.isNotEmpty()) {
             "At least one transport must be registered (e.g. transports { lan() })"
         }
@@ -198,6 +207,9 @@ public class TransportsBuilder internal constructor() {
 
     /** Register a transport. Transport modules expose extension helpers (e.g. `lan()`). */
     public fun register(factory: TransportFactory) {
+        require(factories.none { it === factory }) {
+            "The same TransportFactory instance cannot be registered more than once"
+        }
         factories.add(factory)
     }
 }

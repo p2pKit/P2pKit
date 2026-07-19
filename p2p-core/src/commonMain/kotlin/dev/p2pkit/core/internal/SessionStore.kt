@@ -58,6 +58,7 @@ internal class SessionStore(
 
     private val mutex = Mutex()
     private val byPeer: MutableMap<PeerId, P2pSession> = mutableMapOf()
+    private val directionByPeer: MutableMap<PeerId, SessionDirection> = mutableMapOf()
     private val pending: MutableMap<PeerId, CompletableDeferred<P2pSession>> = mutableMapOf()
 
     /** Immutable publication used by non-suspending diagnostic lookups. */
@@ -91,6 +92,7 @@ internal class SessionStore(
         }
         if (existing != null) {
             byPeer.remove(peerId)
+            directionByPeer.remove(peerId)
             _sessions.value = _sessions.value.filter { it !== existing }
             publishRegistrationSnapshotLocked()
         }
@@ -148,20 +150,32 @@ internal class SessionStore(
         val existing = byPeer[peerId]
         val existingState = existing?.state?.value
         val outcome: RegisterOutcome = if (existing != null && existingState in ACTIVE_STATES) {
-            val newWinsLocally = if (localPeerIdValue < peerId.value) {
-                // We're the smaller-id side — keep our outgoing, reject our incoming.
-                !isIncoming
-            } else {
-                // We're the larger-id side (or equal, which is impossible
-                // by construction) — keep our incoming, reject our outgoing.
-                isIncoming
+            val newDirection = SessionDirection.from(isIncoming)
+            val existingDirection = checkNotNull(directionByPeer[peerId]) {
+                "Active session is missing direction for ${peerId.value}"
             }
-            if (newWinsLocally) {
-                byPeer[peerId] = session
-                _sessions.value = _sessions.value.filter { it !== existing } + session
-                RegisterOutcome.Replaced(winner = session, loser = existing)
-            } else {
+            if (existingDirection == newDirection) {
+                // Simultaneous-open arbitration applies only to opposite
+                // directions. A repeated inbound (or outbound) candidate
+                // never churns a healthy session of the same direction.
                 RegisterOutcome.Rejected(winner = existing, loser = session)
+            } else {
+                val newWinsLocally = if (localPeerIdValue < peerId.value) {
+                    // We're the smaller-id side — keep our outgoing, reject our incoming.
+                    !isIncoming
+                } else {
+                    // We're the larger-id side (or equal, which is impossible
+                    // by construction) — keep our incoming, reject our outgoing.
+                    isIncoming
+                }
+                if (newWinsLocally) {
+                    byPeer[peerId] = session
+                    directionByPeer[peerId] = newDirection
+                    _sessions.value = _sessions.value.filter { it !== existing } + session
+                    RegisterOutcome.Replaced(winner = session, loser = existing)
+                } else {
+                    RegisterOutcome.Rejected(winner = existing, loser = session)
+                }
             }
         } else if (
             // AUDIT-2026-07 (SEC-1, decision #9a): total-session admission
@@ -186,6 +200,7 @@ internal class SessionStore(
             // sample's PeerRow ↔ session matching iterates by peerId and
             // would otherwise see two rows for the same peer.
             byPeer[peerId] = session
+            directionByPeer[peerId] = SessionDirection.from(isIncoming)
             _sessions.value = if (existing != null) {
                 _sessions.value.filter { it !== existing } + session
             } else {
@@ -206,7 +221,10 @@ internal class SessionStore(
      * or [ConnectionState.Failed].
      */
     suspend fun removeIfMatches(peerId: PeerId, session: P2pSession): Unit = mutex.withLock {
-        if (byPeer[peerId] === session) byPeer.remove(peerId)
+        if (byPeer[peerId] === session) {
+            byPeer.remove(peerId)
+            directionByPeer.remove(peerId)
+        }
         _sessions.value = _sessions.value.filter { it !== session }
         publishRegistrationSnapshotLocked()
         checkInvariants("removeIfMatches")
@@ -235,6 +253,7 @@ internal class SessionStore(
         byPeer.values.forEach(::addByIdentity)
         val pendingToFail = pending.values.toList()
         byPeer.clear()
+        directionByPeer.clear()
         pending.clear()
         _sessions.value = emptyList()
         publishRegistrationSnapshotLocked()
@@ -300,6 +319,12 @@ internal class SessionStore(
                     "byPeer.size=${byPeer.size} visible.size=${visible.size}"
             )
         }
+        if (directionByPeer.keys != byPeer.keys) {
+            reportViolation(
+                "SessionStore[$site] INVARIANT: direction keys differ from active session keys. " +
+                    "directions=${directionByPeer.size} byPeer=${byPeer.size}"
+            )
+        }
         val duplicateInstances = visible.fold(0) { acc, s ->
             acc + if (visible.count { it === s } == 1) 0 else 1
         }
@@ -338,6 +363,7 @@ internal class SessionStore(
      */
     internal suspend fun forceInvariantViolationForTest(session: P2pSession): Unit = mutex.withLock {
         byPeer[session.peer.id] = session
+        directionByPeer[session.peer.id] = SessionDirection.Outgoing
         publishRegistrationSnapshotLocked()
         // Deliberately NOT added to _sessions — that is the violation.
         checkInvariants("forceInvariantViolationForTest")
@@ -367,6 +393,15 @@ internal class SessionStore(
          * detected (throw instead of warn), not whether we look.
          */
         private const val ASSERT_INVARIANTS = true
+    }
+}
+
+private enum class SessionDirection {
+    Incoming,
+    Outgoing;
+
+    companion object {
+        fun from(isIncoming: Boolean): SessionDirection = if (isIncoming) Incoming else Outgoing
     }
 }
 

@@ -87,6 +87,7 @@ internal class P2pKitImpl(
     override val permissions: P2pPermissionManager,
     private val logger: P2pLogger,
     private val clock: () -> Long,
+    private val monotonicClock: () -> Long = clock,
     parentJob: Job?,
     private val pathObserver: NetworkPathObserver,
     /**
@@ -239,6 +240,7 @@ internal class P2pKitImpl(
             localPlatform = localPlatform,
             localTransports = supportedTransportKinds,
             clock = clock,
+            monotonicClock = monotonicClock,
             logger = logger,
             fileTransferConfig = fileTransferConfig,
             setupTimeoutMillis = sessionSetupTimeoutMillis,
@@ -996,6 +998,7 @@ internal fun newP2pKit(
             permissions = permissionManager,
             logger = logger,
             clock = ::systemTimeMillis,
+            monotonicClock = ::monotonicTimeMillis,
             parentJob = null,
             pathObserver = pathObserver,
             strictSessionInvariants = strictSessionInvariants,

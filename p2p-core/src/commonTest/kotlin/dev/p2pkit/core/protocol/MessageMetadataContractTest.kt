@@ -31,6 +31,25 @@ class MessageMetadataContractTest {
 
     private val metadata = mapOf("k1" to "v1", "content-type" to "text/plain")
 
+    @Test
+    fun binarySnapshotsCallerBytesAndMetadata() {
+        val source = byteArrayOf(1, 2, 3)
+        val sourceMetadata = mutableMapOf("one" to "1", "two" to "2")
+        val message = P2pMessage.Binary(source, sourceMetadata)
+        val originalHash = message.hashCode()
+
+        source[0] = 9
+        sourceMetadata.clear()
+        val exposedBytes = message.bytes
+        exposedBytes[1] = 9
+        @Suppress("UNCHECKED_CAST")
+        (message.metadata as MutableMap<String, String>).clear()
+
+        assertContentEquals(byteArrayOf(1, 2, 3), message.bytes)
+        assertEquals(mapOf("one" to "1", "two" to "2"), message.metadata)
+        assertEquals(originalHash, message.hashCode())
+    }
+
     // --- Chunker/Reassembler round-trip (protocol codec layer) ---
 
     @Test

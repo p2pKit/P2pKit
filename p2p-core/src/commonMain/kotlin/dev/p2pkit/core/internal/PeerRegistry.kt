@@ -8,6 +8,8 @@ import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.provisioning.ManualPeerRegistrar
+import dev.p2pkit.core.protocol.HelloPayload
+import dev.p2pkit.core.protocol.validateWireText
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.PeerEvent
@@ -17,6 +19,7 @@ import dev.p2pkit.core.transport.TransportSecurityProfile
 import dev.p2pkit.core.transport.TransportHint
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
+import kotlin.jvm.JvmInline
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -74,22 +77,22 @@ internal class PeerRegistry(
     fun internalPeer(peerId: PeerId): InternalPeer? = tracked.value[peerId]?.internalPeer
 
     fun start() {
-        discoveryTransports.forEach { transport ->
+        discoveryTransports.forEachIndexed { sourceIndex, transport ->
             transport.events
-                .onEach(::processEvent)
+                .onEach { event -> processEvent(DiscoverySource(sourceIndex), event) }
                 .launchIn(scope)
         }
         scope.launch { evictLoop() }
     }
 
-    internal fun processEvent(event: PeerEvent) {
+    internal fun processEvent(event: PeerEvent) = processEvent(DIRECT_SOURCE, event)
+
+    private fun processEvent(source: DiscoverySource, event: PeerEvent) {
         tracked.update { current ->
             when (event) {
-                is PeerEvent.Found -> current.upsertDiscoveredPeer(event.peer)
-                is PeerEvent.Updated -> current.upsertDiscoveredPeer(event.peer)
-                is PeerEvent.Lost -> {
-                    if (current[event.peerId]?.isManual == true) current else current - event.peerId
-                }
+                is PeerEvent.Found -> current.upsertDiscoveredPeer(source, event.peer)
+                is PeerEvent.Updated -> current.upsertDiscoveredPeer(source, event.peer)
+                is PeerEvent.Lost -> current.removeDiscoveryContribution(source, event.peerId)
             }
         }
         publishPeers()
@@ -102,32 +105,47 @@ internal class PeerRegistry(
 
     /** A discovery claim can refresh routing, but it can never erase an application-supplied manual pin. */
     private fun Map<PeerId, TrackedPeer>.upsertDiscoveredPeer(
+        source: DiscoverySource,
         discovered: InternalPeer
     ): Map<PeerId, TrackedPeer> {
         val peerId = discovered.publicPeer.id
-        val previous = this[peerId]
-        val retainedPin = previous?.internalPeer?.authenticationHint as?
-            PeerAuthenticationHint.TrustedApplicationPin
-        val merged = if (previous?.isManual == true && retainedPin != null) {
-            discovered.copy(
-                transportHints = (previous.internalPeer.transportHints + discovered.transportHints).distinct(),
-                origin = PeerOrigin.Manual,
-                authenticationHint = retainedPin
+        val previous = this[peerId] ?: TrackedPeer()
+        return this + (
+            peerId to previous.copy(
+                discoveredBy = previous.discoveredBy + (
+                    source to DiscoveryContribution(discovered.snapshotForRegistry(), clock())
+                )
             )
-        } else {
-            discovered
+        )
+    }
+
+    private fun InternalPeer.snapshotForRegistry(): InternalPeer = copy(
+        publicPeer = publicPeer.copy(supportedTransports = publicPeer.supportedTransports.toSet()),
+        transportHints = transportHints.map { hint ->
+            hint.copy(metadata = hint.metadata.toMap())
         }
-        return this + (peerId to TrackedPeer(merged, clock()))
+    )
+
+    private fun Map<PeerId, TrackedPeer>.removeDiscoveryContribution(
+        source: DiscoverySource,
+        peerId: PeerId
+    ): Map<PeerId, TrackedPeer> {
+        val previous = this[peerId] ?: return this
+        val remaining = previous.copy(discoveredBy = previous.discoveredBy - source)
+        return if (remaining.isEmpty) this - peerId else this + (peerId to remaining)
     }
 
     internal fun evictStalePeers() {
         val now = clock()
         tracked.update { current ->
-            // Manual peers carry no heartbeats, so they are exempt from
-            // staleness eviction. The manual flag lives on the entry itself
-            // (atomic with the map update) — no separate, unsynchronized set.
-            current.filterValues { tracked ->
-                tracked.isManual || now - tracked.lastSeenAtMillis <= staleTimeoutMillis
+            current.mapValues { (_, trackedPeer) ->
+                trackedPeer.copy(
+                    discoveredBy = trackedPeer.discoveredBy.filterValues { contribution ->
+                        now - contribution.lastSeenAtMillis <= staleTimeoutMillis
+                    }
+                )
+            }.filterValues { trackedPeer ->
+                !trackedPeer.isEmpty
             }
         }
         publishPeers()
@@ -141,8 +159,17 @@ internal class PeerRegistry(
         deviceName: String?,
         expectedFingerprint: PeerFingerprint?
     ): Peer {
-        require(host.isNotBlank()) { "host must not be blank" }
+        val normalizedHost = normalizeManualHost(host)
         require(port in 1..65_535) { "port out of range: $port" }
+        deviceName?.takeIf { it.isNotBlank() }?.let { name ->
+            validateWireText(
+                name,
+                "manual peer deviceName",
+                HelloPayload.MAX_FIELD_LEN,
+                HelloPayload.MAX_FIELD_UTF8_BYTES,
+                requireNonBlank = true
+            )
+        }
         val authenticatedPeerId = when (securityProfile) {
             TransportSecurityProfile.AuthenticatedV2 -> {
                 val fingerprint = expectedFingerprint
@@ -174,9 +201,9 @@ internal class PeerRegistry(
         // map, so they are forgotten on kit.stop() / process exit and a stale
         // IP is never silently redialed in a later session (AUDIT-2026-06).
         val existing = tracked.value.values.firstOrNull { t ->
-            t.isManual && t.internalPeer.transportHints.any {
-                it.type == kind && it.host == host && it.port == port
-            } && (authenticatedPeerId == null || t.internalPeer.publicPeer.id == authenticatedPeerId)
+            t.manual?.internalPeer?.transportHints?.any {
+                it.type == kind && it.host == normalizedHost && it.port == port
+            } == true && (authenticatedPeerId == null || t.internalPeer.publicPeer.id == authenticatedPeerId)
         }
         if (existing != null) {
             val existingPeer = existing.internalPeer.publicPeer
@@ -188,18 +215,21 @@ internal class PeerRegistry(
             if (refreshedName == null || refreshedName == existingPeer.name) {
                 return existingPeer
             }
-            val refreshedInternal = existing.internalPeer.copy(
-                publicPeer = existingPeer.copy(name = refreshedName)
+            val refreshedManual = checkNotNull(existing.manual).copy(
+                internalPeer = existing.manual.internalPeer.copy(
+                    publicPeer = existing.manual.internalPeer.publicPeer.copy(name = refreshedName)
+                ),
+                registeredAtMillis = clock()
             )
             tracked.update { current ->
-                current + (existingPeer.id to TrackedPeer(refreshedInternal, clock()))
+                current + (existingPeer.id to existing.copy(manual = refreshedManual))
             }
             publishPeers()
-            return refreshedInternal.publicPeer
+            return checkNotNull(tracked.value[existingPeer.id]).internalPeer.publicPeer
         }
 
         val peerId = authenticatedPeerId ?: PeerId("manual-${Uuid.random()}")
-        val displayName = deviceName?.takeIf { it.isNotBlank() } ?: "manual:$host:$port"
+        val displayName = deviceName?.takeIf { it.isNotBlank() } ?: "manual:$normalizedHost:$port"
         val publicPeer = Peer(
             id = peerId,
             name = displayName,
@@ -208,7 +238,7 @@ internal class PeerRegistry(
         )
         val internal = InternalPeer(
             publicPeer = publicPeer,
-            transportHints = listOf(TransportHint(type = kind, host = host, port = port)),
+            transportHints = listOf(TransportHint(type = kind, host = normalizedHost, port = port)),
             // Explicit provenance: SessionManager keys its manual-peer HELLO
             // handling off this flag, never off the "manual-" id prefix.
             origin = PeerOrigin.Manual,
@@ -218,16 +248,43 @@ internal class PeerRegistry(
             val withoutSupersededEndpoint = if (authenticatedPeerId == null) {
                 current
             } else {
-                current.filterValues { trackedPeer ->
-                    !trackedPeer.isManual || trackedPeer.internalPeer.transportHints.none {
-                        it.type == kind && it.host == host && it.port == port
+                current.mapValues { (_, trackedPeer) ->
+                    val manual = trackedPeer.manual
+                    if (manual != null && manual.internalPeer.transportHints.any {
+                            it.type == kind && it.host == normalizedHost && it.port == port
+                        }
+                    ) {
+                        trackedPeer.copy(manual = null)
+                    } else {
+                        trackedPeer
                     }
-                }
+                }.filterValues { !it.isEmpty }
             }
-            withoutSupersededEndpoint + (peerId to TrackedPeer(internal, clock()))
+            val previous = withoutSupersededEndpoint[peerId] ?: TrackedPeer()
+            withoutSupersededEndpoint + (
+                peerId to previous.copy(manual = ManualContribution(internal, clock()))
+            )
         }
         publishPeers()
         return publicPeer
+    }
+
+    private fun normalizeManualHost(host: String): String {
+        val trimmed = host.trim()
+        val unwrapped = if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+            trimmed.substring(1, trimmed.lastIndex)
+        } else {
+            trimmed
+        }
+        require(unwrapped.isNotBlank()) { "host must not be blank" }
+        require(unwrapped.length <= MAX_MANUAL_HOST_CHARS) { "host is too long" }
+        require(unwrapped.none { it.isWhitespace() || it.code < 0x20 || it.code in 0x7F..0x9F }) {
+            "host must not contain whitespace or control characters"
+        }
+        require(unwrapped.none { it == '/' || it == '?' || it == '#' || it == '@' }) {
+            "host must not contain URI path, query, fragment, or user-info delimiters"
+        }
+        return unwrapped.lowercase()
     }
 
     private suspend fun evictLoop() {
@@ -248,19 +305,64 @@ internal class PeerRegistry(
     companion object {
         const val DEFAULT_STALE_TIMEOUT_MS: Long = 15_000
         const val DEFAULT_EVICTION_POLL_MS: Long = 1_000
+        private const val MAX_MANUAL_HOST_CHARS: Int = 253
+        private val DIRECT_SOURCE = DiscoverySource(-1)
     }
 }
 
-internal data class TrackedPeer(
+@JvmInline
+private value class DiscoverySource(val index: Int)
+
+private data class DiscoveryContribution(
     val internalPeer: InternalPeer,
     val lastSeenAtMillis: Long
+)
+
+private data class ManualContribution(
+    val internalPeer: InternalPeer,
+    val registeredAtMillis: Long
+)
+
+private data class TrackedPeer(
+    val manual: ManualContribution? = null,
+    val discoveredBy: Map<DiscoverySource, DiscoveryContribution> = emptyMap()
 ) {
-    val peer: Peer get() = internalPeer.publicPeer
+    val internalPeer: InternalPeer
+        get() {
+            val discovered = discoveredBy.entries
+                .sortedBy { it.key.index }
+                .map { it.value.internalPeer }
+            val primary = discovered.firstOrNull() ?: checkNotNull(manual).internalPeer
+            val allClaims = buildList {
+                manual?.let { add(it.internalPeer) }
+                addAll(discovered)
+            }
+            val retainedPin = manual?.internalPeer?.authenticationHint as?
+                PeerAuthenticationHint.TrustedApplicationPin
+            return primary.copy(
+                publicPeer = primary.publicPeer.copy(
+                    supportedTransports = allClaims
+                        .flatMap { it.publicPeer.supportedTransports }
+                        .toSet()
+                ),
+                transportHints = allClaims.flatMap { it.transportHints }.distinct(),
+                origin = if (manual != null) PeerOrigin.Manual else PeerOrigin.Discovered,
+                authenticationHint = retainedPin ?: primary.authenticationHint
+            )
+        }
+
+    val lastSeenAtMillis: Long
+        get() = maxOf(
+            manual?.registeredAtMillis ?: Long.MIN_VALUE,
+            discoveredBy.values.maxOfOrNull { it.lastSeenAtMillis } ?: Long.MIN_VALUE
+        )
+
+    val isEmpty: Boolean get() = manual == null && discoveredBy.isEmpty()
 
     /**
      * True for entries created by [PeerRegistry.registerManualPeer]; exempt
      * from staleness eviction. Derived from [InternalPeer.origin] so there is
      * a single source of provenance truth (no second flag that could drift).
      */
-    val isManual: Boolean get() = internalPeer.origin == PeerOrigin.Manual
+    val isManual: Boolean get() = manual != null
 }

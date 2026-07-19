@@ -170,6 +170,38 @@ class SessionStoreInvariantTest {
         // strict mode never fires on invariant-preserving operations.
     }
 
+    @Test
+    fun repeatedSameDirectionInboundNeverReplacesHealthySession() = runTest {
+        for (localPeerIdValue in listOf("aaaa-local", "zzzz-local")) {
+            val store = SessionStore(P2pLogger.NoOp, strictInvariants = true)
+            val peer = syntheticPeer("peer-middle", "Peer")
+            val first = StubSession(peer = peer, id = "first-$localPeerIdValue")
+            assertIs<RegisterOutcome.Accepted>(
+                store.tryRegister(
+                    peer.id,
+                    first,
+                    isIncoming = true,
+                    localPeerIdValue = localPeerIdValue
+                )
+            )
+
+            repeat(5) { index ->
+                val duplicate = StubSession(peer = peer, id = "duplicate-$index-$localPeerIdValue")
+                val outcome = assertIs<RegisterOutcome.Rejected>(
+                    store.tryRegister(
+                        peer.id,
+                        duplicate,
+                        isIncoming = true,
+                        localPeerIdValue = localPeerIdValue
+                    )
+                )
+                assertSame(first, outcome.winner)
+                assertSame(duplicate, outcome.loser)
+                assertEquals(listOf<P2pSession>(first), store.sessions.value)
+            }
+        }
+    }
+
     private fun syntheticPeer(id: String, name: String): Peer = Peer(
         id = PeerId(id),
         name = name,

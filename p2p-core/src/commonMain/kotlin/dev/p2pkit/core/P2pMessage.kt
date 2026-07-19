@@ -44,25 +44,35 @@ public sealed class P2pMessage {
      *   map. See [P2pMessage] docs and the post-RC `metadata-wire` milestone.
      */
     public class Binary(
-        public val bytes: ByteArray,
-        public val metadata: Map<String, String> = emptyMap()
+        bytes: ByteArray,
+        metadata: Map<String, String> = emptyMap()
     ) : P2pMessage() {
+
+        private val content: ByteArray = bytes.copyOf()
+
+        /** Defensive copy; mutating the returned array cannot alter this message. */
+        public val bytes: ByteArray get() = content.copyOf()
+
+        internal val payloadSizeBytes: Int get() = content.size
+
+        private val metadataSnapshot: Map<String, String> = metadata.toMap()
+        public val metadata: Map<String, String> get() = metadataSnapshot.toMap()
 
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
             if (other !is Binary) return false
-            if (!bytes.contentEquals(other.bytes)) return false
-            if (metadata != other.metadata) return false
+            if (!content.contentEquals(other.content)) return false
+            if (metadataSnapshot != other.metadataSnapshot) return false
             return true
         }
 
         override fun hashCode(): Int {
-            var result = bytes.contentHashCode()
-            result = 31 * result + metadata.hashCode()
+            var result = content.contentHashCode()
+            result = 31 * result + metadataSnapshot.hashCode()
             return result
         }
 
         override fun toString(): String =
-            "Binary(bytes=ByteArray(size=${bytes.size}), metadata=$metadata)"
+            "Binary(bytes=ByteArray(size=${content.size}), metadata=$metadataSnapshot)"
     }
 }

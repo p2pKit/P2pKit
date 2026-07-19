@@ -9,6 +9,7 @@ import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerEvent
+import dev.p2pkit.core.transport.TransportHint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -121,6 +123,103 @@ class PeerRegistryTest {
 
             assertEquals(1, registry.peers.value.size)
             assertEquals(PeerId("p2"), registry.peers.value[0].id)
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun peerContributionsAreMergedAndLostPerTransportInstance() = runBlocking {
+        val supervisor = SupervisorJob()
+        try {
+            val lan = FakeDiscovery(TransportKind.LAN)
+            val ble = FakeDiscovery(TransportKind.BLE)
+            val registry = PeerRegistry(
+                discoveryTransports = listOf(lan, ble),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2
+            )
+            registry.start()
+
+            lan.emit(
+                PeerEvent.Found(
+                    peer("shared").copy(
+                        transportHints = listOf(
+                            TransportHint(TransportKind.LAN, host = "192.0.2.10", port = 9_001)
+                        )
+                    )
+                )
+            )
+            ble.emit(
+                PeerEvent.Found(
+                    peer("shared").copy(
+                        publicPeer = peer("shared").publicPeer.copy(
+                            supportedTransports = setOf(TransportKind.BLE)
+                        ),
+                        transportHints = listOf(TransportHint(TransportKind.BLE))
+                    )
+                )
+            )
+
+            assertEquals(
+                setOf(TransportKind.LAN, TransportKind.BLE),
+                registry.peers.value.single().supportedTransports
+            )
+            assertEquals(
+                setOf(TransportKind.LAN, TransportKind.BLE),
+                registry.internalPeer(PeerId("shared"))!!.transportHints.map { it.type }.toSet()
+            )
+
+            lan.emit(PeerEvent.Lost(PeerId("shared")))
+            assertEquals(setOf(TransportKind.BLE), registry.peers.value.single().supportedTransports)
+            assertEquals(
+                listOf(TransportKind.BLE),
+                registry.internalPeer(PeerId("shared"))!!.transportHints.map { it.type }
+            )
+
+            ble.emit(PeerEvent.Lost(PeerId("shared")))
+            assertTrue(registry.peers.value.isEmpty())
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun registrySnapshotsMutableDiscoveryCollections() = runBlocking {
+        val supervisor = SupervisorJob()
+        try {
+            val transport = FakeDiscovery()
+            val kinds = mutableSetOf(TransportKind.LAN)
+            val metadata = mutableMapOf("route" to "primary", "scope" to "local")
+            val hints = mutableListOf(
+                TransportHint(TransportKind.LAN, "192.0.2.20", 9_000, metadata)
+            )
+            val registry = PeerRegistry(
+                discoveryTransports = listOf(transport),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2
+            )
+            registry.start()
+            transport.emit(
+                PeerEvent.Found(
+                    InternalPeer(
+                        Peer(PeerId("snapshot"), "Snapshot", Platform.JVM_DESKTOP, kinds),
+                        hints
+                    )
+                )
+            )
+
+            kinds += TransportKind.BLE
+            metadata.clear()
+            hints.clear()
+
+            assertEquals(setOf(TransportKind.LAN), registry.peers.value.single().supportedTransports)
+            val retainedHint = registry.internalPeer(PeerId("snapshot"))!!.transportHints.single()
+            assertEquals(mapOf("route" to "primary", "scope" to "local"), retainedHint.metadata)
         } finally {
             supervisor.cancel()
         }
@@ -412,8 +511,46 @@ class PeerRegistryTest {
         }
     }
 
-    private class FakeDiscovery : DiscoveryTransport {
-        override val type = TransportKind.LAN
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun manualHostsAreCanonicalizedAndUnsafeUriFormsRejected() {
+        val supervisor = SupervisorJob()
+        try {
+            val registry = PeerRegistry(
+                discoveryTransports = listOf(FakeDiscovery()),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2
+            )
+            val first = registry.registerManualPeer("  EXAMPLE.COM  ", 9_000)
+            val duplicate = registry.registerManualPeer("example.com", 9_000)
+            assertEquals(first.id, duplicate.id)
+            assertEquals(
+                "example.com",
+                registry.internalPeer(first.id)!!.transportHints.single().host
+            )
+
+            val ipv6 = registry.registerManualPeer("[FE80::1%EN0]", 9_001)
+            assertEquals(
+                "fe80::1%en0",
+                registry.internalPeer(ipv6.id)!!.transportHints.single().host
+            )
+
+            listOf("https://host", "user@host", "host/path", "host name", "host\u0000name")
+                .forEach { unsafe ->
+                    assertFailsWith<IllegalArgumentException> {
+                        registry.registerManualPeer(unsafe, 9_002)
+                    }
+                }
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    private class FakeDiscovery(
+        override val type: TransportKind = TransportKind.LAN
+    ) : DiscoveryTransport {
         private val flow = MutableSharedFlow<PeerEvent>(extraBufferCapacity = 16)
         override val events: Flow<PeerEvent> = flow
 
