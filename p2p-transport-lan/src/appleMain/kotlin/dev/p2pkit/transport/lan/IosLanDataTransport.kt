@@ -209,6 +209,9 @@ internal class IosLanDataTransport(
         onDrop = { it.cancelNow("inbound admission rejected") }
     )
     private val startMutex = Mutex()
+    private val dialMutex = Mutex()
+    private val pendingDials = mutableSetOf<IosConnectionHandle>()
+    private var dialGeneration: Long = 0
 
     @Volatile
     private var closed: Boolean = false
@@ -406,7 +409,7 @@ internal class IosLanDataTransport(
         IosLanDebug.log("data", "buildListener: queue attached, wiring handlers")
 
         nw_listener_set_new_connection_handler(l) { conn ->
-            if (conn != null && !closed) {
+            if (conn != null && !closed && startedByHost) {
                 IosLanDebug.log("data", "listener: accepted inbound nw_connection")
                 val raw = connectionFactory(conn, queue)
                 val sent = incomingQueue.offer(raw)
@@ -417,7 +420,8 @@ internal class IosLanDataTransport(
             } else {
                 IosLanDebug.log(
                     "data",
-                    "listener: ignored inbound nw_connection (conn=${conn != null} closed=$closed)"
+                    "listener: ignored inbound nw_connection " +
+                        "(conn=${conn != null} closed=$closed started=$startedByHost)"
                 )
             }
             Unit
@@ -578,6 +582,10 @@ internal class IosLanDataTransport(
     }
 
     override suspend fun connect(peer: InternalPeer): RawConnection {
+        val expectedGeneration = dialMutex.withLock {
+            if (closed) throw stoppedDialFailure()
+            dialGeneration
+        }
         val pid8 = peer.publicPeer.id.value.take(8)
         val cached = endpointRegistry.get(peer.publicPeer.id)
         IosLanDebug.log(
@@ -616,28 +624,60 @@ internal class IosLanDataTransport(
         }
         IosLanDebug.log("connect", "peer=$pid8 nw_connection_create OK, wrapping + awaiting Connected (<=${CONNECT_TIMEOUT_MILLIS}ms)")
         val raw = connectionFactory(conn, queue)
-        val terminal = try {
-            withTimeout(CONNECT_TIMEOUT_MILLIS) {
-                raw.state.first { it != ConnectionState.Connecting }
+        val registered = dialMutex.withLock {
+            if (closed || dialGeneration != expectedGeneration) false else pendingDials.add(raw)
+        }
+        if (!registered) {
+            raw.cancelNow("transport stopped before outbound ownership commit")
+            throw stoppedDialFailure()
+        }
+        try {
+            val terminal = try {
+                withTimeout(CONNECT_TIMEOUT_MILLIS) {
+                    raw.state.first { it != ConnectionState.Connecting }
+                }
+            } catch (e: TimeoutCancellationException) {
+                IosLanDebug.log("connect", "TIMEOUT peer=$pid8 after ${CONNECT_TIMEOUT_MILLIS}ms — closing wrapper")
+                raw.cancelNow("outbound connect timeout")
+                throw P2pError.ConnectionFailed("iOS LAN connect timed out after ${CONNECT_TIMEOUT_MILLIS}ms")
+            } catch (cancelled: CancellationException) {
+                IosLanDebug.log("connect", "CANCELLED peer=$pid8 — closing wrapper")
+                raw.cancelNow("outbound connect cancelled")
+                throw cancelled
             }
-        } catch (e: TimeoutCancellationException) {
-            IosLanDebug.log("connect", "TIMEOUT peer=$pid8 after ${CONNECT_TIMEOUT_MILLIS}ms — closing wrapper")
-            raw.cancelNow("outbound connect timeout")
-            throw P2pError.ConnectionFailed("iOS LAN connect timed out after ${CONNECT_TIMEOUT_MILLIS}ms")
-        } catch (cancelled: CancellationException) {
-            IosLanDebug.log("connect", "CANCELLED peer=$pid8 — closing wrapper")
-            raw.cancelNow("outbound connect cancelled")
-            throw cancelled
+            val generationStillActive = dialMutex.withLock {
+                !closed && dialGeneration == expectedGeneration
+            }
+            if (!generationStillActive) {
+                raw.cancelNow("transport stopped during outbound connect")
+                throw stoppedDialFailure()
+            }
+            if (terminal != ConnectionState.Connected) {
+                raw.cancelNow("outbound connect terminal state=$terminal")
+                IosLanDebug.log("connect", "FAILED peer=$pid8 terminal=$terminal (expected Connected)")
+                throw P2pError.ConnectionFailed("iOS LAN connect failed (state=$terminal)")
+            }
+            IosLanDebug.log("connect", "SUCCESS peer=$pid8 raw connection in Connected state")
+            return raw
+        } finally {
+            dialMutex.withLock { pendingDials.remove(raw) }
         }
-        if (terminal != ConnectionState.Connected) {
-            IosLanDebug.log("connect", "FAILED peer=$pid8 terminal=$terminal (expected Connected)")
-            throw P2pError.ConnectionFailed("iOS LAN connect failed (state=$terminal)")
-        }
-        IosLanDebug.log("connect", "SUCCESS peer=$pid8 raw connection in Connected state")
-        return raw
     }
 
     override fun incomingConnections(): Flow<RawConnection> = incomingQueue.asFlow()
+
+    override suspend fun stop(): Unit = withContext(NonCancellable) {
+        startMutex.withLock {
+            if (closed) return@withLock
+            stopStartedResources(closeQueue = false, clearEndpoints = false)
+            if (!releasePendingListeners("transport stop")) {
+                throw IllegalStateException(
+                    "iOS LAN listener did not acknowledge cancellation within " +
+                        "${LISTENER_CANCEL_TIMEOUT_MILLIS}ms"
+                )
+            }
+        }
+    }
 
     override suspend fun close(): Unit = withContext(NonCancellable) {
         startMutex.withLock {
@@ -645,16 +685,7 @@ internal class IosLanDataTransport(
             if (firstClose) {
                 IosLanDebug.log("data", "close: cancelling path monitor, foreground observer, listener, and incoming channel")
                 closed = true
-                startedByHost = false
-                stopPathMonitor()
-                stopForegroundObserver()
-                cancelPendingRebind()
-                rebindScope.coroutineContext.cancelChildren()
-                listenerLease?.let(::retainListenerForCleanup)
-                listenerLease = null
-                _tcpPort.value = null
-                incomingQueue.closeAndDrain()
-                endpointRegistry.clear()
+                stopStartedResources(closeQueue = true, clearEndpoints = true)
             }
 
             if (!releasePendingListeners("transport close")) {
@@ -665,6 +696,32 @@ internal class IosLanDataTransport(
             }
         }
     }
+
+    /** Caller holds [startMutex]. */
+    private suspend fun stopStartedResources(closeQueue: Boolean, clearEndpoints: Boolean) {
+        startedByHost = false
+        stopPendingDials()
+        stopPathMonitor()
+        stopForegroundObserver()
+        cancelPendingRebind()
+        rebindScope.coroutineContext.cancelChildren()
+        listenerLease?.let(::retainListenerForCleanup)
+        listenerLease = null
+        _tcpPort.value = null
+        if (closeQueue) incomingQueue.closeAndDrain() else incomingQueue.drain()
+        if (clearEndpoints) endpointRegistry.clear()
+    }
+
+    private suspend fun stopPendingDials() {
+        val pending = dialMutex.withLock {
+            dialGeneration += 1
+            pendingDials.toList().also { pendingDials.clear() }
+        }
+        pending.forEach { it.cancelNow("transport lifecycle stopped") }
+    }
+
+    private fun stoppedDialFailure(): P2pError.ConnectionFailed =
+        P2pError.ConnectionFailed("iOS LAN data transport stopped during connect")
 
     // ──────────────────────────────────────────────────────────────────
     // V0.4-IOS-LISTENER-REBIND: path monitor + rebind cycle.

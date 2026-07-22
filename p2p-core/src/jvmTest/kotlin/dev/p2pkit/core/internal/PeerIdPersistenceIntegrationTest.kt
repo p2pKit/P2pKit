@@ -146,6 +146,7 @@ private class NoopDataTransport : DataTransport {
     override fun canConnect(peer: InternalPeer) = false
     override suspend fun connect(peer: InternalPeer): RawConnection = error("unused")
     override fun incomingConnections(): Flow<RawConnection> = incoming.receiveAsFlow()
+    override suspend fun stop() = Unit
     override suspend fun close() { incoming.close() }
 }
 

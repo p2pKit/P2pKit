@@ -29,6 +29,9 @@ import java.net.NoRouteToHostException
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 internal class JvmLanDataTransport(
@@ -57,6 +60,14 @@ internal class JvmLanDataTransport(
 
     private val startMutex = Mutex()
     private val serverSocket = AtomicReference<ServerSocket?>(null)
+    private val retainedServerSocketCleanup = AtomicReference<ServerSocket?>(null)
+    private val lifecycleGeneration = AtomicLong()
+    private val pendingDialSockets: MutableSet<Socket> = Collections.newSetFromMap(
+        ConcurrentHashMap<Socket, Boolean>()
+    )
+    private val retainedDialSocketCleanup: MutableSet<Socket> = Collections.newSetFromMap(
+        ConcurrentHashMap<Socket, Boolean>()
+    )
 
     @Volatile private var restartPort: Int = 0
     @Volatile private var hasStarted: Boolean = false
@@ -69,6 +80,11 @@ internal class JvmLanDataTransport(
             // start() after close() previously reported success on a closed
             // socket (AUDIT-2026-06 fix).
             return Result.failure(IllegalStateException("LAN data transport is closed"))
+        }
+        if (retainedServerSocketCleanup.get() != null || retainedDialSocketCleanup.isNotEmpty()) {
+            return Result.failure(
+                IllegalStateException("LAN data transport has unreleased resources; retry stop()")
+            )
         }
         if (serverSocket.get() != null) return Result.success(Unit)
         val sock = try {
@@ -102,6 +118,8 @@ internal class JvmLanDataTransport(
         peer.lanEndpoints().isNotEmpty()
 
     override suspend fun connect(peer: InternalPeer): RawConnection {
+        val dialGeneration = lifecycleGeneration.get()
+        ensureDialGeneration(dialGeneration)
         val endpoints = peer.lanEndpoints()
         if (endpoints.isEmpty()) throw P2pError.NoTransportAvailable(peer.publicPeer)
         val pid8 = peer.publicPeer.id.value.take(8)
@@ -109,6 +127,7 @@ internal class JvmLanDataTransport(
         val deadlineNanos = System.nanoTime() +
             LanConstants.TCP_CONNECT_TIMEOUT_MS * NANOS_PER_MILLISECOND
         endpoints.forEach { endpoint ->
+            ensureDialGeneration(dialGeneration)
             val timeout = if (endpoints.size == 1) {
                 LanConstants.TCP_CONNECT_TIMEOUT_MS
             } else {
@@ -117,26 +136,33 @@ internal class JvmLanDataTransport(
             if (timeout <= 0) return@forEach
             JvmLanDiag.log("dial", "connect peer=$pid8 -> ${endpoint.host}:${endpoint.port} (timeout=${timeout}ms)")
             val socket = socketFactory()
+            pendingDialSockets += socket
             try {
+                ensureDialGeneration(dialGeneration)
                 withContext(Dispatchers.IO) {
                     socket.connect(InetSocketAddress(endpoint.host, endpoint.port), timeout)
                 }
                 currentCoroutineContext().ensureActive()
+                ensureDialGeneration(dialGeneration)
                 JvmLanDiag.log(
                     "dial",
                     "connect OK peer=$pid8 local=${socket.localSocketAddress} remote=${socket.remoteSocketAddress}"
                 )
+                pendingDialSockets -= socket
                 return JvmRawConnection(socket)
             } catch (cancelled: CancellationException) {
-                runCatching { socket.close() }
+                closeDialSocket(socket)
                 JvmLanDiag.log("dial", "connect CANCELLED peer=$pid8 ${endpoint.host}:${endpoint.port} — socket closed")
                 throw cancelled
             } catch (error: Throwable) {
-                runCatching { socket.close() }
+                closeDialSocket(socket)
+                if (!isDialGenerationActive(dialGeneration)) throw stoppedDialFailure()
                 if (error !is Exception) throw error
                 val reason = error.dialFailureReason(timeout)
                 failures += "${endpoint.host}:${endpoint.port} $reason"
                 JvmLanDiag.log("dial", "connect FAILED peer=$pid8 ${endpoint.host}:${endpoint.port} $reason")
+            } finally {
+                pendingDialSockets -= socket
             }
         }
         throw P2pError.ConnectionFailed("TCP connect candidates failed: ${failures.joinToString("; ")}")
@@ -203,21 +229,66 @@ internal class JvmLanDataTransport(
         }
     }
 
-    override suspend fun close(): Unit = startMutex.withLock {
+    override suspend fun stop(): Unit = startMutex.withLock {
         if (closed) return@withLock
-        closed = true
+        stopLocked(preserveRestartPort = true)
+    }
+
+    override suspend fun close(): Unit = startMutex.withLock {
+        if (!closed) closed = true
+        stopLocked(preserveRestartPort = false)
+    }
+
+    private fun stopLocked(preserveRestartPort: Boolean) {
+        lifecycleGeneration.incrementAndGet()
         hasStarted = false
-        restartPort = 0
         val sock = serverSocket.getAndSet(null)
+        if (preserveRestartPort && sock != null) restartPort = sock.localPort
+        if (!preserveRestartPort) restartPort = 0
         serverSocketFlow.value = null
         registration.tcpPort = 0
         _tcpPort.value = null
+        val failures = mutableListOf<Throwable>()
+        val dialCleanup = (pendingDialSockets.toList() + retainedDialSocketCleanup.toList()).distinct()
+        pendingDialSockets.clear()
+        retainedDialSocketCleanup.clear()
+        dialCleanup.forEach { socket -> closeDialSocket(socket)?.let(failures::add) }
         sock?.let {
-            JvmLanDiag.log("data", "closing server socket ${it.localSocketAddress}")
-            runCatching { it.close() }
+            JvmLanDiag.log(
+                "data",
+                "${if (closed) "closing" else "stopping"} server socket ${it.localSocketAddress}"
+            )
         }
-        Unit
+        val listenerCleanup = listOfNotNull(sock, retainedServerSocketCleanup.getAndSet(null)).distinct()
+        listenerCleanup.forEach { listener ->
+            runCatching { listener.close() }.onFailure { failure ->
+                failures += failure
+                retainedServerSocketCleanup.compareAndSet(null, listener)
+            }
+        }
+        if (failures.isNotEmpty()) {
+            throw IllegalStateException(
+                "LAN data transport failed to release ${failures.size} resource(s)",
+                failures.first()
+            )
+        }
     }
+
+    private fun ensureDialGeneration(expected: Long) {
+        if (!isDialGenerationActive(expected)) throw stoppedDialFailure()
+    }
+
+    private fun isDialGenerationActive(expected: Long): Boolean =
+        !closed && lifecycleGeneration.get() == expected
+
+    private fun stoppedDialFailure(): P2pError.ConnectionFailed =
+        P2pError.ConnectionFailed("LAN data transport stopped during connect")
+
+    private fun closeDialSocket(socket: Socket): Throwable? =
+        runCatching { socket.close() }.exceptionOrNull().also { failure ->
+            if (failure == null) retainedDialSocketCleanup -= socket
+            else retainedDialSocketCleanup += socket
+        }
 
     private fun releaseServerSocket(expected: ServerSocket, preservePort: Boolean) {
         if (serverSocket.compareAndSet(expected, null)) {
@@ -226,7 +297,9 @@ internal class JvmLanDataTransport(
             registration.tcpPort = 0
             _tcpPort.value = null
         }
-        runCatching { expected.close() }
+        runCatching { expected.close() }.onFailure {
+            retainedServerSocketCleanup.compareAndSet(null, expected)
+        }
     }
 
     private fun bindServerSocket(port: Int): ServerSocket {

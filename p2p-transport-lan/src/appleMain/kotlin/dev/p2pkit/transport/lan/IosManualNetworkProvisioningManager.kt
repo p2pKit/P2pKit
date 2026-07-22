@@ -1,6 +1,7 @@
 package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.ExperimentalP2pApi
+import dev.p2pkit.core.NetworkProvisioningError
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.dsl.NetworkProvisioningConfigBuilder
@@ -22,6 +23,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Minimum-viable iOS implementation of [NetworkProvisioningManager].
@@ -45,13 +48,16 @@ import kotlinx.coroutines.flow.asStateFlow
  * empty on iOS — Apple offers no synchronous non-loopback IP enumeration
  * without a path-monitor subscription, so only the port/ids are populated;
  * Swift consumers read the local IP themselves if they need to display one
- * (e.g. `CNCopySupportedInterfaces` / `NWPathMonitor`). The [state],
- * [networkState], and [events] surfaces are likewise static on iOS —
- * nothing ever emits into them.
+ * (e.g. `CNCopySupportedInterfaces` / `NWPathMonitor`). [networkState] and
+ * [events] remain static; [state] changes only for terminal [close].
  */
 public class IosManualNetworkProvisioningManager internal constructor(
     private val ctx: ProvisioningContext
 ) : NetworkProvisioningManager {
+
+    private val closeLock = Mutex()
+    @kotlin.concurrent.Volatile
+    private var closed: Boolean = false
 
     private val _state = MutableStateFlow<NetworkProvisioningState>(NetworkProvisioningState.Idle)
     override val state: StateFlow<NetworkProvisioningState> = _state.asStateFlow()
@@ -67,7 +73,8 @@ public class IosManualNetworkProvisioningManager internal constructor(
     override val events: Flow<NetworkProvisioningEvent> = _events.asSharedFlow()
 
     override suspend fun startLocalNetwork(config: LocalNetworkConfig): LocalNetworkResult =
-        LocalNetworkResult.Unsupported(
+        if (closed) LocalNetworkResult.Failed(NetworkProvisioningError.ManagerClosed())
+        else LocalNetworkResult.Unsupported(
             "iOS cannot host Wi-Fi hotspots — Apple does not expose this to third-party apps."
         )
 
@@ -76,11 +83,13 @@ public class IosManualNetworkProvisioningManager internal constructor(
     }
 
     override suspend fun joinLocalNetwork(credentials: WifiCredentials): JoinNetworkResult =
-        JoinNetworkResult.Unsupported(
+        if (closed) JoinNetworkResult.Failed(NetworkProvisioningError.ManagerClosed())
+        else JoinNetworkResult.Unsupported(
             "iOS cannot programmatically join arbitrary Wi-Fi networks — the user must use the system Settings."
         )
 
     override suspend fun getManualConnectionInfo(): ManualConnectionInfo? {
+        ensureOpen()
         // Read lazily — the LAN data transport's port isn't bound until
         // `kit.start()` (or the first lifecycle call) succeeds.
         val port = ctx.lanTcpPort() ?: return null
@@ -107,6 +116,7 @@ public class IosManualNetworkProvisioningManager internal constructor(
         replaceWith = ReplaceWith("createManualPeer(host, port, expectedFingerprint)")
     )
     override suspend fun createManualPeer(host: String, port: Int): Peer {
+        ensureOpen()
         ctx.logger.info("provisioning: createManualPeer host=$host port=$port")
         IosLanDebug.log("provision", "createManualPeer host=$host port=$port")
         return ctx.manualPeerRegistrar.registerManualPeer(host = host, port = port)
@@ -118,6 +128,7 @@ public class IosManualNetworkProvisioningManager internal constructor(
         port: Int,
         expectedFingerprint: PeerFingerprint
     ): Peer {
+        ensureOpen()
         ctx.logger.info("provisioning: createManualPeer host=$host port=$port with authenticated pin")
         IosLanDebug.log("provision", "createManualPeer host=$host port=$port with authenticated pin")
         return ctx.manualPeerRegistrar.registerManualPeer(
@@ -125,6 +136,20 @@ public class IosManualNetworkProvisioningManager internal constructor(
             port = port,
             expectedFingerprint = expectedFingerprint
         )
+    }
+
+    override suspend fun close() {
+        closeLock.withLock {
+            if (closed) return
+            _state.value = NetworkProvisioningState.Closing
+            closed = true
+            _networkState.value = NetworkState.Unknown
+            _state.value = NetworkProvisioningState.Closed
+        }
+    }
+
+    private fun ensureOpen() {
+        if (closed) throw NetworkProvisioningError.ManagerClosed()
     }
 }
 

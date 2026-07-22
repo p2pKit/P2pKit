@@ -13,6 +13,31 @@ import kotlin.test.assertTrue
 class JvmLanDataTransportLifecycleTest {
 
     @Test
+    fun restartableStopReleasesAndRebindsSameInstance() = runBlocking {
+        val registration = LanServiceRegistration(
+            appId = AppId("data-stop-test"),
+            localPeerId = PeerId("data-stop-local"),
+            deviceName = "local",
+            platform = Platform.JVM_DESKTOP
+        )
+        val transport = JvmLanDataTransport(registration)
+
+        assertTrue(transport.start().isSuccess)
+        val initialPort = assertNotNull(transport.tcpPort.value)
+
+        transport.stop()
+        transport.stop()
+        assertNull(transport.tcpPort.value)
+        assertEquals(0, registration.tcpPort)
+
+        assertTrue(transport.start().isSuccess)
+        assertEquals(initialPort, transport.tcpPort.value)
+        assertEquals(initialPort, registration.tcpPort)
+
+        transport.close()
+    }
+
+    @Test
     fun terminalCloseClearsListenerStateAndRejectsRestart() = runBlocking {
         val registration = LanServiceRegistration(
             appId = AppId("data-close-test"),

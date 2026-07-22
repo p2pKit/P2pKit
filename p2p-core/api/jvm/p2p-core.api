@@ -150,6 +150,20 @@ public abstract class dev/p2pkit/core/NetworkProvisioningError : dev/p2pkit/core
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 }
 
+public final class dev/p2pkit/core/NetworkProvisioningError$CleanupFailed : dev/p2pkit/core/NetworkProvisioningError {
+	public fun <init> (Ljava/lang/String;Ljava/lang/Throwable;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/Throwable;
+	public final fun copy (Ljava/lang/String;Ljava/lang/Throwable;)Ldev/p2pkit/core/NetworkProvisioningError$CleanupFailed;
+	public static synthetic fun copy$default (Ldev/p2pkit/core/NetworkProvisioningError$CleanupFailed;Ljava/lang/String;Ljava/lang/Throwable;ILjava/lang/Object;)Ldev/p2pkit/core/NetworkProvisioningError$CleanupFailed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCleanupCause ()Ljava/lang/Throwable;
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class dev/p2pkit/core/NetworkProvisioningError$HotspotStopped : dev/p2pkit/core/NetworkProvisioningError {
 	public fun <init> (Ljava/lang/String;)V
 	public final fun component1 ()Ljava/lang/String;
@@ -170,6 +184,10 @@ public final class dev/p2pkit/core/NetworkProvisioningError$JoinFailed : dev/p2p
 	public final fun getReason ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/NetworkProvisioningError$ManagerClosed : dev/p2pkit/core/NetworkProvisioningError {
+	public fun <init> ()V
 }
 
 public final class dev/p2pkit/core/NetworkProvisioningError$PermissionMissingForProvisioning : dev/p2pkit/core/NetworkProvisioningError {
@@ -1024,6 +1042,7 @@ public abstract interface class dev/p2pkit/core/provisioning/NetworkProvisioning
 }
 
 public abstract interface class dev/p2pkit/core/provisioning/NetworkProvisioningManager {
+	public abstract fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun createManualPeer (Ljava/lang/String;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun createManualPeer-lFwcZpA (Ljava/lang/String;ILjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun getEvents ()Lkotlinx/coroutines/flow/Flow;
@@ -1041,6 +1060,20 @@ public final class dev/p2pkit/core/provisioning/NetworkProvisioningManager$Defau
 }
 
 public abstract class dev/p2pkit/core/provisioning/NetworkProvisioningState {
+}
+
+public final class dev/p2pkit/core/provisioning/NetworkProvisioningState$Closed : dev/p2pkit/core/provisioning/NetworkProvisioningState {
+	public static final field INSTANCE Ldev/p2pkit/core/provisioning/NetworkProvisioningState$Closed;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/provisioning/NetworkProvisioningState$Closing : dev/p2pkit/core/provisioning/NetworkProvisioningState {
+	public static final field INSTANCE Ldev/p2pkit/core/provisioning/NetworkProvisioningState$Closing;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class dev/p2pkit/core/provisioning/NetworkProvisioningState$Failed : dev/p2pkit/core/provisioning/NetworkProvisioningState {
@@ -1168,6 +1201,7 @@ public final class dev/p2pkit/core/provisioning/ProvisioningContext {
 public final class dev/p2pkit/core/provisioning/UnsupportedNetworkProvisioningManager : dev/p2pkit/core/provisioning/NetworkProvisioningManager {
 	public static final field NOT_IN_V01 Ljava/lang/String;
 	public fun <init> ()V
+	public fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun createManualPeer (Ljava/lang/String;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun createManualPeer-lFwcZpA (Ljava/lang/String;ILjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getEvents ()Lkotlinx/coroutines/flow/Flow;
@@ -1369,6 +1403,7 @@ public abstract interface class dev/p2pkit/core/transport/DataTransport {
 	public abstract fun getType ()Ldev/p2pkit/core/TransportKind;
 	public abstract fun incomingConnections ()Lkotlinx/coroutines/flow/Flow;
 	public fun start-IoAF18A (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun stop (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class dev/p2pkit/core/transport/DataTransport$DefaultImpls {

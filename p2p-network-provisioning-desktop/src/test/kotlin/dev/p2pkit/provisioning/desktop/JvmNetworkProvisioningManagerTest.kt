@@ -4,6 +4,7 @@ package dev.p2pkit.provisioning.desktop
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ExperimentalP2pApi
+import dev.p2pkit.core.NetworkProvisioningError
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerFingerprint
@@ -15,12 +16,16 @@ import dev.p2pkit.core.provisioning.LocalNetworkConfig
 import dev.p2pkit.core.provisioning.LocalNetworkResult
 import dev.p2pkit.core.provisioning.ManualPeerRegistrar
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
+import dev.p2pkit.core.provisioning.NetworkProvisioningState
 import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.WifiCredentials
 import dev.p2pkit.core.provisioning.WifiPassword
 import dev.p2pkit.core.provisioning.WifiSecurityType
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -122,19 +127,55 @@ class JvmNetworkProvisioningManagerTest {
 
     @Test
     fun fatalScannerErrorsAreNotConvertedToNoNetwork() = runBlocking<Unit> {
-        val parent = Job().also { it.cancel() }
         val fatal = AssertionError("fatal scanner failure")
+        val calls = AtomicInteger()
         val mgr = JvmNetworkProvisioningManager(
-            ctx(parentJob = parent),
+            ctx(),
             1_000,
-            { throw fatal }
+            {
+                if (calls.incrementAndGet() == 1) emptyList() else throw fatal
+            }
         )
         try {
+            withTimeout(1_000) {
+                while (calls.get() == 0) yield()
+            }
             val observed = assertFailsWith<AssertionError> { mgr.getManualConnectionInfo() }
             assertEquals(fatal.message, observed.message)
         } finally {
             mgr.close()
         }
+    }
+
+    @Test
+    fun closeIsTerminalIdempotentAndFutureOperationsAreDeterministic() = runBlocking<Unit> {
+        val mgr = JvmNetworkProvisioningManager(ctx(), 1_000, { emptyList() })
+
+        mgr.close()
+        mgr.close()
+
+        assertEquals(NetworkProvisioningState.Closed, mgr.state.value)
+        assertIs<NetworkProvisioningError.ManagerClosed>(
+            assertIs<LocalNetworkResult.Failed>(
+                mgr.startLocalNetwork(LocalNetworkConfig())
+            ).error
+        )
+        assertIs<NetworkProvisioningError.ManagerClosed>(
+            assertIs<JoinNetworkResult.Failed>(
+                mgr.joinLocalNetwork(
+                    WifiCredentials(
+                        ssid = "closed",
+                        password = WifiPassword("closed-password"),
+                        securityType = WifiSecurityType.WPA2
+                    )
+                )
+            ).error
+        )
+        assertFailsWith<NetworkProvisioningError.ManagerClosed> {
+            mgr.getManualConnectionInfo()
+        }
+        mgr.stopLocalNetwork()
+        assertEquals(NetworkProvisioningState.Closed, mgr.state.value)
     }
 
     @Test

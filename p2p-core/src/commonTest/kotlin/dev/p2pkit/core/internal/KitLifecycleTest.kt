@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -225,6 +226,11 @@ class KitLifecycleTest {
             val failed = kit.state.value
             assertIs<P2pState.Failed>(failed, "bind failure must publish P2pState.Failed")
             assertSame(thrown, failed.error, "Failed must carry the thrown error instance")
+            assertEquals(
+                1,
+                transport.stopCalls,
+                "even the failing transport may have acquired resources and must be rolled back"
+            )
 
             // A failed start must not latch: the retry re-runs the bind.
             transport.startFailure = null
@@ -237,6 +243,50 @@ class KitLifecycleTest {
 
             kit.stop()
         }
+    }
+
+    @Test
+    fun partialDataStartupRollsBackInReverseAndSameInstancesRetry() = runBlocking {
+        val calls = mutableListOf<String>()
+        val first = StartupProbeTransport(TransportKind.LAN, "first", calls)
+        val second = StartupProbeTransport(TransportKind.BLE, "second", calls).also {
+            it.startFailure = IllegalStateException("second bind failed after acquisition")
+        }
+        val kit = createTestKit {
+            appId = AppId("data-start-rollback-test")
+            deviceName = "Test"
+            transports {
+                register(DataOnlyFactory(first))
+                register(DataOnlyFactory(second))
+            }
+        }
+
+        assertFailsWith<P2pError.TransportStartFailed> { kit.start() }
+        assertEquals(
+            listOf("start:first", "start:second", "stop:second", "stop:first"),
+            calls,
+            "rollback must include the failing transport and run in reverse entry order"
+        )
+        assertFalse(first.active)
+        assertFalse(second.active)
+        assertFalse(first.closed)
+        assertFalse(second.closed)
+
+        second.startFailure = null
+        kit.start()
+        assertEquals(
+            listOf(
+                "start:first", "start:second", "stop:second", "stop:first",
+                "start:first", "start:second"
+            ),
+            calls
+        )
+        assertTrue(first.active)
+        assertTrue(second.active)
+
+        kit.stop()
+        assertTrue(first.closed)
+        assertTrue(second.closed)
     }
 
     /**
@@ -381,9 +431,10 @@ class KitLifecycleTest {
                 "cancellation must never be wrapped into a typed P2pError"
             )
             assertEquals(
-                P2pState.Starting, kit.state.value,
-                "a cancelled start must not corrupt public state to Failed"
+                P2pState.Idle, kit.state.value,
+                "a cancelled start must roll back to the retryable Idle state"
             )
+            assertEquals(1, transport.stopCalls, "cancelled startup must release partial resources")
 
             // The cancelled attempt must not have latched anything: the next
             // start() re-runs the bind and succeeds.
@@ -822,6 +873,8 @@ private class TrackingTransport : DataTransport, DiscoveryTransport {
 
     override fun incomingConnections(): Flow<RawConnection> = incomingChannel.receiveAsFlow()
 
+    override suspend fun stop() = Unit
+
     override suspend fun close() {
         dataClosed = true
         incomingChannel.close()
@@ -844,6 +897,39 @@ private class TrackingTransport : DataTransport, DiscoveryTransport {
 
     override suspend fun stopDiscovery() {
         discoveryStopped = true
+    }
+}
+
+private class StartupProbeTransport(
+    override val type: TransportKind,
+    private val label: String,
+    private val calls: MutableList<String>
+) : DataTransport {
+    override val priority: Int = 100
+    @Volatile var active: Boolean = false
+    @Volatile var closed: Boolean = false
+    @Volatile var startFailure: Throwable? = null
+
+    override suspend fun start(): Result<Unit> {
+        check(!closed)
+        calls += "start:$label"
+        active = true
+        val failure = startFailure
+        return if (failure == null) Result.success(Unit) else Result.failure(failure)
+    }
+
+    override suspend fun stop() {
+        calls += "stop:$label"
+        active = false
+    }
+
+    override fun canConnect(peer: InternalPeer): Boolean = false
+    override suspend fun connect(peer: InternalPeer): RawConnection = error("not supported")
+    override fun incomingConnections(): Flow<RawConnection> = emptyFlow()
+
+    override suspend fun close() {
+        active = false
+        closed = true
     }
 }
 
@@ -879,6 +965,7 @@ private class RollbackDiscoveryTransport(
     override fun canConnect(peer: InternalPeer): Boolean = false
     override suspend fun connect(peer: InternalPeer): RawConnection = error("not supported")
     override fun incomingConnections(): Flow<RawConnection> = incoming.receiveAsFlow()
+    override suspend fun stop() = Unit
     override suspend fun close() { incoming.close() }
     override val events: Flow<PeerEvent> = peerEvents.asSharedFlow()
 
@@ -917,6 +1004,7 @@ private class HungStartTransport : DataTransport {
     override val priority: Int = 100
 
     @Volatile var dataClosed: Boolean = false
+    @Volatile var stopCalls: Int = 0
 
     /** Completed by [start] the moment it is entered (the mutex is now held hung). */
     val startEntered = CompletableDeferred<Unit>()
@@ -937,6 +1025,11 @@ private class HungStartTransport : DataTransport {
         error("HungStartTransport does not produce outgoing connections")
 
     override fun incomingConnections(): Flow<RawConnection> = incomingChannel.receiveAsFlow()
+
+    override suspend fun stop() {
+        stopCalls += 1
+        dataClosed = false
+    }
 
     override suspend fun close() {
         dataClosed = true
@@ -974,6 +1067,7 @@ private class GatedDiscoveryTransport : DataTransport, DiscoveryTransport {
     override suspend fun connect(peer: InternalPeer): RawConnection =
         error("GatedDiscoveryTransport does not connect")
     override fun incomingConnections(): Flow<RawConnection> = incoming.receiveAsFlow()
+    override suspend fun stop() = Unit
     override suspend fun close() {
         incoming.close()
     }
@@ -1025,6 +1119,8 @@ private class GatedConnectTransport(
     }
 
     override fun incomingConnections(): Flow<RawConnection> = incoming.receiveAsFlow()
+
+    override suspend fun stop() = Unit
 
     override suspend fun close() {
         incoming.close()
@@ -1138,6 +1234,8 @@ private class GatedCloseTransport : DataTransport {
 
     override fun incomingConnections(): Flow<RawConnection> = incomingChannel.receiveAsFlow()
 
+    override suspend fun stop() = Unit
+
     override suspend fun close() {
         closeCallCount.update { it + 1 }
         closeEntered.complete(Unit)
@@ -1167,6 +1265,8 @@ private class CleanupProbeTransport(
     override fun canConnect(peer: InternalPeer): Boolean = false
     override suspend fun connect(peer: InternalPeer): RawConnection = error("not supported")
     override fun incomingConnections(): Flow<RawConnection> = incoming.receiveAsFlow()
+
+    override suspend fun stop() = Unit
 
     override suspend fun close() {
         closeCalls += 1

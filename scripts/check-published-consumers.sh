@@ -128,12 +128,67 @@ package consumer
 
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pState
+import dev.p2pkit.core.ExperimentalP2pApi
+import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerFingerprint
+import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.provisioning.JoinNetworkResult
+import dev.p2pkit.core.provisioning.LocalNetworkConfig
+import dev.p2pkit.core.provisioning.LocalNetworkResult
+import dev.p2pkit.core.provisioning.ManualConnectionInfo
+import dev.p2pkit.core.provisioning.NetworkProvisioningEvent
+import dev.p2pkit.core.provisioning.NetworkProvisioningManager
+import dev.p2pkit.core.provisioning.NetworkProvisioningState
+import dev.p2pkit.core.provisioning.NetworkState
+import dev.p2pkit.core.provisioning.WifiCredentials
+import dev.p2pkit.core.transport.DataTransport
+import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.RawConnection
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.io.RawSink
 
 fun coreState(kit: P2pKit, sink: RawSink): StateFlow<P2pState> {
     sink.flush()
     return kit.state
+}
+
+class ExternalDataTransport : DataTransport {
+    override val type: TransportKind = TransportKind.LAN
+    override val priority: Int = 1
+    override suspend fun stop() = Unit
+    override fun canConnect(peer: InternalPeer): Boolean = false
+    override suspend fun connect(peer: InternalPeer): RawConnection = error("not supported")
+    override fun incomingConnections(): Flow<RawConnection> = emptyFlow()
+    override suspend fun close() = Unit
+}
+
+@OptIn(ExperimentalP2pApi::class)
+class ExternalProvisioningManager : NetworkProvisioningManager {
+    override val state: StateFlow<NetworkProvisioningState> =
+        MutableStateFlow(NetworkProvisioningState.Idle)
+    override val networkState: StateFlow<NetworkState> = MutableStateFlow(NetworkState.Unknown)
+    override val events: Flow<NetworkProvisioningEvent> = emptyFlow()
+
+    override suspend fun startLocalNetwork(config: LocalNetworkConfig): LocalNetworkResult =
+        LocalNetworkResult.Unsupported("external fixture")
+    override suspend fun stopLocalNetwork() = Unit
+    override suspend fun joinLocalNetwork(credentials: WifiCredentials): JoinNetworkResult =
+        JoinNetworkResult.Unsupported("external fixture")
+    override suspend fun getManualConnectionInfo(): ManualConnectionInfo? = null
+
+    @Deprecated("legacy fixture overload")
+    override suspend fun createManualPeer(host: String, port: Int): Peer = error("not supported")
+
+    override suspend fun createManualPeer(
+        host: String,
+        port: Int,
+        expectedFingerprint: PeerFingerprint
+    ): Peer = error("not supported")
+
+    override suspend fun close() = Unit
 }
 EOF
 

@@ -14,6 +14,7 @@ final class dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager : dev.p
     final val state // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.state|{}state[0]
         final fun <get-state>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.core.provisioning/NetworkProvisioningState> // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.state.<get-state>|<get-state>(){}[0]
 
+    final suspend fun close() // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.close|close(){}[0]
     final suspend fun createManualPeer(kotlin/String, kotlin/Int): dev.p2pkit.core/Peer // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.createManualPeer|createManualPeer(kotlin.String;kotlin.Int){}[0]
     final suspend fun createManualPeer(kotlin/String, kotlin/Int, dev.p2pkit.core/PeerFingerprint): dev.p2pkit.core/Peer // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.createManualPeer|createManualPeer(kotlin.String;kotlin.Int;dev.p2pkit.core.PeerFingerprint){}[0]
     final suspend fun getManualConnectionInfo(): dev.p2pkit.core.provisioning/ManualConnectionInfo? // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.getManualConnectionInfo|getManualConnectionInfo(){}[0]

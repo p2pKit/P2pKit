@@ -37,6 +37,23 @@ public interface DataTransport {
      */
     public suspend fun start(): Result<Unit> = Result.success(Unit)
 
+    /**
+     * Release resources acquired by [start] while keeping this transport
+     * instance restartable.
+     *
+     * The operation is idempotent: stopping an inactive transport succeeds.
+     * Concurrent lifecycle calls must serialize so `start()` cannot publish a
+     * listener after `stop()` has returned. A later [start] begins a fresh
+     * lifecycle generation. Accepted [RawConnection]s whose ownership already
+     * moved to a session are not transport-startup resources and are closed by
+     * that session instead.
+     *
+     * This is the rollback primitive used when one transport in a
+     * multi-transport startup fails. It must not perform terminal disposal;
+     * [close] is the permanent operation.
+     */
+    public suspend fun stop()
+
     public fun canConnect(peer: InternalPeer): Boolean
 
     public suspend fun connect(peer: InternalPeer): RawConnection
@@ -53,5 +70,10 @@ public interface DataTransport {
      */
     public fun incomingConnections(): Flow<RawConnection>
 
+    /**
+     * Permanently dispose this transport. Idempotent. After `close()` begins,
+     * every later [start] must fail and no native callback may republish a
+     * listener or accepted connection.
+     */
     public suspend fun close()
 }

@@ -1,6 +1,7 @@
 package dev.p2pkit.provisioning.desktop
 
 import dev.p2pkit.core.ExperimentalP2pApi
+import dev.p2pkit.core.NetworkProvisioningError
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerFingerprint
@@ -22,8 +23,9 @@ import java.net.SocketException
 import java.util.Collections
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -34,6 +36,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -85,6 +89,10 @@ public class JvmNetworkProvisioningManager private constructor(
 
     private val scopeJob = SupervisorJob(parent = ctx.parentJob)
     private val scope = CoroutineScope(Dispatchers.IO + scopeJob)
+    private val closeLock = Mutex()
+
+    @Volatile
+    private var closed: Boolean = false
 
     private val _state = MutableStateFlow<NetworkProvisioningState>(NetworkProvisioningState.Idle)
     override val state: StateFlow<NetworkProvisioningState> = _state.asStateFlow()
@@ -100,11 +108,17 @@ public class JvmNetworkProvisioningManager private constructor(
     override val events: Flow<NetworkProvisioningEvent> = _events.asSharedFlow()
 
     init {
+        scopeJob.invokeOnCompletion {
+            closed = true
+            _networkState.value = NetworkState.Unknown
+            _state.value = NetworkProvisioningState.Closed
+        }
         scope.launch { pollNetworkLoop() }
     }
 
     override suspend fun startLocalNetwork(config: LocalNetworkConfig): LocalNetworkResult =
-        LocalNetworkResult.Unsupported(
+        if (closed) LocalNetworkResult.Failed(NetworkProvisioningError.ManagerClosed())
+        else LocalNetworkResult.Unsupported(
             "JVM desktop cannot host Wi-Fi hotspots; use Android for hosting."
         )
 
@@ -113,11 +127,13 @@ public class JvmNetworkProvisioningManager private constructor(
     }
 
     override suspend fun joinLocalNetwork(credentials: WifiCredentials): JoinNetworkResult =
-        JoinNetworkResult.Unsupported(
+        if (closed) JoinNetworkResult.Failed(NetworkProvisioningError.ManagerClosed())
+        else JoinNetworkResult.Unsupported(
             "JVM desktop cannot programmatically join Wi-Fi networks; the user must use the OS network UI."
         )
 
     override suspend fun getManualConnectionInfo(): ManualConnectionInfo? {
+        ensureOpen()
         val port = ctx.lanTcpPort() ?: return null
         val ips = withContext(Dispatchers.IO) { addressScanner.scan() }
         if (ips.isEmpty()) return null
@@ -138,6 +154,7 @@ public class JvmNetworkProvisioningManager private constructor(
         replaceWith = ReplaceWith("createManualPeer(host, port, expectedFingerprint)")
     )
     override suspend fun createManualPeer(host: String, port: Int): Peer {
+        ensureOpen()
         ctx.logger.info("provisioning: createManualPeer host=$host port=$port")
         return ctx.manualPeerRegistrar.registerManualPeer(host = host, port = port)
     }
@@ -148,6 +165,7 @@ public class JvmNetworkProvisioningManager private constructor(
         port: Int,
         expectedFingerprint: PeerFingerprint
     ): Peer {
+        ensureOpen()
         ctx.logger.info("provisioning: createManualPeer host=$host port=$port with authenticated pin")
         return ctx.manualPeerRegistrar.registerManualPeer(
             host = host,
@@ -156,9 +174,21 @@ public class JvmNetworkProvisioningManager private constructor(
         )
     }
 
-    /** Cancels the background polling loop. Called indirectly by `P2pKit.stop()` scope cancellation. */
-    public fun close() {
-        scopeJob.cancel()
+    /** Terminally cancel and join the background polling loop. */
+    override suspend fun close(): Unit = withContext(NonCancellable) {
+        closeLock.withLock {
+            if (!closed) {
+                closed = true
+                _state.value = NetworkProvisioningState.Closing
+            }
+            scopeJob.cancelAndJoin()
+            _networkState.value = NetworkState.Unknown
+            _state.value = NetworkProvisioningState.Closed
+        }
+    }
+
+    private fun ensureOpen() {
+        if (closed) throw NetworkProvisioningError.ManagerClosed()
     }
 
     // --- internals --------------------------------------------------------

@@ -145,6 +145,27 @@ class IosLanRecoveryTest {
     }
 
     @Test
+    fun restartableStopReleasesListenerAndSameInstanceStartsAgain() = runBlocking<Unit> {
+        val transport = IosLanDataTransport(context("restartable-stop"), IosEndpointRegistry())
+        try {
+            assertTrue(transport.start().isSuccess)
+            val releasedPort = assertNotNull(transport.tcpPort.value)
+
+            transport.stop()
+            transport.stop()
+            assertNull(transport.listener)
+            assertNull(transport.tcpPort.value)
+            assertEquals(0, p2pkit_test_bind_tcp_port(releasedPort.toUShort(), false))
+
+            assertTrue(transport.start().isSuccess)
+            assertNotNull(transport.listener)
+            assertNotNull(transport.tcpPort.value)
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Test
     fun cancelledCallerStillCompletesListenerCleanup() = runBlocking {
         val transport = IosLanDataTransport(context("cancelled-close"), IosEndpointRegistry())
         assertTrue(transport.start().isSuccess)

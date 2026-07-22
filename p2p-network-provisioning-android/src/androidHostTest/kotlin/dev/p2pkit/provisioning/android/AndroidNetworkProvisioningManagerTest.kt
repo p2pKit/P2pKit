@@ -26,6 +26,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -36,6 +37,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
@@ -477,15 +479,16 @@ class AndroidNetworkProvisioningManagerTest {
 
             val result = mgr.startLocalNetwork(LocalNetworkConfig())
             val failed = assertIs<LocalNetworkResult.Failed>(result)
-            assertIs<NetworkProvisioningError.HotspotStopped>(failed.error)
+            assertIs<NetworkProvisioningError.ManagerClosed>(failed.error)
             assertNull(wifi.lastHandle, "a closed manager must not call the OS start API")
+            assertEquals(NetworkProvisioningState.Closed, mgr.state.value)
         } finally {
             mgr.close()
         }
     }
 
     @Test
-    fun closeRacingHotspotStartClosesLateReservationAndReturnsOneTerminalFailure() = runBlocking<Unit> {
+    fun closeRacingHotspotStartCancelsAcquisitionAndReturnsOneTerminalFailure() = runBlocking<Unit> {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val wifi = FakeWifiManagerWrapper(
@@ -504,11 +507,9 @@ class AndroidNetworkProvisioningManagerTest {
             release.complete(Unit)
 
             val failed = assertIs<LocalNetworkResult.Failed>(start.await())
-            assertIs<NetworkProvisioningError.HotspotStopped>(failed.error)
-            assertTrue(
-                wifi.lastHandle?.isClosed == true,
-                "a reservation delivered after close must be released before start returns"
-            )
+            assertIs<NetworkProvisioningError.ManagerClosed>(failed.error)
+            assertNull(wifi.lastHandle, "close must cancel the acquisition before a reservation is delivered")
+            assertEquals(NetworkProvisioningState.Closed, mgr.state.value)
         } finally {
             mgr.close()
             release.complete(Unit)
@@ -516,7 +517,33 @@ class AndroidNetworkProvisioningManagerTest {
     }
 
     @Test
-    fun closeRacingJoinClosesLateBindingAndReturnsOneTerminalFailure() = runBlocking<Unit> {
+    fun callerCancellationCancelsOwnedAcquisitionAndRestoresIdle() = runBlocking<Unit> {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.StartSuspends(
+                entered = entered,
+                release = release,
+                credentials = testCreds,
+                apHosts = listOf("192.168.43.1")
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        try {
+            val start = async { mgr.startLocalNetwork(LocalNetworkConfig()) }
+            entered.await()
+            start.cancelAndJoin()
+
+            assertEquals(NetworkProvisioningState.Idle, mgr.state.value)
+            assertNull(wifi.lastHandle, "caller cancellation must cancel acquisition ownership")
+        } finally {
+            release.complete(Unit)
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun closeRacingJoinCancelsAcquisitionAndReturnsOneTerminalFailure() = runBlocking<Unit> {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val wifi = FakeWifiManagerWrapper(
@@ -537,15 +564,44 @@ class AndroidNetworkProvisioningManagerTest {
             release.complete(Unit)
 
             val failed = assertIs<JoinNetworkResult.Failed>(join.await())
-            assertIs<NetworkProvisioningError.JoinFailed>(failed.error)
-            assertTrue(
-                wifi.lastJoinHandle?.isClosed == true,
-                "a joined binding delivered after close must be released before join returns"
-            )
+            assertIs<NetworkProvisioningError.ManagerClosed>(failed.error)
+            assertNull(wifi.lastJoinHandle, "close must cancel acquisition before process binding is delivered")
+            assertEquals(NetworkProvisioningState.Closed, mgr.state.value)
         } finally {
             mgr.close()
             release.complete(Unit)
         }
+    }
+
+    @Test
+    fun closeIsTerminalIdempotentAndFutureOperationsDoNotReachWifiApis() = runBlocking<Unit> {
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.Start(
+                credentials = testCreds,
+                apHosts = listOf("192.168.43.1")
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+
+        mgr.close()
+        mgr.close()
+
+        assertEquals(NetworkProvisioningState.Closed, mgr.state.value)
+        assertIs<NetworkProvisioningError.ManagerClosed>(
+            assertIs<LocalNetworkResult.Failed>(
+                mgr.startLocalNetwork(LocalNetworkConfig())
+            ).error
+        )
+        assertIs<NetworkProvisioningError.ManagerClosed>(
+            assertIs<JoinNetworkResult.Failed>(mgr.joinLocalNetwork(testCreds)).error
+        )
+        assertFailsWith<NetworkProvisioningError.ManagerClosed> {
+            mgr.getManualConnectionInfo()
+        }
+        mgr.stopLocalNetwork()
+        assertNull(wifi.lastHandle, "closed manager must not call the hotspot API")
+        assertNull(wifi.lastJoinHandle, "closed manager must not call the join API")
+        assertEquals(NetworkProvisioningState.Closed, mgr.state.value)
     }
 
     @Test

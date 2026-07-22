@@ -6,7 +6,7 @@ public final class dev/p2pkit/provisioning/desktop/JvmNetworkProvisioningManager
 	public static final field DEFAULT_POLL_INTERVAL_MS J
 	public fun <init> (Ldev/p2pkit/core/provisioning/ProvisioningContext;J)V
 	public synthetic fun <init> (Ldev/p2pkit/core/provisioning/ProvisioningContext;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun close ()V
+	public fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun createManualPeer (Ljava/lang/String;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun createManualPeer-lFwcZpA (Ljava/lang/String;ILjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getEvents ()Lkotlinx/coroutines/flow/Flow;

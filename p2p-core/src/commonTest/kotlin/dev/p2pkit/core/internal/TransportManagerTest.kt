@@ -79,6 +79,7 @@ class TransportManagerTest {
         override fun canConnect(peer: InternalPeer): Boolean = canConnect
         override suspend fun connect(peer: InternalPeer): RawConnection = error("not used")
         override fun incomingConnections(): Flow<RawConnection> = emptyFlow()
+        override suspend fun stop() = Unit
         override suspend fun close() = Unit
     }
 }

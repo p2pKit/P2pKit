@@ -28,4 +28,13 @@ public sealed class NetworkProvisioningError(message: String?, cause: Throwable?
     public data class HotspotStopped(val reason: String) : NetworkProvisioningError(reason, null)
 
     public data class JoinFailed(val reason: String) : NetworkProvisioningError(reason, null)
+
+    /** The manager has begun terminal disposal and cannot accept new work. */
+    public class ManagerClosed : NetworkProvisioningError("network provisioning manager is closed", null)
+
+    /** One or more resources could not be released during terminal disposal. */
+    public data class CleanupFailed(
+        val reason: String,
+        val cleanupCause: Throwable? = null
+    ) : NetworkProvisioningError(reason, cleanupCause)
 }

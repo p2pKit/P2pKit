@@ -185,6 +185,7 @@ abstract interface dev.p2pkit.core.provisioning/NetworkProvisioningManager { // 
     abstract val state // dev.p2pkit.core.provisioning/NetworkProvisioningManager.state|{}state[0]
         abstract fun <get-state>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.core.provisioning/NetworkProvisioningState> // dev.p2pkit.core.provisioning/NetworkProvisioningManager.state.<get-state>|<get-state>(){}[0]
 
+    abstract suspend fun close() // dev.p2pkit.core.provisioning/NetworkProvisioningManager.close|close(){}[0]
     abstract suspend fun createManualPeer(kotlin/String, kotlin/Int): dev.p2pkit.core/Peer // dev.p2pkit.core.provisioning/NetworkProvisioningManager.createManualPeer|createManualPeer(kotlin.String;kotlin.Int){}[0]
     abstract suspend fun createManualPeer(kotlin/String, kotlin/Int, dev.p2pkit.core/PeerFingerprint): dev.p2pkit.core/Peer // dev.p2pkit.core.provisioning/NetworkProvisioningManager.createManualPeer|createManualPeer(kotlin.String;kotlin.Int;dev.p2pkit.core.PeerFingerprint){}[0]
     abstract suspend fun getManualConnectionInfo(): dev.p2pkit.core.provisioning/ManualConnectionInfo? // dev.p2pkit.core.provisioning/NetworkProvisioningManager.getManualConnectionInfo|getManualConnectionInfo(){}[0]
@@ -247,6 +248,7 @@ abstract interface dev.p2pkit.core.transport/DataTransport { // dev.p2pkit.core.
     abstract fun incomingConnections(): kotlinx.coroutines.flow/Flow<dev.p2pkit.core.transport/RawConnection> // dev.p2pkit.core.transport/DataTransport.incomingConnections|incomingConnections(){}[0]
     abstract suspend fun close() // dev.p2pkit.core.transport/DataTransport.close|close(){}[0]
     abstract suspend fun connect(dev.p2pkit.core.transport/InternalPeer): dev.p2pkit.core.transport/RawConnection // dev.p2pkit.core.transport/DataTransport.connect|connect(dev.p2pkit.core.transport.InternalPeer){}[0]
+    abstract suspend fun stop() // dev.p2pkit.core.transport/DataTransport.stop|stop(){}[0]
     open suspend fun start(): kotlin/Result<kotlin/Unit> // dev.p2pkit.core.transport/DataTransport.start|start(){}[0]
 }
 
@@ -610,6 +612,7 @@ final class dev.p2pkit.core.provisioning/UnsupportedNetworkProvisioningManager :
     final val state // dev.p2pkit.core.provisioning/UnsupportedNetworkProvisioningManager.state|{}state[0]
         final fun <get-state>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.core.provisioning/NetworkProvisioningState> // dev.p2pkit.core.provisioning/UnsupportedNetworkProvisioningManager.state.<get-state>|<get-state>(){}[0]
 
+    final suspend fun close() // dev.p2pkit.core.provisioning/UnsupportedNetworkProvisioningManager.close|close(){}[0]
     final suspend fun createManualPeer(kotlin/String, kotlin/Int): dev.p2pkit.core/Peer // dev.p2pkit.core.provisioning/UnsupportedNetworkProvisioningManager.createManualPeer|createManualPeer(kotlin.String;kotlin.Int){}[0]
     final suspend fun createManualPeer(kotlin/String, kotlin/Int, dev.p2pkit.core/PeerFingerprint): dev.p2pkit.core/Peer // dev.p2pkit.core.provisioning/UnsupportedNetworkProvisioningManager.createManualPeer|createManualPeer(kotlin.String;kotlin.Int;dev.p2pkit.core.PeerFingerprint){}[0]
     final suspend fun getManualConnectionInfo(): dev.p2pkit.core.provisioning/ManualConnectionInfo? // dev.p2pkit.core.provisioning/UnsupportedNetworkProvisioningManager.getManualConnectionInfo|getManualConnectionInfo(){}[0]
@@ -1110,6 +1113,18 @@ sealed class dev.p2pkit.core.provisioning/NetworkProvisioningState { // dev.p2pk
         final fun toString(): kotlin/String // dev.p2pkit.core.provisioning/NetworkProvisioningState.Failed.toString|toString(){}[0]
     }
 
+    final object Closed : dev.p2pkit.core.provisioning/NetworkProvisioningState { // dev.p2pkit.core.provisioning/NetworkProvisioningState.Closed|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core.provisioning/NetworkProvisioningState.Closed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.p2pkit.core.provisioning/NetworkProvisioningState.Closed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.p2pkit.core.provisioning/NetworkProvisioningState.Closed.toString|toString(){}[0]
+    }
+
+    final object Closing : dev.p2pkit.core.provisioning/NetworkProvisioningState { // dev.p2pkit.core.provisioning/NetworkProvisioningState.Closing|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core.provisioning/NetworkProvisioningState.Closing.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.p2pkit.core.provisioning/NetworkProvisioningState.Closing.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.p2pkit.core.provisioning/NetworkProvisioningState.Closing.toString|toString(){}[0]
+    }
+
     final object Idle : dev.p2pkit.core.provisioning/NetworkProvisioningState { // dev.p2pkit.core.provisioning/NetworkProvisioningState.Idle|null[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core.provisioning/NetworkProvisioningState.Idle.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.p2pkit.core.provisioning/NetworkProvisioningState.Idle.hashCode|hashCode(){}[0]
@@ -1362,6 +1377,22 @@ sealed class dev.p2pkit.core/NetworkPathStatus { // dev.p2pkit.core/NetworkPathS
 }
 
 sealed class dev.p2pkit.core/NetworkProvisioningError : dev.p2pkit.core/P2pError { // dev.p2pkit.core/NetworkProvisioningError|null[0]
+    final class CleanupFailed : dev.p2pkit.core/NetworkProvisioningError { // dev.p2pkit.core/NetworkProvisioningError.CleanupFailed|null[0]
+        constructor <init>(kotlin/String, kotlin/Throwable? = ...) // dev.p2pkit.core/NetworkProvisioningError.CleanupFailed.<init>|<init>(kotlin.String;kotlin.Throwable?){}[0]
+
+        final val cleanupCause // dev.p2pkit.core/NetworkProvisioningError.CleanupFailed.cleanupCause|{}cleanupCause[0]
+            final fun <get-cleanupCause>(): kotlin/Throwable? // dev.p2pkit.core/NetworkProvisioningError.CleanupFailed.cleanupCause.<get-cleanupCause>|<get-cleanupCause>(){}[0]
+        final val reason // dev.p2pkit.core/NetworkProvisioningError.CleanupFailed.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // dev.p2pkit.core/NetworkProvisioningError.CleanupFailed.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // dev.p2pkit.core/NetworkProvisioningError.CleanupFailed.component1|component1(){}[0]
+        final fun component2(): kotlin/Throwable? // dev.p2pkit.core/NetworkProvisioningError.CleanupFailed.component2|component2(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/Throwable? = ...): dev.p2pkit.core/NetworkProvisioningError.CleanupFailed // dev.p2pkit.core/NetworkProvisioningError.CleanupFailed.copy|copy(kotlin.String;kotlin.Throwable?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/NetworkProvisioningError.CleanupFailed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.p2pkit.core/NetworkProvisioningError.CleanupFailed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.p2pkit.core/NetworkProvisioningError.CleanupFailed.toString|toString(){}[0]
+    }
+
     final class HotspotStopped : dev.p2pkit.core/NetworkProvisioningError { // dev.p2pkit.core/NetworkProvisioningError.HotspotStopped|null[0]
         constructor <init>(kotlin/String) // dev.p2pkit.core/NetworkProvisioningError.HotspotStopped.<init>|<init>(kotlin.String){}[0]
 
@@ -1386,6 +1417,10 @@ sealed class dev.p2pkit.core/NetworkProvisioningError : dev.p2pkit.core/P2pError
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/NetworkProvisioningError.JoinFailed.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.p2pkit.core/NetworkProvisioningError.JoinFailed.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // dev.p2pkit.core/NetworkProvisioningError.JoinFailed.toString|toString(){}[0]
+    }
+
+    final class ManagerClosed : dev.p2pkit.core/NetworkProvisioningError { // dev.p2pkit.core/NetworkProvisioningError.ManagerClosed|null[0]
+        constructor <init>() // dev.p2pkit.core/NetworkProvisioningError.ManagerClosed.<init>|<init>(){}[0]
     }
 
     final class PermissionMissingForProvisioning : dev.p2pkit.core/NetworkProvisioningError { // dev.p2pkit.core/NetworkProvisioningError.PermissionMissingForProvisioning|null[0]

@@ -54,6 +54,19 @@ public interface NetworkProvisioningManager {
         port: Int,
         expectedFingerprint: PeerFingerprint
     ): Peer
+
+    /**
+     * Permanently dispose this manager and every resource it owns.
+     *
+     * Idempotent and concurrency-safe: concurrent callers join one cleanup
+     * transaction. The method returns only after bounded cleanup has been
+     * attempted. Once closing begins, no later operation may acquire or
+     * publish a native handle. A cleanup failure is reported after the
+     * manager becomes terminal; retained cleanup ownership may be retried by
+     * a later `close()` call.
+     */
+    @Throws(Exception::class)
+    public suspend fun close()
 }
 
 /** Provisioning manager's own lifecycle, distinct from the underlying network. */
@@ -64,6 +77,8 @@ public sealed class NetworkProvisioningState {
     public data object JoiningNetwork : NetworkProvisioningState()
     public data object JoinedNetwork : NetworkProvisioningState()
     public data object StoppingLocalNetwork : NetworkProvisioningState()
+    public data object Closing : NetworkProvisioningState()
+    public data object Closed : NetworkProvisioningState()
     public data class Failed(val error: NetworkProvisioningError) : NetworkProvisioningState()
 }
 

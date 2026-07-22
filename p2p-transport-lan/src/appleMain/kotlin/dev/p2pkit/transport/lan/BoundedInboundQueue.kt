@@ -26,11 +26,16 @@ internal class BoundedInboundQueue<T : Any>(
 
     fun asFlow(): Flow<T> = channel.receiveAsFlow()
 
-    fun closeAndDrain() {
-        channel.close()
+    /** Release queued ownership without terminally closing the reusable channel. */
+    fun drain() {
         while (true) {
             val value = channel.tryReceive().getOrNull() ?: return
             onDrop(value)
         }
+    }
+
+    fun closeAndDrain() {
+        channel.close()
+        drain()
     }
 }

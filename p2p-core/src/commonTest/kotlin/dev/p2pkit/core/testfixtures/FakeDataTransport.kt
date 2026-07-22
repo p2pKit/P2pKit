@@ -44,9 +44,13 @@ internal class FakeDataTransport(
     val isClosed: Boolean get() = closed
 
     private val _startCalls = AtomicInt(0)
+    private val _stopCalls = AtomicInt(0)
 
     /** How many times [start] was called. */
     val startCalls: Int get() = _startCalls.load()
+
+    /** How many restartable rollback stops were requested. */
+    val stopCalls: Int get() = _stopCalls.load()
 
     /**
      * Fail-on-demand knob for [start]: while non-null, `start()` returns
@@ -93,6 +97,10 @@ internal class FakeDataTransport(
     }
 
     override fun incomingConnections(): Flow<RawConnection> = incoming.receiveAsFlow()
+
+    override suspend fun stop() {
+        _stopCalls.addAndFetch(1)
+    }
 
     /**
      * Push an incoming connection to the collector. Fails loudly if the

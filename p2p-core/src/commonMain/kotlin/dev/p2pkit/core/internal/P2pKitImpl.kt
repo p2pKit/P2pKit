@@ -367,6 +367,7 @@ internal class P2pKitImpl(
             if (!startingCommitted) {
                 throw lifecycleStoppedFailure()
             }
+            val attempted = mutableListOf<DataTransport>()
             for (transport in dataTransports) {
                 // AUDIT-2026-07 (ARCH-1): rethrow cancellation before any
                 // wrapping or latching. The previous `runCatching` captured
@@ -377,10 +378,20 @@ internal class P2pKitImpl(
                 // the public state corrupted to Failed. On cancellation we
                 // leave `startResult` and `_state` untouched (still Starting)
                 // so a subsequent start() retries cleanly.
+                // Include the currently-entered transport because a platform
+                // start may acquire a listener before returning failure or
+                // observing caller cancellation.
+                attempted += transport
                 val r = try {
                     transport.start()
                 } catch (e: CancellationException) {
-                    if (!isLifecycleActive(generation)) {
+                    if (isLifecycleActive(generation)) {
+                        rollbackDataStartup(attempted)
+                        commitLifecycle(generation) {
+                            startResult = null
+                            _state.value = P2pState.Idle
+                        }
+                    } else {
                         cleanupLateStart(
                             observerMayHaveStarted = false,
                             dataMayHaveStartedLate = true
@@ -404,6 +415,7 @@ internal class P2pKitImpl(
                         reason = cause?.message ?: "transport.start() returned failure",
                         underlying = cause
                     )
+                    rollbackDataStartup(attempted)
                     val committed = commitLifecycle(generation) {
                         startResult = Result.failure(failed)
                         _state.value = P2pState.Failed(failed)
@@ -796,6 +808,22 @@ internal class P2pKitImpl(
         }
     }
 
+    /**
+     * Undo one partial multi-transport startup without terminally disposing
+     * the transport instances. Every entered transport is attempted in
+     * reverse order, including the transport whose `start()` failed after
+     * acquiring a platform handle.
+     */
+    private suspend fun rollbackDataStartup(attempted: List<DataTransport>) {
+        withContext(NonCancellable) {
+            for (transport in attempted.asReversed()) {
+                cleanupStaleResource("${transport.type} data startup") {
+                    transport.stop()
+                }
+            }
+        }
+    }
+
     private suspend fun cleanupStaleResource(
         label: String,
         cleanup: suspend () -> Unit
@@ -868,6 +896,13 @@ internal class P2pKitImpl(
             it.stopDiscovery()
         }
         issues += sessionManager.shutdownAllSessions()
+        captureCleanupIssue(
+            resource = "network provisioning manager",
+            timeoutMillis = RESOURCE_CLOSE_TIMEOUT_MS,
+            preserveCancellation = false
+        ) {
+            networkProvisioning.close()
+        }?.let(issues::add)
         for (transport in dataTransports) {
             captureCleanupIssue(
                 resource = "${transport.type} data transport",

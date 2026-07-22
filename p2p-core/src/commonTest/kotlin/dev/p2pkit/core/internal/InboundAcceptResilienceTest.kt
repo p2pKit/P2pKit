@@ -311,6 +311,8 @@ private class RecoveringDataTransport : DataTransport {
         check(incoming.trySend(connection).isSuccess)
     }
 
+    override suspend fun stop() = Unit
+
     override suspend fun close() {
         incoming.close()
     }

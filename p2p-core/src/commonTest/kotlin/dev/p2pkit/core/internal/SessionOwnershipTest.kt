@@ -255,6 +255,7 @@ private class FirstDialGateTransport(
         return retryConnection
     }
     override fun incomingConnections(): Flow<RawConnection> = emptyFlow()
+    override suspend fun stop() = Unit
     override suspend fun close() = Unit
 }
 
