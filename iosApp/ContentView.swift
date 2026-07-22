@@ -59,6 +59,10 @@ struct ContentView: View {
     /// collector and echo every received message.
     @State private var collectedSessionIds: Set<String> = []
 
+    /// Signature of the last cross-check warning; identical poll results are
+    /// intentionally not emitted once per second.
+    @State private var lastCrossCheckSignature: String?
+
     /// True once NWBrowser has transitioned to `.ready` at least once
     /// in THIS run. Used to detect iOS Local Network permission denial —
     /// if the browser is stuck in `.waiting` for ~6 s we surface a hint.
@@ -99,7 +103,10 @@ struct ContentView: View {
         let name: String
         let peer: Peer
         static func == (lhs: PeerRow, rhs: PeerRow) -> Bool {
-            lhs.id == rhs.id && lhs.name == rhs.name
+            lhs.id == rhs.id && lhs.name == rhs.name &&
+                String(describing: lhs.peer.platform) == String(describing: rhs.peer.platform) &&
+                String(describing: lhs.peer.supportedTransports) ==
+                    String(describing: rhs.peer.supportedTransports)
         }
     }
 
@@ -610,6 +617,7 @@ struct ContentView: View {
         pendingConnectPeerIds = []
         sendingFileSessionIds = []
         browserEverReady = false
+        lastCrossCheckSignature = nil
         // AUDIT-2026-06 (A-G9-samples-desktop-ios-06): fresh probe epoch per
         // run; replayed lines from previous runs precede the marker and are
         // ignored by the readiness probe.
@@ -871,6 +879,7 @@ struct ContentView: View {
         // SessionRow share its peerId? Surfaces the "messages flow but UI
         // shows Connect" symptom if it's a peer-id mismatch (e.g., a Bonjour
         // vs HELLO disagreement, or a Swift bridge formatting glitch).
+        var crossCheckWarnings: [String] = []
         for peerRow in self.peers {
             let matchingSessions = sessionRows.filter { $0.peerId == peerRow.id }
             if matchingSessions.isEmpty && !sessionRows.isEmpty {
@@ -879,12 +888,18 @@ struct ContentView: View {
                 // symptom looks like this.
                 let allSessionPeerIds = sessionRows.map { $0.peerId.prefix(8) }
                     .joined(separator: ",")
-                diag(
-                    "session",
-                    "WARN: peer \(peerRow.name) id=\(peerRow.id.prefix(8)) " +
+                crossCheckWarnings.append(
+                    "peer \(peerRow.name) id=\(peerRow.id.prefix(8)) " +
                         "has no matching session row (sessions exist with peerIds=[\(allSessionPeerIds)])"
                 )
             }
+        }
+        let crossCheckSignature = crossCheckWarnings.joined(separator: "|")
+        if crossCheckSignature != lastCrossCheckSignature {
+            if !crossCheckWarnings.isEmpty {
+                diag("session", "WARN: " + crossCheckWarnings.joined(separator: " | "))
+            }
+            lastCrossCheckSignature = crossCheckSignature
         }
 
         if sessionRows != self.sessions { self.sessions = sessionRows }
@@ -1204,7 +1219,9 @@ struct ContentView: View {
         case let s as FileTransferState.Failed:
             return ("Failed: \(s.error.message ?? "\(s.error)")", true)
         default:
-            return ("…", false)
+            // Unknown future SDK states must not leave a transfer watcher
+            // suspended forever with an open destination.
+            return ("Failed: unknown transfer state", true)
         }
     }
 
@@ -1462,6 +1479,11 @@ struct ContentView: View {
             try await k.stop()
         } catch {
             appendMessage("stop error: \(error.localizedDescription)", kind: .error)
+            errorBanner = "Stop failed: \(error.localizedDescription)"
+            status = "Stop failed — retry Stop"
+            // Retain kit ownership so a failed teardown is retryable; do not
+            // present a stopped state while SDK resources may still be live.
+            return
         }
         // Let the SDK quiesce its writers before cancelling watcher cleanup;
         // otherwise a late write can race the sink close and leave a partial

@@ -938,7 +938,11 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                     val info = r.manualConnectionInfo
                     Text("SSID: ${r.credentials.ssid ?: "—"}", style = MaterialTheme.typography.bodySmall)
                     Text(
-                        text = "Pass: ${r.credentials.password?.reveal() ?: "—"}",
+                        // Do not put the hotspot credential in clear text on a
+                        // shared screen or screenshot. The platform still owns
+                        // the credential; this sample only needs to show that
+                        // one was provisioned.
+                        text = "Pass: ${if (r.credentials.password != null) "••••••" else "—"}",
                         style = MaterialTheme.typography.bodySmall
                     )
                     if (info != null) {

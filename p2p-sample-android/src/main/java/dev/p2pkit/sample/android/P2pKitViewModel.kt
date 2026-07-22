@@ -55,6 +55,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.io.asSink
 import java.io.File
@@ -215,6 +217,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     private var kit: P2pKit? = null
     private var runScope: CoroutineScope? = null
     private val cleanupScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val advertisingToggleMutex = Mutex()
+    private val discoveryToggleMutex = Mutex()
 
     /**
      * AUDIT-2026-06: A-G8-samples-android-13 — all three per-session
@@ -288,48 +292,55 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         AndroidLanDiag.enabled = true
         FrameTrace.sink = { Log.d("P2pKitFrame", it) }
         FrameTrace.enabled = true
-        val newKit = P2pKit.create {
-            appId = AppId(APP_ID)
-            this.deviceName = this@P2pKitViewModel.deviceName
-            security {
-                mode = SecurityMode.AuthenticatedV2(
-                    PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
-                )
-            }
-            transports { lan(ctx) }
-            // Sample-only tuning. SDK defaults are pingIntervalMillis=10_000 /
-            // timeoutMillis=30_000 — appropriate for general-purpose / battery-
-            // conscious apps. The values below are tuned for interactive /
-            // real-time use (e.g. local-multiplayer games) where ~6s
-            // disconnect detection matters more than the ~24s of extra
-            // background pings per session. Apps consuming this library can
-            // pick their own values via the same `keepAlive { ... }` block.
-            keepAlive {
-                pingIntervalMillis = 2_000
-                timeoutMillis = 6_000
-            }
-            networkProvisioning {
-                enableLocalHotspot = true
-                enableManualIpFallback = true
-                android(ctx)
-            }
-            lifecycle {
-                reconnectPolicy = when (choice) {
-                    ReconnectChoice.Disabled -> ReconnectPolicy.Disabled
-                    is ReconnectChoice.Enabled -> ReconnectPolicy.Enabled(
-                        maxAttempts = choice.maxAttempts,
-                        retryDelayMillis = choice.retryDelayMillis
+        val newKit = try {
+            P2pKit.create {
+                appId = AppId(APP_ID)
+                this.deviceName = this@P2pKitViewModel.deviceName
+                security {
+                    mode = SecurityMode.AuthenticatedV2(
+                        PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
                     )
                 }
-                // §4 wire-up. Without this the Android sample would fall
-                // back to NoOpNetworkPathObserver and miss Wi-Fi off/on
-                // events — the kit would still recover via PING timeout
-                // but several seconds slower. ApplicationContext is safe;
-                // AndroidNetworkPathObserver does not hold onto the
-                // calling Activity.
-                networkPathObserver = AndroidNetworkPathObserver(ctx)
+                transports { lan(ctx) }
+                // Sample-only tuning. SDK defaults are pingIntervalMillis=10_000 /
+                // timeoutMillis=30_000 — appropriate for general-purpose / battery-
+                // conscious apps. The values below are tuned for interactive /
+                // real-time use (e.g. local-multiplayer games) where ~6s
+                // disconnect detection matters more than the ~24s of extra
+                // background pings per session. Apps consuming this library can
+                // pick their own values via the same `keepAlive { ... }` block.
+                keepAlive {
+                    pingIntervalMillis = 2_000
+                    timeoutMillis = 6_000
+                }
+                networkProvisioning {
+                    enableLocalHotspot = true
+                    enableManualIpFallback = true
+                    android(ctx)
+                }
+                lifecycle {
+                    reconnectPolicy = when (choice) {
+                        ReconnectChoice.Disabled -> ReconnectPolicy.Disabled
+                        is ReconnectChoice.Enabled -> ReconnectPolicy.Enabled(
+                            maxAttempts = choice.maxAttempts,
+                            retryDelayMillis = choice.retryDelayMillis
+                        )
+                    }
+                    // §4 wire-up. Without this the Android sample would fall
+                    // back to NoOpNetworkPathObserver and miss Wi-Fi off/on
+                    // events — the kit would still recover via PING timeout
+                    // but several seconds slower. ApplicationContext is safe;
+                    // AndroidNetworkPathObserver does not hold onto the
+                    // calling Activity.
+                    networkPathObserver = AndroidNetworkPathObserver(ctx)
+                }
+                logger = TailLogger(this@P2pKitViewModel)
             }
-            logger = TailLogger(this@P2pKitViewModel)
+        } catch (t: Throwable) {
+            _isStarting.value = false
+            Log.e(LOG_TAG, "kit create failed", t)
+            appendSystemMessage("start failed: ${t.message ?: t::class.simpleName}")
+            return
         }
         kit = newKit
         refreshMissingPermissions()
@@ -360,18 +371,27 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         scope.launch {
-            runCatchingNonCancel { newKit.startAdvertising() }
-                .onSuccess { _advertising.value = true }
-                .onFailure {
-                    Log.w(LOG_TAG, "startAdvertising failed", it)
-                    appendSystemMessage("advertise failed: ${it.message ?: it::class.simpleName}")
-                }
-            runCatchingNonCancel { newKit.startDiscovery() }
-                .onSuccess { _discovering.value = true }
-                .onFailure {
-                    Log.w(LOG_TAG, "startDiscovery failed", it)
-                    appendSystemMessage("discovery failed: ${it.message ?: it::class.simpleName}")
-                }
+            try {
+                newKit.startAdvertising()
+                _advertising.value = true
+                newKit.startDiscovery()
+                _discovering.value = true
+                _isRunning.value = true
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (t: Throwable) {
+                _advertising.value = false
+                _discovering.value = false
+                Log.e(LOG_TAG, "kit startup failed", t)
+                appendSystemMessage("start failed: ${t.message ?: t::class.simpleName}")
+                runCatchingNonCancel { newKit.stop() }
+                if (kit === newKit) kit = null
+                runScope = null
+                _kitState.value = P2pState.Stopped
+                cancel()
+            } finally {
+                _isStarting.value = false
+            }
         }
 
         // Auto-mesh: react to peer/session changes and connect to anyone we
@@ -395,7 +415,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             combine(_autoMesh, newKit.peers, newKit.sessions) { enabled, peers, sessions ->
                 Triple(enabled, peers, sessions)
             }.collect { (enabled, peers, sessions) ->
-                if (!enabled) return@collect
+                if (!enabled || !_isRunning.value) return@collect
                 val myId = newKit.localPeerId.value
                 val sessionPeerIds = sessions.map { it.peer.id.value }.toSet()
                 for (peer in peers) {
@@ -409,8 +429,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        _isRunning.value = true
-        _isStarting.value = false
+        // The startup coroutine owns the Running transition so a partial
+        // advertise/discover startup never presents a usable room.
     }
 
     fun connect(peer: Peer) {
@@ -447,8 +467,14 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val scope = runScope ?: viewModelScope
         scope.launch {
             val pm = AndroidP2pPermissionManager(getApplication<Application>().applicationContext)
-            _missingPermissions.value =
-                runCatchingNonCancel { pm.missingPermissions() }.getOrElse { emptyList() }
+            runCatchingNonCancel { pm.missingPermissions() }
+                .onSuccess { _missingPermissions.value = it }
+                .onFailure {
+                    // An exception is not equivalent to "nothing missing";
+                    // preserve the last known list and surface the diagnostic.
+                    Log.e(LOG_TAG, "permission check failed", it)
+                    appendSystemMessage("permission check failed: ${it.message ?: it::class.simpleName}")
+                }
         }
     }
 
@@ -972,14 +998,16 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val currentKit = kit ?: return
         val scope = runScope ?: return
         scope.launch {
-            if (_advertising.value) {
-                runCatchingNonCancel { currentKit.stopAdvertising() }
-                    .onSuccess { _advertising.value = false }
-                    .onFailure { Log.w(LOG_TAG, "stopAdvertising failed", it) }
-            } else {
-                runCatchingNonCancel { currentKit.startAdvertising() }
-                    .onSuccess { _advertising.value = true }
-                    .onFailure { Log.w(LOG_TAG, "startAdvertising failed", it) }
+            advertisingToggleMutex.withLock {
+                if (_advertising.value) {
+                    runCatchingNonCancel { currentKit.stopAdvertising() }
+                        .onSuccess { _advertising.value = false }
+                        .onFailure { Log.w(LOG_TAG, "stopAdvertising failed", it) }
+                } else {
+                    runCatchingNonCancel { currentKit.startAdvertising() }
+                        .onSuccess { _advertising.value = true }
+                        .onFailure { Log.w(LOG_TAG, "startAdvertising failed", it) }
+                }
             }
         }
     }
@@ -988,14 +1016,16 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val currentKit = kit ?: return
         val scope = runScope ?: return
         scope.launch {
-            if (_discovering.value) {
-                runCatchingNonCancel { currentKit.stopDiscovery() }
-                    .onSuccess { _discovering.value = false }
-                    .onFailure { Log.w(LOG_TAG, "stopDiscovery failed", it) }
-            } else {
-                runCatchingNonCancel { currentKit.startDiscovery() }
-                    .onSuccess { _discovering.value = true }
-                    .onFailure { Log.w(LOG_TAG, "startDiscovery failed", it) }
+            discoveryToggleMutex.withLock {
+                if (_discovering.value) {
+                    runCatchingNonCancel { currentKit.stopDiscovery() }
+                        .onSuccess { _discovering.value = false }
+                        .onFailure { Log.w(LOG_TAG, "stopDiscovery failed", it) }
+                } else {
+                    runCatchingNonCancel { currentKit.startDiscovery() }
+                        .onSuccess { _discovering.value = true }
+                        .onFailure { Log.w(LOG_TAG, "startDiscovery failed", it) }
+                }
             }
         }
     }
@@ -1040,7 +1070,17 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     runCatchingNonCancel { pending.offer.reject("sample stopped before consent") }
                 }
                 runCatchingNonCancel { toStop.networkProvisioning.stopLocalNetwork() }
-                runCatchingNonCancel { toStop.stop() }
+                val stopped = runCatchingNonCancel { toStop.stop() }
+                stopped.onFailure {
+                    Log.e(LOG_TAG, "kit.stop failed; ownership retained", it)
+                    // Snapshot-backed UI state remains main-thread confined.
+                    withContext(Dispatchers.Main.immediate) {
+                        // Keep ownership so the user can retry a failed teardown.
+                        kit = toStop
+                        _isRunning.value = true
+                        appendSystemMessage("stop failed: ${it.message ?: it::class.simpleName}")
+                    }
+                }
                 withContext(Dispatchers.IO) {
                     streamsToClose.forEach { s -> runCatchingNonCancel { s.close() } }
                 }

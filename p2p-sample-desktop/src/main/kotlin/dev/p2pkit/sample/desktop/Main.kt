@@ -22,7 +22,10 @@ import dev.p2pkit.provisioning.desktop.jvm
 import dev.p2pkit.transport.lan.JvmLanDiag
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +35,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.io.asSink
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -82,22 +86,31 @@ import java.util.concurrent.ConcurrentHashMap
  */
 @OptIn(ExplicitSecurityRisk::class)
 fun main(args: Array<String>) {
-    // Filter the optional `reconnect=` token from the positional args before
-    // assigning device name, mirroring the appId guard below — otherwise
-    // `--args="reconnect=10,1500"` advertised a device literally named
-    // "reconnect=10,1500" (AUDIT-2026-06 fix).
-    val rawName = args.getOrNull(0)?.trim()?.takeUnless { it.startsWith("reconnect=") }.orEmpty()
+    val launch = when (val parsed = parseCliOptions(args)) {
+        CliParseResult.Help -> {
+            println(CLI_USAGE)
+            return
+        }
+        is CliParseResult.Error -> {
+            System.err.println("[p2pkit ERROR] ${parsed.message}")
+            println(CLI_USAGE)
+            return
+        }
+        is CliParseResult.Success -> parsed.options
+    }
+    // Named options are parsed before assigning positional identity fields,
+    // so an option token can never become a device name or AppId.
+    val rawName = launch.deviceName.orEmpty()
     val deviceName = rawName.ifEmpty { "Desktop-${System.currentTimeMillis() % 10_000}" }
-    val rawAppId = args.getOrNull(1)?.trim()?.takeUnless { it.startsWith("reconnect=") || it.isEmpty() }
+    val rawAppId = launch.appId?.takeUnless { it.isEmpty() }
         ?: "p2pkit-desktop-sample"
     val appId = AppId(rawAppId)
-    val reconnectArg = args.firstOrNull { it.startsWith("reconnect=") }
-    val reconnect = parseReconnect(reconnectArg)
+    val reconnect = parseReconnect(launch.reconnectArg)
 
     // LAN forensic trace (Issue #2). ON by default in this harness — every
     // P2pKitLAN line goes to stdout (greppable). Pass `trace=off` to silence,
     // or `trace=frames` to additionally log every byte chunk on the data socket.
-    when (args.firstOrNull { it.startsWith("trace=") }?.substringAfter("=")) {
+    when (launch.traceMode) {
         "off" -> { JvmLanDiag.enabled = false; FrameTrace.enabled = false }
         "frames" -> {
             JvmLanDiag.enabled = true; JvmLanDiag.traceFrames = true; FrameTrace.enabled = true
@@ -185,7 +198,10 @@ fun main(args: Array<String>) {
                                 val s = p2p.connect(peer)
                                 registerSession(s, scope, sessions, wiredSessionIds, pendingFileOffers)
                             }.onFailure {
-                                System.err.println("[p2pkit WARN] auto-mesh connect to ${peer.name.sanitizedForTerminal()} failed: ${it.message}")
+                                System.err.println(
+                                    "[p2pkit WARN] auto-mesh connect to ${peer.name} failed: ${it.message}"
+                                        .sanitizedForTerminal()
+                                )
                             }
                         } finally {
                             pendingConnects.remove(peer.id.value)
@@ -199,32 +215,33 @@ fun main(args: Array<String>) {
         try {
             p2p.startAdvertising(); advertising.set(true)
             p2p.startDiscovery();   discovering.set(true)
+            println("Ready. Type 'help' for commands.")
+            repl(
+                p2p,
+                scope,
+                sessions,
+                pendingConnects,
+                wiredSessionIds,
+                pendingFileOffers,
+                advertising,
+                discovering,
+                autoMesh
+            )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
-            System.err.println("Failed to start: ${e.message}")
-            runCatching { p2p.stop() }
+            System.err.println("CLI failed: ${e.message}".sanitizedForTerminal())
+        } finally {
+            println("Stopping…")
+            rejectPendingOffers(pendingFileOffers, "receiver stopped")
+            // Quiesce application collectors before stopping the kit so no
+            // collector can race teardown and reopen resources (SAMPLE-38).
             scope.cancel()
-            return@runBlocking
+            scope.coroutineContext[Job]?.join()
+            runCatching { p2p.stop() }.onFailure {
+                System.err.println("kit.stop() failed: ${it.message}".sanitizedForTerminal())
+            }
         }
-
-        println("Ready. Type 'help' for commands.")
-        repl(
-            p2p,
-            scope,
-            sessions,
-            pendingConnects,
-            wiredSessionIds,
-            pendingFileOffers,
-            advertising,
-            discovering,
-            autoMesh
-        )
-
-        println("Stopping…")
-        rejectPendingOffers(pendingFileOffers, "receiver stopped")
-        runCatching { p2p.stop() }.onFailure {
-            System.err.println("kit.stop() failed: ${it.message}")
-        }
-        scope.cancel()
     }
 }
 
@@ -337,7 +354,7 @@ private suspend fun repl(
                 // Light host-form sanity check — reject obvious garbage so the
                 // user sees a useful message instead of waiting on a connect
                 // timeout. Allows IPv4/IPv6 numerics and DNS hostnames.
-                if (!host.all { it.isLetterOrDigit() || it in ".:_-" }) {
+                if (!host.all { it.isLetterOrDigit() || it in ".:_-%" }) {
                     println("manual: host contains invalid characters: '$host'")
                     continue
                 }
@@ -351,7 +368,7 @@ private suspend fun repl(
                         )
                     }
                         .getOrElse {
-                            System.err.println("manual createManualPeer failed: ${it.message}")
+                            System.err.println("manual createManualPeer failed: ${it.message}".sanitizedForTerminal())
                             return@launch
                         }
                     runCatching {
@@ -359,7 +376,7 @@ private suspend fun repl(
                         registerSession(session, scope, sessions, wiredSessionIds, pendingFileOffers)
                         println("connected manual peer ${session.peer.name.sanitizedForTerminal()}")
                     }.onFailure {
-                        System.err.println("manual connect failed: ${it.message}")
+                        System.err.println("manual connect failed: ${it.message}".sanitizedForTerminal())
                     }
                 }
             }
@@ -383,12 +400,16 @@ private suspend fun repl(
                     "on"  -> scope.launch {
                         runCatching { p2p.startAdvertising() }
                             .onSuccess { advertising.set(true); println("advertising on") }
-                            .onFailure { System.err.println("startAdvertising failed: ${it.message}") }
+                            .onFailure {
+                                System.err.println("startAdvertising failed: ${it.message}".sanitizedForTerminal())
+                            }
                     }
                     "off" -> scope.launch {
                         runCatching { p2p.stopAdvertising() }
                             .onSuccess { advertising.set(false); println("advertising off") }
-                            .onFailure { System.err.println("stopAdvertising failed: ${it.message}") }
+                            .onFailure {
+                                System.err.println("stopAdvertising failed: ${it.message}".sanitizedForTerminal())
+                            }
                     }
                     else  -> println("usage: adv on|off")
                 }
@@ -399,12 +420,16 @@ private suspend fun repl(
                     "on"  -> scope.launch {
                         runCatching { p2p.startDiscovery() }
                             .onSuccess { discovering.set(true); println("discovery on") }
-                            .onFailure { System.err.println("startDiscovery failed: ${it.message}") }
+                            .onFailure {
+                                System.err.println("startDiscovery failed: ${it.message}".sanitizedForTerminal())
+                            }
                     }
                     "off" -> scope.launch {
                         runCatching { p2p.stopDiscovery() }
                             .onSuccess { discovering.set(false); println("discovery off") }
-                            .onFailure { System.err.println("stopDiscovery failed: ${it.message}") }
+                            .onFailure {
+                                System.err.println("stopDiscovery failed: ${it.message}".sanitizedForTerminal())
+                            }
                     }
                     else  -> println("usage: disc on|off")
                 }
@@ -415,11 +440,16 @@ private suspend fun repl(
                     println("usage: connect <peer-id-prefix-or-name>")
                     continue
                 }
-                val match = findPeer(p2p, arg)
-                if (match == null) {
+                val peerMatches = matchingPeers(p2p, arg)
+                if (peerMatches.isEmpty()) {
                     println("no peer matching '$arg'")
                     continue
                 }
+                if (peerMatches.size > 1) {
+                    println("ambiguous peer '$arg': ${peerMatches.joinToString { "${it.name.sanitizedForTerminal()}(${it.id.value.take(8)})" }}")
+                    continue
+                }
+                val match = peerMatches.single()
                 val peerId = match.id.value
                 val existing = sessions[peerId]
                 if (existing != null && existing.state.value == ConnectionState.Connected) {
@@ -441,7 +471,7 @@ private suspend fun repl(
                         registerSession(session, scope, sessions, wiredSessionIds, pendingFileOffers)
                         println("connected to ${session.peer.name.sanitizedForTerminal()} (${session.peer.id.value.take(8)})")
                     } catch (e: Throwable) {
-                        System.err.println("connect failed: ${e.message}")
+                        System.err.println("connect failed: ${e.message}".sanitizedForTerminal())
                     } finally {
                         pendingConnects.remove(peerId)
                     }
@@ -473,7 +503,9 @@ private suspend fun repl(
                 for (session in live) {
                     scope.launch {
                         runCatching { session.send(msg) }.onFailure {
-                            System.err.println("send to ${session.peer.name.sanitizedForTerminal()} failed: ${it.message}")
+                            System.err.println(
+                                "send to ${session.peer.name} failed: ${it.message}".sanitizedForTerminal()
+                            )
                         }
                     }
                 }
@@ -491,11 +523,16 @@ private suspend fun repl(
                     println("usage: to <peer-id-prefix-or-name> <text>")
                     continue
                 }
-                val session = sessions.values.firstOrNull { matches(it.peer, target) }
-                if (session == null) {
+                val sessionMatches = matchingSessions(sessions, target)
+                if (sessionMatches.isEmpty()) {
                     println("no active session matching '$target'")
                     continue
                 }
+                if (sessionMatches.size > 1) {
+                    println("ambiguous session '$target': ${sessionMatches.joinToString { "${it.peer.name.sanitizedForTerminal()}(${it.peer.id.value.take(8)})" }}")
+                    continue
+                }
+                val session = sessionMatches.single()
                 if (session.state.value != ConnectionState.Connected) {
                     println("session with ${session.peer.name.sanitizedForTerminal()} is not Connected (state=${session.state.value}) — send skipped")
                     continue
@@ -503,7 +540,9 @@ private suspend fun repl(
                 println("[to ${session.peer.name.sanitizedForTerminal()}] $text")
                 scope.launch {
                     runCatching { session.send(P2pMessage.Text(text)) }.onFailure {
-                        System.err.println("send to ${session.peer.name.sanitizedForTerminal()} failed: ${it.message}")
+                        System.err.println(
+                            "send to ${session.peer.name} failed: ${it.message}".sanitizedForTerminal()
+                        )
                     }
                 }
             }
@@ -513,17 +552,27 @@ private suspend fun repl(
                     println("usage: close <peer-id-prefix-or-name>")
                     continue
                 }
-                val session = sessions.values.firstOrNull { matches(it.peer, arg) }
-                if (session == null) {
+                val sessionMatches = matchingSessions(sessions, arg)
+                if (sessionMatches.isEmpty()) {
                     println("no active session matching '$arg'")
                     continue
                 }
+                if (sessionMatches.size > 1) {
+                    println("ambiguous session '$arg': ${sessionMatches.joinToString { "${it.peer.name.sanitizedForTerminal()}(${it.peer.id.value.take(8)})" }}")
+                    continue
+                }
+                val session = sessionMatches.single()
                 scope.launch {
-                    runCatching { session.close() }.onFailure {
-                        System.err.println("close ${session.peer.name.sanitizedForTerminal()} failed: ${it.message}")
-                    }
-                    sessions.remove(session.peer.id.value)
-                    println("closed session with ${session.peer.name.sanitizedForTerminal()}")
+                    runCatching { session.close() }
+                        .onSuccess {
+                            sessions.remove(session.peer.id.value, session)
+                            println("closed session with ${session.peer.name.sanitizedForTerminal()}")
+                        }
+                        .onFailure {
+                            System.err.println(
+                                "close ${session.peer.name} failed: ${it.message}".sanitizedForTerminal()
+                            )
+                        }
                 }
             }
 
@@ -552,11 +601,16 @@ private suspend fun repl(
                     println("file is empty (0 bytes), nothing to send: ${file.absolutePath}")
                     continue
                 }
-                val session = sessions.values.firstOrNull { matches(it.peer, target) }
-                if (session == null) {
+                val sessionMatches = matchingSessions(sessions, target)
+                if (sessionMatches.isEmpty()) {
                     println("no active session matching '$target'")
                     continue
                 }
+                if (sessionMatches.size > 1) {
+                    println("ambiguous session '$target': ${sessionMatches.joinToString { "${it.peer.name.sanitizedForTerminal()}(${it.peer.id.value.take(8)})" }}")
+                    continue
+                }
+                val session = sessionMatches.single()
                 if (session.state.value != ConnectionState.Connected) {
                     println("session with ${session.peer.name.sanitizedForTerminal()} is not Connected (state=${session.state.value}) — sendfile skipped")
                     continue
@@ -578,7 +632,9 @@ private suspend fun repl(
                                 }
                             }
                         }
-                        .onFailure { System.err.println("sendfile failed: ${it.message}") }
+                        .onFailure {
+                            System.err.println("sendfile failed: ${it.message}".sanitizedForTerminal())
+                        }
                 }
             }
 
@@ -709,8 +765,13 @@ private fun printPeer(peer: Peer) {
     println("  ${peer.id.value.take(8)}…  ${peer.name.sanitizedForTerminal()}  [${peer.platform}]")
 }
 
-private fun findPeer(p2p: P2pKit, query: String): Peer? =
-    p2p.peers.value.firstOrNull { matches(it, query) }
+private fun matchingPeers(p2p: P2pKit, query: String): List<Peer> =
+    p2p.peers.value.filter { matches(it, query) }
+
+private fun matchingSessions(
+    sessions: ConcurrentHashMap<String, P2pSession>,
+    query: String
+): List<P2pSession> = sessions.values.filter { matches(it.peer, query) }
 
 private fun matches(peer: Peer, query: String): Boolean =
     peer.id.value.startsWith(query) || peer.name.equals(query, ignoreCase = true)
@@ -823,38 +884,44 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
     val saveFile = runCatching { uniqueSaveFile(saveDir, sanitizeName(offer.name)) }
         .getOrElse { error ->
             runCatching { offer.reject("cannot claim destination") }
-            System.err.println("[file ← $peerName] destination claim failed: ${error.message}")
+            System.err.println(
+                "[file ← $peerName] destination claim failed: ${error.message}".sanitizedForTerminal()
+            )
             return
         }
     val out = runCatching { saveFile.outputStream() }.getOrElse { error ->
         runCatching { saveFile.delete() }
         runCatching { offer.reject("cannot open destination: ${error.message}") }
-        System.err.println("[file ← $peerName] open failed: ${error.message}")
+        System.err.println("[file ← $peerName] open failed: ${error.message}".sanitizedForTerminal())
         return
     }
     val transfer = runCatching { offer.accept(out.asSink()) }.getOrElse { error ->
         runCatching { out.close() }
         runCatching { saveFile.delete() }
         runCatching { offer.reject("accept failed: ${error.message}") }
-        System.err.println("[file ← $peerName] accept failed: ${error.message}")
+        System.err.println("[file ← $peerName] accept failed: ${error.message}".sanitizedForTerminal())
         return
     }
     println("[file ← $peerName] accepting $fileName (${offer.sizeBytes}B) → ${saveFile.absolutePath}")
-    transfer.state.first { state ->
-        println("[file ← $peerName $fileName] ${state.toString().sanitizedForTerminal()}")
-        when (state) {
-            is FileTransferState.Completed -> {
-                runCatching { out.close() }
-                true
+    var completed = false
+    try {
+        transfer.state.first { state ->
+            println("[file ← $peerName $fileName] ${state.toString().sanitizedForTerminal()}")
+            when (state) {
+                is FileTransferState.Completed -> {
+                    completed = true
+                    true
+                }
+                is FileTransferState.Failed,
+                is FileTransferState.Cancelled,
+                is FileTransferState.Rejected -> true
+                else -> false
             }
-            is FileTransferState.Failed,
-            is FileTransferState.Cancelled,
-            is FileTransferState.Rejected -> {
-                runCatching { out.close() }
-                runCatching { saveFile.delete() }
-                true
-            }
-            else -> false
+        }
+    } finally {
+        withContext(NonCancellable) {
+            runCatching { out.close() }
+            if (!completed) runCatching { saveFile.delete() }
         }
     }
 }
@@ -888,7 +955,7 @@ private fun sanitizeName(raw: String): String {
 // sequences that rewrite, hide, or spoof lines on the operator's terminal
 // (e.g. a fake "[file …] Completed" line). Strip ISO control characters
 // before any remote-controlled string reaches stdout/stderr.
-private fun String.sanitizedForTerminal(): String = filterNot { it.isISOControl() }
+internal fun String.sanitizedForTerminal(): String = filterNot { it.isISOControl() }
 
 // AUDIT-2026-06 (A-G9-samples-desktop-ios-19): pick a destination no other
 // transfer is writing to. createNewFile() atomically claims the name, so a
@@ -918,12 +985,15 @@ private fun uniqueSaveFile(dir: File, sanitizedName: String): File {
 
 private object StdErrLogger : P2pLogger {
     override fun debug(message: String) = Unit
-    override fun info(message: String) = System.err.println("[p2pkit] $message")
+    override fun info(message: String) =
+        System.err.println("[p2pkit] ${message.sanitizedForTerminal()}")
     override fun warn(message: String, throwable: Throwable?) {
-        System.err.println("[p2pkit WARN] $message" + (throwable?.let { " (${it.message})" } ?: ""))
+        val rendered = "$message${throwable?.let { " (${it.message})" } ?: ""}".sanitizedForTerminal()
+        System.err.println("[p2pkit WARN] $rendered")
     }
     override fun error(message: String, throwable: Throwable?) {
-        System.err.println("[p2pkit ERROR] $message" + (throwable?.let { " (${it.message})" } ?: ""))
+        val rendered = "$message${throwable?.let { " (${it.message})" } ?: ""}".sanitizedForTerminal()
+        System.err.println("[p2pkit ERROR] $rendered")
     }
 }
 

@@ -27,4 +27,5 @@ dependencies {
     // JmDNS's own log messages are simply discarded.
     // AUDIT-2026-06: coordinate via the version catalog instead of a hardcoded literal.
     runtimeOnly(libs.slf4j.nop)
+    testImplementation(kotlin("test"))
 }

@@ -101,6 +101,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.io.asSink
 import java.awt.FileDialog
@@ -135,18 +137,23 @@ fun main() {
 
 @Composable
 private fun P2pKitSampleApp() {
-    // AUDIT-2026-06 (B-G9-samples-desktop-ios-20): this scope survives Setup<->Room
-    // screen switches, so the Stop-button `kit.stop()` launched into it is not
-    // cancelled by a screen change. It does NOT outlive the window: on window close
-    // the scope dies with the composition and the process exits, so the mDNS
-    // goodbye inside `kit.stop()` is best-effort only — remote peers may keep a
-    // ghost entry until their cache evicts it.
-    val appScope = rememberCoroutineScope()
+    // Keep SDK ownership independent of Setup/Room composition lifetimes.
+    // `rememberCoroutineScope()` is cancelled as soon as its composition is
+    // disposed, which could cancel the in-flight kit.stop() operation launched
+    // by the disposal hook itself.
+    val compositionScope = rememberCoroutineScope()
+    val appScope = remember {
+        CoroutineScope(compositionScope.coroutineContext.minusKey(Job) + SupervisorJob())
+    }
     val holder = remember { DesktopP2pState(appScope) }
 
     // Final clean-up when the whole app composable leaves.
     DisposableEffect(holder) {
-        onDispose { holder.shutdownIfRunning() }
+        onDispose {
+            holder.shutdownIfRunning()
+            // The stop coroutine above is owned by appScope; cancellation is
+            // intentionally deferred to process/window teardown by the host.
+        }
     }
 
     if (!holder.isRunning) {
@@ -164,8 +171,8 @@ private fun P2pKitSampleApp() {
  * Owns the [P2pKit] instance and all room state for the desktop sample.
  *
  * Mirrors `P2pKitViewModel` in the Android sample but as a plain class
- * since desktop has no ViewModelStore. Lifetime is tied to the parent
- * Composable scope ([appScope]).
+ * since desktop has no ViewModelStore. Teardown uses a dedicated [appScope]
+ * that is not cancelled by a Setup/Room composition transition.
  *
  * No fixed cap on connected peers: broadcast sends to every entry in the
  * live [connectedSessions] snapshot; targeted sends use any subset of
@@ -218,6 +225,10 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     private val _isStopping = MutableStateFlow(false)
     val isStopping: StateFlow<Boolean> = _isStopping.asStateFlow()
 
+    /** User-visible lifecycle failure; never silently discard kit ownership. */
+    private val _lifecycleError = MutableStateFlow<String?>(null)
+    val lifecycleError: StateFlow<String?> = _lifecycleError.asStateFlow()
+
     /** True while a [connectManual] call is in-flight. */
     private val _isManualDialing = MutableStateFlow(false)
     val isManualDialing: StateFlow<Boolean> = _isManualDialing.asStateFlow()
@@ -245,6 +256,8 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
 
     private var kit: P2pKit? = null
     private var runScope: CoroutineScope? = null
+    private val advertisingToggleMutex = Mutex()
+    private val discoveryToggleMutex = Mutex()
 
     // AUDIT-2026-06 (A-G9-samples-desktop-ios-21): track ALL per-session collector
     // jobs (incoming messages, state, incomingFiles) so every one of them is
@@ -297,7 +310,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     }
 
     fun start() {
-        if (isRunning || _isStarting.value) return  // idempotent + re-entry safe
+        if (isRunning || _isStarting.value || _isStopping.value) return  // idempotent + re-entry safe
         val trimmedName = deviceName.trim()
         if (trimmedName.isEmpty()) {
             System.err.println("[p2pkit WARN] start aborted: deviceName is blank")
@@ -305,38 +318,46 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         }
         deviceName = trimmedName
         _isStarting.value = true
+        _lifecycleError.value = null
         val choice = reconnectChoice
         val effectiveAppId = appIdInput.trim().ifEmpty { DEFAULT_APP_ID }
         appIdInput = effectiveAppId
-        val newKit = P2pKit.create {
-            appId = AppId(effectiveAppId)
-            this.deviceName = this@DesktopP2pState.deviceName
-            jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
-            security {
-                mode = SecurityMode.AuthenticatedV2(
-                    PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
-                )
-            }
-            transports { lan() }
-            networkProvisioning { jvm() }
-            lifecycle {
-                reconnectPolicy = when (choice) {
-                    ReconnectChoice.Disabled -> ReconnectPolicy.Disabled
-                    is ReconnectChoice.Enabled -> ReconnectPolicy.Enabled(
-                        maxAttempts = choice.maxAttempts,
-                        retryDelayMillis = choice.retryDelayMillis
+        val newKit = try {
+            P2pKit.create {
+                appId = AppId(effectiveAppId)
+                this.deviceName = this@DesktopP2pState.deviceName
+                jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
+                security {
+                    mode = SecurityMode.AuthenticatedV2(
+                        PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
                     )
                 }
+                transports { lan() }
+                networkProvisioning { jvm() }
+                lifecycle {
+                    reconnectPolicy = when (choice) {
+                        ReconnectChoice.Disabled -> ReconnectPolicy.Disabled
+                        is ReconnectChoice.Enabled -> ReconnectPolicy.Enabled(
+                            maxAttempts = choice.maxAttempts,
+                            retryDelayMillis = choice.retryDelayMillis
+                        )
+                    }
+                }
+                logger = TailLogger(this@DesktopP2pState)
             }
-            logger = TailLogger(this@DesktopP2pState)
+        } catch (t: Throwable) {
+            _isStarting.value = false
+            _lifecycleError.value = "start failed: ${t.message ?: t::class.simpleName}"
+            System.err.println("[p2pkit ERROR] ${_lifecycleError.value}".sanitizedForTerminal())
+            return
         }
         kit = newKit
         _localPeerId.value = newKit.localPeerId.value
-        System.err.println(
+        val startedLine =
             "[p2pkit] kit started: deviceName=${newKit.localDeviceName} " +
                 "appId=${newKit.appId.value} peerId=${newKit.localPeerId.value} " +
                 "reconnect=${choice.describe()}"
-        )
+        System.err.println(startedLine.sanitizedForTerminal())
 
         val supervisor = SupervisorJob(appScope.coroutineContext[Job])
         val scope = CoroutineScope(appScope.coroutineContext + supervisor)
@@ -356,21 +377,30 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             }
         }
         scope.launch {
-            // AUDIT-2026-06 (A-G9-samples-desktop-ios-29): runCatchingCancellable
-            // everywhere a suspend call is guarded, so teardown cancellation is
-            // not reported as a spurious failure.
-            runCatchingCancellable { newKit.startAdvertising() }
-                .onSuccess { _advertising.value = true }
-                .onFailure {
-                    System.err.println("[p2pkit WARN] startAdvertising failed: ${it.message}")
-                    appendSystemMessage("advertise failed: ${it.message ?: it::class.simpleName}")
-                }
-            runCatchingCancellable { newKit.startDiscovery() }
-                .onSuccess { _discovering.value = true }
-                .onFailure {
-                    System.err.println("[p2pkit WARN] startDiscovery failed: ${it.message}")
-                    appendSystemMessage("discovery failed: ${it.message ?: it::class.simpleName}")
-                }
+            // Treat advertise/discover as one startup transaction. Cancellation
+            // belongs to teardown and must not be reported as a start failure.
+            try {
+                newKit.startAdvertising()
+                _advertising.value = true
+                newKit.startDiscovery()
+                _discovering.value = true
+                isRunning = true
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (t: Throwable) {
+                _advertising.value = false
+                _discovering.value = false
+                _lifecycleError.value = "start failed: ${t.message ?: t::class.simpleName}"
+                appendSystemMessage(_lifecycleError.value!!)
+                runCatchingCancellable { newKit.stop() }
+                if (kit === newKit) kit = null
+                isRunning = false
+                runScope = null
+                this@DesktopP2pState._kitState.value = P2pState.Stopped
+                cancel()
+            } finally {
+                _isStarting.value = false
+            }
         }
 
         // Auto-mesh: route through [connect] (which holds the pendingConnect
@@ -387,22 +417,22 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             combine(_autoMesh, newKit.peers, newKit.sessions) { enabled, peers, sessions ->
                 Triple(enabled, peers, sessions)
             }.collect { (enabled, peers, sessions) ->
-                if (!enabled) return@collect
+                if (!enabled || !isRunning) return@collect
                 val myId = newKit.localPeerId.value
                 val sessionPeerIds = sessions.map { it.peer.id.value }.toSet()
                 for (peer in peers) {
                     if (peer.id.value in sessionPeerIds) continue
                     if (pendingConnectPeerIds.contains(peer.id.value)) continue
                     if (myId < peer.id.value) {
-                        System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.name}")
+                        System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.name.sanitizedForTerminal()}")
                         connect(peer)
                     }
                 }
             }
         }
 
-        isRunning = true
-        _isStarting.value = false
+        // The startup coroutine owns the Running transition so a partial
+        // advertise/discover startup never presents a usable room.
     }
 
     fun connect(peer: Peer) {
@@ -423,7 +453,9 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             try {
                 // AUDIT-2026-06 (A-G9-samples-desktop-ios-29): rethrows cancellation.
                 runCatchingCancellable { currentKit.connect(peer) }.onFailure {
-                    System.err.println("[p2pkit WARN] connect to ${peer.name} failed: ${it.message}")
+                    System.err.println(
+                        "[p2pkit WARN] connect to ${peer.name} failed: ${it.message}".sanitizedForTerminal()
+                    )
                     appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
                 }
             } finally {
@@ -454,36 +486,29 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             appendSystemMessage("manual: expected host:port followed by a full p2f1 fingerprint")
             return
         }
-        val parts = endpoint.split(':', limit = 2)
-        val host = parts.getOrNull(0)?.trim().orEmpty()
-        val portStr = parts.getOrNull(1)?.trim().orEmpty()
-        if (host.isEmpty()) {
-            appendSystemMessage("manual: host cannot be empty (expected host:port)")
+        val parsed = parseManualEndpoint(endpoint)
+        if (parsed is ManualEndpointResult.Invalid) {
+            appendSystemMessage("manual: ${parsed.reason}")
             return
         }
-        val port = portStr.toIntOrNull()
-        if (port == null || port !in 1..65_535) {
-            appendSystemMessage("manual: port must be 1..65535 (got '$portStr')")
-            return
-        }
-        // Reject obvious garbage in host so the user sees a useful message
-        // instead of waiting for the OS connect to fail.
-        if (!host.all { it.isLetterOrDigit() || it in ".:_-" }) {
-            appendSystemMessage("manual: host contains invalid characters: '$host'")
-            return
-        }
+        parsed as ManualEndpointResult.Valid
+        val (host, port) = parsed.endpoint
         _isManualDialing.value = true
         scope.launch {
             try {
                 val synthetic = runCatchingCancellable {
                     currentKit.networkProvisioning.createManualPeer(host, port, fingerprint)
                 }.getOrElse {
-                    System.err.println("[p2pkit WARN] manual createManualPeer failed: ${it.message}")
+                    System.err.println(
+                        "[p2pkit WARN] manual createManualPeer failed: ${it.message}".sanitizedForTerminal()
+                    )
                     appendSystemMessage("manual: createManualPeer failed: ${it.message ?: it::class.simpleName}")
                     return@launch
                 }
                 runCatchingCancellable { currentKit.connect(synthetic) }.onFailure {
-                    System.err.println("[p2pkit WARN] manual connect failed: ${it.message}")
+                    System.err.println(
+                        "[p2pkit WARN] manual connect failed: ${it.message}".sanitizedForTerminal()
+                    )
                     appendSystemMessage("manual: connect to $host:$port failed: ${it.message ?: it::class.simpleName}")
                 }
             } finally {
@@ -501,7 +526,9 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         }
         scope.launch {
             runCatchingCancellable { target.close() }.onFailure {
-                System.err.println("[p2pkit WARN] close session to ${target.peer.name} failed: ${it.message}")
+                System.err.println(
+                    "[p2pkit WARN] close session to ${target.peer.name} failed: ${it.message}".sanitizedForTerminal()
+                )
                 appendSystemMessage("close ${target.peer.name} failed: ${it.message ?: it::class.simpleName}")
             }
         }
@@ -564,7 +591,9 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         for (session in recipients) {
             scope.launch {
                 runCatchingCancellable { session.send(body) }.onFailure {
-                    System.err.println("[p2pkit WARN] send to ${session.peer.name} failed: ${it.message}")
+                    System.err.println(
+                        "[p2pkit WARN] send to ${session.peer.name} failed: ${it.message}".sanitizedForTerminal()
+                    )
                     appendSystemMessage("send to ${session.peer.name} failed: ${it.message ?: it::class.simpleName}")
                 }
             }
@@ -575,14 +604,24 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         val currentKit = kit ?: return
         val scope = runScope ?: return
         scope.launch {
-            if (_advertising.value) {
-                runCatchingCancellable { currentKit.stopAdvertising() }
-                    .onSuccess { _advertising.value = false }
-                    .onFailure { System.err.println("[p2pkit WARN] stopAdvertising failed: ${it.message}") }
-            } else {
-                runCatchingCancellable { currentKit.startAdvertising() }
-                    .onSuccess { _advertising.value = true }
-                    .onFailure { System.err.println("[p2pkit WARN] startAdvertising failed: ${it.message}") }
+            advertisingToggleMutex.withLock {
+                if (_advertising.value) {
+                    runCatchingCancellable { currentKit.stopAdvertising() }
+                        .onSuccess { _advertising.value = false }
+                        .onFailure {
+                            System.err.println(
+                                "[p2pkit WARN] stopAdvertising failed: ${it.message}".sanitizedForTerminal()
+                            )
+                        }
+                } else {
+                    runCatchingCancellable { currentKit.startAdvertising() }
+                        .onSuccess { _advertising.value = true }
+                        .onFailure {
+                            System.err.println(
+                                "[p2pkit WARN] startAdvertising failed: ${it.message}".sanitizedForTerminal()
+                            )
+                        }
+                }
             }
         }
     }
@@ -591,14 +630,24 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         val currentKit = kit ?: return
         val scope = runScope ?: return
         scope.launch {
-            if (_discovering.value) {
-                runCatchingCancellable { currentKit.stopDiscovery() }
-                    .onSuccess { _discovering.value = false }
-                    .onFailure { System.err.println("[p2pkit WARN] stopDiscovery failed: ${it.message}") }
-            } else {
-                runCatchingCancellable { currentKit.startDiscovery() }
-                    .onSuccess { _discovering.value = true }
-                    .onFailure { System.err.println("[p2pkit WARN] startDiscovery failed: ${it.message}") }
+            discoveryToggleMutex.withLock {
+                if (_discovering.value) {
+                    runCatchingCancellable { currentKit.stopDiscovery() }
+                        .onSuccess { _discovering.value = false }
+                        .onFailure {
+                            System.err.println(
+                                "[p2pkit WARN] stopDiscovery failed: ${it.message}".sanitizedForTerminal()
+                            )
+                        }
+                } else {
+                    runCatchingCancellable { currentKit.startDiscovery() }
+                        .onSuccess { _discovering.value = true }
+                        .onFailure {
+                            System.err.println(
+                                "[p2pkit WARN] startDiscovery failed: ${it.message}".sanitizedForTerminal()
+                            )
+                        }
+                }
             }
         }
     }
@@ -607,7 +656,6 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         val toStop = kit ?: return
         if (_isStopping.value) return
         _isStopping.value = true
-        kit = null
         isRunning = false
         _advertising.value = false
         _discovering.value = false
@@ -637,8 +685,19 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 offersToReject.forEach { pending ->
                     runCatchingCancellable { pending.offer.reject("sample stopped before consent") }
                 }
-                runCatchingCancellable { toStop.stop() }
-                    .onFailure { System.err.println("[p2pkit WARN] kit.stop() failed: ${it.message}") }
+                val stopped = runCatchingCancellable { toStop.stop() }
+                stopped.onFailure {
+                    // Keep ownership so a failed stop can be retried; report it
+                    // visibly instead of claiming teardown succeeded.
+                    kit = toStop
+                    isRunning = true
+                    _lifecycleError.value = "stop failed: ${it.message ?: it::class.simpleName}"
+                    appendSystemMessage(_lifecycleError.value!!)
+                    System.err.println("[p2pkit ERROR] ${_lifecycleError.value}".sanitizedForTerminal())
+                }.onSuccess {
+                    if (kit === toStop) kit = null
+                    _lifecycleError.value = null
+                }
             } finally {
                 _isStopping.value = false
             }
@@ -675,7 +734,9 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         scope.launch {
             val transfer = runCatchingCancellable { session.sendFile(file) }
                 .getOrElse {
-                    System.err.println("[p2pkit WARN] sendFile failed: ${it.message}")
+                    System.err.println(
+                        "[p2pkit WARN] sendFile failed: ${it.message}".sanitizedForTerminal()
+                    )
                     appendSystemMessage("send file '${file.name}' failed: ${it.message ?: it::class.simpleName}")
                     return@launch
                 }
@@ -859,7 +920,11 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     private fun closeIncomingSink(transferId: String, destinationPath: String, completed: Boolean) {
         activeIncomingSinks.remove(transferId)?.stream?.let { sink ->
             runCatching { sink.close() }
-                .onFailure { System.err.println("[p2pkit WARN] closing incoming sink failed: ${it.message}") }
+                .onFailure {
+                    System.err.println(
+                        "[p2pkit WARN] closing incoming sink failed: ${it.message}".sanitizedForTerminal()
+                    )
+                }
         }
         if (!completed) runCatching { File(destinationPath).delete() }
     }
@@ -905,9 +970,9 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         return cleaned.takeUnless { it.isEmpty() || it == "." || it == ".." } ?: "untitled"
     }
 
-    /** Called when the whole UI composable disposes. */
+    /** Called when the whole UI composable disposes, including during startup. */
     fun shutdownIfRunning() {
-        if (isRunning) stop()
+        if (kit != null) stop()
     }
 
     // --- helpers -----------------------------------------------------------
@@ -925,7 +990,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 connectedSessions.remove(removed)
                 targetedPeerIds.remove(removed.peer.id.value)
                 appendSystemMessage("disconnected from ${removed.peer.name}")
-                System.err.println("[p2pkit] room: session removed ${removed.peer.name}")
+                System.err.println("[p2pkit] room: session removed ${removed.peer.name.sanitizedForTerminal()}")
             }
         }
 
@@ -933,11 +998,11 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             if (sessionJobs.containsKey(session.id)) continue
             connectedSessions.add(session)
             appendSystemMessage("connected to ${session.peer.name}")
-            System.err.println("[p2pkit] room: session added ${session.peer.name}")
+            System.err.println("[p2pkit] room: session added ${session.peer.name.sanitizedForTerminal()}")
             val jobs = mutableListOf<Job>()
             jobs += scope.launch {
                 session.incoming.collect { msg ->
-                    System.err.println("[p2pkit] room: incoming from ${session.peer.name}")
+                    System.err.println("[p2pkit] room: incoming from ${session.peer.name.sanitizedForTerminal()}")
                     // AUDIT-2026-06 (B-G9-samples-desktop-ios-18): keep a size-only
                     // summary of Binary payloads instead of retaining the bytes in
                     // history.
@@ -959,7 +1024,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             }
             jobs += scope.launch {
                 session.state.collect { st ->
-                    System.err.println("[p2pkit] session ${session.peer.name} → $st")
+                    System.err.println("[p2pkit] session ${session.peer.name.sanitizedForTerminal()} → $st")
                 }
             }
             jobs += wireIncomingFiles(session, scope)
@@ -995,7 +1060,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     internal fun recordLog(level: String, message: String) {
         // AUDIT-2026-06 (A-G9-samples-desktop-ios-26): thread-safe handoff — the
         // SnapshotStateList is only touched by the channel consumer on appScope.
-        logLines.trySend("$level  $message")
+        logLines.trySend("$level  ${message.sanitizedForTerminal()}")
     }
 
     companion object {
@@ -1133,16 +1198,19 @@ private class TailLogger(private val state: DesktopP2pState) : P2pLogger {
         state.recordLog("D", message)
     }
     override fun info(message: String) {
-        System.err.println("[p2pkit] $message")
-        state.recordLog("I", message)
+        val safe = message.sanitizedForTerminal()
+        System.err.println("[p2pkit] $safe")
+        state.recordLog("I", safe)
     }
     override fun warn(message: String, throwable: Throwable?) {
-        val rendered = if (throwable != null) "$message (${throwable.message})" else message
+        val rendered = (if (throwable != null) "$message (${throwable.message})" else message)
+            .sanitizedForTerminal()
         System.err.println("[p2pkit WARN] $rendered")
         state.recordLog("W", rendered)
     }
     override fun error(message: String, throwable: Throwable?) {
-        val rendered = if (throwable != null) "$message (${throwable.message})" else message
+        val rendered = (if (throwable != null) "$message (${throwable.message})" else message)
+            .sanitizedForTerminal()
         System.err.println("[p2pkit ERROR] $rendered")
         state.recordLog("E", rendered)
     }
@@ -1155,6 +1223,8 @@ private class TailLogger(private val state: DesktopP2pState) : P2pLogger {
 @Composable
 private fun SetupScreen(state: DesktopP2pState) {
     val isStarting by state.isStarting.collectAsState()
+    val isStopping by state.isStopping.collectAsState()
+    val lifecycleError by state.lifecycleError.collectAsState()
     Column(
         // AUDIT-2026-06 (C-G9-samples-desktop-ios-29): same screen padding as RoomScreen.
         modifier = Modifier.fillMaxSize().padding(Dimens.ScreenPadding),
@@ -1169,12 +1239,19 @@ private fun SetupScreen(state: DesktopP2pState) {
                 "Configure reconnect policy and identity before tapping Start.",
             style = MaterialTheme.typography.bodyMedium
         )
+        if (lifecycleError != null) {
+            Text(
+                text = lifecycleError!!,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
         OutlinedTextField(
             value = state.deviceName,
             onValueChange = { state.deviceName = it },
             label = { Text("Device name") },
             singleLine = true,
-            enabled = !isStarting,
+            enabled = !isStarting && !isStopping,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
@@ -1182,7 +1259,7 @@ private fun SetupScreen(state: DesktopP2pState) {
             onValueChange = { state.appIdInput = it },
             label = { Text("App ID (must match on every device)") },
             singleLine = true,
-            enabled = !isStarting,
+            enabled = !isStarting && !isStopping,
             modifier = Modifier.fillMaxWidth()
         )
         Text(text = "Reconnect policy", style = MaterialTheme.typography.titleSmall)
@@ -1191,10 +1268,16 @@ private fun SetupScreen(state: DesktopP2pState) {
             onClick = state::start,
             enabled = state.deviceName.trim().isNotEmpty() &&
                 state.appIdInput.trim().isNotEmpty() &&
-                !isStarting,
+                !isStarting && !isStopping,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(if (isStarting) "Starting…" else "Start")
+            Text(
+                when {
+                    isStopping -> "Stopping…"
+                    isStarting -> "Starting…"
+                    else -> "Start"
+                }
+            )
         }
     }
 }
@@ -1317,6 +1400,7 @@ private fun RoomScreen(state: DesktopP2pState) {
     val manualInfo by state.manualConnectionInfo.collectAsState()
     val isStopping by state.isStopping.collectAsState()
     val isManualDialing by state.isManualDialing.collectAsState()
+    val lifecycleError by state.lifecycleError.collectAsState()
     var draft by remember { mutableStateOf("") }
 
     Row(modifier = Modifier.fillMaxSize().padding(Dimens.ScreenPadding)) {
@@ -1336,6 +1420,13 @@ private fun RoomScreen(state: DesktopP2pState) {
                 onToggleAutoMesh = state::toggleAutoMesh,
                 onStop = state::stop
             )
+            if (lifecycleError != null) {
+                Text(
+                    text = lifecycleError!!,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
             HorizontalDivider(modifier = Modifier.padding(vertical = Dimens.ItemGap))
 
             Text(
