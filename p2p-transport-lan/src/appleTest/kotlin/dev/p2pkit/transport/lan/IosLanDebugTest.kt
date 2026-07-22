@@ -26,21 +26,19 @@ class IosLanDebugTest {
         previousHistoryRetention = IosLanDebug.retainHistory
         IosLanDebug.mirrorToConsole = false
         IosLanDebug.retainHistory = false
-        IosLanDebug.log("test", "clear replay")
     }
 
     @AfterTest
     fun restoreSettings() {
-        IosLanDebug.retainHistory = false
-        IosLanDebug.log("test", "clear replay")
         IosLanDebug.mirrorToConsole = previousConsoleMirror
         IosLanDebug.retainHistory = previousHistoryRetention
     }
 
     @Test
     fun historyIsOptInAndRetainedLinesAreSanitized() {
-        IosLanDebug.log("peer", "not retained")
-        assertTrue(IosLanDebug.events.replayCache.isEmpty())
+        val notRetainedMarker = "not-retained-diagnostic"
+        IosLanDebug.log("peer", notRetainedMarker)
+        assertTrue(IosLanDebug.events.replayCache.none { notRetainedMarker in it })
 
         val marker = "retained-diagnostic"
         IosLanDebug.retainHistory = true
@@ -68,6 +66,6 @@ class IosLanDebugTest {
         IosLanDebug.log("peer", marker)
 
         assertTrue(marker in withTimeout(1_000) { received.await() })
-        assertTrue(IosLanDebug.events.replayCache.isEmpty())
+        assertTrue(IosLanDebug.events.replayCache.none { marker in it })
     }
 }

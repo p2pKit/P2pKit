@@ -14,12 +14,12 @@ import kotlinx.io.Buffer
 import kotlinx.io.readByteArray
 import kotlinx.io.write
 import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import platform.Foundation.NSDate
-import platform.Foundation.NSUserDefaults
 import platform.Foundation.timeIntervalSince1970
 
 /**
@@ -47,6 +47,14 @@ class IosLanLoopbackTest {
     private val peerIdV2Key: String = "dev.p2pkit.peerId.v2.$unique"
 
     private val toStop: MutableList<P2pKit> = mutableListOf()
+    private var defaultsLease: AppleGlobalStateTestGuard.Lease? = null
+
+    @BeforeTest
+    fun isolateDefaults() {
+        defaultsLease = AppleGlobalStateTestGuard.acquire(
+            keys = arrayOf(peerIdKey, peerIdV2Key)
+        )
+    }
 
     private fun newKit(name: String): P2pKit = P2pKit.create {
         appId = AppId(unique)
@@ -62,8 +70,10 @@ class IosLanLoopbackTest {
     }
 
     private fun removeStoredPeerId() {
-        NSUserDefaults.standardUserDefaults.removeObjectForKey(peerIdKey)
-        NSUserDefaults.standardUserDefaults.removeObjectForKey(peerIdV2Key)
+        val lease = checkNotNull(defaultsLease) { "NSUserDefaults fixture was not acquired" }
+        lease.remove(peerIdKey)
+        lease.remove(peerIdV2Key)
+        lease.synchronize()
     }
 
     private suspend fun startAndAdvertise(name: String): P2pKit {
@@ -76,10 +86,17 @@ class IosLanLoopbackTest {
     }
 
     @AfterTest
-    fun teardown() = runBlocking {
-        toStop.forEach { runCatching { it.stop() } }
-        toStop.clear()
-        removeStoredPeerId()
+    fun teardown() {
+        try {
+            runBlocking {
+                toStop.forEach { runCatching { it.stop() } }
+                toStop.clear()
+            }
+            removeStoredPeerId()
+        } finally {
+            defaultsLease?.close()
+            defaultsLease = null
+        }
     }
 
     @Test

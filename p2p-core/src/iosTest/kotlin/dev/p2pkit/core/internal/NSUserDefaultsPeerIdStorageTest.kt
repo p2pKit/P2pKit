@@ -12,15 +12,12 @@ import kotlin.uuid.Uuid
 import platform.Foundation.NSUserDefaults
 
 class NSUserDefaultsPeerIdStorageTest {
-    private val defaults = NSUserDefaults.standardUserDefaults
-    private val suffixes = mutableSetOf<String>()
+    private val suiteName = "dev.p2pkit.core.tests.${uniqueSuffix()}"
+    private val defaults = NSUserDefaults(suiteName = suiteName)
 
     @AfterTest
     fun cleanup() {
-        suffixes.forEach { suffix ->
-            defaults.removeObjectForKey("dev.p2pkit.peerId.$suffix")
-            defaults.removeObjectForKey("dev.p2pkit.peerId.v2.$suffix")
-        }
+        defaults.removePersistentDomainForName(suiteName)
         defaults.synchronize()
     }
 
@@ -31,7 +28,6 @@ class NSUserDefaultsPeerIdStorageTest {
         val secondAppId = "tenant?$unique"
         val suffix = sanitizeAppIdForKey(firstAppId)
         assertEquals(suffix, sanitizeAppIdForKey(secondAppId))
-        suffixes += suffix
 
         val first = NSUserDefaultsPeerIdStorage(AppId(firstAppId), P2pLogger.NoOp, defaults)
             .loadOrGenerate()
@@ -48,7 +44,6 @@ class NSUserDefaultsPeerIdStorageTest {
     fun legacyStringMigratesWithoutDeletingRollbackValue() {
         val appId = "legacy-${uniqueSuffix()}"
         val suffix = sanitizeAppIdForKey(appId)
-        suffixes += suffix
         val legacyKey = "dev.p2pkit.peerId.$suffix"
         defaults.setObject("legacy-peer-id", legacyKey)
         defaults.synchronize()
@@ -66,7 +61,6 @@ class NSUserDefaultsPeerIdStorageTest {
     fun failedSynchronizationDoesNotRotateSameStorageInstance() {
         val appId = "sync-failure-${uniqueSuffix()}"
         val suffix = sanitizeAppIdForKey(appId)
-        suffixes += suffix
         val storage = NSUserDefaultsPeerIdStorage(
             appId = AppId(appId),
             logger = P2pLogger.NoOp,

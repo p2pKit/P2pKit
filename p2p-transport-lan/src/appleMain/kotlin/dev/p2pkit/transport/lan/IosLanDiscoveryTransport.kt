@@ -53,6 +53,7 @@ import platform.Network.nw_browser_state_ready
 import platform.Network.nw_browser_state_waiting
 import platform.Network.nw_browser_t
 import platform.Network.nw_endpoint_get_bonjour_service_name
+import platform.Network.nw_error_get_error_code
 import platform.Network.nw_listener_set_advertise_descriptor
 import platform.Network.nw_listener_t
 import platform.Network.nw_parameters_create
@@ -72,9 +73,8 @@ import platform.Foundation.NSLock
  *
  * **Diagnostics:** every browser state change, every result-change call,
  * every TXT decode, and every filter outcome is appended to
- * [IosLanDebug.events]. The iOS sample subscribes to that flow for an
- * in-app log; from a release consumer's view it's a 200-entry replayable
- * SharedFlow they can ignore.
+ * [IosLanDebug.events]. The iOS sample subscribes to that non-replaying flow
+ * for an in-app log; release consumers can ignore it.
  */
 internal class IosLanDiscoveryTransport(
     private val transportContext: TransportContext,
@@ -205,6 +205,7 @@ internal class IosLanDiscoveryTransport(
 
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) = lock.withLock {
         if (advertising) return@withLock
+        logAppleLanPackagingIssues(transportContext.lanServiceTypeBonjour, "startAdvertising")
         IosLanDebug.log(
             "advertise",
             "starting: peerId=${localPeer.peerId.value.take(8)} app=${localPeer.appId.value} name=${localPeer.deviceName}"
@@ -239,6 +240,7 @@ internal class IosLanDiscoveryTransport(
 
     override suspend fun startDiscovery() = lock.withLock {
         if (browser != null) return@withLock
+        logAppleLanPackagingIssues(transportContext.lanServiceTypeBonjour, "startDiscovery")
         IosLanDebug.log(
             "browse",
             "startDiscovery: type=${transportContext.lanServiceTypeBonjour} app=${transportContext.appId.value} localPid=${transportContext.localPeerId.value.take(8)}"
@@ -590,7 +592,7 @@ internal class IosLanDiscoveryTransport(
         }
 
         nw_browser_set_queue(b, dataTransport.queue)
-        nw_browser_set_state_changed_handler(b) { state, _ ->
+        nw_browser_set_state_changed_handler(b) { state, error ->
             val label = when (state) {
                 nw_browser_state_ready -> "ready"
                 nw_browser_state_waiting -> "waiting"
@@ -598,7 +600,17 @@ internal class IosLanDiscoveryTransport(
                 nw_browser_state_cancelled -> "cancelled"
                 else -> "raw=$state"
             }
-            IosLanDebug.log("browse", "state -> $label")
+            val errorCode = error?.let { nw_error_get_error_code(it) }
+            IosLanDebug.log(
+                "browse",
+                "state -> $label" + (errorCode?.let { " errCode=$it" } ?: "")
+            )
+            if (state == nw_browser_state_waiting || state == nw_browser_state_failed) {
+                logAppleLanPackagingIssues(
+                    transportContext.lanServiceTypeBonjour,
+                    "browser state=$label errCode=${errorCode ?: 0}"
+                )
+            }
             when (state) {
                 nw_browser_state_ready -> withAnnounceCacheLock {
                     if (browser === lease) {

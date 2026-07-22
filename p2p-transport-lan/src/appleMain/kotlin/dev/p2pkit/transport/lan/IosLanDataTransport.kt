@@ -43,6 +43,7 @@ import platform.Foundation.NSNotificationCenter
 import platform.Network.nw_connection_create
 import platform.Network.nw_connection_t
 import platform.Network.nw_endpoint_create_host
+import platform.Network.nw_error_get_error_code
 import platform.Network.nw_endpoint_t
 import platform.Network.nw_listener_cancel
 import platform.Network.nw_listener_create
@@ -431,14 +432,19 @@ internal class IosLanDataTransport(
                         _tcpPort.value = null
                         nw_listener_cancel(l)
                     }
-                    nw_listener_set_state_changed_handler(l) { state, _ ->
+                    nw_listener_set_state_changed_handler(l) { state, error ->
                         val label = when (state) {
                             nw_listener_state_ready -> "ready"
                             nw_listener_state_failed -> "failed"
                             nw_listener_state_cancelled -> "cancelled"
                             else -> "raw=$state"
                         }
-                        IosLanDebug.log("data", "listener state -> $label")
+                        val errorCode = error?.let { nw_error_get_error_code(it) }
+                        IosLanDebug.log(
+                            "data",
+                            "listener state -> $label" +
+                                (errorCode?.let { " errCode=$it" } ?: "")
+                        )
                         when (state) {
                             nw_listener_state_ready -> {
                                 val port = nw_listener_get_port(l).toInt()

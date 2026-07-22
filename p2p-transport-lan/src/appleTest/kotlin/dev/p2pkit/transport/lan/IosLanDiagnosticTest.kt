@@ -6,7 +6,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Ignore
 import kotlin.test.Test
-import platform.Foundation.NSUserDefaults
 
 /**
  * Diagnostic-only test: holds a kit alive long enough that external tools
@@ -37,16 +36,23 @@ class IosLanDiagnosticTest {
             // each other without flag changes:
             //     ./p2p-sample-desktop ... → appId = "p2pkit-desktop-sample"
             val appIdValue = "p2pkit-desktop-sample"
-            NSUserDefaults.standardUserDefaults.removeObjectForKey("dev.p2pkit.peerId.$appIdValue")
-            NSUserDefaults.standardUserDefaults.removeObjectForKey("dev.p2pkit.peerId.v2.$appIdValue")
-
-            val kit = P2pKit.create {
-                appId = AppId(appIdValue)
-                deviceName = "iOSDiagnostic"
-                security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
-                transports { lan() }
-            }
+            val peerIdKey = "dev.p2pkit.peerId.$appIdValue"
+            val peerIdV2Key = "dev.p2pkit.peerId.v2.$appIdValue"
+            val defaultsLease = AppleGlobalStateTestGuard.acquire(
+                keys = arrayOf(peerIdKey, peerIdV2Key)
+            )
+            var kit: P2pKit? = null
             try {
+                defaultsLease.remove(peerIdKey)
+                defaultsLease.remove(peerIdV2Key)
+                defaultsLease.synchronize()
+
+                kit = P2pKit.create {
+                    appId = AppId(appIdValue)
+                    deviceName = "iOSDiagnostic"
+                    security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
+                    transports { lan() }
+                }
                 kit.startAdvertising()
                 kit.startDiscovery()
                 println("DIAG: kit started, advertising for 60 s")
@@ -59,10 +65,14 @@ class IosLanDiagnosticTest {
                     println("DIAG: t=${(it + 1) * 5}s peers=${peers.size}: ${peers.map { p -> "${p.name}(${p.id.value.take(8)})" }}")
                 }
             } finally {
-                kit.stop()
-                println("DIAG: kit stopped")
-                NSUserDefaults.standardUserDefaults.removeObjectForKey("dev.p2pkit.peerId.$appIdValue")
-                NSUserDefaults.standardUserDefaults.removeObjectForKey("dev.p2pkit.peerId.v2.$appIdValue")
+                try {
+                    kit?.let { created ->
+                        created.stop()
+                        println("DIAG: kit stopped")
+                    }
+                } finally {
+                    defaultsLease.close()
+                }
             }
         }
     }

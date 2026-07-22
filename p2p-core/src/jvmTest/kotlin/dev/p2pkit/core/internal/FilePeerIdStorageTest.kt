@@ -177,25 +177,25 @@ class FilePeerIdStorageTest {
 
     @Test
     fun blankHomeUsesExplicitTemporaryFallbackNeverWorkingDirectory() {
-        synchronized(systemPropertyLock) {
-            withSystemProperties(userHome = "   ", temporary = tempDir.absolutePath) {
-                val root = resolveJvmPeerIdRoot(P2pLogger.NoOp)
-                assertEquals(File(tempDir, "p2pkit-fallback").canonicalFile, root.canonicalFile)
-                assertNotEquals(File(".").canonicalFile, root.canonicalFile)
-            }
+        JvmSystemPropertyTestGuard.withValues(
+            mapOf("user.home" to "   ", "java.io.tmpdir" to tempDir.absolutePath)
+        ) {
+            val root = resolveJvmPeerIdRoot(P2pLogger.NoOp)
+            assertEquals(File(tempDir, "p2pkit-fallback").canonicalFile, root.canonicalFile)
+            assertNotEquals(File(".").canonicalFile, root.canonicalFile)
         }
     }
 
     @Test
     fun missingHomeAndTemporaryRootsFailExplicitly() {
-        synchronized(systemPropertyLock) {
-            val nonDirectory = File(tempDir, "not-a-directory").also { it.writeText("x") }
-            withSystemProperties(userHome = "", temporary = nonDirectory.absolutePath) {
-                val failure = assertFailsWith<IllegalStateException> {
-                    resolveJvmPeerIdRoot(P2pLogger.NoOp)
-                }
-                assertTrue(failure.message.orEmpty().contains("working directory is never used"))
+        val nonDirectory = File(tempDir, "not-a-directory").also { it.writeText("x") }
+        JvmSystemPropertyTestGuard.withValues(
+            mapOf("user.home" to "", "java.io.tmpdir" to nonDirectory.absolutePath)
+        ) {
+            val failure = assertFailsWith<IllegalStateException> {
+                resolveJvmPeerIdRoot(P2pLogger.NoOp)
             }
+            assertTrue(failure.message.orEmpty().contains("working directory is never used"))
         }
     }
 
@@ -339,28 +339,6 @@ class FilePeerIdStorageTest {
         }
     }
 
-    private inline fun withSystemProperties(
-        userHome: String,
-        temporary: String,
-        block: () -> Unit
-    ) {
-        val oldHome = System.getProperty("user.home")
-        val oldTemporary = System.getProperty("java.io.tmpdir")
-        try {
-            System.setProperty("user.home", userHome)
-            System.setProperty("java.io.tmpdir", temporary)
-            block()
-        } finally {
-            if (oldHome == null) System.clearProperty("user.home")
-            else System.setProperty("user.home", oldHome)
-            if (oldTemporary == null) System.clearProperty("java.io.tmpdir")
-            else System.setProperty("java.io.tmpdir", oldTemporary)
-        }
-    }
-
-    private companion object {
-        private val systemPropertyLock = Any()
-    }
 }
 
 /** Separate JVM entry point used to prove the file lock across processes. */

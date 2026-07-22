@@ -49,6 +49,7 @@ import org.junit.Assume
 class JvmLanLoopbackTest {
 
     private val unique = "p2pkit-itest-${System.currentTimeMillis()}"
+    private var globalStateLease: JvmGlobalStateTestGuard.Lease? = null
 
     /**
      * Pin JmDNS to a routable IPv4 interface for these tests. On macOS,
@@ -66,7 +67,8 @@ class JvmLanLoopbackTest {
             "No routable IPv4 interface available for JmDNS loopback test",
             routable != null
         )
-        System.setProperty(JMDNS_BIND_PROPERTY, routable!!)
+        globalStateLease = JvmGlobalStateTestGuard.acquire(JMDNS_BIND_PROPERTY, "user.home")
+        globalStateLease?.set(JMDNS_BIND_PROPERTY, routable!!)
     }
 
     private fun newKit(name: String): P2pKit = P2pKit.create {
@@ -92,13 +94,17 @@ class JvmLanLoopbackTest {
 
     @AfterTest
     fun teardown() {
-        runBlocking {
-            toStop.forEach { runCatching { it.stop() } }
-            toStop.clear()
-            tempHomes.forEach { runCatching { it.deleteRecursively() } }
-            tempHomes.clear()
+        try {
+            runBlocking {
+                toStop.forEach { runCatching { it.stop() } }
+                toStop.clear()
+                tempHomes.forEach { runCatching { it.deleteRecursively() } }
+                tempHomes.clear()
+            }
+        } finally {
+            globalStateLease?.close()
+            globalStateLease = null
         }
-        System.clearProperty(JMDNS_BIND_PROPERTY)
     }
 
     /**
@@ -111,14 +117,11 @@ class JvmLanLoopbackTest {
      * `PeerId` at construction so later `user.home` changes don't affect it.
      */
     private suspend fun startAndAdvertise(name: String): P2pKit {
-        val savedHome = System.getProperty("user.home")
         val tempHome = Files.createTempDirectory("p2pkit-itest-${name}-").toFile()
         tempHomes.add(tempHome)
-        System.setProperty("user.home", tempHome.absolutePath)
-        val kit = try {
+        val lease = checkNotNull(globalStateLease) { "global-state fixture was not acquired" }
+        val kit = lease.withValue("user.home", tempHome.absolutePath) {
             newKit(name)
-        } finally {
-            System.setProperty("user.home", savedHome ?: "")
         }
         toStop.add(kit)
         kit.startAdvertising()

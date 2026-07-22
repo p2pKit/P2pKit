@@ -212,11 +212,11 @@ class JvmLanAcceptLoopResilienceTest {
      * JVM get distinct persisted PeerIds (same trick as [JvmLanLoopbackTest]).
      */
     private fun newKit(name: String, kitLogger: P2pLogger, factory: TransportFactory): P2pKit {
-        val savedHome = System.getProperty("user.home")
         val tempHome = Files.createTempDirectory("p2pkit-itest-$name-").toFile()
         tempHomes.add(tempHome)
-        System.setProperty("user.home", tempHome.absolutePath)
-        val kit = try {
+        val kit = JvmGlobalStateTestGuard.withValues(
+            mapOf("user.home" to tempHome.absolutePath)
+        ) {
             P2pKit.create {
                 appId = AppId(unique)
                 deviceName = name
@@ -230,8 +230,6 @@ class JvmLanAcceptLoopResilienceTest {
                     register(factory)
                 }
             }
-        } finally {
-            System.setProperty("user.home", savedHome ?: "")
         }
         toStop.add(kit)
         return kit
@@ -253,6 +251,8 @@ class JvmLanAcceptLoopResilienceTest {
             platform = Platform.JVM_DESKTOP,
             supportedTransports = setOf(TransportKind.LAN)
         )
+        alice.startDiscovery()
+        stub.awaitSubscriber()
         stub.announce(
             InternalPeer(
                 publicPeer = bobPeer,
@@ -341,14 +341,13 @@ private class TestRecordingLogger : P2pLogger {
     fun errors(): List<String> = errorList.toList()
 }
 
-/** Emits scripted [PeerEvent]s; replay so an announce is never lost. */
+/** Emits scripted [PeerEvent]s with the replay-zero delivery used in production. */
 private class StubDiscovery : DiscoveryTransport {
     override val type: TransportKind = TransportKind.LAN
-    private val _events = MutableSharedFlow<PeerEvent>(replay = 8)
+    private val _events = MutableSharedFlow<PeerEvent>(extraBufferCapacity = 8)
     override val events: Flow<PeerEvent> = _events
-    fun announce(peer: InternalPeer) {
-        check(_events.tryEmit(PeerEvent.Found(peer))) { "announce buffer full" }
-    }
+    suspend fun awaitSubscriber() = _events.subscriptionCount.first { it > 0 }
+    suspend fun announce(peer: InternalPeer) = _events.emit(PeerEvent.Found(peer))
 
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) {}
     override suspend fun stopAdvertising() {}

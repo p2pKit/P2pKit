@@ -53,6 +53,7 @@ class JvmDiscoveryRecordValidationTest {
 
     private val unique = "p2pkit-rbs1-${System.currentTimeMillis()}"
     private var bindAddress: String? = null
+    private var globalStateLease: JvmGlobalStateTestGuard.Lease? = null
 
     @BeforeTest
     fun setup() {
@@ -62,12 +63,14 @@ class JvmDiscoveryRecordValidationTest {
             routable != null
         )
         bindAddress = routable
-        System.setProperty(JMDNS_BIND_PROPERTY, routable!!)
+        globalStateLease = JvmGlobalStateTestGuard.acquire(JMDNS_BIND_PROPERTY)
+        globalStateLease?.set(JMDNS_BIND_PROPERTY, routable!!)
     }
 
     @AfterTest
     fun teardown() {
-        System.clearProperty(JMDNS_BIND_PROPERTY)
+        globalStateLease?.close()
+        globalStateLease = null
     }
 
     @Test

@@ -38,6 +38,7 @@ jobs:
           scripts/check-gradle-wrapper.sh
           scripts/tests/check-gradle-wrapper-test.sh
           scripts/tests/check-release-tag-test.sh
+          scripts/tests/check-sample-run-profiles.sh
           scripts/tests/run-ios-app-test.sh
 
       - name: Run complete module and platform checks

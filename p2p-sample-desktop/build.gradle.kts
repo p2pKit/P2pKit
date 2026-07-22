@@ -12,6 +12,26 @@ application {
 // at the first prompt because the spawned JVM gets a closed System.in.
 tasks.named<JavaExec>("run") {
     standardInput = System.`in`
+
+    // The maintained Alice/Bob IDE configurations must share the same appId
+    // (otherwise they cannot discover each other) while persisting different
+    // PeerIds. A named profile gives each child JVM a stable, separate home
+    // beneath the operator's real home without changing CLI defaults.
+    providers.gradleProperty("p2pkit.sample.identityProfile").orNull?.let { profile ->
+        require(profile.matches(Regex("[A-Za-z0-9_-]{1,32}"))) {
+            "p2pkit.sample.identityProfile must match [A-Za-z0-9_-]{1,32}"
+        }
+        val realHome = providers.systemProperty("user.home").orNull
+            ?.takeIf { it.isNotBlank() }
+            ?: error("A nonblank user.home is required for a named sample identity profile")
+        val profileHome = file("$realHome/.p2pkit/sample-profiles/$profile")
+        doFirst {
+            check(profileHome.isDirectory || profileHome.mkdirs()) {
+                "Could not create sample identity profile directory $profileHome"
+            }
+        }
+        systemProperty("user.home", profileHome.absolutePath)
+    }
 }
 
 kotlin {

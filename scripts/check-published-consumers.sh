@@ -112,6 +112,7 @@ cat > "$FIXTURE_DIR/build.gradle.kts" <<'EOF'
 plugins {
     kotlin("jvm") version "2.3.21" apply false
     kotlin("multiplatform") version "2.3.21" apply false
+    id("com.android.application") version "9.1.1" apply false
     id("com.android.library") version "9.1.1" apply false
     id("com.android.kotlin.multiplatform.library") version "9.1.1" apply false
 }
@@ -176,15 +177,23 @@ fun desktopState(manager: NetworkProvisioningManager): StateFlow<NetworkProvisio
 EOF
 
 cat > "$FIXTURE_DIR/androidConsumer/build.gradle.kts" <<EOF
-plugins { id("com.android.library") }
+plugins { id("com.android.application") }
 android {
     namespace = "consumer.p2pkit.android"
     compileSdk = 36
     defaultConfig {
+        applicationId = "consumer.p2pkit.android"
         minSdk = 24
     }
 }
 dependencies { implementation("dev.p2pkit:p2p-network-provisioning-android-android:$VERSION") }
+dependencies { implementation("dev.p2pkit:p2p-transport-lan-android:$VERSION") }
+EOF
+cat > "$FIXTURE_DIR/androidConsumer/src/main/AndroidManifest.xml" <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application />
+</manifest>
 EOF
 cat > "$FIXTURE_DIR/androidConsumer/src/main/kotlin/consumer/AndroidConsumer.kt" <<'EOF'
 package consumer
@@ -274,8 +283,21 @@ echo "==> Compiling isolated published consumers"
     :lanJvm:compileKotlin \
     :desktopJvm:compileKotlin \
     :androidConsumer:compileDebugKotlin \
+    :androidConsumer:processDebugManifest \
     :kmpConsumer:compileKotlinJvm \
     :kmpConsumer:compileAndroidMain \
     :kmpConsumer:compileKotlinIosSimulatorArm64)
 
-echo "RESULT: PASS — published POM scopes and isolated JVM/Android/KMP/iOS consumers are complete"
+MERGED_MANIFEST="$(find "$FIXTURE_DIR/androidConsumer/build/intermediates" \
+    -path '*/processDebugManifest/AndroidManifest.xml' -print -quit)"
+[[ -f "$MERGED_MANIFEST" ]] || fail "Android consumer merged manifest was not produced"
+for permission in \
+    android.permission.INTERNET \
+    android.permission.ACCESS_NETWORK_STATE \
+    android.permission.ACCESS_WIFI_STATE \
+    android.permission.CHANGE_WIFI_MULTICAST_STATE; do
+    grep -Fq "android:name=\"$permission\"" "$MERGED_MANIFEST" ||
+        fail "Android consumer merged manifest is missing $permission"
+done
+
+echo "RESULT: PASS — published scopes, Android LAN permissions, and isolated JVM/Android/KMP/iOS consumers are complete"

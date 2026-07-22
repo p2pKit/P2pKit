@@ -351,6 +351,8 @@ On Windows:
 
 In a second terminal, start a second instance with a different device name (e.g. `Bob`). After a few seconds each should print `[peers] 1: …` for the other. Then:
 
+The maintained Android Studio run configurations `JVM CLI Alice` and `JVM CLI Bob` keep the shared default `appId` required for discovery but pass distinct persistent identity profiles. Their profile homes are `~/.p2pkit/sample-profiles/alice` and `~/.p2pkit/sample-profiles/bob`, so launching both configurations never makes one process filter the other as self.
+
 ```
 > peers
 > connect <id-prefix-of-other>
