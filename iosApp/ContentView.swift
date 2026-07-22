@@ -89,6 +89,9 @@ struct ContentView: View {
         "Settings → Privacy & Security → Local Network and " +
         "enable this app, then tap Stop / Start."
 
+    private static let transferHistoryCapacity = 24
+    private static let messageByteCapacity = 256 * 1024
+
     // MARK: - Row models
 
     struct PeerRow: Identifiable, Equatable {
@@ -629,7 +632,7 @@ struct ContentView: View {
 
         // Subscribe to IosLanDebug BEFORE startAdvertising/Discovery so
         // we capture every browser-state and result-change from t=0.
-        self.debugLogTask = Task.detached {
+        self.debugLogTask = Task {
             let collector = StringCollector { line in
                 await MainActor.run {
                     self.appendLog(line)
@@ -724,7 +727,7 @@ struct ContentView: View {
             diag("kit", "getManualConnectionInfo failed: \(error.localizedDescription)")
         }
 
-        self.incomingSessionsTask = Task.detached { [weak built] in
+        self.incomingSessionsTask = Task { [weak built] in
             let collector = SessionCollector { session in
                 IosLanDebug.shared.log(
                     tag: "ui",
@@ -913,7 +916,7 @@ struct ContentView: View {
         collectedSessionIds.insert(sid)
         appendMessage("[\(label)] session opened: \(session.peer.name)", kind: .info)
 
-        messageCollectorTasks[sid] = Task.detached {
+        messageCollectorTasks[sid] = Task {
             let collector = MessageCollector { msg in
                 await MainActor.run {
                     if let text = msg as? P2pMessage.Text {
@@ -935,7 +938,7 @@ struct ContentView: View {
         // offers — previously nothing collected incomingFiles on iOS, so
         // offers from desktop/Android peers invisibly auto-rejected as
         // "timeout" after 30 s.
-        fileCollectorTasks[sid] = Task.detached {
+        fileCollectorTasks[sid] = Task {
             let collector = FileOfferCollector { offer in
                 await self.handleIncomingOffer(offer)
             }
@@ -1015,11 +1018,13 @@ struct ContentView: View {
                 kind: .info
             )
             watchTransfer(transfer, direction: .receive, detail: dest.lastPathComponent) {
+                completed in
                 sink.close()
                 if let failure = sink.failureDescription {
                     try? fm.removeItem(at: dest)
                     return failure
                 }
+                if !completed { try? fm.removeItem(at: dest) }
                 return nil
             }
         } catch {
@@ -1037,8 +1042,19 @@ struct ContentView: View {
         rawName: String,
         fileManager: FileManager
     ) -> URL? {
-        let lastComponent = rawName.components(separatedBy: "/").last ?? ""
-        let safeName = lastComponent.isEmpty ? "incoming.bin" : lastComponent
+        let cleaned = rawName
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "\\", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+            .filter { character in
+                character.unicodeScalars.allSatisfy { scalar in
+                    scalar.value >= 0x20 && scalar.value != 0x7f
+                }
+            }
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeName = cleaned.isEmpty || cleaned == "." || cleaned == ".."
+            ? "incoming.bin"
+            : cleaned
         let ext = (safeName as NSString).pathExtension
         let stem = ext.isEmpty ? safeName : String(safeName.dropLast(ext.count + 1))
         for n in 0...10_000 {
@@ -1079,6 +1095,7 @@ struct ContentView: View {
             )
             appendMessage("offering file '\(name)' (\(fmtBytes(Int64(size)))) to \(row.peerName)", kind: .sent)
             watchTransfer(transfer, direction: .send, detail: nil) {
+                _ in
                 source.close()
                 return nil
             }
@@ -1102,7 +1119,7 @@ struct ContentView: View {
         _ transfer: P2pFileTransfer,
         direction: TransferRow.Direction,
         detail: String?,
-        onTerminal: @escaping () -> String?
+        onTerminal: @escaping (_ completed: Bool) -> String?
     ) {
         transfers.append(TransferRow(
             id: transfer.id,
@@ -1116,6 +1133,13 @@ struct ContentView: View {
             detail: detail,
             transfer: transfer
         ))
+        while transfers.count > Self.transferHistoryCapacity {
+            if let idx = transfers.firstIndex(where: { $0.isTerminal }) {
+                transfers.remove(at: idx)
+            } else {
+                transfers.removeFirst()
+            }
+        }
         transferWatchTasks[transfer.id] = Task { @MainActor in
             var lastLabel = ""
             var cleanupCompleted = false
@@ -1131,7 +1155,7 @@ struct ContentView: View {
                     lastLabel = label
                     diag("file", "transfer \(transfer.id.prefix(8)) '\(transfer.name)' -> \(label) (\(bytes)/\(transfer.sizeBytes) B)")
                     if terminal {
-                        let localFailure = onTerminal()
+                        let localFailure = onTerminal(label == "Completed")
                         cleanupCompleted = true
                         let finalLabel = localFailure.map { "Failed: \($0)" } ?? label
                         if let idx = transfers.firstIndex(where: { $0.id == transfer.id }) {
@@ -1148,7 +1172,7 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
             if !cleanupCompleted {
-                let localFailure = onTerminal()
+                let localFailure = onTerminal(false)
                 if let localFailure {
                     let arrow = direction == .send ? "→" : "←"
                     appendMessage(
@@ -1428,10 +1452,8 @@ struct ContentView: View {
         // each Stop/Start cycle.
         messageCollectorTasks.values.forEach { $0.cancel() }
         fileCollectorTasks.values.forEach { $0.cancel() }
-        transferWatchTasks.values.forEach { $0.cancel() }
         messageCollectorTasks = [:]
         fileCollectorTasks = [:]
-        transferWatchTasks = [:]
 
         for offer in pendingOffers.values {
             try? await offer.reject(reason: "sample stopped before consent")
@@ -1441,6 +1463,11 @@ struct ContentView: View {
         } catch {
             appendMessage("stop error: \(error.localizedDescription)", kind: .error)
         }
+        // Let the SDK quiesce its writers before cancelling watcher cleanup;
+        // otherwise a late write can race the sink close and leave a partial
+        // file looking complete.
+        transferWatchTasks.values.forEach { $0.cancel() }
+        transferWatchTasks = [:]
         kit = nil
         peers = []
         sessions = []
@@ -1460,8 +1487,10 @@ struct ContentView: View {
     @MainActor
     private func appendMessage(_ text: String, kind: MessageRow.Kind) {
         messages.append(MessageRow(text: text, kind: kind))
-        if messages.count > 200 {
-            messages.removeFirst(messages.count - 200)
+        while messages.count > 200 ||
+                messages.reduce(0, { $0 + $1.text.utf8.count }) > Self.messageByteCapacity {
+            guard !messages.isEmpty else { break }
+            messages.removeFirst()
         }
     }
 

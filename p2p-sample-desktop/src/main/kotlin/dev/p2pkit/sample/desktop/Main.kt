@@ -566,11 +566,15 @@ private suspend fun repl(
                     runCatching { session.sendFile(file) }
                         .onSuccess { transfer ->
                             scope.launch {
-                                transfer.state.collect { st ->
+                                transfer.state.first { st ->
                                     // AUDIT-2026-06 (B-G9-samples-desktop-ios-11): a Failed
                                     // state can embed the remote peer's reject
                                     // reason — sanitize before printing.
                                     println("[file → ${session.peer.name.sanitizedForTerminal()} ${file.name}] ${st.toString().sanitizedForTerminal()}")
+                                    st is FileTransferState.Completed ||
+                                        st is FileTransferState.Failed ||
+                                        st is FileTransferState.Cancelled ||
+                                        st is FileTransferState.Rejected
                                 }
                             }
                         }
@@ -816,7 +820,12 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
 
     // AUDIT-2026-06 (A-G9-samples-desktop-ios-19): atomically claim a unique
     // destination only after the operator consents and storage checks pass.
-    val saveFile = uniqueSaveFile(saveDir, sanitizeName(offer.name))
+    val saveFile = runCatching { uniqueSaveFile(saveDir, sanitizeName(offer.name)) }
+        .getOrElse { error ->
+            runCatching { offer.reject("cannot claim destination") }
+            System.err.println("[file ← $peerName] destination claim failed: ${error.message}")
+            return
+        }
     val out = runCatching { saveFile.outputStream() }.getOrElse { error ->
         runCatching { saveFile.delete() }
         runCatching { offer.reject("cannot open destination: ${error.message}") }
@@ -870,7 +879,7 @@ private fun sanitizeName(raw: String): String {
     val cleaned = raw.filterNot { it.isISOControl() }
         .replace(Regex("""[\\/:*?"<>|]"""), "_")
         .trim()
-    return cleaned.ifEmpty { "untitled" }
+    return cleaned.takeUnless { it.isEmpty() || it == "." || it == ".." } ?: "untitled"
 }
 
 // AUDIT-2026-06 (B-G9-samples-desktop-ios-11): peer names (from mDNS TXT /
@@ -887,23 +896,24 @@ private fun String.sanitizedForTerminal(): String = filterNot { it.isISOControl(
 // truncating the previous copy, and two concurrent same-named offers can
 // never open two streams onto the same path.
 private fun uniqueSaveFile(dir: File, sanitizedName: String): File {
-    val dot = sanitizedName.lastIndexOf('.')
-    val base = if (dot > 0) sanitizedName.substring(0, dot) else sanitizedName
-    val ext = if (dot > 0) sanitizedName.substring(dot) else ""
-    var n = 0
-    while (true) {
-        val candidate = if (n == 0) File(dir, sanitizedName) else File(dir, "$base ($n)$ext")
-        val claimed = try {
-            candidate.createNewFile() // atomic: false when the name is already taken
-        } catch (_: Exception) {
-            // Unopenable name or unwritable dir — return the candidate and let
-            // the accept path's open-failure guard reject the offer with the
-            // real error instead of looping here.
-            return candidate
+    val safeName = sanitizedName
+        .filterNot { it.isISOControl() }
+        .replace(Regex("""[\\/:*?"<>|]"""), "_")
+        .trim()
+        .takeUnless { it.isEmpty() || it == "." || it == ".." }
+        ?: "untitled"
+    val dot = safeName.lastIndexOf('.')
+    val base = if (dot > 0) safeName.substring(0, dot) else safeName
+    val ext = if (dot > 0) safeName.substring(dot) else ""
+    for (n in 0..10_000) {
+        val candidate = if (n == 0) File(dir, safeName) else File(dir, "$base ($n)$ext")
+        try {
+            if (candidate.createNewFile()) return candidate
+        } catch (error: Exception) {
+            throw java.io.IOException("cannot claim destination ${candidate.absolutePath}", error)
         }
-        if (claimed) return candidate
-        n++
     }
+    throw java.io.IOException("destination namespace exhausted for '$safeName'")
 }
 
 private object StdErrLogger : P2pLogger {

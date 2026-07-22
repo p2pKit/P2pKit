@@ -89,7 +89,9 @@ import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -99,6 +101,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.io.asSink
 import java.awt.FileDialog
 import java.awt.Frame
@@ -252,7 +255,13 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     // AUDIT-2026-06 (A-G9-samples-desktop-ios-20): open incoming-file sinks keyed
     // by transfer id so stop() can close them deterministically even after the
     // run-scope collectors are cancelled.
-    private val activeIncomingSinks: MutableMap<String, OutputStream> = mutableMapOf()
+    private val activeIncomingSinks: MutableMap<String, ActiveIncomingSink> = mutableMapOf()
+
+    private data class ActiveIncomingSink(
+        val transferId: String,
+        val stream: OutputStream,
+        val destinationPath: String
+    )
 
     private var nextMessageId: Long = 1L
 
@@ -541,7 +550,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 id = nextMessageId++,
                 senderPeerId = null,
                 senderName = "(me)",
-                body = body,
+                body = trimmed,
                 timestamp = System.currentTimeMillis(),
                 direction = RoomMessage.Direction.Outgoing,
                 target = target
@@ -734,7 +743,12 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             appendSystemMessage("rejected '${pending.name}': insufficient free space")
             return
         }
-        val saveFile = uniqueSaveFile(saveDir, sanitize(pending.name))
+        val saveFile = runCatching { uniqueSaveFile(saveDir, sanitize(pending.name)) }
+            .getOrElse { error ->
+                runCatchingCancellable { pending.offer.reject("cannot claim destination") }
+                appendSystemMessage("rejected '${pending.name}': ${error.message ?: "cannot claim destination"}")
+                return
+            }
         val out = runCatching { saveFile.outputStream() }
             .getOrElse { e ->
                 runCatching { saveFile.delete() }
@@ -799,8 +813,10 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         // AUDIT-2026-06 (A-G9-samples-desktop-ios-20): register the sink and close
         // it when the transfer reaches a terminal state OR the collector is
         // cancelled (Stop mid-transfer) — not only via a live happy-path collector.
-        activeIncomingSinks[transfer.id] = out
-        watchTransfer(transfer, scope) { closeIncomingSink(transfer.id) }
+        activeIncomingSinks[transfer.id] = ActiveIncomingSink(transfer.id, out, destinationPath)
+        watchTransfer(transfer, scope) { completed ->
+            closeIncomingSink(transfer.id, destinationPath, completed)
+        }
     }
 
     /**
@@ -812,37 +828,50 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     private fun watchTransfer(
         transfer: P2pFileTransfer,
         scope: CoroutineScope,
-        onFinally: (() -> Unit)? = null
+        onFinally: ((completed: Boolean) -> Unit)? = null
     ) {
         scope.launch {
+            var completed = false
             val bytesJob = launch {
                 transfer.bytesTransferred.collect { b -> updateRowBytes(transfer.id, b) }
             }
             try {
                 transfer.state.first { st ->
                     updateRowState(transfer.id, st)
-                    st.isTerminal()
+                    if (st.isTerminal()) {
+                        completed = st is FileTransferState.Completed
+                        true
+                    } else {
+                        false
+                    }
                 }
                 // Snap the byte counter to its final value before the collector dies.
                 updateRowBytes(transfer.id, transfer.bytesTransferred.value)
             } finally {
-                bytesJob.cancel()
-                onFinally?.invoke()
+                withContext(NonCancellable) {
+                    bytesJob.cancelAndJoin()
+                    onFinally?.invoke(completed)
+                }
             }
         }
     }
 
-    private fun closeIncomingSink(transferId: String) {
-        activeIncomingSinks.remove(transferId)?.let { sink ->
+    private fun closeIncomingSink(transferId: String, destinationPath: String, completed: Boolean) {
+        activeIncomingSinks.remove(transferId)?.stream?.let { sink ->
             runCatching { sink.close() }
                 .onFailure { System.err.println("[p2pkit WARN] closing incoming sink failed: ${it.message}") }
         }
+        if (!completed) runCatching { File(destinationPath).delete() }
     }
 
     private fun closeAllIncomingSinks() {
         val sinks = activeIncomingSinks.values.toList()
         activeIncomingSinks.clear()
-        for (sink in sinks) runCatching { sink.close() }
+        for (sink in sinks) {
+            runCatching { sink.stream.close() }
+            val completed = fileTransfers.firstOrNull { it.id == sink.transferId }?.state is FileTransferState.Completed
+            if (!completed) runCatching { File(sink.destinationPath).delete() }
+        }
     }
 
     private fun addRow(row: FileTransferRow) {
@@ -870,8 +899,10 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     }
 
     private fun sanitize(raw: String): String {
-        val cleaned = raw.replace(Regex("""[\\/:*?"<>|]"""), "_").trim()
-        return cleaned.ifEmpty { "untitled" }
+        val cleaned = raw.filterNot { it.isISOControl() }
+            .replace(Regex("""[\\/:*?"<>|]"""), "_")
+            .trim()
+        return cleaned.takeUnless { it.isEmpty() || it == "." || it == ".." } ?: "untitled"
     }
 
     /** Called when the whole UI composable disposes. */
@@ -909,10 +940,10 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                     System.err.println("[p2pkit] room: incoming from ${session.peer.name}")
                     // AUDIT-2026-06 (B-G9-samples-desktop-ios-18): keep a size-only
                     // summary of Binary payloads instead of retaining the bytes in
-                    // history (displayBody renders the identical text either way).
+                    // history.
                     val storedBody = when (msg) {
-                        is P2pMessage.Binary -> P2pMessage.Text("<binary ${msg.bytes.size}B>")
-                        else -> msg
+                        is P2pMessage.Text -> msg.value
+                        is P2pMessage.Binary -> "<binary ${msg.bytes.size}B>"
                     }
                     appendRoomMessage(
                         RoomMessage(
@@ -940,7 +971,12 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     // other history in this sample (logTail, fileTransfers) — trim oldest first.
     private fun appendRoomMessage(message: RoomMessage) {
         roomMessages.add(message)
-        while (roomMessages.size > ROOM_MESSAGE_CAPACITY) roomMessages.removeAt(0)
+        while (
+            roomMessages.size > ROOM_MESSAGE_CAPACITY ||
+            roomMessages.sumOf { it.body.toByteArray().size } > ROOM_MESSAGE_BYTE_CAPACITY
+        ) {
+            roomMessages.removeAt(0)
+        }
     }
 
     private fun appendSystemMessage(text: String) {
@@ -949,7 +985,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 id = nextMessageId++,
                 senderPeerId = null,
                 senderName = "(system)",
-                body = P2pMessage.Text(text),
+                body = text,
                 timestamp = System.currentTimeMillis(),
                 direction = RoomMessage.Direction.System
             )
@@ -969,6 +1005,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
 
         // AUDIT-2026-06 (B-G9-samples-desktop-ios-18): timeline history cap.
         const val ROOM_MESSAGE_CAPACITY = 500
+        const val ROOM_MESSAGE_BYTE_CAPACITY = 256 * 1024
     }
 }
 
@@ -1060,18 +1097,15 @@ data class RoomMessage(
     val id: Long,
     val senderPeerId: String?,
     val senderName: String,
-    val body: P2pMessage,
+    /** Timeline text only; binary payload bytes never enter Compose state. */
+    val body: String,
     val timestamp: Long,
     val direction: Direction,
     val target: SendTarget = SendTarget.All
 ) {
     enum class Direction { Incoming, Outgoing, System }
 
-    val displayBody: String
-        get() = when (body) {
-            is P2pMessage.Text -> body.value
-            is P2pMessage.Binary -> "<binary ${body.bytes.size}B>"
-        }
+    val displayBody: String get() = body
 }
 
 sealed class SendTarget {

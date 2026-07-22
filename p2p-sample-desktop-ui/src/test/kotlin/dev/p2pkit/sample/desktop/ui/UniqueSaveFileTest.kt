@@ -7,18 +7,17 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
  * 2026-07 P1-32 (SMP-1): unit contract for the samples' incoming-file
  * destination-uniquification helper. Two same-named offers must land on
  * distinct paths (no overwrite) and the claim must be atomic (no two claims
- * of one path, so no interleaved writes). The CLI (`uniqueSaveFile` in
- * `p2p-sample-desktop`) and Android (`uniqueDestination`) samples carry the
- * same duplicated-verbatim algorithm — this suite is the de-facto contract
- * for all three copies. The two-offer re-send over a real session remains a
- * manual recipe (INTERNAL_TESTING.md).
+ * of one path, so no interleaved writes). The CLI and Android samples carry
+ * the same platform-neutral claim contract; this suite pins the JVM copy.
+ * The two-offer re-send over a real session remains a manual recipe
+ * (INTERNAL_TESTING.md).
  */
 class UniqueSaveFileTest {
 
@@ -76,6 +75,19 @@ class UniqueSaveFileTest {
     }
 
     @Test
+    fun pathAndDotSegmentsStayInsideTheClaimDirectory() {
+        val dir = newTempDir()
+        val pathLike = uniqueSaveFile(dir, "../escape.txt")
+        val dot = uniqueSaveFile(dir, "..")
+
+        assertEquals(dir.canonicalFile, pathLike.parentFile.canonicalFile)
+        assertEquals(".._escape.txt", pathLike.name)
+        assertEquals("untitled", dot.name)
+        assertTrue(pathLike.exists() && dot.exists())
+        assertTrue(!File(dir.parentFile, "escape.txt").exists(), "a peer name must not escape the inbox")
+    }
+
+    @Test
     fun concurrentClaimsOfOneNameNeverCollide() {
         val dir = newTempDir()
         val threads = 8
@@ -101,14 +113,9 @@ class UniqueSaveFileTest {
     }
 
     @Test
-    fun unwritableDirectoryReturnsTheCandidateWithoutLoopingOrThrowing() {
+    fun unwritableDirectoryFailsDeterministicallyWithoutLooping() {
         val missing = File(newTempDir(), "does/not/exist")
 
-        val candidate = uniqueSaveFile(missing, "ghost.txt")
-
-        // The accept path's open-failure guard owns the error reporting; the
-        // helper must hand back the first candidate instead of spinning.
-        assertEquals("ghost.txt", candidate.name)
-        assertFalse(candidate.exists())
+        assertFailsWith<java.io.IOException> { uniqueSaveFile(missing, "ghost.txt") }
     }
 }

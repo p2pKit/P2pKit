@@ -44,13 +44,16 @@ import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.io.asSink
@@ -709,6 +712,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     error("insufficient free space")
                 }
                 val saveFile = uniqueDestination(saveDir, pending.name)
+                    ?: error("destination namespace exhausted")
                 saveFile to saveFile.outputStream()
             }
         }
@@ -750,12 +754,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             )
         )
         appendSystemMessage("sending file '${transfer.name}' (${transfer.sizeBytes}B) to $peerName")
-        scope.launch {
-            transfer.state.collect { st -> updateRowState(transfer.id, st) }
-        }
-        scope.launch {
-            transfer.bytesTransferred.collect { b -> updateRowBytes(transfer.id, b) }
-        }
+        watchTransfer(transfer, scope)
     }
 
     private fun registerIncomingTransfer(
@@ -782,18 +781,50 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // can close it if this collector is cancelled mid-transfer.
         activeIncomingStreams[transfer.id] = out
         appendSystemMessage("receiving file '${transfer.name}' from $peerName → $destinationPath")
+        watchTransfer(transfer, scope, destinationPath, out)
+    }
+
+    /**
+     * Watches one transfer until terminal state, cancels the byte collector,
+     * and closes/deletes an incoming destination from a non-cancellable owner.
+     * A cancelled run scope therefore cannot strand a writer or partial file.
+     */
+    private fun watchTransfer(
+        transfer: P2pFileTransfer,
+        scope: CoroutineScope,
+        destinationPath: String? = null,
+        incomingOut: OutputStream? = null
+    ) {
         scope.launch {
-            transfer.state.collect { st ->
-                updateRowState(transfer.id, st)
-                if (st.isTerminal()) {
-                    activeIncomingStreams.remove(transfer.id)
-                    // AUDIT-2026-06: B-G8-samples-android-02 — close (flush) off main.
-                    withContext(Dispatchers.IO) { runCatchingNonCancel { out.close() } }
+            var completed = false
+            val bytesJob = launch {
+                transfer.bytesTransferred.collect { b -> updateRowBytes(transfer.id, b) }
+            }
+            try {
+                transfer.state.first { st ->
+                    updateRowState(transfer.id, st)
+                    if (st.isTerminal()) {
+                        completed = st is FileTransferState.Completed
+                        true
+                    } else {
+                        false
+                    }
+                }
+            } finally {
+                withContext(NonCancellable) {
+                    bytesJob.cancelAndJoin()
+                    val out = incomingOut
+                    if (out != null) {
+                        activeIncomingStreams.remove(transfer.id)
+                        withContext(Dispatchers.IO) {
+                            runCatching { out.close() }
+                            if (!completed && destinationPath != null) {
+                                runCatching { File(destinationPath).delete() }
+                            }
+                        }
+                    }
                 }
             }
-        }
-        scope.launch {
-            transfer.bytesTransferred.collect { b -> updateRowBytes(transfer.id, b) }
         }
     }
 
@@ -830,8 +861,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun sanitize(raw: String): String {
-        val cleaned = raw.replace(Regex("""[\\/:*?"<>|]"""), "_").trim()
-        return cleaned.ifEmpty { "untitled" }
+        val cleaned = raw.filterNot { it.isISOControl() }
+            .replace(Regex("""[\\/:*?"<>|]"""), "_")
+            .trim()
+        return cleaned.takeUnless { it.isEmpty() || it == "." || it == ".." } ?: "untitled"
     }
 
     /**
@@ -841,18 +874,16 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      * `outputStream()` then opens the (empty) claimed file. Runs on
      * Dispatchers.IO.
      */
-    private fun uniqueDestination(dir: File, rawName: String): File {
+    private fun uniqueDestination(dir: File, rawName: String): File? {
         val base = sanitize(rawName)
         val dot = base.lastIndexOf('.')
         val stem = if (dot > 0) base.substring(0, dot) else base
         val ext = if (dot > 0) base.substring(dot) else ""
-        var candidate = File(dir, base)
-        var n = 1
-        while (!candidate.createNewFile() && n < 10_000) {
-            candidate = File(dir, "$stem ($n)$ext")
-            n++
+        for (n in 0..10_000) {
+            val candidate = if (n == 0) File(dir, base) else File(dir, "$stem ($n)$ext")
+            if (runCatching { candidate.createNewFile() }.getOrDefault(false)) return candidate
         }
-        return candidate
+        return null
     }
 
     fun closeSession(peerId: String) {
@@ -1117,7 +1148,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      */
     private fun appendRoomMessage(message: RoomMessage) {
         roomMessages.add(message)
-        while (roomMessages.size > ROOM_MESSAGE_CAPACITY) {
+        while (roomMessages.size > ROOM_MESSAGE_CAPACITY || roomMessages.sumOf { it.body.toByteArray().size } > ROOM_MESSAGE_BYTE_CAPACITY) {
             roomMessages.removeAt(0)
         }
     }
@@ -1153,6 +1184,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         const val FILE_TRANSFER_HISTORY_CAPACITY = 24
         // AUDIT-2026-06: B-G8-samples-android-04 — roomMessages cap.
         const val ROOM_MESSAGE_CAPACITY = 500
+        const val ROOM_MESSAGE_BYTE_CAPACITY = 256 * 1024
     }
 }
 
