@@ -1,6 +1,6 @@
 package dev.p2pkit.transport.lan
 
-import android.util.Log
+import dev.p2pkit.transport.lan.AndroidLanDiag as Log
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.transport.RawConnection
 import kotlin.coroutines.resume
@@ -121,7 +121,7 @@ internal class AndroidRawConnection(
             try {
                 try {
                     withContext(Dispatchers.IO) {
-                        AndroidLanDiag.frame(TAG, "$label write ${bytes.size}B")
+                        Log.frame(TAG, "$label write ${bytes.size}B")
                         val out = socket.getOutputStream()
                         out.write(bytes)
                         out.flush()
@@ -210,7 +210,7 @@ internal class AndroidRawConnection(
                     break
                 }
                 if (n > 0) {
-                    AndroidLanDiag.frame(TAG, "$label read ${n}B")
+                    Log.frame(TAG, "$label read ${n}B")
                     emit(buffer.copyOfRange(0, n))
                 }
             }

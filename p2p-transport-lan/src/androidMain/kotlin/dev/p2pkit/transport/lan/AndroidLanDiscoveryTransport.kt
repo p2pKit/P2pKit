@@ -6,7 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
-import android.util.Log
+import dev.p2pkit.transport.lan.AndroidLanDiag as Log
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DiscoveryTransport
@@ -291,11 +291,11 @@ internal class AndroidLanDiscoveryTransport(
                 if (forRebind) {
                     Log.d(
                         TAG,
-                        "rebindNow: rebinding onto ${AndroidLanDiag.describeNetwork(connectivity, target)}"
+                        "rebindNow: rebinding onto ${Log.describeNetwork(connectivity, target)}"
                     )
                 } else {
-                    Log.d(TAG, "ensureJmdns: active ${AndroidLanDiag.describeNetwork(connectivity, target)}")
-                    Log.d(TAG, "ensureJmdns: NICs:${AndroidLanDiag.describeInterfaces()}")
+                    Log.d(TAG, "ensureJmdns: active ${Log.describeNetwork(connectivity, target)}")
+                    Log.d(TAG, "ensureJmdns: NICs:${Log.describeInterfaces()}")
                 }
                 val bindAddr = resolveBindAddress(target)
                 val fresh = if (bindAddr != null) JmDNS.create(bindAddr) else JmDNS.create()

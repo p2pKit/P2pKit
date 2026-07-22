@@ -38,6 +38,7 @@ import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transfer.sendFile
 import dev.p2pkit.provisioning.android.AndroidP2pPermissionManager
 import dev.p2pkit.provisioning.android.android
+import dev.p2pkit.transport.lan.AndroidLanDiag
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -275,8 +276,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val choice = reconnectChoice
         val ctx = getApplication<Application>().applicationContext
         // Diagnostic frame-type trace (Issue #2/#3): route decoded frame lines
-        // to logcat under a P2pKit tag so they sit alongside the transport
-        // (P2pKitJmDNS / P2pKitLan*) lines. Library default is off.
+        // to logcat so they sit alongside the transport's bounded P2pKitLAN
+        // lines. Library lifecycle diagnostics are default-off; this official
+        // diagnostic harness opts in explicitly.
+        AndroidLanDiag.enabled = true
         FrameTrace.sink = { Log.d("P2pKitFrame", it) }
         FrameTrace.enabled = true
         val newKit = P2pKit.create {

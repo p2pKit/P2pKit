@@ -1,6 +1,6 @@
 package dev.p2pkit.transport.lan
 
-import android.util.Log
+import dev.p2pkit.transport.lan.AndroidLanDiag as Log
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DataTransport

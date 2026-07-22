@@ -3,16 +3,17 @@ package dev.p2pkit.transport.lan
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.util.Log
+import android.util.Log as AndroidLog
 import java.net.NetworkInterface
 
 /**
  * Android LAN diagnostic helpers — the Android companion to [JvmLanDiag] /
  * appleMain's `IosLanDebug`.
  *
- * Android already logs through `android.util.Log` (visible via `adb logcat`),
- * so this object only adds the two things a plain `Log.d` line can't express
- * compactly — and a frame-trace gate:
+ * Android logs through `android.util.Log` (visible via `adb logcat`). Routine
+ * lifecycle diagnostics are disabled by default and share one bounded,
+ * sanitized `P2pKitLAN` logcat tag when [enabled]. Cleanup/resource warnings
+ * remain visible even when routine diagnostics are disabled.
  *
  *  - [describeNetwork]: classifies a [Network] by transport (Wi-Fi / Cellular /
  *    Ethernet / VPN) + key addresses. This is the **Issue #2 smoking gun**: if
@@ -20,10 +21,13 @@ import java.net.NetworkInterface
  *    and discovery / dials silently fail.
  *  - [describeInterfaces]: a full NIC dump (name, flags, MTU, addresses).
  *
- * Every P2pKit LAN logcat tag starts with `P2pKit` — filter with
- * `adb logcat | grep P2pKit`.
+ * Filter the unified tag with `adb logcat -s P2pKitLAN`.
  */
 public object AndroidLanDiag {
+
+    /** Enables bounded lifecycle/discovery/data debug diagnostics. */
+    @Volatile
+    public var enabled: Boolean = false
 
     /**
      * Per-frame byte-chunk logging gate (off by default — a single file
@@ -34,12 +38,26 @@ public object AndroidLanDiag {
     @Volatile
     public var traceFrames: Boolean = false
 
-    /** Per-frame line via `Log.d`; no-op unless [traceFrames]. */
+    /** Per-frame line via logcat; no-op unless [enabled] and [traceFrames]. */
     public fun frame(tag: String, message: String) {
-        if (traceFrames) {
-            Log.d(sanitizeLanDiagnostic(tag), sanitizeLanDiagnostic(message))
-        }
+        if (traceFrames) d(tag, message)
     }
+
+    internal fun d(tag: String, message: String) {
+        if (!enabled) return
+        AndroidLog.d(LOGCAT_TAG, diagnosticLine(tag, message))
+    }
+
+    internal fun w(tag: String, message: String, error: Throwable? = null) {
+        val errorSummary = error?.let {
+            val type = it::class.simpleName ?: "Throwable"
+            " ($type: ${it.message.orEmpty()})"
+        }.orEmpty()
+        AndroidLog.w(LOGCAT_TAG, diagnosticLine(tag, message + errorSummary))
+    }
+
+    private fun diagnosticLine(tag: String, message: String): String =
+        "[${sanitizeLanDiagnostic(tag)}] ${sanitizeLanDiagnostic(message)}"
 
     internal fun describeNetwork(cm: ConnectivityManager, network: Network?): String {
         if (network == null) return "network=null"
@@ -79,4 +97,6 @@ public object AndroidLanDiag {
             }.onFailure { append("\n  - ${ni.name} (inspect failed: ${it.message})") }
         }
     }
+
+    private const val LOGCAT_TAG: String = "P2pKitLAN"
 }
