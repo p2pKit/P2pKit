@@ -3,9 +3,12 @@ package dev.p2pkit.transport.lan
 import dev.p2pkit.core.transport.LocalPeerInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -15,13 +18,11 @@ import kotlin.coroutines.CoroutineContext
 
 /**
  * Platform operations behind [JmdnsLifecycleCoordinator] (2026-07 test seam,
- * P1-14). Implemented by `AndroidLanDiscoveryTransport` over JmDNS +
- * `ConnectivityManager`; implemented by fakes in
- * `JmdnsLifecycleCoordinatorTest` (`:p2p-transport-lan:jvmTest`), which is the
- * automated contract for the Android rebind machinery (the same
- * jvm-pins-the-shared-shape convention as `HostSelectorTest` /
- * `JvmRawConnectionCancellationTest`; there are no instrumented Android
- * tests).
+ * P1-14). Implemented by both JmDNS transports (Android additionally supplies
+ * `ConnectivityManager` and multicast-lock operations) and by fakes in
+ * `JmdnsLifecycleCoordinatorTest` (`:p2p-transport-lan:jvmTest`). The fake
+ * suite is also the automated contract for Android's rebind machinery, for
+ * which this module has no instrumented test target.
  *
  * The `*Blocking` functions may block (JmDNS calls do); the coordinator hops
  * to its blocking-I/O context around every call, so implementations must NOT hop or
@@ -40,13 +41,27 @@ internal interface JmdnsLifecycleOps<N : Any, H : Any> {
 
     fun closeHandleBlocking(handle: H)
 
-    /** Register the advertised service on [handle]; returns an opaque token for [unregisterServiceBlocking]. */
-    fun registerServiceBlocking(handle: H, localPeer: LocalPeerInfo): Any
+    /**
+     * Create the opaque service token before registration begins. Keeping the
+     * token outside the blocking call lets the coordinator compensate an
+     * ambiguous success when prompt cancellation wins the dispatcher return.
+     */
+    fun createServiceToken(localPeer: LocalPeerInfo): Any
+
+    fun registerServiceBlocking(handle: H, token: Any)
 
     fun unregisterServiceBlocking(handle: H, token: Any)
 
-    /** Add a fresh browse listener on [handle]; returns an opaque token for [removeListenerBlocking]. */
-    fun addListenerBlocking(handle: H): Any
+    /** Create the listener token before the blocking add for the same ownership reason. */
+    fun createListenerToken(handle: H): Any
+
+    fun addListenerBlocking(handle: H, token: Any)
+
+    /**
+     * Prevent callbacks from [token] from publishing after its lifecycle
+     * generation has been replaced. Must be idempotent and non-blocking.
+     */
+    fun deactivateListenerToken(token: Any)
 
     fun removeListenerBlocking(handle: H, token: Any)
 
@@ -93,14 +108,10 @@ internal interface JmdnsLifecycleOps<N : Any, H : Any> {
 }
 
 /**
- * Platform-neutral JmDNS-style lifecycle state machine, extracted verbatim
- * from `AndroidLanDiscoveryTransport` (2026-07, P1-14 seam) so the module's
- * riskiest state machine is unit-testable from `jvmTest` with fake ops —
- * `androidMain` cannot be driven by an automated test in this module (no
- * instrumented tests by repo policy), so the extraction IS the seam.
- * Behavior-preserving: every guard, log line, and ordering below is ported
- * from the audited Android implementation; the AUDIT-2026-06 (#5) marker
- * comments moved here with the code they describe.
+ * Platform-neutral JmDNS-style lifecycle state machine shared by the JVM and
+ * Android transports. It owns the transactional resource rules once duplicated
+ * in both platform implementations and is directly exercised from `jvmTest`
+ * with fake blocking operations.
  *
  * Owns: the shared advertise/discover handle, the host-intent flags, the
  * multicast-lock + watcher idle policy, and the debounced network-rotation
@@ -138,8 +149,14 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
 
     private val lock = Mutex()
 
+    /** Serializes debounce-job replacement across concurrent platform callbacks. */
+    private val scheduleLock = Mutex()
+
     /** The live platform handle; null before first start, after idle close, and in the failed-rebind window. */
     private var handle: H? = null
+
+    /** True only when the live handle and tokens exactly match both intent flags. */
+    private var bindingHealthy = true
 
     /** Token returned by [JmdnsLifecycleOps.registerServiceBlocking] while advertising is live. */
     private var advertisedToken: Any? = null
@@ -180,18 +197,22 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
     private var boundDefaultNetwork: N? = null
 
     /**
-     * AUDIT-2026-06 (#5): consecutive create failures in [rebindNow]. Bounds
-     * the self-scheduled retry; reset to 0 on the next successful bind and
-     * when the watcher stops. Guarded by [lock].
+     * Consecutive failed binding transactions in [rebindNow]. The budget is
+     * reset on a successful bind, watcher stop, or genuinely new target pair.
+     * Guarded by [lock].
      */
     private var rebindRetryAttempts = 0
 
+    /** Retry budgets are scoped to one observed target pair, including null targets. */
+    private var retryTargetInitialized = false
+    private var retryTarget: N? = null
+    private var retryDefaultTarget: N? = null
+
     /**
-     * AUDIT-2026-06 (#5): pending self-scheduled retry after a create failure
-     * in [rebindNow]. Nothing else is guaranteed to call back in after that
-     * failure (`refresh()` early-returns on a null handle), so the transport
-     * must re-attempt on its own. Cancelled when the watcher stops. Guarded
-     * by [lock].
+     * Pending self-scheduled retry after a failed binding transaction in
+     * [rebindNow]. Nothing else is guaranteed to call back in after failure,
+     * so the transport must re-attempt on its own. Cancelled when the watcher
+     * stops. Guarded by [lock].
      */
     private var rebindRetryJob: Job? = null
 
@@ -209,7 +230,12 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
     private var heartbeatJob: Job? = null
 
     suspend fun startAdvertising(localPeer: LocalPeerInfo): Unit = lock.withLock {
-        if (advertisedToken != null) return@withLock
+        if (advertisingIntent && advertisedToken != null && bindingHealthy) return@withLock
+
+        repairUnhealthyBindingBeforeStart()
+        // Repair may have restored this same intent after a failed rebind or
+        // cleanup. Do not register a second service on the repaired handle.
+        if (advertisingIntent && advertisedToken != null && bindingHealthy) return@withLock
 
         ops.acquireMulticastLock()
         val h = try {
@@ -218,15 +244,18 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
             failedStartCleanup()
             throw e
         }
-        val token = try {
-            withContext(ioContext) { ops.registerServiceBlocking(h, localPeer) }
+        val token = ops.createServiceToken(localPeer)
+        advertisedToken = token
+        bindingHealthy = false
+        try {
+            withContext(ioContext) { ops.registerServiceBlocking(h, token) }
         } catch (e: Throwable) {
             failedStartCleanup()
             throw e
         }
-        advertisedToken = token
         advertisingIntent = true
         cachedLocalPeer = localPeer
+        bindingHealthy = bindingMatchesIntents()
         boundNetwork = ops.currentNetwork()
         boundDefaultNetwork = ops.currentNetwork()
         ops.logDebug(
@@ -237,28 +266,33 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
     }
 
     suspend fun stopAdvertising(): Unit = lock.withLock {
-        // AUDIT-2026-06 (#5): clear intent BEFORE the null-handle check —
-        // after a failed rebind the advertised token is null while the host
-        // still counts as advertising, and the old `?: return` shape would
-        // have skipped the clear, letting the rebind retry resurrect
-        // advertising the host just stopped.
-        advertisingIntent = false
-        val token = advertisedToken
-        if (token != null) {
-            withContext(ioContext) {
-                runCatching { handle?.let { ops.unregisterServiceBlocking(it, token) } }
+        withContext(NonCancellable) {
+            // Clear intent before cleanup so fallback restoration cannot
+            // resurrect the side the host just stopped.
+            advertisingIntent = false
+            cachedLocalPeer = null
+            bindingHealthy = false
+            val token = advertisedToken
+            if (token != null) {
+                val cleanupFailure = removeAdvertisingToken(token)
+                if (cleanupFailure != null) {
+                    recoverOtherIntentsAfterCleanupFailure("stopAdvertising", cleanupFailure)
+                }
             }
-            advertisedToken = null
-            ops.logDebug("stopAdvertising: unregistered")
+            bindingHealthy = bindingMatchesIntents()
+            closeHandleIfIdle()
+            stopNetworkWatcherIfIdle()
+            releaseMulticastLockIfIdle()
         }
-        cachedLocalPeer = null
-        stopNetworkWatcherIfIdle()
-        releaseMulticastLockIfIdle()
-        closeHandleIfIdle()
+        currentCoroutineContext().ensureActive()
     }
 
     suspend fun startDiscovery(): Unit = lock.withLock {
-        if (listenerToken != null) return@withLock
+        if (discoveryIntent && listenerToken != null && bindingHealthy) return@withLock
+
+        repairUnhealthyBindingBeforeStart()
+        // As above, repair can satisfy the requested intent itself.
+        if (discoveryIntent && listenerToken != null && bindingHealthy) return@withLock
 
         ops.acquireMulticastLock()
         val h = try {
@@ -267,14 +301,17 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
             failedStartCleanup()
             throw e
         }
-        val token = try {
-            withContext(ioContext) { ops.addListenerBlocking(h) }
+        val token = ops.createListenerToken(h)
+        listenerToken = token
+        bindingHealthy = false
+        try {
+            withContext(ioContext) { ops.addListenerBlocking(h, token) }
         } catch (e: Throwable) {
             failedStartCleanup()
             throw e
         }
-        listenerToken = token
         discoveryIntent = true
+        bindingHealthy = bindingMatchesIntents()
         boundNetwork = ops.currentNetwork()
         boundDefaultNetwork = ops.currentNetwork()
         ops.logDebug(
@@ -286,39 +323,36 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
     }
 
     suspend fun stopDiscovery(): Unit = lock.withLock {
-        // AUDIT-2026-06 (#5): mirror stopAdvertising — clear intent before
-        // the null-handle check so a failed-rebind window (listener handle
-        // null, host still discovering) cannot strand the intent flag true.
-        discoveryIntent = false
-        // AUDIT-2026-07 (DSC-1): halt the heartbeat — we hold [lock], so an
-        // in-flight tick is either parked on the lock (cancelled here) or
-        // already finished; no tick can re-emit after the intent flips.
-        heartbeatJob?.cancel()
-        heartbeatJob = null
-        val token = listenerToken
-        if (token != null) {
-            withContext(ioContext) {
-                runCatching { handle?.let { ops.removeListenerBlocking(it, token) } }
+        withContext(NonCancellable) {
+            discoveryIntent = false
+            bindingHealthy = false
+            // Halt heartbeat before listener cleanup; no later tick may use a
+            // binding after discovery intent is cleared.
+            heartbeatJob?.cancel()
+            heartbeatJob = null
+            val token = listenerToken
+            if (token != null) {
+                val cleanupFailure = removeListenerToken(token)
+                if (cleanupFailure != null) {
+                    recoverOtherIntentsAfterCleanupFailure("stopDiscovery", cleanupFailure)
+                }
             }
-            listenerToken = null
-            ops.logDebug("stopDiscovery: listener removed")
+            bindingHealthy = bindingMatchesIntents()
+            closeHandleIfIdle()
+            stopNetworkWatcherIfIdle()
+            releaseMulticastLockIfIdle()
         }
-        stopNetworkWatcherIfIdle()
-        releaseMulticastLockIfIdle()
-        closeHandleIfIdle()
+        currentCoroutineContext().ensureActive()
     }
 
     /**
-     * Serialized access for `refresh()`'s listener rotation: runs [rotate]
-     * under [lock] with the live handle and current listener token, skipping
-     * (with the original diagnostic) when discovery is not live. [rotate]
-     * must call `commitListener(fresh)` as soon as the fresh listener is
-     * attached — before removing the old one — so a failure later in the
-     * rotation cannot leave the committed token out of sync with what is
-     * actually registered (the AUDIT-2026-06 #7 add-first ordering).
+     * Rotate discovery add-first under coordinator ownership, then run the
+     * platform-specific cache refresh on the resulting live handle. Failed
+     * detach uses the same close-and-rebuild fallback as stop cleanup, so a
+     * duplicate listener can never become unowned.
      */
     suspend fun refreshDiscovery(
-        rotate: suspend (handle: H, oldListenerToken: Any, commitListener: (Any) -> Unit) -> Unit
+        afterRotation: suspend (handle: H) -> Unit
     ): Unit = lock.withLock {
         val h = handle
         val old = listenerToken
@@ -326,7 +360,52 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
             ops.logDebug("refresh: no listener active — skipping")
             return@withLock
         }
-        rotate(h, old) { fresh -> listenerToken = fresh }
+        val fresh = ops.createListenerToken(h)
+        try {
+            withContext(ioContext) { ops.addListenerBlocking(h, fresh) }
+        } catch (error: Throwable) {
+            ops.deactivateListenerToken(fresh)
+            var cleanupFailure: Throwable? = null
+            try {
+                withContext(NonCancellable) {
+                    withContext(ioContext) { ops.removeListenerBlocking(h, fresh) }
+                }
+            } catch (cleanupError: Throwable) {
+                if (cleanupError !is Exception) throw cleanupError
+                cleanupFailure = cleanupError
+            }
+            if (cleanupFailure != null) {
+                bindingHealthy = false
+                recoverOtherIntentsAfterCleanupFailure("refresh add compensation", cleanupFailure)
+            }
+            if (error is CancellationException) throw error
+            if (error !is Exception) throw error
+            ops.logWarn("refresh: addServiceListener failed; keeping active binding", error)
+            return@withLock
+        }
+
+        listenerToken = fresh
+        bindingHealthy = false
+        // The new generation owns delivery before the old listener is
+        // detached; any queued callback from the old generation is ignored.
+        ops.deactivateListenerToken(old)
+        val removalFailure = try {
+            withContext(NonCancellable) {
+                withContext(ioContext) { ops.removeListenerBlocking(h, old) }
+            }
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            if (error !is Exception) throw error
+            error
+        }
+        if (removalFailure != null) {
+            recoverOtherIntentsAfterCleanupFailure("refresh old-listener removal", removalFailure)
+        }
+        bindingHealthy = bindingMatchesIntents()
+        val live = handle ?: return@withLock
+        afterRotation(live)
     }
 
     /**
@@ -352,7 +431,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
                     heartbeatTick()
                 } catch (e: CancellationException) {
                     throw e
-                } catch (e: Throwable) {
+                } catch (e: Exception) {
                     ops.logWarn("discovery heartbeat: tick failed — keeping loop alive", e)
                 }
             }
@@ -377,12 +456,22 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
      * watcher callbacks must remain cheap and non-blocking.
      */
     fun scheduleRebind(reason: String) {
-        pendingRebindJob?.cancel()
-        ops.logDebug("scheduleRebind: $reason (debounce=${rebindDebounceMillis}ms)")
-        pendingRebindJob = rebindScope.launch {
-            delay(rebindDebounceMillis)
-            rebindNow(reason)
+        rebindScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            scheduleLock.withLock {
+                pendingRebindJob?.cancel()
+                ops.logDebug("scheduleRebind: $reason (debounce=${rebindDebounceMillis}ms)")
+                pendingRebindJob = rebindScope.launch {
+                    delay(rebindDebounceMillis)
+                    rebindNow(reason)
+                }
+            }
         }
+    }
+
+    /** Deterministic synchronization seam for the coordinator regression suite. */
+    internal suspend fun awaitPendingRebindForTest() {
+        val pending = scheduleLock.withLock { pendingRebindJob }
+        pending?.join()
     }
 
     /**
@@ -406,6 +495,15 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         val target = ops.observedNetwork()
         val defaultTarget = ops.observedDefaultNetwork()
 
+        if (!retryTargetInitialized || target != retryTarget || defaultTarget != retryDefaultTarget) {
+            rebindRetryJob?.cancel()
+            rebindRetryJob = null
+            rebindRetryAttempts = 0
+            retryTarget = target
+            retryDefaultTarget = defaultTarget
+            retryTargetInitialized = true
+        }
+
         // AUDIT-2026-06 (#5): `handle != null` term — the bound* markers are
         // only updated on a SUCCESSFUL bind, so after a failed rebind (handle
         // torn down, create failed) they still describe the pre-teardown
@@ -413,7 +511,10 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         // previously-bound one must not be skipped as "no change" while
         // there is no live handle at all.
         val noChangeSinceLastBind =
-            handle != null && target == boundNetwork && defaultTarget == boundDefaultNetwork
+            bindingHealthy &&
+                handle != null &&
+                target == boundNetwork &&
+                defaultTarget == boundDefaultNetwork
         if (noChangeSinceLastBind) {
             ops.logDebug(
                 "rebindNow: no changes since last bind; skipping ($reason) " +
@@ -439,86 +540,29 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
                 "advertising=$hadAdvertising discovery=$hadDiscovery"
         )
 
-        // Close the old handle — on JmDNS this also flushes its in-process
-        // mDNS cache, so resolved peer addresses bound to the old interface
-        // don't leak forward into the next round.
-        val cached = cachedLocalPeer
-        withContext(ioContext) {
-            runCatching { handle?.let { ops.closeHandleBlocking(it) } }
-        }
-        handle = null
-        advertisedToken = null
-        listenerToken = null
-
-        // Recreate the handle on the new interface. MUST NOT throw out of
-        // this coroutine (except cancellation): rebindNow runs fire-and-forget
-        // on [rebindScope] (no CoroutineExceptionHandler), so an uncaught
-        // IOException here would crash an Android host process. On failure we
-        // log, leave the handle null, and self-schedule a bounded retry —
-        // nothing external is guaranteed to call back in (refresh()
-        // early-returns on a null handle), so relying on "the next callback"
-        // bricked the transport on a transient create failure (AUDIT-2026-06
-        // #5 fix).
-        val rebindTarget = target ?: defaultTarget
-        val fresh = try {
-            createHandleClosingOrphanOnCancel(rebindTarget, forRebind = true)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            // Bounded linear backoff (base, 2×base, …), reset on the next
-            // successful bind; a genuine network callback still supersedes
-            // via scheduleRebind, and rebindNow's own guards stop the retry
-            // once the watcher is gone (intent cleared on both sides) or an
-            // interleaved rebind restored the handle with no network change.
-            val attempt = ++rebindRetryAttempts
-            if (attempt <= rebindRetryMaxAttempts) {
-                val backoffMs = rebindRetryBaseDelayMillis * attempt
-                ops.logWarn(
-                    "rebindNow: JmDNS.create failed; retry $attempt/$rebindRetryMaxAttempts " +
-                        "in ${backoffMs}ms",
-                    e
-                )
-                rebindRetryJob?.cancel()
-                rebindRetryJob = rebindScope.launch {
-                    delay(backoffMs)
-                    rebindNow("JmDNS.create retry $attempt/$rebindRetryMaxAttempts")
-                }
-            } else {
-                ops.logWarn(
-                    "rebindNow: JmDNS.create failed; retry budget exhausted — " +
-                        "will re-attempt on the next network change",
-                    e
-                )
-            }
+        // Closing and restoring form one transaction. Ownership is never
+        // cleared until close succeeds, and the binding is not marked healthy
+        // until every intended service/listener has been attached.
+        bindingHealthy = false
+        try {
+            closeCurrentHandle()
+            installCurrentIntents(
+                target = target,
+                defaultTarget = defaultTarget,
+                forRebind = true
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            if (error !is Exception) throw error
+            scheduleRebindRetry(error)
             return@withLock
         }
-        handle = fresh
+
+        rebindRetryJob?.cancel()
+        rebindRetryJob = null
         rebindRetryAttempts = 0
-
-        if (hadAdvertising && cached != null) {
-            runCatching {
-                val token = withContext(ioContext) { ops.registerServiceBlocking(fresh, cached) }
-                advertisedToken = token
-                ops.logDebug("rebindNow: registerService completed on fresh JmDNS")
-            }.onFailure { e ->
-                ops.logWarn("rebindNow: registerService failed", e)
-            }
-        } else if (hadAdvertising) {
-            ops.logWarn("rebindNow: cachedLocalPeer was null; advertising not restored")
-        }
-
-        if (hadDiscovery) {
-            runCatching {
-                val token = withContext(ioContext) { ops.addListenerBlocking(fresh) }
-                listenerToken = token
-                ops.logDebug("rebindNow: addServiceListener completed on fresh JmDNS")
-            }.onFailure { e ->
-                ops.logWarn("rebindNow: addServiceListener failed", e)
-            }
-        }
-
-        boundNetwork = target
-        boundDefaultNetwork = defaultTarget
+        retryTargetInitialized = false
         ops.logDebug(
             "rebindNow: complete; boundNetwork=$target boundDefaultNetwork=$defaultTarget"
         )
@@ -529,7 +573,158 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         handle?.let { return it }
         val fresh = createHandleClosingOrphanOnCancel(ops.currentNetwork(), forRebind = false)
         handle = fresh
+        bindingHealthy = bindingMatchesIntents()
         return fresh
+    }
+
+    private fun bindingMatchesIntents(): Boolean =
+        advertisingIntent == (advertisedToken != null) &&
+            discoveryIntent == (listenerToken != null)
+
+    /**
+     * Install every currently intended resource on one new handle. Tokens are
+     * stored before their blocking side effects begin, so ambiguous completion
+     * remains owned and can be rolled back by closing the handle.
+     */
+    private suspend fun installCurrentIntents(
+        target: N?,
+        defaultTarget: N?,
+        forRebind: Boolean
+    ) {
+        check(handle == null) { "cannot install a binding while another handle is owned" }
+        val fresh = createHandleClosingOrphanOnCancel(target ?: defaultTarget, forRebind)
+        handle = fresh
+        bindingHealthy = false
+        try {
+            if (advertisingIntent) {
+                val localPeer = cachedLocalPeer
+                    ?: error("advertising intent has no cached LocalPeerInfo")
+                val token = ops.createServiceToken(localPeer)
+                advertisedToken = token
+                withContext(ioContext) { ops.registerServiceBlocking(fresh, token) }
+                ops.logDebug("rebindNow: registerService completed on fresh JmDNS")
+            }
+            if (discoveryIntent) {
+                val token = ops.createListenerToken(fresh)
+                listenerToken = token
+                withContext(ioContext) { ops.addListenerBlocking(fresh, token) }
+                ops.logDebug("rebindNow: addServiceListener completed on fresh JmDNS")
+            }
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                try {
+                    closeCurrentHandle()
+                } catch (cleanupError: Throwable) {
+                    if (cleanupError !is Exception) throw cleanupError
+                    ops.logWarn(
+                        "binding rollback: close failed; retaining handle/token ownership",
+                        cleanupError
+                    )
+                }
+            }
+            throw error
+        }
+        bindingHealthy = bindingMatchesIntents()
+        check(bindingHealthy) { "installed JmDNS resources do not match lifecycle intent" }
+        boundNetwork = target
+        boundDefaultNetwork = defaultTarget
+    }
+
+    /** Clear ownership only after the platform handle actually closes. */
+    private suspend fun closeCurrentHandle() {
+        val current = handle ?: run {
+            advertisedToken = null
+            listenerToken = null
+            bindingHealthy = bindingMatchesIntents()
+            return
+        }
+        listenerToken?.let(ops::deactivateListenerToken)
+        withContext(ioContext) { ops.closeHandleBlocking(current) }
+        handle = null
+        advertisedToken = null
+        listenerToken = null
+        bindingHealthy = bindingMatchesIntents()
+    }
+
+    private suspend fun removeAdvertisingToken(token: Any): Throwable? {
+        val current = handle
+            ?: return IllegalStateException("advertised token exists without an owning handle")
+        return try {
+            withContext(NonCancellable) {
+                withContext(ioContext) { ops.unregisterServiceBlocking(current, token) }
+            }
+            advertisedToken = null
+            ops.logDebug("stopAdvertising: unregistered")
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            if (error !is Exception) throw error
+            ops.logWarn("stopAdvertising: unregister failed; retaining ownership", error)
+            error
+        }
+    }
+
+    private suspend fun removeListenerToken(token: Any): Throwable? {
+        val current = handle
+            ?: return IllegalStateException("listener token exists without an owning handle")
+        ops.deactivateListenerToken(token)
+        return try {
+            withContext(NonCancellable) {
+                withContext(ioContext) { ops.removeListenerBlocking(current, token) }
+            }
+            listenerToken = null
+            ops.logDebug("stopDiscovery: listener removed")
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            if (error !is Exception) throw error
+            ops.logWarn("stopDiscovery: listener removal failed; retaining ownership", error)
+            error
+        }
+    }
+
+    private suspend fun recoverOtherIntentsAfterCleanupFailure(
+        operation: String,
+        cleanupFailure: Throwable
+    ) {
+        ops.logWarn("$operation: targeted cleanup failed; rebuilding shared handle", cleanupFailure)
+        try {
+            withContext(NonCancellable) {
+                closeCurrentHandle()
+                if (advertisingIntent || discoveryIntent) {
+                    val target = ops.currentNetwork()
+                    installCurrentIntents(
+                        target = target,
+                        defaultTarget = ops.observedDefaultNetwork(),
+                        forRebind = true
+                    )
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (recoveryFailure: Throwable) {
+            if (recoveryFailure !is Exception) throw recoveryFailure
+            ops.logWarn(
+                "$operation: fallback rebuild failed; ownership retained for retry",
+                recoveryFailure
+            )
+            throw recoveryFailure
+        }
+    }
+
+    private suspend fun repairUnhealthyBindingBeforeStart() {
+        if (bindingHealthy && bindingMatchesIntents()) return
+        closeCurrentHandle()
+        if (advertisingIntent || discoveryIntent) {
+            val target = ops.currentNetwork()
+            installCurrentIntents(
+                target = target,
+                defaultTarget = ops.observedDefaultNetwork(),
+                forRebind = true
+            )
+        }
     }
 
     /**
@@ -550,8 +745,18 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
             }
         } catch (e: CancellationException) {
             produced?.let { orphan ->
-                withContext(NonCancellable + ioContext) {
-                    runCatching { ops.closeHandleBlocking(orphan) }
+                handle = orphan
+                bindingHealthy = false
+                withContext(NonCancellable) {
+                    try {
+                        closeCurrentHandle()
+                    } catch (cleanupError: Throwable) {
+                        if (cleanupError !is Exception) throw cleanupError
+                        ops.logWarn(
+                            "cancelled handle creation: close failed; retaining ownership",
+                            cleanupError
+                        )
+                    }
                 }
             }
             throw e
@@ -569,8 +774,24 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
      */
     private suspend fun failedStartCleanup() {
         withContext(NonCancellable) {
-            releaseMulticastLockIfIdle()
-            closeHandleIfIdle()
+            try {
+                closeCurrentHandle()
+                if (advertisingIntent || discoveryIntent) {
+                    val target = ops.currentNetwork()
+                    installCurrentIntents(
+                        target = target,
+                        defaultTarget = ops.observedDefaultNetwork(),
+                        forRebind = true
+                    )
+                }
+            } catch (cleanupError: Throwable) {
+                if (cleanupError !is Exception) throw cleanupError
+                ops.logWarn(
+                    "failed start cleanup: ownership retained for a later retry",
+                    cleanupError
+                )
+            }
+            if (handle == null) releaseMulticastLockIfIdle()
         }
     }
 
@@ -579,9 +800,8 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         // old handle-based check misread the failed-rebind window (handles
         // null, host still active) as idle — see the intent-flag KDoc.
         if (advertisingIntent || discoveryIntent) return
-        val h = handle ?: return
-        handle = null
-        withContext(ioContext) { runCatching { ops.closeHandleBlocking(h) } }
+        if (handle == null) return
+        closeCurrentHandle()
         ops.logDebug("closeJmdnsIfIdle: closed handle")
     }
 
@@ -590,6 +810,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         // the handles while the host is still active, and the rebind retry
         // needs the multicast lock kept alive to be useful.
         if (advertisingIntent || discoveryIntent) return
+        if (handle != null) return
         ops.releaseMulticastLock()
     }
 
@@ -598,18 +819,47 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
      * rebind/retry — only when **both** advertising and discovery intents
      * have been cleared (AUDIT-2026-06 #5 intent-based idle check).
      */
-    private fun stopNetworkWatcherIfIdle() {
+    private suspend fun stopNetworkWatcherIfIdle() {
         if (advertisingIntent || discoveryIntent) return
+        if (handle != null) return
         if (!ops.isWatcherActive()) return
 
         ops.stopNetworkWatcher()
-        pendingRebindJob?.cancel()
-        pendingRebindJob = null
+        scheduleLock.withLock {
+            pendingRebindJob?.cancel()
+            pendingRebindJob = null
+        }
         rebindRetryJob?.cancel()
         rebindRetryJob = null
         rebindRetryAttempts = 0
+        retryTargetInitialized = false
+        retryTarget = null
+        retryDefaultTarget = null
         boundNetwork = null
         boundDefaultNetwork = null
+    }
+
+    private fun scheduleRebindRetry(error: Throwable) {
+        val attempt = ++rebindRetryAttempts
+        if (attempt <= rebindRetryMaxAttempts) {
+            val backoffMs = rebindRetryBaseDelayMillis * attempt
+            ops.logWarn(
+                "rebindNow: binding transaction failed; retry " +
+                    "$attempt/$rebindRetryMaxAttempts in ${backoffMs}ms",
+                error
+            )
+            rebindRetryJob?.cancel()
+            rebindRetryJob = rebindScope.launch {
+                delay(backoffMs)
+                rebindNow("binding retry $attempt/$rebindRetryMaxAttempts")
+            }
+        } else {
+            ops.logWarn(
+                "rebindNow: binding transaction failed; retry budget exhausted — " +
+                    "will re-attempt with a fresh budget on the next network target",
+                error
+            )
+        }
     }
 
     internal companion object {
@@ -624,13 +874,14 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
 
         /**
          * AUDIT-2026-06 (#5): base delay for the self-scheduled retry after a
-         * create failure in [rebindNow]; attempt N waits N * base (2s, 4s, …
+         * binding-transaction failure in [rebindNow]; attempt N waits N *
+         * base (2s, 4s, …
          * 10s) — bounded backoff, never a tight loop.
          */
         const val REBIND_RETRY_BASE_DELAY_MILLIS = 2_000L
 
         /**
-         * AUDIT-2026-06 (#5): max consecutive create-failure retries before
+         * AUDIT-2026-06 (#5): max consecutive binding-transaction retries before
          * giving up and waiting for the next genuine network change (which
          * schedules a fresh rebind and, on success, resets the counter).
          */

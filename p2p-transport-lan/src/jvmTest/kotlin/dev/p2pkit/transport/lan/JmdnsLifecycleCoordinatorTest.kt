@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -29,19 +30,17 @@ import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
- * 2026-07 P1-14: automated contract for the Android JmDNS rebind machinery —
- * the state machine extracted verbatim into [JmdnsLifecycleCoordinator]
- * (commonMain seam) precisely so this jvm-style unit suite can exist
- * (`androidMain` has no automated test path in this module; the
- * jvm-pins-the-shared-shape convention follows `HostSelectorTest`).
+ * Automated contract for the shared JVM/Android JmDNS lifecycle machinery.
+ * Android has no automated device target in this module, so its platform
+ * operations compile against the same common state machine pinned here.
  *
  * Pinned here, per the coverage row:
  *   - intent flags vs live handles (AUDIT-2026-06 #5): a create failure mid
  *     rebind must not brick the transport; stop* during the failed-rebind
  *     window clears intent and halts the retry;
  *   - bounded create-retry (budget respected, re-attempt on the next change);
- *   - restore-failure repair: a dropped re-register is repaired by the next
- *     rebind (current no-immediate-retry disposition pinned as-is, DSC-4);
+ *   - restoration is transactional: a dropped re-register never commits the
+ *     new target and the bounded retry restores every intended resource;
  *   - cancelled create closes the produced handle (AUDIT-2026-07 DSC-3);
  *   - failed start* releases the handle + multicast lock, keeping both when
  *     the other side is still active (AUDIT-2026-07 DSC-13).
@@ -61,7 +60,12 @@ class JmdnsLifecycleCoordinatorTest {
         override fun toString(): String = "handle#$id"
     }
 
-    private class FakeListenerToken(val handle: FakeHandle)
+    private class FakeListenerToken(val handle: FakeHandle) {
+        @Volatile
+        var active = true
+    }
+
+    private class FakeServiceToken(val localPeer: LocalPeerInfo)
 
     private class FakeOps : JmdnsLifecycleOps<FakeNet, FakeHandle> {
         val createCalls = AtomicInteger(0)
@@ -94,8 +98,24 @@ class JmdnsLifecycleCoordinatorTest {
         @Volatile
         var createGate: CountDownLatch? = null
 
+        @Volatile
+        var registerGate: CountDownLatch? = null
+
+        @Volatile
+        var listenerGate: CountDownLatch? = null
+
+        @Volatile
+        var unregisterGate: CountDownLatch? = null
+
+        @Volatile
+        var removeListenerGate: CountDownLatch? = null
+
         /** One element offered per [createHandleBlocking] entry — a rendezvous for tests. */
         val createEntered = LinkedBlockingQueue<Unit>()
+        val registerEntered = LinkedBlockingQueue<Unit>()
+        val listenerEntered = LinkedBlockingQueue<Unit>()
+        val unregisterEntered = LinkedBlockingQueue<Unit>()
+        val removeListenerEntered = LinkedBlockingQueue<Unit>()
 
         @Volatile
         var failNextRegister = false
@@ -103,18 +123,46 @@ class JmdnsLifecycleCoordinatorTest {
         @Volatile
         var failNextAddListener = false
 
+        @Volatile
+        var failNextUnregister = false
+
+        @Volatile
+        var failNextRemoveListener = false
+
+        @Volatile
+        var failNextWatcherStop = false
+
+        @Volatile
+        var failNextLockRelease = false
+
+        val closeFailuresRemaining = AtomicInteger(0)
+
         /** Handle passed to each heartbeat tick (AUDIT-2026-07 DSC-1). */
         val reemitTicks = CopyOnWriteArrayList<FakeHandle>()
 
         @Volatile
         var failNextReemit = false
 
+        private fun awaitNonCancellableGate(gate: CountDownLatch, label: String) {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (true) {
+                val remaining = deadline - System.nanoTime()
+                if (remaining <= 0) throw IOException("$label never released")
+                try {
+                    if (gate.await(remaining, TimeUnit.NANOSECONDS)) return
+                } catch (_: InterruptedException) {
+                    // JmDNS registration/listener creation is blocking work
+                    // that does not honor coroutine cancellation. Ignore the
+                    // worker-thread interrupt to reproduce prompt-cancellation
+                    // after the side effect completes.
+                }
+            }
+        }
+
         override fun createHandleBlocking(target: FakeNet?, forRebind: Boolean): FakeHandle {
             createCalls.incrementAndGet()
             createEntered.put(Unit)
-            createGate?.let {
-                if (!it.await(5, TimeUnit.SECONDS)) throw IOException("createGate never released")
-            }
+            createGate?.let { awaitNonCancellableGate(it, "createGate") }
             if (createFailuresRemaining.get() > 0) {
                 createFailuresRemaining.decrementAndGet()
                 throw IOException("injected create failure")
@@ -125,34 +173,61 @@ class JmdnsLifecycleCoordinatorTest {
         }
 
         override fun closeHandleBlocking(handle: FakeHandle) {
+            if (closeFailuresRemaining.get() > 0) {
+                closeFailuresRemaining.decrementAndGet()
+                throw IOException("injected close failure")
+            }
             handle.closed = true
             closed += handle
         }
 
-        override fun registerServiceBlocking(handle: FakeHandle, localPeer: LocalPeerInfo): Any {
+        override fun createServiceToken(localPeer: LocalPeerInfo): Any =
+            FakeServiceToken(localPeer)
+
+        override fun registerServiceBlocking(handle: FakeHandle, token: Any) {
+            registerEntered.put(Unit)
+            registerGate?.let { awaitNonCancellableGate(it, "registerGate") }
             if (failNextRegister) {
                 failNextRegister = false
                 throw IOException("injected register failure")
             }
-            registrations += handle to localPeer
-            return handle to localPeer
+            registrations += handle to (token as FakeServiceToken).localPeer
         }
 
         override fun unregisterServiceBlocking(handle: FakeHandle, token: Any) {
+            unregisterEntered.put(Unit)
+            unregisterGate?.let { awaitNonCancellableGate(it, "unregisterGate") }
+            if (failNextUnregister) {
+                failNextUnregister = false
+                throw IOException("injected unregister failure")
+            }
             unregistrations += token
         }
 
-        override fun addListenerBlocking(handle: FakeHandle): Any {
+        override fun createListenerToken(handle: FakeHandle): Any =
+            FakeListenerToken(handle)
+
+        override fun addListenerBlocking(handle: FakeHandle, token: Any) {
+            listenerEntered.put(Unit)
+            listenerGate?.let { awaitNonCancellableGate(it, "listenerGate") }
             if (failNextAddListener) {
                 failNextAddListener = false
                 throw IOException("injected addListener failure")
             }
-            val token = FakeListenerToken(handle)
-            listenersAdded += token
-            return token
+            listenersAdded += token as FakeListenerToken
+        }
+
+        override fun deactivateListenerToken(token: Any) {
+            (token as FakeListenerToken).active = false
         }
 
         override fun removeListenerBlocking(handle: FakeHandle, token: Any) {
+            removeListenerEntered.put(Unit)
+            removeListenerGate?.let { awaitNonCancellableGate(it, "removeListenerGate") }
+            if (failNextRemoveListener) {
+                failNextRemoveListener = false
+                throw IOException("injected listener removal failure")
+            }
             listenersRemoved += token
         }
 
@@ -179,6 +254,10 @@ class JmdnsLifecycleCoordinatorTest {
         }
 
         override fun releaseMulticastLock() {
+            if (failNextLockRelease) {
+                failNextLockRelease = false
+                throw IOException("injected multicast release failure")
+            }
             lockHeld = false
         }
 
@@ -187,6 +266,10 @@ class JmdnsLifecycleCoordinatorTest {
         }
 
         override fun stopNetworkWatcher() {
+            if (failNextWatcherStop) {
+                failNextWatcherStop = false
+                throw IOException("injected watcher cleanup failure")
+            }
             watcherActive = false
         }
 
@@ -257,6 +340,11 @@ class JmdnsLifecycleCoordinatorTest {
             ?: fail("createHandleBlocking was never entered")
     }
 
+    private suspend fun awaitBlockingCall(queue: LinkedBlockingQueue<Unit>, what: String) {
+        withContext(Dispatchers.IO) { queue.poll(5, TimeUnit.SECONDS) }
+            ?: fail("$what was never entered")
+    }
+
     // ── lifecycle / idle policy ─────────────────────────────────────────
 
     @Test
@@ -269,6 +357,7 @@ class JmdnsLifecycleCoordinatorTest {
             assertEquals(1, ops.createCalls.get(), "advertise + discover must share one handle")
             assertEquals(1, ops.registrations.size)
             assertEquals(1, ops.listenersAdded.size)
+            val listener = ops.listenersAdded.single()
             assertTrue(ops.lockHeld)
             assertTrue(ops.watcherActive)
 
@@ -281,9 +370,151 @@ class JmdnsLifecycleCoordinatorTest {
 
             coordinator.stopDiscovery()
             assertEquals(1, ops.listenersRemoved.size)
+            assertFalse(listener.active, "terminal cleanup must deactivate queued callbacks")
             assertEquals(1, ops.closed.size, "idle close must release the shared handle")
             assertFalse(ops.lockHeld)
             assertFalse(ops.watcherActive)
+        }
+    }
+
+    @Test
+    fun unregisterFailureClosesTheOwnerAndRestoresDiscoveryOnly() {
+        val ops = FakeOps().apply { current = FakeNet("wifi0") }
+        coordinatorTest(ops) { coordinator, _ ->
+            coordinator.startAdvertising(localPeer)
+            coordinator.startDiscovery()
+            val original = ops.created.single()
+            ops.failNextUnregister = true
+
+            coordinator.stopAdvertising()
+
+            assertTrue(original.closed, "failed targeted cleanup must close its owning handle")
+            assertEquals(2, ops.created.size)
+            assertEquals(2, ops.listenersAdded.size, "discovery must be restored")
+            assertSame(ops.created.last(), ops.listenersAdded.last().handle)
+            assertEquals(1, ops.registrations.size, "advertising must not be resurrected")
+        }
+    }
+
+    @Test
+    fun listenerRemovalFailureClosesTheOwnerAndRestoresAdvertisingOnly() {
+        val ops = FakeOps().apply { current = FakeNet("wifi0") }
+        coordinatorTest(ops) { coordinator, _ ->
+            coordinator.startAdvertising(localPeer)
+            coordinator.startDiscovery()
+            val original = ops.created.single()
+            ops.failNextRemoveListener = true
+
+            coordinator.stopDiscovery()
+
+            assertTrue(original.closed, "failed targeted cleanup must close its owning handle")
+            assertEquals(2, ops.created.size)
+            assertEquals(2, ops.registrations.size, "advertising must be restored")
+            assertSame(ops.created.last(), ops.registrations.last().first)
+            assertEquals(1, ops.listenersAdded.size, "discovery must not be resurrected")
+        }
+    }
+
+    @Test
+    fun failedFallbackCloseRetainsOwnershipAndARepeatedStopRetriesCleanup() {
+        val ops = FakeOps().apply { current = FakeNet("wifi0") }
+        coordinatorTest(ops) { coordinator, _ ->
+            coordinator.startAdvertising(localPeer)
+            val original = ops.created.single()
+            ops.failNextUnregister = true
+            ops.closeFailuresRemaining.set(1)
+
+            assertFailsWith<IOException> { coordinator.stopAdvertising() }
+            assertFalse(original.closed)
+            assertTrue(ops.lockHeld, "live handle keeps multicast ownership after failed close")
+            assertTrue(ops.watcherActive, "watcher ownership is retained for retry")
+
+            coordinator.stopAdvertising()
+            assertTrue(original.closed)
+            assertFalse(ops.lockHeld)
+            assertFalse(ops.watcherActive)
+        }
+    }
+
+    @Test
+    fun watcherCleanupFailureRetainsIdleOwnershipUntilRepeatedStopSucceeds() {
+        val ops = FakeOps().apply {
+            current = FakeNet("wifi0")
+            failNextWatcherStop = true
+        }
+        coordinatorTest(ops) { coordinator, _ ->
+            coordinator.startAdvertising(localPeer)
+
+            assertFailsWith<IOException> { coordinator.stopAdvertising() }
+            assertTrue(ops.watcherActive, "failed callback cleanup must remain owned")
+            assertTrue(ops.lockHeld, "multicast lock stays owned until watcher cleanup completes")
+
+            coordinator.stopAdvertising()
+            assertFalse(ops.watcherActive)
+            assertFalse(ops.lockHeld)
+        }
+    }
+
+    @Test
+    fun multicastReleaseFailureRetainsLockUntilRepeatedStopSucceeds() {
+        val ops = FakeOps().apply {
+            current = FakeNet("wifi0")
+            failNextLockRelease = true
+        }
+        coordinatorTest(ops) { coordinator, _ ->
+            coordinator.startAdvertising(localPeer)
+
+            assertFailsWith<IOException> { coordinator.stopAdvertising() }
+            assertFalse(ops.watcherActive)
+            assertTrue(ops.lockHeld, "failed release must remain owned and retryable")
+
+            coordinator.stopAdvertising()
+            assertFalse(ops.lockHeld)
+        }
+    }
+
+    @Test
+    fun cancelledAdvertisingStopCompletesCleanupAndPreservesCancellation() {
+        val ops = FakeOps().apply { current = FakeNet("wifi0") }
+        coordinatorTest(ops) { coordinator, scope ->
+            coordinator.startAdvertising(localPeer)
+            val gate = CountDownLatch(1)
+            ops.unregisterGate = gate
+
+            val stopper = scope.launch { coordinator.stopAdvertising() }
+            awaitBlockingCall(ops.unregisterEntered, "unregisterServiceBlocking")
+            stopper.cancel()
+            gate.countDown()
+            stopper.join()
+
+            assertTrue(stopper.isCancelled, "the caller's CancellationException must survive cleanup")
+            assertEquals(1, ops.unregistrations.size)
+            assertTrue(ops.created.single().closed)
+            assertFalse(ops.lockHeld)
+            assertFalse(ops.watcherActive)
+        }
+    }
+
+    @Test
+    fun cancelledDiscoveryStopRemovesListenerWithoutDisruptingAdvertising() {
+        val ops = FakeOps().apply { current = FakeNet("wifi0") }
+        coordinatorTest(ops) { coordinator, scope ->
+            coordinator.startAdvertising(localPeer)
+            coordinator.startDiscovery()
+            val gate = CountDownLatch(1)
+            ops.removeListenerGate = gate
+
+            val stopper = scope.launch { coordinator.stopDiscovery() }
+            awaitBlockingCall(ops.removeListenerEntered, "removeListenerBlocking")
+            stopper.cancel()
+            gate.countDown()
+            stopper.join()
+
+            assertTrue(stopper.isCancelled)
+            assertEquals(1, ops.listenersRemoved.size)
+            assertTrue(ops.closed.isEmpty(), "advertising still owns the shared handle")
+            assertTrue(ops.lockHeld)
+            assertTrue(ops.watcherActive)
         }
     }
 
@@ -312,15 +543,18 @@ class JmdnsLifecycleCoordinatorTest {
     }
 
     @Test
-    fun failedStartDiscoveryKeepsSharedResourcesWhileAdvertisingActive() {
+    fun failedStartDiscoveryRebuildsTheStillIntendedAdvertisingSide() {
         val ops = FakeOps().apply { current = FakeNet("wifi0") }
         coordinatorTest(ops) { coordinator, _ ->
             coordinator.startAdvertising(localPeer)
             ops.failNextAddListener = true
             assertFailsWith<IOException> { coordinator.startDiscovery() }
 
-            assertTrue(ops.lockHeld, "advertising still active — the lock must be kept (DSC-13 idle guard)")
-            assertTrue(ops.closed.isEmpty(), "advertising still active — the shared handle must be kept")
+            assertTrue(ops.lockHeld, "advertising still active — the lock must be kept")
+            assertEquals(1, ops.closed.size, "ambiguous listener add must close its owning handle")
+            assertEquals(2, ops.created.size, "advertising must be restored on a fresh handle")
+            assertEquals(2, ops.registrations.size)
+            assertSame(ops.created.last(), ops.registrations.last().first)
         }
     }
 
@@ -375,7 +609,107 @@ class JmdnsLifecycleCoordinatorTest {
         }
     }
 
+    @Test
+    fun cancellationAfterAdvertisingRegistrationCompletesClosesTheOwningHandle() {
+        val ops = FakeOps().apply { current = FakeNet("wifi0") }
+        val gate = CountDownLatch(1)
+        ops.registerGate = gate
+        coordinatorTest(ops) { coordinator, scope ->
+            val starter = scope.launch { coordinator.startAdvertising(localPeer) }
+            awaitBlockingCall(ops.registerEntered, "registerServiceBlocking")
+
+            starter.cancel()
+            gate.countDown()
+            starter.join()
+
+            awaitCondition("ambiguously registered service handle closed") {
+                ops.registrations.size == 1 && ops.created.single().closed
+            }
+            assertFalse(ops.lockHeld)
+            assertFalse(ops.watcherActive)
+
+            ops.registerGate = null
+            coordinator.startAdvertising(localPeer)
+            assertEquals(2, ops.created.size)
+            assertEquals(2, ops.registrations.size)
+        }
+    }
+
+    @Test
+    fun cancellationAfterListenerAddCompletesRebuildsTheOtherLiveIntent() {
+        val ops = FakeOps().apply { current = FakeNet("wifi0") }
+        coordinatorTest(ops) { coordinator, scope ->
+            coordinator.startAdvertising(localPeer)
+            val original = ops.created.single()
+
+            val gate = CountDownLatch(1)
+            ops.listenerGate = gate
+            val starter = scope.launch { coordinator.startDiscovery() }
+            awaitBlockingCall(ops.listenerEntered, "addListenerBlocking")
+            starter.cancel()
+            gate.countDown()
+            starter.join()
+
+            awaitCondition("advertising restored after ambiguous listener add") {
+                original.closed && ops.registrations.size == 2
+            }
+            assertEquals(2, ops.created.size)
+            assertSame(ops.created.last(), ops.registrations.last().first)
+            assertTrue(ops.lockHeld)
+            assertTrue(ops.watcherActive)
+
+            ops.listenerGate = null
+            coordinator.startDiscovery()
+            assertEquals(2, ops.listenersAdded.size)
+            assertSame(ops.created.last(), ops.listenersAdded.last().handle)
+        }
+    }
+
     // ── AUDIT-2026-06 #5: intent flags vs handles + retry bounds ───────
+
+    @Test
+    fun repeatedDiscoveryStartRepairsFailedRebindWithoutDuplicatingListener() {
+        val ops = FakeOps().apply {
+            current = FakeNet("wifi0")
+            observed = FakeNet("wifi0")
+        }
+        coordinatorTest(ops, retryBaseMillis = 10_000) { coordinator, _ ->
+            coordinator.startDiscovery()
+            ops.observed = FakeNet("wifi1")
+            ops.createFailuresRemaining.set(1)
+
+            coordinator.scheduleRebind("injected failed transaction")
+            coordinator.awaitPendingRebindForTest()
+            assertEquals(1, ops.listenersAdded.size)
+
+            coordinator.startDiscovery()
+            assertEquals(2, ops.listenersAdded.size, "repair must install exactly one fresh listener")
+            assertSame(ops.created.last(), ops.listenersAdded.last().handle)
+            coordinator.stopDiscovery()
+        }
+    }
+
+    @Test
+    fun repeatedAdvertisingStartRepairsFailedRebindWithoutDuplicateRegistration() {
+        val ops = FakeOps().apply {
+            current = FakeNet("wifi0")
+            observed = FakeNet("wifi0")
+        }
+        coordinatorTest(ops, retryBaseMillis = 10_000) { coordinator, _ ->
+            coordinator.startAdvertising(localPeer)
+            ops.observed = FakeNet("wifi1")
+            ops.createFailuresRemaining.set(1)
+
+            coordinator.scheduleRebind("injected failed transaction")
+            coordinator.awaitPendingRebindForTest()
+            assertEquals(1, ops.registrations.size)
+
+            coordinator.startAdvertising(localPeer)
+            assertEquals(2, ops.registrations.size, "repair must register exactly one fresh service")
+            assertSame(ops.created.last(), ops.registrations.last().first)
+            coordinator.stopAdvertising()
+        }
+    }
 
     @Test
     fun rebindCreateFailureRetriesWithinBudgetThenRestores() {
@@ -427,6 +761,55 @@ class JmdnsLifecycleCoordinatorTest {
     }
 
     @Test
+    fun exhaustedRetryBudgetIsResetForEveryGenuinelyNewTarget() {
+        val ops = FakeOps().apply {
+            current = FakeNet("wifi0")
+            observed = FakeNet("wifi0")
+        }
+        coordinatorTest(ops, maxAttempts = 2) { coordinator, _ ->
+            coordinator.startAdvertising(localPeer)
+
+            ops.createFailuresRemaining.set(Int.MAX_VALUE / 2)
+            ops.observed = FakeNet("wifi1")
+            coordinator.scheduleRebind("first failed target")
+            awaitCondition("first target consumes initial attempt plus two retries") {
+                ops.createCalls.get() == 4
+            }
+
+            ops.observed = FakeNet("wifi2")
+            coordinator.scheduleRebind("second failed target")
+            awaitCondition("second target receives a fresh complete retry budget") {
+                ops.createCalls.get() == 7
+            }
+        }
+    }
+
+    @Test
+    fun concurrentScheduleRequestsCollapseToOneRebind() {
+        val ops = FakeOps().apply {
+            current = FakeNet("wifi0")
+            observed = FakeNet("wifi0")
+        }
+        coordinatorTest(ops, debounceMillis = 25) { coordinator, _ ->
+            coordinator.startAdvertising(localPeer)
+            ops.observed = FakeNet("wifi1")
+
+            coroutineScope {
+                val callers = List(32) { index ->
+                    launch(Dispatchers.Default) {
+                        coordinator.scheduleRebind("concurrent callback $index")
+                    }
+                }
+                callers.forEach { it.join() }
+            }
+            coordinator.awaitPendingRebindForTest()
+
+            assertEquals(2, ops.createCalls.get(), "all concurrent callbacks must share one rebind")
+            assertEquals(2, ops.registrations.size)
+        }
+    }
+
+    @Test
     fun stopDuringFailedRebindWindowClearsIntentAndHaltsRetry() {
         val ops = FakeOps().apply {
             current = FakeNet("wifi0")
@@ -453,10 +836,10 @@ class JmdnsLifecycleCoordinatorTest {
         }
     }
 
-    // ── restore-failure repair (DSC-4 disposition pinned) ──────────────
+    // ── transactional restoration ─────────────────────────────────────
 
     @Test
-    fun rebindRegisterFailureIsDroppedNowAndRepairedByNextRebind() {
+    fun rebindRegisterFailureDoesNotCommitAndSelfRetryRestoresAdvertising() {
         val ops = FakeOps().apply {
             current = FakeNet("wifi0")
             observed = FakeNet("wifi0")
@@ -467,16 +850,13 @@ class JmdnsLifecycleCoordinatorTest {
             ops.observed = FakeNet("wifi1")
             ops.failNextRegister = true
             coordinator.scheduleRebind("rotation with restore failure")
-            awaitCondition("fresh handle created") { ops.createCalls.get() == 2 }
-            delay(100)
-            // Pinned current behavior (DSC-4 catalogued): the dropped
-            // re-register is not retried by itself...
-            assertEquals(1, ops.registrations.size, "restore failure is dropped without an immediate retry")
+            awaitCondition("advertising restored by the transaction retry") {
+                ops.registrations.size == 2
+            }
 
-            // ...but intent survives, so the next rotation repairs it.
-            ops.observed = FakeNet("wifi2")
-            coordinator.scheduleRebind("repairing rotation")
-            awaitCondition("advertising repaired on the next rebind") { ops.registrations.size == 2 }
+            assertEquals(3, ops.createCalls.get(), "start + failed restore + successful retry")
+            assertEquals(2, ops.closed.size, "old and partially restored handles must both close")
+            assertSame(ops.created.last(), ops.registrations.last().first)
         }
     }
 
@@ -527,17 +907,77 @@ class JmdnsLifecycleCoordinatorTest {
         coordinatorTest(ops) { coordinator, _ ->
             coordinator.startDiscovery()
             val original = ops.listenersAdded.single()
-            val replacement = FakeListenerToken(ops.created.single())
 
-            coordinator.refreshDiscovery { handle, old, commit ->
+            coordinator.refreshDiscovery { handle ->
                 assertSame(ops.created.single(), handle)
-                assertSame(original, old)
-                commit(replacement)
             }
 
+            val replacement = ops.listenersAdded.last()
+            assertEquals(2, ops.listenersAdded.size)
+            assertSame(original, ops.listenersRemoved.single())
+            assertFalse(original.active, "replaced listener generation must be deactivated")
+            assertTrue(replacement.active)
+
             coordinator.stopDiscovery()
-            assertEquals(1, ops.listenersRemoved.size)
-            assertSame(replacement, ops.listenersRemoved.single(), "stop must remove the committed token")
+            assertEquals(2, ops.listenersRemoved.size)
+            assertSame(replacement, ops.listenersRemoved.last(), "stop must remove the committed token")
+            assertFalse(replacement.active)
+        }
+    }
+
+    @Test
+    fun cancellationAfterRefreshListenerAddCompensatesTheFreshToken() {
+        val ops = FakeOps().apply { current = FakeNet("wifi0") }
+        coordinatorTest(ops) { coordinator, scope ->
+            coordinator.startDiscovery()
+            awaitBlockingCall(ops.listenerEntered, "initial addListenerBlocking")
+            val original = ops.listenersAdded.single()
+
+            val gate = CountDownLatch(1)
+            ops.listenerGate = gate
+            val refresher = scope.launch { coordinator.refreshDiscovery { } }
+            awaitBlockingCall(ops.listenerEntered, "refresh addListenerBlocking")
+            refresher.cancel()
+            gate.countDown()
+            refresher.join()
+
+            assertEquals(
+                2,
+                ops.listenersAdded.size,
+                "created=${ops.created} closed=${ops.closed} removed=${ops.listenersRemoved.size}"
+            )
+            val ambiguousFresh = ops.listenersAdded.last()
+            assertSame(ambiguousFresh, ops.listenersRemoved.single())
+            assertFalse(ambiguousFresh.active)
+            assertTrue(original.active, "failed rotation must leave the original generation live")
+
+            ops.listenerGate = null
+            coordinator.stopDiscovery()
+            assertSame(original, ops.listenersRemoved.last())
+            assertFalse(original.active)
+        }
+    }
+
+    @Test
+    fun refreshOldListenerCleanupFailureRebuildsOneHealthyListener() {
+        val ops = FakeOps().apply { current = FakeNet("wifi0") }
+        coordinatorTest(ops) { coordinator, _ ->
+            coordinator.startDiscovery()
+            val originalHandle = ops.created.single()
+            ops.failNextRemoveListener = true
+
+            coordinator.refreshDiscovery { }
+
+            assertTrue(originalHandle.closed)
+            assertEquals(2, ops.created.size)
+            assertEquals(3, ops.listenersAdded.size, "initial + ambiguous fresh + rebuilt listener")
+            assertSame(ops.created.last(), ops.listenersAdded.last().handle)
+            assertFalse(ops.listenersAdded[0].active)
+            assertFalse(ops.listenersAdded[1].active)
+            assertTrue(ops.listenersAdded.last().active)
+
+            coordinator.stopDiscovery()
+            assertSame(ops.listenersAdded.last(), ops.listenersRemoved.last())
         }
     }
 
@@ -546,7 +986,7 @@ class JmdnsLifecycleCoordinatorTest {
         val ops = FakeOps().apply { current = FakeNet("wifi0") }
         coordinatorTest(ops) { coordinator, _ ->
             var invoked = false
-            coordinator.refreshDiscovery { _, _, _ -> invoked = true }
+            coordinator.refreshDiscovery { invoked = true }
             assertFalse(invoked, "refresh must skip when no listener is live")
 
             // Failed-rebind window: listener token nulled → refresh skips too
@@ -561,7 +1001,7 @@ class JmdnsLifecycleCoordinatorTest {
             awaitCondition("failed rebind create happened") { ops.createCalls.get() >= 2 }
 
             var invokedInWindow = false
-            coordinator.refreshDiscovery { _, _, _ -> invokedInWindow = true }
+            coordinator.refreshDiscovery { invokedInWindow = true }
             assertFalse(invokedInWindow, "refresh must skip in the failed-rebind window")
         }
     }

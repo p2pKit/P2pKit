@@ -23,10 +23,9 @@ import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
 import javax.jmdns.ServiceListener
-import kotlinx.coroutines.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
@@ -130,6 +129,7 @@ internal class AndroidLanDiscoveryTransport(
      * availability — Wi-Fi / Ethernet networks the device has joined as a
      * client. Non-null iff watcher is active.
      */
+    @Volatile
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     /**
@@ -142,6 +142,7 @@ internal class AndroidLanDiscoveryTransport(
      * network's onLost (when client Wi-Fi goes away and there's no
      * replacement default) is also a valid rebind trigger.
      */
+    @Volatile
     private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
 
     private val networkLock = Any()
@@ -166,6 +167,12 @@ internal class AndroidLanDiscoveryTransport(
         rebindScope = rebindScope,
         ioContext = Dispatchers.IO
     )
+
+    /** Callback generation owned by one coordinator listener token. */
+    private class ListenerLease {
+        val active = AtomicBoolean(true)
+        lateinit var listener: ServiceListener
+    }
 
     // ──────────────────────────────────────────────────────────────────
     // DiscoveryTransport API
@@ -214,45 +221,11 @@ internal class AndroidLanDiscoveryTransport(
      *
      * No-op if discovery isn't currently running.
      */
-    override suspend fun refresh(): Unit = coordinator.refreshDiscovery { handle, old, commit ->
+    override suspend fun refresh(): Unit = coordinator.refreshDiscovery { handle ->
         Log.d(TAG, "refresh: rotating listener + force re-querying known peers")
 
-        // Step 1: listener rotation — fresh generic browse. AUDIT-2026-06
-        // (#7 hygiene, mirrored from JvmLanDiscoveryTransport.refresh): the
-        // fresh listener is attached BEFORE the old one is removed so no
-        // failure path leaves zero listeners registered, and
-        // CancellationException is rethrown, never swallowed — the previous
-        // runCatching also caught cancellations and nulled the listener
-        // after the old listener was already gone.
-        val fresh = buildServiceListener(handle)
-        try {
-            withContext(Dispatchers.IO) {
-                handle.addServiceListener(registration.serviceTypeJmdns, fresh)
-            }
-        } catch (e: CancellationException) {
-            // The add may still have completed on the IO thread before the
-            // cancellation surfaced; best-effort detach the fresh listener so
-            // a cancelled refresh cannot leak a duplicate. The old listener
-            // was never removed — discovery keeps working either way.
-            withContext(NonCancellable + Dispatchers.IO) {
-                runCatching { handle.removeServiceListener(registration.serviceTypeJmdns, fresh) }
-            }
-            throw e
-        } catch (e: Throwable) {
-            // Genuine add failure: keep the old listener registered so
-            // discovery stays alive; the next refresh tick retries the
-            // rotation.
-            Log.w(TAG, "refresh: addServiceListener failed — keeping previous listener", e)
-            return@refreshDiscovery
-        }
-        commit(fresh)
-        withContext(Dispatchers.IO) {
-            runCatching {
-                handle.removeServiceListener(registration.serviceTypeJmdns, old as ServiceListener)
-            }
-        }
-
-        // Step 2: per-peer forced re-query. NOTE: JmDNS.list() is NOT a pure
+        // Listener rotation is transactionally owned by the coordinator.
+        // Per-peer forced re-query: JmDNS.list() is NOT a pure
         // cache read — the default overload can block up to 6 s waiting for
         // service infos (ServiceCollector), and this runs under the
         // coordinator lock on the ~3 s reconnect refresh cadence. Use a short
@@ -318,24 +291,36 @@ internal class AndroidLanDiscoveryTransport(
                 handle.close()
             }
 
-            override fun registerServiceBlocking(handle: JmDNS, localPeer: LocalPeerInfo): Any {
-                val info = buildServiceInfo(localPeer)
-                handle.registerService(info)
-                return info
+            override fun createServiceToken(localPeer: LocalPeerInfo): Any =
+                buildServiceInfo(localPeer)
+
+            override fun registerServiceBlocking(handle: JmDNS, token: Any) {
+                handle.registerService(token as ServiceInfo)
             }
 
             override fun unregisterServiceBlocking(handle: JmDNS, token: Any) {
                 handle.unregisterService(token as ServiceInfo)
             }
 
-            override fun addListenerBlocking(handle: JmDNS): Any {
-                val l = buildServiceListener(handle)
-                handle.addServiceListener(registration.serviceTypeJmdns, l)
-                return l
+            override fun createListenerToken(handle: JmDNS): Any =
+                buildListenerLease(handle)
+
+            override fun addListenerBlocking(handle: JmDNS, token: Any) {
+                handle.addServiceListener(
+                    registration.serviceTypeJmdns,
+                    (token as ListenerLease).listener
+                )
+            }
+
+            override fun deactivateListenerToken(token: Any) {
+                (token as ListenerLease).active.set(false)
             }
 
             override fun removeListenerBlocking(handle: JmDNS, token: Any) {
-                handle.removeServiceListener(registration.serviceTypeJmdns, token as ServiceListener)
+                handle.removeServiceListener(
+                    registration.serviceTypeJmdns,
+                    (token as ListenerLease).listener
+                )
             }
 
             override fun reemitCachedPeersBlocking(handle: JmDNS) {
@@ -374,8 +359,10 @@ internal class AndroidLanDiscoveryTransport(
 
             override fun releaseMulticastLock() {
                 val held = multicastLock ?: return
+                if (held.isHeld) held.release()
+                // Clear ownership only after release succeeds. A failed
+                // release remains retryable on the next terminal stop.
                 multicastLock = null
-                runCatching { if (held.isHeld) held.release() }
             }
 
             override fun startNetworkWatcher() = ensureNetworkWatcherStarted()
@@ -470,12 +457,23 @@ internal class AndroidLanDiscoveryTransport(
      * the next natural re-announce will arrive with the routable
      * address and `serviceResolved` will fire again.
      */
-    private fun buildServiceListener(handle: JmDNS): ServiceListener = object : ServiceListener {
+    private fun buildListenerLease(handle: JmDNS): ListenerLease {
+        val lease = ListenerLease()
+        lease.listener = buildServiceListener(handle) { lease.active.get() }
+        return lease
+    }
+
+    private fun buildServiceListener(
+        handle: JmDNS,
+        isActive: () -> Boolean
+    ): ServiceListener = object : ServiceListener {
         override fun serviceAdded(event: ServiceEvent) {
+            if (!isActive()) return
             runCatching { handle.requestServiceInfo(event.type, event.name, true) }
         }
 
         override fun serviceRemoved(event: ServiceEvent) {
+            if (!isActive()) return
             val info = event.info ?: return
             // AUDIT-2026-07 (RBS-1): validate the TXT pid before it can
             // reach the throwing PeerId constructor, and gate the lost
@@ -496,11 +494,14 @@ internal class AndroidLanDiscoveryTransport(
                     fingerprint = info.getPropertyString(LanConstants.TXT_FINGERPRINT)
                 ) == null
             ) return
-            Log.d(TAG, "serviceRemoved: pid=${pid.take(8)} — emitting PeerEvent.Lost")
-            _events.tryEmit(PeerEvent.Lost(PeerId(pid)))
+            if (isActive()) {
+                Log.d(TAG, "serviceRemoved: pid=${pid.take(8)} — emitting PeerEvent.Lost")
+                _events.tryEmit(PeerEvent.Lost(PeerId(pid)))
+            }
         }
 
         override fun serviceResolved(event: ServiceEvent) {
+            if (!isActive()) return
             val info = event.info ?: return
             // AUDIT-2026-07 (RBS-1): a blank pid must be skipped here, not
             // thrown from PeerId() inside the JmDNS callback.
@@ -567,7 +568,7 @@ internal class AndroidLanDiscoveryTransport(
                     "candidates=[${candidates.joinToString(",") { it.hostAddress }}] " +
                     "selected=$host:$port — emitting PeerEvent.Found"
             )
-            _events.tryEmit(PeerEvent.Found(internalPeer))
+            if (isActive()) _events.tryEmit(PeerEvent.Found(internalPeer))
         }
     }
 
@@ -654,25 +655,23 @@ internal class AndroidLanDiscoveryTransport(
                 .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                 .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
                 .build()
-            runCatching { connectivity.registerNetworkCallback(request, cb) }
-                .onSuccess {
-                    networkCallback = cb
-                    Log.d(TAG, "ensureNetworkWatcherStarted: registered NetworkCallback (WIFI|ETHERNET)")
-                }
-                .onFailure { e ->
-                    Log.w(TAG, "ensureNetworkWatcherStarted: registerNetworkCallback failed", e)
-                }
+            try {
+                connectivity.registerNetworkCallback(request, cb)
+                networkCallback = cb
+                Log.d(TAG, "ensureNetworkWatcherStarted: registered NetworkCallback (WIFI|ETHERNET)")
+            } catch (error: Exception) {
+                Log.w(TAG, "ensureNetworkWatcherStarted: registerNetworkCallback failed", error)
+            }
         }
         if (defaultNetworkCallback == null) {
             val cb = buildDefaultNetworkCallback()
-            runCatching { connectivity.registerDefaultNetworkCallback(cb) }
-                .onSuccess {
-                    defaultNetworkCallback = cb
-                    Log.d(TAG, "ensureNetworkWatcherStarted: registered DefaultNetworkCallback")
-                }
-                .onFailure { e ->
-                    Log.w(TAG, "ensureNetworkWatcherStarted: registerDefaultNetworkCallback failed", e)
-                }
+            try {
+                connectivity.registerDefaultNetworkCallback(cb)
+                defaultNetworkCallback = cb
+                Log.d(TAG, "ensureNetworkWatcherStarted: registered DefaultNetworkCallback")
+            } catch (error: Exception) {
+                Log.w(TAG, "ensureNetworkWatcherStarted: registerDefaultNetworkCallback failed", error)
+            }
         }
     }
 
@@ -775,20 +774,35 @@ internal class AndroidLanDiscoveryTransport(
      * keep the lifecycle invariant tight.
      */
     private fun stopNetworkWatcherNow() {
+        var firstFailure: Exception? = null
         networkCallback?.let { cb ->
-            runCatching { connectivity.unregisterNetworkCallback(cb) }
-            networkCallback = null
+            try {
+                connectivity.unregisterNetworkCallback(cb)
+                networkCallback = null
+            } catch (error: Exception) {
+                firstFailure = error
+                Log.w(TAG, "stopNetworkWatcherIfIdle: primary callback cleanup failed; retaining ownership", error)
+            }
         }
         defaultNetworkCallback?.let { cb ->
-            runCatching { connectivity.unregisterNetworkCallback(cb) }
-            defaultNetworkCallback = null
+            try {
+                connectivity.unregisterNetworkCallback(cb)
+                defaultNetworkCallback = null
+            } catch (error: Exception) {
+                val existing = firstFailure
+                if (existing == null) firstFailure = error else existing.addSuppressed(error)
+                Log.w(TAG, "stopNetworkWatcherIfIdle: default callback cleanup failed; retaining ownership", error)
+            }
         }
-        synchronized(networkLock) {
-            observedNetwork = null
-            observedDefaultNetwork = null
-            hasEverObservedNetwork = false
+        if (networkCallback == null && defaultNetworkCallback == null) {
+            synchronized(networkLock) {
+                observedNetwork = null
+                observedDefaultNetwork = null
+                hasEverObservedNetwork = false
+            }
+            Log.d(TAG, "stopNetworkWatcherIfIdle: unregistered both callbacks and reset state")
         }
-        Log.d(TAG, "stopNetworkWatcherIfIdle: unregistered both callbacks and reset state")
+        firstFailure?.let { throw it }
     }
 
     private companion object {
