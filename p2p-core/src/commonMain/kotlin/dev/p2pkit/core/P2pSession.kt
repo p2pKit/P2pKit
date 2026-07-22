@@ -28,9 +28,10 @@ import kotlinx.io.RawSource
  *
  * ### Lifecycle
  *
- * `close()` transitions the session to `Closed` ([ConnectionState.Closing] is
- * declared but never emitted today). After [close], the underlying connection
- * is released and [incoming] completes.
+ * `close()` commits [ConnectionState.Closing] before its bounded wire/resource
+ * cleanup, then transitions to `Closed`. After [close], the underlying
+ * connection is released and [incoming] completes. Concurrent close callers
+ * join the same cleanup transaction.
  */
 public interface P2pSession {
     /** Stable identifier of this session for the lifetime of the process. */

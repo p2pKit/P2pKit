@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,8 +27,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -206,6 +209,85 @@ class CloseSemanticsTest {
             supervisor.cancel()
         }
     }
+
+    @Test
+    fun localCloseIntentWinsConcurrentRawTerminalClassification() = runBlocking {
+        val connection = RawClosesDuringWriteConnection()
+        val supervisor = SupervisorJob()
+        val session = P2pSessionImpl(
+            id = "local-close-raw-terminal-race",
+            peer = Peer(
+                id = PeerId("test-local-close-race"),
+                name = "Test",
+                platform = Platform.JVM_DESKTOP,
+                supportedTransports = setOf(TransportKind.LAN)
+            ),
+            initialConnection = connection,
+            initialEvents = Channel(Channel.UNLIMITED),
+            protocol = DefaultP2pProtocol(clock = { systemTimeMillis() }),
+            parentScope = CoroutineScope(Dispatchers.Default + supervisor),
+            keepAlive = KeepAliveConfig(60_000, 120_000),
+            clock = { systemTimeMillis() },
+            logger = P2pLogger.NoOp
+        )
+        session.start()
+        try {
+            withTimeout(10_000) { session.close() }
+            assertEquals(
+                ConnectionState.Closed,
+                session.state.value,
+                "a raw terminal callback caused by local CLOSE must not win as Failed"
+            )
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun cancelledCloseOwnerStillFinishesAndConcurrentCallerJoinsIt() = runBlocking {
+        val connection = GatedCloseFrameConnection()
+        val supervisor = SupervisorJob()
+        val session = P2pSessionImpl(
+            id = "cancelled-local-close-owner",
+            peer = Peer(
+                id = PeerId("test-cancelled-local-close"),
+                name = "Test",
+                platform = Platform.JVM_DESKTOP,
+                supportedTransports = setOf(TransportKind.LAN)
+            ),
+            initialConnection = connection,
+            initialEvents = Channel(Channel.UNLIMITED),
+            protocol = DefaultP2pProtocol(clock = { systemTimeMillis() }),
+            parentScope = CoroutineScope(Dispatchers.Default + supervisor),
+            keepAlive = KeepAliveConfig(60_000, 120_000),
+            clock = { systemTimeMillis() },
+            logger = P2pLogger.NoOp
+        )
+        session.start()
+        try {
+            val owner = launch { session.close() }
+            connection.writeEntered.await()
+            assertEquals(ConnectionState.Closing, session.state.value)
+
+            val follower = async { session.close() }
+            yield()
+            assertTrue(!follower.isCompleted, "a concurrent close must join the owner")
+
+            owner.cancel()
+            connection.releaseWrite.complete(Unit)
+            withTimeout(5_000) {
+                owner.join()
+                follower.await()
+            }
+
+            assertTrue(owner.isCancelled, "the initiating caller's cancellation must propagate")
+            assertEquals(ConnectionState.Closed, session.state.value)
+            assertEquals(1, connection.closeCalls, "one local close transaction owns raw cleanup")
+        } finally {
+            connection.releaseWrite.complete(Unit)
+            supervisor.cancel()
+        }
+    }
 }
 
 /**
@@ -258,5 +340,50 @@ private class WedgedCloseConnection : RawConnection {
 
     fun releaseClose() {
         closeGate.complete(Unit)
+    }
+}
+
+/** Raw state terminates during the CLOSE write, then the write wedges. */
+private class RawClosesDuringWriteConnection : RawConnection {
+    private val _state = MutableStateFlow(ConnectionState.Connected)
+    override val state: StateFlow<ConnectionState> = _state.asStateFlow()
+    private val closeGate = CompletableDeferred<Unit>()
+
+    override suspend fun write(bytes: ByteArray) {
+        _state.value = ConnectionState.Closed
+        withContext(NonCancellable) { closeGate.await() }
+        throw IllegalStateException("raw connection closed during CLOSE frame")
+    }
+
+    override fun read(): Flow<ByteArray> = emptyFlow()
+
+    override suspend fun close() {
+        _state.value = ConnectionState.Closed
+        closeGate.complete(Unit)
+    }
+}
+
+/** Cancellable CLOSE write gate used to prove close-owner handoff semantics. */
+private class GatedCloseFrameConnection : RawConnection {
+    private val _state = MutableStateFlow(ConnectionState.Connected)
+    override val state: StateFlow<ConnectionState> = _state.asStateFlow()
+    val writeEntered = CompletableDeferred<Unit>()
+    val releaseWrite = CompletableDeferred<Unit>()
+
+    @Volatile
+    var closeCalls: Int = 0
+        private set
+
+    override suspend fun write(bytes: ByteArray) {
+        writeEntered.complete(Unit)
+        releaseWrite.await()
+    }
+
+    override fun read(): Flow<ByteArray> = emptyFlow()
+
+    override suspend fun close() {
+        closeCalls++
+        _state.value = ConnectionState.Closed
+        releaseWrite.complete(Unit)
     }
 }

@@ -15,12 +15,15 @@ import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.Channel
@@ -155,6 +158,13 @@ internal class P2pSessionImpl(
      * [rearmWith] and the `onConnectionLost` decision.
      */
     private val connectionLock = Mutex()
+
+    /**
+     * Exact result of the one local close transaction. A caller that observes
+     * [ConnectionState.Closing] joins this owner instead of running another
+     * CLOSE/cleanup transaction or racing its timeout against the leader.
+     */
+    private val localCloseCompletion = CompletableDeferred<List<CleanupIssue>>()
 
     private var connection: RawConnection = initialConnection
     private var events: ReceiveChannel<ProtocolEvent> = initialEvents
@@ -332,12 +342,32 @@ internal class P2pSessionImpl(
     }
 
     override suspend fun close() {
-        // Idempotent: skip if already terminal.
-        val alreadyTerminal = connectionLock.withLock {
-            val s = _state.value
-            s == ConnectionState.Closed || s == ConnectionState.Failed
+        // Commit local-close intent before touching the wire. Raw-state and
+        // protocol observers then see Closing and cannot classify the socket
+        // teardown as an unrelated Failed outcome. Exactly one caller owns
+        // the bounded cleanup; concurrent close callers join its result.
+        var joinLocalClose = false
+        val ownsLocalClose = connectionLock.withLock {
+            when (_state.value) {
+                ConnectionState.Closed, ConnectionState.Failed -> false
+                ConnectionState.Closing -> {
+                    joinLocalClose = true
+                    false
+                }
+                else -> {
+                    _state.value = ConnectionState.Closing
+                    true
+                }
+            }
         }
-        if (alreadyTerminal) {
+        if (joinLocalClose) {
+            val issues = localCloseCompletion.await()
+            if (issues.isNotEmpty()) {
+                throw cleanupError("session $id close", issues)
+            }
+            return
+        }
+        if (!ownsLocalClose) {
             captureCleanupIssue(
                 resource = "session $id runtime",
                 timeoutMillis = SESSION_RUNTIME_CLOSE_TIMEOUT_MS
@@ -350,47 +380,50 @@ internal class P2pSessionImpl(
             return
         }
 
-        // Best-effort CLOSE frame BEFORE we tear the wire down. Must happen
-        // before [transitionToTerminal] cancels the epoch — once the epoch
-        // is gone, [connection] is closed and the protocol writer would
-        // throw. This is the only terminal path that sends a CLOSE frame;
-        // unintentional failure paths don't (the wire is presumably already
-        // dead).
-        //
-        // The send runs as a job on the session scope and only the WAIT for
-        // it is bounded (AUDIT-2026-06 fix). Bounding the write itself with
-        // withTimeoutOrNull cannot work against a wedged peer: a blocking
-        // socket write ignores cancellation, so the timeout would still park
-        // until the write returned — hanging close() (and kit.stop() behind
-        // it) forever. Instead we give the frame CLOSE_FRAME_TIMEOUT_MS to
-        // get out, then proceed with teardown regardless;
-        // [transitionToTerminal] closes the raw connection, which is the one
-        // lever that unblocks a wedged sendClose. The runCatching lives
-        // inside the launched job (it only guards the best-effort send); the
-        // bounded join is deliberately NOT wrapped, so a genuine caller
-        // CancellationException propagates instead of being swallowed.
-        val closeSend = scope.launch {
-            runCatching { sendMutex.withLock { protocol.sendClose(connection) } }
+        var cleanupIssues: List<CleanupIssue> = emptyList()
+        withContext(NonCancellable) {
+            try {
+                // Best-effort CLOSE frame BEFORE we tear the wire down. Must
+                // happen before [transitionToTerminal] cancels the epoch —
+                // once the epoch is gone, [connection] is closed and the
+                // protocol writer would throw. Only the WAIT is bounded; raw
+                // close below is what unblocks a cancellation-ignoring write.
+                val closeSend = scope.launch {
+                    runCatching { sendMutex.withLock { protocol.sendClose(connection) } }
+                }
+                withTimeoutOrNull(CLOSE_FRAME_TIMEOUT_MS) { closeSend.join() }
+
+                val issues = transitionToTerminal(
+                    ConnectionState.Closed,
+                    "user close()"
+                ).toMutableList()
+                closeSend.cancel()
+
+                // transitionToTerminal cancels the runtime after every
+                // terminal cleanup attempt. Bound the join too: a blocking
+                // child must not make close() unbounded after a failed raw
+                // close.
+                captureCleanupIssue(
+                    resource = "session $id runtime",
+                    timeoutMillis = SESSION_RUNTIME_CLOSE_TIMEOUT_MS,
+                    preserveCancellation = false
+                ) {
+                    sessionJob.cancelAndJoin()
+                }?.let(issues::add)
+                cleanupIssues = issues
+                logCleanupIssues(logger, "session $id close", issues)
+                localCloseCompletion.complete(issues)
+            } catch (failure: Throwable) {
+                localCloseCompletion.completeExceptionally(failure)
+                throw failure
+            }
         }
-        withTimeoutOrNull(CLOSE_FRAME_TIMEOUT_MS) { closeSend.join() }
 
-        // Centralised cleanup: file transfers, epoch cancel, raw close, and
-        // the state flip to Closed all happen here. Each external cleanup is
-        // bounded, so a broken raw close is reported instead of hanging.
-        val cleanupIssues = transitionToTerminal(ConnectionState.Closed, "user close()").toMutableList()
-        closeSend.cancel()
-
-        // transitionToTerminal cancels the runtime after every terminal
-        // cleanup attempt. Bound the join too: a blocking child must not make
-        // close() unbounded after a failed raw close.
-        captureCleanupIssue(
-            resource = "session $id runtime",
-            timeoutMillis = SESSION_RUNTIME_CLOSE_TIMEOUT_MS
-        ) {
-            sessionJob.cancelAndJoin()
-        }?.let(cleanupIssues::add)
+        // The committed close transaction is non-cancellable so ownership is
+        // never stranded in Closing, but the initiating caller's cancellation
+        // still propagates unchanged after cleanup.
+        currentCoroutineContext().ensureActive()
         if (cleanupIssues.isNotEmpty()) {
-            logCleanupIssues(logger, "session $id close", cleanupIssues)
             throw cleanupError("session $id close", cleanupIssues)
         }
     }
