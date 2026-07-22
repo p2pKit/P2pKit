@@ -1,11 +1,15 @@
 package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
+import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.PeerAuthenticationHint
+import dev.p2pkit.core.transport.TransportHint
 import dev.p2pkit.core.transport.TransportSecurityProfile
 
 /**
@@ -98,6 +102,16 @@ internal object LanConstants {
     const val TXT_PROTOCOL_VERSION: String = "pv"
     const val TXT_FINGERPRINT: String = "fp"
 
+    val DISCOVERY_TXT_KEYS: Set<String> = setOf(
+        TXT_PEER_ID,
+        TXT_APP_ID,
+        TXT_DEVICE_NAME,
+        TXT_PLATFORM,
+        TXT_CAPABILITIES,
+        TXT_PROTOCOL_VERSION,
+        TXT_FINGERPRINT
+    )
+
     /** Wire protocol version. Must match `ProtocolConstants.VERSION` in :p2p-core. */
     const val LEGACY_PROTOCOL_VERSION: Int = 1
     const val SECURE_PROTOCOL_VERSION: Int = 2
@@ -167,10 +181,216 @@ internal val TransportContext.lanProtocolVersion: Int
  * across it (on iOS a throw would cross the `nw_browser` callback boundary;
  * on JVM/Android it would surface untyped on a JmDNS listener thread).
  *
- * Returns [rawPid] unchanged when it is usable (present and non-blank), or
- * `null` when the record must be skipped. Values are deliberately NOT
- * trimmed or otherwise normalized — identity handling for conforming peers
- * is unchanged; this is a validation guard only.
+ * Returns [rawPid] unchanged when it is usable (present, non-blank, bounded,
+ * and free of protocol/log controls), or `null` when the record must be
+ * skipped. Values are deliberately NOT trimmed or otherwise normalized —
+ * identity handling for conforming peers is unchanged.
  */
 internal fun validDiscoveryPeerIdOrNull(rawPid: String?): String? =
-    rawPid?.takeUnless { it.isBlank() }
+    validLanTxtValueOrNull(LanConstants.TXT_PEER_ID, rawPid)
+        ?.takeUnless(String::isBlank)
+
+internal fun validLanTxtValueOrNull(key: String, raw: String?): String? =
+    raw?.takeIf { lanTxtEntryFits(key, it) && it.isWellFormedLanText() }
+
+/** Fully bounded/validated semantic content of one LAN discovery record. */
+internal data class ValidatedLanDiscoveryRecord(
+    val peerId: PeerId,
+    val deviceName: String,
+    val platform: Platform,
+    val supportedTransports: Set<TransportKind>,
+    val security: LanDiscoverySecurityMetadata
+) {
+    fun toInternalPeer(hint: TransportHint): InternalPeer = InternalPeer(
+        publicPeer = Peer(
+            id = peerId,
+            name = deviceName,
+            platform = platform,
+            supportedTransports = supportedTransports
+        ),
+        transportHints = listOf(hint),
+        authenticationHint = security.authenticationHint
+    )
+}
+
+/**
+ * Parse only a bounded record matching this app/security profile. Unknown
+ * fields are ignored for forward compatibility; every consumed field must
+ * fit one DNS-SD TXT character-string and contain no terminal/log controls.
+ */
+internal fun validateLanDiscoveryRecord(
+    properties: Map<String, String?>,
+    expectedAppId: AppId,
+    localPeerId: PeerId,
+    securityProfile: TransportSecurityProfile
+): ValidatedLanDiscoveryRecord? {
+    fun value(key: String): String? = validLanTxtValueOrNull(key, properties[key])
+
+    val pidText = value(LanConstants.TXT_PEER_ID)
+        ?.let(::validDiscoveryPeerIdOrNull)
+        ?: return null
+    val app = value(LanConstants.TXT_APP_ID) ?: return null
+    if (app != expectedAppId.value || pidText == localPeerId.value) return null
+
+    val protocolVersion = value(LanConstants.TXT_PROTOCOL_VERSION) ?: return null
+    val fingerprint = properties[LanConstants.TXT_FINGERPRINT]?.let {
+        value(LanConstants.TXT_FINGERPRINT) ?: return null
+    }
+    val security = validateLanDiscoverySecurityMetadata(
+        profile = securityProfile,
+        protocolVersion = protocolVersion,
+        fingerprint = fingerprint
+    ) ?: return null
+
+    val name = properties[LanConstants.TXT_DEVICE_NAME]
+        ?.let { value(LanConstants.TXT_DEVICE_NAME) ?: return null }
+        ?: pidText
+    if (name.isBlank()) return null
+
+    val platformText = properties[LanConstants.TXT_PLATFORM]
+        ?.let { value(LanConstants.TXT_PLATFORM) ?: return null }
+    val platform = platformText
+        ?.let { runCatching { Platform.valueOf(it) }.getOrNull() }
+        ?: Platform.UNKNOWN
+
+    val capabilitiesText = properties[LanConstants.TXT_CAPABILITIES]
+        ?.let { value(LanConstants.TXT_CAPABILITIES) ?: return null }
+    val supported = if (capabilitiesText == null) {
+        setOf(TransportKind.LAN)
+    } else {
+        val tags = capabilitiesText.split(',')
+        if (tags.size > MAX_LAN_CAPABILITY_TAGS) return null
+        tags.mapNotNull { tag ->
+            runCatching { TransportKind.valueOf(tag.trim()) }.getOrNull()
+        }.toSet().takeIf { TransportKind.LAN in it } ?: return null
+    }
+
+    return ValidatedLanDiscoveryRecord(
+        peerId = PeerId(pidText),
+        deviceName = name,
+        platform = platform,
+        supportedTransports = supported,
+        security = security
+    )
+}
+
+/** Build one portable TXT map, failing before native/JmDNS registration. */
+internal fun buildLanTxtProperties(
+    peerId: PeerId,
+    appId: AppId,
+    deviceName: String,
+    platform: Platform,
+    supportedTransports: Set<TransportKind>,
+    protocolVersion: Int,
+    fingerprint: PeerFingerprint?
+): Map<String, String> {
+    fun requireField(key: String, value: String) {
+        require(value.isNotBlank()) { "LAN TXT '$key' must not be blank" }
+        require(value.isWellFormedLanText()) {
+            "LAN TXT '$key' contains forbidden control characters or malformed Unicode"
+        }
+        require(lanTxtEntryFits(key, value)) {
+            "LAN TXT '$key' exceeds the $MAX_DNS_SD_TXT_ENTRY_BYTES-byte entry limit"
+        }
+    }
+
+    requireField(LanConstants.TXT_PEER_ID, peerId.value)
+    requireField(LanConstants.TXT_APP_ID, appId.value)
+    require(TransportKind.LAN in supportedTransports) {
+        "A LAN advertisement must include the LAN transport capability"
+    }
+    require(deviceName.isWellFormedLanText()) {
+        "LAN TXT '${LanConstants.TXT_DEVICE_NAME}' contains forbidden control characters or malformed Unicode"
+    }
+    val boundedName = truncateLanTxtValue(LanConstants.TXT_DEVICE_NAME, deviceName)
+    requireField(LanConstants.TXT_DEVICE_NAME, boundedName)
+    val capabilities = supportedTransports.joinToString(",") { it.name }
+    requireField(LanConstants.TXT_CAPABILITIES, capabilities)
+
+    return buildMap {
+        put(LanConstants.TXT_PEER_ID, peerId.value)
+        put(LanConstants.TXT_APP_ID, appId.value)
+        put(LanConstants.TXT_DEVICE_NAME, boundedName)
+        put(LanConstants.TXT_PLATFORM, platform.name)
+        put(LanConstants.TXT_CAPABILITIES, capabilities)
+        put(LanConstants.TXT_PROTOCOL_VERSION, protocolVersion.toString())
+        fingerprint?.let { put(LanConstants.TXT_FINGERPRINT, it.value) }
+    }.also { properties ->
+        properties.forEach { (key, value) -> requireField(key, value) }
+    }
+}
+
+internal fun lanTxtEntryFits(key: String, value: String): Boolean =
+    key.encodeToByteArray().size + 1 + value.encodeToByteArray().size <=
+        MAX_DNS_SD_TXT_ENTRY_BYTES
+
+internal fun sanitizeLanDiagnostic(raw: String): String = buildString(
+    minOf(raw.length, MAX_LAN_DIAGNOSTIC_CHARS)
+) {
+    var index = 0
+    while (index < raw.length && length < MAX_LAN_DIAGNOSTIC_CHARS) {
+        val character = raw[index]
+        if (
+            character.isHighSurrogate() &&
+            index + 1 < raw.length &&
+            raw[index + 1].isLowSurrogate()
+        ) {
+            if (length + 2 > MAX_LAN_DIAGNOSTIC_CHARS) break
+            append(character)
+            append(raw[index + 1])
+            index += 2
+        } else {
+            append(
+                if (character.isForbiddenLanControl() || character.isSurrogateCodeUnit()) {
+                    '\uFFFD'
+                } else {
+                    character
+                }
+            )
+            index++
+        }
+    }
+}
+
+private fun truncateLanTxtValue(key: String, value: String): String {
+    val maximum = MAX_DNS_SD_TXT_ENTRY_BYTES - key.encodeToByteArray().size - 1
+    if (value.encodeToByteArray().size <= maximum) return value
+    var end = value.length
+    while (end > 0) {
+        if (end < value.length && value[end - 1].isHighSurrogate()) end--
+        val candidate = value.substring(0, end)
+        if (candidate.encodeToByteArray().size <= maximum) return candidate
+        end--
+    }
+    return ""
+}
+
+private fun Char.isForbiddenLanControl(): Boolean {
+    val value = code
+    return value in 0x00..0x1F || value in 0x7F..0x9F ||
+        value == 0x061C || value == 0x200E || value == 0x200F ||
+        value in 0x202A..0x202E || value in 0x2066..0x2069
+}
+
+private fun String.isWellFormedLanText(): Boolean {
+    var index = 0
+    while (index < length) {
+        val character = this[index]
+        if (character.isForbiddenLanControl()) return false
+        when {
+            character.isHighSurrogate() -> {
+                if (index + 1 >= length || !this[index + 1].isLowSurrogate()) return false
+                index += 2
+            }
+            character.isLowSurrogate() -> return false
+            else -> index++
+        }
+    }
+    return true
+}
+
+private fun Char.isSurrogateCodeUnit(): Boolean = code in 0xD800..0xDFFF
+
+internal const val MAX_DNS_SD_TXT_ENTRY_BYTES: Int = 255
+private const val MAX_LAN_CAPABILITY_TAGS: Int = 32
+private const val MAX_LAN_DIAGNOSTIC_CHARS: Int = 160

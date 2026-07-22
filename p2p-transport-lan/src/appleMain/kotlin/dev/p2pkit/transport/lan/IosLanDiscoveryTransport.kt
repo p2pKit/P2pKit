@@ -2,9 +2,7 @@
 
 package dev.p2pkit.transport.lan
 
-import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
-import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
@@ -741,16 +739,15 @@ internal class IosLanDiscoveryTransport(
         ) ?: error("nw_advertise_descriptor_create_bonjour_service returned null")
         nw_advertise_descriptor_set_no_auto_rename(descriptor, true)
 
-        val properties = mutableMapOf(
-            LanConstants.TXT_PEER_ID to localPeer.peerId.value,
-            LanConstants.TXT_APP_ID to localPeer.appId.value,
-            LanConstants.TXT_DEVICE_NAME to localPeer.deviceName,
-            LanConstants.TXT_PLATFORM to localPeer.platform.name,
-            LanConstants.TXT_CAPABILITIES to localPeer.supportedTransports.joinToString(",") { it.name },
-            LanConstants.TXT_PROTOCOL_VERSION to transportContext.lanProtocolVersion.toString()
-        ).apply {
-            transportContext.localFingerprint?.let { put(LanConstants.TXT_FINGERPRINT, it.value) }
-        }
+        val properties = buildLanTxtProperties(
+            peerId = localPeer.peerId,
+            appId = localPeer.appId,
+            deviceName = localPeer.deviceName,
+            platform = localPeer.platform,
+            supportedTransports = localPeer.supportedTransports,
+            protocolVersion = transportContext.lanProtocolVersion,
+            fingerprint = transportContext.localFingerprint
+        )
         val txt = IosBonjour.mapToTxtRecord(
             properties
         )
@@ -790,79 +787,41 @@ internal class IosLanDiscoveryTransport(
             return
         }
         val txt = nw_browse_result_copy_txt_record_object(result)
-        val attrs = IosBonjour.txtRecordToMap(txt)
+        val decoded = IosBonjour.decodeTxtRecord(txt)
+        if (decoded.malformed) {
+            IosLanDebug.log("browse", "emitPeer: malformed TXT record — skip")
+            return
+        }
+        val attrs = decoded.properties
         IosLanDebug.log("browse", "emitPeer: txt=$attrs (isUpdate=$isUpdate)")
 
-        // AUDIT-2026-07 (RBS-1): a blank pid must be skipped here, not
-        // thrown from PeerId() across the nw_browser callback boundary.
-        val pid = validDiscoveryPeerIdOrNull(attrs[LanConstants.TXT_PEER_ID])
-        val app = attrs[LanConstants.TXT_APP_ID]
-        if (pid == null) {
-            IosLanDebug.log("browse", "emitPeer: filter — TXT_PEER_ID missing or blank")
+        val record = validateLanDiscoveryRecord(
+            properties = attrs,
+            expectedAppId = transportContext.appId,
+            localPeerId = transportContext.localPeerId,
+            securityProfile = transportContext.securityProfile
+        ) ?: run {
+            IosLanDebug.log("browse", "emitPeer: filter — invalid/bounded TXT schema")
             return
         }
         val servicePid = validDiscoveryPeerIdOrNull(
             nw_endpoint_get_bonjour_service_name(endpoint)?.toKString()
         )
-        if (servicePid != pid) {
+        if (servicePid != record.peerId.value) {
             IosLanDebug.log(
                 "browse",
                 "emitPeer: filter — Bonjour service identity does not match TXT peer id"
             )
             return
         }
-        if (app == null) {
-            IosLanDebug.log("browse", "emitPeer: filter — missing TXT_APP_ID")
-            return
-        }
-        if (pid == transportContext.localPeerId.value) {
-            IosLanDebug.log("browse", "emitPeer: filter — self (pid matches local)")
-            return
-        }
-        if (app != transportContext.appId.value) {
-            IosLanDebug.log(
-                "browse",
-                "emitPeer: filter — appId mismatch (peer=$app local=${transportContext.appId.value})"
-            )
-            return
-        }
-        val security = validateLanDiscoverySecurityMetadata(
-            profile = transportContext.securityProfile,
-            protocolVersion = attrs[LanConstants.TXT_PROTOCOL_VERSION],
-            fingerprint = attrs[LanConstants.TXT_FINGERPRINT]
-        )
-        if (security == null) {
-            IosLanDebug.log("browse", "emitPeer: filter — invalid security metadata")
-            return
-        }
-
-        val name = attrs[LanConstants.TXT_DEVICE_NAME] ?: pid
-        val platform = attrs[LanConstants.TXT_PLATFORM]
-            ?.let { runCatching { Platform.valueOf(it) }.getOrNull() }
-            ?: Platform.UNKNOWN
-        val capabilities = attrs[LanConstants.TXT_CAPABILITIES]
-            ?.split(",")
-            ?.mapNotNull { tag -> runCatching { TransportKind.valueOf(tag.trim()) }.getOrNull() }
-            ?.toSet()
-            ?: setOf(TransportKind.LAN)
-
-        val peerId = PeerId(pid)
-        val internalPeer = InternalPeer(
-            publicPeer = Peer(
-                id = peerId,
-                name = name,
-                platform = platform,
-                supportedTransports = capabilities
-            ),
-            transportHints = listOf(TransportHint(type = TransportKind.LAN)),
-            authenticationHint = security.authenticationHint
-        )
+        val peerId = record.peerId
+        val internalPeer = record.toInternalPeer(TransportHint(type = TransportKind.LAN))
         // AUDIT-2026-06 (#8): stamp the entry with the generation that
         // confirmed it. A live peer re-added by a replacement browser gets
         // re-stamped here and keeps being announced; a ghost keeps its old
         // generation and is pruned by the announce loop.
         val committed = confirmAnnounceEntryAtomically(
-            pid = pid,
+            pid = peerId.value,
             entry = AnnounceEntry(internalPeer, lastConfirmedGeneration = generation),
             isCurrentGeneration = {
                 // A generation can become stale between native callback entry
@@ -878,12 +837,21 @@ internal class IosLanDiscoveryTransport(
             }
         )
         if (!committed) return
-        IosLanDebug.log("browse", "emitPeer: ACCEPTED ${if (isUpdate) "Updated" else "Found"} $name pid=${pid.take(8)}")
+        IosLanDebug.log(
+            "browse",
+            "emitPeer: ACCEPTED ${if (isUpdate) "Updated" else "Found"} " +
+                "${record.deviceName} pid=${peerId.value.take(8)}"
+        )
     }
 
     private fun emitLost(result: nw_browse_result_t, generation: Int) {
         val txt = nw_browse_result_copy_txt_record_object(result)
-        val attrs = IosBonjour.txtRecordToMap(txt)
+        val decoded = IosBonjour.decodeTxtRecord(txt)
+        if (decoded.malformed) {
+            IosLanDebug.log("browse", "emitLost: malformed TXT record — skip")
+            return
+        }
+        val attrs = decoded.properties
         val endpoint = nw_browse_result_copy_endpoint(result)
         val servicePid = endpoint?.let {
             validDiscoveryPeerIdOrNull(
@@ -899,15 +867,22 @@ internal class IosLanDiscoveryTransport(
         // contradict the service identity/app, and the cache requirement in
         // emitLostById limits an incomplete removal to a peer whose complete
         // Found record already passed app, protocol, and fingerprint checks.
-        val txtPid = validDiscoveryPeerIdOrNull(attrs[LanConstants.TXT_PEER_ID])
-        if (txtPid != null && txtPid != servicePid) {
-            IosLanDebug.log("browse", "emitLost: filter — service/TXT peer identity mismatch")
-            return
+        if (LanConstants.TXT_PEER_ID in attrs) {
+            val txtPid = validDiscoveryPeerIdOrNull(attrs[LanConstants.TXT_PEER_ID])
+            if (txtPid == null || txtPid != servicePid) {
+                IosLanDebug.log("browse", "emitLost: filter — invalid or mismatched TXT peer identity")
+                return
+            }
         }
-        val app = attrs[LanConstants.TXT_APP_ID]
-        if (app != null && app != transportContext.appId.value) {
-            IosLanDebug.log("browse", "emitLost: filter — appId mismatch (peer=$app)")
-            return
+        if (LanConstants.TXT_APP_ID in attrs) {
+            val app = validLanTxtValueOrNull(
+                LanConstants.TXT_APP_ID,
+                attrs[LanConstants.TXT_APP_ID]
+            )
+            if (app == null || app != transportContext.appId.value) {
+                IosLanDebug.log("browse", "emitLost: filter — invalid or mismatched appId")
+                return
+            }
         }
         val carriesSecurityMetadata =
             LanConstants.TXT_PROTOCOL_VERSION in attrs || LanConstants.TXT_FINGERPRINT in attrs

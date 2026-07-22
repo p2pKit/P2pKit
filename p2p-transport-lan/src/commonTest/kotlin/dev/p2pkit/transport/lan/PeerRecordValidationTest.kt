@@ -1,10 +1,14 @@
 package dev.p2pkit.transport.lan
 
+import dev.p2pkit.core.AppId
 import dev.p2pkit.core.PeerId
+import dev.p2pkit.core.Platform
+import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.PeerAuthenticationHint
 import dev.p2pkit.core.transport.TransportSecurityProfile
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -57,10 +61,10 @@ class PeerRecordValidationTest {
     }
 
     @Test
-    fun guardRejectsExactlyTheValuesPeerIdThrowsOn() {
-        // Contract link: the guard must return null for exactly the inputs
-        // the PeerId constructor rejects, so a guarded discovery callback
-        // can never throw from the constructor.
+    fun guardAcceptsEveryBoundedSafeValueAcceptedByPeerId() {
+        // Discovery imposes wire and diagnostic bounds beyond PeerId's local
+        // value-object invariant. Within those bounds, it must preserve every
+        // value PeerId accepts without normalization.
         val samples = listOf("", " ", "  ", "\t\n", "x", " x", "uuid-ish-value")
         for (sample in samples) {
             val guardAccepts = validDiscoveryPeerIdOrNull(sample) != null
@@ -137,4 +141,154 @@ class PeerRecordValidationTest {
             )
         )
     }
+
+    @Test
+    fun localTxtBuilderRejectsOversizedIdentityFieldsAndTruncatesOnlyDisplayName() {
+        assertFailsWith<IllegalArgumentException> {
+            buildLanTxtProperties(
+                peerId = PeerId("p".repeat(252)),
+                appId = AppId("app"),
+                deviceName = "device",
+                platform = Platform.UNKNOWN,
+                supportedTransports = setOf(TransportKind.LAN),
+                protocolVersion = 1,
+                fingerprint = null
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            buildLanTxtProperties(
+                peerId = PeerId("peer"),
+                appId = AppId("a".repeat(252)),
+                deviceName = "device",
+                platform = Platform.UNKNOWN,
+                supportedTransports = setOf(TransportKind.LAN),
+                protocolVersion = 1,
+                fingerprint = null
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            buildLanTxtProperties(
+                peerId = PeerId("peer"),
+                appId = AppId("app"),
+                deviceName = "device",
+                platform = Platform.UNKNOWN,
+                supportedTransports = setOf(TransportKind.BLE),
+                protocolVersion = 1,
+                fingerprint = null
+            )
+        }
+
+        val properties = buildLanTxtProperties(
+            peerId = PeerId("peer"),
+            appId = AppId("app"),
+            deviceName = "🙂".repeat(100),
+            platform = Platform.UNKNOWN,
+            supportedTransports = setOf(TransportKind.LAN),
+            protocolVersion = 1,
+            fingerprint = null
+        )
+        val boundedName = properties.getValue(LanConstants.TXT_DEVICE_NAME)
+        assertEquals(0, boundedName.encodeToByteArray().size % 4)
+        assertEquals(true, lanTxtEntryFits(LanConstants.TXT_DEVICE_NAME, boundedName))
+        assertEquals(62, boundedName.length / 2)
+    }
+
+    @Test
+    fun completeRecordParserRejectsOversizeControlsAndWrongApp() {
+        val valid = legacyProperties()
+        assertNotNull(
+            validateLanDiscoveryRecord(
+                valid,
+                AppId("app"),
+                PeerId("local"),
+                TransportSecurityProfile.LegacyPlaintextV1
+            )
+        )
+        assertNull(
+            validateLanDiscoveryRecord(
+                valid + (LanConstants.TXT_DEVICE_NAME to "spoof\u001B[31m"),
+                AppId("app"),
+                PeerId("local"),
+                TransportSecurityProfile.LegacyPlaintextV1
+            )
+        )
+        assertNull(
+            validateLanDiscoveryRecord(
+                valid + (LanConstants.TXT_DEVICE_NAME to "x".repeat(251)),
+                AppId("app"),
+                PeerId("local"),
+                TransportSecurityProfile.LegacyPlaintextV1
+            )
+        )
+        assertNull(
+            validateLanDiscoveryRecord(
+                valid,
+                AppId("another-app"),
+                PeerId("local"),
+                TransportSecurityProfile.LegacyPlaintextV1
+            )
+        )
+        assertNull(
+            validateLanDiscoveryRecord(
+                valid + (
+                    LanConstants.TXT_CAPABILITIES to
+                        List(33) { TransportKind.LAN.name }.joinToString(",")
+                    ),
+                AppId("app"),
+                PeerId("local"),
+                TransportSecurityProfile.LegacyPlaintextV1
+            )
+        )
+        assertNull(
+            validateLanDiscoveryRecord(
+                valid + (LanConstants.TXT_CAPABILITIES to TransportKind.BLE.name),
+                AppId("app"),
+                PeerId("local"),
+                TransportSecurityProfile.LegacyPlaintextV1
+            )
+        )
+
+        val optionalNulls = valid + mapOf(
+            LanConstants.TXT_DEVICE_NAME to null,
+            LanConstants.TXT_PLATFORM to null,
+            LanConstants.TXT_CAPABILITIES to null,
+            LanConstants.TXT_FINGERPRINT to null
+        )
+        val parsed = assertNotNull(
+            validateLanDiscoveryRecord(
+                optionalNulls,
+                AppId("app"),
+                PeerId("local"),
+                TransportSecurityProfile.LegacyPlaintextV1
+            )
+        )
+        assertEquals("remote", parsed.deviceName)
+        assertEquals(Platform.UNKNOWN, parsed.platform)
+        assertEquals(setOf(TransportKind.LAN), parsed.supportedTransports)
+    }
+
+    @Test
+    fun diagnosticsReplaceControlsAndBoundPeerInput() {
+        val safe = sanitizeLanDiagnostic("peer\u001B[31m\u202Ename" + "x".repeat(300))
+        assertEquals(false, '\u001B' in safe)
+        assertEquals(false, '\u202E' in safe)
+        assertEquals(true, '\uFFFD' in safe)
+        assertEquals(160, safe.length)
+
+        val emojiBoundary = sanitizeLanDiagnostic("x".repeat(159) + "🙂")
+        assertEquals(159, emojiBoundary.length)
+        assertEquals(false, emojiBoundary.last().isHighSurrogate())
+
+        val malformed = sanitizeLanDiagnostic("peer\uD800name")
+        assertEquals(true, '\uFFFD' in malformed)
+    }
+
+    private fun legacyProperties(): Map<String, String?> = mapOf(
+        LanConstants.TXT_PEER_ID to "remote",
+        LanConstants.TXT_APP_ID to "app",
+        LanConstants.TXT_DEVICE_NAME to "Remote",
+        LanConstants.TXT_PLATFORM to Platform.JVM_DESKTOP.name,
+        LanConstants.TXT_CAPABILITIES to TransportKind.LAN.name,
+        LanConstants.TXT_PROTOCOL_VERSION to "1"
+    )
 }

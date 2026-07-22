@@ -30,6 +30,11 @@ import platform.posix.uint8_tVar
  */
 internal object IosBonjour {
 
+    data class DecodedRecord(
+        val properties: Map<String, String>,
+        val malformed: Boolean
+    )
+
     /**
      * Build an `nw_txt_record_t` populated with the given UTF-8 string
      * entries. Values must already encode safely as UTF-8 (the existing
@@ -39,8 +44,11 @@ internal object IosBonjour {
         val record = nw_txt_record_create_dictionary()
             ?: error("nw_txt_record_create_dictionary returned null")
         for ((key, value) in entries) {
+            require(lanTxtEntryFits(key, value)) {
+                "Bonjour TXT '$key' exceeds the $MAX_DNS_SD_TXT_ENTRY_BYTES-byte entry limit"
+            }
             val valueBytes = value.encodeToByteArray()
-            if (valueBytes.isEmpty()) {
+            val accepted = if (valueBytes.isEmpty()) {
                 nw_txt_record_set_key(
                     txt_record = record,
                     key = key,
@@ -57,27 +65,42 @@ internal object IosBonjour {
                     )
                 }
             }
+            check(accepted) { "Network.framework rejected Bonjour TXT key '$key'" }
         }
         return record
     }
 
     /**
-     * Decode every key/value pair in [record] back into a `Map<String,String>`.
+     * Decode the bounded protocol key/value pairs in [record] into a map.
+     * Unknown keys are skipped before reading their values, so a foreign or
+     * future record cannot force allocations for data this version ignores.
      * Empty values surface as `""`; boolean-style entries with no value at
      * all ALSO surface as `""` (indistinguishable from empty-value entries
      * after decoding), so every key present in the record appears in the map.
      */
-    fun txtRecordToMap(record: nw_txt_record_t): Map<String, String> {
-        if (record == null) return emptyMap()
+    fun decodeTxtRecord(record: nw_txt_record_t): DecodedRecord {
+        if (record == null) return DecodedRecord(emptyMap(), malformed = false)
         val out = mutableMapOf<String, String>()
+        var valid = true
         nw_txt_record_apply(record) { keyPtr, found, valuePtr, valueLen ->
             val key = keyPtr?.toKString() ?: return@nw_txt_record_apply true
+            if (key !in LanConstants.DISCOVERY_TXT_KEYS) return@nw_txt_record_apply true
             when (found) {
                 nw_txt_record_find_key_non_empty_value -> {
                     val valueLength = valueLen.toInt()
-                    if (valuePtr != null && valueLength > 0) {
+                    val maximum = MAX_DNS_SD_TXT_ENTRY_BYTES - key.encodeToByteArray().size - 1
+                    if (valuePtr != null && valueLength in 1..maximum) {
                         val bytes = valuePtr.readBytes(valueLength)
-                        out[key] = bytes.decodeToString()
+                        val decoded = try {
+                            bytes.decodeToString(throwOnInvalidSequence = true)
+                        } catch (_: Exception) {
+                            valid = false
+                            return@nw_txt_record_apply false
+                        }
+                        out[key] = decoded
+                    } else {
+                        valid = false
+                        return@nw_txt_record_apply false
                     }
                 }
 
@@ -92,6 +115,13 @@ internal object IosBonjour {
             }
             true
         }
-        return out
+        return if (valid) {
+            DecodedRecord(out, malformed = false)
+        } else {
+            DecodedRecord(emptyMap(), malformed = true)
+        }
     }
+
+    fun txtRecordToMap(record: nw_txt_record_t): Map<String, String> =
+        decodeTxtRecord(record).properties
 }

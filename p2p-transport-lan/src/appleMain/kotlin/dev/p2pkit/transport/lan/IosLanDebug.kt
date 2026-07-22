@@ -1,6 +1,7 @@
 package dev.p2pkit.transport.lan
 
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -25,9 +26,10 @@ import platform.Foundation.timeIntervalSince1970
  * try await IosLanDebug.shared.events.collect(collector: collector)
  * ```
  *
- * 200-entry replay so a UI that subscribes shortly after startup still
- * sees the early browser-state events.
+ * Diagnostic UIs may opt into a 200-entry replay so a subscriber attached
+ * shortly after startup still sees early browser-state events.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 public object IosLanDebug {
 
     private val _events = MutableSharedFlow<String>(
@@ -57,8 +59,9 @@ public object IosLanDebug {
      */
     public fun log(tag: String, message: String) {
         val ts = ((NSDate().timeIntervalSince1970 * 1000).toLong()) % 1_000_000
-        val line = "[$ts][$tag] $message"
+        val line = "[$ts][${sanitizeLanDiagnostic(tag)}] ${sanitizeLanDiagnostic(message)}"
         _events.tryEmit(line)
+        if (!retainHistory) _events.resetReplayCache()
         if (mirrorToConsole) println("p2pkit: $line")
     }
 
@@ -72,4 +75,12 @@ public object IosLanDebug {
      */
     @kotlin.concurrent.Volatile
     public var mirrorToConsole: Boolean = false
+
+    /**
+     * Retain up to 200 recent lines for late subscribers. Disabled by default
+     * so a release process does not keep peer-controlled diagnostics merely
+     * because console mirroring is off; diagnostic UIs may opt in explicitly.
+     */
+    @kotlin.concurrent.Volatile
+    public var retainHistory: Boolean = false
 }

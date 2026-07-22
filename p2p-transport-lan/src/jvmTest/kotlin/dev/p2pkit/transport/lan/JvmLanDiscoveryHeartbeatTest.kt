@@ -47,10 +47,10 @@ import org.junit.Assume
  *    `stopDiscovery`.
  *  - **Kit-level loopback (the P1-13 integration leg)**: a discovered peer
  *    remains in `kit.peers` at t = 20 s and t = 35 s of connect-free idle,
- *    and a departed advertiser (clean stop → mDNS goodbye → cache entry
- *    pruned → no re-emit) still ages out via registry eviction — the JmDNS
- *    goodbye observation (removals carry no TXT, so the Lost path never
- *    fires) makes eviction the only disappearance path on JVM/Android.
+ *    and a departed advertiser is still removed. A clean mDNS goodbye now
+ *    resolves through the transport's previously validated service-instance
+ *    admission even though JmDNS omits TXT on removal; staleness remains the
+ *    fallback for abrupt disappearance without a goodbye.
  *
  * Like [JvmLanLoopbackTest], this depends on multicast working on the test
  * machine and skips (Assume) when no routable IPv4 interface is available.
@@ -192,16 +192,15 @@ class JvmLanDiscoveryHeartbeatTest {
      *
      *  1. Bob stays in Alice's `kit.peers` at t = 20 s and t = 35 s idle —
      *     pre-fix he vanished at ~15 s and never returned.
-     *  2. After Bob stops (clean goodbye), Alice's registry still ages him
-     *     out — the heartbeat re-emits only cache-present peers, so eviction
-     *     keeps working for genuinely departed ones.
+     *  2. After Bob stops (clean goodbye), Alice removes him and the heartbeat
+     *     does not resurrect him from stale cache state.
      *
      * Self-gate rider: Alice advertises too, so her own service sits in her
      * JmDNS cache; the self-skip on the re-emit path keeps her out of her own
      * `kit.peers`.
      */
     @Test
-    fun idlePeerSurvivesEvictionHorizonAndDepartedPeerStillAgesOut() {
+    fun idlePeerSurvivesEvictionHorizonAndDepartedPeerIsRemoved() {
         runBlocking {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
@@ -227,9 +226,9 @@ class JvmLanDiscoveryHeartbeatTest {
                 "healthy idle peer must still be visible at t=35 s"
             )
 
-            // Departure: clean stop → goodbye → cache entry pruned → the
-            // heartbeat stops re-emitting Bob → staleness eviction removes
-            // him (bounded by 15 s staleness + poll + goodbye slack).
+            // Departure: the admitted service instance owns the TXT-less
+            // goodbye Lost event. If a platform drops that goodbye, the same
+            // bound also covers heartbeat cessation plus staleness fallback.
             bob.stop()
             withTimeout(DEPARTURE_TIMEOUT_MS) {
                 alice.peers.first { peers -> peers.none { it.name == "Bob" } }

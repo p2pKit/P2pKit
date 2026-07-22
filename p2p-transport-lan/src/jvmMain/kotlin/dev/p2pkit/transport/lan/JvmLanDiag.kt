@@ -57,7 +57,9 @@ public object JvmLanDiag {
     /** Push one diagnostic line. No-op (and zero allocation) when [enabled] is false. */
     public fun log(tag: String, message: String) {
         if (!enabled) return
-        val line = "P2pKitLAN [${System.currentTimeMillis() % 1_000_000}][$tag] $message"
+        val safeTag = sanitizeLanDiagnostic(tag)
+        val safeMessage = sanitizeLanDiagnostic(message)
+        val line = "P2pKitLAN [${System.currentTimeMillis() % 1_000_000}][$safeTag] $safeMessage"
         _events.tryEmit(line)
         println(line)
     }

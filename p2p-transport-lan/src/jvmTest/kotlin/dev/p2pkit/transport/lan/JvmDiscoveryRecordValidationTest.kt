@@ -29,28 +29,24 @@ import org.junit.Assume
  *
  * A separate JmDNS instance (the "crafter") advertises real
  * `_p2pkit._tcp.local.` services with non-conforming TXT records — a
- * whitespace-only `pid` value and a record for a different appId — alongside
- * conforming ones. The transport under test must:
+ * whitespace-only `pid` value, a record for a different appId, and a
+ * service-instance/TXT identity mismatch — alongside conforming ones. The
+ * transport under test must:
  *
  *  - never emit a `PeerEvent` for the malformed (blank-pid) record, on the
  *    found or the removed path;
- *  - never emit a `PeerEvent` for the other-app record on either path (the
- *    removed-path appId gate is new in RBS-1; the found path already had it);
+ *  - never emit a `PeerEvent` for the other-app or mismatched-identity record;
+ *  - emit `Lost` for a previously admitted conforming instance even though
+ *    JmDNS omits TXT data from its goodbye callback;
  *  - keep delivering events for conforming records after processing the
  *    malformed input on both paths — i.e. no exception escapes the JmDNS
  *    callbacks and the listener worker stays alive. This settles the
  *    register's JVM/Android listener-thread-disposition residual.
  *
- * Removed-path observability note: with JmDNS 3.6.3, goodbye (TTL=0)
- * removals deliver `serviceRemoved` events whose `info` carries no TXT data
- * (the record set is already expired when the PTR removal is dispatched), so
- * the removed path skips every record at the pid validation and a
- * `PeerEvent.Lost` anchor is not observable over real goodbyes — peer
- * disappearance on JVM is covered by PeerRegistry staleness eviction. The
- * removed-path callbacks are therefore observed via [JvmLanDiag]'s replayed
- * trace (the transport's designed observation channel), and callback
- * survival is proven by a fresh conforming registration discovered *after*
- * the removals were processed.
+ * JmDNS 3.6.3 delivers goodbye callbacks after the TXT record has expired.
+ * The production transport therefore records service-instance ownership only
+ * after full validation and consumes that admission on removal; this test
+ * exercises that real behavior rather than relying on removed-event TXT.
  *
  * Like [JvmLanLoopbackTest], this depends on multicast working on the test
  * machine and skips (Assume) when no routable IPv4 interface is available.
@@ -59,7 +55,6 @@ class JvmDiscoveryRecordValidationTest {
 
     private val unique = "p2pkit-rbs1-${System.currentTimeMillis()}"
     private var bindAddress: String? = null
-    private var diagWasEnabled: Boolean = false
 
     @BeforeTest
     fun setup() {
@@ -70,15 +65,10 @@ class JvmDiscoveryRecordValidationTest {
         )
         bindAddress = routable
         System.setProperty(JMDNS_BIND_PROPERTY, routable!!)
-        // The removed path emits no PeerEvent over real JmDNS goodbyes (see
-        // class KDoc), so its callbacks are observed via the trace channel.
-        diagWasEnabled = JvmLanDiag.enabled
-        JvmLanDiag.enabled = true
     }
 
     @AfterTest
     fun teardown() {
-        JvmLanDiag.enabled = diagWasEnabled
         System.clearProperty(JMDNS_BIND_PROPERTY)
     }
 
@@ -88,6 +78,7 @@ class JvmDiscoveryRecordValidationTest {
             val conformingPid = "conforming-$unique"
             val postRemovalPid = "post-removal-$unique"
             val otherAppPid = "other-app-$unique"
+            val mismatchedPid = "mismatched-pid-$unique"
 
             val registration = LanServiceRegistration(
                 appId = AppId(unique),
@@ -136,6 +127,13 @@ class JvmDiscoveryRecordValidationTest {
                     app = unique,
                     deviceName = "Conforming"
                 )
+                val mismatchedService = craftedService(
+                    instanceName = "different-instance-$unique",
+                    port = 45005,
+                    pid = mismatchedPid,
+                    app = unique,
+                    deviceName = "Mismatched"
+                )
                 withContext(Dispatchers.IO) {
                     // Non-conforming records first, so the listener processes
                     // them before (or alongside) the conforming one — the
@@ -143,6 +141,7 @@ class JvmDiscoveryRecordValidationTest {
                     // the malformed input.
                     crafter.registerService(blankPidService)
                     crafter.registerService(otherAppService)
+                    crafter.registerService(mismatchedService)
                     crafter.registerService(conformingService)
                 }
 
@@ -155,16 +154,19 @@ class JvmDiscoveryRecordValidationTest {
                     }
                 }
 
-                // Removed path: goodbye all three. Each processed removal is
-                // visible on the trace channel; none may emit a PeerEvent for
-                // the non-conforming records, and none may throw.
+                // Removed path: goodbye all records. Only the conforming
+                // service was admitted, so only it can own a Lost event even
+                // though the callback's ServiceInfo has no TXT properties.
                 withContext(Dispatchers.IO) {
                     crafter.unregisterService(blankPidService)
                     crafter.unregisterService(otherAppService)
+                    crafter.unregisterService(mismatchedService)
                     crafter.unregisterService(conformingService)
                 }
                 awaitCondition {
-                    JvmLanDiag.events.replayCache.count { "serviceRemoved" in it } >= 2
+                    synchronized(seen) {
+                        seen.any { it is PeerEvent.Lost && pidOf(it) == conformingPid }
+                    }
                 }
 
                 // Listener survival after the removed-path callbacks: a fresh
@@ -191,6 +193,10 @@ class JvmDiscoveryRecordValidationTest {
                 assertTrue(
                     snapshot.none { pidOf(it) == otherAppPid },
                     "a record advertising another appId must not emit Found or Lost: $snapshot"
+                )
+                assertTrue(
+                    snapshot.none { pidOf(it) == mismatchedPid },
+                    "service-instance/TXT identity mismatch must not emit any event: $snapshot"
                 )
             } finally {
                 withContext(Dispatchers.IO) { runCatching { crafter.close() } }

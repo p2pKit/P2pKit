@@ -7,9 +7,7 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.util.Log
-import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
-import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
@@ -23,7 +21,7 @@ import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
 import javax.jmdns.ServiceListener
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -170,9 +168,26 @@ internal class AndroidLanDiscoveryTransport(
 
     /** Callback generation owned by one coordinator listener token. */
     private class ListenerLease {
-        val active = AtomicBoolean(true)
+        private val gate = Any()
+        private var active: Boolean = true
         lateinit var listener: ServiceListener
+
+        fun isActive(): Boolean = synchronized(gate) { active }
+
+        fun deactivate() = synchronized(gate) { active = false }
+
+        fun publishIfActive(block: () -> Unit) = synchronized(gate) {
+            if (active) block()
+        }
     }
+
+    private data class ServiceAdmission(
+        val peerId: PeerId,
+        val owner: ListenerLease
+    )
+
+    /** Service-instance ownership admitted only after full record validation. */
+    private val admittedServices = ConcurrentHashMap<String, ServiceAdmission>()
 
     // ──────────────────────────────────────────────────────────────────
     // DiscoveryTransport API
@@ -185,7 +200,12 @@ internal class AndroidLanDiscoveryTransport(
 
     override suspend fun startDiscovery() = coordinator.startDiscovery()
 
-    override suspend fun stopDiscovery() = coordinator.stopDiscovery()
+    override suspend fun stopDiscovery() {
+        coordinator.stopDiscovery()
+        val lost = admittedServices.values.mapTo(mutableSetOf()) { it.peerId }
+        admittedServices.clear()
+        lost.forEach { _events.tryEmit(PeerEvent.Lost(it)) }
+    }
 
     /**
      * V0.4-DISCOVERY-REFRESH + V0.5-FORCED-REFRESH: force a fresh round
@@ -313,7 +333,7 @@ internal class AndroidLanDiscoveryTransport(
             }
 
             override fun deactivateListenerToken(token: Any) {
-                (token as ListenerLease).active.set(false)
+                (token as ListenerLease).deactivate()
             }
 
             override fun removeListenerBlocking(handle: JmDNS, token: Any) {
@@ -413,17 +433,15 @@ internal class AndroidLanDiscoveryTransport(
     // ──────────────────────────────────────────────────────────────────
 
     private fun buildServiceInfo(localPeer: LocalPeerInfo): ServiceInfo {
-        val properties = mutableMapOf(
-            LanConstants.TXT_PEER_ID to registration.localPeerId.value,
-            LanConstants.TXT_APP_ID to registration.appId.value,
-            LanConstants.TXT_DEVICE_NAME to localPeer.deviceName,
-            LanConstants.TXT_PLATFORM to localPeer.platform.name,
-            LanConstants.TXT_CAPABILITIES to
-                localPeer.supportedTransports.joinToString(",") { it.name },
-            LanConstants.TXT_PROTOCOL_VERSION to registration.protocolVersion.toString()
-        ).apply {
-            registration.fingerprint?.let { put(LanConstants.TXT_FINGERPRINT, it.value) }
-        }
+        val properties = buildLanTxtProperties(
+            peerId = registration.localPeerId,
+            appId = registration.appId,
+            deviceName = localPeer.deviceName,
+            platform = localPeer.platform,
+            supportedTransports = localPeer.supportedTransports,
+            protocolVersion = registration.protocolVersion,
+            fingerprint = registration.fingerprint
+        )
         return ServiceInfo.create(
             registration.serviceTypeJmdns,
             // Service instance name — must be unique on the network. Using
@@ -459,69 +477,41 @@ internal class AndroidLanDiscoveryTransport(
      */
     private fun buildListenerLease(handle: JmDNS): ListenerLease {
         val lease = ListenerLease()
-        lease.listener = buildServiceListener(handle) { lease.active.get() }
+        lease.listener = buildServiceListener(handle, lease)
         return lease
     }
 
     private fun buildServiceListener(
         handle: JmDNS,
-        isActive: () -> Boolean
+        lease: ListenerLease
     ): ServiceListener = object : ServiceListener {
         override fun serviceAdded(event: ServiceEvent) {
-            if (!isActive()) return
+            if (!lease.isActive()) return
             runCatching { handle.requestServiceInfo(event.type, event.name, true) }
         }
 
         override fun serviceRemoved(event: ServiceEvent) {
-            if (!isActive()) return
-            val info = event.info ?: return
-            // AUDIT-2026-07 (RBS-1): validate the TXT pid before it can
-            // reach the throwing PeerId constructor, and gate the lost
-            // path on appId like the resolved path below — a malformed
-            // or other-app record is skipped inside the JmDNS callback
-            // instead of propagating an exception through it. Mirrors
-            // JvmLanDiscoveryTransport.serviceRemoved.
-            val pid = validDiscoveryPeerIdOrNull(info.getPropertyString(LanConstants.TXT_PEER_ID))
-            if (pid == null) {
-                Log.d(TAG, "serviceRemoved: TXT pid missing or blank — skipping record")
-                return
-            }
-            if (info.getPropertyString(LanConstants.TXT_APP_ID) != registration.appId.value) return
-            if (pid == registration.localPeerId.value) return
-            if (validateLanDiscoverySecurityMetadata(
-                    profile = registration.securityProfile,
-                    protocolVersion = info.getPropertyString(LanConstants.TXT_PROTOCOL_VERSION),
-                    fingerprint = info.getPropertyString(LanConstants.TXT_FINGERPRINT)
-                ) == null
-            ) return
-            if (isActive()) {
-                Log.d(TAG, "serviceRemoved: pid=${pid.take(8)} — emitting PeerEvent.Lost")
-                _events.tryEmit(PeerEvent.Lost(PeerId(pid)))
+            lease.publishIfActive {
+                val admission = admittedServices[event.name] ?: return@publishIfActive
+                if (admission.owner !== lease) return@publishIfActive
+                if (!admittedServices.remove(event.name, admission)) return@publishIfActive
+                Log.d(
+                    TAG,
+                    "serviceRemoved: instance=${sanitizeLanDiagnostic(event.name)} " +
+                        "pid=${admission.peerId.value.take(8)} — emitting Lost"
+                )
+                _events.tryEmit(PeerEvent.Lost(admission.peerId))
             }
         }
 
         override fun serviceResolved(event: ServiceEvent) {
-            if (!isActive()) return
+            if (!lease.isActive()) return
             val info = event.info ?: return
-            // AUDIT-2026-07 (RBS-1): a blank pid must be skipped here, not
-            // thrown from PeerId() inside the JmDNS callback.
-            val pid = validDiscoveryPeerIdOrNull(info.getPropertyString(LanConstants.TXT_PEER_ID))
-                ?: run {
-                    Log.d(TAG, "serviceResolved: TXT pid missing or blank — skipping record")
-                    return
-                }
-            val app = info.getPropertyString(LanConstants.TXT_APP_ID) ?: return
-            if (pid == registration.localPeerId.value) return
-            if (app != registration.appId.value) return
-            val security = validateLanDiscoverySecurityMetadata(
-                profile = registration.securityProfile,
-                protocolVersion = info.getPropertyString(LanConstants.TXT_PROTOCOL_VERSION),
-                fingerprint = info.getPropertyString(LanConstants.TXT_FINGERPRINT)
-            ) ?: return
-
-            val name = info.getPropertyString(LanConstants.TXT_DEVICE_NAME) ?: pid
-            val plat = info.getPropertyString(LanConstants.TXT_PLATFORM)
-            val caps = info.getPropertyString(LanConstants.TXT_CAPABILITIES)
+            val record = validatedRecord(info) ?: return
+            if (event.name != record.peerId.value || info.name != record.peerId.value) {
+                Log.d(TAG, "serviceResolved: service/TXT identity mismatch — skipping")
+                return
+            }
             val candidates = info.inetAddresses.toList()
             val host = selectRoutableHost(candidates)
             if (host == null) {
@@ -532,43 +522,26 @@ internal class AndroidLanDiscoveryTransport(
                 // re-announce once a routable address is available.
                 Log.d(
                     TAG,
-                    "serviceResolved: pid=${pid.take(8)} no routable host in " +
+                    "serviceResolved: pid=${record.peerId.value.take(8)} no routable host in " +
                         "candidates=$candidates — skipping (will re-fire)"
                 )
                 return
             }
             val port = info.port
-
-            val supportedTransports = caps
-                ?.split(",")
-                ?.mapNotNull { tag ->
-                    runCatching { TransportKind.valueOf(tag.trim()) }.getOrNull()
-                }
-                ?.toSet()
-                ?: setOf(TransportKind.LAN)
-            val platform = plat?.let {
-                runCatching { Platform.valueOf(it) }.getOrNull()
-            } ?: Platform.UNKNOWN
-
-            val internalPeer = InternalPeer(
-                publicPeer = Peer(
-                    id = PeerId(pid),
-                    name = name,
-                    platform = platform,
-                    supportedTransports = supportedTransports
-                ),
-                transportHints = listOf(
-                    TransportHint(type = TransportKind.LAN, host = host, port = port)
-                ),
-                authenticationHint = security.authenticationHint
+            if (port !in 1..65_535) return
+            val internalPeer = record.toInternalPeer(
+                TransportHint(type = TransportKind.LAN, host = host, port = port)
             )
-            Log.d(
-                TAG,
-                "serviceResolved: pid=${pid.take(8)} " +
-                    "candidates=[${candidates.joinToString(",") { it.hostAddress }}] " +
-                    "selected=$host:$port — emitting PeerEvent.Found"
-            )
-            if (isActive()) _events.tryEmit(PeerEvent.Found(internalPeer))
+            lease.publishIfActive {
+                admittedServices[event.name] = ServiceAdmission(record.peerId, lease)
+                Log.d(
+                    TAG,
+                    "serviceResolved: pid=${record.peerId.value.take(8)} " +
+                        "candidates=[${candidates.joinToString(",") { it.hostAddress ?: it.toString() }}] " +
+                        "selected=$host:$port — emitting PeerEvent.Found"
+                )
+                _events.tryEmit(PeerEvent.Found(internalPeer))
+            }
         }
     }
 
@@ -581,41 +554,22 @@ internal class AndroidLanDiscoveryTransport(
      * and with the JvmLanDiscoveryTransport twin (behavior-parity pair).
      */
     private fun cachedServiceInfoToInternalPeer(info: ServiceInfo): InternalPeer? {
-        val pid = validDiscoveryPeerIdOrNull(info.getPropertyString(LanConstants.TXT_PEER_ID))
-            ?: return null
-        val app = info.getPropertyString(LanConstants.TXT_APP_ID) ?: return null
-        if (pid == registration.localPeerId.value) return null
-        if (app != registration.appId.value) return null
-        val security = validateLanDiscoverySecurityMetadata(
-            profile = registration.securityProfile,
-            protocolVersion = info.getPropertyString(LanConstants.TXT_PROTOCOL_VERSION),
-            fingerprint = info.getPropertyString(LanConstants.TXT_FINGERPRINT)
-        ) ?: return null
-
-        val name = info.getPropertyString(LanConstants.TXT_DEVICE_NAME) ?: pid
-        val plat = info.getPropertyString(LanConstants.TXT_PLATFORM)
-        val caps = info.getPropertyString(LanConstants.TXT_CAPABILITIES)
+        val record = validatedRecord(info) ?: return null
+        if (info.name != record.peerId.value) return null
         val host = selectRoutableHost(info.inetAddresses.toList()) ?: return null
-        val port = info.port
-        val supportedTransports = caps
-            ?.split(",")
-            ?.mapNotNull { tag -> runCatching { TransportKind.valueOf(tag.trim()) }.getOrNull() }
-            ?.toSet()
-            ?: setOf(TransportKind.LAN)
-        val platform = plat?.let { runCatching { Platform.valueOf(it) }.getOrNull() } ?: Platform.UNKNOWN
-        return InternalPeer(
-            publicPeer = Peer(
-                id = PeerId(pid),
-                name = name,
-                platform = platform,
-                supportedTransports = supportedTransports
-            ),
-            transportHints = listOf(
-                TransportHint(type = TransportKind.LAN, host = host, port = port)
-            ),
-            authenticationHint = security.authenticationHint
+        if (info.port !in 1..65_535) return null
+        return record.toInternalPeer(
+            TransportHint(type = TransportKind.LAN, host = host, port = info.port)
         )
     }
+
+    private fun validatedRecord(info: ServiceInfo): ValidatedLanDiscoveryRecord? =
+        validateLanDiscoveryRecord(
+            properties = LanConstants.DISCOVERY_TXT_KEYS.associateWith(info::getPropertyString),
+            expectedAppId = registration.appId,
+            localPeerId = registration.localPeerId,
+            securityProfile = registration.securityProfile
+        )
 
     // ──────────────────────────────────────────────────────────────────
     // Multicast lock

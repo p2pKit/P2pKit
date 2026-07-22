@@ -36,7 +36,9 @@ public object AndroidLanDiag {
 
     /** Per-frame line via `Log.d`; no-op unless [traceFrames]. */
     public fun frame(tag: String, message: String) {
-        if (traceFrames) Log.d(tag, message)
+        if (traceFrames) {
+            Log.d(sanitizeLanDiagnostic(tag), sanitizeLanDiagnostic(message))
+        }
     }
 
     internal fun describeNetwork(cm: ConnectivityManager, network: Network?): String {

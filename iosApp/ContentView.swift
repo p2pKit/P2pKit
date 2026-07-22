@@ -600,6 +600,7 @@ struct ContentView: View {
         // longer println every transport event); the sample is a diagnostic
         // harness, so turn it on for Console.app / Xcode-console capture.
         IosLanDebug.shared.mirrorToConsole = true
+        IosLanDebug.shared.retainHistory = true
 
         // Decoded frame-type trace (Issue #2/#3). With its default sink, each
         // TX/RX frame line (PING/PONG/DATA/FILE_*) prints "P2pKitFRAME …" to the

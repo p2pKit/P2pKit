@@ -1,7 +1,17 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package dev.p2pkit.transport.lan
 
+import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.convert
+import kotlinx.cinterop.reinterpret
+import kotlinx.cinterop.usePinned
+import platform.Network.nw_txt_record_create_dictionary
+import platform.Network.nw_txt_record_set_key
+import platform.posix.uint8_tVar
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -9,7 +19,7 @@ import kotlin.test.assertTrue
  * Unit tests for the iOS Bonjour TXT-record helpers.
  *
  * Round-trip on every input we plausibly ship over the wire:
- * - The six `LanConstants.TXT_*` keys (the only keys the discovery
+ * - The bounded `LanConstants.TXT_*` protocol keys (the only keys discovery
  *   transport advertises today).
  * - Empty values (key present, value blank).
  * - Unicode values (device names — surrogate pairs in emoji, non-ASCII
@@ -103,7 +113,7 @@ class IosBonjourTest {
     }
 
     @Test
-    fun unknownKeysSurviveRoundTripAndAreIgnoredByFilter() {
+    fun unknownKeysAreIgnoredWithoutAffectingKnownFields() {
         // A future-version peer might add new TXT keys. We should still
         // decode the message (forward compat) without dropping the peer if
         // pid+app are present. The discovery filter ignores unknown keys.
@@ -115,7 +125,13 @@ class IosBonjourTest {
         )
         val record = IosBonjour.mapToTxtRecord(withExtra)
         val decoded = IosBonjour.txtRecordToMap(record)
-        assertEquals(withExtra, decoded)
+        assertEquals(
+            mapOf(
+                LanConstants.TXT_PEER_ID to "valid-pid",
+                LanConstants.TXT_APP_ID to "p2pkit-test"
+            ),
+            decoded
+        )
     }
 
     @Test
@@ -166,5 +182,34 @@ class IosBonjourTest {
         val record = IosBonjour.mapToTxtRecord(original)
         val decoded = IosBonjour.txtRecordToMap(record)
         assertEquals(original, decoded)
+    }
+
+    @Test
+    fun oversizedEntryIsRejectedBeforeCallingNetworkFramework() {
+        assertFailsWith<IllegalArgumentException> {
+            IosBonjour.mapToTxtRecord(
+                mapOf(LanConstants.TXT_DEVICE_NAME to "x".repeat(251))
+            )
+        }
+    }
+
+    @Test
+    fun malformedUtf8MarksTheWholeProtocolRecordInvalid() {
+        val record = nw_txt_record_create_dictionary()
+            ?: error("nw_txt_record_create_dictionary returned null")
+        val invalidUtf8 = byteArrayOf(0xC3.toByte(), 0x28)
+        val accepted = invalidUtf8.usePinned { pinned ->
+            nw_txt_record_set_key(
+                txt_record = record,
+                key = LanConstants.TXT_DEVICE_NAME,
+                value = pinned.addressOf(0).reinterpret<uint8_tVar>(),
+                value_len = invalidUtf8.size.convert()
+            )
+        }
+        assertTrue(accepted)
+
+        val decoded = IosBonjour.decodeTxtRecord(record)
+        assertTrue(decoded.malformed)
+        assertEquals(emptyMap(), decoded.properties)
     }
 }
