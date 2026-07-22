@@ -413,7 +413,7 @@ These seven boundaries were explicitly excluded from the original local review. 
 | ENV-02 | Two-machine and hostile-network hardware validation | Blocked | At least two hosts/devices plus controlled hostile-network harness required |
 | ENV-03 | Simulator app launch and UI automation | Implemented | `ebcf827` adds the generated iOS UI-test target, deterministic exact-UDID runner, and accessibility-anchored Start/Stop assertions; committed simulator run passes 1/1 with 0 failures. Physical/device UI remains ENV-01. |
 | ENV-04 | iOS X64 execution on compatible host | Blocked | x86_64 Apple host/runtime required |
-| ENV-05 | Force-enable and resolve ignored Apple diagnostic test | Planned | Run when LAN lifecycle foundation is fixed |
+| ENV-05 | Force-enable and resolve ignored Apple diagnostic test | Implemented | Force-enabled simulator run passes 1/1 for 60.114 s and local `dns-sd` captures exact add/remove events; KDoc now states the deliberate legacy-v1 versus secure-v2 namespace boundary. Physical secure-v2 interop remains ENV-01/ENV-02. |
 | ENV-06 | Third-party dependency CVE/advisory scan | Planned | Select/configure and run a current advisory scanner; record a concrete blocker only if one is encountered |
 | ENV-07 | Real remote Central/Portal upload | Blocked | Approved portal, signing identity, namespace access, and CI credentials required |
 
@@ -428,6 +428,17 @@ These seven boundaries were explicitly excluded from the original local review. 
 | Exact results | Launcher script checks: 7/7 passed. The no-UDID run failed deterministically with the expected duplicate-`iPhone 17` ambiguity safeguard. The exact signed committed run at `ebcf827a7ccef1834ead14c7b1619463b249a8a5` reported `** TEST SUCCEEDED **`: `P2pKitSampleUITests.testLaunchStartAndStopControls`, 1 test, 0 failures; BuildInfo/XCFramework provenance matched `ebcf827` and the source tree was clean. |
 | Compatibility and remaining evidence | Additive UI identifiers, a test-only target/scheme, and a Gradle runner; no SDK ABI, wire protocol, persistence, or runtime library contract changed. Physical Android/Apple UI, permission, lifecycle, and transfer evidence remains in `ENV-01`/`PS-T04`/`PS-T07`; x86 host execution remains `ENV-04`; push remains blocked by `SCM-PUSH-01`. |
 | Source control | Branch `remediation/full-register-2026-07`; focused commit `ebcf827a7ccef1834ead14c7b1619463b249a8a5` (`test(ios): add simulator UI smoke coverage`). Push not attempted. |
+
+## Execution record: ENV-05 — Apple LAN diagnostic capture
+
+| Field | Value |
+| --- | --- |
+| Scope and status | `ENV-05`; Implemented locally for simulator/host advertisement capture. Secure-v2 device interoperability remains `ENV-01`/`ENV-02`. |
+| Implementation | Force-enabled the documented 60-second diagnostic without changing its timeout or assertions, ran it beside the maintained JVM sample and macOS `dns-sd`, restored `@Ignore`, and corrected the diagnostic KDoc: the test deliberately advertises legacy v1 (`_p2pkit._tcp`), while maintained samples use authenticated v2 (`_p2pkit2._tcp`) and must not cross-discover. No production security downgrade was made. |
+| Exact files changed | `p2p-transport-lan/src/appleTest/kotlin/dev/p2pkit/transport/lan/IosLanDiagnosticTest.kt`; `P2PKIT_REMEDIATION_TRACKER_2026-07.md`. |
+| Tests and commands | Temporarily removed only `@Ignore`; ran `./gradlew :p2p-transport-lan:iosSimulatorArm64Test --tests 'dev.p2pkit.transport.lan.IosLanDiagnosticTest' --rerun-tasks --console=plain`; ran local `dns-sd -B _p2pkit._tcp local.`; ran `./gradlew :p2p-sample-desktop:run -Pp2pkit.sample.identityProfile=interop --args="JVMInterop" --console=plain`; restored `@Ignore`; `git diff --check`. |
+| Exact results | Diagnostic: `BUILD SUCCESSFUL`, 1 test, 0 failures/errors/skips, 60.114 s; twelve five-second samples reported a live kit and clean stop. `dns-sd` recorded the diagnostic instance add on interfaces 1 and 14 and corresponding remove events at shutdown. The authenticated JVM sample exited cleanly and correctly reported no legacy peer. A secure-v2 diagnostic experiment failed deterministically with `LocalIdentityUnavailable(TEMPORARILY_UNAVAILABLE)` because the unsigned Kotlin/Native test executable cannot access Keychain; it was fully reverted, and signed secure-v2 app coverage remains the correct external path. |
+| Compatibility and remaining evidence | Documentation/test-only clarification; no SDK API/ABI, runtime behavior, wire protocol, service namespace, or security policy changed. Real signed Android/Apple secure-v2 interop, AWDL, abrupt departure, rotation, and hostile-network evidence remains external. |
 
 ## Execution record: SEC-01
 
@@ -1416,3 +1427,4 @@ The `fix(samples): harden transfer cleanup and histories` shorthand in the SAMPL
 | 2026-07-22 | GOV-PACKAGE-01/determinism | First committed gate exposed a stale same-name Bonjour peer selected across Apple test methods; assigned per-test UUID namespaces, selected exact current PeerIds, and made clean remote stop require exact `Closed` | Corrective commit `90b5f20`; 12/12 focused Apple tests pass three forced runs; final complete Apple LAN 64 tests/0 failures/1 manual skip |
 | 2026-07-22 | GOV-PACKAGE-01/source control | Reviewed both focused commits and reran all affected checks from final committed state | Commits `52e173b`, `90b5f20`; final 46-task gate passes in 2m20s; published consumers pass 221 + 18 tasks; push not attempted because `SCM-PUSH-01` remains unapproved |
 | 2026-07-22 | ENV-03 | Added deterministic iOS simulator UI target/runner and accessibility-anchored Start/Stop regression; reviewed generated scheme and committed diff | Commit `ebcf827`; ambiguous simulator-name invocation fails with the expected safeguard; exact signed committed run passes 1/1 with 0 failures; physical/device UI remains `ENV-01` |
+| 2026-07-22 | ENV-05 | Force-enabled the 60-second Apple diagnostic, captured native Bonjour add/remove, restored its skip, and corrected the legacy-v1 versus secure-v2 KDoc boundary | Diagnostic 1/1 passes in 60.114 s; `dns-sd` records add/remove; maintained authenticated JVM sample correctly does not cross-discover; physical secure-v2 interop remains external |

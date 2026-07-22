@@ -9,8 +9,11 @@ import kotlin.test.Test
 
 /**
  * Diagnostic-only test: holds a kit alive long enough that external tools
- * (`dns-sd`, the JVM CLI, an Android device) can observe its Bonjour
- * advertisement on the host network.
+ * (`dns-sd`, or a deliberately legacy-v1 peer) can observe its Bonjour
+ * advertisement on the host network. The maintained JVM/Android/iOS samples
+ * use authenticated v2 and are intentionally isolated in a different Bonjour
+ * namespace; use those apps, rather than this diagnostic, for secure-v2
+ * interoperability capture.
  *
  * Marked `@Ignore` so it doesn't slow the normal `iosSimulatorArm64Test`
  * cycle. Kotlin/Native test binaries offer no flag to force-run an
