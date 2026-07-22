@@ -238,7 +238,9 @@ struct ContentView: View {
 
     @ViewBuilder
     private var headerSection: some View {
-        Text("P2pKit Sample").font(.title)
+        Text("P2pKit Sample")
+            .font(.title)
+            .accessibilityIdentifier("sample-title")
         // V0.4-PROVENANCE (L2 UI): show the active framework
         // build identity so the operator can visually confirm
         // the deployed SDK version before starting any hardware
@@ -248,6 +250,7 @@ struct ContentView: View {
             .foregroundColor(.secondary)
             .textSelection(.enabled)
         Text("Status: \(status)")
+            .accessibilityIdentifier("sample-status")
 
         if let err = errorBanner {
             // AUDIT-2026-06 (D-G9-samples-desktop-ios-16): explicit dismiss
@@ -297,12 +300,14 @@ struct ContentView: View {
                 Button(isStarting ? "Starting…" : "Start") {
                     Task { await start() }
                 }
+                .accessibilityIdentifier("start-kit")
                 .buttonStyle(.borderedProminent)
                 .disabled(isStarting || trimmedDeviceName.isEmpty)
             } else {
                 Button(isStopping ? "Stopping…" : "Stop") {
                     Task { await stop() }
                 }
+                .accessibilityIdentifier("stop-kit")
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
                 .disabled(isStopping)

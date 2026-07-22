@@ -20,6 +20,15 @@ tasks.register<Exec>("runIosSimulator") {
     errorOutput = System.err
 }
 
+tasks.register<Exec>("runIosUiTests") {
+    description = "Build and run the iOS sample XCTest UI target on one exact simulator."
+    group = "verification"
+    workingDir = rootDir
+    commandLine("bash", "scripts/run-ios-ui-tests.sh")
+    standardOutput = System.out
+    errorOutput = System.err
+}
+
 tasks.register<Exec>("regenerateXcodeProject") {
     description = "Re-run xcodegen against iosApp/project.yml."
     group = "p2pkit"

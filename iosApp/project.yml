@@ -75,3 +75,25 @@ targets:
       - name: "Check P2pKitShared XCFramework provenance"
         script: sh "$SRCROOT/scripts/check-xcframework.sh"
         basedOnDependencyAnalysis: false
+  p2pkit-sample-uitests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - UITests
+    dependencies:
+      - target: p2pkit-sample
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.p2pkit.sample.uitests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  p2pkit-sample-ui:
+    build:
+      targets:
+        p2pkit-sample: all
+        p2pkit-sample-uitests: [test]
+    test:
+      targets:
+        - p2pkit-sample-uitests
