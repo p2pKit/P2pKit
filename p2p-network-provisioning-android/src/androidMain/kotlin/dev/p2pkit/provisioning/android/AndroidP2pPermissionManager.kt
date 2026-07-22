@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import dev.p2pkit.core.permission.P2pPermission
 import dev.p2pkit.core.permission.P2pPermissionManager
 
@@ -26,13 +27,29 @@ import dev.p2pkit.core.permission.P2pPermissionManager
  *
  * Pure reporter — the library never requests permissions. The host app
  * is responsible for the runtime prompt; [missingPermissions] tells it
- * which prompts to launch.
+ * which prompts to launch. Install-time provisioning permissions are checked
+ * separately at construction and reported through a warning because Android
+ * does not permit requesting them through this API.
  */
 public class AndroidP2pPermissionManager(
     applicationContext: Context
 ) : P2pPermissionManager {
 
     private val appContext: Context = applicationContext.applicationContext
+
+    init {
+        val missingNormal = provisioningNormalManifestPermissions.filter {
+            appContext.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missingNormal.isNotEmpty()) {
+            Log.w(
+                "P2pKitProvisioning",
+                "AndroidManifest.xml is missing ${missingNormal.joinToString()}; " +
+                    "provisioning callbacks may fail. These are install-time permissions " +
+                    "and cannot be requested through P2pPermissionManager."
+            )
+        }
+    }
 
     override suspend fun requiredPermissions(): List<P2pPermission> =
         listOf(requiredWifiAwarePermission())

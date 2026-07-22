@@ -173,6 +173,20 @@ public class AndroidNetworkProvisioningManager internal constructor(
                         runCatching { h.close() }
                         return@withLock closedLocalNetworkResult()
                     }
+                    if (result is LocalNetworkResult.Failed) {
+                        synchronized(handleLock) {
+                            if (handle === h) {
+                                handle = null
+                                stopWatch = null
+                            }
+                        }
+                        watcher.cancel()
+                        runCatching { h.close() }
+                        _networkState.value = NetworkState.Unknown
+                        _state.value = NetworkProvisioningState.Failed(result.error)
+                        _events.tryEmit(NetworkProvisioningEvent.Failed(result.error))
+                        return@withLock result
+                    }
                     publishStartedNetworkState(h, creds)
                     _state.value = NetworkProvisioningState.LocalNetworkRunning
                     _events.tryEmit(NetworkProvisioningEvent.LocalNetworkStarted(creds))
@@ -235,10 +249,13 @@ public class AndroidNetworkProvisioningManager internal constructor(
                     )
                 )
             }
-            val ssid = credentials.ssid?.takeIf { it.isNotBlank() }
-                ?: return@withLock JoinNetworkResult.Failed(
-                    NetworkProvisioningError.JoinFailed("SSID must not be blank")
+            val validationError = validateWifiCredentials(credentials)
+            if (validationError != null) {
+                return@withLock JoinNetworkResult.Failed(
+                    NetworkProvisioningError.JoinFailed(validationError)
                 )
+            }
+            val ssid = credentials.ssid!!
 
             _state.value = NetworkProvisioningState.JoiningNetwork
             _events.tryEmit(

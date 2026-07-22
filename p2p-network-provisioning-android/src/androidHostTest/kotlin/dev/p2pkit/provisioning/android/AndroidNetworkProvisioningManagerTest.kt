@@ -36,6 +36,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -154,6 +155,30 @@ class AndroidNetworkProvisioningManagerTest {
     }
 
     @Test
+    fun failedStartedHotspotClosesReservationAndPublishesFailedState() = runBlocking<Unit> {
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.Start(
+                credentials = null,
+                apHosts = emptyList()
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(lanTcpPort = null), wifi)
+        try {
+            val result = assertIs<LocalNetworkResult.Failed>(
+                mgr.startLocalNetwork(LocalNetworkConfig())
+            )
+            assertIs<NetworkProvisioningError.HotspotStopped>(result.error)
+            assertTrue(
+                wifi.lastHandle?.isClosed == true,
+                "a live reservation must not remain installed when its public result is Failed"
+            )
+            assertIs<NetworkProvisioningState.Failed>(mgr.state.value)
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
     fun stopLocalNetworkClosesTheHandleAndResetsState() = runBlocking<Unit> {
         val wifi = FakeWifiManagerWrapper(
             behavior = FakeWifiManagerWrapper.Behavior.Start(
@@ -239,6 +264,40 @@ class AndroidNetworkProvisioningManagerTest {
             val failed = assertIs<JoinNetworkResult.Failed>(result)
             val err = assertIs<NetworkProvisioningError.JoinFailed>(failed.error)
             assertTrue(err.reason.contains("user declined"))
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun joinInputValidationPreventsPlatformBuilderErrors() = runBlocking<Unit> {
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.JoinSucceeds(
+                networkState = dev.p2pkit.core.provisioning.NetworkState.Unknown
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        try {
+            val tooLong = WifiCredentials(
+                ssid = "x".repeat(33),
+                password = WifiPassword("12345678"),
+                securityType = WifiSecurityType.WPA2
+            )
+            val failed = assertIs<JoinNetworkResult.Failed>(mgr.joinLocalNetwork(tooLong))
+            assertTrue((failed.error as NetworkProvisioningError.JoinFailed).reason.contains("32 UTF-8"))
+            assertNull(wifi.lastJoinHandle, "invalid input must not invoke the wrapper")
+            assertEquals(
+                "OPEN Wi-Fi must not include a password",
+                validateWifiCredentials(
+                    WifiCredentials("open", WifiPassword("12345678"), WifiSecurityType.OPEN)
+                )
+            )
+            assertEquals(
+                "Wi-Fi password must be 8..63 characters",
+                validateWifiCredentials(
+                    WifiCredentials("ssid", WifiPassword("short"), WifiSecurityType.WPA2)
+                )
+            )
         } finally {
             mgr.close()
         }
@@ -514,6 +573,51 @@ class AndroidNetworkProvisioningManagerTest {
         } finally {
             mgr.close()
         }
+    }
+
+    @Test
+    fun provisioningOwnershipAndManifestSeamsAreDeterministic() {
+        val hotspot = HotspotReservationOwner<String>()
+        assertTrue(hotspot.tryInstall("reservation"))
+        assertEquals("reservation", hotspot.cancelAndTake())
+        assertFalse(hotspot.tryInstall("late reservation"))
+
+        val join = JoinCallbackOwner<String>()
+        assertTrue(join.claimInitial())
+        assertFalse(join.claimInitial())
+        assertTrue(join.install("binding"))
+        assertEquals("binding", join.closeAndTake())
+        assertFalse(join.install("late binding"))
+        assertNull(join.current())
+
+        val pending = JoinCallbackOwner<String>()
+        assertTrue(pending.claimInitial())
+        assertTrue(pending.closeIfPending())
+        assertFalse(pending.install("late callback"))
+
+        val first = Any()
+        val second = Any()
+        assertTrue(ProcessBindingArbiter.tryAcquire(first))
+        assertFalse(ProcessBindingArbiter.tryAcquire(second))
+        ProcessBindingArbiter.release(first)
+        assertTrue(ProcessBindingArbiter.tryAcquire(second))
+        ProcessBindingArbiter.release(second)
+
+        assertEquals(
+            listOf(
+                "android.permission.ACCESS_WIFI_STATE",
+                "android.permission.CHANGE_WIFI_STATE",
+                "android.permission.CHANGE_NETWORK_STATE"
+            ),
+            provisioningNormalManifestPermissions
+        )
+        assertEquals(
+            dev.p2pkit.core.provisioning.NetworkState.ConnectedToWifi(
+                ssid = null,
+                localIpAddresses = listOf("192.168.1.2", "10.0.0.2")
+            ),
+            networkStateFromJoinedAddresses(listOf("192.168.1.2", "192.168.1.2", "10.0.0.2"))
+        )
     }
 }
 

@@ -37,6 +37,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  * Missing perms cause [WifiManager.startLocalOnlyHotspot] to throw
  * `SecurityException`, which we let propagate so the caller can map it
  * to `LocalNetworkResult.Failed(PermissionMissingForProvisioning(...))`.
+ * `ACCESS_WIFI_STATE`, `CHANGE_WIFI_STATE`, and `CHANGE_NETWORK_STATE` are
+ * install-time requirements and are diagnosed by [AndroidP2pPermissionManager].
  */
 internal class WifiManagerWrapperImpl(
     private val applicationContext: Context
@@ -73,31 +75,41 @@ internal class WifiManagerWrapperImpl(
     override suspend fun startLocalOnlyHotspot(): HotspotStartResult =
         suspendCancellableCoroutine { cont ->
             val handler = Handler(Looper.getMainLooper())
-            val handleHolder = AtomicHandleHolder()
+            val handleHolder = HotspotReservationOwner<HotspotHandleImpl>()
             val callback = object : WifiManager.LocalOnlyHotspotCallback() {
                 override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation) {
                     val handle = HotspotHandleImpl(reservation, handleHolder.stopped)
-                    if (cont.isActive) {
-                        handleHolder.handle = handle
-                        cont.resume(HotspotStartResult.Started(handle))
+                    if (cont.isActive && handleHolder.tryInstall(handle)) {
+                        val resumed = runCatching {
+                            cont.resume(HotspotStartResult.Started(handle))
+                            true
+                        }.getOrDefault(false)
+                        if (!resumed) {
+                            handleHolder.cancelAndTake()?.let { runCatching { it.close() } }
+                        }
                     } else {
                         // Caller cancelled (e.g. withTimeout) before the OS
                         // callback: nobody will ever own this reservation, so
                         // release it immediately instead of leaking the
                         // hotspot until process death (AUDIT-2026-06 fix).
+                        handleHolder.cancelAndTake()?.let { runCatching { it.close() } }
                         runCatching { handle.close() }
                     }
                 }
                 override fun onStopped() {
-                    val h = handleHolder.handle
+                    val h = handleHolder.current()
                     if (h != null) {
                         handleHolder.stopped.tryEmit(HotspotStopReason("system stopped"))
                     } else if (cont.isActive) {
-                        cont.resume(HotspotStartResult.Failed(reasonCode = STOPPED_BEFORE_START))
+                        runCatching {
+                            cont.resume(HotspotStartResult.Failed(reasonCode = STOPPED_BEFORE_START))
+                        }
                     }
                 }
                 override fun onFailed(reason: Int) {
-                    if (cont.isActive) cont.resume(HotspotStartResult.Failed(reasonCode = reason))
+                    if (cont.isActive) {
+                        runCatching { cont.resume(HotspotStartResult.Failed(reasonCode = reason)) }
+                    }
                 }
             }
             val w = wifi
@@ -107,7 +119,7 @@ internal class WifiManagerWrapperImpl(
             }
             w.startLocalOnlyHotspot(callback, handler)
             cont.invokeOnCancellation {
-                handleHolder.handle?.let { runCatching { it.close() } }
+                handleHolder.cancelAndTake()?.let { runCatching { it.close() } }
             }
         }
 
@@ -139,7 +151,6 @@ internal class WifiManagerWrapperImpl(
             .build()
 
         return suspendCancellableCoroutine { cont ->
-            val terminated = AtomicBoolean(false)
             // replay=1: one-shot terminal signal; with replay=0 an emission
             // landing before the manager's watcher subscribed was silently
             // dropped (AUDIT-2026-06 fix).
@@ -148,40 +159,104 @@ internal class WifiManagerWrapperImpl(
                 extraBufferCapacity = 1,
                 onBufferOverflow = BufferOverflow.DROP_OLDEST
             )
-            var handle: JoinHandleImpl? = null
+            val owner = JoinCallbackOwner<JoinHandleImpl>()
             val callback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
-                    if (terminated.compareAndSet(false, true)) {
+                    if (owner.claimInitial()) {
                         if (!cont.isActive) {
                             // Caller cancelled before the user approved the
                             // join: binding now would silently re-route the
                             // whole process with no owner to ever unbind it
                             // (AUDIT-2026-06 fix).
+                            owner.closeAndTake()?.let { runCatching { it.close() } }
                             runCatching { connectivity.unregisterNetworkCallback(this) }
                             return
                         }
-                        // Route process traffic through the joined network so the
-                        // LAN transport's outgoing sockets reach the AP subnet.
-                        runCatching { connectivity.bindProcessToNetwork(network) }
+                        val bindingToken = Any()
                         val h = JoinHandleImpl(
                             network = network,
                             connectivity = connectivity,
                             callback = this,
-                            _released = releasedFlow
+                            _released = releasedFlow,
+                            owner = owner,
+                            bindingToken = bindingToken
                         )
-                        handle = h
-                        if (cont.isActive) cont.resume(JoinResult.Joined(h))
+                        if (!ProcessBindingArbiter.tryAcquire(bindingToken)) {
+                            owner.closeAndTake()
+                            runCatching { connectivity.unregisterNetworkCallback(this) }
+                            if (cont.isActive) {
+                                runCatching {
+                                    cont.resume(
+                                        JoinResult.Failed("another provisioning manager owns the process network binding")
+                                    )
+                                }
+                            }
+                            return
+                        }
+                        val bound = runCatching {
+                            connectivity.bindProcessToNetwork(network)
+                        }.getOrDefault(false)
+                        if (!bound) {
+                            h.close()
+                            runCatching { connectivity.unregisterNetworkCallback(this) }
+                            if (cont.isActive) {
+                                runCatching {
+                                    cont.resume(
+                                        JoinResult.Failed("bindProcessToNetwork rejected the joined network")
+                                    )
+                                }
+                            }
+                            return
+                        }
+                        if (!owner.install(h)) {
+                            h.close()
+                            runCatching { connectivity.unregisterNetworkCallback(this) }
+                            return
+                        }
+                        if (cont.isActive) {
+                            val resumed = runCatching {
+                                cont.resume(JoinResult.Joined(h))
+                                true
+                            }.getOrDefault(false)
+                            if (!resumed) {
+                                owner.closeAndTake()?.let { runCatching { it.close() } }
+                                runCatching { connectivity.unregisterNetworkCallback(this) }
+                            }
+                        } else {
+                            owner.closeAndTake()?.let { runCatching { it.close() } }
+                            runCatching { connectivity.unregisterNetworkCallback(this) }
+                        }
                     } else {
-                        // Reconnection after a transient drop — surface the new network.
-                        runCatching { connectivity.bindProcessToNetwork(network) }
+                        // Reconnection after a transient drop — route only while
+                        // the owned handle is still live. A queued callback after
+                        // close must not resurrect process-wide binding.
+                        owner.current()?.rebind(network)
                     }
                 }
 
                 override fun onUnavailable() {
-                    if (terminated.compareAndSet(false, true)) {
-                        if (cont.isActive) cont.resume(
-                            JoinResult.Failed("network unavailable — user declined, SSID not found, or wrong passphrase")
-                        )
+                    if (owner.claimInitial()) {
+                        owner.closeAndTake()
+                        runCatching { connectivity.unregisterNetworkCallback(this) }
+                        if (cont.isActive) {
+                            runCatching {
+                                cont.resume(
+                                    JoinResult.Failed("network unavailable — user declined, SSID not found, or wrong passphrase")
+                                )
+                            }
+                        }
+                    } else if (owner.closeIfPending()) {
+                        // onAvailable may have claimed the first callback but
+                        // not installed its handle yet. Make that in-flight
+                        // path terminal so it cannot bind after onUnavailable.
+                        runCatching { connectivity.unregisterNetworkCallback(this) }
+                        if (cont.isActive) {
+                            runCatching {
+                                cont.resume(
+                                    JoinResult.Failed("network unavailable — user declined, SSID not found, or wrong passphrase")
+                                )
+                            }
+                        }
                     } else {
                         releasedFlow.tryEmit("system released (onUnavailable)")
                     }
@@ -191,9 +266,22 @@ internal class WifiManagerWrapperImpl(
                     releasedFlow.tryEmit("system released (onLost)")
                 }
             }
-            connectivity.requestNetwork(request, callback)
+            try {
+                connectivity.requestNetwork(request, callback)
+            } catch (e: SecurityException) {
+                owner.closeAndTake()
+                runCatching { connectivity.unregisterNetworkCallback(callback) }
+                if (cont.isActive) {
+                    runCatching {
+                        cont.resume(
+                            JoinResult.Failed("requestNetwork rejected the required install-time permission")
+                        )
+                    }
+                }
+                return@suspendCancellableCoroutine
+            }
             cont.invokeOnCancellation {
-                handle?.let { runCatching { it.close() } }
+                owner.closeAndTake()?.let { runCatching { it.close() } }
                     ?: runCatching { connectivity.unregisterNetworkCallback(callback) }
             }
         }
@@ -205,33 +293,60 @@ internal class WifiManagerWrapperImpl(
     }
 }
 
-/** Live handle to a [WifiNetworkSpecifier] join. */
+/**
+ * Live handle to a [WifiNetworkSpecifier] join. Reconnect callbacks can
+ * replace the bound [Network] only while this handle owns the process-wide
+ * binding token.
+ */
 private class JoinHandleImpl(
-    private val network: Network,
+    network: Network,
     private val connectivity: ConnectivityManager,
     private val callback: ConnectivityManager.NetworkCallback,
-    private val _released: MutableSharedFlow<String>
+    private val _released: MutableSharedFlow<String>,
+    private val owner: JoinCallbackOwner<JoinHandleImpl>,
+    private val bindingToken: Any
 ) : JoinHandle {
+
+    @Volatile
+    private var network: Network = network
+    private val closed = AtomicBoolean(false)
 
     override val released: SharedFlow<String> = _released.asSharedFlow()
 
     override fun snapshotNetworkState(): NetworkState {
-        val ips = mutableListOf<String>()
-        runCatching {
-            for (nif in NetworkInterface.getNetworkInterfaces()) {
-                if (!nif.isUp || nif.isLoopback) continue
-                for (addr in nif.inetAddresses) {
-                    if (addr.isLoopbackAddress || addr.isAnyLocalAddress) continue
-                    if (addr is Inet4Address) ips += addr.hostAddress
-                }
-            }
-        }
-        return NetworkState.ConnectedToWifi(ssid = null, localIpAddresses = ips.distinct())
+        val addresses = runCatching {
+            connectivity.getLinkProperties(network)
+                ?.linkAddresses
+                ?.mapNotNull { it.address.hostAddress }
+                .orEmpty()
+        }.getOrElse { emptyList() }
+        return networkStateFromJoinedAddresses(addresses)
     }
 
     override fun close() {
-        runCatching { connectivity.bindProcessToNetwork(null) }
+        if (!closed.compareAndSet(false, true)) return
+        owner.markClosed(this)
+        val unbound = runCatching { connectivity.bindProcessToNetwork(null) }
+            .getOrElse {
+                _released.tryEmit("process binding clear threw: ${it.message ?: it::class.simpleName}")
+                false
+            }
+        if (!unbound) _released.tryEmit("process binding clear rejected")
         runCatching { connectivity.unregisterNetworkCallback(callback) }
+            .onFailure { _released.tryEmit("network callback unregister threw: ${it.message ?: it::class.simpleName}") }
+        ProcessBindingArbiter.release(bindingToken)
+    }
+
+    fun rebind(next: Network): Boolean {
+        if (closed.get() || !ProcessBindingArbiter.isOwner(bindingToken)) return false
+        val bound = runCatching { connectivity.bindProcessToNetwork(next) }.getOrDefault(false)
+        if (!bound) {
+            _released.tryEmit("system released (rebind rejected)")
+            close()
+            return false
+        }
+        network = next
+        return true
     }
 }
 
@@ -240,14 +355,95 @@ private class JoinHandleImpl(
  * the [HotspotHandle] reference to the callback's onStopped path after
  * onStarted produced it.
  */
-private class AtomicHandleHolder {
-    @Volatile var handle: HotspotHandleImpl? = null
+internal class HotspotReservationOwner<T> {
+    private var handle: T? = null
+    private var cancelled: Boolean = false
     // replay=1 — see releasedFlow note (AUDIT-2026-06 fix).
     val stopped: MutableSharedFlow<HotspotStopReason> = MutableSharedFlow(
         replay = 1,
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
+
+    @Synchronized
+    fun tryInstall(next: T): Boolean {
+        if (cancelled) return false
+        handle = next
+        return true
+    }
+
+    @Synchronized
+    fun current(): T? = handle
+
+    @Synchronized
+    fun cancelAndTake(): T? {
+        cancelled = true
+        val current = handle
+        handle = null
+        return current
+    }
+}
+
+/** Serializes the process-wide `bindProcessToNetwork` owner across managers. */
+internal object ProcessBindingArbiter {
+    private val lock = Any()
+    private var owner: Any? = null
+
+    fun tryAcquire(token: Any): Boolean = synchronized(lock) {
+        if (owner != null) false else {
+            owner = token
+            true
+        }
+    }
+
+    fun isOwner(token: Any): Boolean = synchronized(lock) { owner === token }
+
+    fun release(token: Any) = synchronized(lock) {
+        if (owner === token) owner = null
+    }
+}
+
+internal class JoinCallbackOwner<T> {
+    private val lock = Any()
+    private var initialClaimed = false
+    private var closed = false
+    private var handle: T? = null
+
+    fun claimInitial(): Boolean = synchronized(lock) {
+        if (closed || initialClaimed) false else {
+            initialClaimed = true
+            true
+        }
+    }
+
+    fun install(next: T): Boolean = synchronized(lock) {
+        if (closed) false else {
+            handle = next
+            true
+        }
+    }
+
+    fun current(): T? = synchronized(lock) { handle.takeUnless { closed } }
+
+    fun closeAndTake(): T? = synchronized(lock) {
+        closed = true
+        val current = handle
+        handle = null
+        current
+    }
+
+    /** Closes only the callback phase before a live handle has been installed. */
+    fun closeIfPending(): Boolean = synchronized(lock) {
+        if (closed || handle != null) false else {
+            closed = true
+            true
+        }
+    }
+
+    fun markClosed(firing: T) = synchronized(lock) {
+        closed = true
+        if (handle === firing) handle = null
+    }
 }
 
 private class HotspotHandleImpl(

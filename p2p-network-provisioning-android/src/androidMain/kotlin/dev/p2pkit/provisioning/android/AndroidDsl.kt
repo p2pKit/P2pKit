@@ -33,6 +33,10 @@ import dev.p2pkit.core.dsl.NetworkProvisioningConfigBuilder
  * **Permissions:** the host app must declare and request:
  *  - `NEARBY_WIFI_DEVICES` (targetSdk ≥ 33, with `usesPermissionFlags="neverForLocation"`)
  *  - or `ACCESS_FINE_LOCATION` (targetSdk < 33)
+ *  - and the install-time `ACCESS_WIFI_STATE`, `CHANGE_WIFI_STATE`, and
+ *    `CHANGE_NETWORK_STATE` entries. The latter three cannot be requested at
+ *    runtime; the Android permission manager logs a diagnostic when they are
+ *    absent from the merged application manifest.
  *
  * P2pKit reports missing perms via [P2pKit.permissions]; the host app
  * triggers the OS prompt itself. The library never requests them.
