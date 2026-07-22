@@ -1,5 +1,6 @@
 package dev.p2pkit.transport.lan
 
+import android.net.Network
 import dev.p2pkit.transport.lan.AndroidLanDiag as Log
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.TransportKind
@@ -38,7 +39,10 @@ import java.util.concurrent.atomic.AtomicReference
  */
 internal class AndroidLanDataTransport(
     private val registration: LanServiceRegistration,
-    private val socketFactory: () -> Socket = ::Socket
+    private val networkState: AndroidLanNetworkState? = null,
+    private val socketFactory: (Network?) -> Socket = { network ->
+        network?.socketFactory?.createSocket() ?: Socket()
+    }
 ) : DataTransport, HasLocalTcpEndpoint {
 
     override val type: TransportKind = TransportKind.LAN
@@ -95,50 +99,59 @@ internal class AndroidLanDataTransport(
     }
 
     override fun canConnect(peer: InternalPeer): Boolean =
-        peer.transportHints.any {
-            it.type == TransportKind.LAN && !it.host.isNullOrBlank() && (it.port ?: 0) > 0
-        }
+        peer.lanEndpoints().isNotEmpty()
 
     override suspend fun connect(peer: InternalPeer): RawConnection {
-        val hint = peer.transportHints.firstOrNull {
-            it.type == TransportKind.LAN && !it.host.isNullOrBlank() && (it.port ?: 0) > 0
-        } ?: throw P2pError.NoTransportAvailable(peer.publicPeer)
-        val host = hint.host!!
-        val port = hint.port!!
+        val endpoints = peer.lanEndpoints()
+        if (endpoints.isEmpty()) throw P2pError.NoTransportAvailable(peer.publicPeer)
         val pid8 = peer.publicPeer.id.value.take(8)
-        Log.d(TAG, "connect peer=$pid8 -> $host:$port (timeout=${LanConstants.TCP_CONNECT_TIMEOUT_MS}ms)")
-        val socket = socketFactory()
-        try {
-            withContext(Dispatchers.IO) {
-                // V0.5.1-TCP-TIMEOUT (issue #9): bounded connect so a stale
-                // SRV record doesn't burn ~17 s of the reconnect budget on
-                // the OS-default `Socket(host, port)` blocking wait. The
-                // failure classification below feeds the `reason` field that
-                // `SessionReconnectHandler` already logs per attempt.
-                socket.connect(InetSocketAddress(host, port), LanConstants.TCP_CONNECT_TIMEOUT_MS)
+        val selectedNetwork = networkState?.selectedNetwork()
+        val failures = mutableListOf<String>()
+        val deadlineNanos = System.nanoTime() +
+            LanConstants.TCP_CONNECT_TIMEOUT_MS * NANOS_PER_MILLISECOND
+        endpoints.forEach { endpoint ->
+            val timeout = if (endpoints.size == 1) {
+                LanConstants.TCP_CONNECT_TIMEOUT_MS
+            } else {
+                remainingCandidateTimeoutMillis(deadlineNanos)
             }
-            currentCoroutineContext().ensureActive()
-        } catch (cancelled: CancellationException) {
-            runCatching { socket.close() }
-            Log.d(TAG, "connect CANCELLED peer=$pid8 $host:$port — socket closed")
-            throw cancelled
-        } catch (error: Throwable) {
-            runCatching { socket.close() }
-            if (error !is Exception) throw error
-            val reason = when (error) {
-                is SocketTimeoutException ->
-                    "timed out after ${LanConstants.TCP_CONNECT_TIMEOUT_MS}ms"
-                is ConnectException -> "refused (${error.message ?: "ECONNREFUSED"})"
-                is NoRouteToHostException -> "unreachable (${error.message ?: "EHOSTUNREACH"})"
-                else -> "failed (${error::class.simpleName}: ${error.message ?: ""})"
+            if (timeout <= 0) return@forEach
+            Log.d(TAG, "connect peer=$pid8 -> ${endpoint.host}:${endpoint.port} network=$selectedNetwork (timeout=${timeout}ms)")
+            val socket = socketFactory(selectedNetwork)
+            try {
+                withContext(Dispatchers.IO) {
+                    socket.connect(InetSocketAddress(endpoint.host, endpoint.port), timeout)
+                }
+                currentCoroutineContext().ensureActive()
+                Log.d(TAG, "connect OK peer=$pid8 local=${socket.localSocketAddress} remote=${socket.remoteSocketAddress}")
+                return AndroidRawConnection(socket)
+            } catch (cancelled: CancellationException) {
+                runCatching { socket.close() }
+                Log.d(TAG, "connect CANCELLED peer=$pid8 ${endpoint.host}:${endpoint.port} — socket closed")
+                throw cancelled
+            } catch (error: Throwable) {
+                runCatching { socket.close() }
+                if (error !is Exception) throw error
+                val reason = error.dialFailureReason(timeout)
+                failures += "${endpoint.host}:${endpoint.port} $reason"
+                Log.d(TAG, "connect FAILED peer=$pid8 ${endpoint.host}:${endpoint.port} $reason")
             }
-            Log.d(TAG, "connect FAILED peer=$pid8 $host:$port $reason")
-            throw P2pError.ConnectionFailed("TCP connect $host:$port $reason")
         }
-        // local* reveals which local interface the OS chose to egress toward the
-        // peer — Issue #2 evidence (Wi-Fi vs. cellular/VPN route).
-        Log.d(TAG, "connect OK peer=$pid8 local=${socket.localSocketAddress} remote=${socket.remoteSocketAddress}")
-        return AndroidRawConnection(socket)
+        throw P2pError.ConnectionFailed("TCP connect candidates failed: ${failures.joinToString("; ")}")
+    }
+
+    private fun Exception.dialFailureReason(timeoutMillis: Int): String = when (this) {
+        is SocketTimeoutException -> "timed out after ${timeoutMillis}ms"
+        is ConnectException -> "refused (${message ?: "ECONNREFUSED"})"
+        is NoRouteToHostException -> "unreachable (${message ?: "EHOSTUNREACH"})"
+        else -> "failed (${this::class.simpleName}: ${message ?: ""})"
+    }
+
+    private fun remainingCandidateTimeoutMillis(deadlineNanos: Long): Int {
+        val remainingNanos = deadlineNanos - System.nanoTime()
+        if (remainingNanos <= 0) return 0
+        val roundedMillis = (remainingNanos + NANOS_PER_MILLISECOND - 1) / NANOS_PER_MILLISECOND
+        return minOf(roundedMillis.toInt(), LanConstants.TCP_CANDIDATE_CONNECT_TIMEOUT_MS)
     }
 
     override fun incomingConnections(): Flow<RawConnection> = callbackFlow {
@@ -225,5 +238,6 @@ internal class AndroidLanDataTransport(
 
     private companion object {
         const val TAG = "P2pKitLanData"
+        const val NANOS_PER_MILLISECOND: Long = 1_000_000
     }
 }

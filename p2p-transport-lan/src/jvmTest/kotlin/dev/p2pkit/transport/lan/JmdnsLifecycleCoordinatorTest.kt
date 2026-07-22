@@ -137,12 +137,6 @@ class JmdnsLifecycleCoordinatorTest {
 
         val closeFailuresRemaining = AtomicInteger(0)
 
-        /** Handle passed to each heartbeat tick (AUDIT-2026-07 DSC-1). */
-        val reemitTicks = CopyOnWriteArrayList<FakeHandle>()
-
-        @Volatile
-        var failNextReemit = false
-
         private fun awaitNonCancellableGate(gate: CountDownLatch, label: String) {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
             while (true) {
@@ -231,14 +225,6 @@ class JmdnsLifecycleCoordinatorTest {
             listenersRemoved += token
         }
 
-        override fun reemitCachedPeersBlocking(handle: FakeHandle) {
-            if (failNextReemit) {
-                failNextReemit = false
-                throw IOException("injected reemit failure")
-            }
-            reemitTicks += handle
-        }
-
         override fun currentNetwork(): FakeNet? = current
 
         override fun observedNetwork(): FakeNet? = observed
@@ -296,9 +282,6 @@ class JmdnsLifecycleCoordinatorTest {
         debounceMillis: Long = 1,
         retryBaseMillis: Long = 1,
         maxAttempts: Int = 5,
-        // Large default so the pre-existing tests never see heartbeat ticks;
-        // the DSC-1 heartbeat tests inject a millisecond cadence explicitly.
-        heartbeatMillis: Long = 60_000,
         body: suspend (
             coordinator: JmdnsLifecycleCoordinator<FakeNet, FakeHandle>,
             rebindScope: CoroutineScope
@@ -312,8 +295,7 @@ class JmdnsLifecycleCoordinatorTest {
                 ioContext = Dispatchers.IO,
                 rebindDebounceMillis = debounceMillis,
                 rebindRetryBaseDelayMillis = retryBaseMillis,
-                rebindRetryMaxAttempts = maxAttempts,
-                heartbeatIntervalMillis = heartbeatMillis
+                rebindRetryMaxAttempts = maxAttempts
             )
             try {
                 body(coordinator, rebindScope)
@@ -886,6 +868,27 @@ class JmdnsLifecycleCoordinatorTest {
     }
 
     @Test
+    fun forcedSameNetworkAddressChangeSurvivesCallbackCoalescing() {
+        val net = FakeNet("wifi0")
+        val ops = FakeOps().apply {
+            current = net
+            observed = net
+            observedDefault = net
+        }
+        coordinatorTest(ops, debounceMillis = 20) { coordinator, _ ->
+            coordinator.startDiscovery()
+
+            coordinator.scheduleRebind("link properties changed", force = true)
+            coordinator.scheduleRebind("later capability callback")
+            coordinator.awaitPendingRebindForTest()
+
+            assertEquals(2, ops.createCalls.get())
+            assertEquals(1, ops.closed.size)
+            assertEquals(2, ops.listenersAdded.size)
+        }
+    }
+
+    @Test
     fun rebindSkipsWhenWatcherIsNotActive() {
         val ops = FakeOps().apply {
             current = FakeNet("wifi0")
@@ -1006,119 +1009,4 @@ class JmdnsLifecycleCoordinatorTest {
         }
     }
 
-    // ── AUDIT-2026-07 DSC-1: discovery heartbeat lifecycle (P1-13) ──────
-
-    @Test
-    fun heartbeatStartsWithDiscoveryNotAdvertisingAndTicksOnLiveHandle() {
-        val ops = FakeOps().apply { current = FakeNet("wifi0") }
-        coordinatorTest(ops, heartbeatMillis = 20) { coordinator, _ ->
-            coordinator.startAdvertising(localPeer)
-            delay(150)
-            assertTrue(ops.reemitTicks.isEmpty(), "advertising alone must not start the heartbeat")
-
-            coordinator.startDiscovery()
-            awaitCondition("heartbeat ticks while discovery is active") { ops.reemitTicks.size >= 2 }
-            val live = ops.created.single()
-            assertTrue(
-                ops.reemitTicks.all { it === live },
-                "every tick must re-emit from the live handle"
-            )
-        }
-    }
-
-    @Test
-    fun heartbeatStopsOnStopDiscoveryAndRestartsWithNextStart() {
-        val ops = FakeOps().apply { current = FakeNet("wifi0") }
-        coordinatorTest(ops, heartbeatMillis = 20) { coordinator, _ ->
-            coordinator.startDiscovery()
-            awaitCondition("heartbeat is ticking") { ops.reemitTicks.size >= 2 }
-
-            // stopDiscovery cancels the loop under the coordinator lock, so
-            // once it returns no tick can be in flight — the count is stable.
-            coordinator.stopDiscovery()
-            val atStop = ops.reemitTicks.size
-            delay(200) // ~10 intervals
-            assertEquals(atStop, ops.reemitTicks.size, "no ticks may run after stopDiscovery")
-
-            coordinator.startDiscovery()
-            awaitCondition("heartbeat restarts with the next discovery") {
-                ops.reemitTicks.size > atStop
-            }
-        }
-    }
-
-    @Test
-    fun heartbeatSurvivesRebindMovesToFreshHandleAndSkipsFailedWindow() {
-        val ops = FakeOps().apply {
-            current = FakeNet("wifi0")
-            observed = FakeNet("wifi0")
-        }
-        coordinatorTest(ops, heartbeatMillis = 20) { coordinator, _ ->
-            coordinator.startDiscovery()
-            awaitCondition("ticks on the original handle") { ops.reemitTicks.isNotEmpty() }
-
-            // Genuine rotation: the loop survives the rebind and re-emits
-            // from the FRESH handle without being restarted.
-            ops.observed = FakeNet("wifi1")
-            coordinator.scheduleRebind("rotation under heartbeat")
-            awaitCondition("tick on the fresh handle after rebind") {
-                ops.created.size == 2 && ops.reemitTicks.any { it === ops.created[1] }
-            }
-
-            // Failed-rebind window (handle null): ticks skip silently, the
-            // loop stays alive.
-            ops.observed = FakeNet("wifi2")
-            ops.createFailuresRemaining.set(Int.MAX_VALUE / 2)
-            coordinator.scheduleRebind("rotation into the failed window")
-            awaitCondition("failed-rebind window open") { ops.createCalls.get() >= 3 }
-            awaitCondition("retry budget consumed") {
-                ops.createFailuresRemaining.get() < Int.MAX_VALUE / 2 - 5
-            }
-            val duringWindow = ops.reemitTicks.size
-            delay(200)
-            assertEquals(
-                duringWindow,
-                ops.reemitTicks.size,
-                "ticks must skip while no handle is live"
-            )
-
-            // Recovery: the next genuine change restores the handle and the
-            // same loop resumes ticking on it.
-            ops.createFailuresRemaining.set(0)
-            ops.observed = FakeNet("wifi3")
-            coordinator.scheduleRebind("recovery rotation")
-            awaitCondition("ticks resume on the recovered handle") {
-                val last = ops.created.lastOrNull()
-                last != null && !last.closed && ops.reemitTicks.any { it === last }
-            }
-        }
-    }
-
-    @Test
-    fun heartbeatTickFailureKeepsLoopAliveAndNextTicksRun() {
-        val ops = FakeOps().apply {
-            current = FakeNet("wifi0")
-            failNextReemit = true
-        }
-        coordinatorTest(ops, heartbeatMillis = 20) { coordinator, _ ->
-            coordinator.startDiscovery()
-            awaitCondition("ticks continue after an injected tick failure") {
-                ops.reemitTicks.size >= 2
-            }
-            assertFalse(ops.failNextReemit, "the injected failure must have fired")
-        }
-    }
-
-    /**
-     * Pins the DSC-1 interval contract: the shared JVM/Android heartbeat
-     * cadence matches the iOS re-announce interval (5 s) and stays comfortably
-     * below PeerRegistry's staleness eviction horizon (15 s — the p2p-core
-     * internal `DEFAULT_STALE_TIMEOUT_MS`, not referencable across modules,
-     * hence the numeric pin).
-     */
-    @Test
-    fun heartbeatIntervalStaysComfortablyBelowTheEvictionHorizon() {
-        assertEquals(5_000L, LanConstants.PEER_REANNOUNCE_INTERVAL_MS)
-        assertTrue(LanConstants.PEER_REANNOUNCE_INTERVAL_MS * 2 < 15_000L)
-    }
 }

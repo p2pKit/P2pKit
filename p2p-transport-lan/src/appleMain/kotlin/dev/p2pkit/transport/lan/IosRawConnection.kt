@@ -160,13 +160,10 @@ internal class IosRawConnection private constructor(
                 }
 
                 nw_connection_state_waiting -> {
-                    // Issue #3: a dial to an AWDL-discovered endpoint that these
-                    // (non-peer-to-peer) params cannot route to typically PARKS
-                    // here with a no-route error rather than failing fast.
                     IosLanDebug.log(
                         "conn",
                         "WAITING errCode=${errCode ?: 0} — endpoint not yet routable " +
-                            "(AWDL-only peer without include_peer_to_peer? issue #3)"
+                            "(peer-to-peer routing is enabled; inspect path/packaging state)"
                     )
                 }
 

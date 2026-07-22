@@ -6,10 +6,10 @@ import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerEvent
-import dev.p2pkit.core.transport.TransportHint
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
+import java.net.NetworkInterface
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
@@ -17,20 +17,26 @@ import javax.jmdns.ServiceListener
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
  * [DiscoveryTransport] backed by JmDNS for service registration and browsing.
  *
  * Lifecycle:
- *   - [startAdvertising] registers a `_p2pkit._tcp.local.` service with TXT
- *     records that carry our [LanServiceRegistration].
- *   - [startDiscovery] browses for the same service type. When peers are
+ *   - [startAdvertising] registers the security-profile-specific LAN service
+ *     namespace (`_p2pkit._tcp.local.` for explicit legacy or
+ *     `_p2pkit2._tcp.local.` for secure v2) with TXT records that carry our
+ *     [LanServiceRegistration].
+ *   - [startDiscovery] browses for that same profile-specific service type. When peers are
  *     resolved we filter by `appId`, skip ourselves, and emit
  *     [PeerEvent.Found] / [PeerEvent.Lost].
  *   - [stopAdvertising] / [stopDiscovery] revert each side independently.
@@ -50,11 +56,17 @@ internal class JvmLanDiscoveryTransport(
     )
     override val events: Flow<PeerEvent> = _events.asSharedFlow()
 
-    /** Shared lifecycle/heartbeat scope used by the platform-neutral coordinator. */
+    /** Shared lifecycle scope used by the platform-neutral coordinator. */
     private val lifecycleScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    private val coordinator = JmdnsLifecycleCoordinator<Unit, JmDNS>(
+    @Volatile
+    private var observedNetworkFingerprint: String? = null
+
+    @Volatile
+    private var networkWatcherJob: Job? = null
+
+    private val coordinator = JmdnsLifecycleCoordinator<String, JmDNS>(
         ops = buildLifecycleOps(),
         rebindScope = lifecycleScope,
         ioContext = Dispatchers.IO
@@ -119,39 +131,6 @@ internal class JvmLanDiscoveryTransport(
         )
     }
 
-    /** One coordinator-owned heartbeat tick over the handle's local cache. */
-    private fun reemitCachedPeersBlocking(handle: JmDNS) {
-        val cached = runCatching {
-            handle.list(registration.serviceTypeJmdns, JMDNS_LIST_SNAPSHOT_TIMEOUT_MS)
-        }.getOrDefault(emptyArray())
-        var reemitted = 0
-        cached.forEach { info ->
-            val peer = cachedServiceInfoToInternalPeer(info) ?: return@forEach
-            if (_events.tryEmit(PeerEvent.Updated(peer))) reemitted++
-        }
-        if (reemitted > 0) {
-            JvmLanDiag.log("browse", "heartbeat: re-emitted Updated for $reemitted cached peer(s)")
-        }
-    }
-
-    /**
-     * AUDIT-2026-07 (DSC-1): maps an already-resolved cached [ServiceInfo] to
-     * the same [InternalPeer] shape `serviceResolved` emits, applying the
-     * identical gates — RBS-1 pid validation, appId filter, self skip,
-     * routable-host selection. Returns `null` when the record must be
-     * skipped. Keep in sync with `serviceResolved` in [buildServiceListener]
-     * and with the AndroidLanDiscoveryTransport twin (behavior-parity pair).
-     */
-    private fun cachedServiceInfoToInternalPeer(info: ServiceInfo): InternalPeer? {
-        val record = validatedRecord(info) ?: return null
-        if (info.name != record.peerId.value) return null
-        val host = selectRoutableHost(info.inetAddresses.toList()) ?: return null
-        if (info.port !in 1..65_535) return null
-        return record.toInternalPeer(
-            TransportHint(type = TransportKind.LAN, host = host, port = info.port)
-        )
-    }
-
     private fun validatedRecord(info: ServiceInfo): ValidatedLanDiscoveryRecord? =
         validateLanDiscoveryRecord(
             properties = LanConstants.DISCOVERY_TXT_KEYS.associateWith(info::getPropertyString),
@@ -179,7 +158,13 @@ internal class JvmLanDiscoveryTransport(
             override fun serviceRemoved(event: ServiceEvent) {
                 lease.publishIfActive {
                     val admission = admittedServices[event.name] ?: return@publishIfActive
-                    if (admission.owner !== lease) return@publishIfActive
+                    // A current listener may consume a removal for an entry
+                    // admitted by its now-deactivated predecessor. A stale
+                    // listener can never remove ownership installed by a
+                    // newer active listener.
+                    if (admission.owner !== lease && admission.owner.isActive()) {
+                        return@publishIfActive
+                    }
                     if (!admittedServices.remove(event.name, admission)) return@publishIfActive
                     JvmLanDiag.log(
                         "browse",
@@ -198,12 +183,13 @@ internal class JvmLanDiscoveryTransport(
                     JvmLanDiag.log("browse", "serviceResolved: service/TXT identity mismatch — skipping")
                     return
                 }
-                // Issue #2: log ALL candidate addresses the peer advertised and
-                // which one selectRoutableHost picked to dial. A peer that only
-                // advertised a non-routable address (e.g. an unscoped fe80::)
+                // Issue #2: log every advertised address and the ordered,
+                // bounded candidates retained for fallback. A peer that only
+                // advertises non-routable addresses (e.g. an unscoped fe80::)
                 // shows up here as "no routable host".
                 val candidates = info.inetAddresses.toList()
-                val host = selectRoutableHost(candidates) ?: run {
+                val hosts = selectRoutableHosts(candidates, localLanInterfaceAddresses())
+                if (hosts.isEmpty()) {
                     JvmLanDiag.log(
                         "browse",
                         "serviceResolved pid=${record.peerId.value.take(8)} name=${record.deviceName} " +
@@ -214,9 +200,7 @@ internal class JvmLanDiscoveryTransport(
                 }
                 val port = info.port
                 if (port !in 1..65_535) return
-                val internalPeer = record.toInternalPeer(
-                    TransportHint(type = TransportKind.LAN, host = host, port = port)
-                )
+                val internalPeer = record.toInternalPeer(lanTransportHints(hosts, port))
                 lease.publishIfActive {
                     admittedServices[event.name] = ServiceAdmission(record.peerId, lease)
                     JvmLanDiag.log(
@@ -224,7 +208,7 @@ internal class JvmLanDiscoveryTransport(
                         "serviceResolved pid=${record.peerId.value.take(8)} " +
                             "name=${record.deviceName} plat=${record.platform} " +
                             "candidates=[${candidates.joinToString(",") { it.hostAddress }}] " +
-                            "selected=$host:$port — emitting PeerEvent.Found"
+                            "ordered=${hosts.joinToString(",") { "$it:$port" }} — emitting PeerEvent.Found"
                     )
                     _events.tryEmit(PeerEvent.Found(internalPeer))
                 }
@@ -267,9 +251,9 @@ internal class JvmLanDiscoveryTransport(
         }
     }
 
-    private fun buildLifecycleOps(): JmdnsLifecycleOps<Unit, JmDNS> =
-        object : JmdnsLifecycleOps<Unit, JmDNS> {
-            override fun createHandleBlocking(target: Unit?, forRebind: Boolean): JmDNS {
+    private fun buildLifecycleOps(): JmdnsLifecycleOps<String, JmDNS> =
+        object : JmdnsLifecycleOps<String, JmDNS> {
+            override fun createHandleBlocking(target: String?, forRebind: Boolean): JmDNS {
                 val bindAddress = System.getProperty("dev.p2pkit.test.jmdnsBindAddress")
                 JvmLanDiag.log(
                     "bind",
@@ -342,18 +326,14 @@ internal class JvmLanDiscoveryTransport(
                 )
             }
 
-            override fun reemitCachedPeersBlocking(handle: JmDNS) {
-                this@JvmLanDiscoveryTransport.reemitCachedPeersBlocking(handle)
-            }
-
-            override fun currentNetwork(): Unit = Unit
-            override fun observedNetwork(): Unit = Unit
-            override fun observedDefaultNetwork(): Unit = Unit
-            override fun isWatcherActive(): Boolean = false
+            override fun currentNetwork(): String = jvmLanNetworkFingerprint()
+            override fun observedNetwork(): String? = observedNetworkFingerprint
+            override fun observedDefaultNetwork(): String? = null
+            override fun isWatcherActive(): Boolean = networkWatcherJob?.isActive == true
             override fun acquireMulticastLock() = Unit
             override fun releaseMulticastLock() = Unit
-            override fun startNetworkWatcher() = Unit
-            override fun stopNetworkWatcher() = Unit
+            override fun startNetworkWatcher() = startNetworkWatcherIfNeeded()
+            override fun stopNetworkWatcher() = stopNetworkWatcherNow()
 
             override fun logDebug(message: String) {
                 JvmLanDiag.log("lifecycle", message)
@@ -366,53 +346,153 @@ internal class JvmLanDiscoveryTransport(
                 )
             }
         }
+
+    private fun startNetworkWatcherIfNeeded() {
+        if (networkWatcherJob?.isActive == true) return
+        observedNetworkFingerprint = jvmLanNetworkFingerprint()
+        networkWatcherJob = lifecycleScope.launch {
+            while (isActive) {
+                delay(NETWORK_WATCH_INTERVAL_MS)
+                val next = jvmLanNetworkFingerprint()
+                val previous = observedNetworkFingerprint
+                if (next != previous) {
+                    observedNetworkFingerprint = next
+                    coordinator.scheduleRebind(
+                        "JVM interface/address set changed: $previous -> $next"
+                    )
+                }
+            }
+        }
+    }
+
+    private fun stopNetworkWatcherNow() {
+        networkWatcherJob?.cancel()
+        networkWatcherJob = null
+        observedNetworkFingerprint = null
+    }
 }
 
 /**
- * Pick the most-likely-routable host string from [candidates] for use as a
- * dial target. Returns `null` when no candidate is dialable — the caller
- * skips the corresponding discovery event rather than publish an unusable
- * hint.
+ * Select an ordered, bounded list of safe dial candidates from [candidates].
+ * The caller publishes the complete list as routing hints so the data
+ * transport can fall back when the first address is stale. The compatibility
+ * [selectRoutableHost] helper below returns only the first candidate for older
+ * tests/callers.
  *
- * Precedence (V0.4-IPV6):
- *   1. First [Inet4Address] that is neither loopback nor wildcard.
- *      IPv4 link-local (169.254/16) IS accepted — sometimes dialable on
- *      direct-cable / auto-config segments.
- *   2. First [Inet6Address] that is neither loopback, wildcard, nor an
- *      unscoped link-local. An [Inet6Address] whose `scopeId` is non-zero
- *      is accepted because [InetAddress.getHostAddress] preserves the
- *      `%scope` suffix, producing a dialable string.
+ * Ordering is deterministic: IPv4 before IPv6, then original resolver order;
+ * duplicates are removed and the result is capped at
+ * [LanConstants.MAX_DIAL_CANDIDATES]. IPv4 link-local (169.254/16) is
+ * accepted for direct-cable/auto-config segments. An [Inet6Address] whose
+ * `scopeId` is non-zero is retained with its `%scope` suffix. Loopback,
+ * wildcard, and unscoped IPv6 link-local addresses are rejected.
  *
- * Rejected outright: loopback (127.0.0.1, ::1), any-local (0.0.0.0, ::),
- * and `fe80::` IPv6 link-local with `scopeId == 0` (TCP rejects these with
- * EINVAL because no scope is known). Closes task #25.
- *
- * Intentionally NOT done here:
- *   - No retry / re-resolve fallback — pure function.
- *   - No normalization that strips `%scope` from accepted scoped addresses.
- *   - No identity-check changes — peerId/appId filtering happens upstream.
- *
- * Implementation is duplicated verbatim in `AndroidLanDiscoveryTransport`
- * (androidMain source set). The two source sets cannot share JVM-only
- * code via commonMain without adding a `jvmAndAndroidMain` source set —
- * larger build-config delta than warranted for ~20 lines. Keep both
- * copies in sync; the `HostSelectorTest` in `:p2p-transport-lan:jvmTest`
- * pins the JVM-side behaviour and serves as the de-facto contract.
+ * When [localAddresses] contains valid interface prefixes, only same-subnet
+ * candidates are admitted. If no usable prefix is available, the selector
+ * retains the general routability filter for constrained environments. No
+ * identity checks or network I/O occur here; peerId/appId validation happens
+ * upstream and connection retry belongs to the data transport. The
+ * implementation is duplicated in `AndroidLanDiscoveryTransport` because
+ * the source sets cannot share JVM-only `InetAddress` code; keep both copies
+ * in sync. [HostSelectorTest] pins the JVM contract for both implementations.
  */
-internal fun selectRoutableHost(candidates: List<InetAddress>): String? {
-    candidates.firstOrNull { addr ->
-        addr is Inet4Address && !addr.isLoopbackAddress && !addr.isAnyLocalAddress
-    }?.let { return it.hostAddress }
+internal data class LanInterfaceAddress(
+    val address: InetAddress,
+    val prefixLength: Int
+)
 
-    candidates.firstOrNull { addr ->
-        addr is Inet6Address &&
-            !addr.isLoopbackAddress &&
-            !addr.isAnyLocalAddress &&
-            (!addr.isLinkLocalAddress || addr.scopeId != 0)
-    }?.let { return it.hostAddress }
-
-    return null
+/**
+ * Return every safe candidate in deterministic dial order. When local
+ * interface prefixes are known, only same-subnet addresses are admitted;
+ * this prevents a same-link mDNS record from turning discovery into an
+ * arbitrary routed-address dial. With no interface information the legacy
+ * routability filter remains available for constrained JVM environments.
+ */
+internal fun selectRoutableHosts(
+    candidates: List<InetAddress>,
+    localAddresses: List<LanInterfaceAddress> = emptyList()
+): List<String> {
+    val routable = candidates.withIndex().filter { (_, address) ->
+        when (address) {
+            is Inet4Address -> !address.isLoopbackAddress && !address.isAnyLocalAddress
+            is Inet6Address -> !address.isLoopbackAddress &&
+                !address.isAnyLocalAddress &&
+                (!address.isLinkLocalAddress || address.scopeId != 0)
+            else -> false
+        }
+    }
+    val knownLocalAddresses = localAddresses.filter { local ->
+        local.prefixLength in 1..(local.address.address.size * 8)
+    }
+    val admitted = if (knownLocalAddresses.isEmpty()) {
+        routable
+    } else {
+        routable.filter { (_, candidate) ->
+            knownLocalAddresses.any { local -> sameSubnet(candidate, local) }
+        }
+    }
+    return admitted
+        .sortedWith(compareBy<IndexedValue<InetAddress>>(
+            { if (it.value is Inet4Address) 0 else 1 },
+            { it.index }
+        ))
+        .mapNotNull { it.value.hostAddress }
+        .distinct()
+        .take(LanConstants.MAX_DIAL_CANDIDATES)
 }
+
+internal fun selectRoutableHost(candidates: List<InetAddress>): String? =
+    selectRoutableHosts(candidates).firstOrNull()
+
+private fun sameSubnet(candidate: InetAddress, local: LanInterfaceAddress): Boolean {
+    val candidateBytes = candidate.address
+    val localBytes = local.address.address
+    if (candidateBytes.size != localBytes.size) return false
+    val bitCount = candidateBytes.size * 8
+    if (local.prefixLength !in 1..bitCount) return false
+    if (candidate is Inet6Address && candidate.isLinkLocalAddress) {
+        val local6 = local.address as? Inet6Address ?: return false
+        if (!local6.isLinkLocalAddress || candidate.scopeId != local6.scopeId) return false
+    }
+    var remaining = local.prefixLength
+    for (index in candidateBytes.indices) {
+        if (remaining <= 0) return true
+        val bits = minOf(8, remaining)
+        val mask = (0xFF shl (8 - bits)) and 0xFF
+        if ((candidateBytes[index].toInt() and mask) != (localBytes[index].toInt() and mask)) {
+            return false
+        }
+        remaining -= bits
+    }
+    return true
+}
+
+internal fun localLanInterfaceAddresses(): List<LanInterfaceAddress> = runCatching {
+    NetworkInterface.getNetworkInterfaces().toList()
+        .asSequence()
+        .filter { it.isUp && !it.isLoopback && !it.isPointToPoint && !it.isVirtual }
+        .flatMap { network ->
+            network.interfaceAddresses.asSequence().mapNotNull { entry ->
+                val address = entry.address ?: return@mapNotNull null
+                LanInterfaceAddress(address, entry.networkPrefixLength.toInt())
+            }
+        }
+        .toList()
+}.getOrDefault(emptyList())
+
+internal fun jvmLanNetworkFingerprint(): String = runCatching {
+    NetworkInterface.getNetworkInterfaces().toList()
+        .asSequence()
+        .filter { it.isUp && !it.isLoopback && !it.isPointToPoint && !it.isVirtual }
+        .flatMap { network ->
+            network.interfaceAddresses.asSequence().mapNotNull { entry ->
+                entry.address?.hostAddress?.let { address ->
+                    "${network.name}:$address/${entry.networkPrefixLength}"
+                }
+            }
+        }
+        .sorted()
+        .joinToString("|")
+}.getOrDefault("")
 
 /**
  * Short snapshot timeout for JmDNS.list() during refresh: the default
@@ -420,3 +500,4 @@ internal fun selectRoutableHost(candidates: List<InetAddress>): String? {
  * transport lock on the reconnect hot path.
  */
 private const val JMDNS_LIST_SNAPSHOT_TIMEOUT_MS: Long = 200
+private const val NETWORK_WATCH_INTERVAL_MS: Long = 1_000

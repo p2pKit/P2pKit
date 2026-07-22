@@ -33,6 +33,28 @@ import kotlin.test.assertTrue
 /** Real Network.framework lifecycle regressions for listener/browser recovery. */
 class IosLanRecoveryTest {
 
+    @Test
+    fun listenerAndDialParametersEnablePeerToPeerRouting() = runBlocking {
+        val data = IosLanDataTransport(context("awdl-params"), IosEndpointRegistry())
+        try {
+            assertTrue(data.parametersIncludePeerToPeerForTest())
+        } finally {
+            data.close()
+        }
+    }
+
+    @Test
+    fun sameInterfaceAddressRotationRequiresRebind() {
+        assertTrue(
+            applePathNeedsRebind(
+                becameSatisfied = false,
+                isFirstEver = false,
+                interfaceChanged = false,
+                addressChanged = true
+            )
+        )
+    }
+
     private fun context(suffix: String): TransportContext = TransportContext(
         appId = AppId("ios-lan-recovery-$suffix"),
         localPeerId = PeerId("ios-lan-recovery-local-$suffix"),
@@ -197,7 +219,6 @@ class IosLanRecoveryTest {
                 discovery.reconcileAnnounceCacheAtomically(
                     currentGeneration = 2,
                     graceTicks = 1,
-                    onAnnounce = {},
                     onLost = {
                         eventOrder += "lost"
                         pruneEntered.complete(Unit)

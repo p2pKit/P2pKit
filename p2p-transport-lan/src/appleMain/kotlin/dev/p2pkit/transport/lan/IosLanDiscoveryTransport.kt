@@ -65,13 +65,10 @@ import platform.Foundation.NSLock
  * Browsing uses `nw_browser_t`; advertising rides on the listener inside
  * [IosLanDataTransport] via `nw_listener_set_advertise_descriptor`.
  *
- * **Refresh loop:** `PeerRegistry` in :p2p-core evicts a peer 15 s after its
- * last `PeerEvent.Found`/`Updated`. NWBrowser only fires "result_added" once
- * per peer (and "result_removed" when a peer leaves), so without a periodic
- * heartbeat the iOS discovery transport's peers would silently disappear
- * from `kit.peers` after 15 s even while NWBrowser still sees them. The
- * refresh loop here re-emits `PeerEvent.Updated` for every cached peer
- * every 5 s as long as discovery is running.
+ * NWBrowser owns DNS-SD TTL expiry: a result remains live until its matching
+ * native removal callback. Core therefore does not require cache-derived
+ * heartbeat events. A small reconciliation loop exists only to retire entries
+ * owned by a replaced browser generation that can no longer send removals.
  *
  * **Diagnostics:** every browser state change, every result-change call,
  * every TXT decode, and every filter outcome is appended to
@@ -163,25 +160,17 @@ internal class IosLanDiscoveryTransport(
     private var pendingNudgeJob: Job? = null
 
     /**
-     * Peers seen by the current browse session, re-announced as
-     * [PeerEvent.Updated] every [PEER_REANNOUNCE_INTERVAL_MS] while discovery
-     * is running. NWBrowser fires result_added exactly once per stable result
-     * set, but PeerRegistry evicts peers ~15 s after the last event — the
-     * class KDoc always documented this loop, the implementation was missing,
-     * so iOS-discovered peers vanished from kit.peers after 15 s of browse
-     * quiet (AUDIT-2026-06 fix). [announceCacheLock] serializes cache,
-     * endpoint-registry, and event side effects across the native browse
-     * callback queue and the announce coroutine.
+     * Peers seen by the current browse session. [announceCacheLock] serializes
+     * cache, endpoint-registry, and event side effects across the native browse
+     * callback queue and the stale-generation reconciliation coroutine.
      *
      * AUDIT-2026-06 (#8): each entry is stamped with the [browserGeneration]
      * that last CONFIRMED it via a browse result (added / TXT-changed).
      * `refresh()` and the rebind hooks cancel + recreate the NWBrowser
      * without any `result_removed` callbacks for peers that vanished while
      * the browser was being replaced, so an unconditional re-announce would
-     * pin such ghosts alive forever (their PeerRegistry lastSeen kept
-     * refreshing, defeating staleness eviction). The announce loop therefore
-     * only re-emits entries confirmed by the CURRENT generation and prunes —
-     * via the shared lost-emission path — entries an older generation owns
+     * retain such ghosts after native ownership is gone. The reconciliation
+     * loop prunes — via the shared lost-emission path — entries an older generation owns
      * once they stay unconfirmed for [ANNOUNCE_STALE_GRACE_TICKS] announce
      * cycles (~10 s grace for the replacement browser to re-add live peers).
      * See [reconcileAnnounceCache] for the pure decision logic.
@@ -281,7 +270,7 @@ internal class IosLanDiscoveryTransport(
         if (announceJob?.isActive == true) return
         announceJob = nudgeScope.launch {
             while (isActive) {
-                delay(PEER_REANNOUNCE_INTERVAL_MS)
+                delay(STALE_RECONCILE_INTERVAL_MS)
                 if (!discoveryStartedByHost) continue
                 // One native lock serializes reconcile/loss side effects with
                 // browse re-adds. A fresh result either wins first and is
@@ -292,9 +281,6 @@ internal class IosLanDiscoveryTransport(
                 reconcileAnnounceCacheAtomically(
                     currentGeneration = effectiveGeneration,
                     graceTicks = ANNOUNCE_STALE_GRACE_TICKS,
-                    onAnnounce = { peer ->
-                        _events.tryEmit(PeerEvent.Updated(peer))
-                    },
                     onLost = { pid ->
                         IosLanDebug.log(
                             "browse",
@@ -316,7 +302,6 @@ internal class IosLanDiscoveryTransport(
     internal fun reconcileAnnounceCacheAtomically(
         currentGeneration: Int,
         graceTicks: Int,
-        onAnnounce: (InternalPeer) -> Unit,
         onLost: (String) -> Unit
     ) = withAnnounceCacheLock {
         val result = reconcileAnnounceCache(
@@ -325,7 +310,6 @@ internal class IosLanDiscoveryTransport(
             graceTicks = graceTicks
         )
         announceCache = result.updatedCache
-        result.announce.forEach(onAnnounce)
         result.lostPeerIds.forEach(onLost)
     }
 
@@ -952,12 +936,8 @@ internal class IosLanDiscoveryTransport(
     }
 
     private companion object {
-        /**
-         * Cadence for re-emitting [PeerEvent.Updated] for cached browse
-         * results — must stay comfortably below PeerRegistry's 15 s
-         * staleness eviction.
-         */
-        const val PEER_REANNOUNCE_INTERVAL_MS: Long = 5_000
+        /** Cadence for retiring entries owned by a replaced browser generation. */
+        const val STALE_RECONCILE_INTERVAL_MS: Long = 5_000
 
         /**
          * V0.4-D-IOS-NUDGE: wait this long after a listener rebind before
@@ -978,10 +958,10 @@ internal class IosLanDiscoveryTransport(
          * AUDIT-2026-06 (#8): consecutive announce ticks an [announceCache]
          * entry may stay unconfirmed by the current [browserGeneration]
          * before the announce loop prunes it and emits [PeerEvent.Lost].
-         * 2 ticks × [PEER_REANNOUNCE_INTERVAL_MS] ≈ 10 s of grace for a
+         * 2 ticks × [STALE_RECONCILE_INTERVAL_MS] ≈ 10 s of grace for a
          * replacement browser to re-add a live peer — comfortably longer
          * than NWBrowser's typical sub-second result delivery, comfortably
-         * shorter than letting a ghost pin PeerRegistry forever.
+         * shorter than retaining a native-ownership ghost indefinitely.
          */
         const val ANNOUNCE_STALE_GRACE_TICKS: Int = 2
 
@@ -1004,8 +984,6 @@ internal data class AnnounceEntry(
 
 /** Outcome of one [reconcileAnnounceCache] pass. */
 internal data class AnnounceReconcileResult(
-    /** Peers confirmed by the current generation — re-announce as Updated. */
-    val announce: List<InternalPeer>,
     /** The cache after this tick (stale counters advanced, ghosts dropped). */
     val updatedCache: Map<String, AnnounceEntry>,
     /** Ids pruned this tick — emit Lost for each. */
@@ -1020,8 +998,8 @@ internal data class AnnounceReconcileResult(
  * entries cannot be trusted just because they exist — only entries the
  * CURRENT browser generation has confirmed are known-live. Per entry:
  *
- *   - `lastConfirmedGeneration == currentGeneration` → announce it; reset
- *     its stale counter.
+ *   - `lastConfirmedGeneration == currentGeneration` → retain it and reset
+ *     its stale counter; native ownership is the liveness signal.
  *   - stale generation, fewer than [graceTicks] consecutive stale ticks →
  *     keep it (silently — no announce, so PeerRegistry's lastSeen is NOT
  *     refreshed) and advance the counter, giving the new browser time to
@@ -1037,12 +1015,10 @@ internal fun reconcileAnnounceCache(
     currentGeneration: Int,
     graceTicks: Int
 ): AnnounceReconcileResult {
-    val announce = mutableListOf<InternalPeer>()
     val retained = mutableMapOf<String, AnnounceEntry>()
     val lost = mutableListOf<String>()
     for ((pid, entry) in cache) {
         if (entry.lastConfirmedGeneration == currentGeneration) {
-            announce += entry.peer
             retained[pid] = if (entry.staleTicks == 0) entry else entry.copy(staleTicks = 0)
         } else {
             val ticks = entry.staleTicks + 1
@@ -1053,5 +1029,5 @@ internal fun reconcileAnnounceCache(
             }
         }
     }
-    return AnnounceReconcileResult(announce, retained, lost)
+    return AnnounceReconcileResult(retained, lost)
 }

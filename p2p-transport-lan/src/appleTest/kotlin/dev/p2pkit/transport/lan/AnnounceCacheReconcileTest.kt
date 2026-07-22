@@ -17,10 +17,10 @@ import kotlin.test.assertTrue
  * Scenario being pinned: `refresh()` / the rebind hooks cancel + recreate
  * the NWBrowser without any `result_removed` callbacks for peers that
  * vanished while the browser was being replaced. Before the fix the
- * re-announce loop re-emitted every cached entry unconditionally, so such a
- * ghost kept refreshing its PeerRegistry lastSeen forever. The reconcile
- * step announces only entries confirmed by the CURRENT browser generation,
- * keeps stale-generation entries silently for a grace window (giving the
+ * cache loop re-emitted every cached entry unconditionally, so such a ghost
+ * looked live forever. Native browser ownership now supplies liveness; the
+ * reconcile step retains entries confirmed by the current generation, keeps
+ * stale-generation entries for a grace window (giving the
  * replacement browser time to re-add live peers), and prunes + reports as
  * lost anything the new browser never re-confirms.
  *
@@ -42,19 +42,17 @@ class AnnounceCacheReconcileTest {
     )
 
     @Test
-    fun currentGenerationEntryIsAnnouncedAndRetained() {
-        val p = peer("alive")
-        val cache = mapOf("alive" to AnnounceEntry(p, lastConfirmedGeneration = 3))
+    fun currentGenerationEntryIsRetainedWithoutSyntheticAnnouncement() {
+        val cache = mapOf("alive" to AnnounceEntry(peer("alive"), lastConfirmedGeneration = 3))
 
         val result = reconcileAnnounceCache(cache, currentGeneration = 3, graceTicks = 2)
 
-        assertEquals(listOf(p), result.announce)
         assertEquals(cache, result.updatedCache)
         assertTrue(result.lostPeerIds.isEmpty())
     }
 
     @Test
-    fun staleEntryWithinGraceIsKeptButNotAnnounced() {
+    fun staleEntryWithinGraceIsKept() {
         // Browser was just replaced (gen 2 -> 3); the peer hasn't been
         // re-confirmed yet. It must NOT be announced (that would refresh its
         // PeerRegistry lastSeen — the ghost bug) but must survive this tick.
@@ -63,7 +61,6 @@ class AnnounceCacheReconcileTest {
 
         val result = reconcileAnnounceCache(cache, currentGeneration = 3, graceTicks = 2)
 
-        assertTrue(result.announce.isEmpty())
         assertTrue(result.lostPeerIds.isEmpty())
         assertEquals(1, result.updatedCache.getValue("pending").staleTicks)
         assertEquals(2, result.updatedCache.getValue("pending").lastConfirmedGeneration)
@@ -82,7 +79,6 @@ class AnnounceCacheReconcileTest {
 
         val tick2 = reconcileAnnounceCache(cache, currentGeneration = 2, graceTicks = 2)
         assertEquals(listOf("ghost"), tick2.lostPeerIds)
-        assertTrue(tick2.announce.isEmpty())
         assertTrue("ghost" !in tick2.updatedCache)
     }
 
@@ -90,8 +86,7 @@ class AnnounceCacheReconcileTest {
     fun reconfirmedEntrySurvivesBrowserReplacementAndResetsStaleCounter() {
         // A live peer: went stale for one tick after the browser swap, then
         // the new browser re-added it (emitPeer re-stamps with the current
-        // generation and a zeroed counter). It must be announced again and
-        // carry no stale history forward.
+        // generation and a zeroed counter). It must carry no stale history.
         val p = peer("alive")
         var cache = mapOf("alive" to AnnounceEntry(p, lastConfirmedGeneration = 1))
 
@@ -102,7 +97,6 @@ class AnnounceCacheReconcileTest {
         cache = tick1.updatedCache + ("alive" to AnnounceEntry(p, lastConfirmedGeneration = 2))
 
         val tick2 = reconcileAnnounceCache(cache, currentGeneration = 2, graceTicks = 2)
-        assertEquals(listOf(p), tick2.announce)
         assertTrue(tick2.lostPeerIds.isEmpty())
         assertEquals(0, tick2.updatedCache.getValue("alive").staleTicks)
     }
@@ -139,7 +133,6 @@ class AnnounceCacheReconcileTest {
 
         val result = reconcileAnnounceCache(cache, currentGeneration = 4, graceTicks = 2)
 
-        assertEquals(listOf(alive), result.announce)
         assertEquals(listOf("ghost"), result.lostPeerIds)
         assertEquals(setOf("alive", "pending"), result.updatedCache.keys)
         assertEquals(1, result.updatedCache.getValue("pending").staleTicks)
@@ -148,7 +141,6 @@ class AnnounceCacheReconcileTest {
     @Test
     fun emptyCacheIsANoOp() {
         val result = reconcileAnnounceCache(emptyMap(), currentGeneration = 9, graceTicks = 2)
-        assertTrue(result.announce.isEmpty())
         assertTrue(result.updatedCache.isEmpty())
         assertTrue(result.lostPeerIds.isEmpty())
     }

@@ -46,6 +46,7 @@ internal class AndroidLanTransportFactory(
     private val androidContext: Context
 ) : TransportFactory {
     override fun build(context: TransportContext): TransportPair {
+        val networkState = AndroidLanNetworkState()
         val registration = LanServiceRegistration(
             appId = context.appId,
             localPeerId = context.localPeerId,
@@ -55,8 +56,8 @@ internal class AndroidLanTransportFactory(
             fingerprint = context.localFingerprint
         )
         return TransportPair(
-            data = AndroidLanDataTransport(registration),
-            discovery = AndroidLanDiscoveryTransport(androidContext, registration)
+            data = AndroidLanDataTransport(registration, networkState),
+            discovery = AndroidLanDiscoveryTransport(androidContext, registration, networkState)
         )
     }
 }

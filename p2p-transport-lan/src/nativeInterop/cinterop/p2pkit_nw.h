@@ -4,6 +4,10 @@
 #include <Network/Network.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <stdint.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -31,6 +35,49 @@ static inline nw_parameters_t p2pkit_nw_create_plain_tcp_parameters(void) {
         NW_PARAMETERS_DISABLE_PROTOCOL,
         NW_PARAMETERS_DEFAULT_CONFIGURATION
     );
+}
+
+/**
+ * Order-independent fingerprint of live, non-loopback IPv4/IPv6 interface
+ * addresses. NWPath exposes interface *types* but not a stable signal for a
+ * Wi-Fi-to-Wi-Fi DHCP/address rotation; this fills that gap for rebind logic.
+ */
+static inline uint64_t p2pkit_lan_interface_fingerprint(void) {
+    struct ifaddrs *interfaces = NULL;
+    if (getifaddrs(&interfaces) != 0 || interfaces == NULL) return 0;
+
+    uint64_t combined = 1469598103934665603ULL;
+    uint64_t count = 0;
+    for (struct ifaddrs *entry = interfaces; entry != NULL; entry = entry->ifa_next) {
+        if (entry->ifa_addr == NULL || entry->ifa_name == NULL) continue;
+        if ((entry->ifa_flags & IFF_UP) == 0 || (entry->ifa_flags & IFF_LOOPBACK) != 0) continue;
+
+        const uint8_t *bytes = NULL;
+        size_t length = 0;
+        sa_family_t family = entry->ifa_addr->sa_family;
+        if (family == AF_INET) {
+            bytes = (const uint8_t *)&((const struct sockaddr_in *)entry->ifa_addr)->sin_addr;
+            length = sizeof(struct in_addr);
+        } else if (family == AF_INET6) {
+            bytes = (const uint8_t *)&((const struct sockaddr_in6 *)entry->ifa_addr)->sin6_addr;
+            length = sizeof(struct in6_addr);
+        } else {
+            continue;
+        }
+
+        uint64_t item = 1469598103934665603ULL;
+        for (const unsigned char *name = (const unsigned char *)entry->ifa_name; *name; ++name) {
+            item = (item ^ *name) * 1099511628211ULL;
+        }
+        item = (item ^ (uint8_t)family) * 1099511628211ULL;
+        for (size_t index = 0; index < length; ++index) {
+            item = (item ^ bytes[index]) * 1099511628211ULL;
+        }
+        combined ^= item;
+        count++;
+    }
+    freeifaddrs(interfaces);
+    return combined ^ (count * 0x9e3779b97f4a7c15ULL);
 }
 
 /**

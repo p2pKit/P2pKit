@@ -129,4 +129,54 @@ class HostSelectorTest {
         val scoped = scopedIpv6("fe80::1", scopeId = 5)
         assertEquals("10.0.0.5", selectRoutableHost(listOf(scoped, ipv4("10.0.0.5"))))
     }
+
+    @Test
+    fun interfaceAwareSelectionRejectsOffSubnetClaimAndRetainsAllLocalCandidates() {
+        val local = listOf(LanInterfaceAddress(ipv4("192.168.50.2"), prefixLength = 24))
+
+        val selected = selectRoutableHosts(
+            candidates = listOf(
+                ipv4("203.0.113.7"),
+                ipv4("192.168.50.20"),
+                ipv4("192.168.50.21")
+            ),
+            localAddresses = local
+        )
+
+        assertEquals(listOf("192.168.50.20", "192.168.50.21"), selected)
+    }
+
+    @Test
+    fun interfaceAwareSelectionReturnsEmptyWhenEveryClaimIsOffSubnet() {
+        val selected = selectRoutableHosts(
+            candidates = listOf(ipv4("10.0.0.8"), ipv4("203.0.113.9")),
+            localAddresses = listOf(LanInterfaceAddress(ipv4("192.168.1.5"), 24))
+        )
+
+        assertTrue(selected.isEmpty())
+    }
+
+    @Test
+    fun unusableInterfacePrefixesDoNotRejectEveryCandidate() {
+        val selected = selectRoutableHosts(
+            candidates = listOf(ipv4("10.0.0.8")),
+            localAddresses = listOf(LanInterfaceAddress(ipv4("192.168.1.5"), 0))
+        )
+
+        assertEquals(listOf("10.0.0.8"), selected)
+    }
+
+    @Test
+    fun candidateFanOutIsBoundedAndDeduplicated() {
+        val candidates = buildList {
+            add(ipv4("10.0.0.10"))
+            add(ipv4("10.0.0.10"))
+            repeat(20) { add(ipv4("10.0.0.${it + 20}")) }
+        }
+
+        val selected = selectRoutableHosts(candidates)
+
+        assertEquals(LanConstants.MAX_DIAL_CANDIDATES, selected.size)
+        assertEquals(selected.distinct(), selected)
+    }
 }

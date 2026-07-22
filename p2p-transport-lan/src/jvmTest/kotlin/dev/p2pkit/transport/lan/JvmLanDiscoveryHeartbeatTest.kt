@@ -2,55 +2,25 @@ package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.P2pKit
-import dev.p2pkit.core.PeerId
-import dev.p2pkit.core.Platform
 import dev.p2pkit.core.dsl.jvmSecureIdentityStore
-import dev.p2pkit.core.transport.PeerEvent
 import java.io.File
 import java.net.Inet4Address
-import java.net.InetAddress
 import java.net.NetworkInterface
 import java.nio.file.Files
-import javax.jmdns.JmDNS
-import javax.jmdns.ServiceInfo
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.onStart
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertTrue
-import kotlin.test.fail
 import org.junit.Assume
 
 /**
- * AUDIT-2026-07 (DSC-1) / P1-13: JVM discovery heartbeat — while discovery is
- * active the transport re-emits [PeerEvent.Updated] every
- * [LanConstants.PEER_REANNOUNCE_INTERVAL_MS] for every appId-matching service
- * already resolved in the local JmDNS cache, so `PeerRegistry.lastSeen` keeps
- * refreshing and a healthy idle peer survives the registry's 15 s staleness
- * eviction. Pre-fix, `serviceResolved` fired effectively once per service
- * appearance and `kit.peers` silently emptied ~15 s after resolution in
- * steady state (only iOS had a re-announce loop).
- *
- * Two legs, per the coverage row:
- *
- *  - **Transport-level re-emit contract**: periodic `Updated` for a
- *    conforming cached record; the RBS-1 pid validation and the appId gate
- *    apply to re-emits exactly as to `serviceResolved`; the loop halts on
- *    `stopDiscovery`.
- *  - **Kit-level loopback (the P1-13 integration leg)**: a discovered peer
- *    remains in `kit.peers` at t = 20 s and t = 35 s of connect-free idle,
- *    and a departed advertiser is still removed. A clean mDNS goodbye now
- *    resolves through the transport's previously validated service-instance
- *    admission even though JmDNS omits TXT on removal; staleness remains the
- *    fallback for abrupt disappearance without a goodbye.
+ * LAN discovery lifetime integration: DNS-SD owns TTL/removal and core does
+ * not age a healthy native-browser contribution out after 15 seconds. A clean
+ * TXT-less mDNS goodbye still removes exactly the previously admitted peer.
  *
  * Like [JvmLanLoopbackTest], this depends on multicast working on the test
  * machine and skips (Assume) when no routable IPv4 interface is available.
@@ -85,119 +55,17 @@ class JvmLanDiscoveryHeartbeatTest {
         System.clearProperty(JMDNS_BIND_PROPERTY)
     }
 
-    // ── Transport-level re-emit contract ────────────────────────────────
-
-    private class TimedEvent(val event: PeerEvent, val atMillis: Long)
-
-    @Test
-    fun heartbeatReemitsCachedConformingPeersAndHaltsOnStopDiscovery() {
-        runBlocking {
-            val conformingPid = "conforming-$unique"
-            val otherAppPid = "other-app-$unique"
-
-            val registration = LanServiceRegistration(
-                appId = AppId(unique),
-                localPeerId = PeerId("observer-$unique"),
-                deviceName = "Observer",
-                platform = Platform.JVM_DESKTOP,
-                tcpPort = 46000
-            )
-            val transport = JvmLanDiscoveryTransport(registration)
-            val seen = mutableListOf<TimedEvent>()
-            val subscribed = CompletableDeferred<Unit>()
-            val collector = launch {
-                transport.events
-                    .onStart { subscribed.complete(Unit) }
-                    .collect { event ->
-                        synchronized(seen) { seen.add(TimedEvent(event, System.currentTimeMillis())) }
-                    }
-            }
-            subscribed.await()
-            transport.startDiscovery()
-
-            val crafter = withContext(Dispatchers.IO) {
-                JmDNS.create(InetAddress.getByName(bindAddress))
-            }
-            try {
-                withContext(Dispatchers.IO) {
-                    // Non-conforming records advertised alongside the
-                    // conforming one: the heartbeat must never re-emit them
-                    // (same RBS-1 pid validation + appId gate as
-                    // serviceResolved).
-                    crafter.registerService(
-                        craftedService("blank-pid-$unique", 46001, pid = " ", app = unique)
-                    )
-                    crafter.registerService(
-                        craftedService("other-app-$unique", 46002, pid = otherAppPid, app = "$unique-other")
-                    )
-                    crafter.registerService(
-                        craftedService("conforming-$unique", 46003, pid = conformingPid, app = unique)
-                    )
-                }
-
-                // Heartbeat contract: at least two Updated re-emits for the
-                // conforming cached record (one per ~5 s tick) after the
-                // initial Found.
-                awaitCondition("initial Found for the conforming record") {
-                    synchronized(seen) {
-                        seen.any { it.event is PeerEvent.Found && pidOf(it.event) == conformingPid }
-                    }
-                }
-                awaitCondition("two heartbeat Updated re-emits for the conforming record") {
-                    updatedCount(seen, conformingPid) >= 2
-                }
-
-                // Gates on the re-emit path: nothing blank, nothing from
-                // another appId — on ANY event type.
-                val snapshot = synchronized(seen) { seen.map { it.event } }
-                assertTrue(
-                    snapshot.none { pidOf(it).isBlank() },
-                    "no event may carry a blank peer id: $snapshot"
-                )
-                assertTrue(
-                    snapshot.none { pidOf(it) == otherAppPid },
-                    "a record advertising another appId must never be re-emitted: $snapshot"
-                )
-
-                // Loop lifecycle: stopDiscovery cancels the heartbeat under
-                // the transport lock, so no re-emit may arrive after it
-                // returns (1 s slack for events buffered before the stop).
-                transport.stopDiscovery()
-                val quietFrom = System.currentTimeMillis() + 1_000
-                delay(2 * LanConstants.PEER_REANNOUNCE_INTERVAL_MS + 2_000)
-                val late = synchronized(seen) {
-                    seen.filter {
-                        it.event is PeerEvent.Updated &&
-                            pidOf(it.event) == conformingPid &&
-                            it.atMillis > quietFrom
-                    }
-                }
-                assertTrue(
-                    late.isEmpty(),
-                    "heartbeat must halt on stopDiscovery; saw ${late.size} late re-emit(s)"
-                )
-            } finally {
-                withContext(Dispatchers.IO) { runCatching { crafter.close() } }
-                runCatching { transport.stopDiscovery() }
-                collector.cancel()
-            }
-        }
-    }
-
-    // ── Kit-level loopback: the P1-13 integration leg ───────────────────
-
     /**
      * Two full kits over real mDNS + loopback-adjacent multicast, no connect
      * activity at all:
      *
      *  1. Bob stays in Alice's `kit.peers` at t = 20 s and t = 35 s idle —
      *     pre-fix he vanished at ~15 s and never returned.
-     *  2. After Bob stops (clean goodbye), Alice removes him and the heartbeat
-     *     does not resurrect him from stale cache state.
+     *  2. After Bob stops (clean goodbye), Alice removes him.
      *
      * Self-gate rider: Alice advertises too, so her own service sits in her
-     * JmDNS cache; the self-skip on the re-emit path keeps her out of her own
-     * `kit.peers`.
+     * JmDNS cache; the self-skip on the native listener keeps her out of her
+     * own `kit.peers`.
      */
     @Test
     fun idlePeerSurvivesEvictionHorizonAndDepartedPeerIsRemoved() {
@@ -218,7 +86,7 @@ class JvmLanDiscoveryHeartbeatTest {
             )
             assertTrue(
                 alice.peers.value.none { it.name == "Alice" },
-                "the re-emit path must keep skipping the local peer (self gate)"
+                "native discovery must keep skipping the local peer (self gate)"
             )
             delayUntil(foundAt + 35_000)
             assertTrue(
@@ -226,9 +94,7 @@ class JvmLanDiscoveryHeartbeatTest {
                 "healthy idle peer must still be visible at t=35 s"
             )
 
-            // Departure: the admitted service instance owns the TXT-less
-            // goodbye Lost event. If a platform drops that goodbye, the same
-            // bound also covers heartbeat cessation plus staleness fallback.
+            // The admitted service instance owns the TXT-less goodbye Lost event.
             bob.stop()
             withTimeout(DEPARTURE_TIMEOUT_MS) {
                 alice.peers.first { peers -> peers.none { it.name == "Bob" } }
@@ -264,46 +130,6 @@ class JvmLanDiscoveryHeartbeatTest {
         return kit
     }
 
-    private fun craftedService(
-        instanceName: String,
-        port: Int,
-        pid: String,
-        app: String
-    ): ServiceInfo = ServiceInfo.create(
-        LanConstants.LEGACY_SERVICE_TYPE_JMDNS,
-        instanceName,
-        port,
-        /* weight = */ 0,
-        /* priority = */ 0,
-        mapOf(
-            LanConstants.TXT_PEER_ID to pid,
-            LanConstants.TXT_APP_ID to app,
-            LanConstants.TXT_DEVICE_NAME to instanceName,
-            LanConstants.TXT_PLATFORM to Platform.JVM_DESKTOP.name,
-            LanConstants.TXT_CAPABILITIES to "LAN",
-            LanConstants.TXT_PROTOCOL_VERSION to LanConstants.LEGACY_PROTOCOL_VERSION.toString()
-        )
-    )
-
-    private fun updatedCount(seen: List<TimedEvent>, pid: String): Int =
-        synchronized(seen) {
-            seen.count { it.event is PeerEvent.Updated && pidOf(it.event) == pid }
-        }
-
-    private fun pidOf(event: PeerEvent): String = when (event) {
-        is PeerEvent.Found -> event.peer.publicPeer.id.value
-        is PeerEvent.Updated -> event.peer.publicPeer.id.value
-        is PeerEvent.Lost -> event.peerId.value
-    }
-
-    private suspend fun awaitCondition(what: String, condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + DISCOVERY_TIMEOUT_MS
-        while (!condition()) {
-            if (System.currentTimeMillis() > deadline) fail("timed out waiting for: $what")
-            delay(100)
-        }
-    }
-
     private suspend fun delayUntil(epochMillis: Long) {
         val remaining = epochMillis - System.currentTimeMillis()
         if (remaining > 0) delay(remaining)
@@ -312,12 +138,7 @@ class JvmLanDiscoveryHeartbeatTest {
     private companion object {
         const val DISCOVERY_TIMEOUT_MS: Long = 30_000
 
-        /**
-         * Departure bound: worst case is a heartbeat tick right before the
-         * goodbye (lastSeen refreshed at T) → eviction at T + 15 s staleness
-         * + 1 s poll, plus goodbye processing slack. 30 s is comfortable
-         * without masking a broken eviction path.
-         */
+        /** Native goodbye/TTL processing bound for the multicast integration test. */
         const val DEPARTURE_TIMEOUT_MS: Long = 30_000
         const val JMDNS_BIND_PROPERTY: String = "dev.p2pkit.test.jmdnsBindAddress"
 

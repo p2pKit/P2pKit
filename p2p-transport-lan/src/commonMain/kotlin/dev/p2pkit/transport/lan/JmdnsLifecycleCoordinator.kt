@@ -9,7 +9,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -64,19 +63,6 @@ internal interface JmdnsLifecycleOps<N : Any, H : Any> {
     fun deactivateListenerToken(token: Any)
 
     fun removeListenerBlocking(handle: H, token: Any)
-
-    /**
-     * AUDIT-2026-07 (DSC-1): one discovery-heartbeat tick — re-emit
-     * `PeerEvent.Updated` for every appId-matching service already resolved
-     * in [handle]'s in-process cache, so `PeerRegistry.lastSeen` keeps
-     * refreshing and healthy idle peers survive the 15 s staleness eviction.
-     * Must read the local cache only (no forced network re-query): a
-     * genuinely departed peer, whose cache entry a goodbye or TTL expiry has
-     * pruned, must stop being re-emitted so registry eviction still removes
-     * it. Called by the coordinator's heartbeat loop on the blocking-I/O
-     * context while discovery is intended and a handle is live.
-     */
-    fun reemitCachedPeersBlocking(handle: H)
 
     /** The platform's current active network (bind target for lazy starts). */
     fun currentNetwork(): N?
@@ -136,15 +122,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
     private val ioContext: CoroutineContext,
     private val rebindDebounceMillis: Long = REBIND_DEBOUNCE_MILLIS,
     private val rebindRetryBaseDelayMillis: Long = REBIND_RETRY_BASE_DELAY_MILLIS,
-    private val rebindRetryMaxAttempts: Int = REBIND_RETRY_MAX_ATTEMPTS,
-    /**
-     * AUDIT-2026-07 (DSC-1): cadence of the discovery heartbeat (see
-     * [JmdnsLifecycleOps.reemitCachedPeersBlocking]). Injectable for tests;
-     * production uses the shared JVM/Android constant, which matches the iOS
-     * re-announce interval and stays comfortably below PeerRegistry's 15 s
-     * staleness eviction horizon.
-     */
-    private val heartbeatIntervalMillis: Long = LanConstants.PEER_REANNOUNCE_INTERVAL_MS
+    private val rebindRetryMaxAttempts: Int = REBIND_RETRY_MAX_ATTEMPTS
 ) {
 
     private val lock = Mutex()
@@ -219,15 +197,8 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
     /** The most recent debounced rebind job; cancelled when superseded. */
     private var pendingRebindJob: Job? = null
 
-    /**
-     * AUDIT-2026-07 (DSC-1): discovery heartbeat loop; non-null while
-     * discovery is intended. Started on successful [startDiscovery],
-     * cancelled in [stopDiscovery]. Deliberately NOT touched by [rebindNow]:
-     * the loop keys each tick off the CURRENT [handle] and [discoveryIntent],
-     * so it survives refresh/rebind and simply skips ticks in the
-     * failed-rebind window (handle null). Guarded by [lock].
-     */
-    private var heartbeatJob: Job? = null
+    /** Preserve a same-network address-change request while callbacks coalesce. */
+    private var pendingForcedRebind = false
 
     suspend fun startAdvertising(localPeer: LocalPeerInfo): Unit = lock.withLock {
         if (advertisingIntent && advertisedToken != null && bindingHealthy) return@withLock
@@ -257,7 +228,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         cachedLocalPeer = localPeer
         bindingHealthy = bindingMatchesIntents()
         boundNetwork = ops.currentNetwork()
-        boundDefaultNetwork = ops.currentNetwork()
+        boundDefaultNetwork = ops.observedDefaultNetwork()
         ops.logDebug(
             "startAdvertising: registered, " +
                 "boundNetwork=$boundNetwork boundDefaultNetwork=$boundDefaultNetwork"
@@ -313,23 +284,18 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         discoveryIntent = true
         bindingHealthy = bindingMatchesIntents()
         boundNetwork = ops.currentNetwork()
-        boundDefaultNetwork = ops.currentNetwork()
+        boundDefaultNetwork = ops.observedDefaultNetwork()
         ops.logDebug(
             "startDiscovery: listener added, " +
                 "boundNetwork=$boundNetwork boundDefaultNetwork=$boundDefaultNetwork"
         )
         ops.startNetworkWatcher()
-        startHeartbeatLocked()
     }
 
     suspend fun stopDiscovery(): Unit = lock.withLock {
         withContext(NonCancellable) {
             discoveryIntent = false
             bindingHealthy = false
-            // Halt heartbeat before listener cleanup; no later tick may use a
-            // binding after discovery intent is cleared.
-            heartbeatJob?.cancel()
-            heartbeatJob = null
             val token = listenerToken
             if (token != null) {
                 val cleanupFailure = removeListenerToken(token)
@@ -409,43 +375,6 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
     }
 
     /**
-     * AUDIT-2026-07 (DSC-1): the discovery heartbeat. While discovery is
-     * intended, ask the platform every [heartbeatIntervalMillis] to re-emit
-     * `PeerEvent.Updated` for every service already resolved in the live
-     * handle's in-process cache (see
-     * [JmdnsLifecycleOps.reemitCachedPeersBlocking]) so healthy idle peers
-     * survive PeerRegistry's 15 s staleness eviction — previously only iOS
-     * had this loop and `kit.peers` silently emptied on JVM/Android in steady
-     * state. Runs on [rebindScope] like the rebind machinery; each tick takes
-     * [lock] and re-checks intent + handle, so the loop survives
-     * refresh/rebind and skips the failed-rebind window. Cancellation is
-     * rethrown, never swallowed; any other tick failure is logged and the
-     * loop stays alive. Caller must hold [lock]. Idempotent.
-     */
-    private fun startHeartbeatLocked() {
-        if (heartbeatJob?.isActive == true) return
-        heartbeatJob = rebindScope.launch {
-            while (isActive) {
-                delay(heartbeatIntervalMillis)
-                try {
-                    heartbeatTick()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    ops.logWarn("discovery heartbeat: tick failed — keeping loop alive", e)
-                }
-            }
-        }
-    }
-
-    /** One heartbeat tick under [lock]; skips when discovery is not live. */
-    private suspend fun heartbeatTick(): Unit = lock.withLock {
-        if (!discoveryIntent) return@withLock
-        val h = handle ?: return@withLock
-        withContext(ioContext) { ops.reemitCachedPeersBlocking(h) }
-    }
-
-    /**
      * Debounces rebind requests. Each call cancels the previous pending job
      * and launches a fresh one after [rebindDebounceMillis]. Multiple
      * back-to-back rotation events (typical of Android's
@@ -455,14 +384,20 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
      * No [lock] is taken here — that happens inside [rebindNow]. Platform
      * watcher callbacks must remain cheap and non-blocking.
      */
-    fun scheduleRebind(reason: String) {
+    fun scheduleRebind(reason: String, force: Boolean = false) {
         rebindScope.launch(start = CoroutineStart.UNDISPATCHED) {
             scheduleLock.withLock {
+                pendingForcedRebind = pendingForcedRebind || force
                 pendingRebindJob?.cancel()
-                ops.logDebug("scheduleRebind: $reason (debounce=${rebindDebounceMillis}ms)")
+                ops.logDebug("scheduleRebind: $reason (force=$force debounce=${rebindDebounceMillis}ms)")
                 pendingRebindJob = rebindScope.launch {
                     delay(rebindDebounceMillis)
-                    rebindNow(reason)
+                    val effectiveForce = scheduleLock.withLock {
+                        val requested = pendingForcedRebind
+                        pendingForcedRebind = false
+                        requested
+                    }
+                    rebindNow(reason, effectiveForce)
                 }
             }
         }
@@ -487,7 +422,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
      *     case, and we still want to re-bind so the handle picks up whatever
      *     multicast carrier is alive.
      */
-    private suspend fun rebindNow(reason: String): Unit = lock.withLock {
+    private suspend fun rebindNow(reason: String, force: Boolean = false): Unit = lock.withLock {
         if (!ops.isWatcherActive()) {
             ops.logDebug("rebindNow: watcher already stopped; skipping ($reason)")
             return@withLock
@@ -515,7 +450,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
                 handle != null &&
                 target == boundNetwork &&
                 defaultTarget == boundDefaultNetwork
-        if (noChangeSinceLastBind) {
+        if (noChangeSinceLastBind && !force) {
             ops.logDebug(
                 "rebindNow: no changes since last bind; skipping ($reason) " +
                     "transport=$boundNetwork default=$boundDefaultNetwork"
@@ -828,6 +763,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         scheduleLock.withLock {
             pendingRebindJob?.cancel()
             pendingRebindJob = null
+            pendingForcedRebind = false
         }
         rebindRetryJob?.cancel()
         rebindRetryJob = null

@@ -11,6 +11,8 @@ import dev.p2pkit.core.provisioning.ManualPeerRegistrar
 import dev.p2pkit.core.protocol.HelloPayload
 import dev.p2pkit.core.protocol.validateWireText
 import dev.p2pkit.core.transport.DiscoveryTransport
+import dev.p2pkit.core.transport.DiscoveryLifetime
+import dev.p2pkit.core.transport.discoveryLifetime
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.PeerEvent
 import dev.p2pkit.core.transport.PeerAuthenticationHint
@@ -141,7 +143,8 @@ internal class PeerRegistry(
             current.mapValues { (_, trackedPeer) ->
                 trackedPeer.copy(
                     discoveredBy = trackedPeer.discoveredBy.filterValues { contribution ->
-                        now - contribution.lastSeenAtMillis <= staleTimeoutMillis
+                        contribution.internalPeer.discoveryLifetime() == DiscoveryLifetime.TransportManaged ||
+                            now - contribution.lastSeenAtMillis <= staleTimeoutMillis
                     }
                 )
             }.filterValues { trackedPeer ->

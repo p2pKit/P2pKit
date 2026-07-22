@@ -37,6 +37,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
+import dev.p2pkit.transport.lan.interop.p2pkit_lan_interface_fingerprint
 import platform.Foundation.NSNotification
 import platform.Foundation.NSNotificationCenter
 import platform.Network.nw_connection_create
@@ -55,6 +56,8 @@ import platform.Network.nw_listener_state_failed
 import platform.Network.nw_listener_state_ready
 import platform.Network.nw_listener_t
 import platform.Network.nw_parameters_prohibit_interface_type
+import platform.Network.nw_parameters_get_include_peer_to_peer
+import platform.Network.nw_parameters_set_include_peer_to_peer
 import platform.Network.nw_parameters_t
 import platform.Network.nw_interface_type_cellular
 import platform.Network.nw_interface_type_wifi
@@ -151,6 +154,7 @@ internal class IosLanDataTransport(
             return null
         }
         nw_parameters_prohibit_interface_type(p, nw_interface_type_cellular)
+        nw_parameters_set_include_peer_to_peer(p, true)
         if (!_parameters.compareAndSet(null, p)) {
             IosLanDebug.log(
                 "data",
@@ -158,18 +162,16 @@ internal class IosLanDataTransport(
             )
             return _parameters.value
         }
-        // Issue #3: these params back BOTH the listener and every outbound
-        // connection, and they do NOT call nw_parameters_set_include_peer_to_peer.
-        // The browser (IosLanDiscoveryTransport) DOES, so an AWDL-discovered peer
-        // may be undialable with these params. Logged once (only the CAS winner
-        // reaches this line) so the asymmetry is explicit in the trail.
         IosLanDebug.log(
             "data",
-            "TCP params built: cellular=PROHIBITED, include_peer_to_peer=NOT_SET " +
-                "(listener + outbound) — AWDL asymmetry vs browser (issue #3)"
+            "TCP params built: cellular=PROHIBITED, include_peer_to_peer=true " +
+                "(listener + outbound)"
         )
         return p
     }
+
+    internal fun parametersIncludePeerToPeerForTest(): Boolean =
+        ensureParameters()?.let(::nw_parameters_get_include_peer_to_peer) == true
 
     private val _tcpPort = MutableStateFlow<Int?>(null)
     override val tcpPort: StateFlow<Int?> = _tcpPort.asStateFlow()
@@ -295,6 +297,10 @@ internal class IosLanDataTransport(
      */
     @Volatile
     private var lastInterfaceFingerprint: Int = -1
+
+    /** Live non-loopback interface addresses, including Wi-Fi DHCP rotation. */
+    @Volatile
+    private var lastAddressFingerprint: ULong = ULong.MAX_VALUE
 
     /**
      * Scope for the debounced rebind coroutine. SupervisorJob so one
@@ -593,14 +599,10 @@ internal class IosLanDataTransport(
             )
             throw P2pError.ConnectionFailed("iOS LAN TCP parameters unavailable")
         }
-        // Issue #3: a `browse(AWDL-capable)` endpoint source + a dial that then
-        // sits in `waiting` (see IosRawConnection conn-path lines) is the
-        // signature of the AWDL asymmetry — the peer was found over peer-to-peer
-        // but these connection params can't route there.
         IosLanDebug.log(
             "connect",
             "peer=$pid8 endpointSource=${if (cached != null) "browse(AWDL-capable)" else "manual-IP-hint"} " +
-                "connParams.include_peer_to_peer=NOT_SET"
+                "connParams.include_peer_to_peer=true"
         )
         val conn = nw_connection_create(endpoint, params) ?: run {
             IosLanDebug.log("connect", "ABORT peer=$pid8 — nw_connection_create returned null")
@@ -719,6 +721,13 @@ internal class IosLanDataTransport(
             val interfaceChanged = isSatisfied &&
                 !isFirstFingerprint &&
                 prevFingerprint != fingerprint
+            val addressFingerprint = p2pkit_lan_interface_fingerprint()
+            val previousAddressFingerprint = lastAddressFingerprint
+            val isFirstAddressFingerprint = previousAddressFingerprint == ULong.MAX_VALUE
+            if (isSatisfied) lastAddressFingerprint = addressFingerprint
+            val addressChanged = isSatisfied &&
+                !isFirstAddressFingerprint &&
+                previousAddressFingerprint != addressFingerprint
 
             IosLanDebug.log(
                 "data",
@@ -726,16 +735,27 @@ internal class IosLanDataTransport(
                     "becameSatisfied=$becameSatisfied isFirst=$isFirstEver " +
                     "usesWifi=$usesWifi usesCellular=$usesCellular usesWired=$usesWired " +
                     "fingerprint=$fingerprint prev=$prevFingerprint " +
-                    "interfaceChanged=$interfaceChanged"
+                    "interfaceChanged=$interfaceChanged addressFingerprint=$addressFingerprint " +
+                    "previousAddressFingerprint=$previousAddressFingerprint addressChanged=$addressChanged"
             )
 
+            if (!applePathNeedsRebind(
+                    becameSatisfied = becameSatisfied,
+                    isFirstEver = isFirstEver,
+                    interfaceChanged = interfaceChanged,
+                    addressChanged = addressChanged
+                )
+            ) {
+                return@nw_path_monitor_set_update_handler Unit
+            }
             when {
                 becameSatisfied && !isFirstEver -> {
                     scheduleRebind("path satisfied after change (status=$status)")
                 }
-                interfaceChanged -> {
+                interfaceChanged || addressChanged -> {
                     scheduleRebind(
-                        "active interface set changed: $prevFingerprint -> $fingerprint " +
+                        "active LAN path changed: interface=$prevFingerprint->$fingerprint " +
+                            "addresses=$previousAddressFingerprint->$addressFingerprint " +
                             "(usesWifi=$usesWifi usesCellular=$usesCellular usesWired=$usesWired)"
                     )
                 }
@@ -756,6 +776,7 @@ internal class IosLanDataTransport(
         lastWasSatisfied = false
         hasEverObservedSatisfied = false
         lastInterfaceFingerprint = -1
+        lastAddressFingerprint = ULong.MAX_VALUE
         IosLanDebug.log("data", "stopPathMonitor: monitor cancelled, pending rebind cleared")
     }
 
@@ -974,3 +995,10 @@ internal class IosLanDataTransport(
         const val REBIND_RETRY_MAX_ATTEMPTS: Int = 5
     }
 }
+
+internal fun applePathNeedsRebind(
+    becameSatisfied: Boolean,
+    isFirstEver: Boolean,
+    interfaceChanged: Boolean,
+    addressChanged: Boolean
+): Boolean = (becameSatisfied && !isFirstEver) || interfaceChanged || addressChanged

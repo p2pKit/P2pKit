@@ -5,6 +5,9 @@ import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.PeerAuthenticationHint
+import dev.p2pkit.core.transport.DiscoveryLifetime
+import dev.p2pkit.core.transport.TransportHint
+import dev.p2pkit.core.transport.discoveryLifetime
 import dev.p2pkit.core.transport.TransportSecurityProfile
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -26,6 +29,27 @@ import kotlin.test.assertNull
  * (`IosBonjourTest`).
  */
 class PeerRecordValidationTest {
+
+    @Test
+    fun lanRecordUsesNativeTtlLifetimeAndRetainsAllRoutingCandidates() {
+        val record = assertNotNull(
+            validateLanDiscoveryRecord(
+                legacyProperties(),
+                AppId("app"),
+                PeerId("local"),
+                TransportSecurityProfile.LegacyPlaintextV1
+            )
+        )
+        val hints = listOf(
+            TransportHint(TransportKind.LAN, "192.168.1.10", 9000),
+            TransportHint(TransportKind.LAN, "192.168.1.11", 9000)
+        )
+
+        val peer = record.toInternalPeer(hints)
+
+        assertEquals(DiscoveryLifetime.TransportManaged, peer.discoveryLifetime())
+        assertEquals(hints.map { it.host }, peer.transportHints.map { it.host })
+    }
 
     @Test
     fun absentPeerIdIsRejected() {

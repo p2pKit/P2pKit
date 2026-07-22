@@ -43,6 +43,46 @@ public data class InternalPeer(
 )
 
 /**
+ * Lifetime contract between a [DiscoveryTransport] and the core peer registry.
+ *
+ * Most transports emit periodic observations and use [CoreStaleTimeout]. A
+ * transport backed by a resolver/browser that already enforces protocol TTLs
+ * uses [TransportManaged]: the contribution remains until that exact transport
+ * emits [PeerEvent.Lost] or stops. This avoids turning a local resolver-cache
+ * read into false evidence that a remote peer is still alive.
+ */
+public enum class DiscoveryLifetime {
+    CoreStaleTimeout,
+    TransportManaged
+}
+
+private const val DISCOVERY_LIFETIME_METADATA_KEY = "dev.p2pkit.discovery-lifetime"
+private const val TRANSPORT_MANAGED_LIFETIME_VALUE = "transport-managed"
+
+/** Attach a transport-owned expiry contract without changing the SPI data-class ABI. */
+public fun TransportHint.withDiscoveryLifetime(lifetime: DiscoveryLifetime): TransportHint =
+    when (lifetime) {
+        DiscoveryLifetime.CoreStaleTimeout -> copy(
+            metadata = metadata - DISCOVERY_LIFETIME_METADATA_KEY
+        )
+        DiscoveryLifetime.TransportManaged -> copy(
+            metadata = metadata +
+                (DISCOVERY_LIFETIME_METADATA_KEY to TRANSPORT_MANAGED_LIFETIME_VALUE)
+        )
+    }
+
+/** Resolve the lifetime attached to this transport contribution. */
+public fun InternalPeer.discoveryLifetime(): DiscoveryLifetime =
+    if (transportHints.any {
+            it.metadata[DISCOVERY_LIFETIME_METADATA_KEY] == TRANSPORT_MANAGED_LIFETIME_VALUE
+        }
+    ) {
+        DiscoveryLifetime.TransportManaged
+    } else {
+        DiscoveryLifetime.CoreStaleTimeout
+    }
+
+/**
  * A fingerprint associated with a routing candidate. Discovery claims remain
  * untrusted; only an application/manual pin may authorize a key.
  */

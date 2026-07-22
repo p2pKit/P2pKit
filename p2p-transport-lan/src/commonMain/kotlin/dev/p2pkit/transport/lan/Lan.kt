@@ -7,6 +7,8 @@ import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.DiscoveryLifetime
+import dev.p2pkit.core.transport.withDiscoveryLifetime
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.PeerAuthenticationHint
 import dev.p2pkit.core.transport.TransportHint
@@ -132,36 +134,42 @@ internal object LanConstants {
     }
 
     /**
-     * Per-attempt TCP connect timeout used by the JVM and Android data
-     * transports when dialing a discovered peer. v0.5 real-device traces
-     * showed the kernel's default `Socket(host, port)` blocking ~17 s
-     * before ECONNREFUSED on a stale port — that whole window is wasted
-     * dead time during reconnect because the next attempt would have
-     * picked up the fresh port from the JmDNS cache. 5 s comfortably
-     * exceeds typical LAN RTT plus TCP SYN retries while still keeping
-     * three full retries inside the sample's
-     * `ReconnectPolicy.Enabled(maxAttempts=10, retryDelayMillis=1500)`
-     * budget. iOS-side `NWConnection` already times out on a shorter
-     * horizon via `Network.framework`, so no equivalent knob is needed
-     * on the appleMain path.
+     * Monotonic TCP dial budget used by the JVM and Android data transports
+     * when dialing a discovered peer. A single candidate receives the full
+     * budget; a multi-candidate route gives each attempt at most
+     * [TCP_CANDIDATE_CONNECT_TIMEOUT_MS] while retaining one shared bound.
+     * This prevents a stale first address from consuming the whole reconnect
+     * window while preserving enough time to try alternates. iOS-side
+     * `NWConnection` already has its own bounded wait on the appleMain path.
      */
     const val TCP_CONNECT_TIMEOUT_MS: Int = 5_000
 
-    /**
-     * AUDIT-2026-07 (DSC-1): cadence of the JVM/Android discovery heartbeat —
-     * while discovery is active, both transports re-emit
-     * [dev.p2pkit.core.transport.PeerEvent.Updated] for every appId-matching
-     * service already resolved in the in-process JmDNS cache, so
-     * `PeerRegistry.lastSeen` keeps refreshing and healthy idle peers survive
-     * the registry's 15 s staleness eviction (previously only iOS had this
-     * loop, so `kit.peers` silently emptied on JVM/Android in steady state).
-     * Reads the local cache only — no forced network re-query, no added
-     * multicast. Must stay comfortably below PeerRegistry's 15 s eviction
-     * horizon; matches the iOS `PEER_REANNOUNCE_INTERVAL_MS`
-     * (IosLanDiscoveryTransport), which stays platform-local by design.
-     */
-    const val PEER_REANNOUNCE_INTERVAL_MS: Long = 5_000
+    /** Bound DNS-SD address fan-out and the work of one dial operation. */
+    const val MAX_DIAL_CANDIDATES: Int = 8
+
+    /** Per-candidate slice of the shared dial budget when alternates exist. */
+    const val TCP_CANDIDATE_CONNECT_TIMEOUT_MS: Int = 1_500
+
 }
+
+internal data class LanEndpoint(val host: String, val port: Int)
+
+internal fun InternalPeer.lanEndpoints(): List<LanEndpoint> = transportHints
+    .asSequence()
+    .filter { it.type == TransportKind.LAN }
+    .mapNotNull { hint ->
+        val host = hint.host?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+        val port = hint.port?.takeIf { it in 1..65_535 } ?: return@mapNotNull null
+        LanEndpoint(host, port)
+    }
+    .distinct()
+    .take(LanConstants.MAX_DIAL_CANDIDATES)
+    .toList()
+
+internal fun lanTransportHints(hosts: List<String>, port: Int): List<TransportHint> =
+    hosts.distinct().take(LanConstants.MAX_DIAL_CANDIDATES).map { host ->
+        TransportHint(type = TransportKind.LAN, host = host, port = port)
+    }
 
 internal val TransportContext.lanServiceTypeBonjour: String
     get() = LanConstants.serviceTypeBonjour(securityProfile)
@@ -208,7 +216,22 @@ internal data class ValidatedLanDiscoveryRecord(
             platform = platform,
             supportedTransports = supportedTransports
         ),
-        transportHints = listOf(hint),
+        transportHints = listOf(
+            hint.withDiscoveryLifetime(DiscoveryLifetime.TransportManaged)
+        ),
+        authenticationHint = security.authenticationHint
+    )
+
+    fun toInternalPeer(hints: List<TransportHint>): InternalPeer = InternalPeer(
+        publicPeer = Peer(
+            id = peerId,
+            name = deviceName,
+            platform = platform,
+            supportedTransports = supportedTransports
+        ),
+        transportHints = hints.map {
+            it.withDiscoveryLifetime(DiscoveryLifetime.TransportManaged)
+        },
         authenticationHint = security.authenticationHint
     )
 }
