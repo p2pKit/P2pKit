@@ -18,6 +18,8 @@ import dev.p2pkit.core.provisioning.WifiCredentials
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.NetworkInterface
+import java.net.SocketException
+import java.util.Collections
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -46,17 +48,40 @@ import kotlinx.coroutines.withContext
  * [createManualPeer] registers that pair as a synthetic peer the kit can
  * dial via the normal `connect(peer)` API.
  *
- * Network state ([networkState]) is polled from `NetworkInterface` every
- * 5 s. JVM cannot reliably distinguish Wi-Fi from Ethernet across all OS
- * families, so we report [NetworkState.ConnectedToWifi] when any
- * non-loopback IPv4 is present and [NetworkState.NoNetwork] otherwise. The
- * SSID is always reported as `null`.
+ * Network state ([networkState]) is polled from active `NetworkInterface`
+ * instances every 5 s. JVM cannot reliably distinguish Wi-Fi from Ethernet
+ * across all OS families, so we report [NetworkState.ConnectedToWifi] when
+ * usable non-loopback addresses are present and [NetworkState.NoNetwork]
+ * otherwise. Down, virtual, and link-local candidates are excluded; private
+ * LAN addresses are ranked first. The SSID is always reported as `null`.
  */
 @OptIn(ExperimentalP2pApi::class)
-public class JvmNetworkProvisioningManager(
+public class JvmNetworkProvisioningManager private constructor(
     private val ctx: ProvisioningContext,
-    private val pollIntervalMillis: Long = DEFAULT_POLL_INTERVAL_MS
+    pollIntervalMillisInput: Long,
+    private val addressScanner: NetworkAddressScanner
 ) : NetworkProvisioningManager {
+
+    private val pollIntervalMillis: Long = pollIntervalMillisInput.also {
+        require(it > 0) { "pollIntervalMillis must be positive" }
+    }
+
+    /**
+     * Creates the desktop provisioning sidecar. Polling must be positive so
+     * the background loop cannot become a busy-spin or silently disable
+     * cancellation fairness.
+     */
+    public constructor(
+        ctx: ProvisioningContext,
+        pollIntervalMillis: Long = DEFAULT_POLL_INTERVAL_MS
+    ) : this(ctx, pollIntervalMillis, NetworkAddressScanner { collectNonLoopbackAddresses() })
+
+    /** Host-test seam for deterministic address/fatal-error coverage. */
+    internal constructor(
+        ctx: ProvisioningContext,
+        pollIntervalMillis: Long,
+        addressScanner: () -> List<String>
+    ) : this(ctx, pollIntervalMillis, NetworkAddressScanner(addressScanner))
 
     private val scopeJob = SupervisorJob(parent = ctx.parentJob)
     private val scope = CoroutineScope(Dispatchers.IO + scopeJob)
@@ -94,7 +119,7 @@ public class JvmNetworkProvisioningManager(
 
     override suspend fun getManualConnectionInfo(): ManualConnectionInfo? {
         val port = ctx.lanTcpPort() ?: return null
-        val ips = withContext(Dispatchers.IO) { collectNonLoopbackAddresses() }
+        val ips = withContext(Dispatchers.IO) { addressScanner.scan() }
         if (ips.isEmpty()) return null
         return ManualConnectionInfo(
             hostAddresses = ips,
@@ -140,46 +165,94 @@ public class JvmNetworkProvisioningManager(
 
     private suspend fun pollNetworkLoop() {
         while (scope.isActive) {
-            runCatching {
-                val ips = collectNonLoopbackAddresses()
+            try {
+                val ips = addressScanner.scan()
                 _networkState.value = if (ips.isEmpty()) {
                     NetworkState.NoNetwork
                 } else {
                     NetworkState.ConnectedToWifi(ssid = null, localIpAddresses = ips)
                 }
-            }.onFailure { e ->
+            } catch (e: SocketException) {
                 ctx.logger.debug("provisioning: NetworkInterface poll failed: ${e.message}")
                 _networkState.value = NetworkState.Unknown
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             }
             delay(pollIntervalMillis)
         }
-    }
-
-    private fun collectNonLoopbackAddresses(): List<String> {
-        val out = mutableListOf<String>()
-        val interfaces = try {
-            NetworkInterface.getNetworkInterfaces() ?: return emptyList()
-        } catch (_: Throwable) {
-            return emptyList()
-        }
-        for (nif in interfaces) {
-            if (!nif.isUp || nif.isLoopback) continue
-            for (addr in nif.inetAddresses) {
-                if (addr.isLoopbackAddress || addr.isAnyLocalAddress) continue
-                when (addr) {
-                    is Inet4Address -> out.add(addr.hostAddress)
-                    is Inet6Address -> {
-                        // Link-local IPv6 addresses are not useful for LAN dialing across
-                        // hosts; skip them.
-                        if (!addr.isLinkLocalAddress) out.add(addr.hostAddress)
-                    }
-                }
-            }
-        }
-        return out.distinct()
     }
 
     private companion object {
         const val DEFAULT_POLL_INTERVAL_MS: Long = 5_000
     }
 }
+
+internal fun interface NetworkAddressScanner {
+    fun scan(): List<String>
+}
+
+/**
+ * Collects addresses from active, non-virtual interfaces. Java does not
+ * expose a portable default-route API, so the scan uses interface liveness
+ * and address-family characteristics rather than claiming every stale
+ * address as Wi-Fi. Socket failures are recoverable; fatal Errors and
+ * cancellation are deliberately allowed to propagate.
+ */
+internal fun collectNonLoopbackAddresses(): List<String> {
+    val interfaces = try {
+        NetworkInterface.getNetworkInterfaces()?.asSequence().orEmpty()
+    } catch (e: SocketException) {
+        throw e
+    }
+    val candidates = mutableListOf<NetworkAddressCandidate>()
+    for (nif in interfaces) {
+        val active = try {
+            nif.isUp && !nif.isLoopback && !nif.isVirtual
+        } catch (e: SocketException) {
+            continue
+        }
+        if (!active) continue
+        val addresses = try {
+            Collections.list(nif.inetAddresses)
+        } catch (e: SocketException) {
+            continue
+        }
+        for (addr in addresses) {
+            val host = addr.hostAddress ?: continue
+            when (addr) {
+                is Inet4Address -> candidates += NetworkAddressCandidate(
+                    hostAddress = host,
+                    interfaceActive = true,
+                    linkLocal = addr.isLinkLocalAddress,
+                    siteLocal = addr.isSiteLocalAddress
+                )
+                is Inet6Address -> if (!addr.isLinkLocalAddress) {
+                    candidates += NetworkAddressCandidate(
+                        hostAddress = host,
+                        interfaceActive = true,
+                        linkLocal = false,
+                        siteLocal = addr.isSiteLocalAddress
+                    )
+                }
+            }
+        }
+    }
+    return selectUsableNetworkAddresses(candidates)
+}
+
+internal data class NetworkAddressCandidate(
+    val hostAddress: String,
+    val interfaceActive: Boolean,
+    val linkLocal: Boolean,
+    val siteLocal: Boolean
+)
+
+/** Removes stale/ineligible candidates and prefers private LAN addresses. */
+internal fun selectUsableNetworkAddresses(
+    candidates: List<NetworkAddressCandidate>
+): List<String> = candidates.asSequence()
+    .filter { it.interfaceActive && !it.linkLocal }
+    .distinctBy { it.hostAddress }
+    .sortedWith(compareByDescending<NetworkAddressCandidate> { it.siteLocal })
+    .map { it.hostAddress }
+    .toList()

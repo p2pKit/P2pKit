@@ -19,9 +19,11 @@ import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.WifiCredentials
 import dev.p2pkit.core.provisioning.WifiPassword
 import dev.p2pkit.core.provisioning.WifiSecurityType
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -31,7 +33,8 @@ class JvmNetworkProvisioningManagerTest {
 
     private fun ctx(
         lanTcpPort: Int? = 12345,
-        registrar: ManualPeerRegistrar = RecordingRegistrar()
+        registrar: ManualPeerRegistrar = RecordingRegistrar(),
+        parentJob: Job? = null
     ): ProvisioningContext = ProvisioningContext(
         appId = AppId("jvmnp-test"),
         localPeerId = PeerId("local-id"),
@@ -39,7 +42,8 @@ class JvmNetworkProvisioningManagerTest {
         config = NetworkProvisioningConfig(),
         logger = P2pLogger.NoOp,
         lanTcpPort = { lanTcpPort },
-        manualPeerRegistrar = registrar
+        manualPeerRegistrar = registrar,
+        parentJob = parentJob
     )
 
     @Test
@@ -51,6 +55,12 @@ class JvmNetworkProvisioningManagerTest {
         } finally {
             mgr.close()
         }
+    }
+
+    @Test
+    fun pollIntervalMustBePositive() {
+        assertFailsWith<IllegalArgumentException> { JvmNetworkProvisioningManager(ctx(), 0) }
+        assertFailsWith<IllegalArgumentException> { JvmNetworkProvisioningManager(ctx(), -1) }
     }
 
     @Test
@@ -82,22 +92,66 @@ class JvmNetworkProvisioningManagerTest {
 
     @Test
     fun manualConnectionInfoCarriesIdentityAndPortWhenPresent() = runBlocking<Unit> {
-        val mgr = JvmNetworkProvisioningManager(ctx(lanTcpPort = 54_321))
+        val mgr = JvmNetworkProvisioningManager(
+            ctx(lanTcpPort = 54_321),
+            1_000,
+            { listOf("192.168.1.42", "10.0.0.42") }
+        )
         try {
             val info = mgr.getManualConnectionInfo()
-            // Could be null if the test host has no non-loopback interface (rare on CI);
-            // skip assertion below in that case but still verify the identity carry-through
-            // when info IS produced.
-            if (info != null) {
-                assertEquals(54_321, info.port)
-                assertEquals(AppId("jvmnp-test"), info.appId)
-                assertEquals(PeerId("local-id"), info.peerId)
-                assertEquals("Tester", info.deviceName)
-                assertTrue(info.hostAddresses.isNotEmpty())
-            }
+            assertNotNull(info)
+            assertEquals(54_321, info.port)
+            assertEquals(AppId("jvmnp-test"), info.appId)
+            assertEquals(PeerId("local-id"), info.peerId)
+            assertEquals("Tester", info.deviceName)
+            assertEquals(listOf("192.168.1.42", "10.0.0.42"), info.hostAddresses)
         } finally {
             mgr.close()
         }
+    }
+
+    @Test
+    fun manualConnectionInfoReturnsNullWhenScannerFindsNoUsableAddress() = runBlocking<Unit> {
+        val mgr = JvmNetworkProvisioningManager(ctx(), 1_000, { emptyList() })
+        try {
+            assertNull(mgr.getManualConnectionInfo())
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun fatalScannerErrorsAreNotConvertedToNoNetwork() = runBlocking<Unit> {
+        val parent = Job().also { it.cancel() }
+        val fatal = AssertionError("fatal scanner failure")
+        val mgr = JvmNetworkProvisioningManager(
+            ctx(parentJob = parent),
+            1_000,
+            { throw fatal }
+        )
+        try {
+            val observed = assertFailsWith<AssertionError> { mgr.getManualConnectionInfo() }
+            assertEquals(fatal.message, observed.message)
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun addressSelectionDropsInactiveAndLinkLocalCandidates() {
+        assertEquals(
+            listOf("192.168.1.20", "172.16.0.20", "2001:db8::20", "192.0.2.20"),
+            selectUsableNetworkAddresses(
+                listOf(
+                    NetworkAddressCandidate("169.254.1.20", true, linkLocal = true, siteLocal = false),
+                    NetworkAddressCandidate("192.168.1.20", true, linkLocal = false, siteLocal = true),
+                    NetworkAddressCandidate("10.0.0.20", false, linkLocal = false, siteLocal = true),
+                    NetworkAddressCandidate("172.16.0.20", true, linkLocal = false, siteLocal = true),
+                    NetworkAddressCandidate("2001:db8::20", true, linkLocal = false, siteLocal = false),
+                    NetworkAddressCandidate("192.0.2.20", true, linkLocal = false, siteLocal = false)
+                )
+            )
+        )
     }
 
     @OptIn(ExperimentalP2pApi::class)
