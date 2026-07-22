@@ -5,6 +5,8 @@ import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.jvm.tasks.Jar
 import org.gradle.plugins.signing.Sign
 import org.gradle.plugins.signing.SigningExtension
+import org.gradle.api.services.BuildService
+import org.gradle.api.services.BuildServiceParameters
 import org.cyclonedx.gradle.CyclonedxDirectTask
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 
@@ -18,6 +20,51 @@ plugins {
     alias(libs.plugins.jetbrains.compose) apply false
     alias(libs.plugins.dokka) apply false
     alias(libs.plugins.cyclonedx)
+}
+
+abstract class AppleSimulatorTestService : BuildService<BuildServiceParameters.None>
+
+val appleSimulatorTestService = gradle.sharedServices.registerIfAbsent(
+    "appleSimulatorTests",
+    AppleSimulatorTestService::class,
+) {
+    // Kotlin/Native test binaries share one simulator host and process-global
+    // Apple services. Cross-module overlap caused immediate raw-channel churn
+    // and Bonjour lifecycle timeouts even though each complete suite passed
+    // alone. Serialize execution, while leaving compilation and other targets
+    // parallel, so the repository gate has one deterministic simulator owner.
+    maxParallelUsages.set(1)
+}
+
+// ENV-06: build, documentation, and test plugins bring their own dependency
+// graphs, which are not part of the published SDK SBOM but still execute in
+// trusted CI. Keep security floors centralized so a plugin cannot silently
+// reintroduce a version with a current OSV advisory. These overrides remain
+// scoped to dependencies already requested by a configuration; they do not
+// add any library to a published runtime graph.
+val advisoryMinimumVersions = mapOf(
+    "com.fasterxml.jackson.core:jackson-core" to "2.21.5",
+    "com.fasterxml.jackson.core:jackson-databind" to "2.21.5",
+    "io.opentelemetry:opentelemetry-api" to "1.62.0",
+    "io.opentelemetry:opentelemetry-context" to "1.62.0",
+    "org.apache.commons:commons-lang3" to "3.18.0",
+    "org.apache.httpcomponents:httpclient" to "4.5.13",
+    "org.bitbucket.b_c:jose4j" to "0.9.6",
+    "org.jdom:jdom2" to "2.0.6.1",
+)
+
+fun isVersionBelow(requestedVersion: String?, minimumVersion: String): Boolean {
+    if (requestedVersion == null) return true
+    val numericComponent = Regex("\\d+")
+    val requested = numericComponent.findAll(requestedVersion).mapNotNull { it.value.toIntOrNull() }.toList()
+    val minimum = numericComponent.findAll(minimumVersion).mapNotNull { it.value.toIntOrNull() }.toList()
+    if (requested.isEmpty()) return true
+    for (index in 0 until maxOf(requested.size, minimum.size)) {
+        val requestedPart = requested.getOrElse(index) { 0 }
+        val minimumPart = minimum.getOrElse(index) { 0 }
+        if (requestedPart != minimumPart) return requestedPart < minimumPart
+    }
+    return false
 }
 
 // Establish Maven coordinates for every module from the single source of truth
@@ -36,6 +83,22 @@ allprojects {
     // one explicit --write-locks operation; ordinary builds never rewrite it.
     dependencyLocking {
         lockAllConfigurations()
+    }
+
+    configurations.configureEach {
+        resolutionStrategy.eachDependency {
+            val requestedGroup = requested.group ?: return@eachDependency
+            val requestedModule = "$requestedGroup:${requested.name}"
+            val minimumVersion = when (requestedGroup) {
+                "io.netty" -> "4.1.135.Final"
+                "org.bouncycastle" -> "1.85"
+                else -> advisoryMinimumVersions[requestedModule]
+            }
+            if (minimumVersion != null && isVersionBelow(requested.version, minimumVersion)) {
+                useVersion(minimumVersion)
+                because("ENV-06 current advisory minimum")
+            }
+        }
     }
 
     // The aggregate release SBOM describes the four published libraries, not
@@ -116,6 +179,10 @@ tasks.cyclonedxBom {
 // docs/STABILIZATION_AND_RELEASE.md for the release recipe.
 subprojects {
     val sub = this
+
+    tasks.matching { it.name == "iosSimulatorArm64Test" }.configureEach {
+        usesService(appleSimulatorTestService)
+    }
 
     // REL-GATE-01 (BUILD-14): warnings are regressions, not informational
     // output. Apply this to every Kotlin target (including common tests and
