@@ -411,11 +411,23 @@ These seven boundaries were explicitly excluded from the original local review. 
 | --- | --- | --- | --- |
 | ENV-01 | Physical Android and Apple device tests | Blocked | Compatible devices and test deployment path required |
 | ENV-02 | Two-machine and hostile-network hardware validation | Blocked | At least two hosts/devices plus controlled hostile-network harness required |
-| ENV-03 | Simulator app launch and UI automation | Planned | Add/run platform UI targets after sample fixes |
+| ENV-03 | Simulator app launch and UI automation | Implemented | `ebcf827` adds the generated iOS UI-test target, deterministic exact-UDID runner, and accessibility-anchored Start/Stop assertions; committed simulator run passes 1/1 with 0 failures. Physical/device UI remains ENV-01. |
 | ENV-04 | iOS X64 execution on compatible host | Blocked | x86_64 Apple host/runtime required |
 | ENV-05 | Force-enable and resolve ignored Apple diagnostic test | Planned | Run when LAN lifecycle foundation is fixed |
 | ENV-06 | Third-party dependency CVE/advisory scan | Planned | Select/configure and run a current advisory scanner; record a concrete blocker only if one is encountered |
 | ENV-07 | Real remote Central/Portal upload | Blocked | Approved portal, signing identity, namespace access, and CI credentials required |
+
+## Execution record: ENV-03 — simulator UI automation
+
+| Field | Value |
+| --- | --- |
+| Scope and status | `ENV-03`; Implemented locally. The simulator gate is deterministic and committed-state verified; physical-device UI/lifecycle evidence remains `ENV-01`. |
+| Implementation | Added `p2pkit-sample-uitests` and the explicit `p2p-sample-ui` scheme in `iosApp/project.yml`; added accessibility identifiers and Start/Stop transition assertions in `iosApp/ContentView.swift` and `iosApp/UITests/P2pKitSampleUITests.swift`; added `iosApp:runIosUiTests` and `scripts/run-ios-ui-tests.sh` with exact-UDID selection, isolated derived data, serialized launcher/framework mutation, and failure-preserving cleanup. CI shell syntax coverage includes the runner. |
+| Exact files changed | `.github/workflows/ci.yml`; `iosApp/ContentView.swift`; `iosApp/UITests/P2pKitSampleUITests.swift`; `iosApp/build.gradle.kts`; `iosApp/project.yml`; `scripts/run-ios-ui-tests.sh`. |
+| Tests and commands | `bash -n scripts/run-ios-ui-tests.sh`; `bash -n scripts/run-ios-app.sh`; `sh -n iosApp/scripts/check-xcframework.sh`; `./gradlew :iosApp:checkIosLauncherScripts --console=plain`; `scripts/run-ios-ui-tests.sh` without `SIM_UDID`; exact committed run `SIM_UDID=B93342F4-FC27-4B4C-BD72-E4C9CBAF9583 scripts/run-ios-ui-tests.sh`; staged/committed `git diff --check`. |
+| Exact results | Launcher script checks: 7/7 passed. The no-UDID run failed deterministically with the expected duplicate-`iPhone 17` ambiguity safeguard. The exact signed committed run at `ebcf827a7ccef1834ead14c7b1619463b249a8a5` reported `** TEST SUCCEEDED **`: `P2pKitSampleUITests.testLaunchStartAndStopControls`, 1 test, 0 failures; BuildInfo/XCFramework provenance matched `ebcf827` and the source tree was clean. |
+| Compatibility and remaining evidence | Additive UI identifiers, a test-only target/scheme, and a Gradle runner; no SDK ABI, wire protocol, persistence, or runtime library contract changed. Physical Android/Apple UI, permission, lifecycle, and transfer evidence remains in `ENV-01`/`PS-T04`/`PS-T07`; x86 host execution remains `ENV-04`; push remains blocked by `SCM-PUSH-01`. |
+| Source control | Branch `remediation/full-register-2026-07`; focused commit `ebcf827a7ccef1834ead14c7b1619463b249a8a5` (`test(ios): add simulator UI smoke coverage`). Push not attempted. |
 
 ## Execution record: SEC-01
 
@@ -1403,3 +1415,4 @@ The `fix(samples): harden transfer cleanup and histories` shorthand in the SAMPL
 | 2026-07-22 | GOV-PACKAGE-01 | Isolated replay-zero/global-state fixtures, added Android/Apple packaging diagnostics, and separated maintained Alice/Bob identities | `CORE-30`, `LAN-19/20`, `SAMPLE-35`, `LAN-T09`, and `LAN-T11` implemented; complete core/LAN/desktop, cross-target, ABI, profile, and published-consumer gates pass |
 | 2026-07-22 | GOV-PACKAGE-01/determinism | First committed gate exposed a stale same-name Bonjour peer selected across Apple test methods; assigned per-test UUID namespaces, selected exact current PeerIds, and made clean remote stop require exact `Closed` | Corrective commit `90b5f20`; 12/12 focused Apple tests pass three forced runs; final complete Apple LAN 64 tests/0 failures/1 manual skip |
 | 2026-07-22 | GOV-PACKAGE-01/source control | Reviewed both focused commits and reran all affected checks from final committed state | Commits `52e173b`, `90b5f20`; final 46-task gate passes in 2m20s; published consumers pass 221 + 18 tasks; push not attempted because `SCM-PUSH-01` remains unapproved |
+| 2026-07-22 | ENV-03 | Added deterministic iOS simulator UI target/runner and accessibility-anchored Start/Stop regression; reviewed generated scheme and committed diff | Commit `ebcf827`; ambiguous simulator-name invocation fails with the expected safeguard; exact signed committed run passes 1/1 with 0 failures; physical/device UI remains `ENV-01` |
