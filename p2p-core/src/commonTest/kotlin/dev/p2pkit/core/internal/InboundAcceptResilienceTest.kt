@@ -13,6 +13,8 @@ import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.RecordingLogger
 import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.RawConnection
+import dev.p2pkit.core.transport.DataTransport
+import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
@@ -20,7 +22,11 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
@@ -176,6 +182,39 @@ class InboundAcceptResilienceTest {
     }
 
     @Test
+    fun acceptLoopFailureIsRecollectedAndAcceptsTheNextConnection() = runBlocking {
+        val pair = FakeConnectionPair()
+        val logger = RecordingLogger()
+        val transport = RecoveringDataTransport()
+        val bob = createTestKit {
+            appId = AppId("com.example.test")
+            deviceName = "Bob"
+            this.logger = logger
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
+            keepAlive {
+                pingIntervalMillis = 60_000
+                timeoutMillis = 120_000
+            }
+            transports { register(RecoveringTransportFactory(transport)) }
+        }
+        val alice = outgoingKit("Alice", pair.a)
+        try {
+            withTimeout(5_000) { transport.recollected.await() }
+            transport.emitIncoming(pair.b)
+
+            val outgoing = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+            val incoming = withTimeout(5_000) { bob.incomingSessions.first() }
+            withTimeout(5_000) { outgoing.await() }
+
+            assertEquals("Alice", incoming.peer.name)
+            awaitLogged(logger) { it.contains(acceptLoopEndedFragment) }
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
     fun cleanStopProducesNoInboundAcceptanceDiagnostics() = runBlocking {
         val bobLogger = RecordingLogger()
         val bobTransport = FakeDataTransport()
@@ -238,4 +277,41 @@ private class AcceptResilienceFactory(
 ) : TransportFactory {
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = null)
+}
+
+private class RecoveringTransportFactory(
+    private val transport: RecoveringDataTransport
+) : TransportFactory {
+    override fun build(context: TransportContext): TransportPair =
+        TransportPair(data = transport, discovery = null)
+}
+
+private class RecoveringDataTransport : DataTransport {
+    override val type: TransportKind = TransportKind.LAN
+    override val priority: Int = 100
+    private val incoming = Channel<RawConnection>(Channel.UNLIMITED)
+    private var collections = 0
+    val recollected = CompletableDeferred<Unit>()
+
+    override fun canConnect(peer: InternalPeer): Boolean = false
+
+    override suspend fun connect(peer: InternalPeer): RawConnection =
+        error("outbound connect is not supported")
+
+    override fun incomingConnections(): Flow<RawConnection> = flow {
+        collections += 1
+        if (collections == 1) {
+            throw IllegalStateException("emulated transient accept failure")
+        }
+        recollected.complete(Unit)
+        incoming.receiveAsFlow().collect { emit(it) }
+    }
+
+    fun emitIncoming(connection: RawConnection) {
+        check(incoming.trySend(connection).isSuccess)
+    }
+
+    override suspend fun close() {
+        incoming.close()
+    }
 }

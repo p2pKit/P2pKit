@@ -3,6 +3,7 @@ package dev.p2pkit.core.internal
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.KeepAliveConfig
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -29,6 +30,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -169,6 +172,40 @@ class CloseSemanticsTest {
             }
         }
     }
+
+    @Test
+    fun closeReportsAndReturnsWhenRawConnectionCloseIgnoresCancellation() = runBlocking {
+        val connection = WedgedCloseConnection()
+        val supervisor = SupervisorJob()
+        val session = P2pSessionImpl(
+            id = "raw-close-wedged",
+            peer = Peer(
+                id = PeerId("test-raw-close-wedged"),
+                name = "Test",
+                platform = Platform.JVM_DESKTOP,
+                supportedTransports = setOf(TransportKind.LAN)
+            ),
+            initialConnection = connection,
+            initialEvents = Channel(Channel.UNLIMITED),
+            protocol = DefaultP2pProtocol(clock = { systemTimeMillis() }),
+            parentScope = CoroutineScope(Dispatchers.Default + supervisor),
+            keepAlive = KeepAliveConfig(60_000, 120_000),
+            clock = { systemTimeMillis() },
+            logger = P2pLogger.NoOp
+        )
+        session.start()
+        try {
+            val failure = assertFailsWith<P2pError.ConnectionFailed> {
+                withTimeout(10_000) { session.close() }
+            }
+            assertEquals(ConnectionState.Closed, session.state.value)
+            val aggregate = assertIs<CleanupAggregateException>(failure.cause)
+            assertTrue(aggregate.issues.any { it.resource.contains("raw connection") })
+        } finally {
+            connection.releaseClose()
+            supervisor.cancel()
+        }
+    }
 }
 
 /**
@@ -203,5 +240,23 @@ private class WedgedWriteConnection : RawConnection {
     override suspend fun close() {
         _state.value = ConnectionState.Closed
         closedGate.complete(Unit)
+    }
+}
+
+private class WedgedCloseConnection : RawConnection {
+    private val _state = MutableStateFlow(ConnectionState.Connected)
+    override val state: StateFlow<ConnectionState> = _state.asStateFlow()
+    private val closeGate = CompletableDeferred<Unit>()
+
+    override suspend fun write(bytes: ByteArray) = Unit
+    override fun read(): Flow<ByteArray> = emptyFlow()
+
+    override suspend fun close() {
+        withContext(NonCancellable) { closeGate.await() }
+        _state.value = ConnectionState.Closed
+    }
+
+    fun releaseClose() {
+        closeGate.complete(Unit)
     }
 }

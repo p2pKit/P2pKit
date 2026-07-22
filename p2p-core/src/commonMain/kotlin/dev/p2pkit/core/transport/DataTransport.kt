@@ -43,10 +43,13 @@ public interface DataTransport {
 
     /**
      * Emits a new [RawConnection] for every accepted inbound connection.
-     * Single-collector contract: the engine collects this exactly once per
-     * transport. Shipped implementations are channel-backed, so an
-     * additional collector would steal accepted connections rather than
-     * observe them.
+     * Single-active-collector contract: the engine never collects this flow
+     * concurrently. If collection terminates unexpectedly, the engine may
+     * call this method again after a bounded backoff. Implementations must
+     * therefore return a flow that supports sequential recovery (typically a
+     * fresh wrapper over a live channel); it must not permanently consume or
+     * cancel the transport's acceptance source merely because one collector
+     * ended.
      */
     public fun incomingConnections(): Flow<RawConnection>
 

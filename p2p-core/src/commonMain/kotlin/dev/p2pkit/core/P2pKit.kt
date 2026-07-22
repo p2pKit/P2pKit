@@ -161,11 +161,15 @@ public interface P2pKit {
 
     @Throws(Exception::class)
     public suspend fun startAdvertising()
+
+    /** Stops every advertising transport, then reports any cleanup failures. */
     @Throws(Exception::class)
     public suspend fun stopAdvertising()
 
     @Throws(Exception::class)
     public suspend fun startDiscovery()
+
+    /** Stops every discovery transport, then reports any cleanup failures. */
     @Throws(Exception::class)
     public suspend fun stopDiscovery()
 
@@ -199,6 +203,14 @@ public interface P2pKit {
     /** Notify the SDK that the host app returned to the foreground. */
     public fun notifyAppForegrounded()
 
+    /**
+     * Terminally stop the kit. Every resource receives a bounded cleanup
+     * attempt and [state] reaches [P2pState.Stopped] even if cleanup fails.
+     * Concurrent and later callers observe the same teardown result.
+     *
+     * @throws P2pError.ConnectionFailed after teardown when one or more
+     *   resources failed or exceeded their close deadline.
+     */
     @Throws(Exception::class)
     public suspend fun stop()
 

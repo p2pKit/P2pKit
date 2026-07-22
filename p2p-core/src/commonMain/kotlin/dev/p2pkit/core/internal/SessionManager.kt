@@ -36,6 +36,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.channels.Channel
@@ -47,11 +50,10 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
@@ -220,29 +222,34 @@ internal class SessionManager(
 
     fun startAcceptingIncoming(transports: List<DataTransport>) {
         for (transport in transports) {
-            transport.incomingConnections()
-                .onEach { connection -> handleIncoming(connection) }
-                // AUDIT-2026-07 (CON-3): a transport terminating its incoming
-                // flow with a cause (e.g. a server-socket accept error while
-                // the transport is not closed) previously escaped this
-                // collector as an uncaught exception into the kit scope —
-                // crashing Android host apps via the default handler — and
-                // silently ended inbound acceptance for the kit's lifetime.
-                // Surface it through the injectable logger instead. Defined
-                // post-failure behavior: inbound acceptance on THIS transport
-                // stays down until a later transport start()/rebind re-serves
-                // its accept loop (the nullable-StateFlow server-socket design
-                // supports that); a bounded re-collect is a tracked follow-up,
-                // deliberately not added here. Per-connection setup failures
-                // are unaffected — [handleIncoming] already isolates them, so
-                // the collector keeps accepting subsequent peers.
-                // CancellationException is rethrown, never swallowed, so
-                // kit shutdown still tears the collector down promptly.
-                .catch { e ->
-                    if (e is CancellationException) throw e
-                    logger.warn("inbound acceptance ended for ${transport.type}", e)
+            scope.launch { collectIncomingWithRecovery(transport) }
+        }
+    }
+
+    private suspend fun collectIncomingWithRecovery(transport: DataTransport) {
+        var consecutiveFailures = 0
+        while (currentCoroutineContext().isActive) {
+            var acceptedAny = false
+            try {
+                transport.incomingConnections().collect { connection ->
+                    acceptedAny = true
+                    consecutiveFailures = 0
+                    handleIncoming(connection)
                 }
-                .launchIn(scope)
+                currentCoroutineContext().ensureActive()
+                logger.warn("inbound acceptance completed unexpectedly for ${transport.type}")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                logger.warn("inbound acceptance ended for ${transport.type}", failure)
+            }
+            if (!acceptedAny) consecutiveFailures += 1
+            val exponent = minOf(consecutiveFailures - 1, MAX_INCOMING_RECOLLECT_EXPONENT)
+            val backoff = minOf(
+                INCOMING_RECOLLECT_INITIAL_DELAY_MS shl exponent.coerceAtLeast(0),
+                INCOMING_RECOLLECT_MAX_DELAY_MS
+            )
+            delay(backoff)
         }
     }
 
@@ -1224,30 +1231,39 @@ internal class SessionManager(
 
     suspend fun closeAllSessions() {
         val snapshot = store.activeSnapshot()
-        for (session in snapshot) {
-            try {
-                session.close()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                logger.warn("Session ${session.id} close failed", error)
-            }
+        val issues = closeSessionSnapshot(snapshot, preserveCancellation = true)
+        if (issues.isNotEmpty()) {
+            logCleanupIssues(logger, "session close", issues)
+            throw cleanupError("session close", issues)
         }
     }
 
     /** Terminal kit shutdown: detach public state before watcher scope cancellation. */
-    suspend fun shutdownAllSessions() {
+    suspend fun shutdownAllSessions(): List<CleanupIssue> {
         val snapshot = store.drainForShutdown()
         snapshot.pending.forEach { pending ->
             pending.completeExceptionally(lifecycleStoppedFailure())
         }
-        for (session in snapshot.sessions) {
-            try {
-                session.close()
-            } catch (error: Throwable) {
-                logger.warn("Session ${session.id} shutdown close failed", error)
+        val issues = closeSessionSnapshot(snapshot.sessions, preserveCancellation = false)
+        logCleanupIssues(logger, "session shutdown", issues)
+        return issues
+    }
+
+    private suspend fun closeSessionSnapshot(
+        sessions: List<P2pSession>,
+        preserveCancellation: Boolean
+    ): List<CleanupIssue> = coroutineScope {
+        sessions.map { session ->
+            async {
+                captureCleanupIssue(
+                    resource = "session ${session.id}",
+                    timeoutMillis = SESSION_CLOSE_TIMEOUT_MS,
+                    preserveCancellation = preserveCancellation
+                ) {
+                    session.close()
+                }
             }
-        }
+        }.awaitAll().filterNotNull()
     }
 
     private suspend fun applyAuthoritativePathAfterRegistration(session: P2pSession) {
@@ -1337,6 +1353,14 @@ internal const val HANDSHAKE_CLEANUP_TIMEOUT_MS: Long = 2_000
 
 /** Per-session bound used when terminal lifecycle rejects registration. */
 internal const val SESSION_COMMIT_CLEANUP_TIMEOUT_MS: Long = 2_000
+
+/** Per-session close bound used by background and terminal cleanup. */
+internal const val SESSION_CLOSE_TIMEOUT_MS: Long = 10_000
+
+/** Initial and maximum delays for recovering a transient incoming-flow failure. */
+internal const val INCOMING_RECOLLECT_INITIAL_DELAY_MS: Long = 100
+internal const val INCOMING_RECOLLECT_MAX_DELAY_MS: Long = 5_000
+internal const val MAX_INCOMING_RECOLLECT_EXPONENT: Int = 6
 
 private data class AuthoritativePath(
     val status: NetworkPathStatus,

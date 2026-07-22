@@ -338,7 +338,15 @@ internal class P2pSessionImpl(
             s == ConnectionState.Closed || s == ConnectionState.Failed
         }
         if (alreadyTerminal) {
-            sessionJob.join()
+            captureCleanupIssue(
+                resource = "session $id runtime",
+                timeoutMillis = SESSION_RUNTIME_CLOSE_TIMEOUT_MS
+            ) {
+                sessionJob.join()
+            }?.let { issue ->
+                logCleanupIssues(logger, "session $id close", listOf(issue))
+                throw cleanupError("session $id close", listOf(issue))
+            }
             return
         }
 
@@ -367,15 +375,24 @@ internal class P2pSessionImpl(
         withTimeoutOrNull(CLOSE_FRAME_TIMEOUT_MS) { closeSend.join() }
 
         // Centralised cleanup: file transfers, epoch cancel, raw close, and
-        // the state flip to Closed all happen here atomically. Closing the
-        // raw connection also unblocks a still-wedged closeSend write.
-        transitionToTerminal(ConnectionState.Closed, "user close()")
+        // the state flip to Closed all happen here. Each external cleanup is
+        // bounded, so a broken raw close is reported instead of hanging.
+        val cleanupIssues = transitionToTerminal(ConnectionState.Closed, "user close()").toMutableList()
         closeSend.cancel()
 
-        // transitionToTerminal cancels the runtime only after all terminal
-        // cleanup has completed. Join it here so close() retains its strong
-        // synchronous teardown contract.
-        sessionJob.cancelAndJoin()
+        // transitionToTerminal cancels the runtime after every terminal
+        // cleanup attempt. Bound the join too: a blocking child must not make
+        // close() unbounded after a failed raw close.
+        captureCleanupIssue(
+            resource = "session $id runtime",
+            timeoutMillis = SESSION_RUNTIME_CLOSE_TIMEOUT_MS
+        ) {
+            sessionJob.cancelAndJoin()
+        }?.let(cleanupIssues::add)
+        if (cleanupIssues.isNotEmpty()) {
+            logCleanupIssues(logger, "session $id close", cleanupIssues)
+            throw cleanupError("session $id close", cleanupIssues)
+        }
     }
 
     /**
@@ -444,12 +461,14 @@ internal class P2pSessionImpl(
      * **Behaviour:**
      *   1. Atomic decision under [connectionLock]: if already terminal, this
      *      call is a no-op. Otherwise flip `_state` to [target].
-     *   2. The cleanup block runs in [NonCancellable] context. This matters
+     *   2. The cleanup transaction runs in [NonCancellable] context. This matters
      *      because the most common caller path is `onConnectionLost` triggered
      *      by `observeRawState`, whose coroutine runs inside the epoch we're
      *      about to cancel — without [NonCancellable] the cleanup itself
      *      would be cancelled at the first suspension point, leaking the
      *      raw connection and the file-transfer dispatcher.
+     *      Each external resource attempt has an independently owned deadline,
+     *      so cancellation-ignoring platform code is reported and abandoned.
      *   3. Cleanup order: tear down file transfers first (they may be
      *      writing to the connection); cancel the epoch (stops
      *      `routeEvents` from emitting to `_incoming` — guarantees contract
@@ -469,7 +488,7 @@ internal class P2pSessionImpl(
     private suspend fun transitionToTerminal(
         target: ConnectionState,
         cause: String
-    ) {
+    ): List<CleanupIssue> {
         check(target == ConnectionState.Closed || target == ConnectionState.Failed) {
             "transitionToTerminal: target must be Closed or Failed, got $target"
         }
@@ -478,26 +497,31 @@ internal class P2pSessionImpl(
             if (current == ConnectionState.Closed || current == ConnectionState.Failed) {
                 // I-double-terminal: a second call is idempotent. No cleanup
                 // (the first call did it).
-                return
+                return emptyList()
             }
             _state.value = target
             true
         }
-        if (!didTransition) return  // unreachable; defensive.
+        if (!didTransition) return emptyList() // unreachable; defensive.
 
         logger.debug("Session $id: terminal → ${target.name} ($cause)")
 
         // NonCancellable so the cleanup completes even when our caller is in
         // the cancellation tree of [epochJob] (the typical case — see KDoc).
-        withContext(NonCancellable) {
+        val cleanupIssues = withContext(NonCancellable) {
+            val issues = mutableListOf<CleanupIssue>()
             // File transfers first: they may be mid-write on the connection;
             // tear them down before we close the socket so they surface a
             // sensible "session ended" status instead of a mid-write
             // IOException.
             if (fileTransferDispatcherLazy.isInitialized()) {
-                runCatching {
+                captureCleanupIssue(
+                    resource = "session $id file transfers",
+                    timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
+                    preserveCancellation = false
+                ) {
                     fileTransferDispatcher.closeAll("session $id ${target.name}: $cause")
-                }
+                }?.let(issues::add)
             }
             // Drops queued application payloads and releases their backing
             // storage before the terminal session can be retained by a host.
@@ -506,8 +530,16 @@ internal class P2pSessionImpl(
             // parked observeRawState. Guarantees no further _incoming.emit.
             epochJob?.cancel()
             // Close the underlying raw connection.
-            runCatching { connection.close() }
+            captureCleanupIssue(
+                resource = "session $id raw connection",
+                timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
+                preserveCancellation = false
+            ) {
+                connection.close()
+            }?.let(issues::add)
+            issues
         }
+        logCleanupIssues(logger, "session $id terminal cleanup", cleanupIssues)
 
         // Hard invariants. check() throws on violation; that's intentional —
         // if any of these fail, the SDK is in a state where downstream
@@ -526,6 +558,7 @@ internal class P2pSessionImpl(
         // resource cleanup. Cancellation is non-suspending and the completed
         // post-conditions above remain observable before this method returns.
         sessionJob.cancel(CancellationException("Session $id reached ${target.name}: $cause"))
+        return cleanupIssues
     }
 
     private suspend fun enqueueApplicationMessage(message: P2pMessage): Boolean {
@@ -878,6 +911,10 @@ internal class P2pSessionImpl(
          * inside [transitionToTerminal] (see the comment in [close]).
          */
         const val CLOSE_FRAME_TIMEOUT_MS: Long = 2_000
+
+        /** Bounds each terminal resource attempt and the final runtime join. */
+        const val SESSION_RESOURCE_CLOSE_TIMEOUT_MS: Long = 2_000
+        const val SESSION_RUNTIME_CLOSE_TIMEOUT_MS: Long = 2_000
 
         const val MAX_QUEUED_APPLICATION_MESSAGES: Int = 64
         const val MAX_QUEUED_APPLICATION_BYTES: Long = 8L * 1024L * 1024L

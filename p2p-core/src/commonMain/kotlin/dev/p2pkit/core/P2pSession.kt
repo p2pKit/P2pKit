@@ -141,6 +141,13 @@ public interface P2pSession {
         source: RawSource
     ): P2pFileTransfer
 
+    /**
+     * Close the session and release all owned resources. Cleanup attempts are
+     * bounded; the session still becomes terminal if a resource misbehaves.
+     *
+     * @throws P2pError.ConnectionFailed after all cleanup attempts when one
+     *   or more resources failed or exceeded their close deadline.
+     */
     @Throws(Exception::class)
     public suspend fun close()
 }

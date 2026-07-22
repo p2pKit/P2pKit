@@ -184,7 +184,7 @@ internal class P2pKitImpl(
      */
     private val lifecycleMutex = Mutex()
     private var lifecycleGeneration: Long = 0L
-    private val stopCompletion = CompletableDeferred<Unit>()
+    private val stopCompletion = CompletableDeferred<Result<Unit>>()
 
     init {
         // V0.4-PROVENANCE (L2): emit framework identity to BOTH the
@@ -477,6 +477,7 @@ internal class P2pKitImpl(
         val generation = beginLifecycleOperation()
         ensurePermissions()
         ensureStarted(generation)
+        val attempted = mutableListOf<DiscoveryTransport>()
         try {
             val localInfo = LocalPeerInfo(
                 peerId = localPeerId,
@@ -489,27 +490,27 @@ internal class P2pKitImpl(
             )
             for (transport in discoveryTransports) {
                 requireLifecycleActive(generation)
+                // Include the currently-entered transport: cancellation or an
+                // exception can arrive after its platform resource exists but
+                // before startAdvertising returns ownership to us.
+                attempted += transport
                 transport.startAdvertising(localInfo)
                 if (!isLifecycleActive(generation)) throw lifecycleStoppedFailure()
             }
         } catch (e: CancellationException) {
-            if (!isLifecycleActive(generation)) {
-                cleanupLateDiscoveryOperation("advertising") { it.stopAdvertising() }
-            }
+            rollbackDiscoveryOperation("advertising", attempted) { it.stopAdvertising() }
             throw e
         } catch (e: Throwable) {
             if (!isLifecycleActive(generation)) {
-                cleanupLateDiscoveryOperation("advertising") { it.stopAdvertising() }
+                rollbackDiscoveryOperation("advertising", attempted) { it.stopAdvertising() }
                 throw lifecycleStoppedFailure()
             }
+            rollbackDiscoveryOperation("advertising", attempted) { it.stopAdvertising() }
             // A partial advertise failure must not leave state stuck — surface
             // it as Failed (consistent with the ensureStarted bind-failure path).
             val err = if (e is P2pError) e
             else P2pError.ConnectionFailed("startAdvertising failed: ${e.message ?: e::class.simpleName}")
             if (!commitLifecycle(generation) { _state.value = P2pState.Failed(err) }) {
-                cleanupLateDiscoveryOperation("advertising") {
-                    it.stopAdvertising()
-                }
                 throw lifecycleStoppedFailure()
             }
             throw err
@@ -518,7 +519,7 @@ internal class P2pKitImpl(
             if (_state.value is P2pState.Failed) _state.value = P2pState.Running
         }
         if (!committed) {
-            cleanupLateDiscoveryOperation("advertising") {
+            rollbackDiscoveryOperation("advertising", attempted) {
                 it.stopAdvertising()
             }
             throw lifecycleStoppedFailure()
@@ -526,8 +527,11 @@ internal class P2pKitImpl(
     }
 
     override suspend fun stopAdvertising() {
-        for (transport in discoveryTransports) {
-            runCatching { transport.stopAdvertising() }
+        val issues = stopDiscoveryResources("stop advertising") {
+            it.stopAdvertising()
+        }
+        if (issues.isNotEmpty()) {
+            throw cleanupError("stop advertising", issues)
         }
     }
 
@@ -535,31 +539,29 @@ internal class P2pKitImpl(
         val generation = beginLifecycleOperation()
         ensurePermissions()
         ensureStarted(generation)
+        val attempted = mutableListOf<DiscoveryTransport>()
         try {
             for (transport in discoveryTransports) {
                 requireLifecycleActive(generation)
+                attempted += transport
                 transport.startDiscovery()
                 if (!isLifecycleActive(generation)) throw lifecycleStoppedFailure()
             }
         } catch (e: CancellationException) {
-            if (!isLifecycleActive(generation)) {
-                cleanupLateDiscoveryOperation("discovery") { it.stopDiscovery() }
-            }
+            rollbackDiscoveryOperation("discovery", attempted) { it.stopDiscovery() }
             throw e
         } catch (e: Throwable) {
             if (!isLifecycleActive(generation)) {
-                cleanupLateDiscoveryOperation("discovery") { it.stopDiscovery() }
+                rollbackDiscoveryOperation("discovery", attempted) { it.stopDiscovery() }
                 throw lifecycleStoppedFailure()
             }
+            rollbackDiscoveryOperation("discovery", attempted) { it.stopDiscovery() }
             // Mirror startAdvertising: surface a typed error instead of
             // letting a raw platform exception escape the public API
             // (AUDIT-2026-06 fix).
             val err = if (e is P2pError) e
             else P2pError.ConnectionFailed("startDiscovery failed: ${e.message ?: e::class.simpleName}")
             if (!commitLifecycle(generation) { _state.value = P2pState.Failed(err) }) {
-                cleanupLateDiscoveryOperation("discovery") {
-                    it.stopDiscovery()
-                }
                 throw lifecycleStoppedFailure()
             }
             throw err
@@ -568,7 +570,7 @@ internal class P2pKitImpl(
             if (_state.value is P2pState.Failed) _state.value = P2pState.Running
         }
         if (!committed) {
-            cleanupLateDiscoveryOperation("discovery") {
+            rollbackDiscoveryOperation("discovery", attempted) {
                 it.stopDiscovery()
             }
             throw lifecycleStoppedFailure()
@@ -576,8 +578,11 @@ internal class P2pKitImpl(
     }
 
     override suspend fun stopDiscovery() {
-        for (transport in discoveryTransports) {
-            runCatching { transport.stopDiscovery() }
+        val issues = stopDiscoveryResources("stop discovery") {
+            it.stopDiscovery()
+        }
+        if (issues.isNotEmpty()) {
+            throw cleanupError("stop discovery", issues)
         }
     }
 
@@ -657,90 +662,76 @@ internal class P2pKitImpl(
             // Idempotent concurrent callers observe completion of the same
             // teardown instead of returning while the first caller still owns
             // live resources.
-            withContext(NonCancellable) {
-                stopCompletion.await()
+            val result = withContext(NonCancellable) {
+                val leaderResult = stopCompletion.await()
                 // Preserve the secure-identity fail-closed retry contract: if
                 // the leader retained the lease because a child ignored its
                 // bound, a later idempotent stop gets another bounded join.
-                finishIdentityOwnershipTeardown()
+                val retryIssues = finishIdentityOwnershipTeardown()
+                if (retryIssues.isEmpty() || leaderResult.isFailure) {
+                    leaderResult
+                } else {
+                    logCleanupIssues(logger, "stop", retryIssues)
+                    Result.failure(cleanupError("stop", retryIssues))
+                }
             }
+            result.getOrThrow()
             return
         }
         // NonCancellable: `stopped` latches at entry, so if the caller's
         // coroutine were cancelled mid-teardown the kit would be permanently
         // half-stopped (transports bound, scope alive) with every later
-        // stop() a no-op. closeAllSessions is additionally runCatching-
-        // wrapped so one bad session cannot abort the rest of teardown
-        // (AUDIT-2026-06 fix).
-        withContext(NonCancellable) {
+        // stop() a no-op. Each resource attempt is independently bounded and
+        // retained in the aggregate result, so one bad close cannot abort the
+        // remainder of teardown.
+        val result = withContext(NonCancellable) {
+            val issues = mutableListOf<CleanupIssue>()
             try {
-            // startMutex: a concurrent ensureStarted mid-bind must not
-            // interleave with teardown (it could keep binding transports
-            // after we closed them, then latch Running/startResult-success
-            // AFTER Stopped). But the acquisition must be BOUNDED: if
-            // ensureStarted is parked inside a hung transport.start() while
-            // holding this mutex, an unbounded withLock would park stop()
-            // uncancellably (inside NonCancellable) forever
-            // (AUDIT-2026-06 fix). On timeout, tear down WITHOUT the lock —
-            // best-effort, and safe against a late rebind because `stopped`
-            // is already set and ensureStarted's post-bind re-check closes
-            // anything it bound in the meantime.
-            val acquired = withTimeoutOrNull(STOP_START_MUTEX_TIMEOUT_MS) {
-                startMutex.withLock { teardownBoundResources() }
-                true
-            } ?: false
-            if (!acquired) {
-                logger.warn(
-                    "stop(): startMutex not released within ${STOP_START_MUTEX_TIMEOUT_MS}ms " +
-                        "(a transport start() is likely hung); tearing down without the lock"
-                )
-                teardownBoundResources()
-            }
+                // startMutex: a concurrent ensureStarted mid-bind must not
+                // interleave with teardown. Bound acquisition so a broken
+                // transport start cannot park terminal stop forever.
+                val lockedIssues = withTimeoutOrNull(STOP_START_MUTEX_TIMEOUT_MS) {
+                    startMutex.withLock { teardownBoundResources() }
+                }
+                if (lockedIssues == null) {
+                    logger.warn(
+                        "stop(): startMutex not released within ${STOP_START_MUTEX_TIMEOUT_MS}ms " +
+                            "(a transport start() is likely hung); tearing down without the lock"
+                    )
+                    issues += CleanupIssue(
+                        "transport startup transaction",
+                        IllegalStateException(
+                            "start mutex was not released within ${STOP_START_MUTEX_TIMEOUT_MS}ms"
+                        )
+                    )
+                    issues += teardownBoundResources()
+                } else {
+                    issues += lockedIssues
+                }
 
-            // AUDIT-2026-07 (ARCH-2): this tail previously ran OUTSIDE the
-            // NonCancellable block and unbounded, with two failure shapes:
-            // a caller cancelled mid-teardown aborted `pathObserver.close()`
-            // at its first suspension point (the platform observer leaked and
-            // Stopped was never latched by this call), and a close() parked
-            // on the observer's internal mutex (e.g. one still held by a hung
-            // observer start()) parked stop() forever. Keep it inside
-            // NonCancellable and bound the observer close, mirroring the
-            // bounded startMutex acquisition above (AUDIT-2026-06 pattern).
-            //
-            // Provisioning managers attach their scope to internalJob; the
-            // internalJob.cancel() below fires their invokeOnCompletion
-            // teardown (e.g. AndroidNetworkProvisioningManager releases its
-            // LocalOnlyHotspot reservation and unbinds the joined network
-            // there).
-            val observerClosed = withTimeoutOrNull(OBSERVER_CLOSE_TIMEOUT_MS) {
-                try {
+                captureCleanupIssue(
+                    resource = "network path observer",
+                    timeoutMillis = OBSERVER_CLOSE_TIMEOUT_MS,
+                    preserveCancellation = false
+                ) {
                     pathObserver.close()
-                } catch (e: CancellationException) {
-                    // Only the bounding timeout's own cancellation can reach
-                    // here (this block is NonCancellable from the outside);
-                    // rethrow so withTimeoutOrNull reports it as `null`.
-                    throw e
-                } catch (e: Throwable) {
-                    logger.warn("NetworkPathObserver.close() failed during stop()", e)
-                }
-                true
-            } ?: false
-            if (!observerClosed) {
-                logger.warn(
-                    "stop(): NetworkPathObserver.close() did not complete within " +
-                        "${OBSERVER_CLOSE_TIMEOUT_MS}ms; abandoning it (its platform monitor " +
-                        "may stay attached until process exit)"
-                )
-            }
+                }?.let(issues::add)
+            } catch (failure: Throwable) {
+                issues += CleanupIssue("terminal teardown", failure)
             } finally {
-                try {
-                    finishIdentityOwnershipTeardown()
-                } finally {
-                    _state.value = P2pState.Stopped
-                    stopCompletion.complete(Unit)
-                }
+                issues += finishIdentityOwnershipTeardown()
+                _state.value = P2pState.Stopped
             }
+            logCleanupIssues(logger, "stop", issues)
+            val completed = if (issues.isEmpty()) {
+                Result.success(Unit)
+            } else {
+                Result.failure(cleanupError("stop", issues))
+            }
+            stopCompletion.complete(completed)
+            completed
         }
+        result.getOrThrow()
     }
 
     private suspend fun beginLifecycleOperation(): Long = lifecycleMutex.withLock {
@@ -788,12 +779,13 @@ internal class P2pKitImpl(
         }
     }
 
-    private suspend fun cleanupLateDiscoveryOperation(
+    private suspend fun rollbackDiscoveryOperation(
         operation: String,
+        attempted: List<DiscoveryTransport>,
         cleanup: suspend (DiscoveryTransport) -> Unit
     ) {
         withContext(NonCancellable) {
-            for (transport in discoveryTransports.asReversed()) {
+            for (transport in attempted.asReversed()) {
                 cleanupStaleResource("${transport.type} $operation") { cleanup(transport) }
             }
         }
@@ -826,30 +818,80 @@ internal class P2pKitImpl(
      * child ignores cancellation, retaining the idempotent usage token is the
      * required fail-closed behavior; a later stop() call retries the join.
      */
-    private suspend fun finishIdentityOwnershipTeardown() {
-        localSecureIdentity?.clearPrivate()
+    private suspend fun finishIdentityOwnershipTeardown(): List<CleanupIssue> {
+        val issues = mutableListOf<CleanupIssue>()
+        try {
+            localSecureIdentity?.clearPrivate()
+        } catch (failure: Throwable) {
+            issues += CleanupIssue("in-memory secure identity", failure)
+        }
         internalJob.cancel()
         val childrenStopped = withTimeoutOrNull(INTERNAL_JOB_CLOSE_TIMEOUT_MS) {
             internalJob.cancelAndJoin()
             true
         } ?: false
-        if (childrenStopped) secureIdentityUsage?.release()
+        if (childrenStopped) {
+            try {
+                secureIdentityUsage?.release()
+            } catch (failure: Throwable) {
+                issues += CleanupIssue("secure identity usage lease", failure)
+            }
+        } else {
+            issues += CleanupIssue(
+                "internal coroutine scope",
+                IllegalStateException(
+                    "children did not terminate within ${INTERNAL_JOB_CLOSE_TIMEOUT_MS}ms"
+                )
+            )
+        }
+        return issues
     }
 
     /**
      * The teardown body shared by [stop]'s locked (normal) and lock-less
-     * (mutex-starved) paths. Every step is runCatching-wrapped and idempotent
+     * (mutex-starved) paths. Every step is bounded and idempotent
      * (sessions/transports tolerate double close), so the rare interleavings —
      * two concurrent first `stop()` calls, or the timeout firing mid-teardown
      * and the fallback re-running it — are safe.
      */
-    private suspend fun teardownBoundResources() {
-        runCatching { stopAdvertising() }
-        runCatching { stopDiscovery() }
-        runCatching { sessionManager.shutdownAllSessions() }
-        for (transport in dataTransports) {
-            runCatching { transport.close() }
+    private suspend fun teardownBoundResources(): List<CleanupIssue> {
+        val issues = mutableListOf<CleanupIssue>()
+        issues += stopDiscoveryResources("stop advertising", preserveCancellation = false) {
+            it.stopAdvertising()
         }
+        issues += stopDiscoveryResources("stop discovery", preserveCancellation = false) {
+            it.stopDiscovery()
+        }
+        issues += sessionManager.shutdownAllSessions()
+        for (transport in dataTransports) {
+            captureCleanupIssue(
+                resource = "${transport.type} data transport",
+                timeoutMillis = RESOURCE_CLOSE_TIMEOUT_MS,
+                preserveCancellation = false
+            ) {
+                transport.close()
+            }?.let(issues::add)
+        }
+        return issues
+    }
+
+    private suspend fun stopDiscoveryResources(
+        operation: String,
+        preserveCancellation: Boolean = true,
+        cleanup: suspend (DiscoveryTransport) -> Unit
+    ): List<CleanupIssue> {
+        val issues = mutableListOf<CleanupIssue>()
+        for (transport in discoveryTransports) {
+            captureCleanupIssue(
+                resource = "${transport.type} discovery transport",
+                timeoutMillis = RESOURCE_CLOSE_TIMEOUT_MS,
+                preserveCancellation = preserveCancellation
+            ) {
+                cleanup(transport)
+            }?.let(issues::add)
+        }
+        logCleanupIssues(logger, operation, issues)
+        return issues
     }
 
     // Gates on genuinely runtime-requestable permissions only (e.g. the
@@ -900,6 +942,9 @@ internal class P2pKitImpl(
 
         /** Bound for each resource created by an operation that lost its generation. */
         const val STALE_OPERATION_CLEANUP_TIMEOUT_MS: Long = 2_000
+
+        /** Per-resource close bound for terminal and explicit feature teardown. */
+        const val RESOURCE_CLOSE_TIMEOUT_MS: Long = 2_000
     }
 }
 

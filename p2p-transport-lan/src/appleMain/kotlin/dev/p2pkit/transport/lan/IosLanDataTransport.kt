@@ -24,7 +24,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.consumeAsFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -496,7 +496,7 @@ internal class IosLanDataTransport(
         return raw
     }
 
-    override fun incomingConnections(): Flow<RawConnection> = incomingChannel.consumeAsFlow()
+    override fun incomingConnections(): Flow<RawConnection> = incomingChannel.receiveAsFlow()
 
     override suspend fun close() {
         if (closed) return
