@@ -81,6 +81,7 @@ import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.dsl.jvmSecureIdentityStore
 import dev.p2pkit.core.provisioning.ManualConnectionInfo
 import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transfer.sendFile
 import dev.p2pkit.provisioning.desktop.jvm
@@ -234,6 +235,8 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     val targetedPeerIds: SnapshotStateList<String> = mutableStateListOf()
     val logTail: SnapshotStateList<String> = mutableStateListOf()
     val fileTransfers: SnapshotStateList<FileTransferRow> = mutableStateListOf()
+    /** Incoming offers stay pending until explicit user consent. */
+    val pendingFileOffers: SnapshotStateList<IncomingFileOffer> = mutableStateListOf()
 
     // --- internals ---------------------------------------------------------
 
@@ -613,6 +616,8 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         targetedPeerIds.clear()
         roomMessages.clear()
         fileTransfers.clear()
+        val offersToReject = pendingFileOffers.toList()
+        pendingFileOffers.clear()
         _localPeerId.value = null
         _manualConnectionInfo.value = null
         _isManualDialing.value = false
@@ -620,6 +625,9 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         // runScope.cancel() above.
         appScope.launch {
             try {
+                offersToReject.forEach { pending ->
+                    runCatchingCancellable { pending.offer.reject("sample stopped before consent") }
+                }
                 runCatchingCancellable { toStop.stop() }
                     .onFailure { System.err.println("[p2pkit WARN] kit.stop() failed: ${it.message}") }
             } finally {
@@ -683,37 +691,67 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         scope.launch { runCatchingCancellable { row.transfer.cancel("user cancelled") } }
     }
 
+    fun rejectFileOffer(id: String) {
+        val pending = pendingFileOffers.firstOrNull { it.id == id } ?: return
+        pendingFileOffers.remove(pending)
+        appScope.launch { runCatchingCancellable { pending.offer.reject("rejected by user") } }
+    }
+
+    fun acceptFileOffer(id: String) {
+        val scope = runScope ?: return
+        val pending = pendingFileOffers.firstOrNull { it.id == id } ?: return
+        pendingFileOffers.remove(pending)
+        scope.launch { acceptIncomingFile(pending, scope) }
+    }
+
     // AUDIT-2026-06 (A-G9-samples-desktop-ios-21): returns the collector Job so
     // reconcileSessions can track and cancel it with the session.
     private fun wireIncomingFiles(session: P2pSession, scope: CoroutineScope): Job =
         scope.launch {
             session.incomingFiles.collect { offer ->
-                val baseDir = File(System.getProperty("user.home") ?: ".", ".p2pkit/incoming")
-                val saveDir = File(baseDir, sanitize(session.peer.name)).also { it.mkdirs() }
-                // 2026-07 (SMP-1): uniquify the destination — the previous
-                // name-keyed path silently truncated an earlier same-named
-                // file and let two concurrent same-named offers interleave
-                // onto one path. Same fix the CLI/Android samples already
-                // carry (AUDIT-2026-06 A-G9-samples-desktop-ios-19).
-                val saveFile = uniqueSaveFile(saveDir, sanitize(offer.name))
-                System.err.println(
-                    "[p2pkit] incoming file ${offer.name} (${offer.sizeBytes}B) → ${saveFile.absolutePath}"
+                pendingFileOffers += IncomingFileOffer(
+                    id = offer.id,
+                    name = offer.name,
+                    sizeBytes = offer.sizeBytes,
+                    peerName = session.peer.name,
+                    offer = offer
                 )
-                val out = runCatching { saveFile.outputStream() }
-                    .getOrElse { e ->
-                        System.err.println("[p2pkit WARN] cannot open $saveFile: ${e.message}")
-                        runCatchingCancellable { offer.reject("cannot open destination") }
-                        return@collect
-                    }
-                val incoming = runCatchingCancellable { offer.accept(out.asSink()) }
-                    .getOrElse { e ->
-                        runCatching { out.close() }
-                        System.err.println("[p2pkit WARN] accept ${offer.name} failed: ${e.message}")
-                        return@collect
-                    }
-                registerIncomingTransfer(incoming, session.peer.name, saveFile.absolutePath, scope, out)
+                appendSystemMessage("incoming file '${offer.name}' from ${session.peer.name} — awaiting consent")
             }
         }
+
+    private suspend fun acceptIncomingFile(pending: IncomingFileOffer, scope: CoroutineScope) {
+        val maxBytes = 50L * 1024 * 1024
+        if (pending.sizeBytes !in 0..maxBytes) {
+            runCatchingCancellable { pending.offer.reject("receiver quota exceeded") }
+            appendSystemMessage("rejected '${pending.name}': exceeds 50 MiB sample quota")
+            return
+        }
+        val baseDir = File(System.getProperty("user.home") ?: ".", ".p2pkit/incoming")
+        val saveDir = File(baseDir, sanitize(pending.peerName)).also { it.mkdirs() }
+        if (saveDir.usableSpace < pending.sizeBytes + 1L * 1024 * 1024) {
+            runCatchingCancellable { pending.offer.reject("receiver free space is insufficient") }
+            appendSystemMessage("rejected '${pending.name}': insufficient free space")
+            return
+        }
+        val saveFile = uniqueSaveFile(saveDir, sanitize(pending.name))
+        val out = runCatching { saveFile.outputStream() }
+            .getOrElse { e ->
+                runCatching { saveFile.delete() }
+                runCatchingCancellable { pending.offer.reject("cannot open destination") }
+                appendSystemMessage("rejected '${pending.name}': ${e.message ?: "cannot open destination"}")
+                return
+            }
+        val incoming = runCatchingCancellable { pending.offer.accept(out.asSink()) }
+            .getOrElse { e ->
+                runCatching { out.close() }
+                runCatching { saveFile.delete() }
+                runCatchingCancellable { pending.offer.reject("accept failed on receiver") }
+                appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
+                return
+            }
+        registerIncomingTransfer(incoming, pending.peerName, saveFile.absolutePath, scope, out)
+    }
 
     private fun registerOutgoingTransfer(
         transfer: P2pFileTransfer,
@@ -946,6 +984,14 @@ data class FileTransferRow(
     val bytesTransferred: Long,
     val destinationPath: String?,
     val transfer: P2pFileTransfer
+)
+
+data class IncomingFileOffer(
+    val id: String,
+    val name: String,
+    val sizeBytes: Long,
+    val peerName: String,
+    val offer: P2pFileOffer
 )
 
 private fun pickFile(): File? {
@@ -1389,6 +1435,30 @@ private fun RoomScreen(state: DesktopP2pState) {
                     text = "Tap Connect on a peer to start a room.",
                     style = MaterialTheme.typography.bodyMedium
                 )
+            }
+
+            if (state.pendingFileOffers.isNotEmpty()) {
+                Spacer(Modifier.height(Dimens.SectionGap))
+                Text(
+                    text = "Incoming file offers (${state.pendingFileOffers.size})",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(Modifier.height(Dimens.LabelGap))
+                Column(verticalArrangement = Arrangement.spacedBy(Dimens.LabelGap)) {
+                    state.pendingFileOffers.toList().forEach { offer ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("${offer.name} from ${offer.peerName}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("${offer.sizeBytes} bytes — consent required", style = MaterialTheme.typography.labelSmall)
+                            }
+                            TextButton(onClick = { state.acceptFileOffer(offer.id) }) { Text("Accept") }
+                            TextButton(onClick = { state.rejectFileOffer(offer.id) }) { Text("Reject") }
+                        }
+                    }
+                }
             }
 
             if (state.fileTransfers.isNotEmpty()) {

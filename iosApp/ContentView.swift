@@ -13,6 +13,8 @@ struct ContentView: View {
     @State private var sessions: [SessionRow] = []
     @State private var messages: [MessageRow] = []
     @State private var transfers: [TransferRow] = []
+    /// Incoming file offers stay pending until the user explicitly accepts or rejects them.
+    @State private var pendingOffers: [String: P2pFileOffer] = [:]
     @State private var draft: String = "hi from iPhone"
     @State private var manualHost: String = ""
     @State private var manualPort: String = ""
@@ -442,13 +444,29 @@ struct ContentView: View {
     // AUDIT-2026-06 (D-G9-samples-desktop-ios-03 / A-G9-samples-desktop-ios-07):
     // file transfer was previously invisible on iOS — no send affordance and
     // incoming offers auto-rejected after the 30 s timeout with zero UI trace.
-    // Incoming offers are now auto-accepted into Documents/P2pKitInbox/ (a
-    // sample-harness policy: nobody is watching the phone to race a dialog
-    // against the offer timeout) and every transfer renders here with live
-    // progress and a Cancel button.
+    // Incoming offers remain visible until the user explicitly accepts or
+    // rejects them; accepted transfers render here with live progress.
 
     @ViewBuilder
     private var transfersSection: some View {
+        if !pendingOffers.isEmpty {
+            Text("Incoming file offers").font(.headline)
+            ForEach(Array(pendingOffers.values), id: \.id) { offer in
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(offer.name) from \(offer.peer.name)").font(.caption)
+                        Text("\(fmtBytes(offer.sizeBytes)) — waiting for consent")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Button("Accept") { Task { await acceptIncomingOffer(offer) } }
+                        .buttonStyle(.borderedProminent)
+                    Button("Reject") { Task { await rejectIncomingOffer(offer) } }
+                        .buttonStyle(.bordered)
+                }
+            }
+        }
         Text("File transfers (\(transfers.count))").font(.headline)
         ForEach(transfers) { t in
             VStack(alignment: .leading, spacing: 2) {
@@ -928,17 +946,38 @@ struct ContentView: View {
     // MARK: - File transfer
 
     /// AUDIT-2026-06 (D-G9-samples-desktop-ios-03 / A-G9-samples-desktop-ios-07):
-    /// auto-accept an incoming offer into Documents/P2pKitInbox/<name>.
-    /// Auto-accept is a deliberate harness policy — an unattended phone
-    /// would otherwise race a consent dialog against the 30 s offer timeout.
-    /// The accepted bytes stream through a FileHandle-backed RawSink; the
-    /// transfer row in the UI shows live progress and the saved location.
+    /// Queue an incoming offer until the user explicitly accepts or rejects it.
+    /// The old auto-accept policy let an untrusted peer consume disk space
+    /// without consent and bypassed quota/free-space checks.
     @MainActor
     private func handleIncomingOffer(_ offer: P2pFileOffer) async {
         diag(
             "file",
             "offer id=\(offer.id.prefix(8)) name='\(offer.name)' size=\(offer.sizeBytes) mime=\(offer.mimeType ?? "-") from \(offer.peer.name)"
         )
+        pendingOffers[offer.id] = offer
+        appendMessage("incoming file offer '\(offer.name)' — review to accept or reject", kind: .info)
+    }
+
+    @MainActor
+    private func rejectIncomingOffer(_ offer: P2pFileOffer) async {
+        pendingOffers[offer.id] = nil
+        do {
+            try await offer.reject(reason: "rejected by user")
+        } catch {
+            diag("file", "reject failed for '\(offer.name)': \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func acceptIncomingOffer(_ offer: P2pFileOffer) async {
+        pendingOffers[offer.id] = nil
+        let maxBytes: Int64 = 50 * 1024 * 1024
+        guard offer.sizeBytes >= 0 && offer.sizeBytes <= maxBytes else {
+            appendMessage("file offer '\(offer.name)' rejected: exceeds 50 MiB sample quota", kind: .error)
+            try? await offer.reject(reason: "receiver quota exceeded")
+            return
+        }
         let fm = FileManager.default
         let inbox = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("P2pKitInbox", isDirectory: true)
@@ -949,16 +988,22 @@ struct ContentView: View {
             try? await offer.reject(reason: "receiver storage unavailable")
             return
         }
-        // Strip any path components a hostile sender might embed in the name.
-        let lastComponent = offer.name.components(separatedBy: "/").last ?? ""
-        let safeName = lastComponent.isEmpty ? "incoming-\(offer.id.prefix(8)).bin" : lastComponent
-        var dest = inbox.appendingPathComponent(safeName)
-        if fm.fileExists(atPath: dest.path) {
-            dest = inbox.appendingPathComponent("\(Int(Date().timeIntervalSince1970))-\(safeName)")
+        let required = UInt64(max(0, offer.sizeBytes))
+        let attrs = (try? fm.attributesOfFileSystem(forPath: inbox.path)) ?? [:]
+        let free = (attrs[.systemFreeSize] as? NSNumber)?.uint64Value ?? 0
+        guard free >= required + 1_048_576 else {
+            appendMessage("file offer '\(offer.name)' rejected: insufficient free space", kind: .error)
+            try? await offer.reject(reason: "receiver free space is insufficient")
+            return
         }
-        guard fm.createFile(atPath: dest.path, contents: nil),
-              let handle = FileHandle(forWritingAtPath: dest.path) else {
-            appendMessage("file offer '\(offer.name)': cannot open \(dest.lastPathComponent) — rejecting", kind: .error)
+        guard let dest = claimUniqueDestination(in: inbox, rawName: offer.name, fileManager: fm) else {
+            appendMessage("file offer '\(offer.name)': cannot claim destination — rejecting", kind: .error)
+            try? await offer.reject(reason: "receiver could not open destination")
+            return
+        }
+        guard let handle = FileHandle(forWritingAtPath: dest.path) else {
+            try? fm.removeItem(at: dest)
+            appendMessage("file offer '\(offer.name)': cannot open destination — rejecting", kind: .error)
             try? await offer.reject(reason: "receiver could not open destination")
             return
         }
@@ -966,11 +1011,16 @@ struct ContentView: View {
         do {
             let transfer = try await offer.accept(sink: sink)
             appendMessage(
-                "receiving '\(safeName)' (\(fmtBytes(offer.sizeBytes))) from \(offer.peer.name)",
+                "receiving '\(dest.lastPathComponent)' (\(fmtBytes(offer.sizeBytes))) from \(offer.peer.name)",
                 kind: .info
             )
             watchTransfer(transfer, direction: .receive, detail: dest.lastPathComponent) {
                 sink.close()
+                if let failure = sink.failureDescription {
+                    try? fm.removeItem(at: dest)
+                    return failure
+                }
+                return nil
             }
         } catch {
             sink.close()
@@ -978,6 +1028,27 @@ struct ContentView: View {
             diag("file", "accept THREW for '\(offer.name)': \(error.localizedDescription)")
             appendMessage("accept failed for '\(offer.name)': \(error.localizedDescription)", kind: .error)
         }
+    }
+
+    /// Atomically claims a sanitized destination; timestamp suffixes are not
+    /// sufficient because concurrent offers can share the same clock tick.
+    private func claimUniqueDestination(
+        in directory: URL,
+        rawName: String,
+        fileManager: FileManager
+    ) -> URL? {
+        let lastComponent = rawName.components(separatedBy: "/").last ?? ""
+        let safeName = lastComponent.isEmpty ? "incoming.bin" : lastComponent
+        let ext = (safeName as NSString).pathExtension
+        let stem = ext.isEmpty ? safeName : String(safeName.dropLast(ext.count + 1))
+        for n in 0...10_000 {
+            let candidateName = n == 0
+                ? safeName
+                : ext.isEmpty ? "\(stem) (\(n))" : "\(stem) (\(n)).\(ext)"
+            let candidate = directory.appendingPathComponent(candidateName)
+            if fileManager.createFile(atPath: candidate.path, contents: nil) { return candidate }
+        }
+        return nil
     }
 
     /// AUDIT-2026-06 (D-G9-samples-desktop-ios-03): demonstrate the outgoing
@@ -1009,6 +1080,7 @@ struct ContentView: View {
             appendMessage("offering file '\(name)' (\(fmtBytes(Int64(size)))) to \(row.peerName)", kind: .sent)
             watchTransfer(transfer, direction: .send, detail: nil) {
                 source.close()
+                return nil
             }
         } catch {
             source.close()
@@ -1030,7 +1102,7 @@ struct ContentView: View {
         _ transfer: P2pFileTransfer,
         direction: TransferRow.Direction,
         detail: String?,
-        onTerminal: @escaping () -> Void
+        onTerminal: @escaping () -> String?
     ) {
         transfers.append(TransferRow(
             id: transfer.id,
@@ -1046,6 +1118,7 @@ struct ContentView: View {
         ))
         transferWatchTasks[transfer.id] = Task { @MainActor in
             var lastLabel = ""
+            var cleanupCompleted = false
             while !Task.isCancelled {
                 let (label, terminal) = describeTransferState(transfer.state.value)
                 let bytes = (transfer.bytesTransferred.value as? KotlinLong)?.int64Value ?? 0
@@ -1058,17 +1131,32 @@ struct ContentView: View {
                     lastLabel = label
                     diag("file", "transfer \(transfer.id.prefix(8)) '\(transfer.name)' -> \(label) (\(bytes)/\(transfer.sizeBytes) B)")
                     if terminal {
+                        let localFailure = onTerminal()
+                        cleanupCompleted = true
+                        let finalLabel = localFailure.map { "Failed: \($0)" } ?? label
+                        if let idx = transfers.firstIndex(where: { $0.id == transfer.id }) {
+                            transfers[idx].stateLabel = finalLabel
+                        }
                         let arrow = direction == .send ? "→" : "←"
                         appendMessage(
-                            "file '\(transfer.name)' \(arrow) \(transfer.peer.name): \(label)",
-                            kind: label == "Completed" ? .info : .error
+                            "file '\(transfer.name)' \(arrow) \(transfer.peer.name): \(finalLabel)",
+                            kind: finalLabel == "Completed" ? .info : .error
                         )
                     }
                 }
                 if terminal { break }
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
-            onTerminal()
+            if !cleanupCompleted {
+                let localFailure = onTerminal()
+                if let localFailure {
+                    let arrow = direction == .send ? "→" : "←"
+                    appendMessage(
+                        "file '\(transfer.name)' \(arrow) \(transfer.peer.name): Failed: \(localFailure)",
+                        kind: .error
+                    )
+                }
+            }
             transferWatchTasks[transfer.id] = nil
         }
     }
@@ -1345,6 +1433,9 @@ struct ContentView: View {
         fileCollectorTasks = [:]
         transferWatchTasks = [:]
 
+        for offer in pendingOffers.values {
+            try? await offer.reject(reason: "sample stopped before consent")
+        }
         do {
             try await k.stop()
         } catch {
@@ -1354,6 +1445,7 @@ struct ContentView: View {
         peers = []
         sessions = []
         transfers = []
+        pendingOffers = [:]
         collectedSessionIds = []
         pendingConnectPeerIds = []
         sendingFileSessionIds = []
@@ -1513,11 +1605,19 @@ final class DataRawSource: NSObject, Kotlinx_io_coreRawSource {
 /// closes this sink once the transfer reaches a terminal state.
 final class FileHandleRawSink: NSObject, Kotlinx_io_coreRawSink {
     private let handle: FileHandle
+    private let stateLock = NSLock()
     private var closed = false
     /// RawSink.write cannot throw across the ObjC bridge (no NSError slot in
-    /// the kotlinx-io interface), so disk-write failures are remembered and
-    /// logged; subsequent writes become no-ops. Sample-grade tradeoff.
+    /// the kotlinx-io interface), so disk-write failures are remembered,
+    /// surfaced by the transfer watcher, and subsequent writes become no-ops.
     private var failed = false
+    private var failure: String?
+
+    var failureDescription: String? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return failure
+    }
 
     init(handle: FileHandle) {
         self.handle = handle
@@ -1525,7 +1625,11 @@ final class FileHandleRawSink: NSObject, Kotlinx_io_coreRawSink {
 
     func write(source: Kotlinx_io_coreBuffer, byteCount: Int64) {
         var remaining = byteCount
-        while remaining > 0 && !failed {
+        while remaining > 0 {
+            stateLock.lock()
+            let shouldStop = failed || closed
+            stateLock.unlock()
+            if shouldStop { break }
             let chunk = Int32(min(remaining, 64 * 1024))
             let arr = KotlinByteArray(size: chunk)
             let read = source.readAtMostTo(sink: arr, startIndex: 0, endIndex: chunk)
@@ -1534,15 +1638,20 @@ final class FileHandleRawSink: NSObject, Kotlinx_io_coreRawSink {
             for i in 0..<Int(read) {
                 data[i] = UInt8(bitPattern: arr.get(index: Int32(i)))
             }
+            stateLock.lock()
             do {
-                try handle.write(contentsOf: data)
+                if !failed && !closed {
+                    try handle.write(contentsOf: data)
+                }
             } catch {
                 failed = true
+                failure = error.localizedDescription
                 IosLanDebug.shared.log(
                     tag: "file",
                     message: "sink write FAILED: \(error.localizedDescription)"
                 )
             }
+            stateLock.unlock()
             remaining -= Int64(read)
         }
     }
@@ -1552,6 +1661,8 @@ final class FileHandleRawSink: NSObject, Kotlinx_io_coreRawSink {
     }
 
     func close() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         guard !closed else { return }
         closed = true
         try? handle.close()

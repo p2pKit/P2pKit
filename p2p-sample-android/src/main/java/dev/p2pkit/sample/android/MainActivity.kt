@@ -518,6 +518,30 @@ private fun RoomScreen(
 
         Spacer(Modifier.height(Dimens.ItemGap))
 
+        if (vm.pendingFileOffers.isNotEmpty()) {
+            Text(
+                text = "Incoming file offers (${vm.pendingFileOffers.size})",
+                style = MaterialTheme.typography.titleSmall
+            )
+            Spacer(Modifier.height(Dimens.SmallGap))
+            Column(verticalArrangement = Arrangement.spacedBy(Dimens.SmallGap)) {
+                vm.pendingFileOffers.toList().forEach { offer ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("${offer.name} from ${offer.peerName}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${offer.sizeBytes} bytes — consent required", style = MaterialTheme.typography.labelSmall)
+                        }
+                        TextButton(onClick = { vm.acceptFileOffer(offer.id) }) { Text("Accept") }
+                        TextButton(onClick = { vm.rejectFileOffer(offer.id) }) { Text("Reject") }
+                    }
+                }
+            }
+            Spacer(Modifier.height(Dimens.ItemGap))
+        }
+
         if (vm.fileTransfers.isNotEmpty()) {
             Text(
                 text = "File transfers (${vm.fileTransfers.size})",

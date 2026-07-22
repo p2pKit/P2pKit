@@ -15,6 +15,7 @@ import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.dsl.jvmSecureIdentityStore
 import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.sendFile
 import dev.p2pkit.core.protocol.FrameTrace
 import dev.p2pkit.provisioning.desktop.jvm
@@ -26,6 +27,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -65,14 +67,18 @@ import java.util.concurrent.ConcurrentHashMap
  *                                   uses the JVM provisioning module to register
  *                                   a synthetic peer and then dials it
  * - `sendfile <id-or-name> <path>` — stream a file from disk to one peer
+ * - `offers`                      — list incoming file offers awaiting consent
+ * - `accept <offer-id-prefix>`    — accept an offer if it meets local storage limits
+ * - `reject <offer-id-prefix>`    — reject an incoming offer
  * - `help`                        — print this list
  * - `quit` / `exit`               — stop the kit and exit
  *
- * Incoming file offers are auto-accepted and saved under
- * `<user.home>/.p2pkit/incoming/<sender-name>/<filename>` so the CLI can be
- * used unattended; if the destination name is already taken the file lands in
- * `<name> (n).<ext>` instead of overwriting. State transitions print as
- * `[file …]` lines.
+ * Incoming file offers remain pending until the operator explicitly accepts
+ * or rejects them. Accepted files are subject to a 50 MiB per-file limit and
+ * a 1 MiB free-space reserve, and are saved under
+ * `<user.home>/.p2pkit/incoming/<sender-name>/<filename>`. If the destination
+ * name is already taken the file lands in `<name> (n).<ext>` instead of
+ * overwriting. State transitions print as `[file …]` lines.
  */
 @OptIn(ExplicitSecurityRisk::class)
 fun main(args: Array<String>) {
@@ -137,6 +143,7 @@ fun main(args: Array<String>) {
     // connect attempt for the same peer. The SDK still dedupes either way,
     // but the local guard keeps the CLI output one-clean per session.
     val pendingConnects: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    val pendingFileOffers = ConcurrentHashMap<String, P2pFileOffer>()
     // AUDIT-2026-06 (B-G9-samples-desktop-ios-10): session ids whose collectors
     // are already wired. p2p.connect() is idempotent and can return the SAME
     // P2pSession instance (e.g. `connect` typed while that session is still
@@ -154,7 +161,7 @@ fun main(args: Array<String>) {
     p2p.incomingSessions
         .onEach { session ->
             println("[incoming] from ${session.peer.name.sanitizedForTerminal()} (${session.peer.id.value.take(8)})")
-            registerSession(session, scope, sessions, wiredSessionIds)
+            registerSession(session, scope, sessions, wiredSessionIds, pendingFileOffers)
         }
         .launchIn(scope)
 
@@ -176,7 +183,7 @@ fun main(args: Array<String>) {
                         try {
                             runCatching {
                                 val s = p2p.connect(peer)
-                                registerSession(s, scope, sessions, wiredSessionIds)
+                                registerSession(s, scope, sessions, wiredSessionIds, pendingFileOffers)
                             }.onFailure {
                                 System.err.println("[p2pkit WARN] auto-mesh connect to ${peer.name.sanitizedForTerminal()} failed: ${it.message}")
                             }
@@ -200,9 +207,20 @@ fun main(args: Array<String>) {
         }
 
         println("Ready. Type 'help' for commands.")
-        repl(p2p, scope, sessions, pendingConnects, wiredSessionIds, advertising, discovering, autoMesh)
+        repl(
+            p2p,
+            scope,
+            sessions,
+            pendingConnects,
+            wiredSessionIds,
+            pendingFileOffers,
+            advertising,
+            discovering,
+            autoMesh
+        )
 
         println("Stopping…")
+        rejectPendingOffers(pendingFileOffers, "receiver stopped")
         runCatching { p2p.stop() }.onFailure {
             System.err.println("kit.stop() failed: ${it.message}")
         }
@@ -243,6 +261,7 @@ private suspend fun repl(
     // AUDIT-2026-06 (B-G9-samples-desktop-ios-10): shared wired-collector set,
     // see registerSession.
     wiredSessionIds: MutableSet<String>,
+    pendingFileOffers: ConcurrentHashMap<String, P2pFileOffer>,
     advertising: StateLatch,
     discovering: StateLatch,
     autoMesh: MutableStateFlow<Boolean>
@@ -337,7 +356,7 @@ private suspend fun repl(
                         }
                     runCatching {
                         val session = p2p.connect(synthetic)
-                        registerSession(session, scope, sessions, wiredSessionIds)
+                        registerSession(session, scope, sessions, wiredSessionIds, pendingFileOffers)
                         println("connected manual peer ${session.peer.name.sanitizedForTerminal()}")
                     }.onFailure {
                         System.err.println("manual connect failed: ${it.message}")
@@ -419,7 +438,7 @@ private suspend fun repl(
                         // onto the SAME session instance; registerSession skips
                         // re-wiring collectors on an already-wired id so output
                         // doesn't start printing twice.
-                        registerSession(session, scope, sessions, wiredSessionIds)
+                        registerSession(session, scope, sessions, wiredSessionIds, pendingFileOffers)
                         println("connected to ${session.peer.name.sanitizedForTerminal()} (${session.peer.id.value.take(8)})")
                     } catch (e: Throwable) {
                         System.err.println("connect failed: ${e.message}")
@@ -559,6 +578,62 @@ private suspend fun repl(
                 }
             }
 
+            "offers" -> {
+                val offers = pendingFileOffers.values.sortedBy { it.id }
+                if (offers.isEmpty()) {
+                    println("(no pending file offers)")
+                } else {
+                    offers.forEach { offer ->
+                        println(
+                            "  ${offer.id.take(8)}…  ${offer.name.sanitizedForTerminal()} " +
+                                "(${offer.sizeBytes}B) from ${offer.peer.name.sanitizedForTerminal()}"
+                        )
+                    }
+                }
+            }
+
+            "accept", "reject" -> {
+                if (arg.isEmpty()) {
+                    println("usage: $cmd <offer-id-prefix>")
+                    continue
+                }
+                val matches = pendingFileOffers.values
+                    .filter { it.id == arg || it.id.startsWith(arg) }
+                    .sortedBy { it.id }
+                if (matches.isEmpty()) {
+                    println("no pending file offer matching '$arg'")
+                    continue
+                }
+                if (matches.size > 1) {
+                    println("ambiguous offer id '$arg': ${matches.joinToString { it.id.take(8) }}")
+                    continue
+                }
+                val offer = matches.single()
+                if (!pendingFileOffers.remove(offer.id, offer)) {
+                    println("offer ${offer.id.take(8)} is no longer pending")
+                    continue
+                }
+                scope.launch {
+                    if (cmd == "accept") {
+                        acceptIncomingFile(offer)
+                    } else {
+                        runCatching { offer.reject("rejected by receiver") }
+                            .onSuccess {
+                                println(
+                                    "[file ← ${offer.peer.name.sanitizedForTerminal()}] " +
+                                        "rejected ${offer.name.sanitizedForTerminal()}"
+                                )
+                            }
+                            .onFailure {
+                                System.err.println(
+                                    "[file ← ${offer.peer.name.sanitizedForTerminal()}] " +
+                                        "reject failed: ${it.message}"
+                                )
+                            }
+                    }
+                }
+            }
+
             "quit", "exit" -> return
 
             else -> println("unknown command '$cmd' — type `help`")
@@ -611,13 +686,17 @@ private fun printHelp() {
           to <id-or-name> <text>             — send to one peer
           manual <host>:<port>               — connect by IP, no mDNS needed
           sendfile <id-or-name> <path>       — stream a file from disk to one peer
+          offers                              — list incoming file offers awaiting consent
+          accept <offer-id-prefix>            — accept an offer within local storage limits
+          reject <offer-id-prefix>            — reject an incoming offer
           close <id-or-name>                 — close a session
           help                               — show this list
           quit | exit                        — stop and exit
 
-        Incoming file offers are auto-accepted to
-          ~/.p2pkit/incoming/<sender-name>/<filename>
-        (a " (n)" suffix is appended when the name is already taken)
+        Incoming file offers require an explicit accept or reject command.
+        Accepted files are limited to 50 MiB, preserve 1 MiB of free space,
+        and are saved below ~/.p2pkit/incoming/<sender-name>/.
+        A " (n)" suffix is appended when the name is already taken.
         """.trimIndent()
     )
 }
@@ -660,10 +739,11 @@ private fun registerSession(
     scope: CoroutineScope,
     sessions: ConcurrentHashMap<String, P2pSession>,
     wiredSessionIds: MutableSet<String>,
+    pendingFileOffers: ConcurrentHashMap<String, P2pFileOffer>,
 ) {
     sessions[session.peer.id.value] = session
     if (!wiredSessionIds.add(session.id)) return // collectors already wired on this instance
-    wireIncoming(session, scope)
+    wireIncoming(session, scope, pendingFileOffers)
     scope.launch {
         session.state.collect { st ->
             println("[state] ${session.peer.name.sanitizedForTerminal()} → $st")
@@ -676,7 +756,11 @@ private fun registerSession(
     }
 }
 
-private fun wireIncoming(session: P2pSession, scope: CoroutineScope) {
+private fun wireIncoming(
+    session: P2pSession,
+    scope: CoroutineScope,
+    pendingFileOffers: ConcurrentHashMap<String, P2pFileOffer>,
+) {
     session.incoming
         .onEach { msg ->
             when (msg) {
@@ -687,53 +771,94 @@ private fun wireIncoming(session: P2pSession, scope: CoroutineScope) {
         .launchIn(scope)
     session.incomingFiles
         .onEach { offer ->
-            val saveDir = File(
-                File(System.getProperty("user.home") ?: ".", ".p2pkit"),
-                "incoming/${sanitizeName(session.peer.name)}"
-            ).also { it.mkdirs() }
-            // AUDIT-2026-06 (A-G9-samples-desktop-ios-19): the destination was
-            // keyed by sanitized offer name alone, so a repeated same-named
-            // offer truncated the previously received file and two concurrent
-            // same-named offers opened two streams onto one path, corrupting
-            // both. uniqueSaveFile atomically claims an unused
-            // "<name> (n).<ext>" variant per transfer instead.
-            val saveFile = uniqueSaveFile(saveDir, sanitizeName(offer.name))
-            println("[file ← ${session.peer.name.sanitizedForTerminal()}] offered ${offer.name.sanitizedForTerminal()} (${offer.sizeBytes}B) → ${saveFile.absolutePath}")
-            scope.launch {
-                // Guard stream creation: a remote-controlled name that survives
-                // sanitizeName but is still unopenable (or an unwritable dir)
-                // threw out of the coroutine and left the offer neither accepted
-                // nor rejected — the sender then waited the full 30s timeout
-                // (AUDIT-2026-06 fix).
-                val out = runCatching { saveFile.outputStream() }.getOrElse { e ->
-                    runCatching { offer.reject("cannot open destination: ${e.message}") }
-                    System.err.println("[file ← ${session.peer.name.sanitizedForTerminal()}] open failed: ${e.message}")
-                    return@launch
-                }
-                val transfer = runCatching { offer.accept(out.asSink()) }
-                    .getOrElse {
-                        runCatching { out.close() }
-                        runCatching { offer.reject("accept failed: ${it.message}") }
-                        System.err.println("[file ← ${session.peer.name.sanitizedForTerminal()}] accept failed: ${it.message}")
-                        return@launch
-                    }
-                scope.launch {
-                    transfer.state.collect { st ->
-                        // AUDIT-2026-06 (B-G9-samples-desktop-ios-11): a Failed/
-                        // Cancelled state can embed remote-supplied reasons —
-                        // sanitize before printing.
-                        println("[file ← ${session.peer.name.sanitizedForTerminal()} ${offer.name.sanitizedForTerminal()}] ${st.toString().sanitizedForTerminal()}")
-                        if (st is FileTransferState.Completed ||
-                            st is FileTransferState.Failed ||
-                            st is FileTransferState.Cancelled
-                        ) {
-                            runCatching { out.close() }
-                        }
-                    }
-                }
-            }
+            pendingFileOffers[offer.id] = offer
+            println(
+                "[file ← ${session.peer.name.sanitizedForTerminal()}] offered " +
+                    "${offer.name.sanitizedForTerminal()} (${offer.sizeBytes}B), " +
+                    "id=${offer.id.take(8)}…; use `accept ${offer.id.take(8)}` or `reject ${offer.id.take(8)}`"
+            )
         }
         .launchIn(scope)
+}
+
+private const val MAX_INCOMING_FILE_BYTES: Long = 50L * 1024L * 1024L
+private const val REQUIRED_FREE_SPACE_RESERVE_BYTES: Long = 1024L * 1024L
+
+private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
+    val peerName = offer.peer.name.sanitizedForTerminal()
+    val fileName = offer.name.sanitizedForTerminal()
+    if (offer.sizeBytes < 0L || offer.sizeBytes > MAX_INCOMING_FILE_BYTES) {
+        runCatching { offer.reject("file exceeds receiver limit") }
+        System.err.println(
+            "[file ← $peerName] rejected $fileName: size ${offer.sizeBytes}B is outside " +
+                "the 0..$MAX_INCOMING_FILE_BYTES byte limit"
+        )
+        return
+    }
+
+    val homeDir = File(System.getProperty("user.home") ?: ".")
+    val requiredBytes = offer.sizeBytes + REQUIRED_FREE_SPACE_RESERVE_BYTES
+    if (homeDir.usableSpace < requiredBytes) {
+        runCatching { offer.reject("insufficient receiver storage") }
+        System.err.println(
+            "[file ← $peerName] rejected $fileName: ${homeDir.usableSpace}B usable, " +
+                "$requiredBytes B required"
+        )
+        return
+    }
+
+    val saveDir = File(File(homeDir, ".p2pkit"), "incoming/${sanitizeName(offer.peer.name)}")
+    if (!saveDir.isDirectory && !saveDir.mkdirs()) {
+        runCatching { offer.reject("cannot create destination directory") }
+        System.err.println("[file ← $peerName] cannot create ${saveDir.absolutePath}")
+        return
+    }
+
+    // AUDIT-2026-06 (A-G9-samples-desktop-ios-19): atomically claim a unique
+    // destination only after the operator consents and storage checks pass.
+    val saveFile = uniqueSaveFile(saveDir, sanitizeName(offer.name))
+    val out = runCatching { saveFile.outputStream() }.getOrElse { error ->
+        runCatching { saveFile.delete() }
+        runCatching { offer.reject("cannot open destination: ${error.message}") }
+        System.err.println("[file ← $peerName] open failed: ${error.message}")
+        return
+    }
+    val transfer = runCatching { offer.accept(out.asSink()) }.getOrElse { error ->
+        runCatching { out.close() }
+        runCatching { saveFile.delete() }
+        runCatching { offer.reject("accept failed: ${error.message}") }
+        System.err.println("[file ← $peerName] accept failed: ${error.message}")
+        return
+    }
+    println("[file ← $peerName] accepting $fileName (${offer.sizeBytes}B) → ${saveFile.absolutePath}")
+    transfer.state.first { state ->
+        println("[file ← $peerName $fileName] ${state.toString().sanitizedForTerminal()}")
+        when (state) {
+            is FileTransferState.Completed -> {
+                runCatching { out.close() }
+                true
+            }
+            is FileTransferState.Failed,
+            is FileTransferState.Cancelled,
+            is FileTransferState.Rejected -> {
+                runCatching { out.close() }
+                runCatching { saveFile.delete() }
+                true
+            }
+            else -> false
+        }
+    }
+}
+
+private suspend fun rejectPendingOffers(
+    pendingFileOffers: ConcurrentHashMap<String, P2pFileOffer>,
+    reason: String,
+) {
+    pendingFileOffers.values.toList().forEach { offer ->
+        if (pendingFileOffers.remove(offer.id, offer)) {
+            runCatching { offer.reject(reason) }
+        }
+    }
 }
 
 private fun sanitizeName(raw: String): String {

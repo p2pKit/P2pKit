@@ -34,6 +34,7 @@ import dev.p2pkit.core.provisioning.WifiCredentials
 import dev.p2pkit.core.provisioning.WifiPassword
 import dev.p2pkit.core.provisioning.WifiSecurityType
 import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transfer.sendFile
 import dev.p2pkit.provisioning.android.AndroidP2pPermissionManager
@@ -175,6 +176,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     val roomMessages: SnapshotStateList<RoomMessage> = mutableStateListOf()
     val targetedPeerIds: SnapshotStateList<String> = mutableStateListOf()
     val fileTransfers: SnapshotStateList<FileTransferRow> = mutableStateListOf()
+    /** Incoming files remain pending until the user explicitly accepts/rejects them. */
+    val pendingFileOffers: SnapshotStateList<IncomingFileOffer> = mutableStateListOf()
 
     // --- diagnostics ------------------------------------------------------
 
@@ -660,50 +663,72 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun wireIncomingFiles(session: P2pSession, scope: CoroutineScope): Job {
-        val ctx = getApplication<Application>().applicationContext
         return scope.launch {
             session.incomingFiles.collect { offer ->
-                // AUDIT-2026-06: B-G8-samples-android-02 — mkdirs / create /
-                // open run on Dispatchers.IO, not the main-thread run scope.
-                val opened = withContext(Dispatchers.IO) {
-                    runCatchingNonCancel {
-                        val baseDir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
-                        val saveDir = File(baseDir, "p2pkit-incoming/${sanitize(session.peer.name)}")
-                            .also { it.mkdirs() }
-                        // AUDIT-2026-06: A-G8-samples-android-04 — uniquify the
-                        // destination so two offers with the same name (re-send,
-                        // duplicate, concurrent) never truncate/interleave one path.
-                        val saveFile = uniqueDestination(saveDir, offer.name)
-                        saveFile to saveFile.outputStream()
-                    }
-                }
-                val (saveFile, out) = opened.getOrElse { e ->
-                    Log.w(LOG_TAG, "cannot open destination for ${offer.name}", e)
-                    runCatchingNonCancel { offer.reject("cannot open destination") }
-                    appendSystemMessage("rejected '${offer.name}' from ${session.peer.name}: cannot open destination")
-                    return@collect
-                }
-                Log.i(LOG_TAG, "incoming file offer ${offer.name} (${offer.sizeBytes}B) → ${saveFile.absolutePath}")
-                val incoming = runCatchingNonCancel { offer.accept(out.asSink()) }
-                    .getOrElse { e ->
-                        Log.w(LOG_TAG, "accept ${offer.name} failed", e)
-                        // AUDIT-2026-06: D-G8-samples-android-09 — on accept
-                        // failure, reject the offer (so the sender doesn't wait
-                        // out the 30s offer timeout), remove the empty file, and
-                        // surface the failure in the timeline.
-                        runCatchingNonCancel { offer.reject("accept failed on receiver") }
-                        withContext(Dispatchers.IO) {
-                            runCatchingNonCancel { out.close() }
-                            runCatchingNonCancel { saveFile.delete() }
-                        }
-                        appendSystemMessage(
-                            "receive '${offer.name}' from ${session.peer.name} failed: ${e.message ?: e::class.simpleName}"
-                        )
-                        return@collect
-                    }
-                registerIncomingTransfer(incoming, session.peer.name, saveFile.absolutePath, scope, out)
+                pendingFileOffers.add(
+                    IncomingFileOffer(
+                        id = offer.id,
+                        name = offer.name,
+                        sizeBytes = offer.sizeBytes,
+                        peerName = session.peer.name,
+                        offer = offer
+                    )
+                )
+                appendSystemMessage("incoming file '${offer.name}' from ${session.peer.name} — awaiting consent")
             }
         }
+    }
+
+    fun rejectFileOffer(id: String) {
+        val pending = pendingFileOffers.firstOrNull { it.id == id } ?: return
+        pendingFileOffers.remove(pending)
+        cleanupScope.launch { runCatchingNonCancel { pending.offer.reject("rejected by user") } }
+    }
+
+    fun acceptFileOffer(id: String) {
+        val scope = runScope ?: return
+        val pending = pendingFileOffers.firstOrNull { it.id == id } ?: return
+        pendingFileOffers.remove(pending)
+        scope.launch { acceptIncomingFile(pending, scope) }
+    }
+
+    private suspend fun acceptIncomingFile(pending: IncomingFileOffer, scope: CoroutineScope) {
+        val ctx = getApplication<Application>().applicationContext
+        val maxBytes = 50L * 1024 * 1024
+        if (pending.sizeBytes !in 0..maxBytes) {
+            runCatchingNonCancel { pending.offer.reject("receiver quota exceeded") }
+            appendSystemMessage("rejected '${pending.name}': exceeds 50 MiB sample quota")
+            return
+        }
+        val opened = withContext(Dispatchers.IO) {
+            runCatchingNonCancel {
+                val baseDir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
+                val saveDir = File(baseDir, "p2pkit-incoming/${sanitize(pending.peerName)}")
+                    .also { it.mkdirs() }
+                if (saveDir.usableSpace < pending.sizeBytes + 1L * 1024 * 1024) {
+                    error("insufficient free space")
+                }
+                val saveFile = uniqueDestination(saveDir, pending.name)
+                saveFile to saveFile.outputStream()
+            }
+        }
+        val (saveFile, out) = opened.getOrElse { e ->
+            runCatchingNonCancel { pending.offer.reject("receiver storage unavailable") }
+            appendSystemMessage("rejected '${pending.name}': ${e.message ?: "storage unavailable"}")
+            return
+        }
+        Log.i(LOG_TAG, "incoming file offer ${pending.name} (${pending.sizeBytes}B) → ${saveFile.absolutePath}")
+        val incoming = runCatchingNonCancel { pending.offer.accept(out.asSink()) }
+            .getOrElse { e ->
+                runCatchingNonCancel { pending.offer.reject("accept failed on receiver") }
+                withContext(Dispatchers.IO) {
+                    runCatchingNonCancel { out.close() }
+                    runCatchingNonCancel { saveFile.delete() }
+                }
+                appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
+                return
+            }
+        registerIncomingTransfer(incoming, pending.peerName, saveFile.absolutePath, scope, out)
     }
 
     private fun registerOutgoingTransfer(
@@ -890,7 +915,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val message = RoomMessage(
             id = nextMessageId++,
             senderName = "(me)",
-            body = body,
+            body = trimmed,
             timestamp = System.currentTimeMillis(),
             direction = RoomMessage.Direction.Outgoing,
             target = target
@@ -962,6 +987,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         targetedPeerIds.clear()
         roomMessages.clear()
         fileTransfers.clear()
+        val offersToReject = pendingFileOffers.toList()
+        pendingFileOffers.clear()
         _hasConnectedSession.value = false
         _localPeerId.value = null
         _hotspotResult.value = null
@@ -978,6 +1005,9 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // (not runScope, which we just cancelled) so the stop call survives.
         pendingStopJob = cleanupScope.launch {
             try {
+                offersToReject.forEach { pending ->
+                    runCatchingNonCancel { pending.offer.reject("sample stopped before consent") }
+                }
                 runCatchingNonCancel { toStop.networkProvisioning.stopLocalNetwork() }
                 runCatchingNonCancel { toStop.stop() }
                 withContext(Dispatchers.IO) {
@@ -993,6 +1023,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         super.onCleared()
         val toStop = kit
         kit = null
+        val offersToReject = pendingFileOffers.toList()
+        pendingFileOffers.clear()
         val streamsToClose = activeIncomingStreams.values.toList()
         activeIncomingStreams.clear()
         // AUDIT-2026-06: ARCH-samples-18 — never cancel cleanupScope while a
@@ -1001,6 +1033,9 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val finalCleanup = cleanupScope.launch {
             pendingStopJob?.join()
             if (toStop != null) {
+                offersToReject.forEach { pending ->
+                    runCatchingNonCancel { pending.offer.reject("sample cleared before consent") }
+                }
                 runCatchingNonCancel { toStop.networkProvisioning.stopLocalNetwork() }
                 runCatchingNonCancel { toStop.stop() }
             }
@@ -1047,7 +1082,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         RoomMessage(
                             id = nextMessageId++,
                             senderName = session.peer.name,
-                            body = msg,
+                            body = msg.displayForTimeline(),
                             timestamp = System.currentTimeMillis(),
                             direction = RoomMessage.Direction.Incoming
                         )
@@ -1062,7 +1097,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     recomputeHasConnectedSession()
                 }
             }
-            // Auto-accept inbound file offers and stream to external-files dir.
+            // Queue inbound file offers; the UI must explicitly accept or reject.
             val filesJob = wireIncomingFiles(session, scope)
             sessionJobs[session.id] = listOf(incomingJob, stateJob, filesJob)
         }
@@ -1092,7 +1127,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             RoomMessage(
                 id = nextMessageId++,
                 senderName = "(system)",
-                body = P2pMessage.Text(text),
+                body = text,
                 timestamp = System.currentTimeMillis(),
                 direction = RoomMessage.Direction.System
             )
@@ -1167,6 +1202,15 @@ data class FileTransferRow(
     val transfer: P2pFileTransfer
 )
 
+/** User-consent queue entry; holding the offer does not allocate a destination file. */
+data class IncomingFileOffer(
+    val id: String,
+    val name: String,
+    val sizeBytes: Long,
+    val peerName: String,
+    val offer: P2pFileOffer
+)
+
 /**
  * Sample-level message envelope rendered in the room timeline.
  *
@@ -1176,18 +1220,21 @@ data class FileTransferRow(
 data class RoomMessage(
     val id: Long,
     val senderName: String,
-    val body: P2pMessage,
+    /** Timeline text only; binary payload bytes are never retained in UI state. */
+    val body: String,
     val timestamp: Long,
     val direction: Direction,
     val target: SendTarget = SendTarget.All
 ) {
     enum class Direction { Incoming, Outgoing, System }
 
-    val displayBody: String
-        get() = when (body) {
-            is P2pMessage.Text -> body.value
-            is P2pMessage.Binary -> "<binary ${body.bytes.size}B>"
-        }
+    val displayBody: String get() = body
+}
+
+/** Converts an SDK message to bounded timeline text without retaining payload bytes. */
+private fun P2pMessage.displayForTimeline(): String = when (this) {
+    is P2pMessage.Text -> value
+    is P2pMessage.Binary -> "<binary ${bytes.size}B>"
 }
 
 /** Targeting choice for an outgoing room send. */
