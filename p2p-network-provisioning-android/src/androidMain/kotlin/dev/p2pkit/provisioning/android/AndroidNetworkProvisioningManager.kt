@@ -79,12 +79,15 @@ public class AndroidNetworkProvisioningManager internal constructor(
     override val events: Flow<NetworkProvisioningEvent> = _events.asSharedFlow()
 
     private val lifecycleLock = Mutex()
+    private val handleLock = Any()
     @kotlin.concurrent.Volatile
     private var handle: HotspotHandle? = null
     private var stopWatch: Job? = null
     @kotlin.concurrent.Volatile
     private var joinHandle: JoinHandle? = null
     private var joinReleaseWatch: Job? = null
+    @kotlin.concurrent.Volatile
+    private var closed: Boolean = false
 
     init {
         // Release native resources (LocalOnlyHotspot reservation, joined-network
@@ -92,18 +95,17 @@ public class AndroidNetworkProvisioningManager internal constructor(
         // kit's parent job is cancelled by P2pKit.stop(). Previously stop() only
         // cancelled the scope (stopping the watcher coroutines) but never invoked
         // close(), so the hotspot reservation leaked for the process lifetime.
-        // Fields are @Volatile so this handler (which runs without lifecycleLock)
-        // observes the latest writes. close() releases are idempotent (runCatching).
-        scopeJob.invokeOnCompletion {
-            runCatching { handle?.close() }
-            runCatching { joinHandle?.close() }
-        }
+        // closeOwnedHandles() runs without lifecycleLock and uses handleLock to
+        // claim the latest handles exactly once. Resource close() calls remain
+        // idempotent and isolated (runCatching).
+        scopeJob.invokeOnCompletion { closeOwnedHandles() }
     }
 
     // --- NetworkProvisioningManager surface -------------------------------
 
     override suspend fun startLocalNetwork(config: LocalNetworkConfig): LocalNetworkResult =
         lifecycleLock.withLock {
+            if (closed) return@withLock closedLocalNetworkResult()
             if (!wifi.isLocalOnlyHotspotSupported) {
                 // Contract result for unsupported platforms (API < 26 or no
                 // Wi-Fi hardware) instead of a linkage-error-backed
@@ -118,7 +120,10 @@ public class AndroidNetworkProvisioningManager internal constructor(
             val existing = handle
             if (existing != null) {
                 ctx.logger.debug("provisioning: startLocalNetwork called while already running")
-                return@withLock buildStartedResult(runCatching { existing.getCredentials() }.getOrNull(), existing)
+                val result = buildStartedResult(
+                    runCatching { existing.getCredentials() }.getOrNull(), existing
+                )
+                return@withLock if (closed) closedLocalNetworkResult() else result
             }
             _state.value = NetworkProvisioningState.StartingLocalNetwork
 
@@ -152,17 +157,26 @@ public class AndroidNetworkProvisioningManager internal constructor(
                 }
                 is HotspotStartResult.Started -> {
                     val h = startResult.handle
-                    handle = h
-                    stopWatch = scope.launch {
+                    val watcher = scope.launch {
                         h.stopped.collect { reason ->
                             handleSystemStop(h, reason)
                         }
                     }
+                    if (!installHotspot(h, watcher)) {
+                        watcher.cancel()
+                        runCatching { h.close() }
+                        return@withLock closedLocalNetworkResult()
+                    }
                     val creds = runCatching { h.getCredentials() }.getOrNull()
+                    val result = buildStartedResult(creds, h)
+                    if (closed) {
+                        runCatching { h.close() }
+                        return@withLock closedLocalNetworkResult()
+                    }
                     publishStartedNetworkState(h, creds)
                     _state.value = NetworkProvisioningState.LocalNetworkRunning
                     _events.tryEmit(NetworkProvisioningEvent.LocalNetworkStarted(creds))
-                    buildStartedResult(creds, h)
+                    result
                 }
             }
         }
@@ -174,12 +188,18 @@ public class AndroidNetworkProvisioningManager internal constructor(
      */
     override suspend fun stopLocalNetwork() {
         lifecycleLock.withLock {
-            val h = handle ?: return
+            val owned = synchronized(handleLock) {
+                if (closed) return@withLock
+                val current = handle ?: return@withLock
+                handle = null
+                val watcher = stopWatch
+                stopWatch = null
+                current to watcher
+            }
+            val h = owned.first
             _state.value = NetworkProvisioningState.StoppingLocalNetwork
-            stopWatch?.cancel()
-            stopWatch = null
+            owned.second?.cancel()
             runCatching { h.close() }
-            handle = null
             _networkState.value = NetworkState.Unknown
             _state.value = NetworkProvisioningState.Idle
             _events.tryEmit(NetworkProvisioningEvent.LocalNetworkStopped)
@@ -197,6 +217,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
      */
     override suspend fun joinLocalNetwork(credentials: WifiCredentials): JoinNetworkResult =
         lifecycleLock.withLock {
+            if (closed) return@withLock closedJoinNetworkResult()
             if (!wifi.isSpecifierJoinSupported) {
                 return@withLock JoinNetworkResult.Unsupported(
                     "WifiNetworkSpecifier join requires Android 10 (API 29)"
@@ -252,11 +273,19 @@ public class AndroidNetworkProvisioningManager internal constructor(
                 }
                 is JoinResult.Joined -> {
                     val h = joinResult.handle
-                    joinHandle = h
-                    joinReleaseWatch = scope.launch {
+                    val watcher = scope.launch {
                         h.released.collect { reason -> handleJoinReleased(h, reason) }
                     }
+                    if (!installJoin(h, watcher)) {
+                        watcher.cancel()
+                        runCatching { h.close() }
+                        return@withLock closedJoinNetworkResult()
+                    }
                     val nstate = h.snapshotNetworkState()
+                    if (closed) {
+                        runCatching { h.close() }
+                        return@withLock closedJoinNetworkResult()
+                    }
                     _networkState.value = nstate
                     _state.value = NetworkProvisioningState.JoinedNetwork
                     _events.tryEmit(NetworkProvisioningEvent.NetworkJoined(nstate))
@@ -270,7 +299,12 @@ public class AndroidNetworkProvisioningManager internal constructor(
         // Stale guard + lock: these handlers previously mutated
         // handle/joinHandle/_state off-lock from collector coroutines,
         // racing the locked API paths (AUDIT-2026-06 fix).
-        if (joinHandle !== firing) return@withLock
+        val owned = synchronized(handleLock) {
+            if (joinHandle !== firing) return@withLock
+            joinHandle = null
+            joinReleaseWatch = null
+            firing
+        }
         val err = NetworkProvisioningError.JoinFailed("join released: $reason")
         // close() the handle BEFORE dropping it: JoinHandleImpl.close() is the
         // ONLY code that clears bindProcessToNetwork and unregisters the
@@ -280,9 +314,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
         // It also stops the wrapper's re-onAvailable branch from silently
         // re-binding after we have declared the join terminally Failed
         // (AUDIT-2026-06 fix; close() is idempotent via runCatching).
-        joinHandle?.let { h -> runCatching { h.close() } }
-        joinHandle = null
-        joinReleaseWatch = null
+        runCatching { owned.close() }
         _state.value = NetworkProvisioningState.Failed(err)
         _networkState.value = NetworkState.Unknown
         _events.tryEmit(NetworkProvisioningEvent.Failed(err))
@@ -341,21 +373,16 @@ public class AndroidNetworkProvisioningManager internal constructor(
      * cancelled (via [ProvisioningContext.parentJob]); apps may also call
      * it directly for explicit teardown.
      *
-     * Documented limitation (2026-07 P1-27; decision #8c): a
-     * [startLocalNetwork] / [joinLocalNetwork] call made *after* the parent
-     * job has been cancelled is still accepted, and resources acquired then
-     * sit outside the parent-job completion cleanup (that handler has
-     * already fired) — an explicit call to this method is the only release
-     * path for them. The lifecycle rework (refusing post-cancel starts,
-     * together with a `leaveNetwork()` surface) is deferred to the post-RC
-     * spec discussion.
+     * Once close begins, the manager is terminal: concurrent or later
+     * [startLocalNetwork] / [joinLocalNetwork] calls return a deterministic
+     * failed result and never retain a newly delivered OS handle. The same
+     * terminal gate is set by parent-job cancellation before owned resources
+     * are released, so a callback arriving after kit shutdown cannot create a
+     * reservation or process binding outside teardown ownership.
      */
     public fun close() {
+        closeOwnedHandles()
         scopeJob.cancel()
-        runCatching { handle?.close() }
-        handle = null
-        runCatching { joinHandle?.close() }
-        joinHandle = null
     }
 
     // --- internals --------------------------------------------------------
@@ -402,15 +429,59 @@ public class AndroidNetworkProvisioningManager internal constructor(
     }
 
     private suspend fun handleSystemStop(firing: HotspotHandle, reason: HotspotStopReason) = lifecycleLock.withLock {
-        if (handle !== firing) return@withLock
+        val owned = synchronized(handleLock) {
+            if (handle !== firing) return@withLock
+            handle = null
+            stopWatch = null
+            firing
+        }
         val err = NetworkProvisioningError.HotspotStopped(reason.source)
-        handle = null
-        stopWatch = null
+        runCatching { owned.close() }
         _state.value = NetworkProvisioningState.Failed(err)
         _networkState.value = NetworkState.Unknown
         _events.tryEmit(NetworkProvisioningEvent.Failed(err))
         Unit
     }
+
+    private fun installHotspot(h: HotspotHandle, watcher: Job): Boolean = synchronized(handleLock) {
+        if (closed) false else {
+            handle = h
+            stopWatch = watcher
+            true
+        }
+    }
+
+    private fun installJoin(h: JoinHandle, watcher: Job): Boolean = synchronized(handleLock) {
+        if (closed) false else {
+            joinHandle = h
+            joinReleaseWatch = watcher
+            true
+        }
+    }
+
+    private fun closeOwnedHandles() {
+        val owned = synchronized(handleLock) {
+            if (!closed) closed = true
+            val resources = handle to joinHandle
+            handle = null
+            joinHandle = null
+            stopWatch?.cancel()
+            stopWatch = null
+            joinReleaseWatch?.cancel()
+            joinReleaseWatch = null
+            resources
+        }
+        runCatching { owned.first?.close() }
+        runCatching { owned.second?.close() }
+    }
+
+    private fun closedLocalNetworkResult(): LocalNetworkResult = LocalNetworkResult.Failed(
+        NetworkProvisioningError.HotspotStopped("provisioning manager is closed")
+    )
+
+    private fun closedJoinNetworkResult(): JoinNetworkResult = JoinNetworkResult.Failed(
+        NetworkProvisioningError.JoinFailed("provisioning manager is closed")
+    )
 
     private fun mapStartException(e: Throwable): NetworkProvisioningError {
         if (e is SecurityException || e.cause is SecurityException) {

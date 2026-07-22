@@ -22,6 +22,7 @@ import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.WifiCredentials
 import dev.p2pkit.core.provisioning.WifiPassword
 import dev.p2pkit.core.provisioning.WifiSecurityType
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -400,18 +401,9 @@ class AndroidNetworkProvisioningManagerTest {
         }
     }
 
-    /**
-     * Divergence note (2026-07 review P1-27): the coverage plan expects a
-     * start attempted after the parent job is cancelled to be refused. The
-     * current implementation does not consult scope liveness on the start
-     * path: the start is accepted and returns Started, and because the
-     * scope's completion handler has already fired, the new reservation is
-     * outside the automatic parent-job cleanup — only an explicit close()
-     * releases it. This test pins the CURRENT behavior so a future refusal
-     * guard is added deliberately (with this test updated), not by accident.
-     */
+    /** Parent cancellation is terminal before any later OS acquisition begins. */
     @Test
-    fun startAfterParentJobCancellationIsCurrentlyAcceptedNotRefused() = runBlocking<Unit> {
+    fun startAfterParentJobCancellationIsRefusedAndDoesNotAcquireReservation() = runBlocking<Unit> {
         val parentJob = Job()
         val wifi = FakeWifiManagerWrapper(
             behavior = FakeWifiManagerWrapper.Behavior.Start(
@@ -425,19 +417,75 @@ class AndroidNetworkProvisioningManagerTest {
             parentJob.join()
 
             val result = mgr.startLocalNetwork(LocalNetworkConfig())
-
-            // Pins the current (divergent) behavior: accepted, not refused.
-            assertIs<LocalNetworkResult.Started>(result)
-            // The post-cancellation reservation is not covered by the
-            // parent-job completion handler (it already ran).
-            assertTrue(wifi.lastHandle?.isClosed == false)
+            val failed = assertIs<LocalNetworkResult.Failed>(result)
+            assertIs<NetworkProvisioningError.HotspotStopped>(failed.error)
+            assertNull(wifi.lastHandle, "a closed manager must not call the OS start API")
         } finally {
             mgr.close()
-            // Explicit close() remains the only release path for it.
+        }
+    }
+
+    @Test
+    fun closeRacingHotspotStartClosesLateReservationAndReturnsOneTerminalFailure() = runBlocking<Unit> {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.StartSuspends(
+                entered = entered,
+                release = release,
+                credentials = testCreds,
+                apHosts = listOf("192.168.43.1")
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        try {
+            val start = async { mgr.startLocalNetwork(LocalNetworkConfig()) }
+            entered.await()
+            mgr.close()
+            release.complete(Unit)
+
+            val failed = assertIs<LocalNetworkResult.Failed>(start.await())
+            assertIs<NetworkProvisioningError.HotspotStopped>(failed.error)
             assertTrue(
                 wifi.lastHandle?.isClosed == true,
-                "Explicit close() must release the post-cancellation reservation"
+                "a reservation delivered after close must be released before start returns"
             )
+        } finally {
+            mgr.close()
+            release.complete(Unit)
+        }
+    }
+
+    @Test
+    fun closeRacingJoinClosesLateBindingAndReturnsOneTerminalFailure() = runBlocking<Unit> {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.JoinSuspends(
+                entered = entered,
+                release = release,
+                networkState = dev.p2pkit.core.provisioning.NetworkState.ConnectedToWifi(
+                    ssid = null,
+                    localIpAddresses = listOf("192.168.43.55")
+                )
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        try {
+            val join = async { mgr.joinLocalNetwork(testCreds) }
+            entered.await()
+            mgr.close()
+            release.complete(Unit)
+
+            val failed = assertIs<JoinNetworkResult.Failed>(join.await())
+            assertIs<NetworkProvisioningError.JoinFailed>(failed.error)
+            assertTrue(
+                wifi.lastJoinHandle?.isClosed == true,
+                "a joined binding delivered after close must be released before join returns"
+            )
+        } finally {
+            mgr.close()
+            release.complete(Unit)
         }
     }
 
@@ -483,7 +531,18 @@ private class FakeWifiManagerWrapper(
         data class ThrowSecurityWithMessage(val message: String) : Behavior()
         data class FailWithReason(val reasonCode: Int) : Behavior()
         data class Start(val credentials: WifiCredentials?, val apHosts: List<String>) : Behavior()
+        data class StartSuspends(
+            val entered: CompletableDeferred<Unit>,
+            val release: CompletableDeferred<Unit>,
+            val credentials: WifiCredentials?,
+            val apHosts: List<String>
+        ) : Behavior()
         data class JoinSucceeds(val networkState: dev.p2pkit.core.provisioning.NetworkState) : Behavior()
+        data class JoinSuspends(
+            val entered: CompletableDeferred<Unit>,
+            val release: CompletableDeferred<Unit>,
+            val networkState: dev.p2pkit.core.provisioning.NetworkState
+        ) : Behavior()
         data class JoinFails(val reason: String) : Behavior()
         data class JoinThrowsSecurity(val message: String) : Behavior()
     }
@@ -505,8 +564,16 @@ private class FakeWifiManagerWrapper(
                 lastHandle = h
                 HotspotStartResult.Started(h)
             }
+            is Behavior.StartSuspends -> {
+                b.entered.complete(Unit)
+                b.release.await()
+                val h = FakeHotspotHandle(b.credentials, b.apHosts)
+                lastHandle = h
+                HotspotStartResult.Started(h)
+            }
             // join-only behaviors → not a valid start call in our tests
-            is Behavior.JoinSucceeds, is Behavior.JoinFails, is Behavior.JoinThrowsSecurity ->
+            is Behavior.JoinSucceeds, is Behavior.JoinSuspends,
+            is Behavior.JoinFails, is Behavior.JoinThrowsSecurity ->
                 throw IllegalStateException("test misconfigured: join behavior used for startLocalOnlyHotspot")
         }
     }
@@ -518,11 +585,18 @@ private class FakeWifiManagerWrapper(
                 lastJoinHandle = h
                 JoinResult.Joined(h)
             }
+            is Behavior.JoinSuspends -> {
+                b.entered.complete(Unit)
+                b.release.await()
+                val h = FakeJoinHandle(b.networkState)
+                lastJoinHandle = h
+                JoinResult.Joined(h)
+            }
             is Behavior.JoinFails -> JoinResult.Failed(b.reason)
             is Behavior.JoinThrowsSecurity -> throw SecurityException(b.message)
             // start-only behaviors → not a valid join call in our tests
             Behavior.ThrowSecurity, is Behavior.ThrowSecurityWithMessage,
-            is Behavior.FailWithReason, is Behavior.Start ->
+            is Behavior.FailWithReason, is Behavior.Start, is Behavior.StartSuspends ->
                 throw IllegalStateException("test misconfigured: start behavior used for joinWifiNetwork")
         }
     }
