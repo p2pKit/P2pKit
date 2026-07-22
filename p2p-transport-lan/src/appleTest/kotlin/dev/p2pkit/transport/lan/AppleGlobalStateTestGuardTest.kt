@@ -2,12 +2,21 @@ package dev.p2pkit.transport.lan
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import platform.Foundation.NSUserDefaults
 
 class AppleGlobalStateTestGuardTest {
+
+    @Test
+    fun testNamespacesDoNotReuseBonjourIdentity() {
+        val first = newAppleLanTestNamespace("p2pkit-test")
+        val second = newAppleLanTestNamespace("p2pkit-test")
+
+        assertNotEquals(first, second)
+    }
 
     @Test
     fun restoresPresentAndAbsentValuesExactly() {

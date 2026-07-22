@@ -2,6 +2,12 @@ package dev.p2pkit.transport.lan
 
 import platform.Foundation.NSLock
 import platform.Foundation.NSUserDefaults
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
+
+/** Creates a process- and run-unique namespace so stale Bonjour records cannot cross tests. */
+@OptIn(ExperimentalUuidApi::class)
+internal fun newAppleLanTestNamespace(prefix: String): String = "$prefix-${Uuid.random()}"
 
 /** Serializes and exactly restores Apple tests that touch shared user defaults. */
 internal object AppleGlobalStateTestGuard {

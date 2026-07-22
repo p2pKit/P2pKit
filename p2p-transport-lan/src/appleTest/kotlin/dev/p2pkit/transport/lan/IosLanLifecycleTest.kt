@@ -4,6 +4,7 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
+import dev.p2pkit.core.Peer
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.transfer.FileTransferState
 import kotlinx.coroutines.CompletableDeferred
@@ -20,8 +21,6 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import platform.Foundation.NSDate
-import platform.Foundation.timeIntervalSince1970
 
 /**
  * Probe tests for v0.3.0-dev audit gaps the basic loopback suite doesn't cover:
@@ -44,16 +43,18 @@ import platform.Foundation.timeIntervalSince1970
 @Suppress("DEPRECATION")
 class IosLanLifecycleTest {
 
-    private val unique: String =
-        "p2pkit-ios-lifecycle-${NSDate().timeIntervalSince1970.toLong()}"
-    private val peerIdKey: String = "dev.p2pkit.peerId.$unique"
-    private val peerIdV2Key: String = "dev.p2pkit.peerId.v2.$unique"
+    private lateinit var unique: String
+    private lateinit var peerIdKey: String
+    private lateinit var peerIdV2Key: String
 
     private val toStop: MutableList<P2pKit> = mutableListOf()
     private var defaultsLease: AppleGlobalStateTestGuard.Lease? = null
 
     @BeforeTest
     fun isolateDefaults() {
+        unique = newAppleLanTestNamespace("p2pkit-ios-lifecycle")
+        peerIdKey = "dev.p2pkit.peerId.$unique"
+        peerIdV2Key = "dev.p2pkit.peerId.v2.$unique"
         defaultsLease = AppleGlobalStateTestGuard.acquire(
             keys = arrayOf(peerIdKey, peerIdV2Key)
         )
@@ -88,6 +89,12 @@ class IosLanLifecycleTest {
         return kit
     }
 
+    private suspend fun P2pKit.awaitPeer(target: P2pKit): Peer =
+        withTimeout(DISCOVERY_TIMEOUT_MS) {
+            peers.first { current -> current.any { it.id == target.localPeerId } }
+                .first { it.id == target.localPeerId }
+        }
+
     @AfterTest
     fun teardown() {
         try {
@@ -109,12 +116,8 @@ class IosLanLifecycleTest {
             val bob = startAndAdvertise("Bob")
 
             // Both sides must see each other before we test the removal path.
-            withTimeout(DISCOVERY_TIMEOUT_MS) {
-                alice.peers.first { peers -> peers.any { it.name == "Bob" } }
-            }
-            withTimeout(DISCOVERY_TIMEOUT_MS) {
-                bob.peers.first { peers -> peers.any { it.name == "Alice" } }
-            }
+            alice.awaitPeer(bob)
+            bob.awaitPeer(alice)
 
             // Bob exits cleanly — Alice should see Bob disappear from her
             // peer set. Without the Lost wiring, Alice's flow stays
@@ -123,7 +126,7 @@ class IosLanLifecycleTest {
             toStop.remove(bob)
 
             withTimeout(PEER_LOST_TIMEOUT_MS) {
-                alice.peers.first { peers -> peers.none { it.name == "Bob" } }
+                alice.peers.first { peers -> peers.none { it.id == bob.localPeerId } }
             }
         }
     }
@@ -163,17 +166,20 @@ class IosLanLifecycleTest {
             // somewhere, this lights it up.
             val aliceSees = withTimeout(DISCOVERY_TIMEOUT_MS) {
                 alice.peers.first { peers ->
-                    peers.any { it.name == "Bob" } && peers.any { it.name == "Charlie" }
+                    peers.any { it.id == bob.localPeerId } &&
+                        peers.any { it.id == charlie.localPeerId }
                 }
             }
             val bobSees = withTimeout(DISCOVERY_TIMEOUT_MS) {
                 bob.peers.first { peers ->
-                    peers.any { it.name == "Alice" } && peers.any { it.name == "Charlie" }
+                    peers.any { it.id == alice.localPeerId } &&
+                        peers.any { it.id == charlie.localPeerId }
                 }
             }
             val charlieSees = withTimeout(DISCOVERY_TIMEOUT_MS) {
                 charlie.peers.first { peers ->
-                    peers.any { it.name == "Alice" } && peers.any { it.name == "Bob" }
+                    peers.any { it.id == alice.localPeerId } &&
+                        peers.any { it.id == bob.localPeerId }
                 }
             }
 
@@ -184,9 +190,9 @@ class IosLanLifecycleTest {
             // Each pair should also be able to actually open a session,
             // not just appear in the peer list. We exercise one direction
             // per pair so 3 sessions form total.
-            val bobPeer = aliceSees.first { it.name == "Bob" }
-            val charliePeer = bobSees.first { it.name == "Charlie" }
-            val alicePeerFromCharlie = charlieSees.first { it.name == "Alice" }
+            val bobPeer = aliceSees.first { it.id == bob.localPeerId }
+            val charliePeer = bobSees.first { it.id == charlie.localPeerId }
+            val alicePeerFromCharlie = charlieSees.first { it.id == alice.localPeerId }
 
             val sAB = async { alice.connect(bobPeer) }
             val sBC = async { bob.connect(charliePeer) }
@@ -205,51 +211,31 @@ class IosLanLifecycleTest {
     }
 
     @Test
-    fun reconnectExhaustionAfterRemoteKitStops() {
-        // ReconnectPolicy.Enabled(maxAttempts=3, retryDelayMillis=500) means
-        // after the connection drops, the session must transition through
-        // Connected → Reconnecting → Failed within 3 × 500 ms + handshake
-        // overhead. We stop the remote kit entirely so no endpoint can
-        // resolve and the retries deterministically exhaust.
-        //
-        // What this proves about the iOS transport: the connection-drop
-        // signal (nw_connection_state_failed/_cancelled) DOES propagate
-        // through IosRawConnection → P2pSessionImpl → SessionManager →
-        // reconnect loop, which is otherwise only inferred from the
-        // common-code unit tests.
+    fun cleanRemoteKitStopClosesSessionWithoutReconnect() {
+        // A normal kit stop sends a CLOSE frame. That frame is authoritative
+        // even when reconnect is enabled, so the exact terminal outcome is
+        // Closed; accepting Failed here would hide a protocol-ordering race.
         runBlocking {
             val alice = newKitWithReconnect("Alice")
             val bob = newKitWithReconnect("Bob")
             alice.startAdvertising(); alice.startDiscovery()
             bob.startAdvertising(); bob.startDiscovery()
 
-            val bobPeer = withTimeout(DISCOVERY_TIMEOUT_MS) {
-                alice.peers.first { peers -> peers.any { it.name == "Bob" } }
-                    .first { it.name == "Bob" }
-            }
+            val bobPeer = alice.awaitPeer(bob)
             val session = withTimeout(HANDSHAKE_TIMEOUT_MS) { alice.connect(bobPeer) }
             withTimeout(HANDSHAKE_TIMEOUT_MS) {
                 session.state.first { it == ConnectionState.Connected }
             }
 
-            // Bob disappears. Alice's session detects the drop, attempts
-            // reconnect 3× with 500 ms gap, then surfaces Failed.
+            // Bob exits cleanly and Alice must honor the CLOSE frame without
+            // treating it as a reconnectable transport failure.
             bob.stop()
             toStop.remove(bob)
 
-            // Expect Reconnecting somewhere in the timeline (it may be
-            // brief on the simulator's tight network), then a terminal
-            // state. We accept either Failed (preferred) or Closed
-            // (acceptable: SessionManager closed without retry due to
-            // peer-gone) — what we WILL NOT accept is staying in
-            // Connected or hanging forever.
-            val terminal = withTimeout(RECONNECT_EXHAUSTION_TIMEOUT_MS) {
-                session.state.first { it == ConnectionState.Failed || it == ConnectionState.Closed }
+            val terminal = withTimeout(CLEAN_CLOSE_TIMEOUT_MS) {
+                session.state.first { it == ConnectionState.Closed }
             }
-            assertTrue(
-                terminal == ConnectionState.Failed || terminal == ConnectionState.Closed,
-                "expected Failed or Closed terminal, got $terminal"
-            )
+            assertEquals(ConnectionState.Closed, terminal)
         }
     }
 
@@ -286,10 +272,7 @@ class IosLanLifecycleTest {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
-            val bobPeer = withTimeout(DISCOVERY_TIMEOUT_MS) {
-                alice.peers.first { peers -> peers.any { it.name == "Bob" } }
-                    .first { it.name == "Bob" }
-            }
+            val bobPeer = alice.awaitPeer(bob)
             val outgoingDeferred = async { alice.connect(bobPeer) }
             val incomingSession = withTimeout(HANDSHAKE_TIMEOUT_MS) { bob.incomingSessions.first() }
             val outgoing = withTimeout(HANDSHAKE_TIMEOUT_MS) { outgoingDeferred.await() }
@@ -376,23 +359,19 @@ class IosLanLifecycleTest {
             val bob = startAndAdvertise("Bob")
 
             // Initial discovery — Alice sees Bob.
-            withTimeout(DISCOVERY_TIMEOUT_MS) {
-                alice.peers.first { peers -> peers.any { it.name == "Bob" } }
-            }
+            alice.awaitPeer(bob)
 
             // Bob disappears from the air.
             bob.stopAdvertising()
             withTimeout(PEER_LOST_TIMEOUT_MS) {
-                alice.peers.first { peers -> peers.none { it.name == "Bob" } }
+                alice.peers.first { peers -> peers.none { it.id == bob.localPeerId } }
             }
 
             // Bob re-advertises (same peerId, same deviceName since we can't
             // mutate it through the public DSL). Alice should see the peer
             // reappear within a reasonable Bonjour TTL.
             bob.startAdvertising()
-            withTimeout(DISCOVERY_TIMEOUT_MS) {
-                alice.peers.first { peers -> peers.any { it.name == "Bob" } }
-            }
+            alice.awaitPeer(bob)
         }
     }
 
@@ -407,10 +386,7 @@ class IosLanLifecycleTest {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
-            val bobPeer = withTimeout(DISCOVERY_TIMEOUT_MS) {
-                alice.peers.first { peers -> peers.any { it.name == "Bob" } }
-                    .first { it.name == "Bob" }
-            }
+            val bobPeer = alice.awaitPeer(bob)
 
             repeat(CONNECT_STORM_COUNT) { i ->
                 val session = withTimeout(HANDSHAKE_TIMEOUT_MS) { alice.connect(bobPeer) }
@@ -430,7 +406,7 @@ class IosLanLifecycleTest {
         const val PEER_LOST_TIMEOUT_MS: Long = 30_000
         const val HANDSHAKE_TIMEOUT_MS: Long = 30_000
         const val TERMINAL_TIMEOUT_MS: Long = 5_000
-        const val RECONNECT_EXHAUSTION_TIMEOUT_MS: Long = 30_000
+        const val CLEAN_CLOSE_TIMEOUT_MS: Long = 30_000
         const val LIFECYCLE_CYCLE_COUNT: Int = 20
         const val CONNECT_STORM_COUNT: Int = 10
     }

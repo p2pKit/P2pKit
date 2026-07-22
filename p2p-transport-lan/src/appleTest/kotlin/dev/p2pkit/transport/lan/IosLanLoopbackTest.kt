@@ -3,6 +3,7 @@ package dev.p2pkit.transport.lan
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
+import dev.p2pkit.core.Peer
 import dev.p2pkit.core.transfer.FileTransferState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -19,8 +20,6 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import platform.Foundation.NSDate
-import platform.Foundation.timeIntervalSince1970
 
 /**
  * Integration test: two [P2pKit] instances in one process, both using the
@@ -41,16 +40,18 @@ import platform.Foundation.timeIntervalSince1970
 @Suppress("DEPRECATION")
 class IosLanLoopbackTest {
 
-    private val unique: String =
-        "p2pkit-ios-itest-${NSDate().timeIntervalSince1970.toLong()}"
-    private val peerIdKey: String = "dev.p2pkit.peerId.$unique"
-    private val peerIdV2Key: String = "dev.p2pkit.peerId.v2.$unique"
+    private lateinit var unique: String
+    private lateinit var peerIdKey: String
+    private lateinit var peerIdV2Key: String
 
     private val toStop: MutableList<P2pKit> = mutableListOf()
     private var defaultsLease: AppleGlobalStateTestGuard.Lease? = null
 
     @BeforeTest
     fun isolateDefaults() {
+        unique = newAppleLanTestNamespace("p2pkit-ios-itest")
+        peerIdKey = "dev.p2pkit.peerId.$unique"
+        peerIdV2Key = "dev.p2pkit.peerId.v2.$unique"
         defaultsLease = AppleGlobalStateTestGuard.acquire(
             keys = arrayOf(peerIdKey, peerIdV2Key)
         )
@@ -85,6 +86,12 @@ class IosLanLoopbackTest {
         return kit
     }
 
+    private suspend fun P2pKit.awaitPeer(target: P2pKit): Peer =
+        withTimeout(DISCOVERY_TIMEOUT_MS) {
+            peers.first { current -> current.any { it.id == target.localPeerId } }
+                .first { it.id == target.localPeerId }
+        }
+
     @AfterTest
     fun teardown() {
         try {
@@ -105,10 +112,7 @@ class IosLanLoopbackTest {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
-            val bobAsSeenByAlice = withTimeout(DISCOVERY_TIMEOUT_MS) {
-                alice.peers.first { peers -> peers.any { it.name == "Bob" } }
-                    .first { it.name == "Bob" }
-            }
+            val bobAsSeenByAlice = alice.awaitPeer(bob)
 
             val outgoingDeferred = async { alice.connect(bobAsSeenByAlice) }
             val incomingSession = withTimeout(HANDSHAKE_TIMEOUT_MS) { bob.incomingSessions.first() }
@@ -134,10 +138,7 @@ class IosLanLoopbackTest {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
-            val bobAsSeenByAlice = withTimeout(DISCOVERY_TIMEOUT_MS) {
-                alice.peers.first { peers -> peers.any { it.name == "Bob" } }
-                    .first { it.name == "Bob" }
-            }
+            val bobAsSeenByAlice = alice.awaitPeer(bob)
             val outgoingDeferred = async { alice.connect(bobAsSeenByAlice) }
             val incomingSession = withTimeout(HANDSHAKE_TIMEOUT_MS) { bob.incomingSessions.first() }
             val outgoing = withTimeout(HANDSHAKE_TIMEOUT_MS) { outgoingDeferred.await() }
@@ -163,10 +164,7 @@ class IosLanLoopbackTest {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
-            val bobAsSeenByAlice = withTimeout(DISCOVERY_TIMEOUT_MS) {
-                alice.peers.first { peers -> peers.any { it.name == "Bob" } }
-                    .first { it.name == "Bob" }
-            }
+            val bobAsSeenByAlice = alice.awaitPeer(bob)
             val outgoingDeferred = async { alice.connect(bobAsSeenByAlice) }
             val incomingSession = withTimeout(HANDSHAKE_TIMEOUT_MS) { bob.incomingSessions.first() }
             val outgoing = withTimeout(HANDSHAKE_TIMEOUT_MS) { outgoingDeferred.await() }
