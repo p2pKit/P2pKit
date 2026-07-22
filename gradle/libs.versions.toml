@@ -9,13 +9,15 @@ bouncycastle = "1.85"
 jmdns = "3.6.3"
 slf4j = "2.0.13"
 android-minSdk = "24"
-android-compileSdk = "36"
-android-targetSdk = "36"
+android-compileSdk = "37"
+android-targetSdk = "37"
 androidx-activity-compose = "1.9.3"
 androidx-core-ktx = "1.15.0"
 androidx-lifecycle = "2.8.7"
 androidx-compose-bom = "2024.12.01"
 jetbrains-compose = "1.10.3"
+jetbrains-compose-material3 = "1.9.0"
+jetbrains-compose-material-icons = "1.7.3"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -36,6 +38,8 @@ androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = 
 androidx-compose-ui = { module = "androidx.compose.ui:ui" }
 androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
+jetbrains-compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "jetbrains-compose-material3" }
+jetbrains-compose-material-icons-extended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "jetbrains-compose-material-icons" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

@@ -14,6 +14,7 @@ import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
@@ -57,6 +58,7 @@ import kotlin.test.assertTrue
  * `failNextWrite`, `suspendWrites`, `writeLatencyMillis`) under `runTest`
  * virtual time, mirroring the KeepAliveTest construction idiom.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class SendErrorContractTest {
 
     /** Stands in for a raw platform transport exception (e.g. an IOException shape). */

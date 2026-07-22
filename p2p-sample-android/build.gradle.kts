@@ -29,6 +29,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    lint {
+        // REL-GATE-01 (BUILD-08/15): the sample is the executable Android
+        // manifest/permission integration gate. New warnings must therefore
+        // fail the build just like lint errors.
+        warningsAsErrors = true
+        abortOnError = true
+    }
 }
 
 dependencies {

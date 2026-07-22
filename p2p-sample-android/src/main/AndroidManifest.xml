@@ -27,12 +27,13 @@
         android:icon="@android:drawable/sym_def_app_icon"
         android:roundIcon="@android:drawable/sym_def_app_icon"
         android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:theme="@style/Theme.P2pKitSample">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="P2pKit Sample"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

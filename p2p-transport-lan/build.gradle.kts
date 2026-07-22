@@ -38,7 +38,9 @@ kotlin {
         // src/nativeInterop/cinterop/p2pkit_nw.h for the rationale.
         target.compilations.getByName("main") {
             cinterops.create("p2pkit_nw") {
-                defFile = project.file("src/nativeInterop/cinterop/p2pkit_nw.def")
+                definitionFile.set(
+                    project.layout.projectDirectory.file("src/nativeInterop/cinterop/p2pkit_nw.def")
+                )
             }
         }
         // Sample-app consumers want a single Swift-importable framework that

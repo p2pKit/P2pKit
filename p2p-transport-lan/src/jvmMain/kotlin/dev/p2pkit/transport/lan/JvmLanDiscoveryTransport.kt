@@ -299,7 +299,7 @@ internal class JvmLanDiscoveryTransport(
                 runCatching {
                     JvmLanDiag.log(
                         "bind",
-                        "JmDNS created: boundInterface=${fresh.getInterface()?.hostAddress} " +
+                        "JmDNS created: boundInterface=${fresh.inetAddress?.hostAddress} " +
                             "name=${fresh.getName()}"
                     )
                 }

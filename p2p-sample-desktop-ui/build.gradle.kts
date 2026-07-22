@@ -17,8 +17,11 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
 
     implementation(compose.desktop.currentOs)
-    implementation(compose.material3)
-    implementation(compose.materialIconsExtended)
+    // The Compose plugin dependency shorthands for these artifacts are
+    // deprecated. Pin their currently resolved coordinates in the catalog so
+    // configuration stays warning-free without changing the runtime graph.
+    implementation(libs.jetbrains.compose.material3)
+    implementation(libs.jetbrains.compose.material.icons.extended)
 
     // Silence JmDNS's SLF4J "no provider" warning on startup.
     // AUDIT-2026-06 (BUILD-G10-11): coordinates moved to the version catalog.

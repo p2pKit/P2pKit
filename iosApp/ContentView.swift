@@ -741,7 +741,7 @@ struct ContentView: View {
                     tag: "ui",
                     message: "incomingSessions emitted: peer=\(session.peer.id) name=\(session.peer.name) id=\(session.id)"
                 )
-                await self.attachCollectors(to: session, label: "incoming")
+                self.attachCollectors(to: session, label: "incoming")
             }
             _ = try? await built?.incomingSessions.collect(collector: collector)
         }

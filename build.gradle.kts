@@ -1,9 +1,11 @@
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.publish.maven.tasks.AbstractPublishToMaven
+import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.jvm.tasks.Jar
 import org.gradle.plugins.signing.Sign
 import org.gradle.plugins.signing.SigningExtension
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform) apply false
@@ -40,6 +42,19 @@ allprojects {
 // docs/STABILIZATION_AND_RELEASE.md for the release recipe.
 subprojects {
     val sub = this
+
+    // REL-GATE-01 (BUILD-14): warnings are regressions, not informational
+    // output. Apply this to every Kotlin target (including common tests and
+    // native compilations) and to Java sources such as Android/buildSrc-facing
+    // helpers. Gradle's own deprecation warnings are promoted separately in
+    // gradle.properties.
+    tasks.withType(KotlinCompilationTask::class.java).configureEach {
+        compilerOptions.allWarningsAsErrors.set(true)
+    }
+    tasks.withType(JavaCompile::class.java).configureEach {
+        options.compilerArgs.add("-Werror")
+    }
+
     plugins.withId("maven-publish") {
         sub.apply(plugin = "signing")
         val publishing = sub.extensions.getByType(PublishingExtension::class.java)

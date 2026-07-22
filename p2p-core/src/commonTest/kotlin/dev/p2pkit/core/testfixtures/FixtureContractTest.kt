@@ -3,6 +3,7 @@ package dev.p2pkit.core.testfixtures
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.transport.PeerEvent
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.flow.launchIn
@@ -28,6 +29,7 @@ import kotlin.test.assertTrue
  * with an error like the real accept loop (F3), and start()/close() follow
  * the shipped transport contract (F5).
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class FixtureContractTest {
 
     // ---- F1: remote-termination fidelity -------------------------------

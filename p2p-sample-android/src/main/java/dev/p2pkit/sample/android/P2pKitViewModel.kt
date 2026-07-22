@@ -2,6 +2,8 @@ package dev.p2pkit.sample.android
 
 import android.app.Application
 import android.net.Uri
+import android.os.Build
+import android.os.storage.StorageManager
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -734,7 +736,14 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 val baseDir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
                 val saveDir = File(baseDir, "p2pkit-incoming/${sanitize(pending.peerName)}")
                     .also { it.mkdirs() }
-                if (saveDir.usableSpace < pending.sizeBytes + 1L * 1024 * 1024) {
+                val allocatableBytes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val storage = ctx.getSystemService(StorageManager::class.java)
+                        ?: error("storage service unavailable")
+                    storage.getAllocatableBytes(storage.getUuidForPath(saveDir))
+                } else {
+                    saveDir.usableSpace
+                }
+                if (allocatableBytes < pending.sizeBytes + 1L * 1024 * 1024) {
                     error("insufficient free space")
                 }
                 val saveFile = uniqueDestination(saveDir, pending.name)
