@@ -1,8 +1,8 @@
 # Stabilization & Release Checklist (RC gating)
 
-**Status:** active worklist for cutting the first release-candidate tag off
-`audit/exhaustive-review-2026-06` (current `VERSION_NAME=0.6.0`).
-**Owner:** maintainer. **Updated:** 2026-06-13.
+**Status:** active worklist for the remediation branch
+`remediation/full-register-2026-07` (current `VERSION_NAME=0.6.0`).
+**Owner:** maintainer. **Updated:** 2026-07-22.
 
 This document is the gate between "the audit branch is green in CI" and "we tag
 an RC and publish artifacts." It has three parts:
@@ -15,13 +15,19 @@ an RC and publish artifacts." It has three parts:
 - **Part C — Known caveats & RC checklist:** what is deferred, what is flaky,
   and the final sign-off boxes.
 
-> Automated coverage today: `:p2p-core:jvmTest`, `:p2p-transport-lan:jvmTest`
+> Automated coverage today includes complete affected JVM, Android-host, and
+> Apple-simulator gates for the remediation batches: `:p2p-core:jvmTest`,
+> `:p2p-transport-lan:jvmTest`, the provisioning host suites, and
+> `iosSimulatorArm64Test`, plus warning-free `check`, ABI, Dokka, SBOM,
+> publication-shape, consumer, and XCFramework-provenance checks. These local
+> gates still cannot prove two physical devices, cellular/Wi-Fi interface
+> selection, AWDL, or LocalOnlyHotspot; hence Part A.
+>
+> The underlying loopback coverage remains: `:p2p-core:jvmTest`, `:p2p-transport-lan:jvmTest`
 > (real TCP + mDNS loopback in one JVM: text, 200 KB binary, SHA-256-verified
 > 5 MiB file), `:p2p-network-provisioning-android:testAndroidHostTest`,
 > `:p2p-network-provisioning-desktop:test` (manual-IP loopback), and
 > `:p2p-transport-lan:iosSimulatorArm64Test` (Bonjour + `nw_connection_t`).
-> None of these exercise two physical devices, cellular/Wi-Fi interface
-> selection, or LocalOnlyHotspot — hence Part A.
 
 ---
 
@@ -73,12 +79,15 @@ confirm the sender fails the connection instead of blocking forever.
   via the root `allprojects` block.
 - Per-module POM metadata (name, description, license Apache-2.0, url, scm,
   developer) — Maven-Central-shaped.
-- All four modules publish `-sources.jar` + `-javadoc.jar` (Central requires
-  both). The KMP plugin does **not** attach a javadoc jar automatically
-  (verified 2026-07, finding BLD-2 — an earlier revision of this doc claimed
-  otherwise): the root `build.gradle.kts` attaches an empty Kotlin-style
-  javadoc jar to every KMP publication; the desktop sidecar (plain
-  Kotlin/JVM) uses `withJavadocJar()`.
+- All four modules publish `-sources.jar` + `-javadoc.jar`. KMP publications
+  use strict Dokka HTML output (`failOnWarning=true`) packaged as readable
+  javadoc archives; the desktop sidecar (plain Kotlin/JVM) uses the same
+  generated documentation contract.
+- The release gate pins the Gradle wrapper and plugin inputs, verifies dependency
+  metadata, writes dependency locks, emits a CycloneDX 1.6 SBOM containing only
+  release components, and validates Kotlin ABI baselines. CI runs the same
+  warning-free checks, documentation, ABI, SBOM, publication, and consumer
+  gates with pinned GitHub Actions revisions.
 - **Signing wired centrally** in the root `build.gradle.kts` for every module
   applying `maven-publish`, plus a `publish → sign` task dependency so the
   release path has no "uses output without declaring dependency" error.
@@ -114,9 +123,9 @@ Manual equivalent:
 ls ~/.m2/repository/dev/p2pkit/*/0.6.0/      # jars, -sources, -javadoc, .pom, .module
 ```
 
-Verified output for the two new sidecars: `*.jar`, `*-sources.jar`,
-`*-javadoc.jar`, `*.module`, `*.pom`; POM carries group/artifact/version +
-license + scm; `sign*Publication` reported `SKIPPED`.
+The checker validates every JVM, Android, and Apple publication (15 on macOS):
+readable main/sources/Dokka archives, `.module`, and complete Central-shaped
+POM metadata. With no key, `sign*Publication` reports `SKIPPED`.
 
 ### Signed release (CI / Central)
 
@@ -126,12 +135,12 @@ ORG_GRADLE_PROJECT_signingInMemoryKeyPassword="$PASSPHRASE" \
   ./gradlew publishToMavenLocal      # confirm .asc signatures now appear
 ```
 
-> **Remaining release-infra step (NOT yet wired):** the publishing block has no
-> remote `repositories { maven { … } }` target, so artifacts can be produced
-> and signed but not yet *uploaded* to Maven Central. Before the public release
-> (not required for an internal RC tag), add a Central Portal / Sonatype
-> repository + credentials — e.g. the `com.vanniktech.maven.publish` or
-> `nmcp` plugin — and a `publish` (not just `publishToMavenLocal`) smoke run.
+> **REL-REMOTE-01 / BUILD-02 remains blocked:** no remote Maven repository or
+> release-service credentials are configured in this repository. An owner must
+> choose the Central Portal/OSSRH workflow and authorize its namespace,
+> credentials, signing identity, and upload validation. Until that decision,
+> local publication shape and signing checks are the complete in-scope gate;
+> do not add a third-party publishing plugin or retry an upload by assumption.
 
 ### XCFramework provenance guard (manual verification)
 
@@ -179,15 +188,14 @@ After touching the script or provenance block, verify all three behaviors:
 These are documented in `AUDIT_REPORT_2026-06.md`; none block an RC but should
 be on the post-RC / encryption-milestone radar:
 
-- **Inbound HELLO peerId is not verified** (`SessionManager`, `TODO(encryption-milestone)`).
-  Trusted-LAN only under `SecurityMode.NoneForMvp`; the real fix is the
-  encryption handshake. The reject-own-peerId guard is in place.
-- **iOS `include_peer_to_peer` asymmetry** (browser vs. listener/connection) —
-  AWDL peers may be undialable; needs device testing (A2/A3) to confirm fix
-  direction.
-- **Interface selection** (`AndroidLanDiscoveryTransport`, `JvmLanDiscoveryTransport`)
-  can bind a cellular/loopback NIC; JVM has no network-rotation rebind. Validate
-  on multi-interface hardware (A7).
+- Secure-v2 now authenticates/encrypts by default; `SecurityMode.NoneForMvp` is
+  retained only as an explicit deprecated legacy mode with separate service
+  namespaces and no automatic downgrade. Secure-v2 audit and physical
+  interoperability evidence remain release gates.
+- **iOS AWDL and interface selection** are implemented locally (peer-to-peer
+  parameters, address-fingerprint rebind, Android selected-network routing,
+  JVM rotation detection, bounded multi-address candidates), but require A1–A8
+  physical-device and hostile-network evidence.
 
 **Resolved during stabilization** (closed on this branch, no longer deferred):
 
@@ -202,25 +210,22 @@ be on the post-RC / encryption-milestone radar:
 - ✅ **Mechanical doc-drift** swept (stale NsdManager current-state references,
   the `gradle.properties` publishing comment).
 
-### C2 — Known-flaky automated tests (pre-existing, not regressions)
+### C2 — Simulator and physical-radio boundary
 
-`:p2p-transport-lan:iosSimulatorArm64Test` →
-`IosLanLifecycleTest.peerLostEventFiresWhenPeerStops` and
-`advertiseStopRestartProducesObservablePeerChurn` **fail on the macOS
-simulator** (verified failing on the pre-audit baseline too, with 30 s
-timeouts). Root cause: the simulator's NWBrowser does not reliably deliver
-*removed* results (peer-Lost / churn); the **Found**, handshake, 5 MiB file
-transfer + cancel, and reconnect-exhaustion tests in the same suite pass.
-**Action:** validate the Lost path on real devices via **A4** — do not mask
-these by widening the (already 30 s) timeouts or `@Ignore`. Re-evaluate after
-A4 passes on hardware.
+`:p2p-transport-lan:iosSimulatorArm64Test` currently passes every executed
+test in the affected suite; one manual diagnostic remains intentionally skipped.
+Simulator execution cannot prove physical Bonjour removal, AWDL, DHCP/address
+rotation, or abrupt hostile-network departure. **Action:** validate those
+paths on real devices via A1–A8 and the LAN diagnostic protocol, preserving
+exact assertions and bounded timeouts.
 
 ### C3 — RC sign-off checklist
 
 - [ ] All four host/JVM suites green (3× under parallel load): `core:jvmTest`,
       `transport-lan:jvmTest`, provisioning `-android`/`-desktop`.
 - [ ] JVM, Android, and iOS-simulator targets all **compile**.
-- [ ] `iosSimulatorArm64Test` green **except** the two C2 churn tests.
+- [ ] `iosSimulatorArm64Test` green for all executed tests; complete the manual
+      diagnostic and physical-radio evidence in A1–A8.
 - [ ] Part A device smoke matrix: A1–A8, A10–A12 PASS; A9 PASS or explicitly
       waived for the RC.
 - [ ] `scripts/check-publish-artifacts.sh` PASSes on macOS (full Central
@@ -228,8 +233,9 @@ A4 passes on hardware.
       every publication of all four modules); `sign*` SKIPPED without a key.
 - [ ] One signed `publishToMavenLocal` run with a test key produces `.asc`
       signatures.
-- [ ] Release notes state the trust model honestly: identity/encryption is
-      `NoneForMvp` (trusted-LAN only) — C1 first bullet.
+- [ ] Release notes state the trust model honestly: secure-v2 is the default
+      authenticated/encrypted mode; deprecated `NoneForMvp` is explicit legacy
+      only, with cryptographic audit and physical interoperability still open.
 - [x] **Decision box — `P2pMessage.metadata` (decision #3): DECIDED, option
       (c), 2026-07-04.** Metadata is documented as **not transmitted in
       protocol v1** (`P2pMessage` KDoc + spec §9.4), the receive side is

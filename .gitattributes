@@ -1,0 +1,4 @@
+# Kotlin's ABI generator terminates legacy .api baselines with a blank
+# separator line. Keep the generated format without treating it as whitespace
+# damage during the repository diff gate.
+**/*.api whitespace=-blank-at-eof

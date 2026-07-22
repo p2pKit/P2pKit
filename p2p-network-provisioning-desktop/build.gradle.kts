@@ -1,17 +1,31 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.dokka)
     `maven-publish`
 }
 
 kotlin {
+    @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class)
+    abiValidation {
+        enabled.set(true)
+    }
+
     jvmToolchain(17)
 }
 
-// Sources + (empty, Kotlin) Javadoc jars so the published artifact satisfies
-// Maven Central's required-artifacts rule.
+// Sources are supplied by the Java component; real Dokka Javadoc is attached
+// centrally to each publication by the root build.
 java {
     withSourcesJar()
-    withJavadocJar()
+}
+
+dokka {
+    dokkaPublications.html {
+        moduleName.set(project.name)
+        moduleVersion.set(project.version.toString())
+        outputDirectory.set(layout.buildDirectory.dir("dokka/html"))
+        failOnWarning.set(true)
+    }
 }
 
 dependencies {

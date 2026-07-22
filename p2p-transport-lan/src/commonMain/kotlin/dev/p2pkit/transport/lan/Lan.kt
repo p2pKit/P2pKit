@@ -83,7 +83,7 @@ internal fun validateLanDiscoverySecurityMetadata(
 
 /** Wire-level constants shared by the JVM and Android implementations. */
 internal object LanConstants {
-    /** JmDNS-style service type. Used by [JvmLanDiscoveryTransport]. */
+    /** JmDNS-style service type. Used by the JVM/Android LAN discovery transports. */
     const val LEGACY_SERVICE_TYPE_JMDNS: String = "_p2pkit._tcp.local."
     const val SECURE_SERVICE_TYPE_JMDNS: String = "_p2pkit2._tcp.local."
 

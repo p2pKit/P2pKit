@@ -7,7 +7,7 @@ import android.util.Log as AndroidLog
 import java.net.NetworkInterface
 
 /**
- * Android LAN diagnostic helpers — the Android companion to [JvmLanDiag] /
+ * Android LAN diagnostic helpers — the Android companion to `JvmLanDiag` /
  * appleMain's `IosLanDebug`.
  *
  * Android logs through `android.util.Log` (visible via `adb logcat`). Routine
@@ -31,7 +31,7 @@ public object AndroidLanDiag {
 
     /**
      * Per-frame byte-chunk logging gate (off by default — a single file
-     * transfer is hundreds of chunks). Mirrors [JvmLanDiag.traceFrames]; set
+     * transfer is hundreds of chunks). Mirrors `JvmLanDiag.traceFrames`; set
      * `AndroidLanDiag.traceFrames = true` from the host app when the byte-level
      * trail is specifically needed.
      */

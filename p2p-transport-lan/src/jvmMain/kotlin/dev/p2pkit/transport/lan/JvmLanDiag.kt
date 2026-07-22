@@ -8,7 +8,7 @@ import java.net.NetworkInterface
 
 /**
  * JVM/desktop diagnostic sink for the LAN transport — the JVM counterpart to
- * appleMain's [IosLanDebug] and androidMain's `android.util.Log` usage.
+ * appleMain's `IosLanDebug` and androidMain's `android.util.Log` usage.
  *
  * Why this exists: `:p2p-core`'s `TransportContext` does NOT carry the kit's
  * `P2pLogger` down to transport implementations, so the JVM LAN transport had

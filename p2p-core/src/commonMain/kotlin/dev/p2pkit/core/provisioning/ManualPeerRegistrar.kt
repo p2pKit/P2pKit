@@ -12,7 +12,7 @@ import dev.p2pkit.core.TransportKind
  * The provisioning manager calls [registerManualPeer] from inside its
  * [NetworkProvisioningManager.createManualPeer] implementation. The returned
  * [Peer] is registered with the kit's `PeerRegistry` along with a transport
- * hint carrying [host] / [port], so a subsequent `kit.connect(peer)` call
+ * hint carrying `host` / `port`, so a subsequent `kit.connect(peer)` call
  * resolves to the right [TransportKind] and reaches the right address.
  *
  * Marked [ExperimentalP2pApi]: the surface lives in `:p2p-core` because

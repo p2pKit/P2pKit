@@ -9,6 +9,7 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.android.kmp.library)
     alias(libs.plugins.cryptography)
+    alias(libs.plugins.dokka)
     `maven-publish`
 }
 
@@ -75,6 +76,11 @@ val verifyBuildInfoReproducibility by tasks.registering(VerifyBuildInfoTask::cla
 }
 
 kotlin {
+    @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class)
+    abiValidation {
+        enabled.set(true)
+    }
+
     jvmToolchain(17)
     jvm()
 
@@ -115,6 +121,15 @@ kotlin {
             implementation(kotlin("test"))
             implementation(libs.kotlinx.coroutines.test)
         }
+    }
+}
+
+dokka {
+    dokkaPublications.html {
+        moduleName.set(project.name)
+        moduleVersion.set(project.version.toString())
+        outputDirectory.set(layout.buildDirectory.dir("dokka/html"))
+        failOnWarning.set(true)
     }
 }
 

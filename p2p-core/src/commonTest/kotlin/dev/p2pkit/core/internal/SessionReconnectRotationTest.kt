@@ -118,6 +118,7 @@ class SessionReconnectRotationTest {
         }
         try {
             // Seed alice's PeerRegistry with bobV1.
+            withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
             aliceDiscovery.emit(PeerEvent.Found(bobV1))
             withTimeout(peerPropagationTimeoutMs) {
                 alice.peers.first { list -> list.any { it.id == bobPeer.id } }
@@ -222,6 +223,7 @@ class SessionReconnectRotationTest {
             // peer disappearing from discovery (e.g., long outage exceeding
             // staleTimeoutMillis). The reconnect handler should fall back
             // to its originalInternalPeer capture.
+            withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
             aliceDiscovery.emit(PeerEvent.Found(bobV1))
             withTimeout(peerPropagationTimeoutMs) {
                 alice.peers.first { list -> list.any { it.id == bobPeer.id } }
@@ -326,6 +328,7 @@ class SessionReconnectRotationTest {
             }
         }
         try {
+            withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
             aliceDiscovery.emit(PeerEvent.Found(bobV1))
             withTimeout(peerPropagationTimeoutMs) {
                 alice.peers.first { list -> list.any { it.id == bobPeer.id } }

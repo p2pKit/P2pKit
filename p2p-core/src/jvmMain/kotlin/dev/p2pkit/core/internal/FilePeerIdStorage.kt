@@ -25,7 +25,7 @@ import kotlin.uuid.Uuid
  * the next [loadOrGenerate].
  *
  * AUDIT-2026-06: the directory was previously the visible `p2pkit` (no dot),
- * which contradicted the docs. A one-time migration in [readExistingOrNull]
+ * which contradicted the docs. A one-time migration in `readExistingOrNull`
  * adopts an id from the legacy `<rootDir>/p2pkit/...` location so existing
  * desktop installs keep their identity across the rename.
  *

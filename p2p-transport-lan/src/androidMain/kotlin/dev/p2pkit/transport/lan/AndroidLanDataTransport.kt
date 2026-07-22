@@ -34,7 +34,7 @@ import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Android TCP data transport. Identical shape to [JvmLanDataTransport];
+ * Android TCP data transport. Identical shape to `JvmLanDataTransport`;
  * duplicated for the same reason as [AndroidRawConnection].
  */
 internal class AndroidLanDataTransport(

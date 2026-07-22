@@ -56,7 +56,7 @@ internal interface IosConnectionHandle : RawConnection {
 /**
  * iOS LAN [RawConnection] backed by Network.framework's `nw_connection_t`.
  *
- * Same contract as [JvmRawConnection]/[AndroidRawConnection] but built on the
+ * Same contract as `JvmRawConnection`/`AndroidRawConnection` but built on the
  * Apple C API rather than POSIX sockets:
  *
  * - **State**: NWConnection's state-changed handler maps to [_state].

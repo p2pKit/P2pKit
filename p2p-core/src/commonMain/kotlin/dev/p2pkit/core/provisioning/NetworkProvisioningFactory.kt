@@ -65,7 +65,8 @@ public class ProvisioningContext public constructor(
     /**
      * Parent [Job] the manager should attach its scope to so the kit's
      * `stop()` automatically tears the manager down (cancels callbacks,
-     * releases hotspot reservations, unbinds [android.net.ConnectivityManager.bindProcessToNetwork]
+     * releases hotspot reservations, unbinds
+     * `android.net.ConnectivityManager.bindProcessToNetwork`
      * on Android, etc.). `null` if no parent is available — managers fall
      * back to a free-standing scope, in which case the host is responsible
      * for explicit cleanup.

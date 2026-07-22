@@ -1,0 +1,16 @@
+public final class dev/p2pkit/transport/lan/JvmLanDiag {
+	public static final field INSTANCE Ldev/p2pkit/transport/lan/JvmLanDiag;
+	public final fun describeInterfaces ()Ljava/lang/String;
+	public final fun frame (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun getEnabled ()Z
+	public final fun getEvents ()Lkotlinx/coroutines/flow/SharedFlow;
+	public final fun getTraceFrames ()Z
+	public final fun log (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun setEnabled (Z)V
+	public final fun setTraceFrames (Z)V
+}
+
+public final class dev/p2pkit/transport/lan/JvmLanDslKt {
+	public static final fun lan (Ldev/p2pkit/core/dsl/TransportsBuilder;)V
+}
+

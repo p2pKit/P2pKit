@@ -5,7 +5,7 @@ package dev.p2pkit.core
  *
  * `Peer` is intentionally minimal and stable: it does **not** carry transport
  * details such as host or port — those are internal. Last-seen times are also
- * tracked separately so heartbeats do not churn the peers [StateFlow].
+ * tracked separately so heartbeats do not churn the peers `StateFlow`.
  *
  * @property id Stable identifier for this peer (see [PeerId]).
  * @property name Human-readable device name set by the remote app.

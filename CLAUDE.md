@@ -35,11 +35,11 @@ Java 17 required (`jvmToolchain(17)`); iOS targets compile only on a macOS host.
 ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance
 ./gradlew :iosApp:runIosSimulator                   # exact SIM_UDID, or an unambiguous SIM_NAME; isolated DerivedData per run
 
-# Publishing — local only; no remote Maven Central repo is wired yet
+# Publishing — local shape gate only; remote release is owner-authorized
 ./gradlew publishToMavenLocal                       # dev.p2pkit:<module>:<version> for the four library modules
 ```
 
-There is no lint/format task configured. Maven coordinates come from `gradle.properties` (`GROUP` / `VERSION_NAME`) applied to all modules in the root `build.gradle.kts`. `maven-publish` + Central-shaped POMs are wired on all four library modules; artifact signing is wired centrally in the root build and activates only when a PGP key is supplied via the `signingInMemoryKey`(+`Password`) properties (`ORG_GRADLE_PROJECT_…` env vars) — without a key, Sign tasks are SKIPPED and `publishToMavenLocal` needs no secrets. Release recipe: `docs/STABILIZATION_AND_RELEASE.md` Part B.
+There is no lint/format task configured. Maven coordinates come from `gradle.properties` (`GROUP` / `VERSION_NAME`) applied to all modules in the root `build.gradle.kts`. `maven-publish` + Central-shaped POMs are wired on all four library modules; strict Dokka archives, ABI baselines, dependency locks/verification, and CycloneDX SBOM validation are part of the local release gate. Artifact signing is wired centrally and activates only when a PGP key is supplied via the `signingInMemoryKey`(+`Password`) properties (`ORG_GRADLE_PROJECT_…` env vars) — without a key, Sign tasks are SKIPPED and `publishToMavenLocal` needs no secrets. A remote Central/OSSRH target remains blocked on explicit owner/service authorization; do not add one by assumption. Release recipe: `docs/STABILIZATION_AND_RELEASE.md` Part B.
 
 ## Module structure
 
@@ -88,7 +88,7 @@ The SDK logs through an injectable `P2pLogger` (builder `logger` knob; default N
 
 - Core logic is tested in `commonTest` using fakes in `p2p-core/src/commonTest/.../testfixtures/` (`FakeDataTransport`, `FakeDiscoveryTransport`, `FakeRawConnection`, `FakeNetworkPathObserver`) — prefer these for session/protocol/reconnect tests; no real I/O needed.
 - Integration: `:p2p-transport-lan:jvmTest` runs two full `P2pKit` instances in one JVM over real TCP + mDNS (text, 200 KB binary, SHA-256-verified 5 MiB file). `iosSimulatorArm64Test` mirrors it over real Bonjour + `nw_connection_t`.
-- Known-flaky (pre-existing): `IosLanLifecycleTest.peerLostEventFiresWhenPeerStops` and `advertiseStopRestartProducesObservablePeerChurn` fail on the iOS simulator because its NWBrowser doesn't reliably deliver *removed* results. Do **not** mask them with wider timeouts or `@Ignore` — the peer-Lost path is validated on real hardware instead (smoke-matrix row A4 in `docs/STABILIZATION_AND_RELEASE.md`).
+- The Apple simulator suite passes all executed affected tests, but simulator execution cannot prove physical Bonjour removal, AWDL, address rotation, or hostile-network departure. Preserve exact assertions and bounded timeouts; validate those paths on real hardware (smoke-matrix rows A1–A8 in `docs/STABILIZATION_AND_RELEASE.md`).
 - There are **no instrumented Android tests** — Android-specific LAN paths are verified manually (recipes in `INTERNAL_TESTING.md`).
 
 ## Key documents

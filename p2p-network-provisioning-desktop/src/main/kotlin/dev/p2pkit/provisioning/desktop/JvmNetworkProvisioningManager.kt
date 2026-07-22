@@ -156,7 +156,7 @@ public class JvmNetworkProvisioningManager private constructor(
         )
     }
 
-    /** Cancels the background polling loop. Called by [P2pKit.stop]'s scope cancellation indirectly. */
+    /** Cancels the background polling loop. Called indirectly by `P2pKit.stop()` scope cancellation. */
     public fun close() {
         scopeJob.cancel()
     }

@@ -89,7 +89,7 @@ internal interface SessionLifecycleGate {
  *     [ReconnectHandler] that re-dials and re-handshakes after connection
  *     loss, then rearms the same [P2pSessionImpl] in place so the public
  *     session identity is preserved.
- *   - Close all sessions cleanly on [stop] / [closeAllSessions].
+ *   - Close all sessions cleanly on kit stop or [closeAllSessions].
  */
 internal class SessionManager(
     private val scope: CoroutineScope,
@@ -1141,7 +1141,7 @@ internal class SessionManager(
      * If two peers `connect()` each other at the same instant each side ends
      * up with two `P2pSession` candidates — one outgoing, one incoming. To
      * keep the public contract of "one session per peer in
-     * [P2pKit.sessions]" honest, both sides apply the same deterministic
+     * `P2pKit.sessions`" honest, both sides apply the same deterministic
      * tie-break:
      *
      *  - **The smaller-id peer keeps its OUTGOING session** (closes its incoming).
@@ -1153,7 +1153,7 @@ internal class SessionManager(
      *
      * Returns the [RegisterOutcome] so [setupSession] can route the winner
      * back to the caller (outgoing performConnect's deferred, or
-     * [P2pKit.incomingSessions] for accepted inbound sessions).
+     * `P2pKit.incomingSessions` for accepted inbound sessions).
      */
     private suspend fun registerSession(
         peerId: PeerId,
@@ -1279,7 +1279,7 @@ internal class SessionManager(
 
     /**
      * Handle a host-network path-status change. Called by [P2pKitImpl] which
-     * subscribes to the kit's [NetworkPathObserver] once at startup.
+     * subscribes to the kit's `NetworkPathObserver` once at startup.
      *
      * - [NetworkPathStatus.Unsatisfied]: route every active session through
      *   [P2pSessionImpl.notifyPathLost], which calls `onConnectionLost`. The
@@ -1292,7 +1292,7 @@ internal class SessionManager(
      *   reconnect handler currently parked in `retryDelayMillis` wakes and
      *   attempts immediately.
      * - [NetworkPathStatus.Unknown]: no-op. Treated as "no information",
-     *   not "no network" — matches the [NoOpNetworkPathObserver] default
+     *   not "no network" — matches the no-op network-path observer default
      *   on platforms with no observer wired up.
      */
     fun applyPathChange(status: NetworkPathStatus) {

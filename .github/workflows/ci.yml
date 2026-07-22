@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "remediation/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  complete-gate:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Configure Java 17
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Validate wrapper and configure Gradle
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Install Android API 37
+        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-37'
+
+      - name: Verify repository entry points
+        run: |
+          scripts/check-gradle-wrapper.sh
+          scripts/tests/check-gradle-wrapper-test.sh
+          scripts/tests/check-release-tag-test.sh
+          scripts/tests/run-ios-app-test.sh
+
+      - name: Run complete module and platform checks
+        run: ./gradlew check --console=plain
+
+      - name: Verify API, documentation, and SBOM
+        run: |
+          ./gradlew :p2p-core:checkKotlinAbi :p2p-transport-lan:checkKotlinAbi :p2p-network-provisioning-android:checkKotlinAbi :p2p-network-provisioning-desktop:checkKotlinAbi --console=plain
+          ./gradlew :p2p-core:dokkaGeneratePublicationHtml :p2p-transport-lan:dokkaGeneratePublicationHtml :p2p-network-provisioning-android:dokkaGeneratePublicationHtml :p2p-network-provisioning-desktop:dokkaGeneratePublicationHtml --console=plain
+          scripts/check-sbom.sh
+
+      - name: Verify local release artifacts and consumers
+        run: |
+          scripts/check-publish-artifacts.sh
+          scripts/check-published-consumers.sh
+          ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance --console=plain
+
+      - name: Upload SBOM evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: cyclonedx-sbom
+          path: build/reports/cyclonedx/bom.*
+          if-no-files-found: error

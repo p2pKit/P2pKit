@@ -8,6 +8,7 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.first
 
 /**
  * Test-controllable [DiscoveryTransport]. Tests push [PeerEvent]s through
@@ -68,6 +69,11 @@ internal class FakeDiscoveryTransport(
 
     override suspend fun refresh() {
         refreshCalls++
+    }
+
+    /** Wait until PeerRegistry has attached its replay-zero event collector. */
+    suspend fun awaitSubscriber() {
+        _events.subscriptionCount.first { it > 0 }
     }
 
     /**

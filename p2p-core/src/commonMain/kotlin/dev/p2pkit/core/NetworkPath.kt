@@ -37,7 +37,7 @@ public sealed class NetworkPathStatus {
      * No usable default path. On iOS this is `nw_path_status_unsatisfied`
      * (typically Wi-Fi off, in-flight mode, or no carrier); on Android it's
      * after the last matching Wi-Fi/Ethernet network is lost (cellular
-     * alone does not satisfy — see [AndroidNetworkPathObserver]).
+     * alone does not satisfy — see the Android network-path observer).
      *
      * When the SDK observes a transition into `Unsatisfied`, every session
      * in `Connected` is immediately routed to `onConnectionLost`. That
@@ -64,11 +64,11 @@ public sealed class NetworkPathStatus {
  *     dispatch queue. Wired automatically by [P2pKit.create]. Apps do not
  *     need to construct one unless they want to override.
  *   - Android: `P2pKitAndroid.initialize(context)` supplies the application
- *     context used to construct [AndroidNetworkPathObserver] by default.
+ *     context used to construct the Android network-path observer by default.
  *     Without initialization, Android falls back to
- *     [NoOpNetworkPathObserver]. Apps can still override either default via
+ *     the no-op network-path observer. Apps can still override either default via
  *     the lifecycle DSL.
- *   - JVM desktop: defaults to [NoOpNetworkPathObserver]. There is no
+ *   - JVM desktop: defaults to the no-op network-path observer. There is no
  *     reliable cross-platform JDK API for network-path change events; if a
  *     desktop app wants this behaviour it can supply a custom observer
  *     (e.g., polling `NetworkInterface.getNetworkInterfaces()`).

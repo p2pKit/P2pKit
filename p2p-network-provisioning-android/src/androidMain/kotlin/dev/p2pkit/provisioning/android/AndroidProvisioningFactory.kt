@@ -12,7 +12,7 @@ import dev.p2pkit.core.provisioning.ProvisioningContext
  * Holds only the application context — not an Activity reference — so the
  * library never leaks a UI lifecycle. The host app supplies the runtime
  * permission flow; the library only reports what's missing via
- * [P2pKit.permissions] (the host wires [AndroidP2pPermissionManager]).
+ * `P2pKit.permissions` (the host wires [AndroidP2pPermissionManager]).
  */
 public class AndroidProvisioningFactory(
     applicationContext: Context

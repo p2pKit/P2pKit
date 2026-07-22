@@ -156,7 +156,7 @@ internal class AndroidLanDiscoveryTransport(
     /**
      * The lifecycle/rebind state machine (see the class KDoc's 2026-07 note).
      * All start/stop/refresh/rebind serialization happens on the
-     * coordinator's internal lock, exactly where the transport's own [Mutex]
+     * coordinator's internal lock, exactly where the transport's own `Mutex`
      * used to sit.
      */
     private val coordinator = JmdnsLifecycleCoordinator<Network, JmDNS>(
@@ -758,7 +758,7 @@ internal class AndroidLanDiscoveryTransport(
 }
 
 /**
- * Select an ordered, bounded list of safe dial candidates from [candidates].
+ * Select an ordered, bounded list of safe dial candidates from `candidates`.
  * The caller publishes the complete list as routing hints so the data
  * transport can fall back when the first address is stale. The compatibility
  * [selectRoutableHost] helper below returns only the first candidate for older
@@ -771,14 +771,14 @@ internal class AndroidLanDiscoveryTransport(
  * `scopeId` is non-zero is retained with its `%scope` suffix. Loopback,
  * wildcard, and unscoped IPv6 link-local addresses are rejected.
  *
- * When [localAddresses] contains valid interface prefixes, only same-subnet
+ * When `localAddresses` contains valid interface prefixes, only same-subnet
  * candidates are admitted. If no usable prefix is available, the selector
  * retains the general routability filter for constrained environments. No
  * identity checks or network I/O occur here; peerId/appId validation happens
  * upstream and connection retry belongs to the data transport. The
  * implementation is duplicated in `JvmLanDiscoveryTransport` because the
  * source sets cannot share JVM-only `InetAddress` code; keep both copies in
- * sync. [HostSelectorTest] pins the JVM contract for both implementations.
+ * sync. `HostSelectorTest` pins the JVM contract for both implementations.
  */
 internal data class LanInterfaceAddress(
     val address: InetAddress,

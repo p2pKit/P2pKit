@@ -1,0 +1,54 @@
+name: Release dry run
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Tag to validate without publishing remotely
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  local-release:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Configure Java 17
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Validate wrapper and configure Gradle
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+      - name: Install Android API 37
+        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-37'
+      - name: Validate release identity
+        run: scripts/check-release-tag.sh "$RELEASE_TAG"
+      - name: Run local release gate
+        run: |
+          scripts/check-gradle-wrapper.sh
+          ./gradlew check --console=plain
+          scripts/check-sbom.sh
+          scripts/check-publish-artifacts.sh
+          scripts/check-published-consumers.sh
+          ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance --console=plain
+      - name: Upload local release evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: release-evidence-${{ env.RELEASE_TAG }}
+          path: |
+            build/reports/cyclonedx/bom.*
+            p2p-core/api/**
+            p2p-transport-lan/api/**
+            p2p-network-provisioning-desktop/api/**
+          if-no-files-found: error

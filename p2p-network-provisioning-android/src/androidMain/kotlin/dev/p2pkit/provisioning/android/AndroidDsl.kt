@@ -38,7 +38,7 @@ import dev.p2pkit.core.dsl.NetworkProvisioningConfigBuilder
  *    runtime; the Android permission manager logs a diagnostic when they are
  *    absent from the merged application manifest.
  *
- * P2pKit reports missing perms via [P2pKit.permissions]; the host app
+ * P2pKit reports missing perms via `P2pKit.permissions`; the host app
  * triggers the OS prompt itself. The library never requests them.
  */
 public fun NetworkProvisioningConfigBuilder.android(applicationContext: Context) {

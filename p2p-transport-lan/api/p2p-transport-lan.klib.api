@@ -1,0 +1,47 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, iosX64]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <dev.p2pkit:p2p-transport-lan>
+final class dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager : dev.p2pkit.core.provisioning/NetworkProvisioningManager { // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager|null[0]
+    final val events // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.events|{}events[0]
+        final fun <get-events>(): kotlinx.coroutines.flow/Flow<dev.p2pkit.core.provisioning/NetworkProvisioningEvent> // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.events.<get-events>|<get-events>(){}[0]
+    final val networkState // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.networkState|{}networkState[0]
+        final fun <get-networkState>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.core.provisioning/NetworkState> // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.networkState.<get-networkState>|<get-networkState>(){}[0]
+    final val state // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.state|{}state[0]
+        final fun <get-state>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.core.provisioning/NetworkProvisioningState> // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.state.<get-state>|<get-state>(){}[0]
+
+    final suspend fun createManualPeer(kotlin/String, kotlin/Int): dev.p2pkit.core/Peer // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.createManualPeer|createManualPeer(kotlin.String;kotlin.Int){}[0]
+    final suspend fun createManualPeer(kotlin/String, kotlin/Int, dev.p2pkit.core/PeerFingerprint): dev.p2pkit.core/Peer // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.createManualPeer|createManualPeer(kotlin.String;kotlin.Int;dev.p2pkit.core.PeerFingerprint){}[0]
+    final suspend fun getManualConnectionInfo(): dev.p2pkit.core.provisioning/ManualConnectionInfo? // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.getManualConnectionInfo|getManualConnectionInfo(){}[0]
+    final suspend fun joinLocalNetwork(dev.p2pkit.core.provisioning/WifiCredentials): dev.p2pkit.core.provisioning/JoinNetworkResult // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.joinLocalNetwork|joinLocalNetwork(dev.p2pkit.core.provisioning.WifiCredentials){}[0]
+    final suspend fun startLocalNetwork(dev.p2pkit.core.provisioning/LocalNetworkConfig): dev.p2pkit.core.provisioning/LocalNetworkResult // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.startLocalNetwork|startLocalNetwork(dev.p2pkit.core.provisioning.LocalNetworkConfig){}[0]
+    final suspend fun stopLocalNetwork() // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.stopLocalNetwork|stopLocalNetwork(){}[0]
+}
+
+final object dev.p2pkit.transport.lan/IosLanDebug { // dev.p2pkit.transport.lan/IosLanDebug|null[0]
+    final val events // dev.p2pkit.transport.lan/IosLanDebug.events|{}events[0]
+        final fun <get-events>(): kotlinx.coroutines.flow/SharedFlow<kotlin/String> // dev.p2pkit.transport.lan/IosLanDebug.events.<get-events>|<get-events>(){}[0]
+
+    final var mirrorToConsole // dev.p2pkit.transport.lan/IosLanDebug.mirrorToConsole|{}mirrorToConsole[0]
+        final fun <get-mirrorToConsole>(): kotlin/Boolean // dev.p2pkit.transport.lan/IosLanDebug.mirrorToConsole.<get-mirrorToConsole>|<get-mirrorToConsole>(){}[0]
+        final fun <set-mirrorToConsole>(kotlin/Boolean) // dev.p2pkit.transport.lan/IosLanDebug.mirrorToConsole.<set-mirrorToConsole>|<set-mirrorToConsole>(kotlin.Boolean){}[0]
+    final var retainHistory // dev.p2pkit.transport.lan/IosLanDebug.retainHistory|{}retainHistory[0]
+        final fun <get-retainHistory>(): kotlin/Boolean // dev.p2pkit.transport.lan/IosLanDebug.retainHistory.<get-retainHistory>|<get-retainHistory>(){}[0]
+        final fun <set-retainHistory>(kotlin/Boolean) // dev.p2pkit.transport.lan/IosLanDebug.retainHistory.<set-retainHistory>|<set-retainHistory>(kotlin.Boolean){}[0]
+
+    final fun log(kotlin/String, kotlin/String) // dev.p2pkit.transport.lan/IosLanDebug.log|log(kotlin.String;kotlin.String){}[0]
+}
+
+final object dev.p2pkit.transport.lan/IosManualProvisioningFactory : dev.p2pkit.core.provisioning/NetworkProvisioningFactory { // dev.p2pkit.transport.lan/IosManualProvisioningFactory|null[0]
+    final fun build(dev.p2pkit.core.provisioning/ProvisioningContext): dev.p2pkit.core.provisioning/NetworkProvisioningManager // dev.p2pkit.transport.lan/IosManualProvisioningFactory.build|build(dev.p2pkit.core.provisioning.ProvisioningContext){}[0]
+}
+
+final fun (dev.p2pkit.core.dsl/NetworkProvisioningConfigBuilder).dev.p2pkit.transport.lan/iosManualIp() // dev.p2pkit.transport.lan/iosManualIp|iosManualIp@dev.p2pkit.core.dsl.NetworkProvisioningConfigBuilder(){}[0]
+final fun (dev.p2pkit.core.dsl/TransportsBuilder).dev.p2pkit.transport.lan/lan() // dev.p2pkit.transport.lan/lan|lan@dev.p2pkit.core.dsl.TransportsBuilder(){}[0]
+final fun (dev.p2pkit.core/P2pKit).dev.p2pkit.transport.lan/peersSnapshot(): kotlin.collections/List<dev.p2pkit.core/Peer> // dev.p2pkit.transport.lan/peersSnapshot|peersSnapshot@dev.p2pkit.core.P2pKit(){}[0]
+final fun (dev.p2pkit.core/P2pKit).dev.p2pkit.transport.lan/sessionsSnapshot(): kotlin.collections/List<dev.p2pkit.core/P2pSession> // dev.p2pkit.transport.lan/sessionsSnapshot|sessionsSnapshot@dev.p2pkit.core.P2pKit(){}[0]
+final fun (dev.p2pkit.core/P2pSession).dev.p2pkit.transport.lan/stateName(): kotlin/String // dev.p2pkit.transport.lan/stateName|stateName@dev.p2pkit.core.P2pSession(){}[0]

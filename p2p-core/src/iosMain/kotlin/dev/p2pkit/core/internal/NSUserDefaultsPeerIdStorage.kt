@@ -172,7 +172,7 @@ internal class NSUserDefaultsPeerIdStorage(
  * Reduce a raw appId to a safe `NSUserDefaults` key suffix.
  *
  * Keeps `[A-Za-z0-9._-]`, replaces anything else with `_`, collapses any
- * `..` to `._` (parallels [sanitizeAppIdForFilesystem] on JVM/Android), and
+ * `..` to `._` (parallels `sanitizeAppIdForFilesystem` on JVM/Android), and
  * caps the result at 64 characters.
  */
 internal fun sanitizeAppIdForKey(raw: String): String {
