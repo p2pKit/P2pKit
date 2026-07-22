@@ -2,8 +2,12 @@ package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.transport.RawConnection
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
@@ -15,6 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -133,6 +138,8 @@ internal class JvmRawConnection(
                         )
                     }
                     JvmLanDiag.log("conn", "$label write error: ${e.message}")
+                    closeSocketOnce()
+                    _state.value = ConnectionState.Closed
                     throw e
                 }
                 if (!writeState.compareAndSet(WRITE_INFLIGHT, WRITE_DONE)) {
@@ -154,20 +161,49 @@ internal class JvmRawConnection(
         }
     }
 
+    @OptIn(DelicateCoroutinesApi::class)
     override fun read(): Flow<ByteArray> = flow {
         // AUDIT-2026-07 (CON-1): the terminal cleanup below is in a `finally`
         // so it runs on EVERY exit from this flow — including a
-        // CancellationException from either withContext when the collector is
-        // cancelled, which previously propagated past the cleanup and left
-        // the fd open until GC. The CE itself still propagates (never
-        // swallowed); every production reader-cancellation site tears the
-        // connection down anyway, so releasing here is the correct semantic.
+        // CancellationException when the collector is cancelled, which
+        // previously left the blocking read and fd alive until a remote close
+        // or GC. The CE itself still propagates (never swallowed); every
+        // production reader-cancellation site tears the connection down
+        // anyway, so releasing here is the correct semantic.
         try {
-            val input = withContext(Dispatchers.IO) { socket.getInputStream() }
+            val input = socket.getInputStream()
             val buffer = ByteArray(BUFFER_SIZE)
             while (currentCoroutineContext().isActive) {
                 val n = try {
-                    withContext(Dispatchers.IO) { input.read(buffer) }
+                    suspendCancellableCoroutine<Int> { continuation ->
+                        if (socketClosed.get()) {
+                            continuation.resume(-1)
+                            return@suspendCancellableCoroutine
+                        }
+                        val readJob = connScope.launch(
+                            context = Dispatchers.IO,
+                            start = CoroutineStart.ATOMIC
+                        ) {
+                            try {
+                                val read = input.read(buffer)
+                                if (continuation.isActive) continuation.resume(read)
+                            } catch (error: Throwable) {
+                                if (continuation.isActive) {
+                                    continuation.resumeWithException(error)
+                                } else if (error !is IOException) {
+                                    throw error
+                                }
+                            }
+                        }
+                        continuation.invokeOnCancellation {
+                            // SocketInputStream.read() is not interruptible by
+                            // coroutine cancellation. Closing the descriptor is
+                            // the only portable way to unblock the IO worker.
+                            closeSocketOnce()
+                            _state.value = ConnectionState.Closed
+                            readJob.cancel()
+                        }
+                    }
                 } catch (e: IOException) {
                     // Socket closed locally or remotely; complete the flow normally.
                     JvmLanDiag.log("conn", "$label read error (socket dropped): ${e.message}")

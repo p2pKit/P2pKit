@@ -102,7 +102,7 @@ class JvmRawConnectionCancellationTest {
      * `closeSocketOnce()`, leaving the fd open until GC.
      */
     @Test
-    fun cancelledReadCollectorThenRemoteCloseReleasesSocketFd() {
+    fun cancellingReadCollectorImmediatelyReleasesSocketFd() {
         runBlocking {
             openLoopbackPair().use { pair ->
                 val connection = JvmRawConnection(pair.local)
@@ -119,15 +119,13 @@ class JvmRawConnectionCancellationTest {
                 withTimeout(TIMEOUT_MS) { firstChunk.await() }
 
                 reader.cancel()
-                // The blocking input.read() does not observe cancellation; the
-                // remote close is what unblocks it, after which the pending
-                // CancellationException surfaces inside the flow.
-                pair.remote.close()
+                // Cancellation itself must close the local socket and unblock
+                // SocketInputStream.read(); no remote action is required.
                 withTimeout(TIMEOUT_MS) { reader.join() }
 
                 assertTrue(
                     pair.local.isClosed,
-                    "cancelled read collector + remote close must release the local socket fd"
+                    "cancelled read collector must release the local socket fd"
                 )
                 assertEquals(ConnectionState.Closed, connection.state.value)
             }

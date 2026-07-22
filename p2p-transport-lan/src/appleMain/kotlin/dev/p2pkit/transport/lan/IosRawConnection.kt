@@ -48,6 +48,11 @@ import platform.Network.nw_path_uses_interface_type
 import platform.darwin.dispatch_queue_t
 import platform.posix.uint8_tVar
 
+/** Non-suspending cancellation ownership required by Network.framework callbacks. */
+internal interface IosConnectionHandle : RawConnection {
+    fun cancelNow(reason: String)
+}
+
 /**
  * iOS LAN [RawConnection] backed by Network.framework's `nw_connection_t`.
  *
@@ -73,10 +78,14 @@ import platform.posix.uint8_tVar
  */
 internal class IosRawConnection private constructor(
     private val connection: nw_connection_t,
-    private val queue: dispatch_queue_t
-) : RawConnection {
+    private val queue: dispatch_queue_t,
+    private val sendOverride: (suspend (ByteArray) -> Unit)? = null,
+    startNativeConnection: Boolean = true
+) : IosConnectionHandle {
 
-    private val _state = MutableStateFlow(ConnectionState.Connecting)
+    private val _state = MutableStateFlow(
+        if (startNativeConnection) ConnectionState.Connecting else ConnectionState.Connected
+    )
     override val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
     private val writeLock = Mutex()
@@ -180,8 +189,10 @@ internal class IosRawConnection private constructor(
             }
             Unit
         }
-        nw_connection_start(connection)
-        IosLanDebug.log("conn", "wrapped + nw_connection_start invoked")
+        if (startNativeConnection) {
+            nw_connection_start(connection)
+            IosLanDebug.log("conn", "wrapped + nw_connection_start invoked")
+        }
     }
 
     override suspend fun write(bytes: ByteArray) {
@@ -212,6 +223,17 @@ internal class IosRawConnection private constructor(
             return
         }
         writeLock.withLock {
+            // A writer may have queued behind another send while close()
+            // cancelled the connection. Recheck after acquiring ownership so
+            // no queued write is dispatched on a terminal connection.
+            if (closed) {
+                IosLanDebug.log("conn", "write(${bytes.size}): REFUSED (closed while queued)")
+                throw IllegalStateException("connection closed")
+            }
+            sendOverride?.let { send ->
+                withTimeout(WRITE_TIMEOUT_MILLIS) { send(bytes) }
+                return@withLock
+            }
             // Log the attempt up-front so the timeline shows the send was
             // dispatched; we only log the completion on error (a noisy
             // "completion OK" per packet would drown out the lines that
@@ -285,6 +307,11 @@ internal class IosRawConnection private constructor(
         IosLanDebug.log("conn", "read: flow collector started")
         while (!closed) {
             val chunk: ByteArray? = suspendCancellableCoroutine { cont ->
+                cont.invokeOnCancellation {
+                    // Cancelling only the Kotlin continuation does not cancel
+                    // Network.framework's outstanding receive operation.
+                    cancelNow("read collector cancelled")
+                }
                 p2pkit_nw_connection_receive_default(
                     connection = connection,
                     min_incomplete_length = 1u,
@@ -344,7 +371,7 @@ internal class IosRawConnection private constructor(
      * this is the single place that guarantees the cancel for locally
      * closed connections without double-cancelling remotely-ended ones.
      */
-    internal fun cancelNow(reason: String) {
+    override fun cancelNow(reason: String) {
         closed = true
         _state.value = ConnectionState.Closed
         cancelOnce(reason)
@@ -378,6 +405,17 @@ internal class IosRawConnection private constructor(
 
         fun wrap(connection: nw_connection_t, queue: dispatch_queue_t): IosRawConnection =
             IosRawConnection(connection, queue)
+
+        /** Deterministic send seam for the write/close ownership tests. */
+        internal fun wrapForWriteTest(
+            connection: nw_connection_t,
+            queue: dispatch_queue_t,
+            send: suspend (ByteArray) -> Unit
+        ): IosRawConnection = IosRawConnection(
+            connection = connection,
+            queue = queue,
+            sendOverride = send,
+            startNativeConnection = false
+        )
     }
 }
-

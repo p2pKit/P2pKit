@@ -2,12 +2,28 @@
 
 package dev.p2pkit.transport.lan
 
+import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerId
+import dev.p2pkit.core.Platform
+import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.TransportContext
+import dev.p2pkit.core.transport.TransportHint
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import platform.Network.nw_connection_create
@@ -45,6 +61,19 @@ class IosRawConnectionTest {
         return IosRawConnection.wrap(conn, queue)
     }
 
+    private fun newWriteControlledConnection(
+        send: suspend (ByteArray) -> Unit
+    ): IosRawConnection {
+        val params = p2pkit_nw_create_plain_tcp_parameters()
+            ?: error("p2pkit_nw_create_plain_tcp_parameters returned null")
+        val endpoint = nw_endpoint_create_host("127.0.0.1", "9")
+            ?: error("nw_endpoint_create_host returned null")
+        val conn = nw_connection_create(endpoint, params)
+            ?: error("nw_connection_create returned null")
+        val queue = dispatch_queue_create("dev.p2pkit.test.rawconn.write", null)
+        return IosRawConnection.wrapForWriteTest(conn, queue, send)
+    }
+
     @Test
     fun writeAfterCloseIsRefusedPromptly() = runBlocking {
         val raw = newStartedConnection()
@@ -71,5 +100,84 @@ class IosRawConnectionTest {
             assertFailsWith<IllegalStateException> { raw.write(byteArrayOf(1)) }
         }
         assertEquals("connection closed", e.message)
+    }
+
+    @Test
+    fun cancellingReadCollectorCancelsOutstandingNetworkReceive() = runBlocking {
+        val context = TransportContext(
+            appId = AppId("ios-read-cancel"),
+            localPeerId = PeerId("ios-read-cancel-local"),
+            deviceName = "local",
+            platform = Platform.IOS
+        )
+        val transport = IosLanDataTransport(context, IosEndpointRegistry())
+        assertTrue(transport.start().isSuccess)
+        val port = requireNotNull(transport.tcpPort.value)
+        val incoming = async(start = CoroutineStart.UNDISPATCHED) {
+            transport.incomingConnections().first()
+        }
+        val peer = InternalPeer(
+            publicPeer = Peer(
+                id = PeerId("ios-read-cancel-remote"),
+                name = "loopback",
+                platform = Platform.IOS,
+                supportedTransports = setOf(TransportKind.LAN)
+            ),
+            transportHints = listOf(
+                TransportHint(TransportKind.LAN, host = "127.0.0.1", port = port)
+            )
+        )
+        val outbound = withTimeout(CONNECTION_TIMEOUT_MILLIS) { transport.connect(peer) }
+        val inbound = withTimeout(CONNECTION_TIMEOUT_MILLIS) { incoming.await() }
+        try {
+            // UNDISPATCHED runs the flow until nw_connection_receive is
+            // installed, providing deterministic synchronization with the
+            // cancellation handler and no timing delay.
+            val reader = launch(start = CoroutineStart.UNDISPATCHED) {
+                inbound.read().collect { }
+            }
+            reader.cancel()
+            withTimeout(CONNECTION_TIMEOUT_MILLIS) { reader.cancelAndJoin() }
+            assertEquals(ConnectionState.Closed, inbound.state.value)
+        } finally {
+            outbound.close()
+            transport.close()
+        }
+        assertNull(transport.tcpPort.value)
+        assertNull(transport.listener)
+        assertTrue(transport.start().isFailure, "terminally closed transport must not restart")
+    }
+
+    @Test
+    fun writerQueuedBeforeCloseIsRefusedAfterItAcquiresTheMutex() = runBlocking {
+        val firstSendEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseFirstSend = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val raw = newWriteControlledConnection { bytes ->
+            if (bytes.first() == 1.toByte()) {
+                firstSendEntered.complete(Unit)
+                releaseFirstSend.await()
+            }
+        }
+
+        val first = async(start = CoroutineStart.UNDISPATCHED) {
+            raw.write(byteArrayOf(1))
+        }
+        firstSendEntered.await()
+        val queued = async(start = CoroutineStart.UNDISPATCHED) {
+            runCatching { raw.write(byteArrayOf(2)) }
+        }
+
+        raw.close()
+        releaseFirstSend.complete(Unit)
+        first.await()
+        val error = queued.await().exceptionOrNull()
+
+        assertIs<IllegalStateException>(error)
+        assertEquals("connection closed", error.message)
+        assertEquals(ConnectionState.Closed, raw.state.value)
+    }
+
+    private companion object {
+        const val CONNECTION_TIMEOUT_MILLIS: Long = 10_000
     }
 }

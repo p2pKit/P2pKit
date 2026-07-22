@@ -12,19 +12,18 @@ import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import kotlin.concurrent.Volatile
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelChildren
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -34,6 +33,7 @@ import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
 import platform.Foundation.NSNotification
 import platform.Foundation.NSNotificationCenter
 import platform.Network.nw_connection_create
+import platform.Network.nw_connection_t
 import platform.Network.nw_endpoint_create_host
 import platform.Network.nw_endpoint_t
 import platform.Network.nw_listener_cancel
@@ -96,7 +96,9 @@ import platform.darwin.dispatch_time
  */
 internal class IosLanDataTransport(
     @Suppress("unused") private val transportContext: TransportContext,
-    private val endpointRegistry: IosEndpointRegistry
+    private val endpointRegistry: IosEndpointRegistry,
+    private val connectionFactory: (nw_connection_t, dispatch_queue_t) -> IosConnectionHandle =
+        { connection, connectionQueue -> IosRawConnection.wrap(connection, connectionQueue) }
 ) : DataTransport, HasLocalTcpEndpoint {
 
     override val type: TransportKind = TransportKind.LAN
@@ -182,7 +184,10 @@ internal class IosLanDataTransport(
     internal var listener: nw_listener_t = null
         private set
 
-    private val incomingChannel = Channel<RawConnection>(Channel.UNLIMITED)
+    private val incomingQueue = BoundedInboundQueue<IosConnectionHandle>(
+        capacity = MAX_BUFFERED_INBOUND_CONNECTIONS,
+        onDrop = { it.cancelNow("inbound admission rejected") }
+    )
     private val startMutex = Mutex()
 
     @Volatile
@@ -362,19 +367,8 @@ internal class IosLanDataTransport(
         nw_listener_set_new_connection_handler(l) { conn ->
             if (conn != null && !closed) {
                 IosLanDebug.log("data", "listener: accepted inbound nw_connection")
-                val raw = IosRawConnection.wrap(conn, queue)
-                val sent = incomingChannel.trySend(raw).isSuccess
-                if (!sent) {
-                    // AUDIT-2026-06 (#20b): wrap() already STARTED the
-                    // connection; the only way the UNLIMITED channel refuses
-                    // it is a concurrent close() having closed the channel
-                    // after the `closed` check above. Dropping the wrapper
-                    // without cancelling would leak the started nw_connection.
-                    // cancelNow is the non-suspend close — this handler runs
-                    // on the libdispatch queue and must return quickly
-                    // without suspending.
-                    raw.cancelNow("inbound dropped (incoming channel refused)")
-                }
+                val raw = connectionFactory(conn, queue)
+                val sent = incomingQueue.offer(raw)
                 IosLanDebug.log(
                     "data",
                     "listener: handed connection to incoming channel (queued=$sent)"
@@ -478,15 +472,19 @@ internal class IosLanDataTransport(
             throw P2pError.ConnectionFailed("nw_connection_create returned null")
         }
         IosLanDebug.log("connect", "peer=$pid8 nw_connection_create OK, wrapping + awaiting Connected (<=${CONNECT_TIMEOUT_MILLIS}ms)")
-        val raw = IosRawConnection.wrap(conn, queue)
+        val raw = connectionFactory(conn, queue)
         val terminal = try {
             withTimeout(CONNECT_TIMEOUT_MILLIS) {
                 raw.state.first { it != ConnectionState.Connecting }
             }
         } catch (e: TimeoutCancellationException) {
             IosLanDebug.log("connect", "TIMEOUT peer=$pid8 after ${CONNECT_TIMEOUT_MILLIS}ms — closing wrapper")
-            runCatching { raw.close() }
+            raw.cancelNow("outbound connect timeout")
             throw P2pError.ConnectionFailed("iOS LAN connect timed out after ${CONNECT_TIMEOUT_MILLIS}ms")
+        } catch (cancelled: CancellationException) {
+            IosLanDebug.log("connect", "CANCELLED peer=$pid8 — closing wrapper")
+            raw.cancelNow("outbound connect cancelled")
+            throw cancelled
         }
         if (terminal != ConnectionState.Connected) {
             IosLanDebug.log("connect", "FAILED peer=$pid8 terminal=$terminal (expected Connected)")
@@ -496,17 +494,19 @@ internal class IosLanDataTransport(
         return raw
     }
 
-    override fun incomingConnections(): Flow<RawConnection> = incomingChannel.receiveAsFlow()
+    override fun incomingConnections(): Flow<RawConnection> = incomingQueue.asFlow()
 
-    override suspend fun close() {
-        if (closed) return
+    override suspend fun close(): Unit = startMutex.withLock {
+        if (closed) return@withLock
         IosLanDebug.log("data", "close: cancelling path monitor, foreground observer, listener, and incoming channel")
         closed = true
         stopPathMonitor()
         stopForegroundObserver()
         rebindScope.coroutineContext.cancelChildren()
         listener?.let { nw_listener_cancel(it) }
-        incomingChannel.close()
+        listener = null
+        _tcpPort.value = null
+        incomingQueue.closeAndDrain()
         endpointRegistry.clear()
     }
 
@@ -721,10 +721,9 @@ internal class IosLanDataTransport(
             )
             return@withLock
         }
-        // close() does not take startMutex (it must stay non-blocking even
-        // while a rebind is mid-flight), so re-check after the blocking
-        // rebuild: without this a close() racing the 5s bind window left the
-        // fresh listener bound and orphaned forever (AUDIT-2026-06 fix).
+        // Keep the defensive re-check even though close() is now serialized
+        // by startMutex: it protects against future lifecycle call sites that
+        // may latch terminal state before acquiring this lock.
         if (closed) {
             IosLanDebug.log("data", "rebindNow: closed during rebuild — cancelling fresh listener ($reason)")
             nw_listener_cancel(fresh)
@@ -751,6 +750,9 @@ internal class IosLanDataTransport(
     }
 
     internal companion object {
+        /** Matches core's maximum number of concurrently admitted inbound setups. */
+        const val MAX_BUFFERED_INBOUND_CONNECTIONS: Int = 16
+
         /** Bounded outbound connect; LAN should resolve + handshake in << 10 s. */
         const val CONNECT_TIMEOUT_MILLIS: Long = 10_000
 

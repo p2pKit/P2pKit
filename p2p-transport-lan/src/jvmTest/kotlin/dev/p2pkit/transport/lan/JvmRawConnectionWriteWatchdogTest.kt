@@ -3,6 +3,7 @@ package dev.p2pkit.transport.lan
 import dev.p2pkit.core.ConnectionState
 import java.io.Closeable
 import java.io.IOException
+import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -31,6 +32,18 @@ import kotlin.test.assertTrue
  * completes normally and the socket stays open).
  */
 class JvmRawConnectionWriteWatchdogTest {
+
+    private class FailingWriteSocket : Socket() {
+        override fun getOutputStream(): OutputStream = object : OutputStream() {
+            override fun write(value: Int) {
+                throw IOException("forced write failure")
+            }
+
+            override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                throw IOException("forced write failure")
+            }
+        }
+    }
 
     private class LoopbackPair(
         val server: ServerSocket,
@@ -114,6 +127,22 @@ class JvmRawConnectionWriteWatchdogTest {
                 assertEquals(ConnectionState.Connected, connection.state.value)
                 connection.close()
             }
+        }
+    }
+
+    @Test
+    fun ordinaryWriteFailureClosesSocketAndConnectionState() {
+        runBlocking {
+            val socket = FailingWriteSocket()
+            val connection = JvmRawConnection(socket)
+
+            val error = assertFailsWith<IOException> {
+                connection.write(byteArrayOf(1, 2, 3))
+            }
+
+            assertEquals("forced write failure", error.message)
+            assertTrue(socket.isClosed, "ordinary write failure must release the socket")
+            assertEquals(ConnectionState.Closed, connection.state.value)
         }
     }
 

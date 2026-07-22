@@ -34,6 +34,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -150,6 +151,31 @@ class JvmLanAcceptLoopResilienceTest {
             awaitTrue("accept-loop failure surfaced via logger") {
                 bobLogger.warnings().any { it.contains("inbound acceptance ended") }
             }
+
+            // The failed listener is removed from published state and the
+            // core recollection path rebinds the same advertised port.
+            awaitTrue("listener rebound on its advertised port") {
+                bobTransport.tcpPort.value == bobPort
+            }
+
+            val charlieStub = StubDiscovery()
+            val charlie = newKit(
+                "Charlie",
+                TestRecordingLogger(),
+                PairFactory(newLanTransport("Charlie"), charlieStub)
+            )
+            val (charlieOutgoing, charlieIncoming) = establishSession(
+                charlie,
+                bob,
+                charlieStub,
+                bobPort
+            )
+            val recovered = exchangeMessage(
+                charlieOutgoing,
+                charlieIncoming,
+                P2pMessage.Text("after listener recovery")
+            )
+            assertEquals("after listener recovery", assertIs<P2pMessage.Text>(recovered).value)
 
             // ...and the kit survives: the established session (its socket is
             // independent of the listener) still exchanges messages, and no
@@ -273,7 +299,9 @@ class JvmLanAcceptLoopResilienceTest {
     private fun closeServerSocketUnderLoop(transport: JvmLanDataTransport) {
         val field = JvmLanDataTransport::class.java.getDeclaredField("serverSocket")
         field.isAccessible = true
-        val sock = field.get(transport) as ServerSocket
+        @Suppress("UNCHECKED_CAST")
+        val holder = field.get(transport) as AtomicReference<ServerSocket?>
+        val sock = requireNotNull(holder.get())
         sock.close()
     }
 

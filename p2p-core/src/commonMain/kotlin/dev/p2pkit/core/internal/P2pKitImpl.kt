@@ -690,10 +690,11 @@ internal class P2pKitImpl(
                 // startMutex: a concurrent ensureStarted mid-bind must not
                 // interleave with teardown. Bound acquisition so a broken
                 // transport start cannot park terminal stop forever.
-                val lockedIssues = withTimeoutOrNull(STOP_START_MUTEX_TIMEOUT_MS) {
-                    startMutex.withLock { teardownBoundResources() }
-                }
-                if (lockedIssues == null) {
+                val acquiredStartMutex = withTimeoutOrNull(STOP_START_MUTEX_TIMEOUT_MS) {
+                    startMutex.lock()
+                    true
+                } ?: false
+                if (!acquiredStartMutex) {
                     logger.warn(
                         "stop(): startMutex not released within ${STOP_START_MUTEX_TIMEOUT_MS}ms " +
                             "(a transport start() is likely hung); tearing down without the lock"
@@ -706,7 +707,11 @@ internal class P2pKitImpl(
                     )
                     issues += teardownBoundResources()
                 } else {
-                    issues += lockedIssues
+                    try {
+                        issues += teardownBoundResources()
+                    } finally {
+                        startMutex.unlock()
+                    }
                 }
 
                 captureCleanupIssue(
@@ -943,8 +948,16 @@ internal class P2pKitImpl(
         /** Bound for each resource created by an operation that lost its generation. */
         const val STALE_OPERATION_CLEANUP_TIMEOUT_MS: Long = 2_000
 
-        /** Per-resource close bound for terminal and explicit feature teardown. */
-        const val RESOURCE_CLOSE_TIMEOUT_MS: Long = 2_000
+        /**
+         * Per-resource close bound for terminal and explicit feature teardown.
+         * JmDNS 3.6.3's graceful unregister contract waits up to 5 seconds
+         * for its canceler state, so a shorter generic deadline falsely
+         * reports a healthy LAN goodbye as a leak and cancels the coroutine
+         * while it still owns the discovery mutex. The independent cleanup
+         * owner still guarantees that a genuinely hung resource cannot hold
+         * stop beyond this deadline.
+         */
+        const val RESOURCE_CLOSE_TIMEOUT_MS: Long = 6_000
     }
 }
 
