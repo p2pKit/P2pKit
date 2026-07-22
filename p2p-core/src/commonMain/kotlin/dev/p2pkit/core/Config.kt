@@ -1,5 +1,7 @@
 package dev.p2pkit.core
 
+import dev.p2pkit.core.internal.immutableSetSnapshot
+
 /**
  * Keep-alive (PING/PONG) timings for each [P2pSession].
  *
@@ -109,9 +111,25 @@ public sealed interface PeerAuthorizationPolicy {
     public data object RejectUnknown : PeerAuthorizationPolicy
 
     /** Admit only the complete, high-entropy fingerprints in [fingerprints]. */
-    public data class PinnedOnly(
-        val fingerprints: Set<PeerFingerprint>
-    ) : PeerAuthorizationPolicy
+    public class PinnedOnly(
+        fingerprints: Set<PeerFingerprint>
+    ) : PeerAuthorizationPolicy {
+        /** Stable, unmodifiable snapshot of the admitted identities. */
+        public val fingerprints: Set<PeerFingerprint> = immutableSetSnapshot(fingerprints)
+
+        public operator fun component1(): Set<PeerFingerprint> = fingerprints
+
+        public fun copy(
+            fingerprints: Set<PeerFingerprint> = this.fingerprints
+        ): PinnedOnly = PinnedOnly(fingerprints)
+
+        override fun equals(other: Any?): Boolean =
+            this === other || other is PinnedOnly && fingerprints == other.fingerprints
+
+        override fun hashCode(): Int = fingerprints.hashCode()
+
+        override fun toString(): String = "PinnedOnly(fingerprints=$fingerprints)"
+    }
 
     /**
      * Admit any authenticated key whose handshake is bound to the same exact

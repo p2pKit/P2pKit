@@ -47,6 +47,28 @@ import kotlin.test.assertTrue
 class SessionStoreInvariantTest {
 
     @Test
+    fun publishedSessionListsAreStableUnmodifiableSnapshots() = runTest {
+        val store = SessionStore(P2pLogger.NoOp, strictInvariants = true)
+        val session = StubSession(peer = syntheticPeer("immutable", "Immutable"))
+
+        assertTrue(
+            runCatching { (store.sessions.value as MutableList<P2pSession>).add(session) }
+                .isFailure
+        )
+        assertIs<RegisterOutcome.Accepted>(
+            store.tryRegister(
+                peerId = session.peer.id,
+                session = session,
+                isIncoming = false,
+                localPeerIdValue = "local"
+            )
+        )
+        val published = store.sessions.value
+        assertTrue(runCatching { (published as MutableList<P2pSession>).clear() }.isFailure)
+        assertEquals(listOf(session), store.sessions.value)
+    }
+
+    @Test
     fun registrationLookupIsSafeDuringConcurrentMutation() = runTest {
         val store = SessionStore(P2pLogger.NoOp, strictInvariants = true)
         val peer = syntheticPeer("peer-concurrent", "Concurrent")

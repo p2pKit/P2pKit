@@ -1,5 +1,6 @@
 package dev.p2pkit.core
 
+import dev.p2pkit.core.internal.immutableListSnapshot
 import dev.p2pkit.core.permission.P2pPermission
 
 /** Why the local secure identity could not be loaded or created. */
@@ -90,8 +91,24 @@ public sealed class P2pError(message: String? = null, cause: Throwable? = null) 
      * The app has not been granted one or more required runtime permissions.
      * Apps must request them; the library never does.
      */
-    public data class PermissionMissing(val permissions: List<P2pPermission>) :
-        P2pError("Missing permissions: $permissions")
+    public class PermissionMissing(permissions: List<P2pPermission>) :
+        P2pError("Missing permissions: $permissions") {
+        /** Stable, unmodifiable snapshot of every missing permission. */
+        public val permissions: List<P2pPermission> = immutableListSnapshot(permissions)
+
+        public operator fun component1(): List<P2pPermission> = permissions
+
+        public fun copy(
+            permissions: List<P2pPermission> = this.permissions
+        ): PermissionMissing = PermissionMissing(permissions)
+
+        override fun equals(other: Any?): Boolean =
+            this === other || other is PermissionMissing && permissions == other.permissions
+
+        override fun hashCode(): Int = permissions.hashCode()
+
+        override fun toString(): String = "PermissionMissing(permissions=$permissions)"
+    }
 
     /** [P2pSession.send] rejected an oversized payload. */
     public data class PayloadTooLarge(val maxBytes: Long, val actualBytes: Long) :

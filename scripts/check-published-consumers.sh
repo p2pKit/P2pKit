@@ -74,6 +74,7 @@ assert_scope "$PROV_DESKTOP" kotlinx-coroutines-core-jvm compile
 
 mkdir -p \
     "$FIXTURE_DIR/coreJvm/src/main/kotlin/consumer" \
+    "$FIXTURE_DIR/coreJvm/src/main/java/consumer" \
     "$FIXTURE_DIR/lanJvm/src/main/kotlin/consumer" \
     "$FIXTURE_DIR/desktopJvm/src/main/kotlin/consumer" \
     "$FIXTURE_DIR/androidConsumer/src/main/kotlin/consumer" \
@@ -155,6 +156,11 @@ fun coreState(kit: P2pKit, sink: RawSink): StateFlow<P2pState> {
     return kit.state
 }
 
+fun copyPeer(peer: Peer): Peer {
+    val (id, name, platform, transports) = peer
+    return peer.copy(id, name, platform, transports)
+}
+
 class ExternalDataTransport : DataTransport {
     override val type: TransportKind = TransportKind.LAN
     override val priority: Int = 1
@@ -189,6 +195,34 @@ class ExternalProvisioningManager : NetworkProvisioningManager {
     ): Peer = error("not supported")
 
     override suspend fun close() = Unit
+}
+EOF
+cat > "$FIXTURE_DIR/coreJvm/src/main/java/consumer/ImmutableModelJavaConsumer.java" <<'EOF'
+package consumer;
+
+import dev.p2pkit.core.P2pMessage;
+import dev.p2pkit.core.TransportKind;
+import dev.p2pkit.core.provisioning.NetworkState;
+import dev.p2pkit.core.transport.TransportHint;
+import java.util.List;
+import java.util.Map;
+
+final class ImmutableModelJavaConsumer {
+    static void compilePublicSurface() {
+        P2pMessage.Text text = new P2pMessage.Text("hello", Map.of("key", "value"));
+        P2pMessage.Text copied = text.copy(text.getValue(), text.getMetadata());
+        TransportHint hint = new TransportHint(
+            TransportKind.LAN,
+            "192.0.2.1",
+            4242,
+            Map.of("scope", "lan")
+        );
+        NetworkState.ConnectedToEthernet ethernet =
+            new NetworkState.ConnectedToEthernet(List.of("192.0.2.10"));
+        copied.getMetadata();
+        hint.getMetadata();
+        ethernet.getLocalIpAddresses();
+    }
 }
 EOF
 
@@ -294,7 +328,9 @@ cat > "$FIXTURE_DIR/kmpConsumer/src/commonMain/kotlin/consumer/CommonConsumer.kt
 package consumer
 
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pState
+import dev.p2pkit.core.provisioning.NetworkState
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.io.RawSink
 
@@ -302,6 +338,10 @@ fun commonState(kit: P2pKit, sink: RawSink): StateFlow<P2pState> {
     sink.flush()
     return kit.state
 }
+
+fun immutableValues(): Pair<P2pMessage.Text, NetworkState.ConnectedToEthernet> =
+    P2pMessage.Text("hello", mapOf("key" to "value")) to
+        NetworkState.ConnectedToEthernet(listOf("192.0.2.10"))
 EOF
 cat > "$FIXTURE_DIR/kmpConsumer/src/jvmMain/kotlin/consumer/JvmConsumer.kt" <<'EOF'
 package consumer
@@ -335,6 +375,7 @@ echo "==> Compiling isolated published consumers"
 (cd "$ROOT" && ./gradlew --console=plain -p "$FIXTURE_DIR" \
     -PconsumerRepo="$REPO_DIR" \
     :coreJvm:compileKotlin \
+    :coreJvm:compileJava \
     :lanJvm:compileKotlin \
     :desktopJvm:compileKotlin \
     :androidConsumer:compileDebugKotlin \

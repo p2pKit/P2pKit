@@ -6,6 +6,7 @@ import dev.p2pkit.core.NetworkProvisioningError
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
+import dev.p2pkit.core.internal.immutableListSnapshot
 import kotlin.jvm.JvmInline
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -86,17 +87,82 @@ public sealed class NetworkProvisioningState {
 public sealed class NetworkState {
     public data object Unknown : NetworkState()
     public data object NoNetwork : NetworkState()
-    public data class ConnectedToWifi(
+    public class ConnectedToWifi(
         /** SSID, or `null` if the OS withholds it (e.g., Android 10+ without location). */
-        val ssid: String?,
-        val localIpAddresses: List<String>
-    ) : NetworkState()
-    public data class ConnectedToEthernet(val localIpAddresses: List<String>) : NetworkState()
-    public data class LocalNetworkHosted(
+        public val ssid: String?,
+        localIpAddresses: List<String>
+    ) : NetworkState() {
+        /** Stable, unmodifiable snapshot of local interface addresses. */
+        public val localIpAddresses: List<String> = immutableListSnapshot(localIpAddresses)
+
+        public operator fun component1(): String? = ssid
+        public operator fun component2(): List<String> = localIpAddresses
+
+        public fun copy(
+            ssid: String? = this.ssid,
+            localIpAddresses: List<String> = this.localIpAddresses
+        ): ConnectedToWifi = ConnectedToWifi(ssid, localIpAddresses)
+
+        override fun equals(other: Any?): Boolean =
+            this === other ||
+                other is ConnectedToWifi &&
+                ssid == other.ssid &&
+                localIpAddresses == other.localIpAddresses
+
+        override fun hashCode(): Int = 31 * (ssid?.hashCode() ?: 0) + localIpAddresses.hashCode()
+
+        override fun toString(): String =
+            "ConnectedToWifi(ssid=$ssid, localIpAddresses=$localIpAddresses)"
+    }
+
+    public class ConnectedToEthernet(localIpAddresses: List<String>) : NetworkState() {
+        /** Stable, unmodifiable snapshot of local interface addresses. */
+        public val localIpAddresses: List<String> = immutableListSnapshot(localIpAddresses)
+
+        public operator fun component1(): List<String> = localIpAddresses
+
+        public fun copy(
+            localIpAddresses: List<String> = this.localIpAddresses
+        ): ConnectedToEthernet = ConnectedToEthernet(localIpAddresses)
+
+        override fun equals(other: Any?): Boolean =
+            this === other ||
+                other is ConnectedToEthernet && localIpAddresses == other.localIpAddresses
+
+        override fun hashCode(): Int = localIpAddresses.hashCode()
+
+        override fun toString(): String =
+            "ConnectedToEthernet(localIpAddresses=$localIpAddresses)"
+    }
+
+    public class LocalNetworkHosted(
         /** Credentials of the hosted hotspot, or `null` if the OEM did not expose them. */
-        val credentials: WifiCredentials?,
-        val localIpAddresses: List<String>
-    ) : NetworkState()
+        public val credentials: WifiCredentials?,
+        localIpAddresses: List<String>
+    ) : NetworkState() {
+        /** Stable, unmodifiable snapshot of local interface addresses. */
+        public val localIpAddresses: List<String> = immutableListSnapshot(localIpAddresses)
+
+        public operator fun component1(): WifiCredentials? = credentials
+        public operator fun component2(): List<String> = localIpAddresses
+
+        public fun copy(
+            credentials: WifiCredentials? = this.credentials,
+            localIpAddresses: List<String> = this.localIpAddresses
+        ): LocalNetworkHosted = LocalNetworkHosted(credentials, localIpAddresses)
+
+        override fun equals(other: Any?): Boolean =
+            this === other ||
+                other is LocalNetworkHosted &&
+                credentials == other.credentials &&
+                localIpAddresses == other.localIpAddresses
+
+        override fun hashCode(): Int =
+            31 * (credentials?.hashCode() ?: 0) + localIpAddresses.hashCode()
+
+        override fun toString(): String =
+            "LocalNetworkHosted(credentials=$credentials, localIpAddresses=$localIpAddresses)"
+    }
 }
 
 /** Result of [NetworkProvisioningManager.startLocalNetwork]. */
@@ -158,17 +224,72 @@ public enum class WifiSecurityType { OPEN, WPA2, WPA3, UNKNOWN }
  * via [NetworkProvisioningManager.createManualPeer] to obtain a synthetic
  * [Peer] that can be handed to [dev.p2pkit.core.P2pKit.connect].
  */
-public data class ManualConnectionInfo(
-    val hostAddresses: List<String>,
-    val port: Int,
-    val appId: AppId,
-    val peerId: PeerId,
-    val deviceName: String,
+public class ManualConnectionInfo(
+    hostAddresses: List<String>,
+    public val port: Int,
+    public val appId: AppId,
+    public val peerId: PeerId,
+    public val deviceName: String,
     /** Local authenticated identity to exchange out of band in secure v2. */
-    val fingerprint: PeerFingerprint? = null,
+    public val fingerprint: PeerFingerprint? = null,
     /** Canonical AppId-bound QR payload carrying [fingerprint], when secure. */
-    val pairingQr: String? = null
-)
+    public val pairingQr: String? = null
+) {
+    /** Stable, unmodifiable snapshot of advertised manual connection addresses. */
+    public val hostAddresses: List<String> = immutableListSnapshot(hostAddresses)
+
+    public operator fun component1(): List<String> = hostAddresses
+    public operator fun component2(): Int = port
+    public operator fun component3(): AppId = appId
+    public operator fun component4(): PeerId = peerId
+    public operator fun component5(): String = deviceName
+    public operator fun component6(): PeerFingerprint? = fingerprint
+    public operator fun component7(): String? = pairingQr
+
+    public fun copy(
+        hostAddresses: List<String> = this.hostAddresses,
+        port: Int = this.port,
+        appId: AppId = this.appId,
+        peerId: PeerId = this.peerId,
+        deviceName: String = this.deviceName,
+        fingerprint: PeerFingerprint? = this.fingerprint,
+        pairingQr: String? = this.pairingQr
+    ): ManualConnectionInfo = ManualConnectionInfo(
+        hostAddresses,
+        port,
+        appId,
+        peerId,
+        deviceName,
+        fingerprint,
+        pairingQr
+    )
+
+    override fun equals(other: Any?): Boolean =
+        this === other ||
+            other is ManualConnectionInfo &&
+            hostAddresses == other.hostAddresses &&
+            port == other.port &&
+            appId == other.appId &&
+            peerId == other.peerId &&
+            deviceName == other.deviceName &&
+            fingerprint == other.fingerprint &&
+            pairingQr == other.pairingQr
+
+    override fun hashCode(): Int {
+        var result = hostAddresses.hashCode()
+        result = 31 * result + port
+        result = 31 * result + appId.hashCode()
+        result = 31 * result + peerId.hashCode()
+        result = 31 * result + deviceName.hashCode()
+        result = 31 * result + (fingerprint?.hashCode() ?: 0)
+        result = 31 * result + (pairingQr?.hashCode() ?: 0)
+        return result
+    }
+
+    override fun toString(): String =
+        "ManualConnectionInfo(hostAddresses=$hostAddresses, port=$port, appId=$appId, " +
+            "peerId=$peerId, deviceName=$deviceName, fingerprint=$fingerprint, pairingQr=$pairingQr)"
+}
 
 /** Configuration hints for [NetworkProvisioningManager.startLocalNetwork]. */
 public data class LocalNetworkConfig(

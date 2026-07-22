@@ -62,9 +62,11 @@ internal class SessionStore(
     private val pending: MutableMap<PeerId, CompletableDeferred<P2pSession>> = mutableMapOf()
 
     /** Immutable publication used by non-suspending diagnostic lookups. */
-    private val registrationSnapshot = MutableStateFlow<Map<PeerId, P2pSession>>(emptyMap())
+    private val registrationSnapshot =
+        MutableStateFlow<Map<PeerId, P2pSession>>(immutableMapSnapshot(emptyMap()))
 
-    private val _sessions = MutableStateFlow<List<P2pSession>>(emptyList())
+    private val _sessions =
+        MutableStateFlow<List<P2pSession>>(immutableListSnapshot(emptyList()))
     val sessions: StateFlow<List<P2pSession>> = _sessions.asStateFlow()
 
     /**
@@ -93,7 +95,7 @@ internal class SessionStore(
         if (existing != null) {
             byPeer.remove(peerId)
             directionByPeer.remove(peerId)
-            _sessions.value = _sessions.value.filter { it !== existing }
+            publishSessions(_sessions.value.filter { it !== existing })
             publishRegistrationSnapshotLocked()
         }
         val inFlight = pending[peerId]
@@ -171,7 +173,7 @@ internal class SessionStore(
                 if (newWinsLocally) {
                     byPeer[peerId] = session
                     directionByPeer[peerId] = newDirection
-                    _sessions.value = _sessions.value.filter { it !== existing } + session
+                    publishSessions(_sessions.value.filter { it !== existing } + session)
                     RegisterOutcome.Replaced(winner = session, loser = existing)
                 } else {
                     RegisterOutcome.Rejected(winner = existing, loser = session)
@@ -201,11 +203,11 @@ internal class SessionStore(
             // would otherwise see two rows for the same peer.
             byPeer[peerId] = session
             directionByPeer[peerId] = SessionDirection.from(isIncoming)
-            _sessions.value = if (existing != null) {
+            publishSessions(if (existing != null) {
                 _sessions.value.filter { it !== existing } + session
             } else {
                 _sessions.value + session
-            }
+            })
             RegisterOutcome.Accepted(session = session)
         }
         publishRegistrationSnapshotLocked()
@@ -225,7 +227,7 @@ internal class SessionStore(
             byPeer.remove(peerId)
             directionByPeer.remove(peerId)
         }
-        _sessions.value = _sessions.value.filter { it !== session }
+        publishSessions(_sessions.value.filter { it !== session })
         publishRegistrationSnapshotLocked()
         checkInvariants("removeIfMatches")
     }
@@ -255,7 +257,7 @@ internal class SessionStore(
         byPeer.clear()
         directionByPeer.clear()
         pending.clear()
-        _sessions.value = emptyList()
+        publishSessions(emptyList())
         publishRegistrationSnapshotLocked()
         checkInvariants("drainForShutdown")
         SessionShutdownSnapshot(sessionsToClose, pendingToFail)
@@ -370,7 +372,11 @@ internal class SessionStore(
     }
 
     private fun publishRegistrationSnapshotLocked() {
-        registrationSnapshot.value = byPeer.toMap()
+        registrationSnapshot.value = immutableMapSnapshot(byPeer)
+    }
+
+    private fun publishSessions(sessions: Iterable<P2pSession>) {
+        _sessions.value = immutableListSnapshot(sessions)
     }
 
     companion object {

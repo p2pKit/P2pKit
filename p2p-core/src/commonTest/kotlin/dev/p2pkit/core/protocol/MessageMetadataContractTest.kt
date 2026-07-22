@@ -43,11 +43,14 @@ class MessageMetadataContractTest {
         val exposedBytes = message.bytes
         exposedBytes[1] = 9
         @Suppress("UNCHECKED_CAST")
-        (message.metadata as MutableMap<String, String>).clear()
+        val metadataMutation = runCatching {
+            (message.metadata as MutableMap<String, String>).clear()
+        }
 
         assertContentEquals(byteArrayOf(1, 2, 3), message.bytes)
         assertEquals(mapOf("one" to "1", "two" to "2"), message.metadata)
         assertEquals(originalHash, message.hashCode())
+        assertTrue(metadataMutation.isFailure, "public metadata must reject mutation")
     }
 
     // --- Chunker/Reassembler round-trip (protocol codec layer) ---

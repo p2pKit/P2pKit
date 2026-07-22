@@ -1,5 +1,7 @@
 package dev.p2pkit.core
 
+import dev.p2pkit.core.internal.immutableSetSnapshot
+
 /**
  * A discovered peer device.
  *
@@ -14,12 +16,46 @@ package dev.p2pkit.core
  * @property supportedTransports Transports the remote claims to support; used
  *   by the local [P2pKit] to pick a compatible transport when connecting.
  */
-public data class Peer(
-    val id: PeerId,
-    val name: String,
-    val platform: Platform,
-    val supportedTransports: Set<TransportKind>
-)
+public class Peer(
+    public val id: PeerId,
+    public val name: String,
+    public val platform: Platform,
+    supportedTransports: Set<TransportKind>
+) {
+    /** Stable, unmodifiable snapshot of the remote transport claims. */
+    public val supportedTransports: Set<TransportKind> = immutableSetSnapshot(supportedTransports)
+
+    public operator fun component1(): PeerId = id
+    public operator fun component2(): String = name
+    public operator fun component3(): Platform = platform
+    public operator fun component4(): Set<TransportKind> = supportedTransports
+
+    public fun copy(
+        id: PeerId = this.id,
+        name: String = this.name,
+        platform: Platform = this.platform,
+        supportedTransports: Set<TransportKind> = this.supportedTransports
+    ): Peer = Peer(id, name, platform, supportedTransports)
+
+    override fun equals(other: Any?): Boolean =
+        this === other ||
+            other is Peer &&
+            id == other.id &&
+            name == other.name &&
+            platform == other.platform &&
+            supportedTransports == other.supportedTransports
+
+    override fun hashCode(): Int {
+        var result = id.hashCode()
+        result = 31 * result + name.hashCode()
+        result = 31 * result + platform.hashCode()
+        result = 31 * result + supportedTransports.hashCode()
+        return result
+    }
+
+    override fun toString(): String =
+        "Peer(id=$id, name=$name, platform=$platform, supportedTransports=$supportedTransports)"
+}
 
 /** Platform a peer device is running on. */
 public enum class Platform {

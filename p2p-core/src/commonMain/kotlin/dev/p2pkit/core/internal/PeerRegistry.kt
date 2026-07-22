@@ -60,7 +60,8 @@ internal class PeerRegistry(
 ) : ManualPeerRegistrar {
 
     private val tracked: MutableStateFlow<Map<PeerId, TrackedPeer>> = MutableStateFlow(emptyMap())
-    private val _peers: MutableStateFlow<List<Peer>> = MutableStateFlow(emptyList())
+    private val _peers: MutableStateFlow<List<Peer>> =
+        MutableStateFlow(immutableListSnapshot(emptyList()))
 
     /**
      * Public-facing peer list. Updated synchronously after every accepted
@@ -102,7 +103,7 @@ internal class PeerRegistry(
 
     private fun publishPeers() {
         val newList = tracked.value.values.map { it.internalPeer.publicPeer }
-        if (_peers.value != newList) _peers.value = newList
+        if (_peers.value != newList) _peers.value = immutableListSnapshot(newList)
     }
 
     /** A discovery claim can refresh routing, but it can never erase an application-supplied manual pin. */

@@ -1,5 +1,7 @@
 package dev.p2pkit.core
 
+import dev.p2pkit.core.internal.immutableMapSnapshot
+
 /**
  * A message exchanged over a [P2pSession].
  *
@@ -30,10 +32,28 @@ public sealed class P2pMessage {
      *   the sender's process; received [Text] messages always have an empty
      *   map. See [P2pMessage] docs and the post-RC `metadata-wire` milestone.
      */
-    public data class Text(
-        val value: String,
-        val metadata: Map<String, String> = emptyMap()
-    ) : P2pMessage()
+    public class Text(
+        public val value: String,
+        metadata: Map<String, String> = emptyMap()
+    ) : P2pMessage() {
+        /** Stable, unmodifiable snapshot of sender-local metadata. */
+        public val metadata: Map<String, String> = immutableMapSnapshot(metadata)
+
+        public operator fun component1(): String = value
+        public operator fun component2(): Map<String, String> = metadata
+
+        public fun copy(
+            value: String = this.value,
+            metadata: Map<String, String> = this.metadata
+        ): Text = Text(value, metadata)
+
+        override fun equals(other: Any?): Boolean =
+            this === other || other is Text && value == other.value && metadata == other.metadata
+
+        override fun hashCode(): Int = 31 * value.hashCode() + metadata.hashCode()
+
+        override fun toString(): String = "Text(value=$value, metadata=$metadata)"
+    }
 
     /**
      * Arbitrary binary payload with optional string metadata.
@@ -55,8 +75,10 @@ public sealed class P2pMessage {
 
         internal val payloadSizeBytes: Int get() = content.size
 
-        private val metadataSnapshot: Map<String, String> = metadata.toMap()
-        public val metadata: Map<String, String> get() = metadataSnapshot.toMap()
+        private val metadataSnapshot: Map<String, String> = immutableMapSnapshot(metadata)
+
+        /** Stable, unmodifiable metadata snapshot. */
+        public val metadata: Map<String, String> get() = metadataSnapshot
 
         override fun equals(other: Any?): Boolean {
             if (this === other) return true

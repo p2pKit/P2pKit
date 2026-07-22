@@ -57,6 +57,34 @@ class PeerRegistryTest {
     }
 
     @Test
+    fun publishedPeerListsAreStableUnmodifiableSnapshots() {
+        val supervisor = SupervisorJob()
+        try {
+            val registry = PeerRegistry(
+                discoveryTransports = emptyList(),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2
+            )
+            val initial = registry.peers.value
+            assertTrue(
+                runCatching { (initial as MutableList<Peer>).add(peer("injected").publicPeer) }
+                    .isFailure
+            )
+
+            registry.processEvent(PeerEvent.Found(peer("published")))
+            val published = registry.peers.value
+            assertTrue(
+                runCatching { (published as MutableList<Peer>).clear() }.isFailure
+            )
+            assertEquals(listOf(PeerId("published")), registry.peers.value.map { it.id })
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @Test
     fun foundEventAddsPeer() = runBlocking {
         val supervisor = SupervisorJob()
         try {

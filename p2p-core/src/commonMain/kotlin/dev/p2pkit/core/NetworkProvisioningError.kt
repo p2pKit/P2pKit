@@ -1,5 +1,6 @@
 package dev.p2pkit.core
 
+import dev.p2pkit.core.internal.immutableListSnapshot
 import dev.p2pkit.core.permission.P2pPermission
 
 /**
@@ -22,8 +23,26 @@ public sealed class NetworkProvisioningError(message: String?, cause: Throwable?
         platformException
     )
 
-    public data class PermissionMissingForProvisioning(val permissions: List<P2pPermission>) :
-        NetworkProvisioningError("Missing permissions: $permissions", null)
+    public class PermissionMissingForProvisioning(permissions: List<P2pPermission>) :
+        NetworkProvisioningError("Missing permissions: $permissions", null) {
+        /** Stable, unmodifiable snapshot of every missing permission. */
+        public val permissions: List<P2pPermission> = immutableListSnapshot(permissions)
+
+        public operator fun component1(): List<P2pPermission> = permissions
+
+        public fun copy(
+            permissions: List<P2pPermission> = this.permissions
+        ): PermissionMissingForProvisioning = PermissionMissingForProvisioning(permissions)
+
+        override fun equals(other: Any?): Boolean =
+            this === other ||
+                other is PermissionMissingForProvisioning && permissions == other.permissions
+
+        override fun hashCode(): Int = permissions.hashCode()
+
+        override fun toString(): String =
+            "PermissionMissingForProvisioning(permissions=$permissions)"
+    }
 
     public data class HotspotStopped(val reason: String) : NetworkProvisioningError(reason, null)
 
