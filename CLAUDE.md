@@ -32,8 +32,8 @@ Java 17 required (`jvmToolchain(17)`); iOS targets compile only on a macOS host.
 ./gradlew :p2p-sample-android:assembleDebug         # APK at p2p-sample-android/build/outputs/apk/debug/
 
 # iOS framework + sample (macOS only)
-./gradlew :p2p-transport-lan:assembleP2pKitSharedXCFramework
-./gradlew :iosApp:runIosSimulator                   # xcodegen + xcodebuild + simctl via scripts/run-ios-app.sh (SIM_NAME=… overrides device)
+./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance
+./gradlew :iosApp:runIosSimulator                   # exact SIM_UDID, or an unambiguous SIM_NAME; isolated DerivedData per run
 
 # Publishing — local only; no remote Maven Central repo is wired yet
 ./gradlew publishToMavenLocal                       # dev.p2pkit:<module>:<version> for the four library modules

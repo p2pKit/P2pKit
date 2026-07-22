@@ -37,7 +37,7 @@ Build the harnesses first:
 ./gradlew :p2p-sample-desktop:installDist          # JVM CLI
 ./gradlew :p2p-sample-desktop-ui:run               # Compose Desktop UI
 ./gradlew :p2p-sample-android:assembleDebug        # APK
-./gradlew :p2p-transport-lan:assembleP2pKitSharedXCFramework   # then build iosApp in Xcode
+./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance   # then build iosApp in Xcode
 ```
 
 | # | Scenario | Devices | What it proves | Status |
@@ -135,40 +135,39 @@ ORG_GRADLE_PROJECT_signingInMemoryKeyPassword="$PASSPHRASE" \
 
 ### XCFramework provenance guard (manual verification)
 
-`iosApp/scripts/check-xcframework.sh` gates every Xcode build on the
-`BUILD_COMMIT.txt` stamp. The stamp is only written when the assemble task
-actually executes, so after a commit that touches no framework source
-(docs/Swift/project.yml) the task is UP-TO-DATE and the stamp legitimately
-lags HEAD — the script accepts that case by diffing the stamped commit
-against HEAD over the framework-relevant paths (both modules' `src/`, their
-`build.gradle.kts`, `gradle/libs.versions.toml`). After touching the script
-or the provenance block, verify all three behaviors:
+`iosApp/scripts/check-xcframework.sh` gates every Xcode build on the declared
+XCFramework provenance outputs: `BUILD_COMMIT.txt`,
+`BUILD_SOURCE_STATE.txt`, and `BUILD_INPUTS_SHA256.txt`. The assembly task
+tracks the exact commit, relevant tracked/untracked source state, and all
+framework-shaping source/config files. The verification task refuses invalid
+git identity or stale/missing sidecars before Xcode links either slice.
+After touching the script or provenance block, verify all three behaviors:
 
-1. **Docs-only commit → UP-TO-DATE assemble, check still passes.** Commit a
-   docs-only change, then:
+1. **Unchanged commit/source → deterministic UP-TO-DATE build.** Run twice:
 
    ```bash
-   sh ./gradlew :p2p-transport-lan:assembleP2pKitSharedReleaseXCFramework   # UP-TO-DATE, stamp unchanged
+   sh ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance
+   sh ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance
    sh iosApp/scripts/check-xcframework.sh
-   # → "✅ XCFramework stamped at <short>; no framework sources changed through HEAD — OK"
+   # → "✅ XCFramework is fresh: <short> (matches HEAD, source state: clean|dirty)"
    ```
 
-2. **Kotlin edit → rebuild, re-stamp, pass.** Edit any file under
-   `p2p-transport-lan/src` or `p2p-core/src`, commit, and re-run the two
-   commands above — the assemble task executes (not UP-TO-DATE), re-stamps,
-   and the check prints `✅ XCFramework is fresh: <short> (matches HEAD)`.
+2. **Tracked or untracked framework input → rebuild and new fingerprint.**
+   Edit or add a fixture under either module's `src/` tree and rerun the
+   verification task. It must execute, record `dirty`, and change the SHA-256
+   fingerprint. Restore the fixture and rerun before committing.
 
-3. **Stale stamp + real source diff → hard fail.** Forge a stamp older than
-   the last source-touching commit (the script's embedded assemble run is
-   UP-TO-DATE, so it won't overwrite the forgery) and confirm the guard
-   refuses, then restore:
+3. **Deleted sidecar → declared-output recovery.** Move one sidecar aside,
+   rerun verification, and confirm Gradle executes the declared provenance
+   writer and recreates the exact sidecar while the framework assembly itself
+   may remain UP-TO-DATE:
 
    ```bash
    STAMP=p2p-transport-lan/build/XCFrameworks/release/BUILD_COMMIT.txt
    cp "$STAMP" /tmp/BUILD_COMMIT.txt.bak
-   git rev-parse "$(git log -1 --format=%H -- p2p-transport-lan/src p2p-core/src)^" > "$STAMP"
-   sh iosApp/scripts/check-xcframework.sh   # → "error: XCFramework identity mismatch", exit 1
-   cp /tmp/BUILD_COMMIT.txt.bak "$STAMP"
+   rm "$STAMP"
+   sh ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance
+   cmp "$STAMP" /tmp/BUILD_COMMIT.txt.bak
    ```
 
 ---

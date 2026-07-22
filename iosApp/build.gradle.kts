@@ -9,8 +9,9 @@
 tasks.register<Exec>("runIosSimulator") {
     description = "Build the iOS sample, install on the iPhone simulator, and launch it."
     group = "p2pkit"
-    // Make sure the XCFramework is fresh before xcodebuild consumes it.
-    dependsOn(":p2p-transport-lan:assembleP2pKitSharedReleaseXCFramework")
+    // xcodebuild's project-declared pre-build phase runs the authoritative
+    // XCFramework verification exactly once. An outer dependsOn duplicated
+    // the full framework task before that nested Gradle invocation.
     workingDir = rootDir
     commandLine("bash", "scripts/run-ios-app.sh")
     // Forward script stdout/stderr to the Gradle/Android Studio console so
@@ -24,4 +25,16 @@ tasks.register<Exec>("regenerateXcodeProject") {
     group = "p2pkit"
     workingDir = projectDir
     commandLine("xcodegen", "generate")
+}
+
+tasks.register<Exec>("checkIosLauncherScripts") {
+    description = "Run deterministic simulator-selection and isolated-run-directory tests."
+    group = "verification"
+    workingDir = rootDir
+    inputs.files(
+        rootProject.file("scripts/run-ios-app.sh"),
+        rootProject.file("scripts/tests/run-ios-app-test.sh"),
+        project.file("scripts/check-xcframework.sh"),
+    )
+    commandLine("bash", "scripts/tests/run-ios-app-test.sh")
 }

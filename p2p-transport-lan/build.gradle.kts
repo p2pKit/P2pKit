@@ -1,3 +1,7 @@
+import dev.p2pkit.build.GitCommitValueSource
+import dev.p2pkit.build.GitDirtyValueSource
+import dev.p2pkit.build.VerifyXcframeworkProvenanceTask
+import dev.p2pkit.build.WriteXcframeworkProvenanceTask
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 
 plugins {
@@ -81,56 +85,77 @@ kotlin {
     }
 }
 
-// V0.4-PROVENANCE (L3) + AUDIT-2026-06: stamp BUILD_COMMIT.txt as the FINAL
-// action of each per-config XCFramework assembly. Using the assembly task's
-// own `doLast` (rather than a shared `finalizedBy` task) means the stamp is
-// written ONLY when that assembly actually executes and SUCCEEDS:
-//   • a `doLast` is skipped when the task FAILS — a `finalizedBy` runs even on
-//     failure, which would stamp a failed/partial framework with the current
-//     HEAD and let the Xcode freshness guard pass against a broken artifact;
-//   • a `doLast` is skipped when the task is UP-TO-DATE — so a no-op rebuild
-//     after HEAD moved no longer re-stamps an unchanged framework with a newer
-//     commit (the old "freshness guard can lie" bug); and
-//   • each task stamps ONLY the config it produced (release XOR debug), so a
-//     debug-only assembly can't re-stamp a stale release dir, or vice-versa.
-// The Xcode pre-build script reads this file to validate the deployed
-// framework before the iOS app compiles. Flip side of the UP-TO-DATE skip
-// (AUDIT #10): after a commit touching only non-framework files, HEAD moves
-// while the stamp stays put — so iosApp/scripts/check-xcframework.sh does
-// NOT require raw stamp == HEAD; on mismatch it passes iff no framework
-// sources (both modules' src/, their build scripts, the version catalog)
-// changed between the stamped commit and HEAD. Keep the script's path list
-// in sync with what actually feeds this framework.
-afterEvaluate {
-    val provenanceRootDir = rootProject.projectDir
-    tasks.matching {
-        it.name.startsWith("assemble") && it.name.contains("XCFramework")
-    }.configureEach {
-        val config = when {
-            name.contains("Release") -> "release"
-            name.contains("Debug") -> "debug"
-            else -> null // umbrella aggregate task: per-config tasks stamp their own dir
-        } ?: return@configureEach
-        val outDir = layout.buildDirectory.dir("XCFrameworks/$config")
-        doLast {
-            fun git(vararg args: String): String = try {
-                val p = ProcessBuilder("git", *args)
-                    .directory(provenanceRootDir)
-                    .redirectErrorStream(true)
-                    .start()
-                val out = p.inputStream.bufferedReader().readText().trim()
-                if (p.waitFor() == 0) out else ""
-            } catch (_: Exception) {
-                ""
-            }
-            val commit = git("rev-parse", "HEAD").ifBlank { "unknown" }
-            val dir = outDir.get().asFile
-            if (dir.exists()) {
-                dir.resolve("BUILD_COMMIT.txt").writeText(commit + "\n")
-            }
-        }
+// XCFramework provenance is a typed post-assembly task with declared inputs
+// and outputs. Deleting any sidecar reruns the writer; source/config changes
+// (including untracked files) update the fingerprint; and an unresolvable git
+// identity fails instead of writing "unknown". A normal dependsOn edge orders
+// the writer after successful assembly, so a failed framework is not attested.
+val xcframeworkProvenancePaths = listOf(
+    "buildSrc/src/main/java/dev/p2pkit/build",
+    "p2p-core/src",
+    "p2p-transport-lan/src",
+    "p2p-core/build.gradle.kts",
+    "p2p-transport-lan/build.gradle.kts",
+    "build.gradle.kts",
+    "settings.gradle.kts",
+    "gradle.properties",
+    "gradle/libs.versions.toml",
+    "gradle/wrapper/gradle-wrapper.properties",
+)
+val xcframeworkProvenanceInputs = files(
+    xcframeworkProvenancePaths.map(rootProject::file),
+).asFileTree
+val xcframeworkCommit = providers.of(GitCommitValueSource::class) {
+    parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+}
+val xcframeworkDirty = providers.of(GitDirtyValueSource::class) {
+    parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+    parameters.relevantPaths.set(xcframeworkProvenancePaths)
+}
+
+fun registerXcframeworkProvenanceVerification(config: String) {
+    val capitalized = config.replaceFirstChar(Char::uppercaseChar)
+    val outDir = layout.buildDirectory.dir("XCFrameworks/$config")
+    val frameworkBinaries = outDir.map { directory ->
+        listOf(
+            directory.file("P2pKitShared.xcframework/ios-arm64/P2pKitShared.framework/P2pKitShared").asFile,
+            directory.file("P2pKitShared.xcframework/ios-arm64_x86_64-simulator/P2pKitShared.framework/P2pKitShared").asFile,
+        )
+    }
+    val writeTask = tasks.register<WriteXcframeworkProvenanceTask>(
+        "writeP2pKitShared${capitalized}XCFrameworkProvenance",
+    ) {
+        group = "build"
+        description = "Writes declared provenance for the $config P2pKitShared XCFramework."
+        dependsOn("assembleP2pKitShared${capitalized}XCFramework")
+        provenanceInputs.from(xcframeworkProvenanceInputs)
+        this.frameworkBinaries.from(frameworkBinaries)
+        rootDirectory.set(rootProject.layout.projectDirectory)
+        sourceCommit.set(xcframeworkCommit)
+        relevantSourceDirty.set(xcframeworkDirty)
+        commitFile.set(outDir.map { it.file("BUILD_COMMIT.txt") })
+        stateFile.set(outDir.map { it.file("BUILD_SOURCE_STATE.txt") })
+        fingerprintFile.set(outDir.map { it.file("BUILD_INPUTS_SHA256.txt") })
+    }
+    tasks.register<VerifyXcframeworkProvenanceTask>(
+        "verifyP2pKitShared${capitalized}XCFrameworkProvenance",
+    ) {
+        group = "verification"
+        description = "Verifies the $config P2pKitShared XCFramework provenance sidecars."
+        dependsOn(writeTask)
+        provenanceInputs.from(xcframeworkProvenanceInputs)
+        this.frameworkBinaries.from(frameworkBinaries)
+        rootDirectory.set(rootProject.layout.projectDirectory)
+        sourceCommit.set(xcframeworkCommit)
+        relevantSourceDirty.set(xcframeworkDirty)
+        commitFile.set(writeTask.flatMap { it.commitFile })
+        stateFile.set(writeTask.flatMap { it.stateFile })
+        fingerprintFile.set(writeTask.flatMap { it.fingerprintFile })
     }
 }
+
+registerXcframeworkProvenanceVerification("release")
+registerXcframeworkProvenanceVerification("debug")
 
 // Maven publishing (fixes no-publishing-plugin / no-pom-metadata). See
 // :p2p-core build for rationale. Auto-created KMP publications; POM enriched
