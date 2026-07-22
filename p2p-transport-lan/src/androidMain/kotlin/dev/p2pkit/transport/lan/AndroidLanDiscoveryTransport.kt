@@ -168,10 +168,14 @@ internal class AndroidLanDiscoveryTransport(
     /** Callback generation owned by one coordinator listener token. */
     private class ListenerLease {
         private val gate = Any()
+
+        @Volatile
         private var active: Boolean = true
         lateinit var listener: ServiceListener
 
-        fun isActive(): Boolean = synchronized(gate) { active }
+        // Lock-free so serviceRemoved never nests two generation locks while
+        // comparing current and prior admission ownership.
+        fun isActive(): Boolean = active
 
         fun deactivate() = synchronized(gate) { active = false }
 

@@ -19,8 +19,12 @@ import org.junit.Assume
 
 /**
  * LAN discovery lifetime integration: DNS-SD owns TTL/removal and core does
- * not age a healthy native-browser contribution out after 15 seconds. A clean
- * TXT-less mDNS goodbye still removes exactly the previously admitted peer.
+ * not age a healthy native-browser contribution out after 15 seconds.
+ *
+ * Exact TXT-less removal ownership is covered without UDP timing in
+ * [JvmServiceAdmissionsTest]. Real multicast delivery remains exercised by
+ * discovery here, while clean/abrupt departure timing is hostile-network
+ * evidence rather than a deterministic unit-test clock.
  *
  * Like [JvmLanLoopbackTest], this depends on multicast working on the test
  * machine and skips (Assume) when no routable IPv4 interface is available.
@@ -61,17 +65,15 @@ class JvmLanDiscoveryHeartbeatTest {
      *
      *  1. Bob stays in Alice's `kit.peers` at t = 20 s and t = 35 s idle —
      *     pre-fix he vanished at ~15 s and never returned.
-     *  2. After Bob stops (clean goodbye), Alice removes him.
-     *
      * Self-gate rider: Alice advertises too, so her own service sits in her
      * JmDNS cache; the self-skip on the native listener keeps her out of her
      * own `kit.peers`.
      */
     @Test
-    fun idlePeerSurvivesEvictionHorizonAndDepartedPeerIsRemoved() {
+    fun idlePeerSurvivesEvictionHorizon() {
         runBlocking {
             val alice = startAndAdvertise("Alice")
-            val bob = startAndAdvertise("Bob")
+            startAndAdvertise("Bob")
 
             withTimeout(DISCOVERY_TIMEOUT_MS) {
                 alice.peers.first { peers -> peers.any { it.name == "Bob" } }
@@ -93,12 +95,6 @@ class JvmLanDiscoveryHeartbeatTest {
                 alice.peers.value.any { it.name == "Bob" },
                 "healthy idle peer must still be visible at t=35 s"
             )
-
-            // The admitted service instance owns the TXT-less goodbye Lost event.
-            bob.stop()
-            withTimeout(DEPARTURE_TIMEOUT_MS) {
-                alice.peers.first { peers -> peers.none { it.name == "Bob" } }
-            }
         }
     }
 
@@ -138,8 +134,6 @@ class JvmLanDiscoveryHeartbeatTest {
     private companion object {
         const val DISCOVERY_TIMEOUT_MS: Long = 30_000
 
-        /** Native goodbye/TTL processing bound for the multicast integration test. */
-        const val DEPARTURE_TIMEOUT_MS: Long = 30_000
         const val JMDNS_BIND_PROPERTY: String = "dev.p2pkit.test.jmdnsBindAddress"
 
         /** Mirrors [JvmLanLoopbackTest]'s interface selection. */

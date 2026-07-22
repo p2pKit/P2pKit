@@ -28,6 +28,58 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
+/** One callback generation installed in JmDNS by the lifecycle coordinator. */
+internal class JvmListenerLease {
+    private val gate = Any()
+
+    @Volatile
+    private var active: Boolean = true
+
+    lateinit var listener: ServiceListener
+
+    /** Lock-free so a callback never nests two listener-generation locks. */
+    fun isActive(): Boolean = active
+
+    fun deactivate() = synchronized(gate) { active = false }
+
+    fun publishIfActive(block: () -> Unit) = synchronized(gate) {
+        if (active) block()
+    }
+}
+
+/**
+ * Thread-safe ownership for service instances admitted after complete TXT
+ * validation. JmDNS removal callbacks commonly omit TXT data, so the exact
+ * peer identity must come from this registry rather than the removal record.
+ */
+internal class JvmServiceAdmissions {
+    private data class Admission(
+        val peerId: PeerId,
+        val owner: JvmListenerLease
+    )
+
+    private val entries = ConcurrentHashMap<String, Admission>()
+
+    fun admit(instanceName: String, peerId: PeerId, owner: JvmListenerLease) {
+        entries[instanceName] = Admission(peerId, owner)
+    }
+
+    fun remove(instanceName: String, callbackOwner: JvmListenerLease): PeerId? {
+        val admission = entries[instanceName] ?: return null
+        // A current listener may consume a removal for an entry admitted by
+        // its deactivated predecessor. A stale listener can never withdraw
+        // ownership installed by a newer active listener.
+        if (admission.owner !== callbackOwner && admission.owner.isActive()) return null
+        return if (entries.remove(instanceName, admission)) admission.peerId else null
+    }
+
+    fun drain(): Set<PeerId> {
+        val peers = entries.values.mapTo(mutableSetOf()) { it.peerId }
+        entries.clear()
+        return peers
+    }
+}
+
 /**
  * [DiscoveryTransport] backed by JmDNS for service registration and browsing.
  *
@@ -72,28 +124,8 @@ internal class JvmLanDiscoveryTransport(
         ioContext = Dispatchers.IO
     )
 
-    /** Callback generation owned by one coordinator listener token. */
-    private class ListenerLease {
-        private val gate = Any()
-        private var active: Boolean = true
-        lateinit var listener: ServiceListener
-
-        fun isActive(): Boolean = synchronized(gate) { active }
-
-        fun deactivate() = synchronized(gate) { active = false }
-
-        fun publishIfActive(block: () -> Unit) = synchronized(gate) {
-            if (active) block()
-        }
-    }
-
-    private data class ServiceAdmission(
-        val peerId: PeerId,
-        val owner: ListenerLease
-    )
-
     /** Service-instance ownership admitted only after full record validation. */
-    private val admittedServices = ConcurrentHashMap<String, ServiceAdmission>()
+    private val serviceAdmissions = JvmServiceAdmissions()
 
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) =
         coordinator.startAdvertising(localPeer)
@@ -104,9 +136,7 @@ internal class JvmLanDiscoveryTransport(
 
     override suspend fun stopDiscovery() {
         coordinator.stopDiscovery()
-        val lost = admittedServices.values.mapTo(mutableSetOf()) { it.peerId }
-        admittedServices.clear()
-        lost.forEach { _events.tryEmit(PeerEvent.Lost(it)) }
+        serviceAdmissions.drain().forEach { _events.tryEmit(PeerEvent.Lost(it)) }
     }
 
     private fun buildServiceInfo(localPeer: LocalPeerInfo): ServiceInfo {
@@ -139,15 +169,15 @@ internal class JvmLanDiscoveryTransport(
             securityProfile = registration.securityProfile
         )
 
-    private fun buildListenerLease(handle: JmDNS): ListenerLease {
-        val lease = ListenerLease()
+    private fun buildListenerLease(handle: JmDNS): JvmListenerLease {
+        val lease = JvmListenerLease()
         lease.listener = buildServiceListener(handle, lease)
         return lease
     }
 
     private fun buildServiceListener(
         handle: JmDNS,
-        lease: ListenerLease
+        lease: JvmListenerLease
     ): ServiceListener = object : ServiceListener {
             override fun serviceAdded(event: ServiceEvent) {
                 if (!lease.isActive()) return
@@ -157,21 +187,14 @@ internal class JvmLanDiscoveryTransport(
 
             override fun serviceRemoved(event: ServiceEvent) {
                 lease.publishIfActive {
-                    val admission = admittedServices[event.name] ?: return@publishIfActive
-                    // A current listener may consume a removal for an entry
-                    // admitted by its now-deactivated predecessor. A stale
-                    // listener can never remove ownership installed by a
-                    // newer active listener.
-                    if (admission.owner !== lease && admission.owner.isActive()) {
-                        return@publishIfActive
-                    }
-                    if (!admittedServices.remove(event.name, admission)) return@publishIfActive
+                    val peerId = serviceAdmissions.remove(event.name, lease)
+                        ?: return@publishIfActive
                     JvmLanDiag.log(
                         "browse",
                         "serviceRemoved instance=${event.name} " +
-                            "pid=${admission.peerId.value.take(8)} — emitting Lost"
+                            "pid=${peerId.value.take(8)} — emitting Lost"
                     )
-                    _events.tryEmit(PeerEvent.Lost(admission.peerId))
+                    _events.tryEmit(PeerEvent.Lost(peerId))
                 }
             }
 
@@ -202,7 +225,7 @@ internal class JvmLanDiscoveryTransport(
                 if (port !in 1..65_535) return
                 val internalPeer = record.toInternalPeer(lanTransportHints(hosts, port))
                 lease.publishIfActive {
-                    admittedServices[event.name] = ServiceAdmission(record.peerId, lease)
+                    serviceAdmissions.admit(event.name, record.peerId, lease)
                     JvmLanDiag.log(
                         "browse",
                         "serviceResolved pid=${record.peerId.value.take(8)} " +
@@ -311,18 +334,18 @@ internal class JvmLanDiscoveryTransport(
             override fun addListenerBlocking(handle: JmDNS, token: Any) {
                 handle.addServiceListener(
                     registration.serviceTypeJmdns,
-                    (token as ListenerLease).listener
+                    (token as JvmListenerLease).listener
                 )
             }
 
             override fun deactivateListenerToken(token: Any) {
-                (token as ListenerLease).deactivate()
+                (token as JvmListenerLease).deactivate()
             }
 
             override fun removeListenerBlocking(handle: JmDNS, token: Any) {
                 handle.removeServiceListener(
                     registration.serviceTypeJmdns,
-                    (token as ListenerLease).listener
+                    (token as JvmListenerLease).listener
                 )
             }
 

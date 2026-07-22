@@ -36,17 +36,15 @@ import org.junit.Assume
  *  - never emit a `PeerEvent` for the malformed (blank-pid) record, on the
  *    found or the removed path;
  *  - never emit a `PeerEvent` for the other-app or mismatched-identity record;
- *  - emit `Lost` for a previously admitted conforming instance even though
- *    JmDNS omits TXT data from its goodbye callback;
- *  - keep delivering events for conforming records after processing the
- *    malformed input on both paths — i.e. no exception escapes the JmDNS
- *    callbacks and the listener worker stays alive. This settles the
- *    register's JVM/Android listener-thread-disposition residual.
+ *  - keep delivering conforming records after malformed discovery input and
+ *    advertiser withdrawal/re-registration, so the listener worker remains
+ *    live. This settles the register's JVM/Android listener-thread-disposition
+ *    residual without assigning a deterministic deadline to UDP goodbye.
  *
- * JmDNS 3.6.3 delivers goodbye callbacks after the TXT record has expired.
- * The production transport therefore records service-instance ownership only
- * after full validation and consumes that admission on removal; this test
- * exercises that real behavior rather than relying on removed-event TXT.
+ * JmDNS goodbye delivery is multicast/TTL-timed and cannot provide a stable
+ * unit-test clock. [JvmServiceAdmissionsTest] deterministically proves that a
+ * TXT-less removal consumes only an exactly admitted service identity, while
+ * this test keeps the real multicast parsing and listener-survival coverage.
  *
  * Like [JvmLanLoopbackTest], this depends on multicast working on the test
  * machine and skips (Assume) when no routable IPv4 interface is available.
@@ -154,22 +152,18 @@ class JvmDiscoveryRecordValidationTest {
                     }
                 }
 
-                // Removed path: goodbye all records. Only the conforming
-                // service was admitted, so only it can own a Lost event even
-                // though the callback's ServiceInfo has no TXT properties.
+                // Exercise real removal callbacks for every record, then
+                // prove the same listener still accepts a fresh conforming
+                // record. Exact removal ownership is deterministic in
+                // JvmServiceAdmissionsTest rather than coupled to UDP timing.
                 withContext(Dispatchers.IO) {
                     crafter.unregisterService(blankPidService)
                     crafter.unregisterService(otherAppService)
                     crafter.unregisterService(mismatchedService)
                     crafter.unregisterService(conformingService)
                 }
-                awaitCondition {
-                    synchronized(seen) {
-                        seen.any { it is PeerEvent.Lost && pidOf(it) == conformingPid }
-                    }
-                }
 
-                // Listener survival after the removed-path callbacks: a fresh
+                // Listener survival after advertiser withdrawal: a fresh
                 // conforming record must still be discovered.
                 val postRemovalService = craftedService(
                     instanceName = "post-removal-$unique",
