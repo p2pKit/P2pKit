@@ -63,13 +63,11 @@ public sealed class NetworkPathStatus {
  *   - iOS: provided by default — uses `nw_path_monitor_t` on a serial
  *     dispatch queue. Wired automatically by [P2pKit.create]. Apps do not
  *     need to construct one unless they want to override.
- *   - Android: provided as [AndroidNetworkPathObserver] (requires a
- *     `Context`). Host apps register it via
- *     `lifecycle { networkPathObserver = AndroidNetworkPathObserver(ctx) }`.
- *     Without that override, Android falls back to [NoOpNetworkPathObserver]
- *     — the default factory deliberately does not construct the
- *     `ConnectivityManager`-based observer, even when a `Context` is
- *     available via `P2pKitAndroid.initialize(context)`.
+ *   - Android: `P2pKitAndroid.initialize(context)` supplies the application
+ *     context used to construct [AndroidNetworkPathObserver] by default.
+ *     Without initialization, Android falls back to
+ *     [NoOpNetworkPathObserver]. Apps can still override either default via
+ *     the lifecycle DSL.
  *   - JVM desktop: defaults to [NoOpNetworkPathObserver]. There is no
  *     reliable cross-platform JDK API for network-path change events; if a
  *     desktop app wants this behaviour it can supply a custom observer
@@ -89,6 +87,10 @@ public interface NetworkPathObserver {
      */
     public suspend fun start()
 
-    /** Detach the underlying OS monitor. Idempotent. */
+    /**
+     * Detach the underlying OS monitor. Idempotent. A failed native detach
+     * must retain cleanup ownership for a later retry and must not allow
+     * [start] to attach a second monitor over the first one.
+     */
     public suspend fun close()
 }

@@ -9,8 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * [NetworkPathObserver] that reports nothing. Used as the default on
  * platforms where the SDK can't construct a real observer without external
- * input (JVM desktop, Android when the host app hasn't supplied
- * `AndroidNetworkPathObserver(ctx)`).
+ * input (JVM desktop, or Android before `P2pKitAndroid.initialize`).
  *
  * The SDK treats a permanent [NetworkPathStatus.Unknown] stream as "no
  * observer" — `SessionManager.applyPathChange` only reacts to `Satisfied`

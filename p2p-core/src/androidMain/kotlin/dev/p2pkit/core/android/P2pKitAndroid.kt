@@ -13,9 +13,13 @@ import android.content.Context
  * - **Persistent `PeerId`.** Without this call, the Android default
  *   `PeerIdStorage` falls back to an in-memory implementation and the device
  *   appears to other peers with a new `PeerId` after every process restart.
+ * - **Network-path recovery.** The default `NetworkPathObserver` uses this
+ *   context to watch Wi-Fi/Ethernet availability. Without initialization it
+ *   remains a no-op `Unknown` stream unless the host supplies an observer.
  *
  * If you forget to call this on Android, the kit will emit a `P2pLogger.warn`
- * at construction and behave as in v0.1 (in-memory `PeerId`).
+ * at construction and behave as in v0.1 (in-memory `PeerId`, no default path
+ * observer).
  */
 public object P2pKitAndroid {
 

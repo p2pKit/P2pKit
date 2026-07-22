@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import platform.Foundation.NSLock
 import platform.Network.nw_interface_type_cellular
 import platform.Network.nw_interface_type_wifi
 import platform.Network.nw_interface_type_wired
@@ -47,6 +48,10 @@ import platform.darwin.dispatch_queue_create
  * it would wake reconnect to re-dial peers unreachable over cellular. A path
  * carrying Wi-Fi or wired (even alongside cellular) stays `Satisfied`.
  *
+ * Closing a monitor clears retained status to `Unknown`; a generation token
+ * prevents late callbacks from that cancelled monitor from changing state
+ * after close or after a subsequent restart.
+ *
  * **Lambda return-type hazard:** the update handler block must return
  * void. Kotlin/Native infers the lambda's ObjC return type from its last
  * expression; if that's the return value of `_status.value =`
@@ -64,6 +69,8 @@ internal class IosNetworkPathObserver(
 
     private val queue = dispatch_queue_create("dev.p2pkit.nwpath", null)
     private val startMutex = Mutex()
+    private val callbackStateLock = NSLock()
+    private val callbackState = NetworkPathCallbackState<Unit>()
 
     @Volatile
     private var monitor: nw_path_monitor_t = null
@@ -75,6 +82,7 @@ internal class IosNetworkPathObserver(
             return@withLock
         }
         nw_path_monitor_set_queue(m, queue)
+        val generation = checkNotNull(withCallbackStateLock { callbackState.begin() })
         nw_path_monitor_set_update_handler(m) { path ->
             val s = nw_path_get_status(path)
             // AUDIT-2026-06: the LAN data transport prohibits cellular
@@ -95,7 +103,9 @@ internal class IosNetworkPathObserver(
                 s == nw_path_status_unsatisfied -> NetworkPathStatus.Unsatisfied
                 else -> NetworkPathStatus.Unknown
             }
-            _status.value = mapped
+            withCallbackStateLock {
+                callbackState.publish(generation, mapped)?.let { _status.value = it }
+            }
             Unit
         }
         nw_path_monitor_start(m)
@@ -104,7 +114,21 @@ internal class IosNetworkPathObserver(
 
     override suspend fun close() = startMutex.withLock {
         val m = monitor ?: return@withLock
+        val generation = checkNotNull(withCallbackStateLock { callbackState.currentGeneration() })
         nw_path_monitor_cancel(m)
         monitor = null
+        withCallbackStateLock {
+            callbackState.detach(generation)?.let { _status.value = it }
+        }
+        Unit
+    }
+
+    private inline fun <T> withCallbackStateLock(block: () -> T): T {
+        callbackStateLock.lock()
+        return try {
+            block()
+        } finally {
+            callbackStateLock.unlock()
+        }
     }
 }

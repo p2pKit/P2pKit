@@ -1,19 +1,17 @@
 package dev.p2pkit.core.internal
 
+import dev.p2pkit.core.AndroidNetworkPathObserver
 import dev.p2pkit.core.NetworkPathObserver
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.core.android.androidApplicationContextOrNull
 
 /**
- * Android's default network path observer is deliberately no-op. A `Context`
- * could be obtained here via `androidApplicationContextOrNull()` once the
- * host app has called `P2pKitAndroid.initialize` (the peer-id and permission
- * factories in this source set do exactly that), but auto-wiring the real
- * observer would be a behavior change this factory has not adopted —
- * AUDIT-2026-06: the previous comment wrongly claimed a Context "cannot be
- * synthesised from :p2p-core alone". Host apps that want path-change
- * recovery construct [dev.p2pkit.core.AndroidNetworkPathObserver] and
- * register it via
- * `lifecycle { networkPathObserver = AndroidNetworkPathObserver(ctx) }`.
+ * Uses the application context registered through `P2pKitAndroid.initialize`
+ * to provide Android path recovery by default. Initialization-free hosts keep
+ * the compatibility fallback to a permanent `Unknown` stream.
  */
 internal actual fun defaultNetworkPathObserver(logger: P2pLogger): NetworkPathObserver =
-    NoOpNetworkPathObserver
+    selectAndroidDefaultPathObserver(
+        context = androidApplicationContextOrNull(),
+        fallback = NoOpNetworkPathObserver
+    ) { context -> AndroidNetworkPathObserver(context, logger) }

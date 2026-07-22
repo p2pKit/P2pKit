@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import dev.p2pkit.core.internal.NetworkPathCallbackState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,8 +15,8 @@ import kotlinx.coroutines.sync.withLock
 /**
  * Android network-path observer backed by `ConnectivityManager.NetworkCallback`.
  *
- * Construct one with the host app's `applicationContext` and register it via
- * the kit DSL:
+ * `P2pKitAndroid.initialize(context)` makes this the platform default. Apps
+ * may also construct one explicitly to override the lifecycle DSL:
  *
  * ```kotlin
  * P2pKit.create {
@@ -48,72 +49,106 @@ import kotlinx.coroutines.sync.withLock
  *
  * Requires `ACCESS_NETWORK_STATE` (already required by the LAN
  * transport — install-time permission, no runtime prompt).
+ *
+ * A successful [close] resets [status] to [NetworkPathStatus.Unknown] and
+ * invalidates the callback generation. If native unregister fails, the
+ * observer retains ownership so another [close] can retry; [start] will not
+ * attach a second callback over that registration.
  */
-public class AndroidNetworkPathObserver(
-    context: Context,
+public class AndroidNetworkPathObserver internal constructor(
+    private val monitor: AndroidNetworkPathMonitor,
     private val logger: P2pLogger = P2pLogger.NoOp
 ) : NetworkPathObserver {
 
-    private val appContext: Context = context.applicationContext
-    private val connectivity: ConnectivityManager =
-        appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    public constructor(
+        context: Context,
+        logger: P2pLogger = P2pLogger.NoOp
+    ) : this(ConnectivityManagerNetworkPathMonitor(context.applicationContext), logger)
 
     private val _status = MutableStateFlow<NetworkPathStatus>(NetworkPathStatus.Unknown)
     public override val status: StateFlow<NetworkPathStatus> = _status.asStateFlow()
 
     private val startMutex = Mutex()
-    private val activeNetworks: MutableSet<Network> = mutableSetOf()
-    @Volatile
-    private var callback: ConnectivityManager.NetworkCallback? = null
+    private val callbackStateLock = Any()
+    private val callbackState = NetworkPathCallbackState<Any>()
 
     public override suspend fun start(): Unit = startMutex.withLock {
-        if (callback != null) return@withLock
-        val cb = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                synchronized(activeNetworks) { activeNetworks.add(network) }
-                _status.value = NetworkPathStatus.Satisfied
-            }
-
-            override fun onLost(network: Network) {
-                val empty = synchronized(activeNetworks) {
-                    activeNetworks.remove(network)
-                    activeNetworks.isEmpty()
+        val generation = synchronized(callbackStateLock) { callbackState.begin() }
+            ?: return@withLock
+        val listener = object : AndroidNetworkPathListener {
+            override fun onAvailable(network: Any) {
+                synchronized(callbackStateLock) {
+                    callbackState.available(generation, network)?.let { _status.value = it }
                 }
-                // Only flip to Unsatisfied when the last validated network
-                // has gone away — handover events (Wi-Fi → cellular) emit
-                // onAvailable for the new network before onLost for the old,
-                // so flipping eagerly would cause a spurious Unsatisfied
-                // tick during seamless transitions.
-                if (empty) _status.value = NetworkPathStatus.Unsatisfied
             }
 
-            override fun onCapabilitiesChanged(
-                network: Network,
-                capabilities: NetworkCapabilities
-            ) {
-                // No-op for now — we only care about presence/absence, not
-                // whether the network is metered, VPN'd, etc.
+            override fun onLost(network: Any) {
+                synchronized(callbackStateLock) {
+                    // Only flip after the last matching network is gone.
+                    callbackState.lost(generation, network)?.let { _status.value = it }
+                }
             }
         }
-        // Match LAN-capable transports without requiring upstream internet.
-        // Dropping NET_CAPABILITY_INTERNET is deliberate — hotspot Wi-Fi
-        // without internet is still a valid P2P path. See class-level kdoc.
-        val request = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-            .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
-            .build()
         try {
-            connectivity.registerNetworkCallback(request, cb)
-            callback = cb
+            monitor.register(listener)
         } catch (e: Throwable) {
+            synchronized(callbackStateLock) {
+                callbackState.detach(generation)?.let { _status.value = it }
+            }
             logger.warn("registerNetworkCallback failed; path observer will report Unknown", e)
         }
     }
 
     public override suspend fun close(): Unit = startMutex.withLock {
-        val cb = callback ?: return@withLock
-        runCatching { connectivity.unregisterNetworkCallback(cb) }
+        val generation = synchronized(callbackStateLock) { callbackState.currentGeneration() }
+            ?: return@withLock
+        try {
+            monitor.unregister()
+        } catch (e: Throwable) {
+            // Keep ownership and the live generation so a later close retries
+            // the exact registration instead of leaking it and attaching a
+            // second callback on restart.
+            logger.warn("unregisterNetworkCallback failed; path observer still owns callback", e)
+            return@withLock
+        }
+        synchronized(callbackStateLock) {
+            callbackState.detach(generation)?.let { _status.value = it }
+        }
+    }
+}
+
+internal interface AndroidNetworkPathListener {
+    fun onAvailable(network: Any)
+    fun onLost(network: Any)
+}
+
+internal interface AndroidNetworkPathMonitor {
+    fun register(listener: AndroidNetworkPathListener)
+    fun unregister()
+}
+
+private class ConnectivityManagerNetworkPathMonitor(context: Context) : AndroidNetworkPathMonitor {
+    private val connectivity =
+        context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private var callback: ConnectivityManager.NetworkCallback? = null
+
+    override fun register(listener: AndroidNetworkPathListener) {
+        check(callback == null) { "network callback is already registered" }
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = listener.onAvailable(network)
+            override fun onLost(network: Network) = listener.onLost(network)
+        }
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+            .build()
+        connectivity.registerNetworkCallback(request, cb)
+        callback = cb
+    }
+
+    override fun unregister() {
+        val cb = callback ?: return
+        connectivity.unregisterNetworkCallback(cb)
         callback = null
-        synchronized(activeNetworks) { activeNetworks.clear() }
     }
 }

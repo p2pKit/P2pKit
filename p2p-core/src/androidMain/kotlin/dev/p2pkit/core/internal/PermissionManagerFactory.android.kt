@@ -1,6 +1,5 @@
 package dev.p2pkit.core.internal
 
-import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import dev.p2pkit.core.P2pLogger
@@ -52,14 +51,14 @@ internal actual fun defaultPlatformPermissionManager(logger: P2pLogger): P2pPerm
  * a manifest edit can fix.
  */
 private fun warnIfLanManifestPermissionsUndeclared(appContext: Context, logger: P2pLogger) {
-    val undeclared = listOf(
-        Manifest.permission.ACCESS_WIFI_STATE,
-        Manifest.permission.CHANGE_WIFI_MULTICAST_STATE
-    ).filter { appContext.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+    val undeclared = androidLanManifestPermissions.filter {
+        appContext.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+    }
     if (undeclared.isNotEmpty()) {
         logger.warn(
             "AndroidManifest.xml is missing ${undeclared.joinToString()}. Declare " +
-                "them (<uses-permission>) or LAN discovery/advertising may find no peers — " +
+                "them (<uses-permission>) or LAN transport/path observation may fail — " +
+                "INTERNET gates sockets, ACCESS_NETWORK_STATE gates route observation, and " +
                 "CHANGE_WIFI_MULTICAST_STATE gates the multicast lock the JmDNS receiver " +
                 "needs. These are install-time (protection level: normal) permissions: they " +
                 "cannot be requested at runtime, so P2pKit.permissions does not report them."

@@ -34,17 +34,27 @@ import kotlin.test.assertTrue
  * 3. The gate keys on **missing**, not **required**: required-but-granted
  *    permissions never block.
  *
- * `AndroidLanPermissionManager` itself needs an Android `Context`, and
- * p2p-core has no Android host-test harness (no androidUnitTest source set /
- * Robolectric), so its empty-report + manifest-warn behavior is verified
- * manually. Recipe: fresh-install a sample app whose manifest OMITS
- * `ACCESS_WIFI_STATE` + `CHANGE_WIFI_MULTICAST_STATE` (after
- * `P2pKitAndroid.initialize(context)`): startAdvertising()/startDiscovery()
- * must still start (no P2pError.PermissionMissing) and logcat must show the
- * "AndroidManifest.xml is missing ..." warn at kit construction; declaring
- * both permissions silences the warn and discovery finds peers.
+ * A common pure seam pins the exact four-permission manifest diagnostic while
+ * the remaining tests pin the runtime gate. Physical-device evidence still
+ * verifies PackageManager/logcat behavior: omit each documented normal
+ * permission in turn after `P2pKitAndroid.initialize(context)`; construction
+ * must warn, while startAdvertising()/startDiscovery() remain ungated because
+ * no runtime prompt can grant a missing manifest declaration.
  */
 class PermissionGateTest {
+
+    @Test
+    fun androidManifestDiagnosticCoversEveryDocumentedInstallTimePermission() {
+        assertEquals(
+            listOf(
+                "android.permission.INTERNET",
+                "android.permission.ACCESS_NETWORK_STATE",
+                "android.permission.ACCESS_WIFI_STATE",
+                "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+            ),
+            androidLanManifestPermissions
+        )
+    }
 
     @Test
     fun noOpManagerReportsNoRuntimePermissions() {

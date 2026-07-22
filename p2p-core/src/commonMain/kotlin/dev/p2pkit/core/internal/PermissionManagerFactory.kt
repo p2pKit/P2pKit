@@ -9,11 +9,12 @@ import dev.p2pkit.core.permission.P2pPermissionManager
  * [dev.p2pkit.core.dsl.P2pKitBuilder.permissionManager].
  *
  * - **Android:** reports no runtime permissions — core LAN needs only
- *   normal install-time permissions (`ACCESS_WIFI_STATE`,
- *   `CHANGE_WIFI_MULTICAST_STATE`), which are auto-granted iff declared in
- *   the manifest and cannot be requested at runtime. Using the application
+ *   normal install-time permissions (`INTERNET`, `ACCESS_NETWORK_STATE`,
+ *   `ACCESS_WIFI_STATE`, `CHANGE_WIFI_MULTICAST_STATE`), which are
+ *   auto-granted iff declared in the manifest and cannot be requested at
+ *   runtime. Using the application
  *   context registered via `P2pKitAndroid.initialize(context)`, the factory
- *   emits a non-fatal warn at construction if either is missing from the
+ *   emits a non-fatal warn at construction if any is missing from the
  *   manifest (a build-time mistake that otherwise shows up as silent
  *   zero-discovery). Falls back to a no-op manager (with a warn) if init was
  *   never called.
