@@ -14,7 +14,10 @@ import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportHint
 import kotlin.concurrent.Volatile
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.toKString
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -22,8 +25,6 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -53,10 +54,12 @@ import platform.Network.nw_browser_state_failed
 import platform.Network.nw_browser_state_ready
 import platform.Network.nw_browser_state_waiting
 import platform.Network.nw_browser_t
+import platform.Network.nw_endpoint_get_bonjour_service_name
 import platform.Network.nw_listener_set_advertise_descriptor
 import platform.Network.nw_listener_t
 import platform.Network.nw_parameters_create
 import platform.Network.nw_parameters_set_include_peer_to_peer
+import platform.Foundation.NSLock
 
 /**
  * iOS LAN [DiscoveryTransport].
@@ -98,8 +101,14 @@ internal class IosLanDiscoveryTransport(
     @Volatile
     private var advertising: Boolean = false
 
+    private class BrowserLease(
+        val handle: nw_browser_t,
+        val generation: Int,
+        @Volatile var recoveryAttempt: Int
+    )
+
     @Volatile
-    private var browser: nw_browser_t = null
+    private var browser: BrowserLease? = null
 
     @Volatile
     private var browserReady: Boolean = false
@@ -146,6 +155,11 @@ internal class IosLanDiscoveryTransport(
     private val nudgeScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    private val browserScheduleMutex = Mutex()
+
+    @Volatile
+    private var pendingBrowserRecoveryJob: Job? = null
+
     /** Most recent pending nudge job; superseded on each new rebind. */
     @Volatile
     private var pendingNudgeJob: Job? = null
@@ -157,8 +171,9 @@ internal class IosLanDiscoveryTransport(
      * set, but PeerRegistry evicts peers ~15 s after the last event — the
      * class KDoc always documented this loop, the implementation was missing,
      * so iOS-discovered peers vanished from kit.peers after 15 s of browse
-     * quiet (AUDIT-2026-06 fix). StateFlow CAS keeps it thread-safe between
-     * the browse callback queue and the announce coroutine without a lock.
+     * quiet (AUDIT-2026-06 fix). [announceCacheLock] serializes cache,
+     * endpoint-registry, and event side effects across the native browse
+     * callback queue and the announce coroutine.
      *
      * AUDIT-2026-06 (#8): each entry is stamped with the [browserGeneration]
      * that last CONFIRMED it via a browse result (added / TXT-changed).
@@ -173,7 +188,8 @@ internal class IosLanDiscoveryTransport(
      * cycles (~10 s grace for the replacement browser to re-add live peers).
      * See [reconcileAnnounceCache] for the pure decision logic.
      */
-    private val announceCache = MutableStateFlow<Map<String, AnnounceEntry>>(emptyMap())
+    private val announceCacheLock = NSLock()
+    private var announceCache: Map<String, AnnounceEntry> = emptyMap()
 
     /**
      * AUDIT-2026-06 (#8): incremented (under [lock]) every time a new
@@ -241,8 +257,25 @@ internal class IosLanDiscoveryTransport(
             "startDiscovery: type=${transportContext.lanServiceTypeBonjour} app=${transportContext.appId.value} localPid=${transportContext.localPeerId.value.take(8)}"
         )
         discoveryStartedByHost = true
-        createBrowserLocked()
+        try {
+            createBrowserLocked(recoveryAttempt = 0)
+        } catch (cancelled: CancellationException) {
+            discoveryStartedByHost = false
+            throw cancelled
+        } catch (error: Exception) {
+            discoveryStartedByHost = false
+            throw error
+        }
         startAnnounceLoopLocked()
+    }
+
+    private inline fun <T> withAnnounceCacheLock(block: () -> T): T {
+        announceCacheLock.lock()
+        return try {
+            block()
+        } finally {
+            announceCacheLock.unlock()
+        }
     }
 
     /** Caller must hold [lock]. Idempotent. */
@@ -252,33 +285,66 @@ internal class IosLanDiscoveryTransport(
             while (isActive) {
                 delay(PEER_REANNOUNCE_INTERVAL_MS)
                 if (!discoveryStartedByHost) continue
-                // AUDIT-2026-06 (#8): reconcile inside update {} so the CAS
-                // retries against concurrent browse-callback stamps instead
-                // of clobbering them; `applied` captures the result of the
-                // lambda execution that actually committed.
-                var applied: AnnounceReconcileResult? = null
-                announceCache.update { current ->
-                    reconcileAnnounceCache(
-                        cache = current,
-                        currentGeneration = browserGeneration,
-                        graceTicks = ANNOUNCE_STALE_GRACE_TICKS
-                    ).also { applied = it }.updatedCache
-                }
-                val result = applied ?: continue
-                result.announce.forEach { peer ->
-                    _events.tryEmit(PeerEvent.Updated(peer))
-                }
-                result.lostPeerIds.forEach { pid ->
-                    IosLanDebug.log(
-                        "browse",
-                        "announce loop: pruning ghost pid=${pid.take(8)} — not " +
-                            "re-confirmed by browser generation $browserGeneration"
-                    )
-                    emitLostById(pid)
-                }
+                // One native lock serializes reconcile/loss side effects with
+                // browse re-adds. A fresh result either wins first and is
+                // retained, or follows Lost and publishes a correctly ordered
+                // Found; stale prune can no longer delete a fresh endpoint.
+                val effectiveGeneration =
+                    if (browserReady) browserGeneration else browserGeneration + 1
+                reconcileAnnounceCacheAtomically(
+                    currentGeneration = effectiveGeneration,
+                    graceTicks = ANNOUNCE_STALE_GRACE_TICKS,
+                    onAnnounce = { peer ->
+                        _events.tryEmit(PeerEvent.Updated(peer))
+                    },
+                    onLost = { pid ->
+                        IosLanDebug.log(
+                            "browse",
+                            "announce loop: pruning ghost pid=${pid.take(8)} — not " +
+                                "re-confirmed by browser generation $effectiveGeneration"
+                        )
+                        emitLostByIdLocked(pid, removeCacheEntry = false)
+                    }
+                )
             }
         }
     }
+
+    /**
+     * Commit reconcile, endpoint removal, and Lost/Updated publication as one
+     * cache transaction. A concurrent fresh confirmation cannot be deleted by
+     * a stale prune after the reconcile snapshot has been committed.
+     */
+    internal fun reconcileAnnounceCacheAtomically(
+        currentGeneration: Int,
+        graceTicks: Int,
+        onAnnounce: (InternalPeer) -> Unit,
+        onLost: (String) -> Unit
+    ) = withAnnounceCacheLock {
+        val result = reconcileAnnounceCache(
+            cache = announceCache,
+            currentGeneration = currentGeneration,
+            graceTicks = graceTicks
+        )
+        announceCache = result.updatedCache
+        result.announce.forEach(onAnnounce)
+        result.lostPeerIds.forEach(onLost)
+    }
+
+    internal fun confirmAnnounceEntryAtomically(
+        pid: String,
+        entry: AnnounceEntry,
+        isCurrentGeneration: () -> Boolean = { true },
+        onConfirmed: () -> Unit = {}
+    ): Boolean = withAnnounceCacheLock {
+        if (!isCurrentGeneration()) return@withAnnounceCacheLock false
+        announceCache = announceCache + (pid to entry)
+        onConfirmed()
+        true
+    }
+
+    internal fun announceEntryForTest(pid: String): AnnounceEntry? =
+        withAnnounceCacheLock { announceCache[pid] }
 
     override suspend fun stopDiscovery() = lock.withLock {
         // Clear host intent BEFORE the browser null-check: when iOS reaps the
@@ -287,14 +353,19 @@ internal class IosLanDiscoveryTransport(
         // silently resurrected browsing the host had stopped
         // (AUDIT-2026-06 fix).
         discoveryStartedByHost = false
+        cancelPendingBrowserRecoveryLocked()
         announceJob?.cancel()
         announceJob = null
-        announceCache.value = emptyMap()
-        val b = browser ?: return@withLock
+        withAnnounceCacheLock { announceCache = emptyMap() }
+        val lease = browser ?: return@withLock
         IosLanDebug.log("browse", "stopDiscovery: cancelling browser")
-        browser = null
-        browserReady = false
-        nw_browser_cancel(b)
+        withAnnounceCacheLock {
+            if (browser === lease) {
+                browser = null
+                browserReady = false
+            }
+        }
+        nw_browser_cancel(lease.handle)
     }
 
     /**
@@ -316,11 +387,26 @@ internal class IosLanDiscoveryTransport(
             return@withLock
         }
         IosLanDebug.log("browse", "refresh: cancel + recreate browser to flush Bonjour cache")
-        browser?.let { nw_browser_cancel(it) }
-        browser = null
-        browserReady = false
-        createBrowserLocked()
-        IosLanDebug.log("browse", "refresh: fresh browser started")
+        val previous = browser
+        withAnnounceCacheLock {
+            if (browser === previous) {
+                browser = null
+                browserReady = false
+            }
+        }
+        previous?.handle?.let { nw_browser_cancel(it) }
+        try {
+            createBrowserLocked(recoveryAttempt = 0)
+            IosLanDebug.log("browse", "refresh: fresh browser started")
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            IosLanDebug.log(
+                "browse",
+                "refresh: browser recreation failed; scheduling bounded recovery (${error.message})"
+            )
+            scheduleBrowserRecoveryLocked("refresh create failure", attempt = 1)
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -352,12 +438,17 @@ internal class IosLanDiscoveryTransport(
      */
     private suspend fun onBeforeListenerRebind(): Unit = lock.withLock {
         wasBrowsingBeforeRebind = discoveryStartedByHost
-        browser?.let { b ->
+        val previous = browser
+        withAnnounceCacheLock {
+            if (browser === previous) {
+                browser = null
+                browserReady = false
+            }
+        }
+        previous?.handle?.let { b ->
             IosLanDebug.log("browse", "rebind: cancelling old browser")
             nw_browser_cancel(b)
         }
-        browser = null
-        browserReady = false
         IosLanDebug.log(
             "browse",
             "rebind: pre-rebind state captured " +
@@ -393,9 +484,19 @@ internal class IosLanDiscoveryTransport(
             IosLanDebug.log("advertise", "rebind: was not advertising; nothing to re-attach")
         }
         if (wasBrowsingBeforeRebind) {
-            createBrowserLocked()
-            wasBrowsingBeforeRebind = false
-            IosLanDebug.log("browse", "rebind: browser recreated on new listener queue")
+            try {
+                createBrowserLocked(recoveryAttempt = 0)
+                wasBrowsingBeforeRebind = false
+                IosLanDebug.log("browse", "rebind: browser recreated on new listener queue")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                IosLanDebug.log(
+                    "browse",
+                    "rebind: browser recreation failed; scheduling bounded recovery (${error.message})"
+                )
+                scheduleBrowserRecoveryLocked("listener rebind create failure", attempt = 1)
+            }
         } else {
             IosLanDebug.log("browse", "rebind: was not browsing; nothing to recreate")
         }
@@ -471,7 +572,7 @@ internal class IosLanDiscoveryTransport(
      * [onAfterListenerRebind] share the same lifecycle code. Caller MUST
      * hold [lock] and MUST have checked that [browser] is null.
      */
-    private fun createBrowserLocked() {
+    private fun createBrowserLocked(recoveryAttempt: Int) {
         // AUDIT-2026-06 (#8): every new browser instance opens a fresh
         // generation. Entries in [announceCache] confirmed by an older
         // generation are ghost candidates until this browser re-adds them.
@@ -496,7 +597,15 @@ internal class IosLanDiscoveryTransport(
 
         val b = nw_browser_create(descriptor, browserParams)
             ?: error("nw_browser_create returned null")
-        browser = b
+        val lease = BrowserLease(
+            handle = b,
+            generation = browserGeneration,
+            recoveryAttempt = recoveryAttempt
+        )
+        withAnnounceCacheLock {
+            browser = lease
+            browserReady = false
+        }
 
         nw_browser_set_queue(b, dataTransport.queue)
         nw_browser_set_state_changed_handler(b) { state, _ ->
@@ -509,8 +618,17 @@ internal class IosLanDiscoveryTransport(
             }
             IosLanDebug.log("browse", "state -> $label")
             when (state) {
-                nw_browser_state_ready -> if (browser === b) browserReady = true
+                nw_browser_state_ready -> withAnnounceCacheLock {
+                    if (browser === lease) {
+                        browserReady = true
+                        lease.recoveryAttempt = 0
+                    }
+                }
                 nw_browser_state_failed, nw_browser_state_cancelled -> {
+                    // Break the native callback-retention graph for both
+                    // expected and unexpected terminal transitions.
+                    nw_browser_set_browse_results_changed_handler(lease.handle, null)
+                    nw_browser_set_state_changed_handler(lease.handle, null)
                     // Identity check: this handler belongs to `b`. refresh()
                     // cancels the old browser and installs a replacement; the
                     // old instance's async cancelled callback must not clobber
@@ -519,9 +637,20 @@ internal class IosLanDiscoveryTransport(
                     // accumulating leak during the ~3s Reconnecting refresh
                     // cadence). Only clear state for the CURRENT browser
                     // (AUDIT-2026-06 fix).
-                    if (browser === b) {
-                        browserReady = false
-                        browser = null
+                    val shouldRecover = withAnnounceCacheLock {
+                        if (browser === lease) {
+                            browserReady = false
+                            browser = null
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    if (shouldRecover) {
+                        scheduleBrowserRecoveryFromCallback(
+                            reason = "browser state=$label",
+                            attempt = lease.recoveryAttempt + 1
+                        )
                     }
                 }
             }
@@ -534,13 +663,74 @@ internal class IosLanDiscoveryTransport(
             // (e.g. a result_removed for a peer the CURRENT browser still
             // sees) must not mutate the announce cache / endpoint registry
             // or emit Lost once a newer browser owns the field.
-            if (browser === b) {
-                handleBrowseResultChange(old, new, batchComplete)
+            if (browser === lease) {
+                handleBrowseResultChange(
+                    old = old,
+                    new = new,
+                    batchComplete = batchComplete,
+                    generation = lease.generation
+                )
             }
             Unit
         }
         nw_browser_start(b)
         IosLanDebug.log("browse", "nw_browser_start invoked")
+    }
+
+    private fun scheduleBrowserRecoveryFromCallback(reason: String, attempt: Int) {
+        nudgeScope.launch {
+            lock.withLock {
+                if (!discoveryStartedByHost || browser != null) return@withLock
+                scheduleBrowserRecoveryLocked(reason, attempt)
+            }
+        }
+    }
+
+    /** Caller holds [lock]. */
+    private fun scheduleBrowserRecoveryLocked(reason: String, attempt: Int) {
+        if (!discoveryStartedByHost || browser != null) return
+        if (attempt > BROWSER_RECOVERY_MAX_ATTEMPTS) {
+            IosLanDebug.log(
+                "browse",
+                "browser recovery budget exhausted after ${attempt - 1} attempt(s): $reason"
+            )
+            return
+        }
+        nudgeScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            browserScheduleMutex.withLock {
+                pendingBrowserRecoveryJob?.cancel()
+                pendingBrowserRecoveryJob = nudgeScope.launch {
+                    delay(BROWSER_RECOVERY_BASE_DELAY_MS * attempt)
+                    lock.withLock {
+                        if (!discoveryStartedByHost || browser != null) return@withLock
+                        try {
+                            createBrowserLocked(recoveryAttempt = attempt)
+                            wasBrowsingBeforeRebind = false
+                            IosLanDebug.log(
+                                "browse",
+                                "browser recovery $attempt/$BROWSER_RECOVERY_MAX_ATTEMPTS started"
+                            )
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            IosLanDebug.log(
+                                "browse",
+                                "browser recovery attempt $attempt failed (${error.message})"
+                            )
+                            scheduleBrowserRecoveryLocked(reason, attempt + 1)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Caller holds [lock]. */
+    private suspend fun cancelPendingBrowserRecoveryLocked() {
+        browserScheduleMutex.withLock {
+            pendingBrowserRecoveryJob?.cancel()
+            pendingBrowserRecoveryJob = null
+        }
     }
 
     private fun buildAdvertiseDescriptor(localPeer: LocalPeerInfo): nw_advertise_descriptor_t {
@@ -571,7 +761,8 @@ internal class IosLanDiscoveryTransport(
     private fun handleBrowseResultChange(
         old: nw_browse_result_t,
         new: nw_browse_result_t,
-        batchComplete: Boolean
+        batchComplete: Boolean,
+        generation: Int
     ) {
         val changes = nw_browse_result_get_changes(old, new)
         val added = (changes and nw_browse_result_change_result_added.toULong()) != 0UL
@@ -584,15 +775,15 @@ internal class IosLanDiscoveryTransport(
         )
 
         if (added && new != null) {
-            emitPeer(new, isUpdate = false)
+            emitPeer(new, isUpdate = false, generation = generation)
         } else if (removed && old != null) {
-            emitLost(old)
+            emitLost(old, generation)
         } else if (txtChanged && new != null) {
-            emitPeer(new, isUpdate = true)
+            emitPeer(new, isUpdate = true, generation = generation)
         }
     }
 
-    private fun emitPeer(result: nw_browse_result_t, isUpdate: Boolean) {
+    private fun emitPeer(result: nw_browse_result_t, isUpdate: Boolean, generation: Int) {
         val endpoint = nw_browse_result_copy_endpoint(result)
         if (endpoint == null) {
             IosLanDebug.log("browse", "emitPeer: copy_endpoint returned null — skip")
@@ -608,6 +799,16 @@ internal class IosLanDiscoveryTransport(
         val app = attrs[LanConstants.TXT_APP_ID]
         if (pid == null) {
             IosLanDebug.log("browse", "emitPeer: filter — TXT_PEER_ID missing or blank")
+            return
+        }
+        val servicePid = validDiscoveryPeerIdOrNull(
+            nw_endpoint_get_bonjour_service_name(endpoint)?.toKString()
+        )
+        if (servicePid != pid) {
+            IosLanDebug.log(
+                "browse",
+                "emitPeer: filter — Bonjour service identity does not match TXT peer id"
+            )
             return
         }
         if (app == null) {
@@ -646,8 +847,6 @@ internal class IosLanDiscoveryTransport(
             ?: setOf(TransportKind.LAN)
 
         val peerId = PeerId(pid)
-        endpointRegistry.put(peerId, endpoint)
-
         val internalPeer = InternalPeer(
             publicPeer = Peer(
                 id = peerId,
@@ -662,37 +861,84 @@ internal class IosLanDiscoveryTransport(
         // confirmed it. A live peer re-added by a replacement browser gets
         // re-stamped here and keeps being announced; a ghost keeps its old
         // generation and is pruned by the announce loop.
-        announceCache.update { it + (pid to AnnounceEntry(internalPeer, browserGeneration)) }
-        val event = if (isUpdate) PeerEvent.Updated(internalPeer) else PeerEvent.Found(internalPeer)
-        _events.tryEmit(event)
+        val committed = confirmAnnounceEntryAtomically(
+            pid = pid,
+            entry = AnnounceEntry(internalPeer, lastConfirmedGeneration = generation),
+            isCurrentGeneration = {
+                // A generation can become stale between native callback entry
+                // and parsing. Never let that queued result replace current
+                // ownership.
+                generation == browserGeneration && browser?.generation == generation
+            },
+            onConfirmed = {
+                endpointRegistry.put(peerId, endpoint)
+                val event =
+                    if (isUpdate) PeerEvent.Updated(internalPeer) else PeerEvent.Found(internalPeer)
+                _events.tryEmit(event)
+            }
+        )
+        if (!committed) return
         IosLanDebug.log("browse", "emitPeer: ACCEPTED ${if (isUpdate) "Updated" else "Found"} $name pid=${pid.take(8)}")
     }
 
-    private fun emitLost(result: nw_browse_result_t) {
+    private fun emitLost(result: nw_browse_result_t, generation: Int) {
         val txt = nw_browse_result_copy_txt_record_object(result)
         val attrs = IosBonjour.txtRecordToMap(txt)
-        // AUDIT-2026-07 (RBS-1): validate the TXT pid before the lost path
-        // can construct PeerId, and gate on appId like emitPeer — a
-        // malformed or other-app record is skipped inside the browse
-        // callback instead of propagating an exception through it.
-        val pid = validDiscoveryPeerIdOrNull(attrs[LanConstants.TXT_PEER_ID])
-        if (pid == null) {
-            IosLanDebug.log("browse", "emitLost: TXT peer id missing or blank — skip")
+        val endpoint = nw_browse_result_copy_endpoint(result)
+        val servicePid = endpoint?.let {
+            validDiscoveryPeerIdOrNull(
+                nw_endpoint_get_bonjour_service_name(it)?.toKString()
+            )
+        }
+        if (servicePid == null) {
+            IosLanDebug.log("browse", "emitLost: Bonjour service identity unavailable — skip")
+            return
+        }
+
+        // Removed results may omit TXT entirely. Present fields must not
+        // contradict the service identity/app, and the cache requirement in
+        // emitLostById limits an incomplete removal to a peer whose complete
+        // Found record already passed app, protocol, and fingerprint checks.
+        val txtPid = validDiscoveryPeerIdOrNull(attrs[LanConstants.TXT_PEER_ID])
+        if (txtPid != null && txtPid != servicePid) {
+            IosLanDebug.log("browse", "emitLost: filter — service/TXT peer identity mismatch")
             return
         }
         val app = attrs[LanConstants.TXT_APP_ID]
-        if (app != transportContext.appId.value) {
-            IosLanDebug.log("browse", "emitLost: filter — appId missing or mismatch (peer=$app)")
+        if (app != null && app != transportContext.appId.value) {
+            IosLanDebug.log("browse", "emitLost: filter — appId mismatch (peer=$app)")
             return
         }
-        if (validateLanDiscoverySecurityMetadata(
+        val carriesSecurityMetadata =
+            LanConstants.TXT_PROTOCOL_VERSION in attrs || LanConstants.TXT_FINGERPRINT in attrs
+        if (
+            carriesSecurityMetadata &&
+            validateLanDiscoverySecurityMetadata(
                 profile = transportContext.securityProfile,
                 protocolVersion = attrs[LanConstants.TXT_PROTOCOL_VERSION],
                 fingerprint = attrs[LanConstants.TXT_FINGERPRINT]
             ) == null
-        ) return
-        emitLostById(pid)
+        ) {
+            IosLanDebug.log("browse", "emitLost: filter — contradictory security metadata")
+            return
+        }
+        emitLostById(
+            pid = servicePid,
+            expectedGeneration = generation,
+            requireCachedPeer = true
+        )
     }
+
+    /** Real Network.framework failure seam used by the Apple lifecycle suite. */
+    internal fun cancelCurrentBrowserForTest() {
+        browser?.handle?.let { nw_browser_cancel(it) }
+    }
+
+    internal val browserGenerationForTest: Int
+        get() = browserGeneration
+
+    internal val hasBrowserForTest: Boolean
+        get() = browser != null
 
     /**
      * Shared lost-emission path: browse `result_removed` callbacks land here
@@ -701,7 +947,22 @@ internal class IosLanDiscoveryTransport(
      * cache removal is idempotent — the prune path has already dropped the
      * entry via [reconcileAnnounceCache]'s updated map.
      */
-    private fun emitLostById(pid: String) {
+    private fun emitLostById(
+        pid: String,
+        expectedGeneration: Int? = null,
+        requireCachedPeer: Boolean = false
+    ) {
+        withAnnounceCacheLock {
+            if (expectedGeneration != null && browser?.generation != expectedGeneration) {
+                return@withAnnounceCacheLock
+            }
+            if (requireCachedPeer && pid !in announceCache) return@withAnnounceCacheLock
+            emitLostByIdLocked(pid, removeCacheEntry = true)
+        }
+    }
+
+    /** Caller holds [announceCacheLock]. */
+    private fun emitLostByIdLocked(pid: String, removeCacheEntry: Boolean) {
         if (pid == transportContext.localPeerId.value) return
         // AUDIT-2026-07 (RBS-1): both callers validate their input (emitLost
         // from the raw TXT record, the announce-loop prune from entries that
@@ -709,7 +970,7 @@ internal class IosLanDiscoveryTransport(
         // throwing PeerId constructor from this shared path.
         if (validDiscoveryPeerIdOrNull(pid) == null) return
         val peerId = PeerId(pid)
-        announceCache.update { it - pid }
+        if (removeCacheEntry) announceCache = announceCache - pid
         endpointRegistry.remove(peerId)
         _events.tryEmit(PeerEvent.Lost(peerId))
         IosLanDebug.log("browse", "emitLost: $pid")
@@ -748,6 +1009,9 @@ internal class IosLanDiscoveryTransport(
          * shorter than letting a ghost pin PeerRegistry forever.
          */
         const val ANNOUNCE_STALE_GRACE_TICKS: Int = 2
+
+        const val BROWSER_RECOVERY_BASE_DELAY_MS: Long = 250
+        const val BROWSER_RECOVERY_MAX_ATTEMPTS: Int = 5
     }
 }
 

@@ -2,6 +2,10 @@
 #define P2PKIT_NW_H
 
 #include <Network/Network.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 /**
  * Build an nw_parameters_t for plain TCP without TLS.
@@ -27,6 +31,41 @@ static inline nw_parameters_t p2pkit_nw_create_plain_tcp_parameters(void) {
         NW_PARAMETERS_DISABLE_PROTOCOL,
         NW_PARAMETERS_DEFAULT_CONFIGURATION
     );
+}
+
+/**
+ * Test seam for proving that an NWListener's exact native port descriptor has
+ * been released. Network.framework's `nw_listener_create_with_port` reports
+ * EINVAL on the iOS simulator for otherwise valid numeric ports, so it cannot
+ * distinguish an occupied port from an unsupported probe. A direct BSD bind
+ * gives the required ownership signal and closes the probe descriptor before
+ * returning. This static-inline helper is used only by appleTest.
+ *
+ * Returns 0 on a successful bind, otherwise the errno from bind/socket.
+ */
+static inline int p2pkit_test_bind_tcp_port(uint16_t port, bool ipv6) {
+    int family = ipv6 ? AF_INET6 : AF_INET;
+    int fd = socket(family, SOCK_STREAM, 0);
+    if (fd < 0) return errno;
+
+    int result;
+    if (ipv6) {
+        struct sockaddr_in6 address = {0};
+        address.sin6_family = AF_INET6;
+        address.sin6_port = htons(port);
+        address.sin6_addr = in6addr_any;
+        result = bind(fd, (const struct sockaddr *)&address, sizeof(address));
+    } else {
+        struct sockaddr_in address = {0};
+        address.sin_family = AF_INET;
+        address.sin_port = htons(port);
+        address.sin_addr.s_addr = htonl(INADDR_ANY);
+        result = bind(fd, (const struct sockaddr *)&address, sizeof(address));
+    }
+
+    int bind_errno = result == 0 ? 0 : errno;
+    close(fd);
+    return bind_errno;
 }
 
 /**
