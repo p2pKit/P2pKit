@@ -364,6 +364,11 @@ class JvmSecureIdentityStoreAdapterTest {
                 deviceName = "must-not-build-transport"
                 transports {
                     register(object : TransportFactory {
+                        override val descriptor =
+                            dev.p2pkit.core.transport.TransportDescriptor.dataOnly(
+                                dev.p2pkit.core.TransportKind.LAN
+                            )
+
                         override fun build(context: TransportContext): TransportPair {
                             factoryBuilds++
                             return TransportPair(data = FakeDataTransport(), discovery = null)
@@ -444,6 +449,9 @@ class JvmSecureIdentityStoreAdapterTest {
     private class JvmIdentityTestFactory(
         private val transport: FakeDataTransport
     ) : TransportFactory {
+        override val descriptor =
+            dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
+
         override fun build(context: TransportContext): TransportPair =
             TransportPair(data = transport, discovery = null)
     }

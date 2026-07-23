@@ -3,6 +3,7 @@ package dev.p2pkit.core.internal
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.AppKilledPolicy
 import dev.p2pkit.core.BackgroundPolicy
+import dev.p2pkit.core.FeatureState
 import dev.p2pkit.core.KeepAliveConfig
 import dev.p2pkit.core.NetworkPathObserver
 import dev.p2pkit.core.NetworkPathStatus
@@ -38,8 +39,11 @@ import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.LocalPeerInfo
+import dev.p2pkit.core.transport.RegisteredTransportFactory
+import dev.p2pkit.core.transport.TransportCapability
 import dev.p2pkit.core.transport.TransportContext
-import dev.p2pkit.core.transport.TransportFactory
+import dev.p2pkit.core.transport.TransportDescriptor
+import dev.p2pkit.core.transport.TransportPair
 import dev.p2pkit.core.transport.TransportSecurityProfile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -75,7 +79,7 @@ internal class P2pKitImpl(
     private val secureIdentityService: SecureIdentityService?,
     private val secureIdentityUsage: SecureIdentityUsage?,
     private val securityCryptography: PlatformSecurityCryptography?,
-    private val transportFactories: List<TransportFactory>,
+    private val transportFactories: List<RegisteredTransportFactory>,
     private val keepAlive: KeepAliveConfig,
     private val reconnectPolicy: ReconnectPolicy,
     private val backgroundPolicy: BackgroundPolicy,
@@ -139,7 +143,13 @@ internal class P2pKitImpl(
     private val _state = MutableStateFlow<P2pState>(P2pState.Idle)
     override val state: StateFlow<P2pState> = _state.asStateFlow()
 
-    private val transports: List<Pair<DataTransport, DiscoveryTransport?>>
+    private val advertisingFeature = FeatureControl()
+    override val advertisingState: StateFlow<FeatureState> = advertisingFeature.state
+
+    private val discoveryFeature = FeatureControl()
+    override val discoveryState: StateFlow<FeatureState> = discoveryFeature.state
+
+    private val transports: List<TransportPair>
     private val dataTransports: List<DataTransport>
     private val discoveryTransports: List<DiscoveryTransport>
 
@@ -207,13 +217,28 @@ internal class P2pKitImpl(
             securityProfile = securityProfile,
             localFingerprint = localFingerprint
         )
-        transports = transportFactories.map { factory ->
-            val pair = factory.build(ctx)
-            pair.data to pair.discovery
+        transports = transportFactories.map { registration ->
+            val descriptor = registration.descriptor
+            val pair = try {
+                registration.factory.build(ctx)
+            } catch (error: P2pError.TransportInitializationFailed) {
+                throw error
+            } catch (error: Throwable) {
+                throw P2pError.TransportInitializationFailed(
+                    descriptor.kind,
+                    error.message ?: error::class.simpleName ?: "factory build failed",
+                    error
+                )
+            }
+            validateTransportPair(descriptor, pair)
+            pair
         }
-        dataTransports = transports.map { it.first }
-        discoveryTransports = transports.mapNotNull { it.second }
-        supportedTransportKinds = dataTransports.map { it.type }.toSet()
+        dataTransports = transports.mapNotNull { it.data }
+        discoveryTransports = transports.mapNotNull { it.discovery }
+        supportedTransportKinds = transportFactories
+            .filter { TransportCapability.DATA in it.descriptor.capabilities }
+            .map { it.descriptor.kind }
+            .toSet()
 
         transportManager = TransportManager(dataTransports)
         peerRegistry = PeerRegistry(
@@ -486,117 +511,406 @@ internal class P2pKitImpl(
     }
 
     override suspend fun startAdvertising() {
-        val generation = beginLifecycleOperation()
-        ensurePermissions()
-        ensureStarted(generation)
-        val attempted = mutableListOf<DiscoveryTransport>()
-        try {
-            val localInfo = LocalPeerInfo(
-                peerId = localPeerId,
-                deviceName = deviceName,
-                platform = localPlatform,
-                appId = appId,
-                supportedTransports = supportedTransportKinds,
-                securityProfile = securityProfile,
-                fingerprint = localFingerprint
-            )
-            for (transport in discoveryTransports) {
-                requireLifecycleActive(generation)
-                // Include the currently-entered transport: cancellation or an
-                // exception can arrive after its platform resource exists but
-                // before startAdvertising returns ownership to us.
-                attempted += transport
-                transport.startAdvertising(localInfo)
-                if (!isLifecycleActive(generation)) throw lifecycleStoppedFailure()
-            }
-        } catch (e: CancellationException) {
-            rollbackDiscoveryOperation("advertising", attempted) { it.stopAdvertising() }
-            throw e
-        } catch (e: Throwable) {
-            if (!isLifecycleActive(generation)) {
-                rollbackDiscoveryOperation("advertising", attempted) { it.stopAdvertising() }
-                throw lifecycleStoppedFailure()
-            }
-            rollbackDiscoveryOperation("advertising", attempted) { it.stopAdvertising() }
-            // A partial advertise failure must not leave state stuck — surface
-            // it as Failed (consistent with the ensureStarted bind-failure path).
-            val err = if (e is P2pError) e
-            else P2pError.ConnectionFailed("startAdvertising failed: ${e.message ?: e::class.simpleName}")
-            if (!commitLifecycle(generation) { _state.value = P2pState.Failed(err) }) {
-                throw lifecycleStoppedFailure()
-            }
-            throw err
-        }
-        val committed = commitLifecycle(generation) {
-            if (_state.value is P2pState.Failed) _state.value = P2pState.Running
-        }
-        if (!committed) {
-            rollbackDiscoveryOperation("advertising", attempted) {
-                it.stopAdvertising()
-            }
-            throw lifecycleStoppedFailure()
-        }
+        val localInfo = LocalPeerInfo(
+            peerId = localPeerId,
+            deviceName = deviceName,
+            platform = localPlatform,
+            appId = appId,
+            supportedTransports = supportedTransportKinds,
+            securityProfile = securityProfile,
+            fingerprint = localFingerprint
+        )
+        startFeature(
+            control = advertisingFeature,
+            featureName = "advertising",
+            unsupportedReason = "No registered transport supports advertising",
+            startTransport = { it.startAdvertising(localInfo) },
+            stopTransport = { it.stopAdvertising() }
+        )
     }
 
     override suspend fun stopAdvertising() {
-        val issues = stopDiscoveryResources("stop advertising") {
-            it.stopAdvertising()
-        }
-        if (issues.isNotEmpty()) {
-            throw cleanupError("stop advertising", issues)
-        }
+        stopFeature(advertisingFeature, "advertising") { it.stopAdvertising() }
     }
 
     override suspend fun startDiscovery() {
-        val generation = beginLifecycleOperation()
-        ensurePermissions()
-        ensureStarted(generation)
-        val attempted = mutableListOf<DiscoveryTransport>()
-        try {
-            for (transport in discoveryTransports) {
-                requireLifecycleActive(generation)
-                attempted += transport
-                transport.startDiscovery()
-                if (!isLifecycleActive(generation)) throw lifecycleStoppedFailure()
-            }
-        } catch (e: CancellationException) {
-            rollbackDiscoveryOperation("discovery", attempted) { it.stopDiscovery() }
-            throw e
-        } catch (e: Throwable) {
-            if (!isLifecycleActive(generation)) {
-                rollbackDiscoveryOperation("discovery", attempted) { it.stopDiscovery() }
-                throw lifecycleStoppedFailure()
-            }
-            rollbackDiscoveryOperation("discovery", attempted) { it.stopDiscovery() }
-            // Mirror startAdvertising: surface a typed error instead of
-            // letting a raw platform exception escape the public API
-            // (AUDIT-2026-06 fix).
-            val err = if (e is P2pError) e
-            else P2pError.ConnectionFailed("startDiscovery failed: ${e.message ?: e::class.simpleName}")
-            if (!commitLifecycle(generation) { _state.value = P2pState.Failed(err) }) {
-                throw lifecycleStoppedFailure()
-            }
-            throw err
-        }
-        val committed = commitLifecycle(generation) {
-            if (_state.value is P2pState.Failed) _state.value = P2pState.Running
-        }
-        if (!committed) {
-            rollbackDiscoveryOperation("discovery", attempted) {
-                it.stopDiscovery()
-            }
-            throw lifecycleStoppedFailure()
-        }
+        startFeature(
+            control = discoveryFeature,
+            featureName = "discovery",
+            unsupportedReason = "No registered transport supports discovery",
+            startTransport = { it.startDiscovery() },
+            stopTransport = { it.stopDiscovery() }
+        )
     }
 
     override suspend fun stopDiscovery() {
-        val issues = stopDiscoveryResources("stop discovery") {
-            it.stopDiscovery()
-        }
-        if (issues.isNotEmpty()) {
-            throw cleanupError("stop discovery", issues)
+        stopFeature(discoveryFeature, "discovery") { it.stopDiscovery() }
+    }
+
+    private suspend fun startFeature(
+        control: FeatureControl,
+        featureName: String,
+        unsupportedReason: String,
+        startTransport: suspend (DiscoveryTransport) -> Unit,
+        stopTransport: suspend (DiscoveryTransport) -> Unit
+    ) {
+        control.operationMutex.withLock {
+            val lifecycleGeneration = beginLifecycleOperation()
+            val start = lifecycleMutex.withLock {
+                if (!lifecycleIsActiveLocked(lifecycleGeneration)) throw lifecycleStoppedFailure()
+                if (control.mutableState.value == FeatureState.Active) return@withLock null
+                val token = ++control.nextStartToken
+                control.activeStartToken = token
+                control.stopRequestedToken = null
+                control.mutableState.value = FeatureState.Starting
+                FeatureStart(token, control.cleanupRequired)
+            } ?: return
+
+            if (start.cleanupRequired) {
+                val cleanupIssues = stopDiscoveryResources(
+                    "prepare $featureName retry",
+                    preserveCancellation = false,
+                    cleanup = stopTransport
+                )
+                if (cleanupIssues.isNotEmpty()) {
+                    val cleanupFailure = cleanupError("prepare $featureName retry", cleanupIssues)
+                    finishFeatureStart(
+                        control,
+                        start.token,
+                        FeatureState.Failed(cleanupFailure),
+                        cleanupRequired = true
+                    )
+                    throw cleanupFailure
+                }
+                lifecycleMutex.withLock {
+                    if (control.activeStartToken == start.token) control.cleanupRequired = false
+                }
+            }
+
+            if (handleRequestedFeatureStop(control, start.token, featureName, emptyList(), stopTransport)) {
+                return
+            }
+
+            // Static support is authoritative and does not depend on a
+            // momentary permission/radio state. Report it before querying
+            // runtime availability so an absent provider cannot be mistaken
+            // for a recoverable permission failure.
+            if (discoveryTransports.isEmpty()) {
+                when (
+                    completeFeatureStart(
+                        control,
+                        start.token,
+                        FeatureState.Unsupported(unsupportedReason)
+                    )
+                ) {
+                    FeatureCompletion.Applied -> return
+                    FeatureCompletion.StopRequested -> {
+                        handleRequestedFeatureStop(
+                            control,
+                            start.token,
+                            featureName,
+                            emptyList(),
+                            stopTransport
+                        )
+                        return
+                    }
+                    FeatureCompletion.LifecycleStopped -> throw lifecycleStoppedFailure()
+                    FeatureCompletion.Stale -> throw staleFeatureOperation(featureName)
+                }
+            }
+
+            // Only genuinely runtime-requestable permissions participate.
+            // Install-time manifest declarations remain construction-time
+            // diagnostics and cannot be repaired by a runtime prompt.
+            val missing = try {
+                permissions.missingPermissions()
+            } catch (error: Throwable) {
+                failFeatureStart(
+                    control,
+                    start.token,
+                    lifecycleGeneration,
+                    featureName,
+                    emptyList(),
+                    stopTransport,
+                    error
+                )
+            }
+            if (handleRequestedFeatureStop(control, start.token, featureName, emptyList(), stopTransport)) {
+                return
+            }
+            if (missing.isNotEmpty()) {
+                when (
+                    completeFeatureStart(
+                        control,
+                        start.token,
+                        FeatureState.PermissionRequired(missing)
+                    )
+                ) {
+                    FeatureCompletion.Applied -> throw P2pError.PermissionMissing(missing)
+                    FeatureCompletion.StopRequested -> {
+                        handleRequestedFeatureStop(
+                            control,
+                            start.token,
+                            featureName,
+                            emptyList(),
+                            stopTransport
+                        )
+                        return
+                    }
+                    FeatureCompletion.LifecycleStopped -> throw lifecycleStoppedFailure()
+                    FeatureCompletion.Stale -> throw staleFeatureOperation(featureName)
+                }
+            }
+
+            try {
+                ensureStarted(lifecycleGeneration)
+            } catch (error: Throwable) {
+                failFeatureStart(
+                    control,
+                    start.token,
+                    lifecycleGeneration,
+                    featureName,
+                    emptyList(),
+                    stopTransport,
+                    error
+                )
+            }
+            if (handleRequestedFeatureStop(control, start.token, featureName, emptyList(), stopTransport)) {
+                return
+            }
+
+            val attempted = mutableListOf<DiscoveryTransport>()
+            for (transport in discoveryTransports) {
+                if (!isLifecycleActive(lifecycleGeneration)) {
+                    rollbackDiscoveryOperation(featureName, attempted, stopTransport)
+                    throw lifecycleStoppedFailure()
+                }
+                if (handleRequestedFeatureStop(control, start.token, featureName, attempted, stopTransport)) {
+                    return
+                }
+                attempted += transport
+                try {
+                    startTransport(transport)
+                } catch (error: Throwable) {
+                    failFeatureStart(
+                        control,
+                        start.token,
+                        lifecycleGeneration,
+                        featureName,
+                        attempted,
+                        stopTransport,
+                        error
+                    )
+                }
+                if (handleRequestedFeatureStop(control, start.token, featureName, attempted, stopTransport)) {
+                    return
+                }
+            }
+
+            when (completeFeatureStart(control, start.token, FeatureState.Active)) {
+                FeatureCompletion.Applied -> Unit
+                FeatureCompletion.StopRequested -> {
+                    handleRequestedFeatureStop(
+                        control,
+                        start.token,
+                        featureName,
+                        attempted,
+                        stopTransport
+                    )
+                }
+                FeatureCompletion.LifecycleStopped -> {
+                    rollbackDiscoveryOperation(featureName, attempted, stopTransport)
+                    throw lifecycleStoppedFailure()
+                }
+                FeatureCompletion.Stale -> {
+                    rollbackDiscoveryOperation(featureName, attempted, stopTransport)
+                    throw staleFeatureOperation(featureName)
+                }
+            }
         }
     }
+
+    private suspend fun stopFeature(
+        control: FeatureControl,
+        featureName: String,
+        stopTransport: suspend (DiscoveryTransport) -> Unit
+    ) {
+        val lifecycleGeneration = lifecycleMutex.withLock {
+            if (stopped) throw lifecycleStoppedFailure()
+            when (control.mutableState.value) {
+                FeatureState.Idle -> return
+                is FeatureState.PermissionRequired,
+                is FeatureState.Unsupported -> {
+                    control.mutableState.value = FeatureState.Idle
+                    control.cleanupRequired = false
+                    return
+                }
+                else -> {
+                    control.stopRequestedToken = control.activeStartToken
+                    control.mutableState.value = FeatureState.Stopping
+                    this@P2pKitImpl.lifecycleGeneration
+                }
+            }
+        }
+
+        withContext(NonCancellable) {
+            control.operationMutex.withLock {
+                val needsCleanup = lifecycleMutex.withLock {
+                    if (!lifecycleIsActiveLocked(lifecycleGeneration)) throw lifecycleStoppedFailure()
+                    control.mutableState.value != FeatureState.Idle
+                }
+                if (!needsCleanup) return@withLock
+
+                val issues = stopDiscoveryResources(
+                    "stop $featureName",
+                    preserveCancellation = false,
+                    cleanup = stopTransport
+                )
+                val failure = issues.takeIf { it.isNotEmpty() }
+                    ?.let { cleanupError("stop $featureName", it) }
+                lifecycleMutex.withLock {
+                    if (lifecycleIsActiveLocked(lifecycleGeneration)) {
+                        control.activeStartToken = null
+                        control.stopRequestedToken = null
+                        control.cleanupRequired = failure != null
+                        control.mutableState.value = if (failure == null) {
+                            FeatureState.Idle
+                        } else {
+                            FeatureState.Failed(failure)
+                        }
+                    }
+                }
+                if (failure != null) throw failure
+            }
+        }
+    }
+
+    private suspend fun handleRequestedFeatureStop(
+        control: FeatureControl,
+        token: Long,
+        featureName: String,
+        attempted: List<DiscoveryTransport>,
+        stopTransport: suspend (DiscoveryTransport) -> Unit
+    ): Boolean {
+        val (requested, terminallyStopped) = lifecycleMutex.withLock {
+            (control.activeStartToken == token && control.stopRequestedToken == token) to stopped
+        }
+        if (!requested) return false
+
+        val issues = rollbackDiscoveryOperation(featureName, attempted, stopTransport)
+        val failure = issues.takeIf { it.isNotEmpty() }
+            ?.let { cleanupError("stop $featureName during startup", it) }
+        finishFeatureStart(
+            control,
+            token,
+            failure?.let { FeatureState.Failed(it) } ?: FeatureState.Idle,
+            cleanupRequired = failure != null
+        )
+        if (failure != null) throw failure
+        if (terminallyStopped) throw lifecycleStoppedFailure()
+        return true
+    }
+
+    private suspend fun failFeatureStart(
+        control: FeatureControl,
+        token: Long,
+        lifecycleGeneration: Long,
+        featureName: String,
+        attempted: List<DiscoveryTransport>,
+        stopTransport: suspend (DiscoveryTransport) -> Unit,
+        error: Throwable
+    ): Nothing {
+        val issues = rollbackDiscoveryOperation(featureName, attempted, stopTransport)
+        val lifecycleActive = withContext(NonCancellable) {
+            isLifecycleActive(lifecycleGeneration)
+        }
+        if (!lifecycleActive) throw lifecycleStoppedFailure()
+
+        if (error is CancellationException) {
+            val cleanupFailure = issues.takeIf { it.isNotEmpty() }
+                ?.let { cleanupError("cancel $featureName startup", it) }
+            withContext(NonCancellable) {
+                finishFeatureStart(
+                    control,
+                    token,
+                    cleanupFailure?.let { FeatureState.Failed(it) } ?: FeatureState.Idle,
+                    cleanupRequired = cleanupFailure != null
+                )
+            }
+            throw error
+        }
+
+        val baseError = if (error is P2pError) {
+            error
+        } else {
+            P2pError.ConnectionFailed(
+                "start $featureName failed: ${error.message ?: error::class.simpleName}"
+            ).also { it.underlying = error }
+        }
+        val publicError = if (issues.isEmpty()) {
+            baseError
+        } else {
+            P2pError.ConnectionFailed(
+                "start $featureName failed and rollback left ${issues.size} cleanup failure(s)"
+            ).also {
+                it.underlying = CleanupAggregateException(
+                    "start $featureName and rollback",
+                    listOf(CleanupIssue("start $featureName", error)) + issues
+                )
+            }
+        }
+        val stopWasRequested = lifecycleMutex.withLock {
+            control.activeStartToken == token && control.stopRequestedToken == token
+        }
+        finishFeatureStart(
+            control,
+            token,
+            if (stopWasRequested && issues.isEmpty()) FeatureState.Idle else FeatureState.Failed(publicError),
+            cleanupRequired = issues.isNotEmpty()
+        )
+        throw publicError
+    }
+
+    private suspend fun completeFeatureStart(
+        control: FeatureControl,
+        token: Long,
+        state: FeatureState
+    ): FeatureCompletion = lifecycleMutex.withLock {
+        when {
+            stopped -> FeatureCompletion.LifecycleStopped
+            control.activeStartToken != token -> FeatureCompletion.Stale
+            control.stopRequestedToken == token -> {
+                control.mutableState.value = FeatureState.Stopping
+                FeatureCompletion.StopRequested
+            }
+            else -> {
+                control.activeStartToken = null
+                control.stopRequestedToken = null
+                control.cleanupRequired = false
+                control.mutableState.value = state
+                FeatureCompletion.Applied
+            }
+        }
+    }
+
+    private suspend fun finishFeatureStart(
+        control: FeatureControl,
+        token: Long,
+        state: FeatureState,
+        cleanupRequired: Boolean
+    ) {
+        lifecycleMutex.withLock {
+            if (!stopped && control.activeStartToken == token) {
+                control.activeStartToken = null
+                control.stopRequestedToken = null
+                control.cleanupRequired = cleanupRequired
+                control.mutableState.value = state
+            }
+        }
+    }
+
+    private fun staleFeatureOperation(featureName: String): IllegalStateException =
+        IllegalStateException("Stale $featureName lifecycle operation")
 
     override suspend fun connect(peer: Peer): P2pSession {
         return connectInternal(peer, expectedFingerprint = null)
@@ -666,6 +980,8 @@ internal class P2pKitImpl(
                     stopped = true
                     lifecycleGeneration += 1
                     _state.value = P2pState.Stopping
+                    markFeatureStoppingForKit(advertisingFeature)
+                    markFeatureStoppingForKit(discoveryFeature)
                     true
                 }
             }
@@ -800,12 +1116,16 @@ internal class P2pKitImpl(
         operation: String,
         attempted: List<DiscoveryTransport>,
         cleanup: suspend (DiscoveryTransport) -> Unit
-    ) {
+    ): List<CleanupIssue> {
+        val issues = mutableListOf<CleanupIssue>()
         withContext(NonCancellable) {
             for (transport in attempted.asReversed()) {
-                cleanupStaleResource("${transport.type} $operation") { cleanup(transport) }
+                cleanupStaleResource("${transport.type} $operation") {
+                    cleanup(transport)
+                }?.let(issues::add)
             }
         }
+        return issues
     }
 
     /**
@@ -827,7 +1147,7 @@ internal class P2pKitImpl(
     private suspend fun cleanupStaleResource(
         label: String,
         cleanup: suspend () -> Unit
-    ) {
+    ): CleanupIssue? {
         val completed = try {
             withTimeoutOrNull(STALE_OPERATION_CLEANUP_TIMEOUT_MS) {
                 cleanup()
@@ -835,14 +1155,16 @@ internal class P2pKitImpl(
             } ?: false
         } catch (e: Throwable) {
             logger.warn("Late lifecycle cleanup failed for $label", e)
-            return
+            return CleanupIssue(label, e)
         }
         if (!completed) {
-            logger.warn(
-                "Late lifecycle cleanup for $label exceeded " +
-                    "$STALE_OPERATION_CLEANUP_TIMEOUT_MS ms"
+            val failure = IllegalStateException(
+                "cleanup exceeded $STALE_OPERATION_CLEANUP_TIMEOUT_MS ms"
             )
+            logger.warn("Late lifecycle cleanup failed for $label", failure)
+            return CleanupIssue(label, failure)
         }
+        return null
     }
 
     /**
@@ -889,12 +1211,16 @@ internal class P2pKitImpl(
      */
     private suspend fun teardownBoundResources(): List<CleanupIssue> {
         val issues = mutableListOf<CleanupIssue>()
-        issues += stopDiscoveryResources("stop advertising", preserveCancellation = false) {
+        val advertisingIssues = stopDiscoveryResources("stop advertising", preserveCancellation = false) {
             it.stopAdvertising()
         }
-        issues += stopDiscoveryResources("stop discovery", preserveCancellation = false) {
+        finishTerminalFeatureTeardown(advertisingFeature, "stop advertising", advertisingIssues)
+        issues += advertisingIssues
+        val discoveryIssues = stopDiscoveryResources("stop discovery", preserveCancellation = false) {
             it.stopDiscovery()
         }
+        finishTerminalFeatureTeardown(discoveryFeature, "stop discovery", discoveryIssues)
+        issues += discoveryIssues
         issues += sessionManager.shutdownAllSessions()
         captureCleanupIssue(
             resource = "network provisioning manager",
@@ -913,6 +1239,28 @@ internal class P2pKitImpl(
             }?.let(issues::add)
         }
         return issues
+    }
+
+    private fun markFeatureStoppingForKit(control: FeatureControl) {
+        control.stopRequestedToken = control.activeStartToken
+        if (control.mutableState.value != FeatureState.Idle) {
+            control.mutableState.value = FeatureState.Stopping
+        }
+    }
+
+    private fun finishTerminalFeatureTeardown(
+        control: FeatureControl,
+        operation: String,
+        issues: List<CleanupIssue>
+    ) {
+        control.activeStartToken = null
+        control.stopRequestedToken = null
+        control.cleanupRequired = issues.isNotEmpty()
+        control.mutableState.value = if (issues.isEmpty()) {
+            FeatureState.Idle
+        } else {
+            FeatureState.Failed(cleanupError(operation, issues))
+        }
     }
 
     private suspend fun stopDiscoveryResources(
@@ -934,16 +1282,26 @@ internal class P2pKitImpl(
         return issues
     }
 
-    // Gates on genuinely runtime-requestable permissions only (e.g. the
-    // provisioning sidecar's NEARBY_WIFI_DEVICES / ACCESS_FINE_LOCATION via
-    // its own P2pPermissionManager). The default platform managers report
-    // none — Android's install-time Wi-Fi permissions are deliberately NOT
-    // surfaced here; a missing manifest declaration is a construction-time
-    // warn instead (AUDIT-2026-06 permission-gate regression fix; see
-    // PermissionManagerFactory.android.kt).
-    private suspend fun ensurePermissions() {
-        val missing = permissions.missingPermissions()
-        if (missing.isNotEmpty()) throw P2pError.PermissionMissing(missing)
+    private fun validateTransportPair(
+        descriptor: TransportDescriptor,
+        pair: TransportPair
+    ) {
+        val declaresData = TransportCapability.DATA in descriptor.capabilities
+        val declaresDiscovery = TransportCapability.DISCOVERY in descriptor.capabilities
+        val reason = when {
+            declaresData != (pair.data != null) ->
+                "descriptor DATA=$declaresData but built data path=${pair.data != null}"
+            declaresDiscovery != (pair.discovery != null) ->
+                "descriptor DISCOVERY=$declaresDiscovery but built discovery path=${pair.discovery != null}"
+            pair.data != null && pair.data.type != descriptor.kind ->
+                "descriptor kind ${descriptor.kind} does not match data kind ${pair.data.type}"
+            pair.discovery != null && pair.discovery.type != descriptor.kind ->
+                "descriptor kind ${descriptor.kind} does not match discovery kind ${pair.discovery.type}"
+            else -> null
+        }
+        if (reason != null) {
+            throw P2pError.TransportInitializationFailed(descriptor.kind, reason)
+        }
     }
 
     /**
@@ -996,6 +1354,36 @@ internal class P2pKitImpl(
     }
 }
 
+private class FeatureControl {
+    val operationMutex: Mutex = Mutex()
+    val mutableState: MutableStateFlow<FeatureState> = MutableStateFlow(FeatureState.Idle)
+    val state: StateFlow<FeatureState> = mutableState.asStateFlow()
+
+    /** Guarded by P2pKitImpl.lifecycleMutex, except after terminal stop owns teardown. */
+    var nextStartToken: Long = 0L
+
+    /** Guarded by P2pKitImpl.lifecycleMutex, except after terminal stop owns teardown. */
+    var activeStartToken: Long? = null
+
+    /** Guarded by P2pKitImpl.lifecycleMutex, except after terminal stop owns teardown. */
+    var stopRequestedToken: Long? = null
+
+    /** Guarded by P2pKitImpl.lifecycleMutex, except after terminal stop owns teardown. */
+    var cleanupRequired: Boolean = false
+}
+
+private data class FeatureStart(
+    val token: Long,
+    val cleanupRequired: Boolean
+)
+
+private enum class FeatureCompletion {
+    Applied,
+    StopRequested,
+    LifecycleStopped,
+    Stale
+}
+
 /**
  * Builds a [P2pKitImpl] from collected DSL configuration. Called by
  * [dev.p2pkit.core.dsl.P2pKitBuilder.build]. Public so the DSL package can
@@ -1004,7 +1392,7 @@ internal class P2pKitImpl(
 internal fun newP2pKit(
     appId: AppId,
     deviceName: String,
-    transportFactories: List<TransportFactory>,
+    transportFactories: List<RegisteredTransportFactory>,
     keepAlive: KeepAliveConfig,
     reconnectPolicy: ReconnectPolicy,
     backgroundPolicy: BackgroundPolicy,

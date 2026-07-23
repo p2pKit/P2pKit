@@ -1,7 +1,9 @@
 package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.FeatureState
 import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.permission.NoOpP2pPermissionManager
 import dev.p2pkit.core.permission.P2pPermission
 import dev.p2pkit.core.permission.P2pPermissionManager
@@ -89,6 +91,8 @@ class PermissionGateTest {
             kit.startDiscovery()
             assertEquals(1, discovery.startAdvertisingCalls, "advertising should have reached the transport")
             assertEquals(1, discovery.startDiscoveryCalls, "discovery should have reached the transport")
+            assertEquals(FeatureState.Active, kit.advertisingState.value)
+            assertEquals(FeatureState.Active, kit.discoveryState.value)
 
             kit.stop()
         }
@@ -116,6 +120,15 @@ class PermissionGateTest {
             assertEquals(listOf(P2pPermission.NearbyWifiDevices), discoveryError.permissions)
             assertEquals(0, discovery.startAdvertisingCalls, "gated advertising must never reach the transport")
             assertEquals(0, discovery.startDiscoveryCalls, "gated discovery must never reach the transport")
+            assertEquals(
+                FeatureState.PermissionRequired(listOf(P2pPermission.NearbyWifiDevices)),
+                kit.advertisingState.value
+            )
+            assertEquals(
+                FeatureState.PermissionRequired(listOf(P2pPermission.NearbyWifiDevices)),
+                kit.discoveryState.value
+            )
+            assertEquals(P2pState.Idle, kit.state.value)
 
             kit.stop()
         }
@@ -140,6 +153,8 @@ class PermissionGateTest {
             kit.startDiscovery()
             assertEquals(1, discovery.startAdvertisingCalls)
             assertEquals(1, discovery.startDiscoveryCalls)
+            assertEquals(FeatureState.Active, kit.advertisingState.value)
+            assertEquals(FeatureState.Active, kit.discoveryState.value)
 
             kit.stop()
         }
@@ -150,6 +165,8 @@ private class FixedTransportFactory(
     private val data: FakeDataTransport,
     private val discovery: FakeDiscoveryTransport
 ) : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataAndDiscovery(data.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = data, discovery = discovery)
 }

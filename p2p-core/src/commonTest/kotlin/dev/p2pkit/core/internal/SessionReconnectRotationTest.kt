@@ -368,6 +368,11 @@ class SessionReconnectRotationTest {
         private val data: FakeDataTransport,
         private val discovery: DiscoveryTransport?
     ) : TransportFactory {
+        override val descriptor = if (discovery == null) {
+            dev.p2pkit.core.transport.TransportDescriptor.dataOnly(data.type)
+        } else {
+            dev.p2pkit.core.transport.TransportDescriptor.dataAndDiscovery(data.type)
+        }
         override fun build(context: TransportContext): TransportPair =
             TransportPair(data = data, discovery = discovery)
     }

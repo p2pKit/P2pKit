@@ -2,6 +2,7 @@ package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.FeatureState
 import dev.p2pkit.core.NetworkPathObserver
 import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pError
@@ -36,6 +37,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -289,15 +291,9 @@ class KitLifecycleTest {
         assertTrue(second.closed)
     }
 
-    /**
-     * P1-07 (2026-07 coverage plan) / AUDIT-2026-06 re-advertise fix: a
-     * post-start advertise failure latches [P2pState.Failed]; a subsequent
-     * successful `startAdvertising()` must clear it back to Running
-     * (ensureStarted's success fast-path never re-runs the Running
-     * transition, so this clearing is the only way out).
-     */
+    /** Advertising failure/retry is retained without corrupting discovery or kit state. */
     @Test
-    fun successfulReadvertiseClearsLatchedFailed() {
+    fun advertisingFailureIsIndependentAndRetryReachesActive() {
         runBlocking {
             val transport = TrackingTransport()
             val kit = createTestKit {
@@ -310,19 +306,88 @@ class KitLifecycleTest {
             assertEquals(P2pState.Running, kit.state.value)
 
             transport.advertiseFailure = RuntimeException("simulated mDNS registration refusal")
-            assertFailsWith<P2pError.ConnectionFailed> { kit.startAdvertising() }
-            assertIs<P2pState.Failed>(
-                kit.state.value,
-                "an advertise failure must surface through the lifecycle as Failed"
+            val thrown = assertFailsWith<P2pError.ConnectionFailed> { kit.startAdvertising() }
+            val failed = assertIs<FeatureState.Failed>(
+                kit.advertisingState.value,
+                "advertising must retain its own failure"
             )
+            assertSame(thrown, failed.error)
+            assertEquals(P2pState.Running, kit.state.value)
+            assertEquals(FeatureState.Idle, kit.discoveryState.value)
+
+            kit.startDiscovery()
+            assertEquals(FeatureState.Active, kit.discoveryState.value)
+            assertIs<FeatureState.Failed>(kit.advertisingState.value)
 
             transport.advertiseFailure = null
             kit.startAdvertising()
-            assertEquals(
-                P2pState.Running, kit.state.value,
-                "a successful re-advertise must clear latched Failed back to Running"
-            )
+            assertEquals(FeatureState.Active, kit.advertisingState.value)
+            assertEquals(FeatureState.Active, kit.discoveryState.value)
+            assertEquals(P2pState.Running, kit.state.value)
 
+            kit.stop()
+        }
+    }
+
+    @Test
+    fun concurrentAdvertisingStartsCoalesceAndActiveStartIsIdempotent() = runBlocking {
+        val transport = GatedDiscoveryTransport()
+        val kit = createTestKit {
+            appId = AppId("coalesced-advertising-test")
+            deviceName = "Test"
+            transports { register(GatedDiscoveryFactory(transport)) }
+        }
+        try {
+            val firstStart = launch { kit.startAdvertising() }
+            transport.advertisingEntered.await()
+            assertEquals(FeatureState.Starting, kit.advertisingState.value)
+
+            val secondStart = launch { kit.startAdvertising() }
+            yield()
+            assertEquals(1, transport.startAdvertisingCalls)
+
+            transport.releaseAdvertising.complete(Unit)
+            withTimeout(5_000) {
+                firstStart.join()
+                secondStart.join()
+            }
+            assertEquals(FeatureState.Active, kit.advertisingState.value)
+            assertEquals(1, transport.startAdvertisingCalls)
+
+            kit.startAdvertising()
+            assertEquals(1, transport.startAdvertisingCalls)
+        } finally {
+            kit.stop()
+        }
+    }
+
+    @Test
+    fun stopDuringAdvertisingStartWinsAndRollsBackLateResource() = runBlocking {
+        val transport = GatedDiscoveryTransport()
+        val kit = createTestKit {
+            appId = AppId("stop-during-advertising-test")
+            deviceName = "Test"
+            transports { register(GatedDiscoveryFactory(transport)) }
+        }
+        try {
+            val start = launch { kit.startAdvertising() }
+            transport.advertisingEntered.await()
+            assertEquals(FeatureState.Starting, kit.advertisingState.value)
+
+            val stop = launch { kit.stopAdvertising() }
+            withTimeout(5_000) {
+                kit.advertisingState.first { it == FeatureState.Stopping }
+            }
+
+            transport.releaseAdvertising.complete(Unit)
+            withTimeout(5_000) {
+                start.join()
+                stop.join()
+            }
+            assertEquals(FeatureState.Idle, kit.advertisingState.value)
+            assertEquals(1, transport.startAdvertisingCalls)
+            assertEquals(1, transport.stopAdvertisingCalls)
+        } finally {
             kit.stop()
         }
     }
@@ -386,6 +451,7 @@ class KitLifecycleTest {
             assertEquals(1, second.stopDiscoveryCalls)
             assertFalse(first.discoveryActive)
             assertFalse(second.discoveryActive)
+            assertEquals(FeatureState.Idle, kit.discoveryState.value)
         } finally {
             kit.stop()
         }
@@ -839,6 +905,17 @@ class KitLifecycleTest {
             assertEquals(1, failing.stopAdvertisingCalls)
             assertEquals(1, healthy.stopAdvertisingCalls)
             assertFalse(healthy.advertisingActive)
+            assertIs<FeatureState.Failed>(kit.advertisingState.value)
+            assertEquals(FeatureState.Idle, kit.discoveryState.value)
+            assertEquals(P2pState.Running, kit.state.value)
+
+            failing.stopAdvertisingFailure = null
+            kit.startAdvertising()
+            assertEquals(2, failing.stopAdvertisingCalls)
+            assertEquals(2, healthy.stopAdvertisingCalls)
+            assertTrue(failing.advertisingActive)
+            assertTrue(healthy.advertisingActive)
+            assertEquals(FeatureState.Active, kit.advertisingState.value)
         } finally {
             failing.stopAdvertisingFailure = null
             kit.stop()
@@ -934,6 +1011,8 @@ private class StartupProbeTransport(
 }
 
 private class TrackingFactory(private val transport: TrackingTransport) : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataAndDiscovery(transport.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = transport)
 }
@@ -941,6 +1020,8 @@ private class TrackingFactory(private val transport: TrackingTransport) : Transp
 private class RollbackDiscoveryFactory(
     private val transport: RollbackDiscoveryTransport
 ) : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataAndDiscovery(transport.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = transport)
 }
@@ -1038,12 +1119,16 @@ private class HungStartTransport : DataTransport {
 }
 
 private class HungStartFactory(private val transport: HungStartTransport) : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = null)
 }
 
 /** Registers any data-only [DataTransport] (e.g. the shared [FakeDataTransport]). */
 private class DataOnlyFactory(private val transport: DataTransport) : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = null)
 }
@@ -1057,7 +1142,9 @@ private class GatedDiscoveryTransport : DataTransport, DiscoveryTransport {
     val discoveryEntered = CompletableDeferred<Unit>()
     val releaseDiscovery = CompletableDeferred<Unit>()
 
+    @Volatile var startAdvertisingCalls: Int = 0
     @Volatile var stopAdvertisingCalls: Int = 0
+    @Volatile var startDiscoveryCalls: Int = 0
     @Volatile var stopDiscoveryCalls: Int = 0
 
     private val incoming = Channel<RawConnection>(Channel.UNLIMITED)
@@ -1075,6 +1162,7 @@ private class GatedDiscoveryTransport : DataTransport, DiscoveryTransport {
     override val events: Flow<PeerEvent> = peerEvents.asSharedFlow()
 
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) {
+        startAdvertisingCalls += 1
         advertisingEntered.complete(Unit)
         releaseAdvertising.await()
     }
@@ -1084,6 +1172,7 @@ private class GatedDiscoveryTransport : DataTransport, DiscoveryTransport {
     }
 
     override suspend fun startDiscovery() {
+        startDiscoveryCalls += 1
         discoveryEntered.complete(Unit)
         releaseDiscovery.await()
     }
@@ -1096,6 +1185,8 @@ private class GatedDiscoveryTransport : DataTransport, DiscoveryTransport {
 private class GatedDiscoveryFactory(
     private val transport: GatedDiscoveryTransport
 ) : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataAndDiscovery(transport.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = transport)
 }
@@ -1130,6 +1221,8 @@ private class GatedConnectTransport(
 private class GatedConnectFactory(
     private val transport: GatedConnectTransport
 ) : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = null)
 }
@@ -1246,6 +1339,8 @@ private class GatedCloseTransport : DataTransport {
 }
 
 private class GatedCloseFactory(private val transport: GatedCloseTransport) : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = null)
 }
@@ -1288,6 +1383,8 @@ private class CleanupProbeTransport(
 private class CleanupProbeFactory(
     private val transport: CleanupProbeTransport
 ) : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = null)
 }

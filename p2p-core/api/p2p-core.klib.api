@@ -68,6 +68,17 @@ final enum class dev.p2pkit.core.transport/PeerOrigin : kotlin/Enum<dev.p2pkit.c
     final fun values(): kotlin/Array<dev.p2pkit.core.transport/PeerOrigin> // dev.p2pkit.core.transport/PeerOrigin.values|values#static(){}[0]
 }
 
+final enum class dev.p2pkit.core.transport/TransportCapability : kotlin/Enum<dev.p2pkit.core.transport/TransportCapability> { // dev.p2pkit.core.transport/TransportCapability|null[0]
+    enum entry DATA // dev.p2pkit.core.transport/TransportCapability.DATA|null[0]
+    enum entry DISCOVERY // dev.p2pkit.core.transport/TransportCapability.DISCOVERY|null[0]
+
+    final val entries // dev.p2pkit.core.transport/TransportCapability.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<dev.p2pkit.core.transport/TransportCapability> // dev.p2pkit.core.transport/TransportCapability.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): dev.p2pkit.core.transport/TransportCapability // dev.p2pkit.core.transport/TransportCapability.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<dev.p2pkit.core.transport/TransportCapability> // dev.p2pkit.core.transport/TransportCapability.values|values#static(){}[0]
+}
+
 final enum class dev.p2pkit.core.transport/TransportSecurityProfile : kotlin/Enum<dev.p2pkit.core.transport/TransportSecurityProfile> { // dev.p2pkit.core.transport/TransportSecurityProfile|null[0]
     enum entry AuthenticatedV2 // dev.p2pkit.core.transport/TransportSecurityProfile.AuthenticatedV2|null[0]
     enum entry LegacyPlaintextV1 // dev.p2pkit.core.transport/TransportSecurityProfile.LegacyPlaintextV1|null[0]
@@ -280,6 +291,9 @@ abstract interface dev.p2pkit.core.transport/RawConnection { // dev.p2pkit.core.
 }
 
 abstract interface dev.p2pkit.core.transport/TransportFactory { // dev.p2pkit.core.transport/TransportFactory|null[0]
+    abstract val descriptor // dev.p2pkit.core.transport/TransportFactory.descriptor|{}descriptor[0]
+        abstract fun <get-descriptor>(): dev.p2pkit.core.transport/TransportDescriptor // dev.p2pkit.core.transport/TransportFactory.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
     abstract fun build(dev.p2pkit.core.transport/TransportContext): dev.p2pkit.core.transport/TransportPair // dev.p2pkit.core.transport/TransportFactory.build|build(dev.p2pkit.core.transport.TransportContext){}[0]
 }
 
@@ -316,6 +330,10 @@ abstract interface dev.p2pkit.core/P2pKit { // dev.p2pkit.core/P2pKit|null[0]
         abstract fun <get-sessions>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/List<dev.p2pkit.core/P2pSession>> // dev.p2pkit.core/P2pKit.sessions.<get-sessions>|<get-sessions>(){}[0]
     abstract val state // dev.p2pkit.core/P2pKit.state|{}state[0]
         abstract fun <get-state>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.core/P2pState> // dev.p2pkit.core/P2pKit.state.<get-state>|<get-state>(){}[0]
+    open val advertisingState // dev.p2pkit.core/P2pKit.advertisingState|{}advertisingState[0]
+        open fun <get-advertisingState>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.core/FeatureState> // dev.p2pkit.core/P2pKit.advertisingState.<get-advertisingState>|<get-advertisingState>(){}[0]
+    open val discoveryState // dev.p2pkit.core/P2pKit.discoveryState|{}discoveryState[0]
+        open fun <get-discoveryState>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.core/FeatureState> // dev.p2pkit.core/P2pKit.discoveryState.<get-discoveryState>|<get-discoveryState>(){}[0]
 
     abstract fun lastSeen(dev.p2pkit.core/PeerId): kotlin/Long? // dev.p2pkit.core/P2pKit.lastSeen|lastSeen(dev.p2pkit.core.PeerId){}[0]
     abstract fun notifyAppBackgrounded() // dev.p2pkit.core/P2pKit.notifyAppBackgrounded|notifyAppBackgrounded(){}[0]
@@ -746,6 +764,28 @@ final class dev.p2pkit.core.transport/TransportContext { // dev.p2pkit.core.tran
     final fun toString(): kotlin/String // dev.p2pkit.core.transport/TransportContext.toString|toString(){}[0]
 }
 
+final class dev.p2pkit.core.transport/TransportDescriptor { // dev.p2pkit.core.transport/TransportDescriptor|null[0]
+    constructor <init>(dev.p2pkit.core/TransportKind, kotlin.collections/Set<dev.p2pkit.core.transport/TransportCapability>) // dev.p2pkit.core.transport/TransportDescriptor.<init>|<init>(dev.p2pkit.core.TransportKind;kotlin.collections.Set<dev.p2pkit.core.transport.TransportCapability>){}[0]
+
+    final val capabilities // dev.p2pkit.core.transport/TransportDescriptor.capabilities|{}capabilities[0]
+        final fun <get-capabilities>(): kotlin.collections/Set<dev.p2pkit.core.transport/TransportCapability> // dev.p2pkit.core.transport/TransportDescriptor.capabilities.<get-capabilities>|<get-capabilities>(){}[0]
+    final val kind // dev.p2pkit.core.transport/TransportDescriptor.kind|{}kind[0]
+        final fun <get-kind>(): dev.p2pkit.core/TransportKind // dev.p2pkit.core.transport/TransportDescriptor.kind.<get-kind>|<get-kind>(){}[0]
+
+    final fun component1(): dev.p2pkit.core/TransportKind // dev.p2pkit.core.transport/TransportDescriptor.component1|component1(){}[0]
+    final fun component2(): kotlin.collections/Set<dev.p2pkit.core.transport/TransportCapability> // dev.p2pkit.core.transport/TransportDescriptor.component2|component2(){}[0]
+    final fun copy(dev.p2pkit.core/TransportKind = ..., kotlin.collections/Set<dev.p2pkit.core.transport/TransportCapability> = ...): dev.p2pkit.core.transport/TransportDescriptor // dev.p2pkit.core.transport/TransportDescriptor.copy|copy(dev.p2pkit.core.TransportKind;kotlin.collections.Set<dev.p2pkit.core.transport.TransportCapability>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core.transport/TransportDescriptor.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // dev.p2pkit.core.transport/TransportDescriptor.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // dev.p2pkit.core.transport/TransportDescriptor.toString|toString(){}[0]
+
+    final object Companion { // dev.p2pkit.core.transport/TransportDescriptor.Companion|null[0]
+        final fun dataAndDiscovery(dev.p2pkit.core/TransportKind): dev.p2pkit.core.transport/TransportDescriptor // dev.p2pkit.core.transport/TransportDescriptor.Companion.dataAndDiscovery|dataAndDiscovery(dev.p2pkit.core.TransportKind){}[0]
+        final fun dataOnly(dev.p2pkit.core/TransportKind): dev.p2pkit.core.transport/TransportDescriptor // dev.p2pkit.core.transport/TransportDescriptor.Companion.dataOnly|dataOnly(dev.p2pkit.core.TransportKind){}[0]
+        final fun discoveryOnly(dev.p2pkit.core/TransportKind): dev.p2pkit.core.transport/TransportDescriptor // dev.p2pkit.core.transport/TransportDescriptor.Companion.discoveryOnly|discoveryOnly(dev.p2pkit.core.TransportKind){}[0]
+    }
+}
+
 final class dev.p2pkit.core.transport/TransportHint { // dev.p2pkit.core.transport/TransportHint|null[0]
     constructor <init>(dev.p2pkit.core/TransportKind, kotlin/String? = ..., kotlin/Int? = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ...) // dev.p2pkit.core.transport/TransportHint.<init>|<init>(dev.p2pkit.core.TransportKind;kotlin.String?;kotlin.Int?;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
 
@@ -769,16 +809,16 @@ final class dev.p2pkit.core.transport/TransportHint { // dev.p2pkit.core.transpo
 }
 
 final class dev.p2pkit.core.transport/TransportPair { // dev.p2pkit.core.transport/TransportPair|null[0]
-    constructor <init>(dev.p2pkit.core.transport/DataTransport, dev.p2pkit.core.transport/DiscoveryTransport? = ...) // dev.p2pkit.core.transport/TransportPair.<init>|<init>(dev.p2pkit.core.transport.DataTransport;dev.p2pkit.core.transport.DiscoveryTransport?){}[0]
+    constructor <init>(dev.p2pkit.core.transport/DataTransport? = ..., dev.p2pkit.core.transport/DiscoveryTransport? = ...) // dev.p2pkit.core.transport/TransportPair.<init>|<init>(dev.p2pkit.core.transport.DataTransport?;dev.p2pkit.core.transport.DiscoveryTransport?){}[0]
 
     final val data // dev.p2pkit.core.transport/TransportPair.data|{}data[0]
-        final fun <get-data>(): dev.p2pkit.core.transport/DataTransport // dev.p2pkit.core.transport/TransportPair.data.<get-data>|<get-data>(){}[0]
+        final fun <get-data>(): dev.p2pkit.core.transport/DataTransport? // dev.p2pkit.core.transport/TransportPair.data.<get-data>|<get-data>(){}[0]
     final val discovery // dev.p2pkit.core.transport/TransportPair.discovery|{}discovery[0]
         final fun <get-discovery>(): dev.p2pkit.core.transport/DiscoveryTransport? // dev.p2pkit.core.transport/TransportPair.discovery.<get-discovery>|<get-discovery>(){}[0]
 
-    final fun component1(): dev.p2pkit.core.transport/DataTransport // dev.p2pkit.core.transport/TransportPair.component1|component1(){}[0]
+    final fun component1(): dev.p2pkit.core.transport/DataTransport? // dev.p2pkit.core.transport/TransportPair.component1|component1(){}[0]
     final fun component2(): dev.p2pkit.core.transport/DiscoveryTransport? // dev.p2pkit.core.transport/TransportPair.component2|component2(){}[0]
-    final fun copy(dev.p2pkit.core.transport/DataTransport = ..., dev.p2pkit.core.transport/DiscoveryTransport? = ...): dev.p2pkit.core.transport/TransportPair // dev.p2pkit.core.transport/TransportPair.copy|copy(dev.p2pkit.core.transport.DataTransport;dev.p2pkit.core.transport.DiscoveryTransport?){}[0]
+    final fun copy(dev.p2pkit.core.transport/DataTransport? = ..., dev.p2pkit.core.transport/DiscoveryTransport? = ...): dev.p2pkit.core.transport/TransportPair // dev.p2pkit.core.transport/TransportPair.copy|copy(dev.p2pkit.core.transport.DataTransport?;dev.p2pkit.core.transport.DiscoveryTransport?){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core.transport/TransportPair.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.p2pkit.core.transport/TransportPair.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.p2pkit.core.transport/TransportPair.toString|toString(){}[0]
@@ -1356,6 +1396,71 @@ sealed class dev.p2pkit.core/BackgroundPolicy { // dev.p2pkit.core/BackgroundPol
     }
 }
 
+sealed class dev.p2pkit.core/FeatureState { // dev.p2pkit.core/FeatureState|null[0]
+    final class Failed : dev.p2pkit.core/FeatureState { // dev.p2pkit.core/FeatureState.Failed|null[0]
+        constructor <init>(dev.p2pkit.core/P2pError) // dev.p2pkit.core/FeatureState.Failed.<init>|<init>(dev.p2pkit.core.P2pError){}[0]
+
+        final val error // dev.p2pkit.core/FeatureState.Failed.error|{}error[0]
+            final fun <get-error>(): dev.p2pkit.core/P2pError // dev.p2pkit.core/FeatureState.Failed.error.<get-error>|<get-error>(){}[0]
+
+        final fun component1(): dev.p2pkit.core/P2pError // dev.p2pkit.core/FeatureState.Failed.component1|component1(){}[0]
+        final fun copy(dev.p2pkit.core/P2pError = ...): dev.p2pkit.core/FeatureState.Failed // dev.p2pkit.core/FeatureState.Failed.copy|copy(dev.p2pkit.core.P2pError){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/FeatureState.Failed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.p2pkit.core/FeatureState.Failed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.p2pkit.core/FeatureState.Failed.toString|toString(){}[0]
+    }
+
+    final class PermissionRequired : dev.p2pkit.core/FeatureState { // dev.p2pkit.core/FeatureState.PermissionRequired|null[0]
+        constructor <init>(kotlin.collections/List<dev.p2pkit.core.permission/P2pPermission>) // dev.p2pkit.core/FeatureState.PermissionRequired.<init>|<init>(kotlin.collections.List<dev.p2pkit.core.permission.P2pPermission>){}[0]
+
+        final val missing // dev.p2pkit.core/FeatureState.PermissionRequired.missing|{}missing[0]
+            final fun <get-missing>(): kotlin.collections/List<dev.p2pkit.core.permission/P2pPermission> // dev.p2pkit.core/FeatureState.PermissionRequired.missing.<get-missing>|<get-missing>(){}[0]
+
+        final fun component1(): kotlin.collections/List<dev.p2pkit.core.permission/P2pPermission> // dev.p2pkit.core/FeatureState.PermissionRequired.component1|component1(){}[0]
+        final fun copy(kotlin.collections/List<dev.p2pkit.core.permission/P2pPermission> = ...): dev.p2pkit.core/FeatureState.PermissionRequired // dev.p2pkit.core/FeatureState.PermissionRequired.copy|copy(kotlin.collections.List<dev.p2pkit.core.permission.P2pPermission>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/FeatureState.PermissionRequired.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.p2pkit.core/FeatureState.PermissionRequired.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.p2pkit.core/FeatureState.PermissionRequired.toString|toString(){}[0]
+    }
+
+    final class Unsupported : dev.p2pkit.core/FeatureState { // dev.p2pkit.core/FeatureState.Unsupported|null[0]
+        constructor <init>(kotlin/String) // dev.p2pkit.core/FeatureState.Unsupported.<init>|<init>(kotlin.String){}[0]
+
+        final val reason // dev.p2pkit.core/FeatureState.Unsupported.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // dev.p2pkit.core/FeatureState.Unsupported.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // dev.p2pkit.core/FeatureState.Unsupported.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): dev.p2pkit.core/FeatureState.Unsupported // dev.p2pkit.core/FeatureState.Unsupported.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/FeatureState.Unsupported.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.p2pkit.core/FeatureState.Unsupported.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.p2pkit.core/FeatureState.Unsupported.toString|toString(){}[0]
+    }
+
+    final object Active : dev.p2pkit.core/FeatureState { // dev.p2pkit.core/FeatureState.Active|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/FeatureState.Active.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.p2pkit.core/FeatureState.Active.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.p2pkit.core/FeatureState.Active.toString|toString(){}[0]
+    }
+
+    final object Idle : dev.p2pkit.core/FeatureState { // dev.p2pkit.core/FeatureState.Idle|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/FeatureState.Idle.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.p2pkit.core/FeatureState.Idle.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.p2pkit.core/FeatureState.Idle.toString|toString(){}[0]
+    }
+
+    final object Starting : dev.p2pkit.core/FeatureState { // dev.p2pkit.core/FeatureState.Starting|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/FeatureState.Starting.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.p2pkit.core/FeatureState.Starting.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.p2pkit.core/FeatureState.Starting.toString|toString(){}[0]
+    }
+
+    final object Stopping : dev.p2pkit.core/FeatureState { // dev.p2pkit.core/FeatureState.Stopping|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/FeatureState.Stopping.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.p2pkit.core/FeatureState.Stopping.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.p2pkit.core/FeatureState.Stopping.toString|toString(){}[0]
+    }
+}
+
 sealed class dev.p2pkit.core/NetworkPathStatus { // dev.p2pkit.core/NetworkPathStatus|null[0]
     final object Satisfied : dev.p2pkit.core/NetworkPathStatus { // dev.p2pkit.core/NetworkPathStatus.Satisfied|null[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/NetworkPathStatus.Satisfied.equals|equals(kotlin.Any?){}[0]
@@ -1607,6 +1712,25 @@ sealed class dev.p2pkit.core/P2pError : kotlin/Exception { // dev.p2pkit.core/P2
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/P2pError.SecurityConfigurationInvalid.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.p2pkit.core/P2pError.SecurityConfigurationInvalid.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // dev.p2pkit.core/P2pError.SecurityConfigurationInvalid.toString|toString(){}[0]
+    }
+
+    final class TransportInitializationFailed : dev.p2pkit.core/P2pError { // dev.p2pkit.core/P2pError.TransportInitializationFailed|null[0]
+        constructor <init>(dev.p2pkit.core/TransportKind, kotlin/String, kotlin/Throwable? = ...) // dev.p2pkit.core/P2pError.TransportInitializationFailed.<init>|<init>(dev.p2pkit.core.TransportKind;kotlin.String;kotlin.Throwable?){}[0]
+
+        final val reason // dev.p2pkit.core/P2pError.TransportInitializationFailed.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // dev.p2pkit.core/P2pError.TransportInitializationFailed.reason.<get-reason>|<get-reason>(){}[0]
+        final val transportKind // dev.p2pkit.core/P2pError.TransportInitializationFailed.transportKind|{}transportKind[0]
+            final fun <get-transportKind>(): dev.p2pkit.core/TransportKind // dev.p2pkit.core/P2pError.TransportInitializationFailed.transportKind.<get-transportKind>|<get-transportKind>(){}[0]
+        final val underlying // dev.p2pkit.core/P2pError.TransportInitializationFailed.underlying|{}underlying[0]
+            final fun <get-underlying>(): kotlin/Throwable? // dev.p2pkit.core/P2pError.TransportInitializationFailed.underlying.<get-underlying>|<get-underlying>(){}[0]
+
+        final fun component1(): dev.p2pkit.core/TransportKind // dev.p2pkit.core/P2pError.TransportInitializationFailed.component1|component1(){}[0]
+        final fun component2(): kotlin/String // dev.p2pkit.core/P2pError.TransportInitializationFailed.component2|component2(){}[0]
+        final fun component3(): kotlin/Throwable? // dev.p2pkit.core/P2pError.TransportInitializationFailed.component3|component3(){}[0]
+        final fun copy(dev.p2pkit.core/TransportKind = ..., kotlin/String = ..., kotlin/Throwable? = ...): dev.p2pkit.core/P2pError.TransportInitializationFailed // dev.p2pkit.core/P2pError.TransportInitializationFailed.copy|copy(dev.p2pkit.core.TransportKind;kotlin.String;kotlin.Throwable?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/P2pError.TransportInitializationFailed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.p2pkit.core/P2pError.TransportInitializationFailed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.p2pkit.core/P2pError.TransportInitializationFailed.toString|toString(){}[0]
     }
 
     final class TransportStartFailed : dev.p2pkit.core/P2pError { // dev.p2pkit.core/P2pError.TransportStartFailed|null[0]

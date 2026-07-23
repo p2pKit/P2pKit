@@ -3,6 +3,7 @@ package dev.p2pkit.core
 import dev.p2pkit.core.dsl.P2pKitBuilder
 import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.core.provisioning.NetworkProvisioningManager
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -88,6 +89,23 @@ public interface P2pKit {
     public val state: StateFlow<P2pState>
 
     /**
+     * Retained advertising state, independent from [state] and
+     * [discoveryState]. The default keeps third-party mocks source-compatible
+     * for one migration release; production implementations override it.
+     */
+    public val advertisingState: StateFlow<FeatureState>
+        get() = idleFeatureState
+
+    /**
+     * Retained discovery state, independent from [state] and
+     * [advertisingState]. The default keeps third-party mocks
+     * source-compatible for one migration release; production implementations
+     * override it.
+     */
+    public val discoveryState: StateFlow<FeatureState>
+        get() = idleFeatureState
+
+    /**
      * Currently-known peers. Updated as discovery transports report Found,
      * Updated, and Lost events. Heartbeats alone do not trigger emissions;
      * use [lastSeen] for freshness.
@@ -159,17 +177,30 @@ public interface P2pKit {
     @Throws(Exception::class)
     public suspend fun start()
 
+    /**
+     * Start every declared advertising path. Concurrent calls coalesce and a
+     * call while active is a no-op. Static absence publishes
+     * [FeatureState.Unsupported] without starting the kit; missing runtime
+     * permission publishes [FeatureState.PermissionRequired] and throws
+     * [P2pError.PermissionMissing]. Other startup failures publish
+     * [FeatureState.Failed] without changing [state].
+     */
     @Throws(Exception::class)
     public suspend fun startAdvertising()
 
-    /** Stops every advertising transport, then reports any cleanup failures. */
+    /**
+     * Stop every advertising path. A stop racing startup wins and rolls back
+     * late resources. Successful and repeated stops reach
+     * [FeatureState.Idle]; cleanup failures remain [FeatureState.Failed].
+     */
     @Throws(Exception::class)
     public suspend fun stopAdvertising()
 
+    /** Advertising-equivalent lifecycle contract for discovery paths. */
     @Throws(Exception::class)
     public suspend fun startDiscovery()
 
-    /** Stops every discovery transport, then reports any cleanup failures. */
+    /** Discovery-equivalent stop and rollback contract. */
     @Throws(Exception::class)
     public suspend fun stopDiscovery()
 
@@ -235,3 +266,5 @@ public interface P2pKit {
         }
     }
 }
+
+private val idleFeatureState: StateFlow<FeatureState> = MutableStateFlow(FeatureState.Idle)

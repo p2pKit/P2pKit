@@ -137,6 +137,16 @@ public sealed class P2pError(message: String? = null, cause: Throwable? = null) 
         P2pError("Protocol version mismatch: local=$localVersion remote=$remoteVersion")
 
     /**
+     * A factory threw or returned a pair that contradicts its pre-build
+     * descriptor. No feature/data startup has begun when this is reported.
+     */
+    public data class TransportInitializationFailed(
+        val transportKind: TransportKind,
+        val reason: String,
+        val underlying: Throwable? = null
+    ) : P2pError("Transport $transportKind failed to initialize: $reason", underlying)
+
+    /**
      * A registered transport could not be brought up by [P2pKit.start] or by
      * the first [P2pKit.startAdvertising] / [P2pKit.connect] call that
      * triggered lazy startup. Carries the failed transport's kind and the

@@ -260,5 +260,7 @@ private class FirstDialGateTransport(
 }
 
 private class OwnershipFactory(private val transport: DataTransport) : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
     override fun build(context: TransportContext): TransportPair = TransportPair(transport)
 }

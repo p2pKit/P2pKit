@@ -98,6 +98,8 @@ class LocalIdentityTest {
 }
 
 private class IdentityTestFactory(private val transport: FakeDataTransport) : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = null)
 }

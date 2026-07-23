@@ -275,6 +275,8 @@ class InboundAcceptResilienceTest {
 private class AcceptResilienceFactory(
     private val transport: FakeDataTransport
 ) : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = null)
 }
@@ -282,6 +284,8 @@ private class AcceptResilienceFactory(
 private class RecoveringTransportFactory(
     private val transport: RecoveringDataTransport
 ) : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = null)
 }

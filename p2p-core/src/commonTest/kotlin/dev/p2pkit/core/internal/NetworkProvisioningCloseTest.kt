@@ -150,5 +150,7 @@ private class RecordingDataTransport(
 private class RecordingTransportFactory(
     private val data: DataTransport
 ) : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataOnly(data.type)
     override fun build(context: TransportContext): TransportPair = TransportPair(data = data)
 }

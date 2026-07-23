@@ -52,6 +52,7 @@ class PublicModelImmutabilityTest {
             "Local"
         )
         val missing = P2pError.PermissionMissing(permissions)
+        val featureMissing = FeatureState.PermissionRequired(permissions)
         val provisioningMissing =
             NetworkProvisioningError.PermissionMissingForProvisioning(permissions)
 
@@ -74,6 +75,7 @@ class PublicModelImmutabilityTest {
         assertEquals(listOf("192.0.2.10"), hosted.localIpAddresses)
         assertEquals(listOf("192.0.2.10"), manual.hostAddresses)
         assertEquals(listOf(P2pPermission.LocalNetwork), missing.permissions)
+        assertEquals(listOf(P2pPermission.LocalNetwork), featureMissing.missing)
         assertEquals(
             listOf(P2pPermission.LocalNetwork),
             provisioningMissing.permissions
@@ -97,6 +99,7 @@ class PublicModelImmutabilityTest {
         assertCannotAdd(hosted.localIpAddresses, "203.0.113.1")
         assertCannotAdd(manual.hostAddresses, "203.0.113.1")
         assertCannotAdd(missing.permissions, P2pPermission.Location)
+        assertCannotAdd(featureMissing.missing, P2pPermission.Location)
         assertCannotAdd(provisioningMissing.permissions, P2pPermission.Location)
     }
 

@@ -129,6 +129,7 @@ package consumer
 
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pState
+import dev.p2pkit.core.FeatureState
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerFingerprint
@@ -145,6 +146,10 @@ import dev.p2pkit.core.provisioning.WifiCredentials
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.RawConnection
+import dev.p2pkit.core.transport.TransportContext
+import dev.p2pkit.core.transport.TransportDescriptor
+import dev.p2pkit.core.transport.TransportFactory
+import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -155,6 +160,9 @@ fun coreState(kit: P2pKit, sink: RawSink): StateFlow<P2pState> {
     sink.flush()
     return kit.state
 }
+
+fun featureStates(kit: P2pKit): Pair<StateFlow<FeatureState>, StateFlow<FeatureState>> =
+    kit.advertisingState to kit.discoveryState
 
 fun copyPeer(peer: Peer): Peer {
     val (id, name, platform, transports) = peer
@@ -169,6 +177,14 @@ class ExternalDataTransport : DataTransport {
     override suspend fun connect(peer: InternalPeer): RawConnection = error("not supported")
     override fun incomingConnections(): Flow<RawConnection> = emptyFlow()
     override suspend fun close() = Unit
+}
+
+class ExternalTransportFactory : TransportFactory {
+    override val descriptor: TransportDescriptor =
+        TransportDescriptor.dataOnly(TransportKind.LAN)
+
+    override fun build(context: TransportContext): TransportPair =
+        TransportPair(data = ExternalDataTransport())
 }
 
 @OptIn(ExperimentalP2pApi::class)
@@ -203,6 +219,9 @@ package consumer;
 import dev.p2pkit.core.P2pMessage;
 import dev.p2pkit.core.TransportKind;
 import dev.p2pkit.core.provisioning.NetworkState;
+import dev.p2pkit.core.transport.TransportCapability;
+import dev.p2pkit.core.transport.TransportDescriptor;
+import dev.p2pkit.core.transport.TransportPair;
 import dev.p2pkit.core.transport.TransportHint;
 import java.util.List;
 import java.util.Map;
@@ -219,9 +238,14 @@ final class ImmutableModelJavaConsumer {
         );
         NetworkState.ConnectedToEthernet ethernet =
             new NetworkState.ConnectedToEthernet(List.of("192.0.2.10"));
+        TransportDescriptor descriptor =
+            TransportDescriptor.Companion.dataOnly(TransportKind.LAN);
+        TransportPair pair = new TransportPair(new ExternalDataTransport(), null);
         copied.getMetadata();
         hint.getMetadata();
         ethernet.getLocalIpAddresses();
+        descriptor.getCapabilities().contains(TransportCapability.DATA);
+        pair.getData();
     }
 }
 EOF
@@ -330,6 +354,7 @@ package consumer
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pState
+import dev.p2pkit.core.FeatureState
 import dev.p2pkit.core.provisioning.NetworkState
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.io.RawSink
@@ -338,6 +363,8 @@ fun commonState(kit: P2pKit, sink: RawSink): StateFlow<P2pState> {
     sink.flush()
     return kit.state
 }
+
+fun commonFeatureState(kit: P2pKit): StateFlow<FeatureState> = kit.discoveryState
 
 fun immutableValues(): Pair<P2pMessage.Text, NetworkState.ConnectedToEthernet> =
     P2pMessage.Text("hello", mapOf("key" to "value")) to

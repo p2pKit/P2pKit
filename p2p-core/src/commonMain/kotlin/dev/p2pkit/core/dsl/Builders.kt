@@ -19,6 +19,7 @@ import dev.p2pkit.core.protocol.validateWireText
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
 import dev.p2pkit.core.provisioning.NetworkProvisioningFactory
 import dev.p2pkit.core.transfer.FileTransferConfig
+import dev.p2pkit.core.transport.RegisteredTransportFactory
 import dev.p2pkit.core.transport.TransportFactory
 
 /**
@@ -171,13 +172,13 @@ public class P2pKitBuilder internal constructor() {
             HelloPayload.MAX_FIELD_UTF8_BYTES,
             requireNonBlank = true
         )
-        check(transportsBuilder.factories.isNotEmpty()) {
+        check(transportsBuilder.registrations.isNotEmpty()) {
             "At least one transport must be registered (e.g. transports { lan() })"
         }
         return newP2pKit(
             appId = resolvedAppId,
             deviceName = resolvedName,
-            transportFactories = transportsBuilder.factories.toList(),
+            transportFactories = transportsBuilder.registrations.toList(),
             keepAlive = keepAlive,
             reconnectPolicy = reconnectPolicy,
             backgroundPolicy = backgroundPolicy,
@@ -203,14 +204,21 @@ public class P2pKitBuilder internal constructor() {
 @P2pKitDsl
 public class TransportsBuilder internal constructor() {
 
-    internal val factories: MutableList<TransportFactory> = mutableListOf()
+    internal val registrations: MutableList<RegisteredTransportFactory> = mutableListOf()
 
-    /** Register a transport. Transport modules expose extension helpers (e.g. `lan()`). */
+    /**
+     * Register a transport after validating its static descriptor. Duplicate
+     * kinds are rejected before any factory can allocate a resource.
+     */
     public fun register(factory: TransportFactory) {
-        require(factories.none { it === factory }) {
+        require(registrations.none { it.factory === factory }) {
             "The same TransportFactory instance cannot be registered more than once"
         }
-        factories.add(factory)
+        val descriptor = factory.descriptor
+        require(registrations.none { it.descriptor.kind == descriptor.kind }) {
+            "Transport kind ${descriptor.kind} is already registered"
+        }
+        registrations += RegisteredTransportFactory(factory, descriptor)
     }
 }
 

@@ -135,6 +135,9 @@ class PeerIdPersistenceIntegrationTest {
 
 /** No-op [TransportFactory] just so the builder accepts a non-empty transport list. */
 private object NoopFactory : TransportFactory {
+    override val descriptor =
+        dev.p2pkit.core.transport.TransportDescriptor.dataAndDiscovery(TransportKind.LAN)
+
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = NoopDataTransport(), discovery = NoopDiscoveryTransport())
 }

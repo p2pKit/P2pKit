@@ -1,7 +1,9 @@
 package dev.p2pkit.transport.lan
 
+import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.dsl.TransportsBuilder
 import dev.p2pkit.core.transport.TransportContext
+import dev.p2pkit.core.transport.TransportDescriptor
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
 
@@ -25,6 +27,9 @@ public fun TransportsBuilder.lan() {
 }
 
 internal object IosLanTransportFactory : TransportFactory {
+    override val descriptor: TransportDescriptor =
+        TransportDescriptor.dataAndDiscovery(TransportKind.LAN)
+
     override fun build(context: TransportContext): TransportPair {
         val endpointRegistry = IosEndpointRegistry()
         val dataTransport = IosLanDataTransport(context, endpointRegistry)

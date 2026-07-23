@@ -70,6 +70,70 @@ public abstract interface annotation class dev/p2pkit/core/ExperimentalP2pApi : 
 public abstract interface annotation class dev/p2pkit/core/ExplicitSecurityRisk : java/lang/annotation/Annotation {
 }
 
+public abstract class dev/p2pkit/core/FeatureState {
+}
+
+public final class dev/p2pkit/core/FeatureState$Active : dev/p2pkit/core/FeatureState {
+	public static final field INSTANCE Ldev/p2pkit/core/FeatureState$Active;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/FeatureState$Failed : dev/p2pkit/core/FeatureState {
+	public fun <init> (Ldev/p2pkit/core/P2pError;)V
+	public final fun component1 ()Ldev/p2pkit/core/P2pError;
+	public final fun copy (Ldev/p2pkit/core/P2pError;)Ldev/p2pkit/core/FeatureState$Failed;
+	public static synthetic fun copy$default (Ldev/p2pkit/core/FeatureState$Failed;Ldev/p2pkit/core/P2pError;ILjava/lang/Object;)Ldev/p2pkit/core/FeatureState$Failed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getError ()Ldev/p2pkit/core/P2pError;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/FeatureState$Idle : dev/p2pkit/core/FeatureState {
+	public static final field INSTANCE Ldev/p2pkit/core/FeatureState$Idle;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/FeatureState$PermissionRequired : dev/p2pkit/core/FeatureState {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Ldev/p2pkit/core/FeatureState$PermissionRequired;
+	public static synthetic fun copy$default (Ldev/p2pkit/core/FeatureState$PermissionRequired;Ljava/util/List;ILjava/lang/Object;)Ldev/p2pkit/core/FeatureState$PermissionRequired;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMissing ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/FeatureState$Starting : dev/p2pkit/core/FeatureState {
+	public static final field INSTANCE Ldev/p2pkit/core/FeatureState$Starting;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/FeatureState$Stopping : dev/p2pkit/core/FeatureState {
+	public static final field INSTANCE Ldev/p2pkit/core/FeatureState$Stopping;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/FeatureState$Unsupported : dev/p2pkit/core/FeatureState {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Ldev/p2pkit/core/FeatureState$Unsupported;
+	public static synthetic fun copy$default (Ldev/p2pkit/core/FeatureState$Unsupported;Ljava/lang/String;ILjava/lang/Object;)Ldev/p2pkit/core/FeatureState$Unsupported;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class dev/p2pkit/core/KeepAliveConfig {
 	public fun <init> ()V
 	public fun <init> (JJ)V
@@ -347,6 +411,22 @@ public final class dev/p2pkit/core/P2pError$SecurityConfigurationInvalid : dev/p
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class dev/p2pkit/core/P2pError$TransportInitializationFailed : dev/p2pkit/core/P2pError {
+	public fun <init> (Ldev/p2pkit/core/TransportKind;Ljava/lang/String;Ljava/lang/Throwable;)V
+	public synthetic fun <init> (Ldev/p2pkit/core/TransportKind;Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ldev/p2pkit/core/TransportKind;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/Throwable;
+	public final fun copy (Ldev/p2pkit/core/TransportKind;Ljava/lang/String;Ljava/lang/Throwable;)Ldev/p2pkit/core/P2pError$TransportInitializationFailed;
+	public static synthetic fun copy$default (Ldev/p2pkit/core/P2pError$TransportInitializationFailed;Ldev/p2pkit/core/TransportKind;Ljava/lang/String;Ljava/lang/Throwable;ILjava/lang/Object;)Ldev/p2pkit/core/P2pError$TransportInitializationFailed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public final fun getTransportKind ()Ldev/p2pkit/core/TransportKind;
+	public final fun getUnderlying ()Ljava/lang/Throwable;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class dev/p2pkit/core/P2pError$TransportStartFailed : dev/p2pkit/core/P2pError {
 	public fun <init> (Ldev/p2pkit/core/TransportKind;Ljava/lang/String;Ljava/lang/Throwable;)V
 	public synthetic fun <init> (Ldev/p2pkit/core/TransportKind;Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -380,7 +460,9 @@ public abstract interface class dev/p2pkit/core/P2pKit {
 	public static final field Companion Ldev/p2pkit/core/P2pKit$Companion;
 	public abstract fun connect (Ldev/p2pkit/core/Peer;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun connect-Wd47VqM (Ldev/p2pkit/core/Peer;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getAdvertisingState ()Lkotlinx/coroutines/flow/StateFlow;
 	public abstract fun getAppId-1XHUZfw ()Ljava/lang/String;
+	public fun getDiscoveryState ()Lkotlinx/coroutines/flow/StateFlow;
 	public abstract fun getIncomingSessions ()Lkotlinx/coroutines/flow/SharedFlow;
 	public abstract fun getLocalDeviceName ()Ljava/lang/String;
 	public abstract fun getLocalFingerprint-5J9nGDo ()Ljava/lang/String;
@@ -406,6 +488,11 @@ public abstract interface class dev/p2pkit/core/P2pKit {
 
 public final class dev/p2pkit/core/P2pKit$Companion {
 	public final fun create (Lkotlin/jvm/functions/Function1;)Ldev/p2pkit/core/P2pKit;
+}
+
+public final class dev/p2pkit/core/P2pKit$DefaultImpls {
+	public static fun getAdvertisingState (Ldev/p2pkit/core/P2pKit;)Lkotlinx/coroutines/flow/StateFlow;
+	public static fun getDiscoveryState (Ldev/p2pkit/core/P2pKit;)Lkotlinx/coroutines/flow/StateFlow;
 }
 
 public abstract interface class dev/p2pkit/core/P2pLogger {
@@ -1560,6 +1647,14 @@ public abstract interface class dev/p2pkit/core/transport/RawConnection {
 	public abstract fun write ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
+public final class dev/p2pkit/core/transport/TransportCapability : java/lang/Enum {
+	public static final field DATA Ldev/p2pkit/core/transport/TransportCapability;
+	public static final field DISCOVERY Ldev/p2pkit/core/transport/TransportCapability;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/core/transport/TransportCapability;
+	public static fun values ()[Ldev/p2pkit/core/transport/TransportCapability;
+}
+
 public final class dev/p2pkit/core/transport/TransportContext {
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ldev/p2pkit/core/Platform;Ldev/p2pkit/core/transport/TransportSecurityProfile;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ldev/p2pkit/core/Platform;Ldev/p2pkit/core/transport/TransportSecurityProfile;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -1582,8 +1677,29 @@ public final class dev/p2pkit/core/transport/TransportContext {
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class dev/p2pkit/core/transport/TransportDescriptor {
+	public static final field Companion Ldev/p2pkit/core/transport/TransportDescriptor$Companion;
+	public fun <init> (Ldev/p2pkit/core/TransportKind;Ljava/util/Set;)V
+	public final fun component1 ()Ldev/p2pkit/core/TransportKind;
+	public final fun component2 ()Ljava/util/Set;
+	public final fun copy (Ldev/p2pkit/core/TransportKind;Ljava/util/Set;)Ldev/p2pkit/core/transport/TransportDescriptor;
+	public static synthetic fun copy$default (Ldev/p2pkit/core/transport/TransportDescriptor;Ldev/p2pkit/core/TransportKind;Ljava/util/Set;ILjava/lang/Object;)Ldev/p2pkit/core/transport/TransportDescriptor;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCapabilities ()Ljava/util/Set;
+	public final fun getKind ()Ldev/p2pkit/core/TransportKind;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/transport/TransportDescriptor$Companion {
+	public final fun dataAndDiscovery (Ldev/p2pkit/core/TransportKind;)Ldev/p2pkit/core/transport/TransportDescriptor;
+	public final fun dataOnly (Ldev/p2pkit/core/TransportKind;)Ldev/p2pkit/core/transport/TransportDescriptor;
+	public final fun discoveryOnly (Ldev/p2pkit/core/TransportKind;)Ldev/p2pkit/core/transport/TransportDescriptor;
+}
+
 public abstract interface class dev/p2pkit/core/transport/TransportFactory {
 	public abstract fun build (Ldev/p2pkit/core/transport/TransportContext;)Ldev/p2pkit/core/transport/TransportPair;
+	public abstract fun getDescriptor ()Ldev/p2pkit/core/transport/TransportDescriptor;
 }
 
 public final class dev/p2pkit/core/transport/TransportHint {
@@ -1605,6 +1721,7 @@ public final class dev/p2pkit/core/transport/TransportHint {
 }
 
 public final class dev/p2pkit/core/transport/TransportPair {
+	public fun <init> ()V
 	public fun <init> (Ldev/p2pkit/core/transport/DataTransport;Ldev/p2pkit/core/transport/DiscoveryTransport;)V
 	public synthetic fun <init> (Ldev/p2pkit/core/transport/DataTransport;Ldev/p2pkit/core/transport/DiscoveryTransport;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ldev/p2pkit/core/transport/DataTransport;
