@@ -72,8 +72,10 @@ From the pinned checkout:
 ```sh
 ./gradlew :p2p-sample-android:assembleDebug \
   :p2p-sample-android:testDebugUnitTest \
+  :p2p-sample-diagnostics:test \
   :p2p-sample-desktop:test \
-  :p2p-sample-desktop-ui:test
+  :p2p-sample-desktop-ui:test \
+  :p2p-sample-desktop-ui:compileKotlin
 ./gradlew :p2p-transport-lan:assembleP2pKitSharedReleaseXCFramework
 ```
 
@@ -92,7 +94,7 @@ Generate and build the iOS sample:
 ```sh
 (cd iosApp && xcodegen generate)
 xcodebuild -project iosApp/p2pkit-sample.xcodeproj \
-  -scheme p2pkit-sample -configuration Debug \
+  -scheme p2pkit-sample-ui -configuration Debug \
   -destination "platform=iOS,id=$IOS_UDID" build
 ```
 
@@ -119,6 +121,13 @@ p.write_bytes(bytes((i * 31 + 7) & 0xff for i in range(49 * 1024 * 1024)))
 PY
 shasum -a 256 "$EVIDENCE"/files/*
 ```
+
+For Android, open the app-bar `Diagnostics` action. For Desktop UI, open the
+top-right `Diagnostics` action. On iOS, tap `Test Diagnostics` in the sample
+header. On the JVM CLI, pass `test=PS-T05 session=<shared-id> role=sender
+log="$EVIDENCE/logs/cli.jsonl" evidence="$EVIDENCE"` as named arguments, or
+use the `diag` commands at the prompt. These are test-mode controls; they do
+not alter secure-v2 defaults or production protocol behavior.
 
 ### 1.4 Evidence and result template
 
@@ -797,8 +806,71 @@ test, while the missing hardware/infrastructure remains a blocker.
 | File selection/generation | Deterministic generated presets | Android SAF `OpenDocument` any type/size | Filesystem path | Native file chooser |
 | KMP consumer runtime | Swift/XCFramework consumer plus physical sample | `Run KMP consumer smoke` button calls `initP2pKitAndroid`/`runDiscoverAndGreet` | JVM KMP consumer tests and CLI | Uses published JVM/consumer checks |
 | Packet/timeout/fault controls | Logs and OS/network tools; no production fault toggle | Logs and adb/network tools; no production fault toggle | `trace=off|frames`, external process fault wrapper | External headful/fault harness |
-| Evidence export | On-screen selectable log, Console/log stream, screen/video | Logcat, selectable UI rows, adb dumps, screen/video | Terminal transcript, stdout/stderr, PCAP | stdout/log tail, screenshots/video |
+| Structured diagnostic viewer | `Test Diagnostics` sheet: begin session, active IDs/state/progress/hashes, search, session/transfer/severity filters, pause, select/copy, clear-current confirmation | `Diagnostics` screen: same fields and filters, live/paused rows, selected/all copy, clear-current confirmation | `diag start/status/export/complete/clear`; JSONL is also written with `log=<path>` | `Diagnostics` screen: active IDs/state/progress/hashes, search/session/transfer/severity filters, pause, selected/all copy, clear-current confirmation |
+| Evidence export | `Export Test Evidence` presents a ZIP through the iOS share sheet | `Export Test Evidence` launches the Android share sheet for a ZIP | `diag export` writes a ZIP; `log=<path>` writes bounded JSONL | `Export Test Evidence` writes the ZIP and opens the evidence directory |
+| Structured fields | JSONL schema v1: timestamp, OS/app/build/SHA/device hash, test/session/role/peer/connection/transfer, state transition, protocol/packet/direction/size/sequence/retry/timeout, outcome, redaction | Same schema via `p2p-sample-diagnostics`; Android transport stream is opt-in and bounded | Same schema plus CLI command/configuration and bounded rolling files | Same schema plus Compose lifecycle/window events and bounded rolling files |
+| Correlation | Shared operator-entered `testSessionId`; `conn-<hash>` and transfer IDs are visible/exported; compare both peer ZIPs | Same; persisted active session survives process restart | Same; pass `test/session/role` at launch or `diag start` | Same; compare both peer ZIPs |
+| Secret/PII protection | No payload text, credentials, private keys, raw identifierForVendor, or raw IPs; values are redacted/hashed | No payload/credential/private-key export; Android ID is hashed; IPs and sensitive keys redacted | No payload/credential/private-key export; host identity is hashed; bounded output | No payload/credential/private-key export; host identity is hashed; bounded output |
 | Platform limitation | Physical AWDL/path and x86_64 require Apple hardware/runtime | Real hotspot/OEM callbacks and API matrix require devices | CLI fault injection requires approved wrapper | Headful UI/fault injection requires display and automation |
+
+### 10.1 Diagnostic evidence workflow and logging coverage matrix
+
+Every test row below uses the same operator workflow. Before the first action,
+open the sample's diagnostics screen (or pass the CLI `test=`, `session=`,
+`role=`, and `log=` options), enter the exact tracker test ID, and record the
+displayed test ID, session ID, role, and build identity. For a two-peer test,
+enter the same session ID on both peers. Record the displayed connection ID
+when it appears and the transfer ID for every file operation. At the end,
+capture the UI result, choose `Export Test Evidence` (or `diag export`), and
+send the ZIP from every participating peer plus the screenshots/video and
+external artifacts listed in the row. The ZIP's `summary.json`,
+`events.jsonl`, `checksums.sha256`, and `manual-evidence-required.txt` must
+remain together.
+
+The expected success sequence is: `application.started` →
+`test.session.created`/`test.mode.activated` → peer/discovery events →
+`connection.attempted` → `connection.state.changed` to `Connected` →
+`connection.authentication.succeeded` → `protocol.secure_v2.negotiated` →
+metadata/envelope validation events → transfer preparation/start/progress →
+`transfer.durable.committed` (receiver) → sender/receiver SHA-256 events →
+`file.integrity.checked` with `match=true` only after both peer packages are
+correlated → `transfer.completed` → `test.session.completed` with
+`outcome=SUCCESS`. A receiver package alone may legitimately say
+`awaiting-peer-evidence`; that is not an integrity match. Any
+`protocol.packet.rejected`, `metadata.envelope.rejected`, authentication
+failure, timeout, unexpected state regression, storage/permission error, or
+terminal `FAILURE`/`CANCELLATION` must be explained by the UI observation and
+the row's expected failure sequence.
+
+| Test ID | Required structured events and exported fields | UI indicators to record | Expected success / failure sequence | Evidence from each peer and external capture |
+| --- | --- | --- | --- | --- |
+| PROV-A12 / PS-T01 | `application.started`, `test.session.*`, `peer.local.initialized`, `discovery.started/stopped`, `network.path.changed`, `timeout.expired`, `diagnostics.failure`; OS/build/permission configuration and exact terminal outcome | Start/Stop/Host/Join result, permission/location text, provisioning state, manual port, build identity | Success: one callback terminal result and cleanup. Failure: `permission-required`/`unsupported`/timeout with no “started” claim; late callback is recorded as recovery/cleanup | Android ZIP plus logcat, `dumpsys wifi/connectivity/package`, permission screenshots, device fingerprint; no PCAP required |
+| PROV-A12 / PS-T02 | Above plus connection/state transitions and process-binding details (`bind`, `unbind`, manager/session correlation) | Two-manager owner, busy/closing/idle states and callback result | Success: one owner, other manager deterministically rejected or waits, close releases binding. Failure: duplicate owner, late callback, stale binding | ZIP from both managers/process runs, logcat, `dumpsys connectivity`, callback timestamps |
+| LAN-T01 / PT-T20 | Discovery peer found/lost, connection attempt/state/auth, `protocol.secure_v2.negotiated`, packet sent/received/rejected, path changes, file offer/transfer/hash/commit/outcome | Advertise/discover switches, peer ID, connection ID/state, selected network/path chip, transfer ID/progress/hashes | Success: correct interface/address family and authenticated transfer. Failure: unsupported/oversized/malformed packet or path loss is explicit and terminal state agrees | Android ZIP(s), logcat, `dumpsys wifi/connectivity`, router/AP logs and PCAP when selected-network/IPv6/multicast is under test |
+| PS-T04 | Offer received/accepted/rejected, storage temporary created/cleaned, sender/receiver hash, durable committed, cancellation/failure, restart recovery | Pending offer remains until Accept/Reject; quota/free-space message; bytes/progress; final file/hash | Success: explicit consent, bounded destination, durable commit and matching peer hashes. Failure: quota/storage/permission/cancel deletes partial file and emits typed failure | Android ZIP(s), screenshots/video, filesystem listing/hash, `adb bugreport` or relevant dumpsys |
+| LAN-T07 | Apple `discovery.*`, `connection.*`, protocol negotiation, `network.path.changed`, background/foreground, recovery, packet reject/timeout | Browser/listener readiness, peer/session state, path/port changes, reconnect result, AWDL/Wi-Fi indicators when exposed | Success: path rotation/rebind recovers without ghost peers. Failure: permission/AWDL/path loss is accurately surfaced and no false Connected remains | iOS ZIP(s), Console/Xcode unified log, `dns-sd`, `log show`, path/AWDL screenshots, PCAP where lawful |
+| ENV-01 | Same complete connection/discovery/transfer sequence with platform/build fields on every run | BuildInfo, OS/device, role, IDs, final result | Success: every supported device pair has identical protocol and UI semantics. Failure: platform-specific divergence is tied to an event/error | ZIP from every Android/iOS device, screenshots/video, device matrix, AP logs |
+| ENV-04 | Application/build/OS/architecture fields, startup/shutdown, protocol/transfer events, recovery | x86_64 host launch, build identity, state/result | Success: app starts and executes the applicable test on the required host. Failure: architecture/link/runtime limitation is recorded, not hidden | iOS host ZIP, Xcode build log, architecture/device metadata |
+| PS-T07 | `diagnostics.failure`, sink/export failures, temporary-file cleanup, collision, cancellation/interruption/recovery, final result | Collision suffix, partial-file cleanup, export error/success, cancellation state | Success: forced diagnostic/storage failure does not break transfer. Failure: protocol/UI diverges, leaked temp file, or unbounded log | iOS ZIP if export works, otherwise copied live JSONL/Console log, screen recording, filesystem listing; requires approved fault injection |
+| PS-T08 | Redacted peer IDs/IPs, packet rejected, metadata rejected, transfer failed, no secret fields | Sanitized names/IPv6/path result and final status | Success: hostile names/addresses are handled without traversal or PII export. Failure: raw secret/IP/payload appears or wrong peer is accepted | ZIP from every applicable sample, screenshots, crafted fixture hashes, optional PCAP |
+| PS-T09 | Build/consumer startup, peer/discovery/connection, secure-v2 negotiation, transfer/hash/outcome | KMP consumer screen/CLI output and IDs | Success: published consumer and sample show the same authenticated behavior. Failure: missing symbol/version/protocol mismatch | Android/iOS consumer ZIPs, install/build logs, exact dependency coordinates and SHA |
+| LAN-T08 | Packet sent/received/rejected, authentication failure, replay/duplicate/oversized/malformed errors, timeout/retry, connection state/outcome | Peer identity, connection state, fault action, retry/timeout controls, final result | Success: hostile records are rejected and no false peer/session appears. Failure: spoof accepted, flood unbounded, or UI claims success | ZIP from both machines, PCAP, firewall rule log, packet generator transcript; PCAP is mandatory |
+| ENV-02 | Complete two-peer correlation, packet rejection/authentication, retries/timeouts, final outcome | Same session/connection/transfer IDs on both peers and matching UI result | Success: timeline reconstructed across both packages. Failure: any unexplained ID divergence or accepted hostile packet | ZIP from both machines, PCAP, firewall logs, synchronized clock evidence |
+| PS-T05 | CLI `application.started/shutdown`, command/config, peer/discovery, connection, packet, transfer, `test.session.completed`; raw JSONL and ZIP | Terminal prompts, `diag status`, export path, exact command result | Success/failure/cancel/timeout outcomes are typed and match process exit/REPL state. Failure: crash, mixed transfer IDs, missing/incorrect final event | CLI ZIP, bounded `log=` JSONL, terminal transcript, fault-wrapper output |
+| PS-T06 | Desktop UI startup/window, discovery/connection, transfer progress/hash/commit, background/foreground, export/clear, final outcome | Diagnostics screen fields, Compose state, file chooser, progress, hashes, export folder | Success: UI and event timeline agree through soak/restart. Failure: UI-only success, mixed simultaneous transfers, unbounded viewer | Desktop ZIP, screenshots/video, terminal/OS logs, generated file hashes |
+| SECURE-V2-INTEROP-01 | Negotiation/version, authenticated metadata created/sent/received/validated/rejected, packet sent/received/rejected, transfer commit/hash/outcome | Selected protocol version, peer identity, metadata/integrity result | Success: independent peer accepts exact vectors and durable acknowledgement. Failure: downgrade, unauthenticated metadata, digest mismatch accepted | ZIP from both implementations, wire transcript/PCAP, independent implementation version/config |
+| CRYPTO-AUDIT-01 | Exported schema/privacy review fields, protocol event names, no secret/payload fields, commit/build provenance | Build identity and test-mode indicator | Success: auditor can map events to wire code without secrets. Failure: missing provenance, ambiguous authentication, or sensitive export | Sample ZIPs, source/tag/SBOM/provenance, threat model, audit workpapers; independent auditor required |
+| BUILD-02 / ENV-07 | Build/publish provenance fields, version/namespace/configuration, final test outcome | Build identity and exact coordinates/Portal status | Success: remote artifact metadata/checksums/signature and clean consumer match the tested SHA. Failure: wrong namespace, missing platform, credential leak | ZIP from publication consumer, local checksums/SBOM, Portal/CI audit trail; credentials and remote status required |
+
+For every row, the tester must verify that the ZIP's `testId` and
+`testSessionId` equal the values shown in the UI or CLI at the start of the
+run. For two-peer rows, compare `connectionIds`, `transferIds`, and the
+ordered event timestamps before judging the result. `events.jsonl` is the
+machine-readable source of truth; `events.txt` is for quick human review.
+Packet captures and OS logs are additional evidence, never replacements for
+the application export. When a platform cannot expose a native path detail
+(for example AWDL internals), the event records `network.path.changed` with a
+safe high-level state and the row remains dependent on the external capture.
 
 Applicable test IDs: iOS `LAN-T07`, `ENV-01`, `ENV-04`, `PS-T07`,
 `PS-T08`, `PS-T09`, `SECURE-V2-INTEROP-01`; Android `PROV-A12`, `PT-T20`,
@@ -808,7 +880,9 @@ Applicable test IDs: iOS `LAN-T07`, `ENV-01`, `ENV-04`, `PS-T07`,
 The sample additions in this revision are test-focused only: deterministic
 iOS size presets and SHA-256 evidence, plus equivalent Android/JVM/Desktop
 hash display/logging and known-vector tests. They do not weaken production
-security, change the public SDK ABI, or add secrets. The samples still do not
+security or change the production wire protocol; the additive Android
+diagnostics event surface is disabled by default and exports only redacted
+test evidence. The samples still do not
 replace physical devices, hostile-network equipment, an independent secure-v2
 peer, a cryptographic auditor, or owner-approved publication credentials.
 

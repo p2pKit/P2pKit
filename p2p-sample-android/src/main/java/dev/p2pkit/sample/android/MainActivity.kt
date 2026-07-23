@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.viewModels
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -71,7 +72,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pSession
@@ -108,16 +108,27 @@ private object Dimens {
 }
 
 class MainActivity : ComponentActivity() {
+    private val sampleViewModel: P2pKitViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    val vm: P2pKitViewModel = viewModel()
-                    P2pKitSampleApp(vm)
+                    P2pKitSampleApp(sampleViewModel)
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        sampleViewModel.notifyForegrounded()
+    }
+
+    override fun onStop() {
+        sampleViewModel.notifyBackgrounded()
+        super.onStop()
     }
 }
 
@@ -125,6 +136,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun P2pKitSampleApp(vm: P2pKitViewModel) {
     val isRunning by vm.isRunning.collectAsState()
+    var showDiagnostics by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -141,11 +153,22 @@ private fun P2pKitSampleApp(vm: P2pKitViewModel) {
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
+                },
+                actions = {
+                    TextButton(onClick = { showDiagnostics = !showDiagnostics }) {
+                        Text(if (showDiagnostics) "Room" else "Diagnostics")
+                    }
                 }
             )
         }
     ) { padding ->
-        if (!isRunning) {
+        if (showDiagnostics) {
+            AndroidDiagnosticsScreen(
+                vm = vm,
+                onBack = { showDiagnostics = false },
+                paddingValues = padding
+            )
+        } else if (!isRunning) {
             SetupScreen(
                 paddingValues = padding,
                 vm = vm

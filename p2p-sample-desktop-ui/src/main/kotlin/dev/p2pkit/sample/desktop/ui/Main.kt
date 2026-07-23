@@ -84,6 +84,10 @@ import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transfer.sendFile
+import dev.p2pkit.sample.diagnostics.DiagnosticDirection
+import dev.p2pkit.sample.diagnostics.DiagnosticEventNames
+import dev.p2pkit.sample.diagnostics.DiagnosticOutcome
+import dev.p2pkit.sample.diagnostics.DiagnosticRecord
 import dev.p2pkit.provisioning.desktop.jvm
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CancellationException
@@ -145,6 +149,14 @@ private fun P2pKitSampleApp() {
         CoroutineScope(compositionScope.coroutineContext.minusKey(Job) + SupervisorJob())
     }
     val holder = remember { DesktopP2pState(appScope) }
+    var showDiagnostics by remember { mutableStateOf(false) }
+    remember(holder) {
+        FrameTrace.sink = {
+            println("P2pKitFRAME $it")
+            holder.diagnostics.frame(it)
+        }
+        Unit
+    }
 
     // Final clean-up when the whole app composable leaves.
     DisposableEffect(holder) {
@@ -155,10 +167,26 @@ private fun P2pKitSampleApp() {
         }
     }
 
-    if (!holder.isRunning) {
-        SetupScreen(holder)
-    } else {
-        RoomScreen(holder)
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (showDiagnostics) {
+            DesktopDiagnosticsScreen(
+                diagnostics = holder.diagnostics,
+                revision = holder.diagnosticRevision,
+                onBack = { showDiagnostics = false }
+            )
+        } else if (!holder.isRunning) {
+            SetupScreen(holder)
+        } else {
+            RoomScreen(holder)
+        }
+        if (!showDiagnostics) {
+            Button(
+                onClick = { showDiagnostics = true },
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+            ) {
+                Text("Diagnostics")
+            }
+        }
     }
 }
 
@@ -178,7 +206,7 @@ private fun P2pKitSampleApp() {
  * peer ids in [targetedPeerIds].
  */
 @OptIn(ExplicitSecurityRisk::class)
-private class DesktopP2pState(private val appScope: CoroutineScope) {
+internal class DesktopP2pState(private val appScope: CoroutineScope) {
 
     // --- identity / config -------------------------------------------------
 
@@ -250,6 +278,9 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     val fileTransfers: SnapshotStateList<FileTransferRow> = mutableStateListOf()
     /** Incoming offers stay pending until explicit user consent. */
     val pendingFileOffers: SnapshotStateList<IncomingFileOffer> = mutableStateListOf()
+    var diagnosticRevision: Long by mutableStateOf(0L)
+        private set
+    val diagnostics = DesktopDiagnosticHarness { diagnosticRevision++ }
 
     // --- internals ---------------------------------------------------------
 
@@ -278,6 +309,9 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 if (logTail.size >= LOG_TAIL_CAPACITY) logTail.removeAt(0)
                 logTail.add(line)
             }
+        }
+        appScope.launch {
+            JvmLanDiag.events.collect { diagnostics.transport(it) }
         }
     }
 
@@ -331,7 +365,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                         )
                     }
                 }
-                logger = TailLogger(this@DesktopP2pState)
+                logger = diagnostics.logger(TailLogger(this@DesktopP2pState))
             }
         } catch (t: Throwable) {
             _isStarting.value = false
@@ -341,6 +375,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         }
         kit = newKit
         _localPeerId.value = newKit.localPeerId.value
+        diagnostics.localPeerId = newKit.localPeerId.value
         val startedLine =
             "[p2pkit] kit started: deviceName=${newKit.localDeviceName} " +
                 "appId=${newKit.appId.value} peerId=${newKit.localPeerId.value} " +
@@ -643,6 +678,13 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     fun stop() {
         val toStop = kit ?: return
         if (_isStopping.value) return
+        diagnostics.recorder.record(
+            DiagnosticRecord(
+                category = "application",
+                eventName = DiagnosticEventNames.APPLICATION_SHUTDOWN,
+                currentState = "stopping"
+            )
+        )
         _isStopping.value = true
         isRunning = false
         _advertising.value = false
@@ -717,6 +759,17 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         }
         scope.launch {
             val sourceDigest = withContext(Dispatchers.IO) { testFileSha256(file) }
+            diagnostics.recorder.record(
+                DiagnosticRecord(
+                    peerId = session.peer.id.value,
+                    connectionId = diagnostics.latestConnectionId,
+                    category = "file",
+                    eventName = DiagnosticEventNames.FILE_SELECTED,
+                    payloadSizeBytes = file.length(),
+                    details = mapOf("filename" to file.name, "mimeType" to "test-fixture")
+                )
+            )
+            diagnostics.hash(session.peer.id.value, null, file.length(), sourceDigest, receiver = false)
             appendSystemMessage("prepared ${file.name} sha256=$sourceDigest")
             val transfer = runCatchingCancellable { session.sendFile(file) }
                 .getOrElse {
@@ -726,6 +779,14 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                     appendSystemMessage("send file '${file.name}' failed: ${it.message ?: it::class.simpleName}")
                     return@launch
                 }
+            diagnostics.transfer(
+                peerId = session.peer.id.value,
+                transferId = transfer.id,
+                eventName = DiagnosticEventNames.TRANSFER_PREPARED,
+                state = transfer.state.value.toString(),
+                size = transfer.sizeBytes,
+                direction = DiagnosticDirection.SENT
+            )
             registerOutgoingTransfer(transfer, session.peer.name, scope)
         }
     }
@@ -744,12 +805,29 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     fun cancelFileTransfer(id: String) {
         val row = fileTransfers.firstOrNull { it.id == id } ?: return
         val scope = runScope ?: return
+        diagnostics.transfer(
+            peerId = row.transfer.peer.id.value,
+            transferId = id,
+            eventName = DiagnosticEventNames.TRANSFER_CANCELLED,
+            state = "Cancelling",
+            outcome = DiagnosticOutcome.CANCELLATION
+        )
         scope.launch { runCatchingCancellable { row.transfer.cancel("user cancelled") } }
     }
 
     fun rejectFileOffer(id: String) {
         val pending = pendingFileOffers.firstOrNull { it.id == id } ?: return
         pendingFileOffers.remove(pending)
+        diagnostics.transfer(
+            peerId = pending.offer.peer.id.value,
+            transferId = id,
+            eventName = DiagnosticEventNames.TRANSFER_OFFER_REJECTED,
+            state = "Rejected",
+            size = pending.sizeBytes,
+            direction = DiagnosticDirection.RECEIVED,
+            outcome = DiagnosticOutcome.CANCELLATION,
+            details = mapOf("reason" to "operator rejected")
+        )
         appScope.launch { runCatchingCancellable { pending.offer.reject("rejected by user") } }
     }
 
@@ -757,6 +835,14 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         val scope = runScope ?: return
         val pending = pendingFileOffers.firstOrNull { it.id == id } ?: return
         pendingFileOffers.remove(pending)
+        diagnostics.transfer(
+            peerId = pending.offer.peer.id.value,
+            transferId = id,
+            eventName = DiagnosticEventNames.TRANSFER_OFFER_ACCEPTED,
+            state = "Accepted",
+            size = pending.sizeBytes,
+            direction = DiagnosticDirection.RECEIVED
+        )
         scope.launch { acceptIncomingFile(pending, scope) }
     }
 
@@ -780,6 +866,14 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                             )
                             appendSystemMessage(
                                 "incoming file '${offer.name}' from ${session.peer.name} — awaiting consent"
+                            )
+                            diagnostics.transfer(
+                                peerId = session.peer.id.value,
+                                transferId = offer.id,
+                                eventName = DiagnosticEventNames.TRANSFER_OFFER_RECEIVED,
+                                state = "Offered",
+                                size = offer.sizeBytes,
+                                direction = DiagnosticDirection.RECEIVED
                             )
                         }
                     }
@@ -854,6 +948,14 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 transfer = transfer
             )
         )
+        diagnostics.transfer(
+            peerId = transfer.peer.id.value,
+            transferId = transfer.id,
+            eventName = DiagnosticEventNames.TRANSFER_STARTED,
+            state = transfer.state.value.toString(),
+            size = transfer.sizeBytes,
+            direction = DiagnosticDirection.SENT
+        )
         appendSystemMessage("sending file '${transfer.name}' (${transfer.sizeBytes}B) to $peerName")
         watchTransfer(transfer, scope)
     }
@@ -878,6 +980,14 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 transfer = transfer
             )
         )
+        diagnostics.transfer(
+            peerId = transfer.peer.id.value,
+            transferId = transfer.id,
+            eventName = DiagnosticEventNames.TRANSFER_STARTED,
+            state = transfer.state.value.toString(),
+            size = transfer.sizeBytes,
+            direction = DiagnosticDirection.RECEIVED
+        )
         appendSystemMessage("receiving file '${transfer.name}' from $peerName → $destinationPath")
         // The transactional destination is owned by the SDK and is committed
         // or aborted even if this UI collector is cancelled.
@@ -889,6 +999,23 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                     testFileSha256(File(destinationPath))
                 }
                 updateRowDigest(transfer.id, digest)
+                diagnostics.hash(
+                    transfer.peer.id.value,
+                    transfer.id,
+                    File(destinationPath).length(),
+                    digest,
+                    receiver = true
+                )
+                diagnostics.transfer(
+                    peerId = transfer.peer.id.value,
+                    transferId = transfer.id,
+                    eventName = DiagnosticEventNames.TRANSFER_DURABLE_COMMITTED,
+                    state = "Completed",
+                    size = transfer.sizeBytes,
+                    direction = DiagnosticDirection.RECEIVED,
+                    outcome = DiagnosticOutcome.SUCCESS,
+                    details = mapOf("durable" to "true")
+                )
                 appendSystemMessage("received ${transfer.name} sha256=$digest")
             }
         }
@@ -913,6 +1040,34 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             try {
                 transfer.state.first { st ->
                     updateRowState(transfer.id, st)
+                    diagnostics.transfer(
+                        peerId = transfer.peer.id.value,
+                        transferId = transfer.id,
+                        eventName = when (st) {
+                            is FileTransferState.Completed -> DiagnosticEventNames.TRANSFER_COMPLETED
+                            is FileTransferState.Failed -> DiagnosticEventNames.TRANSFER_FAILED
+                            is FileTransferState.Cancelled -> DiagnosticEventNames.TRANSFER_CANCELLED
+                            is FileTransferState.Rejected -> DiagnosticEventNames.TRANSFER_OFFER_REJECTED
+                            else -> DiagnosticEventNames.TRANSFER_PROGRESS
+                        },
+                        state = st.toString(),
+                        size = transfer.bytesTransferred.value,
+                        direction = if (fileTransfers.firstOrNull { it.id == transfer.id }?.direction ==
+                            FileTransferDirection.Outgoing
+                        ) {
+                            DiagnosticDirection.SENT
+                        } else {
+                            DiagnosticDirection.RECEIVED
+                        },
+                        outcome = when (st) {
+                            is FileTransferState.Completed -> DiagnosticOutcome.SUCCESS
+                            is FileTransferState.Failed -> DiagnosticOutcome.FAILURE
+                            is FileTransferState.Cancelled -> DiagnosticOutcome.CANCELLATION
+                            is FileTransferState.Rejected -> DiagnosticOutcome.CANCELLATION
+                            else -> null
+                        },
+                        error = (st as? FileTransferState.Failed)?.error
+                    )
                     if (st.isTerminal()) {
                         completed = st is FileTransferState.Completed
                         true
@@ -970,6 +1125,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
 
     /** Called when the whole UI composable disposes, including during startup. */
     fun shutdownIfRunning() {
+        diagnostics.shutdown()
         if (kit != null) stop()
     }
 
@@ -985,6 +1141,11 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             sessionJobs.remove(id)?.forEach { it.cancel() }
             val removed = connectedSessions.firstOrNull { it.id == id }
             if (removed != null) {
+                diagnostics.connection(
+                    removed.peer.id.value,
+                    "Closed",
+                    removed.state.value.toString()
+                )
                 connectedSessions.remove(removed)
                 targetedPeerIds.remove(removed.peer.id.value)
                 appendSystemMessage("disconnected from ${removed.peer.name}")
@@ -994,6 +1155,10 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
 
         for (session in current) {
             if (sessionJobs.containsKey(session.id)) continue
+            diagnostics.connection(
+                session.peer.id.value,
+                session.state.value.toString()
+            )
             connectedSessions.add(session)
             appendSystemMessage("connected to ${session.peer.name}")
             System.err.println("[p2pkit] room: session added ${session.peer.name.sanitizedForTerminal()}")
@@ -1008,6 +1173,20 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                         is P2pMessage.Text -> msg.value
                         is P2pMessage.Binary -> "<binary ${msg.bytes.size}B>"
                     }
+                    diagnostics.recorder.record(
+                        DiagnosticRecord(
+                            peerId = session.peer.id.value,
+                            connectionId = diagnostics.latestConnectionId,
+                            category = "metadata",
+                            eventName = DiagnosticEventNames.METADATA_VALIDATED,
+                            payloadSizeBytes = when (msg) {
+                                is P2pMessage.Text -> msg.value.toByteArray().size.toLong()
+                                is P2pMessage.Binary -> msg.bytes.size.toLong()
+                            },
+                            direction = DiagnosticDirection.RECEIVED,
+                            details = mapOf("authenticated" to "true")
+                        )
+                    )
                     appendRoomMessage(
                         RoomMessage(
                             id = nextMessageId++,
@@ -1021,8 +1200,15 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 }
             }
             jobs += scope.launch {
+                var previous: String? = null
                 session.state.collect { st ->
                     System.err.println("[p2pkit] session ${session.peer.name.sanitizedForTerminal()} → $st")
+                    diagnostics.connection(
+                        session.peer.id.value,
+                        st.toString(),
+                        previous
+                    )
+                    previous = st.toString()
                 }
             }
             jobs += wireIncomingFiles(session, scope)

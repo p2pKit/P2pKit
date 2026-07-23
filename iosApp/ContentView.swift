@@ -4,6 +4,9 @@ import CryptoKit
 import Darwin
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var diagnostics = IOSTestDiagnosticStore()
+
     // MARK: - Public state shown in the UI
 
     @State private var status: String = "Not started"
@@ -24,6 +27,7 @@ struct ContentView: View {
     @State private var logLines: [LogLine] = []
     @State private var nextLogId: Int = 0
     @State private var showLog: Bool = true
+    @State private var showDiagnostics: Bool = false
 
     /// Top-of-screen banner for user-actionable errors. Dismissed via the
     /// explicit close button on the banner (AUDIT-2026-06: was tap-to-dismiss
@@ -256,6 +260,29 @@ struct ContentView: View {
                 Button("Done") { focusedField = nil }
             }
         }
+        .sheet(isPresented: $showDiagnostics) {
+            IOSTestDiagnosticsView(diagnostics: diagnostics)
+        }
+        .onChange(of: scenePhase) { phase in
+            switch phase {
+            case .active:
+                diagnostics.record(TestDiagnosticRecord(
+                    category: "application",
+                    eventName: TestDiagnosticEventName.applicationForegrounded,
+                    currentState: "foreground"
+                ))
+                kit?.notifyAppForegrounded()
+            case .background:
+                diagnostics.record(TestDiagnosticRecord(
+                    category: "application",
+                    eventName: TestDiagnosticEventName.applicationBackgrounded,
+                    currentState: "background"
+                ))
+                kit?.notifyAppBackgrounded()
+            default:
+                break
+            }
+        }
     }
 
     @ViewBuilder
@@ -263,6 +290,11 @@ struct ContentView: View {
         Text("P2pKit Sample")
             .font(.title)
             .accessibilityIdentifier("sample-title")
+        Button("Test Diagnostics") {
+            showDiagnostics = true
+        }
+        .buttonStyle(.bordered)
+        .accessibilityIdentifier("test-diagnostics")
         // V0.4-PROVENANCE (L2 UI): show the active framework
         // build identity so the operator can visually confirm
         // the deployed SDK version before starting any hardware
@@ -677,6 +709,12 @@ struct ContentView: View {
         // unified log → Xcode console / Console.app (filter "P2pKitFRAME").
         // To also surface frames in the on-screen log, additionally set:
         //   FrameTrace.shared.sink = { IosLanDebug.shared.log(tag: "frame", message: $0) }
+        FrameTrace.shared.sink = { line in
+            IosLanDebug.shared.log(tag: "frame", message: line)
+            Task { @MainActor in
+                self.diagnostics.recordFrame(line)
+            }
+        }
         FrameTrace.shared.enabled = true
 
         // Subscribe to IosLanDebug BEFORE startAdvertising/Discovery so
@@ -685,6 +723,7 @@ struct ContentView: View {
             let collector = StringCollector { line in
                 await MainActor.run {
                     self.appendLog(line)
+                    self.diagnostics.recordTransport(line)
                     if !self.probeEpochSeen {
                         if line.contains(self.probeEpoch) {
                             self.probeEpochSeen = true
@@ -746,6 +785,12 @@ struct ContentView: View {
         }
         self.kit = built
         self.localPeerId = "\(built.localPeerId)"
+        diagnostics.record(TestDiagnosticRecord(
+            peerId: localPeerId,
+            category: "peer",
+            eventName: TestDiagnosticEventName.peerInitialized,
+            currentState: "ready"
+        ))
         diag("kit", "P2pKit constructed (peerId=\(localPeerId.prefix(8)) name='\(name)')")
 
         do {
@@ -754,6 +799,11 @@ struct ContentView: View {
             diag("kit", "startAdvertising returned OK")
             diag("kit", "calling startDiscovery")
             try await built.startDiscovery()
+            diagnostics.record(TestDiagnosticRecord(
+                category: "discovery",
+                eventName: TestDiagnosticEventName.discoveryStarted,
+                currentState: "active"
+            ))
             diag("kit", "startDiscovery returned OK")
             status = "Running"
         } catch {
@@ -835,6 +885,26 @@ struct ContentView: View {
         let peerRows = peerArray.map { p in
             PeerRow(id: "\(p.id)", name: p.name, peer: p)
         }.sorted { $0.name < $1.name }
+        let previousPeerIds = Set(self.peers.map(\.id))
+        let currentPeerIds = Set(peerRows.map(\.id))
+        for peer in peerRows where !previousPeerIds.contains(peer.id) {
+            diagnostics.record(TestDiagnosticRecord(
+                peerId: peer.id,
+                category: "discovery",
+                eventName: TestDiagnosticEventName.peerDiscovered,
+                currentState: "available",
+                details: ["peerName": peer.name]
+            ))
+        }
+        for peer in self.peers where !currentPeerIds.contains(peer.id) {
+            diagnostics.record(TestDiagnosticRecord(
+                peerId: peer.id,
+                category: "discovery",
+                eventName: TestDiagnosticEventName.peerLost,
+                currentState: "unavailable",
+                previousState: "available"
+            ))
+        }
         if peerRows != self.peers { self.peers = peerRows }
 
         let sessionRows = sessionArray.map { s in
@@ -864,6 +934,12 @@ struct ContentView: View {
         )
         for row in sessionRows {
             if let prev = previousById[row.id], prev.state != row.state {
+                diagnostics.connection(
+                    peerId: row.peerId,
+                    rawConnectionId: row.id,
+                    state: row.state,
+                    previous: prev.state
+                )
                 appendMessage(
                     "[session] \(row.peerName) (\(row.peerId.prefix(8))) → \(row.state)",
                     kind: .info
@@ -873,6 +949,12 @@ struct ContentView: View {
                     "\(row.peerName) (\(row.peerId.prefix(8))) \(prev.state) → \(row.state)"
                 )
             } else if previousById[row.id] == nil {
+                diagnostics.connection(
+                    peerId: row.peerId,
+                    rawConnectionId: row.id,
+                    state: row.state,
+                    previous: nil
+                )
                 appendMessage(
                     "[session] new \(row.peerName) (\(row.peerId.prefix(8))) state=\(row.state)",
                     kind: .info
@@ -887,6 +969,15 @@ struct ContentView: View {
         // because watchForTerminal cleaned them out after Closed/Failed).
         let currentIds = Set(sessionRows.map { $0.id })
         for prev in self.sessions where !currentIds.contains(prev.id) {
+            diagnostics.record(TestDiagnosticRecord(
+                peerId: prev.peerId,
+                connectionId: diagnostics.activeConnectionId,
+                category: "connection",
+                eventName: TestDiagnosticEventName.connectionDisconnected,
+                currentState: "removed",
+                previousState: prev.state,
+                outcome: .interruption
+            ))
             diag(
                 "session",
                 "removed id=\(prev.id.prefix(12)) peer=\(prev.peerId.prefix(8)) lastState=\(prev.state)"
@@ -979,6 +1070,23 @@ struct ContentView: View {
             let collector = MessageCollector { msg in
                 await MainActor.run {
                     if let text = msg as? P2pMessage.Text {
+                        self.diagnostics.record(TestDiagnosticRecord(
+                            peerId: "\(session.peer.id)",
+                            connectionId: self.diagnostics.activeConnectionId,
+                            category: "metadata",
+                            eventName: TestDiagnosticEventName.metadataReceived,
+                            direction: .received,
+                            payloadSizeBytes: Int64(text.value.utf8.count),
+                            details: ["metadataKeys": text.metadata.keys.sorted().joined(separator: ",")]
+                        ))
+                        self.diagnostics.record(TestDiagnosticRecord(
+                            peerId: "\(session.peer.id)",
+                            connectionId: self.diagnostics.activeConnectionId,
+                            category: "metadata",
+                            eventName: TestDiagnosticEventName.metadataValidated,
+                            direction: .received,
+                            outcome: .success
+                        ))
                         self.appendMessage("\(session.peer.name) -> \(text.value)", kind: .received)
                     } else if let bin = msg as? P2pMessage.Binary {
                         self.appendMessage(
@@ -1023,6 +1131,15 @@ struct ContentView: View {
                     "offer id=\(offer.id.prefix(8)) name='\(offer.name)' size=\(offer.sizeBytes) " +
                         "mime=\(offer.mimeType ?? "-") from \(offer.peer.name)"
                 )
+                self.diagnostics.transfer(
+                    TestDiagnosticEventName.offerReceived,
+                    peerId: "\(offer.peer.id)",
+                    transferId: offer.id,
+                    state: "offered",
+                    size: offer.sizeBytes,
+                    direction: .received,
+                    details: ["name": offer.name, "mimeType": offer.mimeType ?? "unknown"]
+                )
                 appendMessage("incoming file offer '\(offer.name)' — review to accept or reject", kind: .info)
             }
             pendingOffers[offer.id] = offer
@@ -1033,6 +1150,16 @@ struct ContentView: View {
     @MainActor
     private func rejectIncomingOffer(_ offer: P2pFileOffer) async {
         pendingOffers[offer.id] = nil
+        diagnostics.transfer(
+            TestDiagnosticEventName.offerRejected,
+            peerId: "\(offer.peer.id)",
+            transferId: offer.id,
+            state: "rejected",
+            size: offer.sizeBytes,
+            direction: .received,
+            outcome: .cancellation,
+            details: ["reason": "rejected by user"]
+        )
         do {
             try await offer.reject(reason: "rejected by user")
         } catch {
@@ -1087,6 +1214,14 @@ struct ContentView: View {
         }
         do {
             let transfer = try await offer.accept(destination: destination)
+            diagnostics.transfer(
+                TestDiagnosticEventName.offerAccepted,
+                peerId: "\(offer.peer.id)",
+                transferId: transfer.id,
+                state: "accepted",
+                size: offer.sizeBytes,
+                direction: .received
+            )
             appendMessage(
                 "receiving '\(dest.lastPathComponent)' (\(fmtBytes(offer.sizeBytes))) from \(offer.peer.name)",
                 kind: .info
@@ -1095,6 +1230,22 @@ struct ContentView: View {
                 guard completed else { return nil }
                 do {
                     let digest = try sha256File(at: dest)
+                    diagnostics.fileHash(
+                        peerId: "\(offer.peer.id)",
+                        transferId: transfer.id,
+                        size: offer.sizeBytes,
+                        digest: digest,
+                        receiver: true
+                    )
+                    diagnostics.transfer(
+                        TestDiagnosticEventName.transferDurableCommitted,
+                        peerId: "\(offer.peer.id)",
+                        transferId: transfer.id,
+                        state: "durably-persisted",
+                        size: offer.sizeBytes,
+                        direction: .received,
+                        outcome: .success
+                    )
                     diag("file", "durable receive committed '\(dest.lastPathComponent)' sha256=\(digest)")
                     appendMessage("sha256 \(dest.lastPathComponent): \(digest)", kind: .info)
                 } catch {
@@ -1107,6 +1258,16 @@ struct ContentView: View {
                 return nil
             }
         } catch {
+            diagnostics.transfer(
+                TestDiagnosticEventName.transferFailed,
+                peerId: "\(offer.peer.id)",
+                transferId: offer.id,
+                state: "failed",
+                size: offer.sizeBytes,
+                direction: .received,
+                outcome: .failure,
+                error: error.localizedDescription
+            )
             diag("file", "accept THREW for '\(offer.name)': \(error.localizedDescription)")
             appendMessage("accept failed for '\(offer.name)': \(error.localizedDescription)", kind: .error)
         }
@@ -1163,6 +1324,22 @@ struct ContentView: View {
         let name = "ios-test-\(preset.rawValue.replacingOccurrences(of: " ", with: "-"))-\(Int(Date().timeIntervalSince1970)).bin"
         let source = PreparedDataSource(data: data)
         let digest = source.sha256Hex
+        diagnostics.record(TestDiagnosticRecord(
+            peerId: row.peerId,
+            connectionId: diagnostics.activeConnectionId,
+            category: "file",
+            eventName: TestDiagnosticEventName.fileGenerated,
+            direction: .sent,
+            payloadSizeBytes: Int64(size),
+            details: ["name": name, "preset": preset.rawValue]
+        ))
+        diagnostics.fileHash(
+            peerId: row.peerId,
+            transferId: nil,
+            size: Int64(size),
+            digest: digest,
+            receiver: false
+        )
         diag("file", "sendFile '\(name)' (\(size) B) sha256=\(digest) -> \(row.peerName)")
         appendMessage("prepared \(name): sha256 \(digest)", kind: .info)
         do {
@@ -1170,6 +1347,30 @@ struct ContentView: View {
                 name: name,
                 mimeType: "application/octet-stream",
                 source: source
+            )
+            diagnostics.transfer(
+                TestDiagnosticEventName.transferPrepared,
+                peerId: row.peerId,
+                transferId: transfer.id,
+                state: "prepared",
+                size: Int64(size),
+                direction: .sent,
+                details: ["name": name, "mimeType": "application/octet-stream"]
+            )
+            diagnostics.transfer(
+                TestDiagnosticEventName.transferStarted,
+                peerId: row.peerId,
+                transferId: transfer.id,
+                state: "started",
+                size: Int64(size),
+                direction: .sent
+            )
+            diagnostics.fileHash(
+                peerId: row.peerId,
+                transferId: transfer.id,
+                size: Int64(size),
+                digest: digest,
+                receiver: false
             )
             appendMessage("offering file '\(name)' (\(fmtBytes(Int64(size)))) to \(row.peerName)", kind: .sent)
             watchTransfer(transfer, direction: .send, detail: nil) { completed in
@@ -1179,6 +1380,16 @@ struct ContentView: View {
                 return nil
             }
         } catch {
+            diagnostics.transfer(
+                TestDiagnosticEventName.transferFailed,
+                peerId: row.peerId,
+                transferId: diagnostics.activeTransferId ?? "transfer-unknown",
+                state: "failed",
+                size: Int64(size),
+                direction: .sent,
+                outcome: .failure,
+                error: error.localizedDescription
+            )
             diag("file", "sendFile THREW for \(row.peerId.prefix(8)): \(error.localizedDescription)")
             appendMessage("sendFile failed (\(row.peerName)): \(error.localizedDescription)", kind: .error)
             errorBanner = "Send file to \(row.peerName) failed: \(error.localizedDescription)"
@@ -1232,7 +1443,29 @@ struct ContentView: View {
                 if label != lastLabel {
                     lastLabel = label
                     diag("file", "transfer \(transfer.id.prefix(8)) '\(transfer.name)' -> \(label) (\(bytes)/\(transfer.sizeBytes) B)")
+                    self.diagnostics.transferProgress(
+                        peerId: "\(transfer.peer.id)",
+                        transferId: transfer.id,
+                        bytes: bytes,
+                        total: transfer.sizeBytes
+                    )
                     if terminal {
+                        self.diagnostics.transfer(
+                            label == "Completed"
+                                ? TestDiagnosticEventName.transferCompleted
+                                : (label.hasPrefix("Cancelled")
+                                    ? TestDiagnosticEventName.transferCancelled
+                                    : TestDiagnosticEventName.transferFailed),
+                            peerId: "\(transfer.peer.id)",
+                            transferId: transfer.id,
+                            state: label,
+                            size: transfer.sizeBytes,
+                            direction: direction == .send ? .sent : .received,
+                            outcome: label == "Completed"
+                                ? .success
+                                : (label.hasPrefix("Cancelled") ? .cancellation : .failure),
+                            error: label == "Completed" ? nil : label
+                        )
                         let localFailure = onTerminal(label == "Completed")
                         cleanupCompleted = true
                         let finalLabel = localFailure.map { "Failed: \($0)" } ?? label
@@ -1291,6 +1524,15 @@ struct ContentView: View {
     @MainActor
     private func cancelTransfer(_ row: TransferRow) async {
         diag("file", "Cancel tapped for transfer \(row.id.prefix(8)) '\(row.fileName)'")
+        diagnostics.transfer(
+            TestDiagnosticEventName.transferCancelled,
+            peerId: "\(row.transfer.peer.id)",
+            transferId: row.id,
+            state: "cancelling",
+            size: row.totalBytes,
+            direction: row.direction == .send ? .sent : .received,
+            outcome: .cancellation
+        )
         do {
             try await row.transfer.cancel(reason: "cancelled from iOS sample UI")
         } catch {
@@ -1301,6 +1543,12 @@ struct ContentView: View {
     @MainActor
     private func connect(_ row: PeerRow) async {
         diag("ui", "Connect tapped: peer=\(row.id.prefix(8)) name=\(row.name)")
+        diagnostics.record(TestDiagnosticRecord(
+            peerId: row.id,
+            category: "connection",
+            eventName: TestDiagnosticEventName.connectionAttempted,
+            currentState: "connecting"
+        ))
         guard let k = kit else {
             diag("ui", "Connect ABORT — kit not started")
             errorBanner = "Kit not started."
@@ -1342,6 +1590,16 @@ struct ContentView: View {
             )
             attachCollectors(to: session, label: "outgoing")
         } catch {
+            diagnostics.record(TestDiagnosticRecord(
+                peerId: row.id,
+                category: "connection",
+                eventName: TestDiagnosticEventName.connectionAuthenticationFailed,
+                severity: .error,
+                currentState: "failed",
+                errorCode: "CONNECT_FAILED",
+                errorDescription: error.localizedDescription,
+                outcome: .failure
+            ))
             diag("ui", "kit.connect THREW: \(error.localizedDescription)")
             appendMessage("connect failed (\(row.name)): \(error.localizedDescription)", kind: .error)
             errorBanner = "Connect to \(row.name) failed: \(error.localizedDescription)"
@@ -1463,7 +1721,25 @@ struct ContentView: View {
         for row in liveSessions {
             diag("ui", "Send → session=\(row.id.prefix(12)) peer=\(row.peerId.prefix(8)) (\(text.count) chars)")
             do {
+                diagnostics.record(TestDiagnosticRecord(
+                    peerId: row.peerId,
+                    connectionId: diagnostics.activeConnectionId,
+                    category: "metadata",
+                    eventName: TestDiagnosticEventName.metadataCreated,
+                    direction: .sent,
+                    payloadSizeBytes: Int64(text.utf8.count),
+                    details: ["metadataKeys": ""]
+                ))
                 try await row.session.send(message: P2pMessage.Text(value: text, metadata: [:]))
+                diagnostics.record(TestDiagnosticRecord(
+                    peerId: row.peerId,
+                    connectionId: diagnostics.activeConnectionId,
+                    category: "metadata",
+                    eventName: TestDiagnosticEventName.metadataSent,
+                    direction: .sent,
+                    payloadSizeBytes: Int64(text.utf8.count),
+                    outcome: .success
+                ))
                 diag("ui", "session.send OK for \(row.peerId.prefix(8))")
                 appendMessage("me -> \(row.peerName): \(text)", kind: .sent)
                 successes += 1
@@ -1520,6 +1796,11 @@ struct ContentView: View {
         isStopping = true
         defer { isStopping = false }
         status = "Stopping..."
+        diagnostics.record(TestDiagnosticRecord(
+            category: "discovery",
+            eventName: TestDiagnosticEventName.discoveryStopped,
+            currentState: "stopping"
+        ))
 
         pollTask?.cancel()
         incomingSessionsTask?.cancel()
@@ -1566,6 +1847,12 @@ struct ContentView: View {
         localTcpPort = 0
         errorBanner = nil
         status = "Stopped"
+        diagnostics.record(TestDiagnosticRecord(
+            category: "application",
+            eventName: TestDiagnosticEventName.applicationShutdown,
+            currentState: "stopped",
+            outcome: .success
+        ))
     }
 
     // MARK: - Helpers
@@ -1596,6 +1883,7 @@ struct ContentView: View {
     /// log show "user tapped Send" interleaved with "nw_connection_send
     /// completed OK" so we can confirm UI ↔ SDK alignment.
     private func diag(_ tag: String, _ message: String) {
+        diagnostics.recordLegacy(tag: tag, message: message)
         IosLanDebug.shared.log(tag: tag, message: message)
     }
 }

@@ -16,6 +16,8 @@ class CliOptionsTest {
         assertNull(parsed.appId)
         assertEquals("reconnect=3,250", parsed.reconnectArg)
         assertEquals("frames", parsed.traceMode)
+        assertNull(parsed.testId)
+        assertNull(parsed.sessionId)
     }
 
     @Test
@@ -35,6 +37,30 @@ class CliOptionsTest {
         assertIs<CliParseResult.Error>(parseCliOptions(arrayOf("--unknown")))
         assertIs<CliParseResult.Error>(parseCliOptions(arrayOf("future=value")))
         assertIs<CliParseResult.Error>(parseCliOptions(arrayOf("trace=off", "trace=frames")))
+        assertIs<CliParseResult.Error>(parseCliOptions(arrayOf("test=PS-T05", "test=ENV-02")))
+        assertIs<CliParseResult.Error>(parseCliOptions(arrayOf("session=bad session")))
+    }
+
+    @Test
+    fun diagnosticOptionsAreSeparatedAndValidated() {
+        val parsed = assertIs<CliParseResult.Success>(
+            parseCliOptions(
+                arrayOf(
+                    "Alice",
+                    "test=PS-T05",
+                    "session=session-shared",
+                    "role=sender",
+                    "evidence=/tmp/evidence",
+                    "log=/tmp/events.jsonl"
+                )
+            )
+        ).options
+        assertEquals("Alice", parsed.deviceName)
+        assertEquals("PS-T05", parsed.testId)
+        assertEquals("session-shared", parsed.sessionId)
+        assertEquals("sender", parsed.role)
+        assertEquals("/tmp/evidence", parsed.evidenceDirectory)
+        assertEquals("/tmp/events.jsonl", parsed.jsonlFile)
     }
 
     @Test

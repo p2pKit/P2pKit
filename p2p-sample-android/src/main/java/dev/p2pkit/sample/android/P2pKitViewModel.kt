@@ -41,6 +41,16 @@ import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transfer.sendFile
 import dev.p2pkit.provisioning.android.AndroidP2pPermissionManager
 import dev.p2pkit.provisioning.android.android
+import dev.p2pkit.sample.diagnostics.DiagnosticEventNames
+import dev.p2pkit.sample.diagnostics.DiagnosticDirection
+import dev.p2pkit.sample.diagnostics.DiagnosticFilter
+import dev.p2pkit.sample.diagnostics.DiagnosticOutcome
+import dev.p2pkit.sample.diagnostics.DiagnosticRecord
+import dev.p2pkit.sample.diagnostics.DiagnosticRecorder
+import dev.p2pkit.sample.diagnostics.DiagnosticSeverity
+import dev.p2pkit.sample.diagnostics.StructuredFrameTrace
+import dev.p2pkit.sample.diagnostics.StructuredSdkLogger
+import dev.p2pkit.sample.diagnostics.correlationConnectionId
 import dev.p2pkit.sample.kmp.createP2pKit
 import dev.p2pkit.sample.kmp.runDiscoverAndGreet
 import dev.p2pkit.transport.lan.AndroidLanDiag
@@ -58,6 +68,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -197,6 +208,19 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     /** Last N lines from the logger; surfaced under the room timeline. */
     val logTail: SnapshotStateList<String> = mutableStateListOf()
 
+    private val _diagnosticRevision = MutableStateFlow(0L)
+    val diagnosticRevision: StateFlow<Long> = _diagnosticRevision.asStateFlow()
+    var diagnosticTestId: String by mutableStateOf("PS-T04")
+        private set
+    var diagnosticRole: String by mutableStateOf("both")
+        private set
+    private val diagnostics = AndroidDiagnosticHarness(
+        getApplication<Application>().applicationContext
+    ) {
+        _diagnosticRevision.update { it + 1L }
+    }
+    val diagnosticRecorder: DiagnosticRecorder get() = diagnostics.recorder
+
     // --- hotspot host (v0.2.1 task 11) ------------------------------------
 
     /**
@@ -227,6 +251,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     private val cleanupScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val advertisingToggleMutex = Mutex()
     private val discoveryToggleMutex = Mutex()
+    private val connectionIds: MutableMap<String, String> = mutableMapOf()
 
     /**
      * AUDIT-2026-06: A-G8-samples-android-13 — all three per-session
@@ -249,6 +274,55 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     fun updateDeviceName(name: String) {
         deviceName = name
+    }
+
+    fun updateDiagnosticTestId(value: String) {
+        diagnosticTestId = value
+            .filter { it.isLetterOrDigit() || it == '-' || it == '_' }
+            .uppercase()
+            .take(64)
+    }
+
+    fun updateDiagnosticRole(value: String) {
+        diagnosticRole = value
+            .filter { it.isLetterOrDigit() || it == '-' || it == '_' }
+            .lowercase()
+            .take(24)
+    }
+
+    fun beginDiagnosticSession(requestedSessionId: String? = null) {
+        runCatching {
+            diagnostics.beginSession(diagnosticTestId, diagnosticRole, requestedSessionId)
+        }.onSuccess { id ->
+            appendSystemMessage(
+                "diagnostics active: test=${diagnosticRecorder.activeTestId} " +
+                    "session=$id role=${diagnosticRecorder.activeRole}"
+            )
+        }.onFailure {
+            appendSystemMessage("diagnostics could not start: ${it.message ?: it::class.simpleName}")
+        }
+    }
+
+    fun completeDiagnostic(outcome: DiagnosticOutcome) {
+        diagnostics.complete(outcome, "operator selected ${outcome.name}", outcome.name)
+        appendSystemMessage("diagnostics completed: ${outcome.name}")
+    }
+
+    fun exportDiagnosticEvidence(): File? =
+        runCatching { diagnostics.export() }
+            .onSuccess { appendSystemMessage("evidence exported: ${it.absolutePath}") }
+            .onFailure { appendSystemMessage("evidence export failed: ${it.message ?: it::class.simpleName}") }
+            .getOrNull()
+
+    fun clearCurrentDiagnosticSession(): Int = diagnostics.clearCurrentSession()
+
+    fun diagnosticEvents(filter: DiagnosticFilter = DiagnosticFilter()) =
+        diagnosticRecorder.snapshot(filter)
+
+    fun diagnosticSummary() = diagnosticRecorder.summary()
+
+    internal fun recordDiagnostic(record: DiagnosticRecord) {
+        diagnosticRecorder.record(record)
     }
 
     fun updateReconnectChoice(choice: ReconnectChoice) {
@@ -306,12 +380,30 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         _isStarting.value = true
         val choice = reconnectChoice
         val ctx = getApplication<Application>().applicationContext
+        if (diagnosticRecorder.activeSessionId == "session-unassigned") {
+            beginDiagnosticSession()
+        }
+        recordDiagnostic(
+            DiagnosticRecord(
+                category = "application",
+                eventName = DiagnosticEventNames.TEST_MODE_ACTIVATED,
+                currentState = "starting"
+            )
+        )
         // Diagnostic frame-type trace (Issue #2/#3): route decoded frame lines
         // to logcat so they sit alongside the transport's bounded P2pKitLAN
         // lines. Library lifecycle diagnostics are default-off; this official
         // diagnostic harness opts in explicitly.
         AndroidLanDiag.enabled = true
-        FrameTrace.sink = { Log.d("P2pKitFrame", it) }
+        AndroidLanDiag.retainHistory = true
+        FrameTrace.sink = {
+            Log.d("P2pKitFrame", it)
+            StructuredFrameTrace.record(
+                diagnosticRecorder,
+                it,
+                connectionIds.values.firstOrNull()
+            )
+        }
         FrameTrace.enabled = true
         val newKit = try {
             P2pKit.create {
@@ -355,7 +447,18 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     // calling Activity.
                     networkPathObserver = AndroidNetworkPathObserver(ctx)
                 }
-                logger = TailLogger(this@P2pKitViewModel)
+                logger = StructuredSdkLogger(
+                    recorder = diagnosticRecorder,
+                    delegate = TailLogger(this@P2pKitViewModel),
+                    context = {
+                        val session = connectedSessions.lastOrNull()
+                        Triple(
+                            session?.peer?.id?.value,
+                            session?.let { connectionIds[it.id] },
+                            fileTransfers.lastOrNull()?.id
+                        )
+                    }
+                )
             }
         } catch (t: Throwable) {
             _isStarting.value = false
@@ -380,10 +483,63 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             newKit.state.collect { _kitState.value = it }
         }
         scope.launch {
-            newKit.peers.collect { _peers.value = it }
+            AndroidLanDiag.events.collect { line ->
+                recordDiagnostic(
+                    DiagnosticRecord(
+                        category = "transport",
+                        eventName = DiagnosticEventNames.TRANSPORT_LOG,
+                        severity = if ("WARN" in line || "error" in line.lowercase()) {
+                            DiagnosticSeverity.WARNING
+                        } else {
+                            DiagnosticSeverity.DEBUG
+                        },
+                        details = mapOf("line" to line)
+                    )
+                )
+            }
         }
         scope.launch {
-            newKit.networkPathStatus.collect { _networkPathStatus.value = it }
+            var previous: Set<String> = emptySet()
+            newKit.peers.collect { current ->
+                val currentIds = current.map { it.id.value }.toSet()
+                current.filter { it.id.value !in previous }.forEach { peer ->
+                    recordDiagnostic(
+                        DiagnosticRecord(
+                            peerId = peer.id.value,
+                            category = "discovery",
+                            eventName = DiagnosticEventNames.PEER_DISCOVERED,
+                            details = mapOf("platform" to peer.platform.toString())
+                        )
+                    )
+                }
+                previous.filter { it !in currentIds }.forEach { peerId ->
+                    recordDiagnostic(
+                        DiagnosticRecord(
+                            peerId = peerId,
+                            category = "discovery",
+                            eventName = DiagnosticEventNames.PEER_LOST
+                        )
+                    )
+                }
+                previous = currentIds
+                _peers.value = current
+            }
+        }
+        scope.launch {
+            var previous: NetworkPathStatus? = null
+            newKit.networkPathStatus.collect { current ->
+                recordDiagnostic(
+                    DiagnosticRecord(
+                        category = "network",
+                        eventName = DiagnosticEventNames.NETWORK_PATH_CHANGED,
+                        previousState = previous?.toString(),
+                        currentState = current.toString(),
+                        details = mapOf("observer" to "AndroidNetworkPathObserver")
+                    )
+                )
+                previous = current
+                _networkPathStatus.value = current
+            }
         }
         // Single source of truth for "which peers do we have a session with".
         scope.launch {
@@ -395,8 +551,22 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 newKit.startAdvertising()
                 _advertising.value = true
+                recordDiagnostic(
+                    DiagnosticRecord(
+                        category = "discovery",
+                        eventName = DiagnosticEventNames.DISCOVERY_STARTED,
+                        currentState = "advertising"
+                    )
+                )
                 newKit.startDiscovery()
                 _discovering.value = true
+                recordDiagnostic(
+                    DiagnosticRecord(
+                        category = "discovery",
+                        eventName = DiagnosticEventNames.DISCOVERY_STARTED,
+                        currentState = "discovering"
+                    )
+                )
                 _isRunning.value = true
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -467,10 +637,29 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             appendSystemMessage("already connected to ${peer.name}")
             return
         }
+        recordDiagnostic(
+            DiagnosticRecord(
+                peerId = peerId,
+                category = "connection",
+                eventName = DiagnosticEventNames.CONNECTION_ATTEMPTED,
+                currentState = "Connecting"
+            )
+        )
         pendingConnectPeerIds.add(peerId)
         scope.launch {
             try {
                 runCatchingNonCancel { currentKit.connect(peer) }.onFailure {
+                    recordDiagnostic(
+                        DiagnosticRecord(
+                            peerId = peerId,
+                            category = "connection",
+                            eventName = DiagnosticEventNames.CONNECTION_AUTHENTICATION_FAILED,
+                            severity = DiagnosticSeverity.ERROR,
+                            errorCode = it::class.simpleName?.uppercase(),
+                            errorDescription = it.message,
+                            outcome = DiagnosticOutcome.FAILURE
+                        )
+                    )
                     Log.w(LOG_TAG, "connect to ${peer.name} failed", it)
                     appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
                 }
@@ -665,6 +854,18 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         scope.launch {
             val preparedHash = withContext(Dispatchers.IO) { sha256Uri(ctx, uri) }
             if (preparedHash != null) {
+                val size = runCatching {
+                    ctx.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
+                }.getOrNull()
+                recordDiagnostic(
+                    DiagnosticRecord(
+                        peerId = peerId,
+                        category = "file",
+                        eventName = DiagnosticEventNames.FILE_SENDER_HASH,
+                        payloadSizeBytes = size,
+                        details = mapOf("sha256" to preparedHash)
+                    )
+                )
                 appendSystemMessage("prepared file sha256=$preparedHash")
             }
             val transfer = runCatchingNonCancel {
@@ -678,6 +879,16 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 appendSystemMessage("send file failed: ${it.message ?: it::class.simpleName}")
                 return@launch
             }
+            recordDiagnostic(
+                DiagnosticRecord(
+                    peerId = peerId,
+                    transferId = transfer.id,
+                    category = "transfer",
+                    eventName = DiagnosticEventNames.TRANSFER_PREPARED,
+                    currentState = transfer.state.value.toString(),
+                    payloadSizeBytes = transfer.sizeBytes
+                )
+            )
             registerOutgoingTransfer(transfer, session.peer.name, scope)
         }
     }
@@ -737,6 +948,17 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                             appendSystemMessage(
                                 "incoming file '${offer.name}' from ${session.peer.name} — awaiting consent"
                             )
+                            recordDiagnostic(
+                                DiagnosticRecord(
+                                    peerId = session.peer.id.value,
+                                    connectionId = connectionIds[session.id],
+                                    transferId = offer.id,
+                                    category = "transfer",
+                                    eventName = DiagnosticEventNames.TRANSFER_OFFER_RECEIVED,
+                                    currentState = "Offered",
+                                    payloadSizeBytes = offer.sizeBytes
+                                )
+                            )
                         }
                     }
                     previousIds = currentIds
@@ -751,12 +973,31 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val pending = pendingFileOffers.firstOrNull { it.id == id } ?: return
         pendingFileOffers.remove(pending)
         cleanupScope.launch { runCatchingNonCancel { pending.offer.reject("rejected by user") } }
+        recordDiagnostic(
+            DiagnosticRecord(
+                transferId = id,
+                category = "transfer",
+                eventName = DiagnosticEventNames.TRANSFER_OFFER_REJECTED,
+                currentState = "Rejected",
+                outcome = DiagnosticOutcome.CANCELLATION,
+                details = mapOf("reason" to "operator rejected")
+            )
+        )
     }
 
     fun acceptFileOffer(id: String) {
         val scope = runScope ?: return
         val pending = pendingFileOffers.firstOrNull { it.id == id } ?: return
         pendingFileOffers.remove(pending)
+        recordDiagnostic(
+            DiagnosticRecord(
+                peerId = pending.offer.peer.id.value,
+                transferId = id,
+                category = "transfer",
+                eventName = DiagnosticEventNames.TRANSFER_OFFER_ACCEPTED,
+                currentState = "Accepted"
+            )
+        )
         scope.launch { acceptIncomingFile(pending, scope) }
     }
 
@@ -833,6 +1074,17 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 transfer = transfer
             )
         )
+        recordDiagnostic(
+            DiagnosticRecord(
+                peerId = transfer.peer.id.value,
+                transferId = transfer.id,
+                category = "transfer",
+                eventName = DiagnosticEventNames.TRANSFER_PREPARED,
+                currentState = transfer.state.value.toString(),
+                payloadSizeBytes = transfer.sizeBytes,
+                direction = DiagnosticDirection.SENT
+            )
+        )
         appendSystemMessage("sending file '${transfer.name}' (${transfer.sizeBytes}B) to $peerName")
         watchTransfer(transfer, scope)
     }
@@ -855,6 +1107,23 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 destinationPath = destinationPath,
                 sha256 = null,
                 transfer = transfer
+            )
+        )
+        connectionIds[transfer.id] = correlationConnectionId(
+            diagnosticRecorder.activeSessionId,
+            transfer.peer.id.value,
+            diagnosticRecorder.environment.safeDeviceId
+        )
+        recordDiagnostic(
+            DiagnosticRecord(
+                peerId = transfer.peer.id.value,
+                connectionId = connectionIds[transfer.id],
+                transferId = transfer.id,
+                category = "transfer",
+                eventName = DiagnosticEventNames.TRANSFER_STARTED,
+                currentState = transfer.state.value.toString(),
+                payloadSizeBytes = transfer.sizeBytes,
+                direction = DiagnosticDirection.RECEIVED
             )
         )
         // The transactional destination is SDK-owned and is committed or
@@ -880,7 +1149,36 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             }
             try {
                 transfer.state.first { st ->
+                    val previous = fileTransfers.firstOrNull { it.id == transfer.id }?.state?.toString()
                     updateRowState(transfer.id, st)
+                    val eventName = when (st) {
+                        is FileTransferState.Completed -> DiagnosticEventNames.TRANSFER_COMPLETED
+                        is FileTransferState.Failed -> DiagnosticEventNames.TRANSFER_FAILED
+                        is FileTransferState.Cancelled -> DiagnosticEventNames.TRANSFER_CANCELLED
+                        is FileTransferState.Rejected -> DiagnosticEventNames.TRANSFER_OFFER_REJECTED
+                        else -> DiagnosticEventNames.TRANSFER_PROGRESS
+                    }
+                    recordDiagnostic(
+                        DiagnosticRecord(
+                            peerId = transfer.peer.id.value,
+                            connectionId = connectionIds[transfer.id],
+                            transferId = transfer.id,
+                            category = "transfer",
+                            eventName = eventName,
+                            severity = if (st is FileTransferState.Failed) DiagnosticSeverity.ERROR else DiagnosticSeverity.INFO,
+                            previousState = previous,
+                            currentState = st.toString(),
+                            payloadSizeBytes = transfer.bytesTransferred.value,
+                            outcome = when (st) {
+                                is FileTransferState.Completed -> DiagnosticOutcome.SUCCESS
+                                is FileTransferState.Failed -> DiagnosticOutcome.FAILURE
+                                is FileTransferState.Cancelled -> DiagnosticOutcome.CANCELLATION
+                                is FileTransferState.Rejected -> DiagnosticOutcome.CANCELLATION
+                                else -> null
+                            },
+                            errorDescription = (st as? FileTransferState.Failed)?.error?.message
+                        )
+                    )
                     if (st.isTerminal()) {
                         completed = st is FileTransferState.Completed
                         true
@@ -901,6 +1199,60 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         }
                         updateRowDigest(transfer.id, digest)
                         if (digest != null) {
+                            recordDiagnostic(
+                                DiagnosticRecord(
+                                    peerId = transfer.peer.id.value,
+                                    connectionId = connectionIds[transfer.id],
+                                    transferId = transfer.id,
+                                    category = "file",
+                                    eventName = DiagnosticEventNames.FILE_RECEIVER_HASH,
+                                    payloadSizeBytes = transfer.sizeBytes,
+                                    direction = DiagnosticDirection.RECEIVED,
+                                    details = mapOf("sha256" to digest)
+                                )
+                            )
+                            val senderDigest = diagnosticRecorder.snapshot()
+                                .lastOrNull {
+                                    it.transferId == transfer.id &&
+                                        it.eventName == DiagnosticEventNames.FILE_SENDER_HASH
+                                }?.details?.get("sha256")
+                            // The sender and receiver normally export separate
+                            // packages. Never report a local receiver hash as
+                            // a cross-peer match when the sender package has
+                            // not been correlated yet; the operator must
+                            // compare both packages (or use the protocol's
+                            // authenticated FILE_COMMIT result).
+                            recordDiagnostic(
+                                DiagnosticRecord(
+                                    peerId = transfer.peer.id.value,
+                                    connectionId = connectionIds[transfer.id],
+                                    transferId = transfer.id,
+                                    category = "file",
+                                    eventName = DiagnosticEventNames.FILE_INTEGRITY_CHECKED,
+                                    currentState = if (senderDigest == null) {
+                                        "awaiting-peer-evidence"
+                                    } else if (senderDigest == digest) {
+                                        "match"
+                                    } else {
+                                        "mismatch"
+                                    },
+                                    severity = if (senderDigest == null) {
+                                        DiagnosticSeverity.INFO
+                                    } else if (senderDigest == digest) {
+                                        DiagnosticSeverity.INFO
+                                    } else {
+                                        DiagnosticSeverity.ERROR
+                                    },
+                                    outcome = if (senderDigest == null) null
+                                    else if (senderDigest == digest) DiagnosticOutcome.SUCCESS
+                                    else DiagnosticOutcome.FAILURE,
+                                    details = mapOf(
+                                        "match" to if (senderDigest == null) "unknown"
+                                        else (senderDigest == digest).toString(),
+                                        "senderDigestAvailable" to (senderDigest != null).toString()
+                                    )
+                                )
+                            )
                             appendSystemMessage("received ${transfer.name} sha256=$digest")
                         }
                     }
@@ -1099,6 +1451,20 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     fun stop() {
         val toStop = kit ?: return
         if (_isStopping.value) return
+        recordDiagnostic(
+            DiagnosticRecord(
+                category = "application",
+                eventName = DiagnosticEventNames.APPLICATION_SHUTDOWN,
+                currentState = "stopping"
+            )
+        )
+        recordDiagnostic(
+            DiagnosticRecord(
+                category = "discovery",
+                eventName = DiagnosticEventNames.DISCOVERY_STOPPED,
+                currentState = "stopping"
+            )
+        )
         _isStopping.value = true
         kit = null
         _isRunning.value = false
@@ -1149,6 +1515,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     override fun onCleared() {
+        diagnostics.shutdown()
         super.onCleared()
         val toStop = kit
         kit = null
@@ -1170,6 +1537,28 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         finalCleanup.invokeOnCompletion { cleanupScope.cancel() }
     }
 
+    fun notifyForegrounded() {
+        recordDiagnostic(
+            DiagnosticRecord(
+                category = "application",
+                eventName = DiagnosticEventNames.APPLICATION_FOREGROUNDED,
+                currentState = "foreground"
+            )
+        )
+        kit?.notifyAppForegrounded()
+    }
+
+    fun notifyBackgrounded() {
+        recordDiagnostic(
+            DiagnosticRecord(
+                category = "application",
+                eventName = DiagnosticEventNames.APPLICATION_BACKGROUNDED,
+                currentState = "background"
+            )
+        )
+        kit?.notifyAppBackgrounded()
+    }
+
     // --- helpers ----------------------------------------------------------
 
     private fun reconcileSessions(current: List<P2pSession>, scope: CoroutineScope) {
@@ -1184,6 +1573,16 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             sessionJobs.remove(id)?.forEach { it.cancel() }
             val removed = connectedSessions.firstOrNull { it.id == id }
             if (removed != null) {
+                recordDiagnostic(
+                    DiagnosticRecord(
+                        peerId = removed.peer.id.value,
+                        connectionId = connectionIds.remove(id),
+                        category = "connection",
+                        eventName = DiagnosticEventNames.CONNECTION_DISCONNECTED,
+                        previousState = removed.state.value.toString(),
+                        currentState = "Closed"
+                    )
+                )
                 connectedSessions.remove(removed)
                 targetedPeerIds.remove(removed.peer.id.value)
                 appendSystemMessage("disconnected from ${removed.peer.name}")
@@ -1194,6 +1593,22 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // Add sessions that are new in the kit.
         for (session in current) {
             if (sessionJobs.containsKey(session.id)) continue
+            val connectionId = correlationConnectionId(
+                diagnosticRecorder.activeSessionId,
+                newKitLocalPeerId(),
+                session.peer.id.value
+            )
+            connectionIds[session.id] = connectionId
+            recordDiagnostic(
+                DiagnosticRecord(
+                    peerId = session.peer.id.value,
+                    connectionId = connectionId,
+                    category = "connection",
+                    eventName = DiagnosticEventNames.CONNECTION_AUTHENTICATED,
+                    currentState = session.state.value.toString(),
+                    outcome = DiagnosticOutcome.SUCCESS
+                )
+            )
             connectedSessions.add(session)
             appendSystemMessage("connected to ${session.peer.name}")
             Log.i(LOG_TAG, "room: session added ${session.peer.name}")
@@ -1214,8 +1629,39 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             // Log session state transitions (Connected / Reconnecting / Failed / Closed)
             // and keep the derived hasConnectedSession flag fresh.
             val stateJob = scope.launch {
+                var previousState: ConnectionState? = null
                 session.state.collect { st ->
                     Log.i(LOG_TAG, "session ${session.peer.name} → $st")
+                    recordDiagnostic(
+                        DiagnosticRecord(
+                            peerId = session.peer.id.value,
+                            connectionId = connectionIds[session.id],
+                            category = "connection",
+                            eventName = DiagnosticEventNames.CONNECTION_STATE_CHANGED,
+                            previousState = previousState?.toString(),
+                            currentState = st.toString(),
+                            outcome = when (st) {
+                                ConnectionState.Connected -> DiagnosticOutcome.SUCCESS
+                                ConnectionState.Reconnecting -> DiagnosticOutcome.INTERRUPTION
+                                ConnectionState.Failed -> DiagnosticOutcome.FAILURE
+                                ConnectionState.Closed -> DiagnosticOutcome.CANCELLATION
+                                else -> null
+                            }
+                        )
+                    )
+                    if (st == ConnectionState.Connected) {
+                        recordDiagnostic(
+                            DiagnosticRecord(
+                                peerId = session.peer.id.value,
+                                connectionId = connectionIds[session.id],
+                                category = "protocol",
+                                eventName = DiagnosticEventNames.PROTOCOL_NEGOTIATED,
+                                currentState = "secure-v2",
+                                details = mapOf("feature" to "file-commit-sha256-v1")
+                            )
+                        )
+                    }
+                    previousState = st
                     recomputeHasConnectedSession()
                 }
             }
@@ -1225,6 +1671,9 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
         recomputeHasConnectedSession()
     }
+
+    private fun newKitLocalPeerId(): String =
+        kit?.localPeerId?.value ?: _localPeerId.value.orEmpty()
 
     /** Main-thread only (called from runScope collectors / UI intents). */
     private fun recomputeHasConnectedSession() {

@@ -4,6 +4,11 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.util.Log as AndroidLog
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import java.net.NetworkInterface
 
 /**
@@ -23,6 +28,7 @@ import java.net.NetworkInterface
  *
  * Filter the unified tag with `adb logcat -s P2pKitLAN`.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 public object AndroidLanDiag {
 
     /** Enables bounded lifecycle/discovery/data debug diagnostics. */
@@ -38,6 +44,27 @@ public object AndroidLanDiag {
     @Volatile
     public var traceFrames: Boolean = false
 
+    private val _events = MutableSharedFlow<String>(
+        replay = 200,
+        extraBufferCapacity = 200,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+
+    /**
+     * Bounded in-process diagnostic stream for explicit diagnostic/test UIs.
+     * It contains the same sanitized lines as the `P2pKitLAN` logcat tag, so
+     * physical-device evidence can be exported without requiring adb access.
+     * No events are emitted unless [enabled] is true.
+     */
+    public val events: SharedFlow<String> = _events.asSharedFlow()
+
+    /**
+     * Retains the bounded replay window for a late in-app collector. Samples
+     * opt in; production defaults to false and clears replay after each line.
+     */
+    @Volatile
+    public var retainHistory: Boolean = false
+
     /** Per-frame line via logcat; no-op unless [enabled] and [traceFrames]. */
     public fun frame(tag: String, message: String) {
         if (traceFrames) d(tag, message)
@@ -45,7 +72,9 @@ public object AndroidLanDiag {
 
     internal fun d(tag: String, message: String) {
         if (!enabled) return
-        AndroidLog.d(LOGCAT_TAG, diagnosticLine(tag, message))
+        val line = diagnosticLine(tag, message)
+        emit(line)
+        AndroidLog.d(LOGCAT_TAG, line)
     }
 
     internal fun w(tag: String, message: String, error: Throwable? = null) {
@@ -53,7 +82,14 @@ public object AndroidLanDiag {
             val type = it::class.simpleName ?: "Throwable"
             " ($type: ${it.message.orEmpty()})"
         }.orEmpty()
-        AndroidLog.w(LOGCAT_TAG, diagnosticLine(tag, message + errorSummary))
+        val line = diagnosticLine(tag, message + errorSummary)
+        if (enabled) emit(line)
+        AndroidLog.w(LOGCAT_TAG, line)
+    }
+
+    private fun emit(line: String) {
+        _events.tryEmit(line)
+        if (!retainHistory) _events.resetReplayCache()
     }
 
     private fun diagnosticLine(tag: String, message: String): String =

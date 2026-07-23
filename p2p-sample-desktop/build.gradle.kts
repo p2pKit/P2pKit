@@ -42,6 +42,7 @@ dependencies {
     implementation(project(":p2p-core"))
     implementation(project(":p2p-transport-lan"))
     implementation(project(":p2p-network-provisioning-desktop"))
+    implementation(project(":p2p-sample-diagnostics"))
     implementation(libs.kotlinx.coroutines.core)
     // Silence JmDNS's SLF4J "no provider" warning on startup. No-op logger;
     // JmDNS's own log messages are simply discarded.

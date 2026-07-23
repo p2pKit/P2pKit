@@ -17,6 +17,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     buildTypes {
@@ -44,6 +45,7 @@ dependencies {
     implementation(project(":p2p-transport-lan"))
     implementation(project(":p2p-network-provisioning-android"))
     implementation(project(":sample-kmp-shared"))
+    implementation(project(":p2p-sample-diagnostics"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
