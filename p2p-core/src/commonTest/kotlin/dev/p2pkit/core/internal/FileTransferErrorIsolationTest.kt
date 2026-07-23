@@ -2,11 +2,15 @@ package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.FileTransferFailureKind
+import dev.p2pkit.core.FileTransferPhase
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
+import dev.p2pkit.core.Retryability
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
@@ -20,8 +24,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
-import kotlinx.coroutines.flow.take
-import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.io.Buffer
@@ -125,14 +127,9 @@ class FileTransferErrorIsolationTest {
             }
             withTimeout(5_000) { msgReady.await() }
 
-            val offersReady = CompletableDeferred<Unit>()
             val offersDeferred = async {
-                incomingSession.incomingFiles
-                    .onSubscription { offersReady.complete(Unit) }
-                    .take(2)
-                    .toList()
+                incomingSession.pendingFileOffers.first { it.size == 2 }
             }
-            withTimeout(5_000) { offersReady.await() }
 
             // Two concurrent transfers: "bad.bin" lands in a sink whose flush
             // throws during finish(); "good.bin" must be unaffected.
@@ -164,6 +161,12 @@ class FileTransferErrorIsolationTest {
                 badIncoming.state.first { it is FileTransferState.Failed || it is FileTransferState.Completed }
             }
             val failed = assertIs<FileTransferState.Failed>(badTerminal)
+            val error = assertIs<P2pError.FileTransferFailed>(failed.error)
+            assertEquals(FileTransferFailureKind.STORAGE, error.kind)
+            assertEquals(FileTransferPhase.FLUSH, error.phase)
+            assertEquals(Retryability.RETRY_AFTER_USER_ACTION, error.retryability)
+            assertEquals(badIncoming.id, error.transferId)
+            assertIs<IOException>(error.cause)
             assertTrue(
                 failed.error.message?.contains("disk full") == true,
                 "Failure should carry the sink's IOException, got ${failed.error}"

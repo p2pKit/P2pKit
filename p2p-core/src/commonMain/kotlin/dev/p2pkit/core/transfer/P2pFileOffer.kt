@@ -4,9 +4,10 @@ import dev.p2pkit.core.Peer
 import kotlinx.io.RawSink
 
 /**
- * Inbound file offer from a peer. Emitted on
- * [dev.p2pkit.core.P2pSession.incomingFiles] after the sender calls
- * [dev.p2pkit.core.P2pSession.sendFile].
+ * Inbound file offer from a peer. Retained in
+ * [dev.p2pkit.core.P2pSession.pendingFileOffers] after the sender calls
+ * [dev.p2pkit.core.P2pSession.sendFile]. The deprecated `incomingFiles` flow
+ * also emits newly admitted offers, but can miss offers before subscription.
  *
  * The receiver must respond by calling either [accept] (which provides a
  * [RawSink] for the bytes) or [reject]. If neither is called within the
@@ -38,8 +39,9 @@ public interface P2pFileOffer {
      * sink has been flushed but not closed — the caller is responsible for
      * closing it.
      *
-     * Throws [IllegalStateException] if the offer was already accepted, rejected,
-     * or timed out.
+     * Throws [IllegalStateException] if the offer was already accepted,
+     * rejected, cancelled, or timed out. Once the FILE_ACCEPT write commits,
+     * this offer is removed from the session's retained pending snapshot.
      */
     @Throws(Exception::class)
     public suspend fun accept(sink: RawSink): P2pFileTransfer
@@ -47,7 +49,8 @@ public interface P2pFileOffer {
     /**
      * Decline the offer. The sender observes [FileTransferState.Rejected].
      *
-     * No-op if the offer was already accepted or rejected.
+     * Throws [IllegalStateException] if another accept/reject/cancel/timeout
+     * transition already won.
      */
     @Throws(Exception::class)
     public suspend fun reject(reason: String? = null)

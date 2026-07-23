@@ -1,8 +1,11 @@
 package dev.p2pkit.core.internal
 
+import dev.p2pkit.core.FileTransferFailureKind
+import dev.p2pkit.core.FileTransferPhase
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.Retryability
 import dev.p2pkit.core.protocol.FileOfferPayload
 import dev.p2pkit.core.protocol.Frame
 import dev.p2pkit.core.protocol.MessageId
@@ -28,8 +31,11 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -65,6 +71,9 @@ internal class FileTransferDispatcher(
     )
     val incomingFiles: SharedFlow<P2pFileOffer> = incomingOffers.asSharedFlow()
 
+    private val _pendingFileOffers = MutableStateFlow<List<P2pFileOffer>>(emptyList())
+    val pendingFileOffers: StateFlow<List<P2pFileOffer>> = _pendingFileOffers.asStateFlow()
+
     private val outgoing: MutableMap<MessageId, OutgoingEntry> = mutableMapOf()
     private val incoming: MutableMap<MessageId, IncomingEntry> = mutableMapOf()
     private val lock = Mutex()
@@ -86,6 +95,7 @@ internal class FileTransferDispatcher(
 
     private class IncomingEntry(
         val session: IncomingFileSession,
+        val payload: FileOfferPayload,
         @Volatile
         var phase: IncomingPhase = IncomingPhase.OFFERED,
         var offerTimer: Job? = null,
@@ -102,17 +112,45 @@ internal class FileTransferDispatcher(
         mimeType: String?,
         source: RawSource
     ): P2pFileTransfer {
-        require(sizeBytes >= 0L) { "sizeBytes must be non-negative, got $sizeBytes" }
+        if (sizeBytes < 0L) {
+            val cause = IllegalArgumentException("sizeBytes must be non-negative, got $sizeBytes")
+            throw fileFailure(
+                kind = FileTransferFailureKind.INVALID_METADATA,
+                phase = FileTransferPhase.OFFER,
+                retryability = Retryability.NOT_RETRYABLE,
+                transferId = null,
+                reason = cause.message ?: "sizeBytes must be non-negative",
+                cause = cause
+            )
+        }
         if (sizeBytes > config.maxFileSizeBytes) {
             throw P2pError.PayloadTooLarge(config.maxFileSizeBytes, sizeBytes)
         }
         requireSupportedChunkCount(sizeBytes)
 
+        val payload = FileOfferPayload(name = name, sizeBytes = sizeBytes, mimeType = mimeType)
+        try {
+            FileOfferPayload.validate(payload)
+        } catch (e: IllegalArgumentException) {
+            throw fileFailure(
+                kind = FileTransferFailureKind.INVALID_METADATA,
+                phase = FileTransferPhase.OFFER,
+                retryability = Retryability.NOT_RETRYABLE,
+                transferId = null,
+                reason = e.message ?: "Invalid file-offer metadata",
+                cause = e
+            )
+        }
+
         val entry = try {
             lock.withLock {
                 if (closed) {
-                    throw P2pError.ConnectionFailed(
-                        "Session $sessionId is closed; cannot start file transfer"
+                    throw fileFailure(
+                        kind = FileTransferFailureKind.REMOTE_DISCONNECTED,
+                        phase = FileTransferPhase.OFFER,
+                        retryability = Retryability.RETRY_NEW_SESSION,
+                        transferId = null,
+                        reason = "Session $sessionId is closed; cannot start file transfer"
                     )
                 }
                 val transferId = allocateTransferIdLocked()
@@ -133,7 +171,6 @@ internal class FileTransferDispatcher(
         }
 
         val transferId = entry.handle.transferId
-        val payload = FileOfferPayload(name = name, sizeBytes = sizeBytes, mimeType = mimeType)
         try {
             sendMutex.withLock {
                 protocol.sendFileOffer(getConnection(), transferId, payload)
@@ -148,7 +185,14 @@ internal class FileTransferDispatcher(
             }
             throw e
         } catch (e: Throwable) {
-            val err = connectionFailure("FILE_OFFER write failed", e)
+            val err = failureFromCause(
+                kind = FileTransferFailureKind.TRANSPORT,
+                phase = FileTransferPhase.OFFER,
+                retryability = Retryability.RETRY_NEW_SESSION,
+                transferId = transferId,
+                prefix = "FILE_OFFER write failed",
+                cause = e
+            )
             removeOutgoing(transferId, entry)?.cancelJobs()
             entry.handle.markFailed(err)
             throw err
@@ -199,9 +243,14 @@ internal class FileTransferDispatcher(
             }
             currentCoroutineContext().ensureActive()
         } catch (e: TimeoutCancellationException) {
-            val err = P2pError.ConnectionFailed(
-                "FILE_ACCEPT write did not finish within ${config.offerTimeoutMillis}ms"
-            ).also { it.underlying = e }
+            val err = fileFailure(
+                kind = FileTransferFailureKind.TIMEOUT,
+                phase = FileTransferPhase.ACCEPT,
+                retryability = Retryability.RETRY_NEW_SESSION,
+                transferId = session.transferId,
+                reason = "FILE_ACCEPT write did not finish within ${config.offerTimeoutMillis}ms",
+                cause = e
+            )
             compensateAmbiguousAccept(entry, FileTransferState.Failed(err))
             throw err
         } catch (e: CancellationException) {
@@ -211,7 +260,14 @@ internal class FileTransferDispatcher(
             )
             throw e
         } catch (e: Throwable) {
-            val err = connectionFailure("FILE_ACCEPT write failed", e)
+            val err = failureFromCause(
+                kind = FileTransferFailureKind.TRANSPORT,
+                phase = FileTransferPhase.ACCEPT,
+                retryability = Retryability.RETRY_NEW_SESSION,
+                transferId = session.transferId,
+                prefix = "FILE_ACCEPT write failed",
+                cause = e
+            )
             compensateAmbiguousAccept(entry, FileTransferState.Failed(err))
             throw err
         }
@@ -220,6 +276,7 @@ internal class FileTransferDispatcher(
             val current = incoming[session.transferId]
             if (current === entry && current.phase == IncomingPhase.ACCEPTING) {
                 current.phase = IncomingPhase.ACCEPTED
+                removePendingOfferLocked(current.session)
                 true
             } else {
                 false
@@ -231,9 +288,13 @@ internal class FileTransferDispatcher(
 
     suspend fun rejectOffer(session: IncomingFileSession, reason: String?) {
         val entry = lock.withLock {
-            val current = incoming[session.transferId] ?: return
-            if (current.phase != IncomingPhase.OFFERED || session.state.value.isTerminal()) return
+            val current = incoming[session.transferId]
+                ?: throw IllegalStateException("Offer ${session.id} is no longer pending")
+            if (current.phase != IncomingPhase.OFFERED || session.state.value.isTerminal()) {
+                throw IllegalStateException("Offer ${session.id} was already accepted or rejected")
+            }
             incoming.remove(session.transferId)
+            removePendingOfferLocked(current.session)
             current
         }
         entry.cancelJobs()
@@ -246,6 +307,7 @@ internal class FileTransferDispatcher(
     suspend fun cancelIncoming(session: IncomingFileSession, reason: String?) {
         val entry = lock.withLock {
             val current = incoming.remove(session.transferId) ?: return
+            removePendingOfferLocked(current.session)
             current
         }
         val accepted = entry.phase != IncomingPhase.OFFERED
@@ -289,33 +351,46 @@ internal class FileTransferDispatcher(
             dispatcher = this
         )
         val insertion = lock.withLock {
+            val existingIncoming = incoming[transferId]
             when {
                 closed -> OfferInsertion.CLOSED
-                incoming.containsKey(transferId) || outgoing.containsKey(transferId) ->
-                    OfferInsertion.DUPLICATE
+                existingIncoming != null && existingIncoming.payload == payload ->
+                    OfferInsertion.EXACT_DUPLICATE
+                existingIncoming != null -> OfferInsertion.CONFLICT
+                outgoing.containsKey(transferId) -> OfferInsertion.CONFLICT
                 incoming.size >= MAX_PENDING_INCOMING_OFFERS -> OfferInsertion.CAPACITY
                 else -> {
-                    val entry = IncomingEntry(session)
+                    val entry = IncomingEntry(session, payload)
                     incoming[transferId] = entry
+                    _pendingFileOffers.value = immutableListSnapshot(
+                        _pendingFileOffers.value + session
+                    )
                     OfferInsertion.Inserted(entry)
                 }
             }
         }
         when (insertion) {
             OfferInsertion.CLOSED -> return
-            OfferInsertion.DUPLICATE -> {
-                logger.warn("Session $sessionId: duplicate FILE_OFFER transferId $transferId; ignoring")
+            OfferInsertion.EXACT_DUPLICATE -> {
+                logger.debug("Session $sessionId: repeated FILE_OFFER transferId $transferId; ignoring")
                 return
             }
+            OfferInsertion.CONFLICT -> throw fileFailure(
+                kind = FileTransferFailureKind.TRANSFER_PROTOCOL,
+                phase = FileTransferPhase.OFFER,
+                retryability = Retryability.NOT_RETRYABLE,
+                transferId = transferId,
+                reason = "Conflicting FILE_OFFER reused transferId $transferId"
+            )
             OfferInsertion.CAPACITY -> {
                 sendBestEffort("capacity FILE_REJECT for $transferId") {
                     protocol.sendFileReject(getConnection(), transferId, "too many pending offers")
                 }
                 return
             }
-            is OfferInsertion.Inserted -> scope.launch {
-                incomingOffers.emit(insertion.entry.session)
+            is OfferInsertion.Inserted -> {
                 armIncomingOfferTimer(insertion.entry)
+                scope.launch { incomingOffers.emit(insertion.entry.session) }
             }
         }
     }
@@ -427,20 +502,52 @@ internal class FileTransferDispatcher(
         closed = false
     }
 
-    suspend fun closeAll(reason: String) {
+    suspend fun closeAll(
+        reason: String,
+        failureKind: FileTransferFailureKind = FileTransferFailureKind.REMOTE_DISCONNECTED,
+        retryability: Retryability = Retryability.RETRY_NEW_SESSION
+    ) {
         closed = true
         val (outgoingEntries, incomingEntries) = lock.withLock {
             val outs = outgoing.values.toList().also { outgoing.clear() }
             val ins = incoming.values.toList().also { incoming.clear() }
+            _pendingFileOffers.value = immutableListSnapshot(emptyList())
             outs to ins
         }
-        val error = P2pError.ConnectionFailed(reason)
         for (entry in outgoingEntries) {
-            entry.handle.markFailed(error)
+            entry.handle.markFailed(
+                fileFailure(
+                    kind = failureKind,
+                    phase = if (entry.phase == OutgoingPhase.OFFERED) {
+                        FileTransferPhase.OFFER
+                    } else {
+                        FileTransferPhase.SEND
+                    },
+                    retryability = retryability,
+                    transferId = entry.handle.transferId,
+                    reason = reason
+                )
+            )
             entry.cancelJobs()
         }
         for (entry in incomingEntries) {
-            entry.session.markFailed(error)
+            if (entry.phase == IncomingPhase.OFFERED) {
+                entry.session.setState(FileTransferState.Cancelled(reason))
+            } else {
+                entry.session.markFailed(
+                    fileFailure(
+                        kind = failureKind,
+                        phase = if (entry.phase == IncomingPhase.ACCEPTING) {
+                            FileTransferPhase.ACCEPT
+                        } else {
+                            FileTransferPhase.RECEIVE
+                        },
+                        retryability = retryability,
+                        transferId = entry.session.transferId,
+                        reason = reason
+                    )
+                )
+            }
             entry.cancelJobs()
         }
     }
@@ -490,9 +597,25 @@ internal class FileTransferDispatcher(
             throw e
         } catch (e: Throwable) {
             val alreadyTerminal = handle.state.value.isTerminal()
-            val err = connectionFailure(
-                if (connectionWriteFailure) "FILE_DATA write failed" else "file source read failed",
-                e
+            val err = failureFromCause(
+                kind = if (connectionWriteFailure) {
+                    FileTransferFailureKind.TRANSPORT
+                } else {
+                    FileTransferFailureKind.SOURCE_IO
+                },
+                phase = if (connectionWriteFailure) {
+                    FileTransferPhase.SEND
+                } else {
+                    FileTransferPhase.SOURCE_READ
+                },
+                retryability = if (connectionWriteFailure) {
+                    Retryability.RETRY_NEW_SESSION
+                } else {
+                    Retryability.RETRY_AFTER_USER_ACTION
+                },
+                transferId = handle.transferId,
+                prefix = if (connectionWriteFailure) "FILE_DATA write failed" else "file source read failed",
+                cause = e
             )
             handle.markFailed(err)
             removeOutgoing(handle.transferId, entry)
@@ -533,8 +656,14 @@ internal class FileTransferDispatcher(
             current
         }
         removed.handle.setState(
-            FileTransferState.Cancelled(
-                "offer response not received within ${config.outgoingOfferWatchdogMillis}ms"
+            FileTransferState.Failed(
+                fileFailure(
+                    kind = FileTransferFailureKind.TIMEOUT,
+                    phase = FileTransferPhase.OFFER,
+                    retryability = Retryability.RETRY_SAME_SESSION,
+                    transferId = entry.handle.transferId,
+                    reason = "offer response not received within ${config.outgoingOfferWatchdogMillis}ms"
+                )
             )
         )
         sendBestEffort("offer-watchdog FILE_CANCEL for ${entry.handle.transferId}") {
@@ -567,6 +696,7 @@ internal class FileTransferDispatcher(
             val current = incoming[entry.session.transferId]
             if (current !== entry || current.phase != IncomingPhase.OFFERED) return
             incoming.remove(entry.session.transferId)
+            removePendingOfferLocked(current.session)
             current
         }
         withContext(NonCancellable) {
@@ -654,13 +784,19 @@ internal class FileTransferDispatcher(
         }
         withContext(NonCancellable) {
             removed.session.setState(
-                FileTransferState.Cancelled(
-                    "$kind transfer timeout after " +
-                        (if (kind == "idle") {
-                            config.acceptedIdleTimeoutMillis
-                        } else {
-                            config.acceptedOverallTimeoutMillis
-                        }) + "ms"
+                FileTransferState.Failed(
+                    fileFailure(
+                        kind = FileTransferFailureKind.TIMEOUT,
+                        phase = FileTransferPhase.RECEIVE,
+                        retryability = Retryability.RETRY_NEW_SESSION,
+                        transferId = entry.session.transferId,
+                        reason = "$kind transfer timeout after " +
+                            (if (kind == "idle") {
+                                config.acceptedIdleTimeoutMillis
+                            } else {
+                                config.acceptedOverallTimeoutMillis
+                            }) + "ms"
+                    )
                 )
             )
             removed.cancelJobs()
@@ -705,7 +841,29 @@ internal class FileTransferDispatcher(
     }
 
     private suspend fun failIncomingTransfer(entry: IncomingEntry, prefix: String, cause: Throwable) {
-        val err = if (cause is P2pError) cause else connectionFailure(prefix, cause)
+        val protocolViolation = cause is P2pError.ProtocolError
+        val err = failureFromCause(
+            kind = if (protocolViolation) {
+                FileTransferFailureKind.TRANSFER_PROTOCOL
+            } else {
+                FileTransferFailureKind.STORAGE
+            },
+            phase = if (protocolViolation) {
+                FileTransferPhase.RECEIVE
+            } else if (prefix.contains("finalize")) {
+                FileTransferPhase.FLUSH
+            } else {
+                FileTransferPhase.RECEIVE
+            },
+            retryability = if (protocolViolation) {
+                Retryability.NOT_RETRYABLE
+            } else {
+                Retryability.RETRY_AFTER_USER_ACTION
+            },
+            transferId = entry.session.transferId,
+            prefix = prefix,
+            cause = cause
+        )
         removeIncoming(entry.session.transferId, entry)?.cancelJobs()
         entry.session.markFailed(err)
         sendBestEffort("FILE_CANCEL for ${entry.session.transferId}") {
@@ -742,13 +900,42 @@ internal class FileTransferDispatcher(
         }
     }
 
-    private fun connectionFailure(prefix: String, cause: Throwable): P2pError.ConnectionFailed =
-        if (cause is P2pError.ConnectionFailed) {
-            cause
-        } else {
-            P2pError.ConnectionFailed("$prefix: ${cause.message ?: cause::class.simpleName}")
-                .also { it.underlying = cause }
-        }
+    private fun failureFromCause(
+        kind: FileTransferFailureKind,
+        phase: FileTransferPhase,
+        retryability: Retryability,
+        transferId: MessageId?,
+        prefix: String,
+        cause: Throwable
+    ): P2pError = when (cause) {
+        is P2pError.FileTransferFailed -> cause
+        is P2pError.AuthenticationFailed -> cause
+        else -> fileFailure(
+            kind = kind,
+            phase = phase,
+            retryability = retryability,
+            transferId = transferId,
+            reason = "$prefix: " +
+                (cause.message ?: cause::class.simpleName ?: "unknown failure")
+                    .take(MAX_TRANSFER_FAILURE_REASON_CHARS),
+            cause = cause
+        )
+    }
+
+    private fun fileFailure(
+        kind: FileTransferFailureKind,
+        phase: FileTransferPhase,
+        retryability: Retryability,
+        transferId: MessageId?,
+        reason: String,
+        cause: Throwable? = null
+    ): P2pError.FileTransferFailed = P2pError.FileTransferFailed(
+        kind = kind,
+        phase = phase,
+        retryability = retryability,
+        transferId = transferId?.toString(),
+        reason = reason.take(MAX_TRANSFER_FAILURE_REASON_CHARS)
+    ).also { it.underlying = cause }
 
     private suspend fun removeOutgoing(
         transferId: MessageId,
@@ -766,7 +953,14 @@ internal class FileTransferDispatcher(
         val current = incoming[transferId] ?: return@withLock null
         if (expected != null && current !== expected) return@withLock null
         incoming.remove(transferId)
+        removePendingOfferLocked(current.session)
         current
+    }
+
+    private fun removePendingOfferLocked(session: IncomingFileSession) {
+        val current = _pendingFileOffers.value
+        if (current.none { it === session }) return
+        _pendingFileOffers.value = immutableListSnapshot(current.filterNot { it === session })
     }
 
     private fun allocateTransferIdLocked(): MessageId {
@@ -774,14 +968,25 @@ internal class FileTransferDispatcher(
             val candidate = MessageId.random(random)
             if (candidate !in outgoing && candidate !in incoming) return candidate
         }
-        throw P2pError.ConnectionFailed(
-            "Unable to allocate a unique transfer id after $MAX_TRANSFER_ID_ATTEMPTS attempts"
+        throw fileFailure(
+            kind = FileTransferFailureKind.TRANSFER_PROTOCOL,
+            phase = FileTransferPhase.OFFER,
+            retryability = Retryability.RETRY_NEW_SESSION,
+            transferId = null,
+            reason = "Unable to allocate a unique transfer id after $MAX_TRANSFER_ID_ATTEMPTS attempts"
         )
     }
 
     private fun requireSupportedChunkCount(sizeBytes: Long) {
-        require(hasSupportedChunkCount(sizeBytes)) {
-            "Transfer requires more than ${Int.MAX_VALUE} chunks for chunkSizeBytes=${config.chunkSizeBytes}"
+        if (!hasSupportedChunkCount(sizeBytes)) {
+            throw fileFailure(
+                kind = FileTransferFailureKind.INVALID_METADATA,
+                phase = FileTransferPhase.OFFER,
+                retryability = Retryability.NOT_RETRYABLE,
+                transferId = null,
+                reason = "Transfer requires more than ${Int.MAX_VALUE} chunks " +
+                    "for chunkSizeBytes=${config.chunkSizeBytes}"
+            )
         }
     }
 
@@ -809,7 +1014,8 @@ internal class FileTransferDispatcher(
 
     private sealed interface OfferInsertion {
         data object CLOSED : OfferInsertion
-        data object DUPLICATE : OfferInsertion
+        data object EXACT_DUPLICATE : OfferInsertion
+        data object CONFLICT : OfferInsertion
         data object CAPACITY : OfferInsertion
         data class Inserted(val entry: IncomingEntry) : OfferInsertion
     }
@@ -822,3 +1028,4 @@ internal class FileTransferDispatcher(
 
 private const val MAX_PENDING_INCOMING_OFFERS: Int = 64
 private const val MAX_TRANSFER_ID_ATTEMPTS: Int = 128
+private const val MAX_TRANSFER_FAILURE_REASON_CHARS: Int = 512

@@ -1,6 +1,8 @@
 package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.FileTransferFailureKind
+import dev.p2pkit.core.FileTransferPhase
 import dev.p2pkit.core.KeepAliveConfig
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
@@ -8,6 +10,7 @@ import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerIdentity
+import dev.p2pkit.core.Retryability
 import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.transfer.FileTransferConfig
@@ -198,8 +201,12 @@ internal class P2pSessionImpl(
     }
     private val fileTransferDispatcher: FileTransferDispatcher get() = fileTransferDispatcherLazy.value
 
+    @Deprecated("Observe pendingFileOffers")
     override val incomingFiles: SharedFlow<P2pFileOffer>
         get() = fileTransferDispatcher.incomingFiles
+
+    override val pendingFileOffers: StateFlow<List<P2pFileOffer>>
+        get() = fileTransferDispatcher.pendingFileOffers
 
     fun start() {
         scope.launch { deliverApplicationMessages() }
@@ -310,6 +317,36 @@ internal class P2pSessionImpl(
             ).also { it.underlying = e }
         }
 
+    private inline fun <T> typedFileTransferBoundary(block: () -> T): T =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: P2pError) {
+            throw e
+        } catch (e: Throwable) {
+            val invalidMetadata = e is IllegalArgumentException
+            throw P2pError.FileTransferFailed(
+                kind = if (invalidMetadata) {
+                    FileTransferFailureKind.INVALID_METADATA
+                } else {
+                    FileTransferFailureKind.TRANSPORT
+                },
+                phase = FileTransferPhase.OFFER,
+                retryability = if (invalidMetadata) {
+                    Retryability.NOT_RETRYABLE
+                } else {
+                    Retryability.RETRY_NEW_SESSION
+                },
+                transferId = null,
+                reason = (
+                    "sendFile failed on session $id: " +
+                        (e.message ?: e::class.simpleName ?: "unknown failure")
+                            .take(MAX_TRANSFER_FAILURE_REASON_CHARS)
+                    ).take(MAX_TRANSFER_FAILURE_REASON_CHARS)
+            ).also { it.underlying = e }
+        }
+
     override suspend fun send(message: P2pMessage) {
         if (_state.value != ConnectionState.Connected) {
             throw P2pError.ConnectionFailed("Session $id is ${_state.value}; cannot send")
@@ -329,14 +366,20 @@ internal class P2pSessionImpl(
         source: RawSource
     ): P2pFileTransfer {
         if (_state.value != ConnectionState.Connected) {
-            throw P2pError.ConnectionFailed("Session $id is ${_state.value}; cannot send file")
+            throw P2pError.FileTransferFailed(
+                kind = FileTransferFailureKind.REMOTE_DISCONNECTED,
+                phase = FileTransferPhase.OFFER,
+                retryability = Retryability.RETRY_NEW_SESSION,
+                transferId = null,
+                reason = "Session $id is ${_state.value}; cannot send file"
+            )
         }
-        // AUDIT-2026-07 (API-2): see [typedSendBoundary]. Ownership-on-throw
-        // contract is documented on [P2pSession.sendFile]: refusals before the
-        // dispatcher registers the transfer leave [source] caller-owned and
-        // open; throws at or after registration close it via the handle's
-        // terminal transition (FIL-1 close-once guard).
-        return typedSendBoundary("sendFile") {
+        // Ownership-on-throw
+        // contract is documented on [P2pSession.sendFile]: local validation
+        // refusals leave [source] caller-owned and open; once the dispatcher
+        // starts its registration transaction, throws close it via the
+        // handle's terminal transition (FIL-1 close-once guard).
+        return typedFileTransferBoundary {
             fileTransferDispatcher.sendFile(name, sizeBytes, mimeType, source)
         }
     }
@@ -395,7 +438,9 @@ internal class P2pSessionImpl(
 
                 val issues = transitionToTerminal(
                     ConnectionState.Closed,
-                    "user close()"
+                    "user close()",
+                    fileFailureKind = FileTransferFailureKind.TRANSPORT,
+                    fileRetryability = Retryability.NOT_RETRYABLE
                 ).toMutableList()
                 closeSend.cancel()
 
@@ -520,7 +565,9 @@ internal class P2pSessionImpl(
      */
     private suspend fun transitionToTerminal(
         target: ConnectionState,
-        cause: String
+        cause: String,
+        fileFailureKind: FileTransferFailureKind = FileTransferFailureKind.REMOTE_DISCONNECTED,
+        fileRetryability: Retryability = Retryability.RETRY_NEW_SESSION
     ): List<CleanupIssue> {
         check(target == ConnectionState.Closed || target == ConnectionState.Failed) {
             "transitionToTerminal: target must be Closed or Failed, got $target"
@@ -553,7 +600,11 @@ internal class P2pSessionImpl(
                     timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
                     preserveCancellation = false
                 ) {
-                    fileTransferDispatcher.closeAll("session $id ${target.name}: $cause")
+                    fileTransferDispatcher.closeAll(
+                        reason = "session $id ${target.name}: $cause",
+                        failureKind = fileFailureKind,
+                        retryability = fileRetryability
+                    )
                 }?.let(issues::add)
             }
             // Drops queued application payloads and releases their backing
@@ -638,7 +689,12 @@ internal class P2pSessionImpl(
 
     /** Roll back a session that never crossed the public ownership commit. */
     internal suspend fun abortUncommitted() {
-        transitionToTerminal(ConnectionState.Closed, "uncommitted session rollback")
+        transitionToTerminal(
+            target = ConnectionState.Closed,
+            cause = "uncommitted session rollback",
+            fileFailureKind = FileTransferFailureKind.TRANSPORT,
+            fileRetryability = Retryability.NOT_RETRYABLE
+        )
         sessionJob.join()
     }
 
@@ -775,6 +831,19 @@ internal class P2pSessionImpl(
             // AUDIT-2026-07 (SES-1): same classification as the completion
             // branch above — the channel ended without delivering a CLOSE.
             onConnectionLost("remote hangup without CLOSE frame (receive on closed channel)")
+        } catch (e: P2pError.FileTransferFailed) {
+            if (e.kind == FileTransferFailureKind.TRANSFER_PROTOCOL) {
+                logger.warn("Session $id: structural file-transfer protocol violation", e)
+                transitionToTerminal(
+                    target = ConnectionState.Failed,
+                    cause = e.reason,
+                    fileFailureKind = FileTransferFailureKind.TRANSFER_PROTOCOL,
+                    fileRetryability = Retryability.NOT_RETRYABLE
+                )
+            } else {
+                logger.warn("Session $id: routeEvents file-transfer failure", e)
+                onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}")
+            }
         } catch (e: Throwable) {
             logger.warn("Session $id: routeEvents failed", e)
             onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}")
@@ -937,6 +1006,8 @@ internal class P2pSessionImpl(
     }
 
     private companion object {
+        private const val MAX_TRANSFER_FAILURE_REASON_CHARS: Int = 512
+
         /**
          * How long [close] waits for the best-effort CLOSE frame to reach the
          * wire before proceeding with teardown. Bounds only the wait — the

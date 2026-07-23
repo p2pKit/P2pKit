@@ -107,6 +107,43 @@ final enum class dev.p2pkit.core/ConnectionState : kotlin/Enum<dev.p2pkit.core/C
     final fun values(): kotlin/Array<dev.p2pkit.core/ConnectionState> // dev.p2pkit.core/ConnectionState.values|values#static(){}[0]
 }
 
+final enum class dev.p2pkit.core/FileTransferFailureKind : kotlin/Enum<dev.p2pkit.core/FileTransferFailureKind> { // dev.p2pkit.core/FileTransferFailureKind|null[0]
+    enum entry AUTHENTICATION // dev.p2pkit.core/FileTransferFailureKind.AUTHENTICATION|null[0]
+    enum entry INTEGRITY // dev.p2pkit.core/FileTransferFailureKind.INTEGRITY|null[0]
+    enum entry INVALID_METADATA // dev.p2pkit.core/FileTransferFailureKind.INVALID_METADATA|null[0]
+    enum entry REMOTE_DISCONNECTED // dev.p2pkit.core/FileTransferFailureKind.REMOTE_DISCONNECTED|null[0]
+    enum entry SOURCE_CHANGED // dev.p2pkit.core/FileTransferFailureKind.SOURCE_CHANGED|null[0]
+    enum entry SOURCE_IO // dev.p2pkit.core/FileTransferFailureKind.SOURCE_IO|null[0]
+    enum entry STORAGE // dev.p2pkit.core/FileTransferFailureKind.STORAGE|null[0]
+    enum entry TIMEOUT // dev.p2pkit.core/FileTransferFailureKind.TIMEOUT|null[0]
+    enum entry TRANSFER_PROTOCOL // dev.p2pkit.core/FileTransferFailureKind.TRANSFER_PROTOCOL|null[0]
+    enum entry TRANSPORT // dev.p2pkit.core/FileTransferFailureKind.TRANSPORT|null[0]
+    enum entry UNSUPPORTED_FEATURE // dev.p2pkit.core/FileTransferFailureKind.UNSUPPORTED_FEATURE|null[0]
+
+    final val entries // dev.p2pkit.core/FileTransferFailureKind.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<dev.p2pkit.core/FileTransferFailureKind> // dev.p2pkit.core/FileTransferFailureKind.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): dev.p2pkit.core/FileTransferFailureKind // dev.p2pkit.core/FileTransferFailureKind.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<dev.p2pkit.core/FileTransferFailureKind> // dev.p2pkit.core/FileTransferFailureKind.values|values#static(){}[0]
+}
+
+final enum class dev.p2pkit.core/FileTransferPhase : kotlin/Enum<dev.p2pkit.core/FileTransferPhase> { // dev.p2pkit.core/FileTransferPhase|null[0]
+    enum entry ACCEPT // dev.p2pkit.core/FileTransferPhase.ACCEPT|null[0]
+    enum entry DURABLE_COMMIT // dev.p2pkit.core/FileTransferPhase.DURABLE_COMMIT|null[0]
+    enum entry FLUSH // dev.p2pkit.core/FileTransferPhase.FLUSH|null[0]
+    enum entry OFFER // dev.p2pkit.core/FileTransferPhase.OFFER|null[0]
+    enum entry RECEIVE // dev.p2pkit.core/FileTransferPhase.RECEIVE|null[0]
+    enum entry SEND // dev.p2pkit.core/FileTransferPhase.SEND|null[0]
+    enum entry SOURCE_READ // dev.p2pkit.core/FileTransferPhase.SOURCE_READ|null[0]
+    enum entry VERIFY // dev.p2pkit.core/FileTransferPhase.VERIFY|null[0]
+
+    final val entries // dev.p2pkit.core/FileTransferPhase.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<dev.p2pkit.core/FileTransferPhase> // dev.p2pkit.core/FileTransferPhase.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): dev.p2pkit.core/FileTransferPhase // dev.p2pkit.core/FileTransferPhase.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<dev.p2pkit.core/FileTransferPhase> // dev.p2pkit.core/FileTransferPhase.values|values#static(){}[0]
+}
+
 final enum class dev.p2pkit.core/LocalIdentityFailureKind : kotlin/Enum<dev.p2pkit.core/LocalIdentityFailureKind> { // dev.p2pkit.core/LocalIdentityFailureKind|null[0]
     enum entry CORRUPT_RECORD // dev.p2pkit.core/LocalIdentityFailureKind.CORRUPT_RECORD|null[0]
     enum entry CRYPTO_PROVIDER_UNAVAILABLE // dev.p2pkit.core/LocalIdentityFailureKind.CRYPTO_PROVIDER_UNAVAILABLE|null[0]
@@ -158,6 +195,19 @@ final enum class dev.p2pkit.core/Platform : kotlin/Enum<dev.p2pkit.core/Platform
 
     final fun valueOf(kotlin/String): dev.p2pkit.core/Platform // dev.p2pkit.core/Platform.valueOf|valueOf#static(kotlin.String){}[0]
     final fun values(): kotlin/Array<dev.p2pkit.core/Platform> // dev.p2pkit.core/Platform.values|values#static(){}[0]
+}
+
+final enum class dev.p2pkit.core/Retryability : kotlin/Enum<dev.p2pkit.core/Retryability> { // dev.p2pkit.core/Retryability|null[0]
+    enum entry NOT_RETRYABLE // dev.p2pkit.core/Retryability.NOT_RETRYABLE|null[0]
+    enum entry RETRY_AFTER_USER_ACTION // dev.p2pkit.core/Retryability.RETRY_AFTER_USER_ACTION|null[0]
+    enum entry RETRY_NEW_SESSION // dev.p2pkit.core/Retryability.RETRY_NEW_SESSION|null[0]
+    enum entry RETRY_SAME_SESSION // dev.p2pkit.core/Retryability.RETRY_SAME_SESSION|null[0]
+
+    final val entries // dev.p2pkit.core/Retryability.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<dev.p2pkit.core/Retryability> // dev.p2pkit.core/Retryability.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): dev.p2pkit.core/Retryability // dev.p2pkit.core/Retryability.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<dev.p2pkit.core/Retryability> // dev.p2pkit.core/Retryability.values|values#static(){}[0]
 }
 
 final enum class dev.p2pkit.core/TransportKind : kotlin/Enum<dev.p2pkit.core/TransportKind> { // dev.p2pkit.core/TransportKind|null[0]
@@ -378,6 +428,8 @@ abstract interface dev.p2pkit.core/P2pSession { // dev.p2pkit.core/P2pSession|nu
         abstract fun <get-state>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.core/ConnectionState> // dev.p2pkit.core/P2pSession.state.<get-state>|<get-state>(){}[0]
     open val peerIdentity // dev.p2pkit.core/P2pSession.peerIdentity|{}peerIdentity[0]
         open fun <get-peerIdentity>(): dev.p2pkit.core/PeerIdentity // dev.p2pkit.core/P2pSession.peerIdentity.<get-peerIdentity>|<get-peerIdentity>(){}[0]
+    open val pendingFileOffers // dev.p2pkit.core/P2pSession.pendingFileOffers|{}pendingFileOffers[0]
+        open fun <get-pendingFileOffers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/List<dev.p2pkit.core.transfer/P2pFileOffer>> // dev.p2pkit.core/P2pSession.pendingFileOffers.<get-pendingFileOffers>|<get-pendingFileOffers>(){}[0]
 
     abstract suspend fun close() // dev.p2pkit.core/P2pSession.close|close(){}[0]
     abstract suspend fun send(dev.p2pkit.core/P2pMessage) // dev.p2pkit.core/P2pSession.send|send(dev.p2pkit.core.P2pMessage){}[0]
@@ -1610,6 +1662,33 @@ sealed class dev.p2pkit.core/P2pError : kotlin/Exception { // dev.p2pkit.core/P2
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/P2pError.ConnectionFailed.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.p2pkit.core/P2pError.ConnectionFailed.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // dev.p2pkit.core/P2pError.ConnectionFailed.toString|toString(){}[0]
+    }
+
+    final class FileTransferFailed : dev.p2pkit.core/P2pError { // dev.p2pkit.core/P2pError.FileTransferFailed|null[0]
+        constructor <init>(dev.p2pkit.core/FileTransferFailureKind, dev.p2pkit.core/FileTransferPhase, dev.p2pkit.core/Retryability, kotlin/String?, kotlin/String) // dev.p2pkit.core/P2pError.FileTransferFailed.<init>|<init>(dev.p2pkit.core.FileTransferFailureKind;dev.p2pkit.core.FileTransferPhase;dev.p2pkit.core.Retryability;kotlin.String?;kotlin.String){}[0]
+
+        final val cause // dev.p2pkit.core/P2pError.FileTransferFailed.cause|{}cause[0]
+            final fun <get-cause>(): kotlin/Throwable? // dev.p2pkit.core/P2pError.FileTransferFailed.cause.<get-cause>|<get-cause>(){}[0]
+        final val kind // dev.p2pkit.core/P2pError.FileTransferFailed.kind|{}kind[0]
+            final fun <get-kind>(): dev.p2pkit.core/FileTransferFailureKind // dev.p2pkit.core/P2pError.FileTransferFailed.kind.<get-kind>|<get-kind>(){}[0]
+        final val phase // dev.p2pkit.core/P2pError.FileTransferFailed.phase|{}phase[0]
+            final fun <get-phase>(): dev.p2pkit.core/FileTransferPhase // dev.p2pkit.core/P2pError.FileTransferFailed.phase.<get-phase>|<get-phase>(){}[0]
+        final val reason // dev.p2pkit.core/P2pError.FileTransferFailed.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // dev.p2pkit.core/P2pError.FileTransferFailed.reason.<get-reason>|<get-reason>(){}[0]
+        final val retryability // dev.p2pkit.core/P2pError.FileTransferFailed.retryability|{}retryability[0]
+            final fun <get-retryability>(): dev.p2pkit.core/Retryability // dev.p2pkit.core/P2pError.FileTransferFailed.retryability.<get-retryability>|<get-retryability>(){}[0]
+        final val transferId // dev.p2pkit.core/P2pError.FileTransferFailed.transferId|{}transferId[0]
+            final fun <get-transferId>(): kotlin/String? // dev.p2pkit.core/P2pError.FileTransferFailed.transferId.<get-transferId>|<get-transferId>(){}[0]
+
+        final fun component1(): dev.p2pkit.core/FileTransferFailureKind // dev.p2pkit.core/P2pError.FileTransferFailed.component1|component1(){}[0]
+        final fun component2(): dev.p2pkit.core/FileTransferPhase // dev.p2pkit.core/P2pError.FileTransferFailed.component2|component2(){}[0]
+        final fun component3(): dev.p2pkit.core/Retryability // dev.p2pkit.core/P2pError.FileTransferFailed.component3|component3(){}[0]
+        final fun component4(): kotlin/String? // dev.p2pkit.core/P2pError.FileTransferFailed.component4|component4(){}[0]
+        final fun component5(): kotlin/String // dev.p2pkit.core/P2pError.FileTransferFailed.component5|component5(){}[0]
+        final fun copy(dev.p2pkit.core/FileTransferFailureKind = ..., dev.p2pkit.core/FileTransferPhase = ..., dev.p2pkit.core/Retryability = ..., kotlin/String? = ..., kotlin/String = ...): dev.p2pkit.core/P2pError.FileTransferFailed // dev.p2pkit.core/P2pError.FileTransferFailed.copy|copy(dev.p2pkit.core.FileTransferFailureKind;dev.p2pkit.core.FileTransferPhase;dev.p2pkit.core.Retryability;kotlin.String?;kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/P2pError.FileTransferFailed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.p2pkit.core/P2pError.FileTransferFailed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.p2pkit.core/P2pError.FileTransferFailed.toString|toString(){}[0]
     }
 
     final class HandshakeRejected : dev.p2pkit.core/P2pError { // dev.p2pkit.core/P2pError.HandshakeRejected|null[0]

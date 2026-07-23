@@ -39,7 +39,7 @@ session.send(P2pMessage.Text("hello"))
 - Not Bluetooth, Wi-Fi Direct, Apple Multipeer, or a relay client — those are **future** transports designed to plug in behind the same API.
 - Not iOS / native macOS in v0.1.
 - Not encrypted in v0.1 (`SecurityMode.NoneForMvp`); the security abstraction exists so encryption can be added without breaking the public API.
-- Not a multimedia streaming SDK — file transfer (added in v0.2.2) streams discrete files via `sendFile` / `incomingFiles` with a 2 GiB default cap, but the SDK does not provide a media pipeline. Text and binary messages stay capped at **4 MiB per `send()`** (use `sendFile` for anything larger).
+- Not a multimedia streaming SDK — file transfer (added in v0.2.2) streams discrete files via `sendFile` / `pendingFileOffers` with a 2 GiB default cap, but the SDK does not provide a media pipeline. Text and binary messages stay capped at **4 MiB per `send()`** (use `sendFile` for anything larger).
 - Does not request runtime permissions on your behalf — that's the app's responsibility.
 - Does not promise to put two devices on the same LAN automatically. **Network provisioning** is a planned v0.2 sidecar.
 
@@ -124,7 +124,7 @@ scope.launch {
 
 **Never use nested `collect { collect { … } }`** — always use `launchIn(scope)` on inner flows.
 
-**Subscription window on fresh sessions:** `session.incoming` / `session.incomingFiles` are hot flows with `replay = 0` — messages that arrive before your collector is attached are dropped. For an *incoming* session (created by the remote's dial) the first messages inherently race your subscription, so a peer that sends immediately after connecting can beat the collector. Subscribe to a session's flows before sending on it, and have the dialing side wait for an app-level ready/greeting reply (or a short grace delay) before its first real payload (decision #13b; spec §10).
+**Subscription window on fresh sessions:** `session.incoming` is a hot flow with `replay = 0` — messages that arrive before your collector is attached are dropped. For an *incoming* session (created by the remote's dial) the first messages inherently race your subscription, so a peer that sends immediately after connecting can beat the collector. Subscribe before sending, and have the dialing side wait for an app-level ready/greeting reply before its first real payload (decision #13b; spec §10). File offers do not have this race: `session.pendingFileOffers` is retained until each offer is accepted, rejected, cancelled, or expires.
 
 ### File transfer (v0.2.2)
 
@@ -145,7 +145,10 @@ import dev.p2pkit.core.transfer.sendFile
 session.sendFile(context, pickedUri)
 
 // Incoming: the peer's send arrives as a P2pFileOffer.
-session.incomingFiles
+session.pendingFileOffers
+    .map { it.firstOrNull() }
+    .filterNotNull()
+    .distinctUntilChangedBy { it.id }
     .onEach { offer ->
         // sink can be Buffer(), File.outputStream().asSink(), getExternalFilesDir(...)... etc.
         offer.accept(saveFile.outputStream().asSink())
@@ -204,7 +207,7 @@ LAN + TCP is the **only transport that works the same way on every desktop and m
 |---|---|---|
 | LAN (mDNS + TCP) | **v0.1** | Shipped. |
 | Network provisioning sidecar | **v0.2.1** | Android `LocalOnlyHotspot` host + Wi-Fi join via `WifiNetworkSpecifier`; JVM manual-IP fallback. Code complete, real-device verification pending (see backlog). |
-| File transfer (`sendFile` / `incomingFiles`) | **v0.2.2** | Streaming via `kotlinx.io.RawSource` / `RawSink`; default 2 GiB cap, 64 KiB chunks, 30 s offer timeout; JVM `sendFile(File)` and Android `sendFile(Context, Uri)` convenience extensions; integration-tested via 5 MiB SHA-256 LAN loopback. |
+| File transfer (`sendFile` / `pendingFileOffers`) | **v0.2.2** | Retained, bounded incoming offers; structured terminal errors; streaming via `kotlinx.io.RawSource` / `RawSink`; default 2 GiB cap, 64 KiB chunks, 30 s offer timeout; JVM `sendFile(File)` and Android `sendFile(Context, Uri)` convenience extensions. |
 | iOS LAN (Bonjour + `Network.framework`) | **v0.3** | Same public API as JVM/Android. `NWBrowser` + `NWListener` + `NWConnection` via the auto-generated `platform.Network` bindings, with a small cinterop helper (`p2pkit_nw.h`) that wraps the void-returning block macros (`NW_PARAMETERS_DISABLE_PROTOCOL` etc.) which Kotlin/Native cannot box. Wire-compatible with JmDNS peers (JVM and Android). iOS sample app followed in v0.4 (`iosApp/`). |
 | macOS native LAN | v0.3.x candidate | Not declared on any module yet; same `Network.framework` story would apply, but needs Bonjour testing on Wi-Fi vs the simulator's network stack to be sure. |
 | BLE | v0.4+ | Discovery + small messages. **Not** for large file transfer. |
@@ -270,7 +273,7 @@ Detailed design lives in [`P2pKit-Spec.md`](./P2pKit-Spec.md).
 
 ## Modules
 
-- **`:p2p-core`** — public API, models, errors, protocol framing, session manager, peer registry, **file transfer** (`P2pSession.sendFile` / `incomingFiles`, JVM `sendFile(File)` and Android `sendFile(Context, Uri)` convenience extensions, configurable cap + chunk size + offer timeout via `fileTransfer { … }`). KMP module with `commonMain` / `jvmMain` / `androidMain` / `iosMain` (core scaffolding only — no LAN).
+- **`:p2p-core`** — public API, models, errors, protocol framing, session manager, peer registry, **file transfer** (`P2pSession.sendFile` / retained `pendingFileOffers`, JVM `sendFile(File)` and Android `sendFile(Context, Uri)` convenience extensions, configurable cap + chunk size + offer timeout via `fileTransfer { … }`). KMP module with `commonMain` / `jvmMain` / `androidMain` / `iosMain` (core scaffolding only — no LAN).
 - **`:p2p-transport-lan`** — mDNS discovery + TCP data. JmDNS on JVM **and Android** (Android migrated from `NsdManager` to in-process JmDNS in v0.5 so the SDK owns the mDNS cache), `NWBrowser` + `NWListener` + `NWConnection` on iOS (v0.3). Apple targets share an `appleMain` source set plus a small static-inline-only cinterop wrapper at `src/nativeInterop/cinterop/p2pkit_nw.h` so void-returning block sentinels (`NW_PARAMETERS_DISABLE_PROTOCOL`, `NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT`) never round-trip through `Kotlin_Interop_refFromObjC`.
 - **`:p2p-sample-android`** — Compose UI room/broadcast test harness. **Primary visual harness** for v0.2. `./gradlew :p2p-sample-android:assembleDebug`.
 - **`:p2p-sample-desktop`** — JVM CLI test harness. **Canonical desktop harness** for v0.2. `./gradlew :p2p-sample-desktop:installDist` then run the launcher. Type `help` for commands.

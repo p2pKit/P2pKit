@@ -213,6 +213,7 @@ private class CapStubSession(
     private val _state = MutableStateFlow(initialState)
     override val state: StateFlow<ConnectionState> = _state
     override val incoming: SharedFlow<P2pMessage> = MutableSharedFlow()
+    @Deprecated("Observe pendingFileOffers")
     override val incomingFiles: SharedFlow<P2pFileOffer> = MutableSharedFlow()
 
     fun moveTo(state: ConnectionState) {

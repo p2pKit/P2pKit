@@ -271,13 +271,11 @@ interface P2pSession {
      */
     val incoming: SharedFlow<P2pMessage>
 
-    /**
-     * v0.2.2. Inbound file offers from the peer, emitted when the peer calls
-     * sendFile. Hot SharedFlow with the same semantics as [incoming] —
-     * subscribe immediately. Each offer must be accepted or rejected within
-     * the configured offerTimeoutMillis (default 30 s) or it auto-rejects
-     * with reason "timeout". See §7.6.
-     */
+    /** Authoritative retained, admission-ordered pending inbound offers. */
+    val pendingFileOffers: StateFlow<List<P2pFileOffer>>
+
+    /** Migration-only event stream; replay = 0 and not authoritative. */
+    @Deprecated("Observe pendingFileOffers")
     val incomingFiles: SharedFlow<P2pFileOffer>
 
     /**
@@ -293,8 +291,8 @@ interface P2pSession {
      * terminal state.
      *
      * Throws P2pError.PayloadTooLarge if sizeBytes exceeds the configured
-     * maxFileSizeBytes (default 2 GiB), P2pError.ConnectionFailed if the
-     * session is not Connected. See §7.6.
+     * maxFileSizeBytes (default 2 GiB), or P2pError.FileTransferFailed with
+     * stable kind/phase/retryability fields. See §7.6.
      */
     suspend fun sendFile(
         name: String,
@@ -384,7 +382,7 @@ buffered in memory; bytes stream in `chunkSizeBytes` frames through the
 session's write mutex so messages and keepalive still get slots mid-transfer.
 
 **Flow.** Sender calls `session.sendFile(name, sizeBytes, mimeType, source)` →
-receiver gets a `P2pFileOffer` on `session.incomingFiles` → receiver calls
+receiver gets a retained `P2pFileOffer` in `session.pendingFileOffers` → receiver calls
 `offer.accept(sink)` or `offer.reject(reason)` (or the offer auto-rejects with
 reason `"timeout"` after `offerTimeoutMillis`) → on accept, FILE_DATA frames
 stream until FILE_DONE; either side may `cancel(reason)` at any point
@@ -392,12 +390,11 @@ stream until FILE_DONE; either side may `cancel(reason)` at any point
 FILE_DATA / FILE_DONE / FILE_CANCEL (codes `0x10`–`0x15`, §13.1); the frame's
 `message_id` carries the transfer id for the lifetime of one offer.
 
-**Unanswered-offer terminal states (decision #11a, 2026-07-04):** the two
-sides of an unanswered offer terminalize asymmetrically — the receiver's
-transfer ends as `Rejected("timeout")` (the receive-side auto-reject), while
-the sender's ends as `Cancelled` carrying the offer-timeout message
-(`"offer not accepted within <offerTimeoutMillis>ms"`, from the sender's own
-local timer).
+**Unanswered-offer terminal states:** a conforming receiver is the timeout
+authority and sends FILE_REJECT, so both sides end as `Rejected("timeout")`.
+The sender's later safety watchdog covers a non-conforming peer that sends no
+decision; that local transfer ends as `Failed(FileTransferFailed)` with kind
+`TIMEOUT`, phase `OFFER`, and `RETRY_SAME_SESSION`.
 
 **Public types** (package `dev.p2pkit.core.transfer`):
 
@@ -1434,7 +1431,7 @@ The published README must contain:
 - `:p2p-network-provisioning` interface module
 - `:p2p-network-provisioning-android` — `LocalOnlyHotspot` host + Wi-Fi join helper
 - `:p2p-network-provisioning-desktop` — manual info, network state detection
-- File transfer API — **shipped in v0.2.2** with a different shape than originally sketched: `P2pSession.sendFile(name, sizeBytes, mimeType, source: RawSource): P2pFileTransfer` plus `incomingFiles: SharedFlow<P2pFileOffer>` (see §7.6). No `sendStream` API shipped.
+- File transfer API — **shipped in v0.2.2** and now exposes `P2pSession.sendFile(name, sizeBytes, mimeType, source: RawSource): P2pFileTransfer` plus authoritative `pendingFileOffers: StateFlow<List<P2pFileOffer>>`; the replay-zero `incomingFiles` event remains deprecated for migration (see §7.6). No `sendStream` API shipped.
 
 ### v0.3
 

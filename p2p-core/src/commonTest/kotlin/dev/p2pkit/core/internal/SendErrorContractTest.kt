@@ -1,6 +1,8 @@
 package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.FileTransferFailureKind
+import dev.p2pkit.core.FileTransferPhase
 import dev.p2pkit.core.KeepAliveConfig
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
@@ -8,6 +10,7 @@ import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
+import dev.p2pkit.core.Retryability
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.protocol.DefaultP2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
@@ -49,9 +52,8 @@ import kotlin.test.assertTrue
  *  - already-typed [P2pError]s ([P2pError.PayloadTooLarge], the
  *    not-Connected pre-check refusal) pass through unchanged (no
  *    double-wrap, `cause` stays null where it was null);
- *  - the same contract holds at the [P2pSessionImpl.sendFile] boundary,
- *    including the FILE_OFFER write-failure path and the negative-`sizeBytes`
- *    argument refusal.
+     *  - file-transfer failures use [P2pError.FileTransferFailed] with stable
+     *    kind, phase, retryability, transfer-id, and cause fields.
  *
  * Uses fixture F2 (write-fault injection in
  * [dev.p2pkit.core.testfixtures.FakeRawConnection]: `writeFailure`,
@@ -276,13 +278,13 @@ class SendErrorContractTest {
     // ---- sendFile(): same boundary contract ----
 
     @Test
-    fun sendFileOfferWriteFailureSurfacesAsConnectionFailedWithCausePreserved() = runTest {
+    fun sendFileOfferWriteFailureSurfacesAsTypedTransportFailureWithCausePreserved() = runTest {
         val h = harness()
         try {
             val raw = FakeTransportWriteException("simulated raw transport write failure")
             h.pair.a.writeFailure = raw
 
-            val err = assertFailsWith<P2pError.ConnectionFailed> {
+            val err = assertFailsWith<P2pError.FileTransferFailed> {
                 h.session.sendFile(
                     name = "f.bin",
                     sizeBytes = 16,
@@ -290,6 +292,10 @@ class SendErrorContractTest {
                     source = Buffer().apply { write(ByteArray(16)) }
                 )
             }
+            assertEquals(FileTransferFailureKind.TRANSPORT, err.kind)
+            assertEquals(FileTransferPhase.OFFER, err.phase)
+            assertEquals(Retryability.RETRY_NEW_SESSION, err.retryability)
+            assertTrue(err.transferId != null)
             assertSame(raw, err.cause, "original exception must be preserved as cause")
             assertTrue(err.reason.contains("FILE_OFFER write failed"), "reason: ${err.reason}")
         } finally {
@@ -301,7 +307,7 @@ class SendErrorContractTest {
     fun sendFileNegativeSizeRefusalIsTypedWithArgumentCause() = runTest {
         val h = harness()
         try {
-            val err = assertFailsWith<P2pError.ConnectionFailed> {
+            val err = assertFailsWith<P2pError.FileTransferFailed> {
                 h.session.sendFile(
                     name = "f.bin",
                     sizeBytes = -1,
@@ -309,10 +315,70 @@ class SendErrorContractTest {
                     source = Buffer()
                 )
             }
-            // Decision #12a: only CancellationException and P2pError pass
-            // through; the argument refusal is wrapped with its original
-            // IllegalArgumentException preserved as cause.
+            assertEquals(FileTransferFailureKind.INVALID_METADATA, err.kind)
+            assertEquals(FileTransferPhase.OFFER, err.phase)
+            assertEquals(Retryability.NOT_RETRYABLE, err.retryability)
+            assertNull(err.transferId)
             assertIs<IllegalArgumentException>(err.cause)
+        } finally {
+            h.scope.cancel()
+        }
+    }
+
+    @Test
+    fun sendFileInvalidNameIsTypedBeforeAnyWireWrite() = runTest {
+        val h = harness()
+        try {
+            val err = assertFailsWith<P2pError.FileTransferFailed> {
+                h.session.sendFile(
+                    name = "../secret.bin",
+                    sizeBytes = 0,
+                    mimeType = null,
+                    source = Buffer()
+                )
+            }
+            assertEquals(FileTransferFailureKind.INVALID_METADATA, err.kind)
+            assertEquals(FileTransferPhase.OFFER, err.phase)
+            assertEquals(Retryability.NOT_RETRYABLE, err.retryability)
+            assertNull(err.transferId)
+            assertIs<IllegalArgumentException>(err.cause)
+            assertEquals(0, h.pair.a.writtenChunks.size)
+        } finally {
+            h.scope.cancel()
+        }
+    }
+
+    @Test
+    fun sendFileAfterSessionCloseIsTypedRemoteDisconnection() = runTest {
+        val h = harness()
+        try {
+            h.session.close()
+            val err = assertFailsWith<P2pError.FileTransferFailed> {
+                h.session.sendFile("closed.bin", 0, null, Buffer())
+            }
+            assertEquals(FileTransferFailureKind.REMOTE_DISCONNECTED, err.kind)
+            assertEquals(FileTransferPhase.OFFER, err.phase)
+            assertEquals(Retryability.RETRY_NEW_SESSION, err.retryability)
+            assertNull(err.transferId)
+            assertNull(err.cause)
+        } finally {
+            h.scope.cancel()
+        }
+    }
+
+    @Test
+    fun transferFailureCauseIsDiagnosticAndExcludedFromStableValueShape() = runTest {
+        val h = harness()
+        try {
+            val raw = FakeTransportWriteException("diagnostic")
+            h.pair.a.writeFailure = raw
+            val err = assertFailsWith<P2pError.FileTransferFailed> {
+                h.session.sendFile("cause.bin", 0, null, Buffer())
+            }
+            val copy = err.copy()
+            assertEquals(err, copy)
+            assertSame(raw, err.cause)
+            assertNull(copy.cause, "copy deliberately excludes the diagnostic platform cause")
         } finally {
             h.scope.cancel()
         }

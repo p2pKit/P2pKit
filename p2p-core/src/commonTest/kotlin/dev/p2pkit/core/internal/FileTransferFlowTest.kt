@@ -1,6 +1,8 @@
 package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.FileTransferFailureKind
+import dev.p2pkit.core.FileTransferPhase
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
@@ -8,6 +10,7 @@ import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
+import dev.p2pkit.core.Retryability
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.protocol.FileOfferPayload
 import dev.p2pkit.core.protocol.Frame
@@ -17,7 +20,6 @@ import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
-import dev.p2pkit.core.testfixtures.SnapshotList
 import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transfer.FileTransferState
@@ -144,15 +146,6 @@ class FileTransferFlowTest {
             val payload = ByteArray(1024) { (it and 0xFF).toByte() }
             val sink = Buffer()
 
-            // Subscribe to incomingFiles BEFORE the sender opens the offer —
-            // SharedFlow with replay=0 won't replay an offer emitted before
-            // a subscriber attaches.
-            val offerReady = CompletableDeferred<Unit>()
-            val offerDeferred = async {
-                incomingSession.incomingFiles.onSubscription { offerReady.complete(Unit) }.first()
-            }
-            offerReady.await()
-
             val transfer = outgoing.sendFile(
                 name = "blob.bin",
                 sizeBytes = payload.size.toLong(),
@@ -160,7 +153,11 @@ class FileTransferFlowTest {
                 source = Buffer().apply { write(payload) }
             )
 
-            val offer = withTimeout(5_000) { offerDeferred.await() }
+            // Deliberately observe only after sendFile returns: retained state
+            // must make the offer available to a late subscriber.
+            val offer = withTimeout(5_000) {
+                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+            }
             assertEquals("blob.bin", offer.name)
             assertEquals(payload.size.toLong(), offer.sizeBytes)
             assertEquals("application/octet-stream", offer.mimeType)
@@ -199,11 +196,9 @@ class FileTransferFlowTest {
             val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
             val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            val offerReady = CompletableDeferred<Unit>()
             val offerDeferred = async {
-                incomingSession.incomingFiles.onSubscription { offerReady.complete(Unit) }.first()
+                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
             }
-            offerReady.await()
 
             val transfer = outgoing.sendFile(
                 name = "x.bin",
@@ -236,19 +231,6 @@ class FileTransferFlowTest {
             val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
             val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            // AUDIT-2026-07 (FIL-11 / P1-23): a REAL subscriber, attached
-            // before any offer is sent — the headline invariant is that the
-            // oversize offer never surfaces on incomingFiles (the previous
-            // assertSubscriberSeesNoOffer helper asserted nothing).
-            val surfacedOffers = SnapshotList<String>()
-            val subscribed = CompletableDeferred<Unit>()
-            val collectJob = launch {
-                incomingSession.incomingFiles
-                    .onSubscription { subscribed.complete(Unit) }
-                    .collect { surfacedOffers.add(it.name) }
-            }
-            subscribed.await()
-
             // No accept side — receiver auto-rejects on size.
             val transfer = outgoing.sendFile(
                 name = "huge.bin",
@@ -264,6 +246,10 @@ class FileTransferFlowTest {
                 rejected.reason?.contains("exceeds", ignoreCase = true) == true,
                 "Expected size-exceeds reason, got ${rejected.reason}"
             )
+            assertTrue(
+                incomingSession.pendingFileOffers.value.isEmpty(),
+                "oversize offer must never enter retained pending state"
+            )
 
             // Sentinel: a conforming offer sent AFTER the oversize one must be
             // the only offer the subscriber ever sees. Its arrival bounds the
@@ -274,14 +260,10 @@ class FileTransferFlowTest {
                 mimeType = null,
                 source = Buffer().apply { write(ByteArray(16)) }
             )
-            withTimeout(5_000) { while (surfacedOffers.snapshot().isEmpty()) delay(10) }
-            delay(50)  // grace so a late oversize emission would surface
-            assertEquals(
-                listOf("small.bin"),
-                surfacedOffers.snapshot(),
-                "oversize offer must never surface on incomingFiles"
-            )
-            collectJob.cancel()
+            val retained = withTimeout(5_000) {
+                incomingSession.pendingFileOffers.first { it.isNotEmpty() }
+            }
+            assertEquals(listOf("small.bin"), retained.map { it.name })
         } finally {
             alice.stop()
             bob.stop()
@@ -356,11 +338,9 @@ class FileTransferFlowTest {
             val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
             val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            val offerReady = CompletableDeferred<Unit>()
             val offerDeferred = async {
-                incomingSession.incomingFiles.onSubscription { offerReady.complete(Unit) }.first()
+                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
             }
-            offerReady.await()
 
             val transfer = outgoing.sendFile(
                 name = "abort.bin",
@@ -418,11 +398,9 @@ class FileTransferFlowTest {
             }
             msgReady.await()
 
-            val offerReady = CompletableDeferred<Unit>()
             val offerDeferred = async {
-                incomingSession.incomingFiles.onSubscription { offerReady.complete(Unit) }.first()
+                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
             }
-            offerReady.await()
 
             // Kick off a file transfer, then send a regular message — message
             // should land regardless of transfer state.
@@ -485,11 +463,9 @@ class FileTransferFlowTest {
             }
             msgReady.await()
 
-            val offerReady = CompletableDeferred<Unit>()
             val offerDeferred = async {
-                incomingSession.incomingFiles.onSubscription { offerReady.complete(Unit) }.first()
+                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
             }
-            offerReady.await()
 
             val source = CloseTrackingSource(Buffer().apply { write(ByteArray(512) { 9 }) })
             val transfer = outgoing.sendFile(
@@ -543,11 +519,9 @@ class FileTransferFlowTest {
             val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
             val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            val offerReady = CompletableDeferred<Unit>()
             val offerDeferred = async {
-                incomingSession.incomingFiles.onSubscription { offerReady.complete(Unit) }.first()
+                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
             }
-            offerReady.await()
 
             val source = CloseTrackingSource(Buffer().apply { write(ByteArray(1024) { 4 }) })
             val transfer = outgoing.sendFile(
@@ -601,11 +575,9 @@ class FileTransferFlowTest {
             val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
             val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            val offerReady = CompletableDeferred<Unit>()
             val offerDeferred = async {
-                incomingSession.incomingFiles.onSubscription { offerReady.complete(Unit) }.first()
+                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
             }
-            offerReady.await()
 
             val source = CloseTrackingSource(Buffer().apply { write(ByteArray(1024) { 6 }) })
             val transfer = outgoing.sendFile(
@@ -644,6 +616,195 @@ class FileTransferFlowTest {
     }
 
     // ---- Direct-dispatcher tests (recording protocol, no wire I/O) ----
+
+    @Test
+    fun pendingOfferIsRetainedBeforeObservationAndExpiresAtExactDeadline() = runTest {
+        val protocol = RecordingFileProtocol()
+        val config = FileTransferConfig(
+            maxFileSizeBytes = 8L,
+            chunkSizeBytes = 1,
+            offerTimeoutMillis = 100L
+        )
+        val dispatcher = directDispatcher(backgroundScope, protocol, config)
+        val id = MessageId.random(Random(5_001))
+
+        dispatcher.onFileOffer(id, FileOfferPayload("retained.bin", 1L))
+
+        val initial = dispatcher.pendingFileOffers.value
+        assertEquals(listOf(id.toString()), initial.map { it.id })
+        assertTrue(
+            runCatching { (initial as MutableList).clear() }.isFailure,
+            "retained offer snapshots must reject mutation"
+        )
+
+        runCurrent()
+        advanceTimeBy(99L)
+        runCurrent()
+        assertEquals(listOf(id.toString()), dispatcher.pendingFileOffers.value.map { it.id })
+        advanceTimeBy(1L)
+        runCurrent()
+
+        assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+        val rejected = assertIs<FileTransferState.Rejected>(
+            (initial.single() as IncomingFileSession).state.value
+        )
+        assertEquals("timeout", rejected.reason)
+        assertEquals(id, protocol.fileRejects.single())
+        assertFailsWith<IllegalStateException> { initial.single().accept(Buffer()) }
+        assertFailsWith<IllegalStateException> { initial.single().reject("late") }
+        assertTrue(dispatcher.pendingFileOffers.value.isEmpty(), "late response must not revive an expired offer")
+    }
+
+    @Test
+    fun pendingOffersStayOrderedAndEveryTerminalOwnershipPathRemovesThem() = runBlocking<Unit> {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol()
+        val dispatcher = directDispatcher(scope, protocol)
+        try {
+            val firstId = MessageId.random(Random(5_010))
+            val secondId = MessageId.random(Random(5_011))
+            dispatcher.onFileOffer(firstId, FileOfferPayload("first.bin", 1L))
+            dispatcher.onFileOffer(secondId, FileOfferPayload("second.bin", 1L))
+
+            val initial = dispatcher.pendingFileOffers.value
+            assertEquals(listOf("first.bin", "second.bin"), initial.map { it.name })
+            initial.first().reject("declined")
+            assertEquals(listOf("second.bin"), dispatcher.pendingFileOffers.value.map { it.name })
+
+            dispatcher.onFileCancel(secondId, "remote cancelled")
+            assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+            assertIs<FileTransferState.Cancelled>((initial[1] as IncomingFileSession).state.value)
+
+            val closingId = MessageId.random(Random(5_012))
+            dispatcher.onFileOffer(closingId, FileOfferPayload("closing.bin", 1L))
+            val closingOffer = dispatcher.pendingFileOffers.value.single() as IncomingFileSession
+            dispatcher.closeAll("session closing")
+            assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+            assertIs<FileTransferState.Cancelled>(closingOffer.state.value)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun offerRemainsPendingUntilFileAcceptWriteCommits() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol().apply { gateAccept = true }
+        val dispatcher = directDispatcher(scope, protocol)
+        try {
+            val id = MessageId.random(Random(5_020))
+            dispatcher.onFileOffer(id, FileOfferPayload("commit.bin", 1L))
+            val offer = dispatcher.pendingFileOffers.value.single()
+
+            val accepting = async { offer.accept(Buffer()) }
+            protocol.acceptStarted.await()
+            assertTrue(
+                dispatcher.pendingFileOffers.value.single() === offer,
+                "an in-flight FILE_ACCEPT must not remove retained ownership"
+            )
+
+            protocol.acceptReleases.send(Unit)
+            assertTrue(accepting.await() === offer)
+            assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun exactDuplicateOfferIsIdempotentAndDoesNotResetDeadlineOrReemit() = runTest {
+        val protocol = RecordingFileProtocol()
+        val config = FileTransferConfig(
+            maxFileSizeBytes = 8L,
+            chunkSizeBytes = 1,
+            offerTimeoutMillis = 100L
+        )
+        val dispatcher = directDispatcher(backgroundScope, protocol, config)
+        val emitted = Channel<IncomingFileSession>(Channel.UNLIMITED)
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            dispatcher.incomingFiles.collect { emitted.send(it as IncomingFileSession) }
+        }
+        val id = MessageId.random(Random(5_030))
+        val payload = FileOfferPayload("same.bin", 1L, "application/octet-stream")
+
+        dispatcher.onFileOffer(id, payload)
+        runCurrent()
+        val admitted = emitted.receive()
+        advanceTimeBy(60L)
+        dispatcher.onFileOffer(id, payload.copy())
+        runCurrent()
+
+        assertTrue(dispatcher.pendingFileOffers.value.single() === admitted)
+        assertTrue(emitted.tryReceive().isFailure, "an exact duplicate must not re-emit")
+        advanceTimeBy(40L)
+        runCurrent()
+        assertTrue(dispatcher.pendingFileOffers.value.isEmpty(), "duplicate must not extend retention")
+        assertIs<FileTransferState.Rejected>(admitted.state.value)
+    }
+
+    @Test
+    fun conflictingDuplicateOfferIsTypedProtocolFailureAndCannotReplaceOwnership() = runTest {
+        val dispatcher = directDispatcher(backgroundScope, RecordingFileProtocol())
+        val id = MessageId.random(Random(5_040))
+        dispatcher.onFileOffer(id, FileOfferPayload("original.bin", 1L))
+        val original = dispatcher.pendingFileOffers.value.single()
+
+        val failure = assertFailsWith<P2pError.FileTransferFailed> {
+            dispatcher.onFileOffer(id, FileOfferPayload("conflict.bin", 1L))
+        }
+        assertEquals(FileTransferFailureKind.TRANSFER_PROTOCOL, failure.kind)
+        assertEquals(FileTransferPhase.OFFER, failure.phase)
+        assertEquals(Retryability.NOT_RETRYABLE, failure.retryability)
+        assertEquals(id.toString(), failure.transferId)
+        assertTrue(dispatcher.pendingFileOffers.value.single() === original)
+    }
+
+    @Test
+    fun concurrentOfferResponsesHaveOneWinnerAndDoNotReviveTerminalOffer() = runBlocking<Unit> {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol().apply { gateAccept = true }
+        val dispatcher = directDispatcher(scope, protocol)
+        try {
+            val id = MessageId.random(Random(5_050))
+            dispatcher.onFileOffer(id, FileOfferPayload("race.bin", 1L))
+            val offer = dispatcher.pendingFileOffers.value.single()
+
+            val accepting = async { offer.accept(Buffer()) }
+            protocol.acceptStarted.await()
+            assertFailsWith<IllegalStateException> { offer.accept(Buffer()) }
+            assertFailsWith<IllegalStateException> { offer.reject("too late") }
+            protocol.acceptReleases.send(Unit)
+            accepting.await()
+
+            assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+            assertFailsWith<IllegalStateException> { offer.accept(Buffer()) }
+            assertFailsWith<IllegalStateException> { offer.reject("already accepted") }
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun pendingOfferCapacityIsBoundedAtSixtyFour() = runTest {
+        val protocol = RecordingFileProtocol()
+        val dispatcher = directDispatcher(
+            backgroundScope,
+            protocol,
+            FileTransferConfig(maxFileSizeBytes = 1L, offerTimeoutMillis = 60_000L, chunkSizeBytes = 1)
+        )
+        repeat(64) { index ->
+            dispatcher.onFileOffer(
+                MessageId.random(Random(5_100 + index)),
+                FileOfferPayload("pending-$index.bin", 1L)
+            )
+        }
+        assertEquals(64, dispatcher.pendingFileOffers.value.size)
+
+        val overflowId = MessageId.random(Random(5_200))
+        dispatcher.onFileOffer(overflowId, FileOfferPayload("overflow.bin", 1L))
+        assertEquals(64, dispatcher.pendingFileOffers.value.size)
+        assertEquals(overflowId, protocol.fileRejects.single())
+    }
 
     @Test
     fun offerProcessedWhileDispatcherClosedIsDroppedAndLeaksNoEntry() = runBlocking {
@@ -813,13 +974,158 @@ class FileTransferFlowTest {
         val protocol = RecordingFileProtocol()
         val dispatcher = directDispatcher(scope, protocol)
         try {
-            protocol.offerFailure = IOException("wire failed before FILE_OFFER")
+            val wireFailure = IOException("wire failed before FILE_OFFER")
+            protocol.offerFailure = wireFailure
             val source = CloseTrackingSource(Buffer().apply { write(ByteArray(8) { 5 }) })
-            assertFailsWith<P2pError.ConnectionFailed> {
+            val failure = assertFailsWith<P2pError.FileTransferFailed> {
                 dispatcher.sendFile("never-offered.bin", 8L, null, source)
             }
+            assertEquals(FileTransferFailureKind.TRANSPORT, failure.kind)
+            assertEquals(FileTransferPhase.OFFER, failure.phase)
+            assertEquals(Retryability.RETRY_NEW_SESSION, failure.retryability)
+            assertTrue(failure.transferId != null)
+            assertTrue(failure.cause === wireFailure)
             repeat(10) { yield() }
             assertEquals(1, source.closeCount, "offer-write failure must release the source exactly once")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun acceptWriteFailureIsTypedAndClearsPendingReceiverOwnership() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val raw = IOException("accept control write failed")
+        val protocol = RecordingFileProtocol().apply { acceptFailure = raw }
+        val dispatcher = directDispatcher(scope, protocol)
+        try {
+            val id = MessageId.random(Random(8_001))
+            dispatcher.onFileOffer(id, FileOfferPayload("accept-failure.bin", 1L))
+            val offer = dispatcher.pendingFileOffers.value.single() as IncomingFileSession
+
+            val failure = assertFailsWith<P2pError.FileTransferFailed> {
+                offer.accept(Buffer())
+            }
+            assertEquals(FileTransferFailureKind.TRANSPORT, failure.kind)
+            assertEquals(FileTransferPhase.ACCEPT, failure.phase)
+            assertEquals(Retryability.RETRY_NEW_SESSION, failure.retryability)
+            assertEquals(offer.id, failure.transferId)
+            val preserved = assertIs<IOException>(failure.cause)
+            assertEquals(raw.message, preserved.message)
+            assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+            assertFalse(offer.retainsReceiver())
+            assertEquals(id, protocol.fileCancels.single().first)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun dataWriteFailureIsTypedTransportSendFailureWithCause() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val raw = IOException("data write failed")
+        val protocol = RecordingFileProtocol().apply { dataFailure = raw }
+        val dispatcher = directDispatcher(scope, protocol)
+        try {
+            val transfer = dispatcher.sendFile(
+                "data-failure.bin",
+                1L,
+                null,
+                Buffer().apply { writeByte(1) }
+            )
+            dispatcher.onFileAccept(protocol.fileOffers.single())
+
+            val failed = assertIs<FileTransferState.Failed>(
+                withTimeout(5_000) { transfer.state.first { it.isTerminal() } }
+            )
+            val failure = assertIs<P2pError.FileTransferFailed>(failed.error)
+            assertEquals(FileTransferFailureKind.TRANSPORT, failure.kind)
+            assertEquals(FileTransferPhase.SEND, failure.phase)
+            assertEquals(Retryability.RETRY_NEW_SESSION, failure.retryability)
+            assertEquals(transfer.id, failure.transferId)
+            assertTrue(failure.cause === raw)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun receiverSinkWriteFailureIsTypedStorageReceiveFailure() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol()
+        val dispatcher = directDispatcher(
+            scope,
+            protocol,
+            FileTransferConfig(maxFileSizeBytes = 16_384L, offerTimeoutMillis = 60_000L, chunkSizeBytes = 16_384)
+        )
+        val raw = IOException("receiver storage write failed")
+        val sink = object : RawSink {
+            override fun write(source: Buffer, byteCount: Long) {
+                throw raw
+            }
+
+            override fun flush() = Unit
+            override fun close() = Unit
+        }
+        try {
+            val id = MessageId.random(Random(8_010))
+            dispatcher.onFileOffer(id, FileOfferPayload("storage-failure.bin", 9_000L))
+            val offer = dispatcher.pendingFileOffers.value.single() as IncomingFileSession
+            offer.accept(sink)
+            dispatcher.onFileData(
+                Frame(
+                    type = dev.p2pkit.core.protocol.PacketType.FILE_DATA,
+                    flags = dev.p2pkit.core.protocol.FrameFlags.LAST_CHUNK.toByte(),
+                    messageId = id,
+                    chunkIndex = 0,
+                    totalChunks = 1,
+                    payload = ByteArray(9_000)
+                )
+            )
+
+            val failed = assertIs<FileTransferState.Failed>(offer.state.value)
+            val failure = assertIs<P2pError.FileTransferFailed>(failed.error)
+            assertEquals(FileTransferFailureKind.STORAGE, failure.kind)
+            assertEquals(FileTransferPhase.RECEIVE, failure.phase)
+            assertEquals(Retryability.RETRY_AFTER_USER_ACTION, failure.retryability)
+            assertEquals(offer.id, failure.transferId)
+            assertTrue(failure.cause === raw)
+            assertEquals(id, protocol.fileCancels.single().first)
+            assertFalse(offer.retainsReceiver())
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun invalidChunkOrderingIsTypedTransferProtocolFailure() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol()
+        val dispatcher = directDispatcher(scope, protocol)
+        try {
+            val id = MessageId.random(Random(8_020))
+            dispatcher.onFileOffer(id, FileOfferPayload("ordering.bin", 2L))
+            val offer = dispatcher.pendingFileOffers.value.single() as IncomingFileSession
+            offer.accept(Buffer())
+            dispatcher.onFileData(
+                Frame(
+                    type = dev.p2pkit.core.protocol.PacketType.FILE_DATA,
+                    flags = dev.p2pkit.core.protocol.FrameFlags.LAST_CHUNK.toByte(),
+                    messageId = id,
+                    chunkIndex = 1,
+                    totalChunks = 2,
+                    payload = byteArrayOf(1)
+                )
+            )
+
+            val failed = assertIs<FileTransferState.Failed>(offer.state.value)
+            val failure = assertIs<P2pError.FileTransferFailed>(failed.error)
+            assertEquals(FileTransferFailureKind.TRANSFER_PROTOCOL, failure.kind)
+            assertEquals(FileTransferPhase.RECEIVE, failure.phase)
+            assertEquals(Retryability.NOT_RETRYABLE, failure.retryability)
+            assertEquals(offer.id, failure.transferId)
+            assertIs<P2pError.ProtocolError>(failure.cause)
+            assertEquals(id, protocol.fileCancels.single().first)
         } finally {
             scope.cancel()
         }
@@ -836,7 +1142,11 @@ class FileTransferFlowTest {
             // The reconnect-rearm path: closeAll fails in-flight transfers.
             dispatcher.closeAll("reconnect: connection replaced")
             val failed = assertIs<FileTransferState.Failed>(transfer.state.value)
-            assertIs<P2pError.ConnectionFailed>(failed.error)
+            val error = assertIs<P2pError.FileTransferFailed>(failed.error)
+            assertEquals(FileTransferFailureKind.REMOTE_DISCONNECTED, error.kind)
+            assertEquals(FileTransferPhase.OFFER, error.phase)
+            assertEquals(Retryability.RETRY_NEW_SESSION, error.retryability)
+            assertEquals(transfer.id, error.transferId)
             assertEquals(1, source.closeCount, "rearm closeAll must release the source")
             // reopen() must leave the dispatcher usable and the first source's
             // close-once latch untouched.
@@ -864,12 +1174,16 @@ class FileTransferFlowTest {
         val dispatcher = directDispatcher(scope, protocol)
         try {
             dispatcher.closeAll("session closing")
-            assertFailsWith<P2pError.ConnectionFailed> {
+            val failure = assertFailsWith<P2pError.FileTransferFailed> {
                 dispatcher.sendFile(
                     "late.bin", 8L, null,
                     CloseTrackingSource(Buffer().apply { write(ByteArray(8)) })
                 )
             }
+            assertEquals(FileTransferFailureKind.REMOTE_DISCONNECTED, failure.kind)
+            assertEquals(FileTransferPhase.OFFER, failure.phase)
+            assertEquals(Retryability.RETRY_NEW_SESSION, failure.retryability)
+            assertEquals(null, failure.transferId)
             assertTrue(protocol.fileOffers.isEmpty(), "no FILE_OFFER may leave a closed dispatcher")
 
             dispatcher.reopen()
@@ -907,7 +1221,12 @@ class FileTransferFlowTest {
 
             val terminal = withTimeout(5_000) { transfer.state.first { it.isTerminal() } }
             val failed = assertIs<FileTransferState.Failed>(terminal)
-            assertIs<P2pError.ConnectionFailed>(failed.error)
+            val failure = assertIs<P2pError.FileTransferFailed>(failed.error)
+            assertEquals(FileTransferFailureKind.SOURCE_IO, failure.kind)
+            assertEquals(FileTransferPhase.SOURCE_READ, failure.phase)
+            assertEquals(Retryability.RETRY_AFTER_USER_ACTION, failure.retryability)
+            assertEquals(transfer.id, failure.transferId)
+            assertIs<IOException>(failure.cause)
             assertTrue(
                 failed.error.message?.contains("source read failed") == true,
                 "sender failure should be classified as a source read failure, got ${failed.error}"
@@ -1039,8 +1358,13 @@ class FileTransferFlowTest {
         assertFalse(offer.state.value.isTerminal())
         advanceTimeBy(1L)
         runCurrent()
-        val cancelled = assertIs<FileTransferState.Cancelled>(offer.state.value)
-        assertTrue(cancelled.reason?.startsWith("idle transfer timeout") == true)
+        val failed = assertIs<FileTransferState.Failed>(offer.state.value)
+        val failure = assertIs<P2pError.FileTransferFailed>(failed.error)
+        assertEquals(FileTransferFailureKind.TIMEOUT, failure.kind)
+        assertEquals(FileTransferPhase.RECEIVE, failure.phase)
+        assertEquals(Retryability.RETRY_NEW_SESSION, failure.retryability)
+        assertEquals(offer.id, failure.transferId)
+        assertTrue(failure.reason.startsWith("idle transfer timeout"))
         assertEquals(id, protocol.fileCancels.single().first)
         assertFalse(offer.retainsReceiver())
     }
@@ -1078,8 +1402,12 @@ class FileTransferFlowTest {
         assertFalse(offer.state.value.isTerminal())
         advanceTimeBy(2L)
         runCurrent()
-        val cancelled = assertIs<FileTransferState.Cancelled>(offer.state.value)
-        assertTrue(cancelled.reason?.startsWith("overall transfer timeout") == true)
+        val failed = assertIs<FileTransferState.Failed>(offer.state.value)
+        val failure = assertIs<P2pError.FileTransferFailed>(failed.error)
+        assertEquals(FileTransferFailureKind.TIMEOUT, failure.kind)
+        assertEquals(FileTransferPhase.RECEIVE, failure.phase)
+        assertEquals(Retryability.RETRY_NEW_SESSION, failure.retryability)
+        assertTrue(failure.reason.startsWith("overall transfer timeout"))
     }
 
     @Test
@@ -1094,9 +1422,13 @@ class FileTransferFlowTest {
             val firstSource = CloseTrackingSource(Buffer().apply { write(ByteArray(1)) })
             val secondSource = CloseTrackingSource(Buffer().apply { write(ByteArray(1)) })
             val first = dispatcher.sendFile("first.bin", 1L, null, firstSource)
-            val failure = assertFailsWith<P2pError.ConnectionFailed> {
+            val failure = assertFailsWith<P2pError.FileTransferFailed> {
                 dispatcher.sendFile("second.bin", 1L, null, secondSource)
             }
+            assertEquals(FileTransferFailureKind.TRANSFER_PROTOCOL, failure.kind)
+            assertEquals(FileTransferPhase.OFFER, failure.phase)
+            assertEquals(Retryability.RETRY_NEW_SESSION, failure.retryability)
+            assertEquals(null, failure.transferId)
             assertTrue(failure.reason.contains("unique transfer id"))
             assertEquals(1, protocol.fileOffers.size)
             assertEquals(1, secondSource.closeCount)
@@ -1237,7 +1569,13 @@ class FileTransferFlowTest {
 
         advanceTimeBy(100L)
         runCurrent()
-        assertTrue(accepted.all { it.state.value is FileTransferState.Cancelled })
+        assertTrue(accepted.all { it.state.value is FileTransferState.Failed })
+        accepted.forEach { offer ->
+            val failed = assertIs<FileTransferState.Failed>(offer.state.value)
+            val failure = assertIs<P2pError.FileTransferFailed>(failed.error)
+            assertEquals(FileTransferFailureKind.TIMEOUT, failure.kind)
+            assertEquals(FileTransferPhase.RECEIVE, failure.phase)
+        }
         assertTrue(accepted.all { !it.retainsReceiver() })
 
         val replacementId = MessageId.random(Random(2_001))
@@ -1271,7 +1609,12 @@ class FileTransferFlowTest {
         assertFalse(transfer.state.value.isTerminal())
         advanceTimeBy(1L)
         runCurrent()
-        assertIs<FileTransferState.Cancelled>(transfer.state.value)
+        val failed = assertIs<FileTransferState.Failed>(transfer.state.value)
+        val failure = assertIs<P2pError.FileTransferFailed>(failed.error)
+        assertEquals(FileTransferFailureKind.TIMEOUT, failure.kind)
+        assertEquals(FileTransferPhase.OFFER, failure.phase)
+        assertEquals(Retryability.RETRY_SAME_SESSION, failure.retryability)
+        assertEquals(transfer.id, failure.transferId)
     }
 
     private fun directDispatcher(
@@ -1365,6 +1708,8 @@ private class RecordingFileProtocol : P2pProtocol {
 
     /** When non-null, [sendFileOffer] throws it instead of recording (offer-write-failure injection). */
     var offerFailure: Throwable? = null
+    var acceptFailure: Throwable? = null
+    var dataFailure: Throwable? = null
     var gateOffer: Boolean = false
     val offerStarted = CompletableDeferred<Unit>()
     val offerRelease = CompletableDeferred<Unit>()
@@ -1397,6 +1742,7 @@ private class RecordingFileProtocol : P2pProtocol {
     }
 
     override suspend fun sendFileAccept(connection: RawConnection, transferId: MessageId) {
+        acceptFailure?.let { throw it }
         if (gateAccept) {
             acceptStarted.complete(Unit)
             acceptReleases.receive()
@@ -1408,6 +1754,7 @@ private class RecordingFileProtocol : P2pProtocol {
     }
 
     override suspend fun sendFileDataFrame(connection: RawConnection, frame: Frame) {
+        dataFailure?.let { throw it }
         fileData.add(frame.messageId to frame.chunkIndex)
         if (gateDataFrames) dataFrameReleases.receive()
     }

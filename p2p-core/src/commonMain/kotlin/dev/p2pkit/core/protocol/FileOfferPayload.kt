@@ -54,7 +54,7 @@ internal data class FileOfferPayload(
             return payload
         }
 
-        private fun validate(payload: FileOfferPayload) {
+        internal fun validate(payload: FileOfferPayload) {
             require(payload.sizeBytes >= 0) {
                 "FILE_OFFER sizeBytes must be non-negative, got ${payload.sizeBytes}"
             }

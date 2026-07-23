@@ -299,7 +299,7 @@ Verifies `WifiNetworkSpecifier`-based Wi-Fi join: the guest device joins the hos
 
 ## J. Cross-device file transfer (v0.2.2)
 
-Verifies the full `sendFile` / `incomingFiles` pipeline end-to-end: pick a file on the sender, watch progress + state on both sides, confirm the bytes on disk match. Three sub-recipes — pick whichever pair of platforms you have handy.
+Verifies the full `sendFile` / retained `pendingFileOffers` pipeline end-to-end: pick a file on the sender, watch progress + state on both sides, confirm the bytes on disk match. Three sub-recipes — pick whichever pair of platforms you have handy.
 
 The pipeline streams the file in `chunkSizeBytes` (default 64 KiB) frames through the same TCP socket as messages and PING/PONG; nothing is buffered in memory. Sender state walks `Offered → Accepted → Sending(progress) → Completed`. Receiver walks the same states.
 

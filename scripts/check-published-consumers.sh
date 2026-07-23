@@ -128,11 +128,16 @@ cat > "$FIXTURE_DIR/coreJvm/src/main/kotlin/consumer/CoreConsumer.kt" <<'EOF'
 package consumer
 
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.FeatureState
 import dev.p2pkit.core.ExperimentalP2pApi
+import dev.p2pkit.core.FileTransferFailureKind
+import dev.p2pkit.core.FileTransferPhase
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerFingerprint
+import dev.p2pkit.core.Retryability
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.provisioning.JoinNetworkResult
 import dev.p2pkit.core.provisioning.LocalNetworkConfig
@@ -150,6 +155,7 @@ import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportDescriptor
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
+import dev.p2pkit.core.transfer.P2pFileOffer
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -163,6 +169,21 @@ fun coreState(kit: P2pKit, sink: RawSink): StateFlow<P2pState> {
 
 fun featureStates(kit: P2pKit): Pair<StateFlow<FeatureState>, StateFlow<FeatureState>> =
     kit.advertisingState to kit.discoveryState
+
+fun pendingOffers(session: P2pSession): StateFlow<List<P2pFileOffer>> =
+    session.pendingFileOffers
+
+fun classifyTransferFailure(error: P2pError.FileTransferFailed): String =
+    "${error.kind}:${error.phase}:${error.retryability}:${error.transferId}:${error.reason}"
+
+fun constructTransferFailure(): P2pError.FileTransferFailed =
+    P2pError.FileTransferFailed(
+        kind = FileTransferFailureKind.STORAGE,
+        phase = FileTransferPhase.DURABLE_COMMIT,
+        retryability = Retryability.RETRY_AFTER_USER_ACTION,
+        transferId = "0123456789abcdef0123456789abcdef",
+        reason = "fixture"
+    )
 
 fun copyPeer(peer: Peer): Peer {
     val (id, name, platform, transports) = peer
@@ -217,6 +238,10 @@ cat > "$FIXTURE_DIR/coreJvm/src/main/java/consumer/ImmutableModelJavaConsumer.ja
 package consumer;
 
 import dev.p2pkit.core.P2pMessage;
+import dev.p2pkit.core.P2pError;
+import dev.p2pkit.core.FileTransferFailureKind;
+import dev.p2pkit.core.FileTransferPhase;
+import dev.p2pkit.core.Retryability;
 import dev.p2pkit.core.TransportKind;
 import dev.p2pkit.core.provisioning.NetworkState;
 import dev.p2pkit.core.transport.TransportCapability;
@@ -246,6 +271,17 @@ final class ImmutableModelJavaConsumer {
         ethernet.getLocalIpAddresses();
         descriptor.getCapabilities().contains(TransportCapability.DATA);
         pair.getData();
+        P2pError.FileTransferFailed failure = new P2pError.FileTransferFailed(
+            FileTransferFailureKind.STORAGE,
+            FileTransferPhase.FLUSH,
+            Retryability.RETRY_AFTER_USER_ACTION,
+            "0123456789abcdef0123456789abcdef",
+            "fixture"
+        );
+        failure.getKind();
+        failure.getPhase();
+        failure.getRetryability();
+        failure.getTransferId();
     }
 }
 EOF
@@ -355,6 +391,10 @@ import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.FeatureState
+import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.FileTransferFailureKind
+import dev.p2pkit.core.FileTransferPhase
+import dev.p2pkit.core.Retryability
 import dev.p2pkit.core.provisioning.NetworkState
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.io.RawSink
@@ -365,6 +405,15 @@ fun commonState(kit: P2pKit, sink: RawSink): StateFlow<P2pState> {
 }
 
 fun commonFeatureState(kit: P2pKit): StateFlow<FeatureState> = kit.discoveryState
+
+fun commonTransferFailure(): P2pError.FileTransferFailed =
+    P2pError.FileTransferFailed(
+        FileTransferFailureKind.TIMEOUT,
+        FileTransferPhase.OFFER,
+        Retryability.RETRY_SAME_SESSION,
+        null,
+        "fixture"
+    )
 
 fun immutableValues(): Pair<P2pMessage.Text, NetworkState.ConnectedToEthernet> =
     P2pMessage.Text("hello", mapOf("key" to "value")) to

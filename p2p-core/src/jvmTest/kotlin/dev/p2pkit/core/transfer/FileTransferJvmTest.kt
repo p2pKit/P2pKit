@@ -15,10 +15,8 @@ import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.io.Buffer
@@ -100,11 +98,9 @@ class FileTransferJvmTest {
             val payload = ByteArray(2048) { (it and 0xFF).toByte() }
             val file = tempFile(payload, "data.bin")
 
-            val offerReady = CompletableDeferred<Unit>()
             val offerDeferred = async {
-                incomingSession.incomingFiles.onSubscription { offerReady.complete(Unit) }.first()
+                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
             }
-            offerReady.await()
 
             val transfer = outgoing.sendFile(file)
             val offer = withTimeout(5_000) { offerDeferred.await() }

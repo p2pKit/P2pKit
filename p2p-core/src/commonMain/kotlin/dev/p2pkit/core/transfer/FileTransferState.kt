@@ -15,7 +15,8 @@ import dev.p2pkit.core.P2pError
  *
  * A conforming receiver is the unanswered-offer timeout authority: both sides
  * reach `Rejected("timeout")`. The sender also has a later safety watchdog for
- * an unresponsive/non-conforming peer; that local-only path is [Cancelled].
+ * an unresponsive/non-conforming peer; that local-only path is [Failed] with a
+ * typed `TIMEOUT` failure in the `OFFER` phase.
  *
  * Progress in [Sending] is `bytesTransferred / sizeBytes` clamped to `0.0..1.0`.
  */
@@ -42,13 +43,15 @@ public sealed class FileTransferState {
     public data class Rejected(val reason: String?) : FileTransferState()
 
     /**
-     * Either side cancelled mid-transfer. A sender also reaches this state if
-     * its grace-delayed response watchdog expires because the remote peer did
-     * not provide the required accept/reject response.
+     * Either side intentionally cancelled mid-transfer.
      */
     public data class Cancelled(val reason: String?) : FileTransferState()
 
-    /** Transfer ended in an error (I/O, protocol, connection drop). */
+    /**
+     * Transfer ended in an error. File-transfer-owned failures use
+     * [P2pError.FileTransferFailed]; session authentication failures retain
+     * their existing session-level [P2pError] type.
+     */
     public data class Failed(val error: P2pError) : FileTransferState()
 }
 

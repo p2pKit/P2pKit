@@ -2,8 +2,10 @@ package dev.p2pkit.core
 
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.io.RawSource
 
 /**
@@ -76,21 +78,31 @@ public interface P2pSession {
     public suspend fun send(message: P2pMessage)
 
     /**
-     * Inbound file offers from the peer. Emitted when the peer calls
-     * [sendFile]. Subscribe immediately after `connect()` or when accepting an
-     * incoming session — offers emitted before any subscriber attaches are not
-     * buffered.
+     * Authoritative retained snapshot of inbound offers awaiting a response.
      *
-     * Each offer must be responded to with either [P2pFileOffer.accept] or
-     * [P2pFileOffer.reject] within the configured `offerTimeoutMillis`
-     * (default 30 s) or it is auto-rejected with reason `"timeout"`.
+     * Offers are ordered by admission and are present before their response
+     * timer starts. An offer is removed when acceptance commits, it is
+     * rejected, expires, is remotely cancelled, or this session closes. At
+     * most 64 offers are pending. Snapshot lists are immutable and safe to
+     * retain across Kotlin, Java, and Swift calls.
+     *
+     * The default empty state preserves source compatibility for third-party
+     * session test doubles; SDK-created sessions always override it.
      */
+    public val pendingFileOffers: StateFlow<List<P2pFileOffer>>
+        get() = EMPTY_PENDING_FILE_OFFERS
+
+    /**
+     * Migration-only event stream of newly admitted offers. It has no replay
+     * and is not authoritative; observe [pendingFileOffers] instead.
+     */
+    @Deprecated("Observe pendingFileOffers")
     public val incomingFiles: SharedFlow<P2pFileOffer>
 
     /**
-     * Offer a file to the peer. The peer receives a [P2pFileOffer] on its
-     * [incomingFiles] flow and must call `accept(sink)` or `reject(reason)`
-     * for the transfer to make progress.
+     * Offer a file to the peer. The peer receives a [P2pFileOffer] in its
+     * retained [pendingFileOffers] state and must call `accept(sink)` or
+     * `reject(reason)` for the transfer to make progress.
      *
      * Bytes are pulled from [source] in chunks of the configured
      * [dev.p2pkit.core.transfer.FileTransferConfig.chunkSizeBytes]; the whole
@@ -100,39 +112,38 @@ public interface P2pSession {
      *
      * ### Ownership of [source] when this method throws (AUDIT-2026-07 API-2)
      *
-     * Ownership transfers to the kit only once the transfer is registered
-     * internally (immediately before the FILE_OFFER frame is written):
+     * Ownership stays with the caller through local metadata validation:
      *
      * - Refusals thrown **before** registration leave [source] open and still
      *   owned by the caller, who must close it: the session is not
      *   [ConnectionState.Connected], [sizeBytes] is negative, [sizeBytes]
-     *   exceeds `maxFileSizeBytes` ([P2pError.PayloadTooLarge]), or the
-     *   session's file-transfer machinery has already shut down.
-     * - Throws **at or after** registration close [source] before rethrowing:
-     *   a FILE_OFFER write failure, cancellation while the offer is being
-     *   written, or losing a race with a concurrent session close/reconnect.
+     *   exceeds `maxFileSizeBytes` ([P2pError.PayloadTooLarge]), or the name or
+     *   MIME type is invalid.
+     * - Once validation succeeds and the dispatcher begins its registration
+     *   transaction, the kit treats [source] as transferred. A FILE_OFFER
+     *   write failure, cancellation during that write, allocation failure, or
+     *   concurrent close/reconnect then closes it before rethrowing.
      *
-     * The two shapes of a concurrent-close refusal (just before vs. just
-     * after registration) surface as the same [P2pError.ConnectionFailed], so
-     * a caller cannot always tell from the error alone whether the kit closed
-     * [source]. After any throw from this method, treat [source] as unusable;
-     * if its `close()` is idempotent (true for `kotlinx.io.Buffer` and the
-     * file-backed sources the samples use), closing it defensively is safe.
+     * Concurrent-close refusals surface as
+     * [P2pError.FileTransferFailed] with `REMOTE_DISCONNECTED`. A caller still
+     * cannot always tell from the error alone whether registration committed;
+     * after any throw, treat [source] as unusable. If its `close()` is
+     * idempotent (true for `kotlinx.io.Buffer` and the file-backed sources the
+     * samples use), closing it defensively is safe.
      *
      * ### Error contract (decision #12a)
      *
-     * Same as [send]: failures surface as typed [P2pError] and
-     * [kotlinx.coroutines.CancellationException] propagates unchanged; any
-     * unexpected exception is wrapped in [P2pError.ConnectionFailed] with the
-     * original preserved as [cause][Throwable.cause]. In particular a
-     * negative [sizeBytes] surfaces as [P2pError.ConnectionFailed] wrapping
-     * the underlying `IllegalArgumentException`.
+     * Transfer-owned failures surface as [P2pError.FileTransferFailed] with a
+     * stable kind, phase, retry action, optional transfer id, and preserved
+     * platform [cause][Throwable.cause]. Cancellation propagates unchanged;
+     * rejection and explicit transfer cancellation are terminal transfer
+     * states rather than exceptions. Authentication failures retain their
+     * existing session-level [P2pError.AuthenticationFailed] type.
      *
      * @throws P2pError.PayloadTooLarge if [sizeBytes] exceeds the configured
      *   `maxFileSizeBytes` (default 2 GiB).
-     * @throws P2pError.ConnectionFailed if the session is not in
-     *   [ConnectionState.Connected], the offer could not be written, or any
-     *   other unexpected failure occurred (original exception as `cause`).
+     * @throws P2pError.FileTransferFailed for invalid metadata, a disconnected
+     *   session, offer timeout/write failure, or another transfer-owned error.
      */
     @Throws(Exception::class)
     public suspend fun sendFile(
@@ -152,3 +163,6 @@ public interface P2pSession {
     @Throws(Exception::class)
     public suspend fun close()
 }
+
+private val EMPTY_PENDING_FILE_OFFERS: StateFlow<List<P2pFileOffer>> =
+    MutableStateFlow<List<P2pFileOffer>>(emptyList()).asStateFlow()

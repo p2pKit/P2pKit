@@ -30,6 +30,41 @@ public enum class LocalIdentityRecovery {
     EXPLICIT_RESET_REQUIRED
 }
 
+/** Stable, cross-platform classification of a file-transfer failure. */
+public enum class FileTransferFailureKind {
+    TRANSPORT,
+    REMOTE_DISCONNECTED,
+    TIMEOUT,
+    INVALID_METADATA,
+    AUTHENTICATION,
+    INTEGRITY,
+    SOURCE_CHANGED,
+    SOURCE_IO,
+    STORAGE,
+    UNSUPPORTED_FEATURE,
+    TRANSFER_PROTOCOL
+}
+
+/** Operation phase in which a [P2pError.FileTransferFailed] occurred. */
+public enum class FileTransferPhase {
+    OFFER,
+    ACCEPT,
+    SOURCE_READ,
+    SEND,
+    RECEIVE,
+    VERIFY,
+    FLUSH,
+    DURABLE_COMMIT
+}
+
+/** Safe recovery action for a terminal file-transfer failure. */
+public enum class Retryability {
+    RETRY_SAME_SESSION,
+    RETRY_NEW_SESSION,
+    RETRY_AFTER_USER_ACTION,
+    NOT_RETRYABLE
+}
+
 /**
  * Typed errors thrown by the P2pKit public API.
  *
@@ -78,6 +113,28 @@ public sealed class P2pError(message: String? = null, cause: Throwable? = null) 
      * the cause.
      */
     public data class ConnectionFailed(val reason: String) : P2pError(reason) {
+        /** Backing slot for [cause]; internal so only the SDK can attach it. */
+        internal var underlying: Throwable? = null
+
+        override val cause: Throwable? get() = underlying
+    }
+
+    /**
+     * Terminal failure of one file-transfer attempt.
+     *
+     * Portable behavior depends only on [kind], [phase], [retryability], and
+     * [transferId]. A retained platform exception is available as [cause] for
+     * diagnostics, but deliberately does not participate in value equality,
+     * destructuring, or [copy]. Retrying always creates a new transfer; a
+     * failed transfer handle never resumes.
+     */
+    public data class FileTransferFailed(
+        val kind: FileTransferFailureKind,
+        val phase: FileTransferPhase,
+        val retryability: Retryability,
+        val transferId: String?,
+        val reason: String
+    ) : P2pError(reason) {
         /** Backing slot for [cause]; internal so only the SDK can attach it. */
         internal var underlying: Throwable? = null
 

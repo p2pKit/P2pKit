@@ -236,7 +236,7 @@ Run each test once, capture the log files, fill the result table at the bottom. 
 
 ### Test 7 — Parallel file transfer + reconnect
 
-**Race targeted.** A `sendFile` is mid-stream when the wire drops. The Failed transitions in `transitionToTerminal` (post-S3) now correctly call `fileTransferDispatcher.closeAll(reason)` on every path — this test verifies the file transfer's final state surfaces as `Failed(ConnectionFailed)` and not as a silent stuck `Sending` state.
+**Race targeted.** A `sendFile` is mid-stream when the wire drops. The Failed transitions in `transitionToTerminal` (post-S3) now correctly call `fileTransferDispatcher.closeAll(reason)` on every path — this test verifies the file transfer's final state surfaces as `Failed(FileTransferFailed(kind = REMOTE_DISCONNECTED, …))` and not as a silent stuck `Sending` state.
 
 **Setup.** Two phones, session Connected. On Android: open Send file menu and pick a moderately large file (1–10 MB, e.g., a video clip).
 

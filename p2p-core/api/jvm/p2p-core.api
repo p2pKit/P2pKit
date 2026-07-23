@@ -134,6 +134,37 @@ public final class dev/p2pkit/core/FeatureState$Unsupported : dev/p2pkit/core/Fe
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class dev/p2pkit/core/FileTransferFailureKind : java/lang/Enum {
+	public static final field AUTHENTICATION Ldev/p2pkit/core/FileTransferFailureKind;
+	public static final field INTEGRITY Ldev/p2pkit/core/FileTransferFailureKind;
+	public static final field INVALID_METADATA Ldev/p2pkit/core/FileTransferFailureKind;
+	public static final field REMOTE_DISCONNECTED Ldev/p2pkit/core/FileTransferFailureKind;
+	public static final field SOURCE_CHANGED Ldev/p2pkit/core/FileTransferFailureKind;
+	public static final field SOURCE_IO Ldev/p2pkit/core/FileTransferFailureKind;
+	public static final field STORAGE Ldev/p2pkit/core/FileTransferFailureKind;
+	public static final field TIMEOUT Ldev/p2pkit/core/FileTransferFailureKind;
+	public static final field TRANSFER_PROTOCOL Ldev/p2pkit/core/FileTransferFailureKind;
+	public static final field TRANSPORT Ldev/p2pkit/core/FileTransferFailureKind;
+	public static final field UNSUPPORTED_FEATURE Ldev/p2pkit/core/FileTransferFailureKind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/core/FileTransferFailureKind;
+	public static fun values ()[Ldev/p2pkit/core/FileTransferFailureKind;
+}
+
+public final class dev/p2pkit/core/FileTransferPhase : java/lang/Enum {
+	public static final field ACCEPT Ldev/p2pkit/core/FileTransferPhase;
+	public static final field DURABLE_COMMIT Ldev/p2pkit/core/FileTransferPhase;
+	public static final field FLUSH Ldev/p2pkit/core/FileTransferPhase;
+	public static final field OFFER Ldev/p2pkit/core/FileTransferPhase;
+	public static final field RECEIVE Ldev/p2pkit/core/FileTransferPhase;
+	public static final field SEND Ldev/p2pkit/core/FileTransferPhase;
+	public static final field SOURCE_READ Ldev/p2pkit/core/FileTransferPhase;
+	public static final field VERIFY Ldev/p2pkit/core/FileTransferPhase;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/core/FileTransferPhase;
+	public static fun values ()[Ldev/p2pkit/core/FileTransferPhase;
+}
+
 public final class dev/p2pkit/core/KeepAliveConfig {
 	public fun <init> ()V
 	public fun <init> (JJ)V
@@ -323,6 +354,26 @@ public final class dev/p2pkit/core/P2pError$ConnectionFailed : dev/p2pkit/core/P
 	public fun equals (Ljava/lang/Object;)Z
 	public fun getCause ()Ljava/lang/Throwable;
 	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/P2pError$FileTransferFailed : dev/p2pkit/core/P2pError {
+	public fun <init> (Ldev/p2pkit/core/FileTransferFailureKind;Ldev/p2pkit/core/FileTransferPhase;Ldev/p2pkit/core/Retryability;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ldev/p2pkit/core/FileTransferFailureKind;
+	public final fun component2 ()Ldev/p2pkit/core/FileTransferPhase;
+	public final fun component3 ()Ldev/p2pkit/core/Retryability;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun copy (Ldev/p2pkit/core/FileTransferFailureKind;Ldev/p2pkit/core/FileTransferPhase;Ldev/p2pkit/core/Retryability;Ljava/lang/String;Ljava/lang/String;)Ldev/p2pkit/core/P2pError$FileTransferFailed;
+	public static synthetic fun copy$default (Ldev/p2pkit/core/P2pError$FileTransferFailed;Ldev/p2pkit/core/FileTransferFailureKind;Ldev/p2pkit/core/FileTransferPhase;Ldev/p2pkit/core/Retryability;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Ldev/p2pkit/core/P2pError$FileTransferFailed;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getCause ()Ljava/lang/Throwable;
+	public final fun getKind ()Ldev/p2pkit/core/FileTransferFailureKind;
+	public final fun getPhase ()Ldev/p2pkit/core/FileTransferPhase;
+	public final fun getReason ()Ljava/lang/String;
+	public final fun getRetryability ()Ldev/p2pkit/core/Retryability;
+	public final fun getTransferId ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -548,6 +599,7 @@ public abstract interface class dev/p2pkit/core/P2pSession {
 	public abstract fun getIncomingFiles ()Lkotlinx/coroutines/flow/SharedFlow;
 	public abstract fun getPeer ()Ldev/p2pkit/core/Peer;
 	public fun getPeerIdentity ()Ldev/p2pkit/core/PeerIdentity;
+	public fun getPendingFileOffers ()Lkotlinx/coroutines/flow/StateFlow;
 	public abstract fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public abstract fun send (Ldev/p2pkit/core/P2pMessage;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun sendFile (Ljava/lang/String;JLjava/lang/String;Lkotlinx/io/RawSource;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -555,6 +607,7 @@ public abstract interface class dev/p2pkit/core/P2pSession {
 
 public final class dev/p2pkit/core/P2pSession$DefaultImpls {
 	public static fun getPeerIdentity (Ldev/p2pkit/core/P2pSession;)Ldev/p2pkit/core/PeerIdentity;
+	public static fun getPendingFileOffers (Ldev/p2pkit/core/P2pSession;)Lkotlinx/coroutines/flow/StateFlow;
 }
 
 public abstract class dev/p2pkit/core/P2pState {
@@ -754,6 +807,16 @@ public final class dev/p2pkit/core/ReconnectPolicy$Enabled : dev/p2pkit/core/Rec
 	public final fun getRetryDelayMillis ()J
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/Retryability : java/lang/Enum {
+	public static final field NOT_RETRYABLE Ldev/p2pkit/core/Retryability;
+	public static final field RETRY_AFTER_USER_ACTION Ldev/p2pkit/core/Retryability;
+	public static final field RETRY_NEW_SESSION Ldev/p2pkit/core/Retryability;
+	public static final field RETRY_SAME_SESSION Ldev/p2pkit/core/Retryability;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/core/Retryability;
+	public static fun values ()[Ldev/p2pkit/core/Retryability;
 }
 
 public abstract class dev/p2pkit/core/SecurityMode {
