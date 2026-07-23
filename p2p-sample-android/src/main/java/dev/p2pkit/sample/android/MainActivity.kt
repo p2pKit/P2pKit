@@ -173,6 +173,8 @@ private fun SetupScreen(
     // previous kit's async teardown, or two kits overlap (duplicate mDNS
     // advertisements + two TCP listeners).
     val isStopping by vm.isStopping.collectAsState()
+    val kmpSmokeBusy by vm.kmpSmokeBusy.collectAsState()
+    val kmpSmokeResult by vm.kmpSmokeResult.collectAsState()
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -221,6 +223,20 @@ private fun SetupScreen(
                     isStopping -> "Stopping previous run…"
                     else -> "Start"
                 }
+            )
+        }
+
+        Button(
+            onClick = vm::runKmpConsumerSmoke,
+            enabled = !isStarting && !isStopping && !kmpSmokeBusy,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (kmpSmokeBusy) "Running KMP consumer smoke…" else "Run KMP consumer smoke")
+        }
+        if (kmpSmokeResult != null) {
+            Text(
+                text = kmpSmokeResult.orEmpty(),
+                style = MaterialTheme.typography.bodySmall
             )
         }
     }
@@ -810,6 +826,14 @@ private fun FileTransferRowView(row: FileTransferRow, onCancel: () -> Unit) {
             if (row.destinationPath != null) {
                 Text(
                     text = "saved to ${row.destinationPath}",
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (row.sha256 != null) {
+                Text(
+                    text = "sha256 ${row.sha256}",
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis

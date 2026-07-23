@@ -1,7 +1,7 @@
 package dev.p2pkit.sample.android
 
 import android.app.Application
-import dev.p2pkit.core.android.P2pKitAndroid
+import dev.p2pkit.sample.kmp.initP2pKitAndroid
 
 /**
  * Wires P2pKit's Android-only init hook so that `PeerId` persistence uses
@@ -11,6 +11,6 @@ import dev.p2pkit.core.android.P2pKitAndroid
 class P2pKitSampleApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        P2pKitAndroid.initialize(this)
+        initP2pKitAndroid(this)
     }
 }

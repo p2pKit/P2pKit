@@ -58,6 +58,24 @@ struct ContentView: View {
     @State private var pendingConnectPeerIds: Set<String> = []
     @State private var sendingFileSessionIds: Set<String> = []
 
+    /// Test-only deterministic file presets. These keep physical-device
+    /// transfer runs reproducible without a document-provider fixture.
+    private enum TestFilePreset: String, CaseIterable, Identifiable {
+        case small = "200 KiB"
+        case medium = "5 MiB"
+        case boundary = "49 MiB"
+
+        var id: String { rawValue }
+
+        var byteCount: Int {
+            switch self {
+            case .small: return 200 * 1024
+            case .medium: return 5 * 1024 * 1024
+            case .boundary: return 49 * 1024 * 1024
+            }
+        }
+    }
+
     /// Session ids whose `incoming`/`pendingFileOffers` flows we've already
     /// subscribed to, so duplicate Connect taps don't attach a second
     /// collector and echo every received message.
@@ -410,13 +428,15 @@ struct ContentView: View {
                         .frame(width: 8, height: 8)
                     Text("\(row.peerName) — \(row.state)").font(.callout)
                     Spacer()
-                    // AUDIT-2026-06 (D-G9-samples-desktop-ios-03): per-session
-                    // send-file affordance. Streams a generated 200 KB binary
-                    // through sendFile() — the same "200KB binary preset" the
-                    // README test recipes reference — so the cross-platform
-                    // file path is exercisable without a document picker.
-                    Button(sendingFileSessionIds.contains(row.id) ? "Sending…" : "Send file") {
-                        Task { await sendTestFile(to: row) }
+                    // Test-only deterministic presets cover normal,
+                    // multi-megabyte, and near-quota transfers without a
+                    // document-provider fixture.
+                    Menu(sendingFileSessionIds.contains(row.id) ? "Sending…" : "Send test file") {
+                        ForEach(TestFilePreset.allCases) { preset in
+                            Button(preset.rawValue) {
+                                Task { await sendTestFile(to: row, preset: preset) }
+                            }
+                        }
                     }
                     .buttonStyle(.bordered)
                     .disabled(!row.isConnected || isStopping || sendingFileSessionIds.contains(row.id))
@@ -591,6 +611,18 @@ struct ContentView: View {
         if n >= 1_048_576 { return String(format: "%.1f MB", Double(n) / 1_048_576.0) }
         if n >= 1_024 { return String(format: "%.0f KB", Double(n) / 1_024.0) }
         return "\(n) B"
+    }
+
+    private func sha256File(at url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = CryptoKit.SHA256()
+        while true {
+            let chunk = try handle.read(upToCount: 64 * 1024) ?? Data()
+            if chunk.isEmpty { break }
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Actions
@@ -1059,7 +1091,21 @@ struct ContentView: View {
                 "receiving '\(dest.lastPathComponent)' (\(fmtBytes(offer.sizeBytes))) from \(offer.peer.name)",
                 kind: .info
             )
-            watchTransfer(transfer, direction: .receive, detail: dest.lastPathComponent) { _ in nil }
+            watchTransfer(transfer, direction: .receive, detail: dest.lastPathComponent) { completed in
+                guard completed else { return nil }
+                do {
+                    let digest = try sha256File(at: dest)
+                    diag("file", "durable receive committed '\(dest.lastPathComponent)' sha256=\(digest)")
+                    appendMessage("sha256 \(dest.lastPathComponent): \(digest)", kind: .info)
+                } catch {
+                    diag("file", "sha256 read failed for '\(dest.lastPathComponent)': \(error.localizedDescription)")
+                    appendMessage(
+                        "sha256 unavailable for \(dest.lastPathComponent): \(error.localizedDescription)",
+                        kind: .error
+                    )
+                }
+                return nil
+            }
         } catch {
             diag("file", "accept THREW for '\(offer.name)': \(error.localizedDescription)")
             appendMessage("accept failed for '\(offer.name)': \(error.localizedDescription)", kind: .error)
@@ -1104,19 +1150,21 @@ struct ContentView: View {
     /// the prepared SHA-256 `sendFile(name:mimeType:source:)` API —
     /// no document picker needed, so the flow is one tap on the test bench.
     @MainActor
-    private func sendTestFile(to row: SessionRow) async {
+    private func sendTestFile(to row: SessionRow, preset: TestFilePreset = .small) async {
         guard !sendingFileSessionIds.contains(row.id) else { return }
         sendingFileSessionIds.insert(row.id)
         defer { sendingFileSessionIds.remove(row.id) }
 
-        let size = 200 * 1024
+        let size = preset.byteCount
         var data = Data(count: size)
         for i in 0..<size {
             data[i] = UInt8(truncatingIfNeeded: i &* 31 &+ 7)   // deterministic pattern
         }
-        let name = "ios-test-\(Int(Date().timeIntervalSince1970)).bin"
+        let name = "ios-test-\(preset.rawValue.replacingOccurrences(of: " ", with: "-"))-\(Int(Date().timeIntervalSince1970)).bin"
         let source = PreparedDataSource(data: data)
-        diag("file", "sendFile '\(name)' (\(size) B) -> \(row.peerName)")
+        let digest = source.sha256Hex
+        diag("file", "sendFile '\(name)' (\(size) B) sha256=\(digest) -> \(row.peerName)")
+        appendMessage("prepared \(name): sha256 \(digest)", kind: .info)
         do {
             let transfer = try await row.session.sendFile(
                 name: name,
@@ -1124,7 +1172,12 @@ struct ContentView: View {
                 source: source
             )
             appendMessage("offering file '\(name)' (\(fmtBytes(Int64(size)))) to \(row.peerName)", kind: .sent)
-            watchTransfer(transfer, direction: .send, detail: nil) { _ in nil }
+            watchTransfer(transfer, direction: .send, detail: nil) { completed in
+                if completed {
+                    diag("file", "sender completed '\(name)' sha256=\(digest)")
+                }
+                return nil
+            }
         } catch {
             diag("file", "sendFile THREW for \(row.peerId.prefix(8)): \(error.localizedDescription)")
             appendMessage("sendFile failed (\(row.peerName)): \(error.localizedDescription)", kind: .error)
@@ -1647,11 +1700,13 @@ final class PreparedDataSource: NSObject, PreparedFileSource {
     private let data: Data
     let sizeBytes: Int64
     let sha256: Sha256Digest
+    let sha256Hex: String
 
     init(data: Data) {
         self.data = data
         self.sizeBytes = Int64(data.count)
         let digest = Array(CryptoKit.SHA256.hash(data: data))
+        self.sha256Hex = digest.map { String(format: "%02x", $0) }.joined()
         let bytes = KotlinByteArray(size: Int32(digest.count))
         for (index, byte) in digest.enumerated() {
             bytes.set(index: Int32(index), value: Int8(bitPattern: byte))

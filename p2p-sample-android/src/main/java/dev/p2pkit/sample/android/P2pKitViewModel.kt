@@ -41,6 +41,8 @@ import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transfer.sendFile
 import dev.p2pkit.provisioning.android.AndroidP2pPermissionManager
 import dev.p2pkit.provisioning.android.android
+import dev.p2pkit.sample.kmp.createP2pKit
+import dev.p2pkit.sample.kmp.runDiscoverAndGreet
 import dev.p2pkit.transport.lan.AndroidLanDiag
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CancellationException
@@ -105,6 +107,12 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     /** True from [stop] until the in-flight kit.stop() coroutine returns. */
     private val _isStopping = MutableStateFlow(false)
     val isStopping: StateFlow<Boolean> = _isStopping.asStateFlow()
+
+    private val _kmpSmokeBusy = MutableStateFlow(false)
+    val kmpSmokeBusy: StateFlow<Boolean> = _kmpSmokeBusy.asStateFlow()
+
+    private val _kmpSmokeResult = MutableStateFlow<String?>(null)
+    val kmpSmokeResult: StateFlow<String?> = _kmpSmokeResult.asStateFlow()
 
     /**
      * True while a [startHotspot] / [joinHotspot] / [stopHotspot] call is
@@ -246,6 +254,28 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     fun updateReconnectChoice(choice: ReconnectChoice) {
         if (_isRunning.value) return  // locked at kit construction
         reconnectChoice = choice
+    }
+
+    /** Physical-device consumer smoke for PS-T09; unavailable while the room kit owns LAN. */
+    fun runKmpConsumerSmoke() {
+        if (_isRunning.value || _isStarting.value || _isStopping.value || _kmpSmokeBusy.value) return
+        _kmpSmokeBusy.value = true
+        _kmpSmokeResult.value = "Running KMP advertise/discover/connect/send/close/stop…"
+        viewModelScope.launch {
+            val result = runCatchingNonCancel {
+                val smoke = createP2pKit(APP_ID, "Android-KMP-${Build.MODEL.take(16)}")
+                runDiscoverAndGreet(
+                    p2p = smoke,
+                    greetingFrom = "Android KMP consumer",
+                    discoveryTimeoutMillis = 10_000
+                )
+            }
+            _kmpSmokeResult.value = result.fold(
+                onSuccess = { "KMP consumer: $it" },
+                onFailure = { "KMP consumer failed: ${it.message ?: it::class.simpleName}" }
+            )
+            _kmpSmokeBusy.value = false
+        }
     }
 
     fun togglePeerTarget(peerId: String) {
@@ -633,6 +663,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
         val ctx = getApplication<Application>().applicationContext
         scope.launch {
+            val preparedHash = withContext(Dispatchers.IO) { sha256Uri(ctx, uri) }
+            if (preparedHash != null) {
+                appendSystemMessage("prepared file sha256=$preparedHash")
+            }
             val transfer = runCatchingNonCancel {
                 // AUDIT-2026-06: B-G8-samples-android-02 — the SAF extension does
                 // ContentResolver getType/query/openInputStream with no internal
@@ -795,6 +829,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 state = transfer.state.value,
                 bytesTransferred = 0L,
                 destinationPath = null,
+                sha256 = null,
                 transfer = transfer
             )
         )
@@ -818,6 +853,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 state = transfer.state.value,
                 bytesTransferred = 0L,
                 destinationPath = destinationPath,
+                sha256 = null,
                 transfer = transfer
             )
         )
@@ -859,6 +895,14 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         withContext(Dispatchers.IO) {
                             runCatching { File(destinationPath).delete() }
                         }
+                    } else if (completed && destinationPath != null) {
+                        val digest = withContext(Dispatchers.IO) {
+                            runCatching { TestFileDigests.sha256(File(destinationPath)) }.getOrNull()
+                        }
+                        updateRowDigest(transfer.id, digest)
+                        if (digest != null) {
+                            appendSystemMessage("received ${transfer.name} sha256=$digest")
+                        }
                     }
                 }
             }
@@ -889,6 +933,17 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val idx = fileTransfers.indexOfFirst { it.id == id }
         if (idx < 0) return
         fileTransfers[idx] = fileTransfers[idx].copy(bytesTransferred = bytes)
+    }
+
+    private fun updateRowDigest(id: String, digest: String?) {
+        val idx = fileTransfers.indexOfFirst { it.id == id }
+        if (idx < 0) return
+        fileTransfers[idx] = fileTransfers[idx].copy(sha256 = digest)
+    }
+
+    private fun sha256Uri(context: android.content.Context, uri: Uri): String? {
+        val input = context.contentResolver.openInputStream(uri) ?: return null
+        return input.use { TestFileDigests.sha256(it) }
     }
 
     fun cancelFileTransfer(id: String) {
@@ -1267,6 +1322,8 @@ data class FileTransferRow(
     val bytesTransferred: Long,
     /** Absolute path on disk for incoming transfers; null for outgoing. */
     val destinationPath: String?,
+    /** Test-harness verification digest, populated after durable receive commit. */
+    val sha256: String?,
     val transfer: P2pFileTransfer
 )
 

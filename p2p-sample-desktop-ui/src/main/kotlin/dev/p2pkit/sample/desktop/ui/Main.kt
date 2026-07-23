@@ -88,6 +88,7 @@ import dev.p2pkit.provisioning.desktop.jvm
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
@@ -715,6 +716,8 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             return
         }
         scope.launch {
+            val sourceDigest = withContext(Dispatchers.IO) { testFileSha256(file) }
+            appendSystemMessage("prepared ${file.name} sha256=$sourceDigest")
             val transfer = runCatchingCancellable { session.sendFile(file) }
                 .getOrElse {
                     System.err.println(
@@ -847,6 +850,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 state = transfer.state.value,
                 bytesTransferred = 0L,
                 destinationPath = null,
+                sha256 = null,
                 transfer = transfer
             )
         )
@@ -870,6 +874,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 state = transfer.state.value,
                 bytesTransferred = 0L,
                 destinationPath = destinationPath,
+                sha256 = null,
                 transfer = transfer
             )
         )
@@ -877,7 +882,15 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         // The transactional destination is owned by the SDK and is committed
         // or aborted even if this UI collector is cancelled.
         watchTransfer(transfer, scope) { completed ->
-            if (!completed) runCatching { File(destinationPath).delete() }
+            if (!completed) {
+                runCatching { File(destinationPath).delete() }
+            } else {
+                val digest = withContext(Dispatchers.IO) {
+                    testFileSha256(File(destinationPath))
+                }
+                updateRowDigest(transfer.id, digest)
+                appendSystemMessage("received ${transfer.name} sha256=$digest")
+            }
         }
     }
 
@@ -890,7 +903,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     private fun watchTransfer(
         transfer: P2pFileTransfer,
         scope: CoroutineScope,
-        onFinally: ((completed: Boolean) -> Unit)? = null
+        onFinally: (suspend (completed: Boolean) -> Unit)? = null
     ) {
         scope.launch {
             var completed = false
@@ -940,6 +953,12 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         val idx = fileTransfers.indexOfFirst { it.id == id }
         if (idx < 0) return
         fileTransfers[idx] = fileTransfers[idx].copy(bytesTransferred = bytes)
+    }
+
+    private fun updateRowDigest(id: String, digest: String?) {
+        val idx = fileTransfers.indexOfFirst { it.id == id }
+        if (idx < 0) return
+        fileTransfers[idx] = fileTransfers[idx].copy(sha256 = digest)
     }
 
     private fun sanitize(raw: String): String {
@@ -1064,6 +1083,7 @@ data class FileTransferRow(
     val state: FileTransferState,
     val bytesTransferred: Long,
     val destinationPath: String?,
+    val sha256: String?,
     val transfer: P2pFileTransfer
 )
 
@@ -1818,6 +1838,14 @@ private fun FileTransferRowView(row: FileTransferRow, onCancel: () -> Unit) {
             if (row.destinationPath != null) {
                 Text(
                     text = "saved to ${row.destinationPath}",
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (row.sha256 != null) {
+                Text(
+                    text = "sha256 ${row.sha256}",
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis

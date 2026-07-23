@@ -8,6 +8,13 @@ Baseline commit: `6a05ccd04fcb6fb8106ed47941618fb6bcfd3fa6`
 
 Working branch: `remediation/full-register-2026-07`
 
+Canonical remote: `https://github.com/p2pKit/P2pKit.git`
+
+Published remediation tip before the external-validation batch:
+`3da5d3f5de7ea2204c0b921d262872dd3831ee0d`. The same history was
+fast-forwarded to `main` and verified at the canonical remote. The final
+sample/test-plan commit will advance both branches together.
+
 ## Purpose and non-negotiable rules
 
 This is the mutable execution record for remediating the source review. The source review is evidence and must not be edited as a substitute for fixing code. The pre-existing `.review-2026-07/` directory and `DEFERRED_ITEMS_REGISTER_2026-07.md` are user-owned and remain outside this program.
@@ -48,7 +55,20 @@ Operating safeguards:
 | Findings total | 150 |
 | Explicit test gaps | 54 |
 
-Current finding state: 0 `Planned`, 119 `Implemented`, 29 `Verified`, and 2 `Blocked`. Explicit gap state: 21 `Verified`, 21 `Implemented`, 0 `Planned`, and 12 `Blocked`; no gap remains `In Progress`. All nine owner-approved lifecycle/API/protocol decisions are locally implemented. The authenticated-envelope and durable-transfer rows now have deterministic JVM/Apple tests, cross-target gates, ABI/Dokka, isolated published-consumer, Swift, and release-XCFramework evidence; they remain `Implemented` rather than `Verified` because the focused commit is not pushed. Existing physical-device, hostile-network, credential, cryptographic-audit, runtime-UI, remote-release, and source-control blockers remain unchanged. The repository is not production-ready until every external gate is complete and local commits are pushed and reclassified under the strict status rules.
+Current finding state: 0 `Planned`, 119 `Implemented`, 29 `Verified`, and 2
+`Blocked`. Explicit gap state: 21 `Verified`, 21 `Implemented`, 0 `Planned`,
+and 12 `Blocked`; no gap remains `In Progress`. All nine owner-approved
+lifecycle/API/protocol decisions are locally implemented. The authenticated
+envelope and durable-transfer rows have deterministic JVM/Apple tests,
+cross-target gates, ABI/Dokka, isolated published-consumer, Swift, and
+release-XCFramework evidence and are now on the owner-approved canonical
+remote, but remain below `Verified` until their external acceptance criteria
+are executed. The external-validation plan is committed as
+`P2PKIT_EXTERNAL_VALIDATION_TEST_PLAN.md`; sample readiness additions and
+their exact local checks are recorded below. Physical-device, hostile-network,
+credential, cryptographic-audit, and independent-interoperability blockers
+remain explicit. The repository is not production-ready until every external
+gate is complete.
 
 ### Baseline gate evidence and reusable command catalog
 
@@ -1540,3 +1560,9 @@ The `fix(samples): harden transfer cleanup and histories` shorthand in the SAMPL
 | 2026-07-23 | PARSE-META-01 + XFER-PROTO-01/verification | Ran focused and complete affected checks, Swift warnings-as-errors typecheck, both ABI validators, core/LAN warning-failing Dokka, isolated published consumers, and release XCFramework provenance | Focused 83 core + 9 desktop-UI tests pass; complete core 489 JVM + 460 Apple, LAN 87 JVM + 67 Apple (one registered diagnostic skip), 61 Gradle tasks, ABI/Dokka/Swift pass; publication 221 + 19 consumers pass; release provenance pass; push remains blocked at `SCM-PUSH-01` |
 | 2026-07-23 | PARSE-META-01 + XFER-PROTO-01/source control | Reviewed committed `a70ea626a1bae237b6248cfaeb639952a5552c49`, reran focused core/LAN JVM+Apple tests, complete affected platforms, both ABI validators, Swift, published consumers, and release provenance | Committed focused: core 100 JVM + 95 Apple, LAN 4 JVM + 3 Apple; complete final: core 489 JVM + 460 Apple, LAN 87 JVM + 67 Apple with one registered diagnostic skip, desktop UI 13; all zero failures/errors; 29-task compile/ABI, 221 + 19 consumer, Swift, and release provenance gates pass; no push attempted |
 | 2026-07-23 | FINAL-LOCAL-GATE | Ran the repository-wide `./gradlew check --rerun-tasks --console=plain` from committed `a70ea626` | BUILD SUCCESSFUL, 149/149 tasks, zero failures/errors; Android lint and all locally available module/platform checks pass; physical/device/hostile-network/credential/audit/push blockers remain explicit |
+
+| 2026-07-23 | EXTERNAL-VALIDATION-PLAN-01 | Added the executable external-validation plan and audited the actual iOS, Android, JVM CLI, Desktop UI, and KMP sample controls against `PROV-A12`, `PT-T20`, `LAN-T01`, `PS-T01`, `PS-T02`, `PS-T04`, `LAN-T07`, `ENV-01`, `ENV-02`, `ENV-04`, `PS-T05`, `PS-T06`, `PS-T07`, `PS-T08`, `PS-T09`, `BUILD-02`, `ENV-07`, professional cryptographic audit preparation, and independent secure-v2 interoperability | `P2PKIT_EXTERNAL_VALIDATION_TEST_PLAN.md` documents exact preparation/build/install commands, UI actions, configurations, data, expected/pass/fail criteria, evidence, cleanup, troubleshooting, safety, result templates, and a platform capability matrix. It does not claim any external row is Verified. |
+| 2026-07-23 | EXTERNAL-VALIDATION-PLAN-01/sample-readiness | Added test-focused SHA-256 evidence and deterministic file fixtures without changing production protocol/security behavior | iOS `ContentView.swift` exposes 200 KiB/5 MiB/49 MiB generated secure-v2 presets and sender/receiver digest diagnostics; Android displays/logs prepared and durably received SHA-256 values and adds the KMP consumer smoke control; JVM CLI and Desktop UI print prepared/durable hashes. Added Android/JVM/Desktop-UI known-vector digest tests and the Android `sample-kmp-shared` runtime dependency/initialization path. |
+| 2026-07-23 | EXTERNAL-VALIDATION-PLAN-01/files | Exact files changed | `P2PKIT_EXTERNAL_VALIDATION_TEST_PLAN.md`; `P2PKIT_REMEDIATION_TRACKER_2026-07.md`; `iosApp/ContentView.swift`; `p2p-sample-android/build.gradle.kts`; `p2p-sample-android/gradle.lockfile`; `p2p-sample-android/src/main/java/dev/p2pkit/sample/android/MainActivity.kt`; `p2p-sample-android/src/main/java/dev/p2pkit/sample/android/P2pKitSampleApplication.kt`; `p2p-sample-android/src/main/java/dev/p2pkit/sample/android/P2pKitViewModel.kt`; `p2p-sample-android/src/main/java/dev/p2pkit/sample/android/TestFileDigests.kt`; `p2p-sample-android/src/test/java/dev/p2pkit/sample/android/TestFileDigestsTest.kt`; `p2p-sample-desktop/src/main/kotlin/dev/p2pkit/sample/desktop/Main.kt`; `p2p-sample-desktop/src/main/kotlin/dev/p2pkit/sample/desktop/TestFileDigest.kt`; `p2p-sample-desktop/src/test/kotlin/dev/p2pkit/sample/desktop/TestFileDigestTest.kt`; `p2p-sample-desktop-ui/src/main/kotlin/dev/p2pkit/sample/desktop/ui/Main.kt`; `p2p-sample-desktop-ui/src/main/kotlin/dev/p2pkit/sample/desktop/ui/TestFileDigest.kt`; `p2p-sample-desktop-ui/src/test/kotlin/dev/p2pkit/sample/desktop/ui/TestFileDigestTest.kt`. |
+| 2026-07-23 | EXTERNAL-VALIDATION-PLAN-01/local-verification | Ran `git diff --check`; focused Gradle sample/KMP checks; generated iOS project and exact-UDID UI automation | `git diff --check` passed. `./gradlew :p2p-sample-android:testDebugUnitTest :p2p-sample-android:compileDebugKotlin :sample-kmp-shared:allTests :p2p-sample-desktop:test :p2p-sample-desktop-ui:test --rerun-tasks --console=plain` passed: BUILD SUCCESSFUL, 82 actionable tasks, zero failures/errors. `KEEP_IOS_RUN_ARTIFACTS=1 SIM_UDID=B93342F4-FC27-4B4C-BD72-E4C9CBAF9583 scripts/run-ios-ui-tests.sh` passed: 1/1 UI tests, zero failures; the runner correctly rejected the ambiguous simulator name before the exact-UDID rerun. |
+| 2026-07-23 | EXTERNAL-VALIDATION-PLAN-01/compatibility | Sample additions are test-focused and additive; no public SDK ABI, wire format, security default, credential, or production destination policy changed | iOS/Android/JVM/Desktop UI retain secure-v2 authenticated same-AppId test policy, explicit file consent, progress/cancel/failure state, reconnect/manual endpoint, and bounded diagnostics. Physical devices, hostile-network equipment, an independent peer, professional auditor, and publication credentials remain required. |

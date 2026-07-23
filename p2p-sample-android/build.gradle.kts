@@ -43,6 +43,7 @@ dependencies {
     implementation(project(":p2p-core"))
     implementation(project(":p2p-transport-lan"))
     implementation(project(":p2p-network-provisioning-android"))
+    implementation(project(":sample-kmp-shared"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
@@ -53,4 +54,5 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    testImplementation(kotlin("test-junit"))
 }

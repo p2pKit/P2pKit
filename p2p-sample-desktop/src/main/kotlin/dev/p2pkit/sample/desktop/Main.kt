@@ -616,6 +616,8 @@ private suspend fun repl(
                 }
                 println("[file → ${session.peer.name.sanitizedForTerminal()}] sending ${file.name} (${file.length()}B)")
                 scope.launch {
+                    val sourceDigest = withContext(Dispatchers.IO) { testFileSha256(file) }
+                    println("[file → ${session.peer.name.sanitizedForTerminal()}] sha256=$sourceDigest")
                     runCatching { session.sendFile(file) }
                         .onSuccess { transfer ->
                             scope.launch {
@@ -927,6 +929,8 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
             when (state) {
                 is FileTransferState.Completed -> {
                     completed = true
+                    val digest = withContext(Dispatchers.IO) { testFileSha256(saveFile) }
+                    println("[file ← $peerName $fileName] durable sha256=$digest")
                     true
                 }
                 is FileTransferState.Failed,
