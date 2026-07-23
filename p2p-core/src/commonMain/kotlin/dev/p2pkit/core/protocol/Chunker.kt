@@ -40,8 +40,34 @@ internal class Chunker(
         if (bytes.size.toLong() > maxPayloadBytes) {
             throw P2pError.PayloadTooLarge(maxBytes = maxPayloadBytes, actualBytes = bytes.size.toLong())
         }
-        val extraFlags = if (isText) FrameFlags.IS_TEXT else 0
-        val messageId = MessageId.random(random)
+        return chunkPayload(
+            bytes = bytes,
+            messageId = MessageId.random(random),
+            extraFlags = if (isText) FrameFlags.IS_TEXT else 0,
+            needsAck = needsAck,
+            maximumBytes = maxPayloadBytes
+        )
+    }
+
+    fun chunkEnvelope(payload: ByteArray, messageId: MessageId): List<Frame> =
+        chunkPayload(
+            bytes = payload,
+            messageId = messageId,
+            extraFlags = FrameFlags.IS_ENVELOPE,
+            needsAck = false,
+            maximumBytes = ProtocolConstants.MAX_APP_MESSAGE_ENVELOPE_BYTES.toLong()
+        )
+
+    private fun chunkPayload(
+        bytes: ByteArray,
+        messageId: MessageId,
+        extraFlags: Int,
+        needsAck: Boolean,
+        maximumBytes: Long
+    ): List<Frame> {
+        if (bytes.size.toLong() > maximumBytes) {
+            throw P2pError.PayloadTooLarge(maxBytes = maximumBytes, actualBytes = bytes.size.toLong())
+        }
 
         if (bytes.isEmpty() || bytes.size <= chunkSize) {
             // Single frame: total = 1, index = 0, LAST_CHUNK set.

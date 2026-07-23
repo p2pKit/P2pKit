@@ -61,6 +61,7 @@ import kotlin.test.assertTrue
  * virtual time, mirroring the KeepAliveTest construction idiom.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("DEPRECATION")
 class SendErrorContractTest {
 
     /** Stands in for a raw platform transport exception (e.g. an IOException shape). */

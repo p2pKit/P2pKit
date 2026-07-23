@@ -21,6 +21,7 @@ import dev.p2pkit.core.internal.security.noise.NoiseRole
 import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolConstants
 import dev.p2pkit.core.protocol.ProtocolEvent
+import dev.p2pkit.core.protocol.ProtocolSessionState
 import dev.p2pkit.core.security.LocalSecureIdentity
 import dev.p2pkit.core.security.SecureConnection
 import dev.p2pkit.core.transfer.FileTransferConfig
@@ -545,6 +546,7 @@ internal class SessionManager(
             peerIdentity = handshake.peerIdentity,
             initialConnection = handshake.secureConnection,
             initialEvents = handshake.events,
+            initialProtocolState = handshake.protocolState,
             protocol = protocol,
             parentScope = scope,
             keepAlive = keepAlive,
@@ -728,9 +730,13 @@ internal class SessionManager(
                 val channel = Channel<ProtocolEvent>(capacity = 256)
                 eventChannel = channel
                 val connection = checkNotNull(selectedConnection)
+                val protocolState = ProtocolSessionState(
+                    localPeerId = localPeerId.value,
+                    secure = securityMode is SecurityMode.AuthenticatedV2
+                )
                 val launchedReader = scope.launch {
                     try {
-                        protocol.events(connection).collect { event -> channel.send(event) }
+                        protocol.events(connection, protocolState).collect { event -> channel.send(event) }
                         channel.close()
                     } catch (e: CancellationException) {
                         channel.close()
@@ -750,6 +756,7 @@ internal class SessionManager(
                     localDeviceName = localDeviceName,
                     localPlatform = localPlatform,
                     localTransports = localTransports,
+                    protocolState = protocolState,
                     protocolVersion = protocolVersion,
                     handshakeTimeoutMillis = setupTimeoutMillis
                 )
@@ -800,7 +807,8 @@ internal class SessionManager(
                     events = channel,
                     readerJob = launchedReader,
                     resolvedPeer = resolvedPeer,
-                    peerIdentity = peerIdentity
+                    peerIdentity = peerIdentity,
+                    protocolState = protocolState
                 )
             }
         } catch (e: TimeoutCancellationException) {
@@ -881,7 +889,8 @@ internal class SessionManager(
         val events: ReceiveChannel<ProtocolEvent>,
         val readerJob: Job,
         val resolvedPeer: Peer,
-        val peerIdentity: PeerIdentity
+        val peerIdentity: PeerIdentity,
+        val protocolState: ProtocolSessionState
     )
 
     /**
@@ -1051,7 +1060,11 @@ internal class SessionManager(
                         return
                     }
 
-                    session.rearmWith(handshake.secureConnection, handshake.events)
+                    session.rearmWith(
+                        handshake.secureConnection,
+                        handshake.events,
+                        handshake.protocolState
+                    )
                     logger.info(
                         "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
                             "name=${expectedPeer.name} SUCCEEDED dialed=$dialedStr source=$source"

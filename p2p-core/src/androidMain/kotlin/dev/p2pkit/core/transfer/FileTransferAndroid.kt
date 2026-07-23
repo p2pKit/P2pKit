@@ -6,9 +6,12 @@ import android.content.res.AssetFileDescriptor
 import android.net.Uri
 import android.provider.OpenableColumns
 import dev.p2pkit.core.P2pSession
+import dev.p2pkit.core.internal.P2pSessionImpl
 import kotlinx.io.Buffer
 import kotlinx.io.RawSource
 import kotlinx.io.asSource
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Send a file identified by a content [Uri] (typically from the Storage Access
@@ -20,14 +23,18 @@ import kotlinx.io.asSource
  *  - `sizeBytes` ← [OpenableColumns.SIZE]
  *  - `mimeType` ← [ContentResolver.getType]
  *
- * The underlying `InputStream` opened from the URI is closed automatically
- * when the returned [P2pFileTransfer] reaches any terminal state.
+ * Secure SDK sessions hash the first stable descriptor on [Dispatchers.IO],
+ * close it while the offer is pending, and reopen the URI only after the peer
+ * accepts. The streamed bytes are hashed again; changed content or size fails
+ * instead of being durably committed. Explicit legacy or third-party session
+ * implementations retain the deprecated one-shot source behavior.
  *
  * @throws IllegalArgumentException if the URI cannot be opened or its size
  *   cannot be determined (Android Storage Access Framework occasionally
  *   returns `null` for documents the host app cannot stat — for those, save
  *   to a temp file first and use the JVM `sendFile(File)` overload).
  */
+@Suppress("DEPRECATION")
 public suspend fun P2pSession.sendFile(context: Context, uri: Uri): P2pFileTransfer {
     val cr = context.contentResolver
     val descriptor = cr.openAssetFileDescriptor(uri, "r")
@@ -50,17 +57,43 @@ public suspend fun P2pSession.sendFile(context: Context, uri: Uri): P2pFileTrans
         runCatching { descriptor.close() }
         throw e
     }
-    return try {
-        sendFile(
-            name = displayName,
-            sizeBytes = resolvedSize,
-            mimeType = mimeType,
-            source = source
-        )
-    } catch (e: Throwable) {
-        runCatching { source.close() }
-        throw e
+    if (this !is P2pSessionImpl || !usesAuthenticatedFileTransfer) {
+        return try {
+            sendFile(displayName, resolvedSize, mimeType, source)
+        } catch (e: Throwable) {
+            runCatching { source.close() }
+            throw e
+        }
     }
+    val hash = withContext(Dispatchers.IO) {
+        try {
+            hashPreparedSource(source)
+        } finally {
+            source.close()
+        }
+    }
+    require(hash.sizeBytes == resolvedSize) {
+        "Document size changed while hashing $uri: expected=$resolvedSize actual=${hash.sizeBytes}"
+    }
+    val prepared = object : PreparedFileSource {
+        override val sizeBytes: Long = resolvedSize
+        override val sha256: Sha256Digest = hash.digest
+        override fun open(): RawSource {
+            val reopened = cr.openAssetFileDescriptor(uri, "r")
+                ?: throw IllegalArgumentException("Cannot reopen URI for reading: $uri")
+            return try {
+                val stable = resolveStableSize(uri, queriedSize, reopened.length)
+                require(stable == sizeBytes) {
+                    "Document size changed before transfer $uri: expected=$sizeBytes actual=$stable"
+                }
+                AssetFileRawSource(reopened, reopened.createInputStream().asSource())
+            } catch (e: Throwable) {
+                runCatching { reopened.close() }
+                throw e
+            }
+        }
+    }
+    return sendFile(name = displayName, mimeType = mimeType, source = prepared)
 }
 
 internal fun resolveStableSize(uri: Uri, queriedSize: Long?, descriptorSize: Long): Long {

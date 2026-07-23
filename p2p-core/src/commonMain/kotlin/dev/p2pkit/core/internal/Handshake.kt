@@ -33,6 +33,7 @@ internal suspend fun performHandshake(
     localDeviceName: String,
     localPlatform: Platform,
     localTransports: Set<TransportKind>,
+    protocolState: dev.p2pkit.core.protocol.ProtocolSessionState? = null,
     protocolVersion: Byte = ProtocolConstants.LEGACY_VERSION,
     handshakeTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS
 ): HelloPayload {
@@ -43,7 +44,8 @@ internal suspend fun performHandshake(
         deviceName = localDeviceName,
         platform = localPlatform.name,
         supportedTransports = localTransports.map { it.name },
-        protocolVersion = protocolVersion.toUByte().toInt()
+        protocolVersion = protocolVersion.toUByte().toInt(),
+        features = protocolState?.localFeatures?.sorted() ?: emptyList()
     )
     protocol.sendHello(connection, localHello)
 
@@ -74,6 +76,7 @@ internal suspend fun performHandshake(
             remoteVersion = peerHello.protocolVersion
         )
     }
+    protocolState?.completeHello(peerHello.peerId, peerHello.features)
     return peerHello
 }
 

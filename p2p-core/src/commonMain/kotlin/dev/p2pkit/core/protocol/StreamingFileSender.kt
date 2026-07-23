@@ -15,8 +15,8 @@ import kotlinx.io.readByteArray
  * after exactly [sizeBytes] bytes have been read; if the source has fewer
  * bytes the kotlinx-io `readByteArray` call throws.
  *
- * Zero-byte files emit zero frames — the caller is expected to send a
- * `FILE_DONE` frame to terminate the transfer regardless.
+ * Zero-byte files emit zero frames — the caller sends the protocol-appropriate
+ * legacy `FILE_DONE` or authenticated `FILE_FINISH` completion signal.
  *
  * Cancellation: the coroutine collecting this flow can cancel at any time;
  * the source is **not** closed by this function — the caller owns its lifetime.

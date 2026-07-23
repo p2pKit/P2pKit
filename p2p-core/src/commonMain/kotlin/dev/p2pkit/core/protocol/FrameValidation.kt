@@ -8,7 +8,7 @@ package dev.p2pkit.core.protocol
 internal object FrameValidation {
 
     private const val DATA_FLAGS: Int =
-        FrameFlags.NEEDS_ACK or FrameFlags.LAST_CHUNK or FrameFlags.IS_TEXT
+        FrameFlags.NEEDS_ACK or FrameFlags.LAST_CHUNK or FrameFlags.IS_TEXT or FrameFlags.IS_ENVELOPE
 
     fun maxPayloadBytes(type: PacketType?): Int = when (type) {
         null -> ProtocolConstants.MAX_UNKNOWN_PACKET_PAYLOAD_BYTES
@@ -17,8 +17,11 @@ internal object FrameValidation {
         PacketType.ERROR, PacketType.FILE_REJECT, PacketType.FILE_CANCEL ->
             ProtocolConstants.MAX_REASON_PAYLOAD_BYTES
         PacketType.FILE_OFFER -> ProtocolConstants.MAX_FILE_OFFER_PAYLOAD_BYTES
+        PacketType.FILE_ACCEPT -> 64
+        PacketType.FILE_FINISH, PacketType.FILE_COMMIT -> 128
+        PacketType.FILE_RESULT -> ProtocolConstants.MAX_REASON_PAYLOAD_BYTES + 64
         PacketType.ACK, PacketType.PING, PacketType.PONG, PacketType.CLOSE,
-        PacketType.FILE_ACCEPT, PacketType.FILE_DONE -> 0
+        PacketType.FILE_DONE -> 0
     }
 
     /** Returns a stable diagnostic when a known packet's header is invalid. */
@@ -48,6 +51,10 @@ internal object FrameValidation {
             PacketType.DATA -> {
                 when {
                     bits and DATA_FLAGS != bits -> "$type has unsupported flags 0x${bits.toString(16)}"
+                    bits and FrameFlags.IS_ENVELOPE != 0 && bits and FrameFlags.IS_TEXT != 0 ->
+                        "$type cannot combine IS_ENVELOPE and IS_TEXT"
+                    bits and FrameFlags.IS_ENVELOPE != 0 && bits and FrameFlags.NEEDS_ACK != 0 ->
+                        "$type authenticated envelope cannot use legacy NEEDS_ACK"
                     totalChunks > ProtocolConstants.MAX_TOTAL_CHUNKS ->
                         "$type totalChunks $totalChunks exceeds maximum ${ProtocolConstants.MAX_TOTAL_CHUNKS}"
                     (bits and FrameFlags.LAST_CHUNK != 0) != (chunkIndex == totalChunks - 1) ->
@@ -84,8 +91,7 @@ internal object FrameValidation {
                 payloadLength = payloadLength
             )
 
-            PacketType.PING, PacketType.PONG, PacketType.CLOSE,
-            PacketType.FILE_ACCEPT, PacketType.FILE_DONE -> singletonViolation(
+            PacketType.PING, PacketType.PONG, PacketType.CLOSE, PacketType.FILE_DONE -> singletonViolation(
                 type = type,
                 bits = bits,
                 chunkIndex = chunkIndex,
@@ -94,13 +100,22 @@ internal object FrameValidation {
                 payloadLength = payloadLength
             )
 
-            PacketType.ERROR -> singletonViolation(
+            PacketType.ERROR, PacketType.FILE_FINISH,
+            PacketType.FILE_COMMIT, PacketType.FILE_RESULT -> singletonViolation(
                 type = type,
                 bits = bits,
                 chunkIndex = chunkIndex,
                 totalChunks = totalChunks,
                 payloadLength = payloadLength,
                 requirePayload = true
+            )
+
+            PacketType.FILE_ACCEPT -> singletonViolation(
+                type = type,
+                bits = bits,
+                chunkIndex = chunkIndex,
+                totalChunks = totalChunks,
+                payloadLength = payloadLength
             )
 
             PacketType.FILE_REJECT, PacketType.FILE_CANCEL -> singletonViolation(

@@ -27,10 +27,17 @@ internal sealed class ProtocolEvent {
     data class PeerError(val reason: String) : ProtocolEvent()
     data object Close : ProtocolEvent()
 
-    data class FileOffer(val transferId: MessageId, val payload: FileOfferPayload) : ProtocolEvent()
+    data class FileOffer(
+        val transferId: MessageId,
+        val payload: FileOfferPayload,
+        val secureOffer: SecureFileOffer? = null
+    ) : ProtocolEvent()
     data class FileAccept(val transferId: MessageId) : ProtocolEvent()
     data class FileReject(val transferId: MessageId, val reason: String?) : ProtocolEvent()
     data class FileData(val frame: Frame) : ProtocolEvent()
     data class FileDone(val transferId: MessageId) : ProtocolEvent()
+    data class FileFinish(val payload: SecureFileFinish) : ProtocolEvent()
+    data class FileCommit(val payload: SecureFileCommit) : ProtocolEvent()
+    data class FileResult(val payload: SecureFileResult) : ProtocolEvent()
     data class FileCancel(val transferId: MessageId, val reason: String?) : ProtocolEvent()
 }

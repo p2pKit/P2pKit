@@ -301,6 +301,12 @@ interface P2pSession {
         source: kotlinx.io.RawSource
     ): P2pFileTransfer
 
+    suspend fun sendFile(
+        name: String,
+        mimeType: String?,
+        source: PreparedFileSource
+    ): P2pFileTransfer
+
     suspend fun close()
 }
 ```
@@ -381,14 +387,21 @@ Discrete-file streaming on top of an existing session. The whole file is never
 buffered in memory; bytes stream in `chunkSizeBytes` frames through the
 session's write mutex so messages and keepalive still get slots mid-transfer.
 
-**Flow.** Sender calls `session.sendFile(name, sizeBytes, mimeType, source)` →
-receiver gets a retained `P2pFileOffer` in `session.pendingFileOffers` → receiver calls
-`offer.accept(sink)` or `offer.reject(reason)` (or the offer auto-rejects with
-reason `"timeout"` after `offerTimeoutMillis`) → on accept, FILE_DATA frames
-stream until FILE_DONE; either side may `cancel(reason)` at any point
-(FILE_CANCEL). Wire frames are FILE_OFFER / FILE_ACCEPT / FILE_REJECT /
-FILE_DATA / FILE_DONE / FILE_CANCEL (codes `0x10`–`0x15`, §13.1); the frame's
-`message_id` carries the transfer id for the lifetime of one offer.
+**Secure-v2 flow.** The sender supplies a repeatable `PreparedFileSource`
+containing a size and SHA-256 snapshot. The authenticated HELLO must negotiate
+`file-commit-sha256-v1`; otherwise the operation fails with
+`UNSUPPORTED_FEATURE` without opening the source. The receiver gets a retained
+`P2pFileOffer` and accepts a transactional `FileTransferDestination`. FILE_DATA
+streams only after acceptance. The sender hashes the exact streamed content,
+sends FILE_FINISH with size/chunk count/content digest/offer hash, and remains
+nonterminal. The receiver verifies all values, flushes, durably commits, then
+sends FILE_COMMIT. Only a matching authenticated FILE_COMMIT completes the
+sender. FILE_RESULT carries typed verification/storage/protocol/source/timeout
+failure. Retry always creates a new transfer id; resume is not supported.
+
+**Legacy-v1 flow.** The deprecated `RawSource` / `RawSink` overloads retain the
+original FILE_OFFER → FILE_ACCEPT → FILE_DATA → FILE_DONE behavior and complete
+after receiver flush. Secure sessions never downgrade to this path.
 
 **Unanswered-offer terminal states:** a conforming receiver is the timeout
 authority and sends FILE_REJECT, so both sides end as `Rejected("timeout")`.
@@ -406,8 +419,11 @@ interface P2pFileOffer {
     val sizeBytes: Long
     val mimeType: String?
 
-    /** Stream the bytes into [sink]. Completed = flushed, not closed — the caller closes the sink. */
+    /** Legacy only: Completed = flushed, not closed — the caller closes the sink. */
+    @Deprecated("Legacy flush-only transfer")
     suspend fun accept(sink: kotlinx.io.RawSink): P2pFileTransfer
+    /** Secure-v2: verify, flush, durably commit, then acknowledge. */
+    suspend fun accept(destination: FileTransferDestination): P2pFileTransfer
     /** Decline. Sender observes FileTransferState.Rejected. No-op if already answered. */
     suspend fun reject(reason: String? = null)
 }
@@ -609,7 +625,15 @@ sealed class P2pMessage {
 
 No `FileChunk` in the public API. Chunking is internal.
 
-**Metadata in protocol v1 (decision #3c, 2026-07-04):** `metadata` is **not transmitted**. Protocol v1 DATA frames carry only the text/binary payload: metadata attached at `send()` is local to the sender's process, and received messages always have `metadata` empty. Wiring metadata onto the wire is the post-RC `metadata-wire` milestone (`docs/STABILIZATION_AND_RELEASE.md` §C4).
+**Metadata compatibility (PARSE-META-01, approved 2026-07-22):** explicit
+legacy protocol v1 remains metadata-free. Authenticated secure peers negotiate
+`app-message-envelope-v1` in encrypted HELLO and then authenticate a canonical
+envelope containing message type/id, per-direction sequence, sender, recipient,
+sorted UTF-8 metadata, content length, content SHA-256, and content. A secure
+peer lacking the feature may still exchange raw DATA only when metadata is
+empty; non-empty metadata fails with `P2pError.UnsupportedFeature` instead of
+being silently discarded. Bounds are 64 entries, 256 UTF-8 bytes per key,
+4 KiB per value, and 32 KiB aggregate key/value bytes.
 
 **Max payload size for v0.1:** 4 MB per `send()` call. Larger payloads throw `P2pError.PayloadTooLarge`. File/stream APIs are v0.2+.
 
@@ -786,8 +810,11 @@ internal enum class PacketType(val code: Byte) {
     FILE_ACCEPT(0x11),   // empty payload
     FILE_REJECT(0x12),   // optional UTF-8 reason payload
     FILE_DATA(0x13),     // one chunk of file bytes
-    FILE_DONE(0x14),     // sender finished; empty payload
-    FILE_CANCEL(0x15)    // either side aborts; optional UTF-8 reason
+    FILE_DONE(0x14),     // legacy sender finished; empty payload
+    FILE_CANCEL(0x15),   // either side aborts; optional UTF-8 reason
+    FILE_FINISH(0x16),   // secure-v2 streamed size/chunks/digest/offer hash
+    FILE_COMMIT(0x17),   // receiver durably committed matching content
+    FILE_RESULT(0x18)    // typed secure-v2 terminal failure
 }
 ```
 
@@ -798,12 +825,13 @@ code added on one platform must be mirrored on the others.
 
 ```
 | magic (4 bytes)         | 'P' 'P' '2' 'K'  = 0x50 0x50 0x32 0x4B
-| version (1 byte)        | currently 0x01
+| version (1 byte)        | 0x01 explicit legacy; 0x02 authenticated secure
 | type (1 byte)           | PacketType code
 | flags (1 byte)          | bit 0 = needs ACK
 |                         | bit 1 = last chunk in sequence
 |                         | bit 2 = is text payload
-|                         | bits 3-7 reserved (must be 0)
+|                         | bit 3 = authenticated application envelope (DATA only)
+|                         | bits 4-7 reserved (must be 0)
 | reserved (1 byte)       | must be 0
 | message_id (16 bytes)   | UUID; same id for all chunks of one message
 | chunk_index (4 bytes)   | big-endian uint32
@@ -830,11 +858,17 @@ JSON-encoded:
   "deviceName": "Abdo Phone",
   "platform": "ANDROID",
   "supportedTransports": ["LAN"],
-  "protocolVersion": 1
+  "protocolVersion": 2,
+  "features": ["app-message-envelope-v1", "file-commit-sha256-v1"]
 }
 ```
 
-Both sides exchange HELLO before any DATA. If `appId` doesn't match the local config, the receiver sends `ERROR` and closes. If `protocolVersion` major is different, the receiver sends `ERROR` and closes.
+Both sides exchange HELLO before any DATA. In secure-v2, HELLO is inside the
+authenticated encrypted channel and feature intersection is fixed for that
+connection epoch. If `appId` doesn't match the local config, the receiver sends
+`ERROR` and closes. If the protocol version is incompatible, the receiver sends
+`ERROR` and closes. Unknown feature identifiers are ignored; required features
+fail closed at the operation boundary.
 
 ### 13.4 Chunking
 
@@ -1431,7 +1465,7 @@ The published README must contain:
 - `:p2p-network-provisioning` interface module
 - `:p2p-network-provisioning-android` — `LocalOnlyHotspot` host + Wi-Fi join helper
 - `:p2p-network-provisioning-desktop` — manual info, network state detection
-- File transfer API — **shipped in v0.2.2** and now exposes `P2pSession.sendFile(name, sizeBytes, mimeType, source: RawSource): P2pFileTransfer` plus authoritative `pendingFileOffers: StateFlow<List<P2pFileOffer>>`; the replay-zero `incomingFiles` event remains deprecated for migration (see §7.6). No `sendStream` API shipped.
+- File transfer API — **shipped in v0.2.2** and now exposes negotiated secure-v2 `PreparedFileSource` / `FileTransferDestination` durability plus authoritative `pendingFileOffers: StateFlow<List<P2pFileOffer>>`; the legacy flush-only overload and replay-zero `incomingFiles` event remain deprecated for migration (see §7.6). No `sendStream` API shipped.
 
 ### v0.3
 

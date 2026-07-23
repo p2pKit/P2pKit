@@ -145,19 +145,21 @@ import dev.p2pkit.core.transfer.sendFile
 session.sendFile(context, pickedUri)
 
 // Incoming: the peer's send arrives as a P2pFileOffer.
+import dev.p2pkit.core.transfer.durableFileDestination
+
 session.pendingFileOffers
     .map { it.firstOrNull() }
     .filterNotNull()
     .distinctUntilChangedBy { it.id }
     .onEach { offer ->
-        // sink can be Buffer(), File.outputStream().asSink(), getExternalFilesDir(...)... etc.
-        offer.accept(saveFile.outputStream().asSink())
+        // Choose an app-owned, collision-safe target path first.
+        offer.accept(durableFileDestination(saveFile))
         // or: offer.reject("not now")
     }
     .launchIn(scope)
 ```
 
-Files stream in 64 KiB chunks (configurable via `fileTransfer { chunkSizeBytes = … }`); the SDK never buffers the whole file in memory. The default 2 GiB cap and 30 s offer-timeout are also configurable.
+Files stream in 64 KiB chunks (configurable via `fileTransfer { chunkSizeBytes = … }`); the SDK never buffers the whole file in memory. In secure-v2, the sender completes only after the receiver verifies SHA-256 and durably commits the transactional destination. The default 2 GiB cap and 30 s offer/commit timeout are configurable. The old `RawSource` / `RawSink` overloads are deprecated legacy-v1 compatibility only.
 
 ## Required permissions
 
@@ -207,7 +209,7 @@ LAN + TCP is the **only transport that works the same way on every desktop and m
 |---|---|---|
 | LAN (mDNS + TCP) | **v0.1** | Shipped. |
 | Network provisioning sidecar | **v0.2.1** | Android `LocalOnlyHotspot` host + Wi-Fi join via `WifiNetworkSpecifier`; JVM manual-IP fallback. Code complete, real-device verification pending (see backlog). |
-| File transfer (`sendFile` / `pendingFileOffers`) | **v0.2.2** | Retained, bounded incoming offers; structured terminal errors; streaming via `kotlinx.io.RawSource` / `RawSink`; default 2 GiB cap, 64 KiB chunks, 30 s offer timeout; JVM `sendFile(File)` and Android `sendFile(Context, Uri)` convenience extensions. |
+| File transfer (`sendFile` / `pendingFileOffers`) | **v0.2.2+secure-v2** | Retained, bounded incoming offers; structured terminal errors; negotiated prepared SHA-256 sources and transactional durable destinations in secure-v2; deprecated flush-only `RawSource` / `RawSink` remains for explicit legacy v1; default 2 GiB cap, 64 KiB chunks, 30 s offer/commit timeout; JVM `sendFile(File)` and Android `sendFile(Context, Uri)` convenience extensions. |
 | iOS LAN (Bonjour + `Network.framework`) | **v0.3** | Same public API as JVM/Android. `NWBrowser` + `NWListener` + `NWConnection` via the auto-generated `platform.Network` bindings, with a small cinterop helper (`p2pkit_nw.h`) that wraps the void-returning block macros (`NW_PARAMETERS_DISABLE_PROTOCOL` etc.) which Kotlin/Native cannot box. Wire-compatible with JmDNS peers (JVM and Android). iOS sample app followed in v0.4 (`iosApp/`). |
 | macOS native LAN | v0.3.x candidate | Not declared on any module yet; same `Network.framework` story would apply, but needs Bonjour testing on Wi-Fi vs the simulator's network stack to be sure. |
 | BLE | v0.4+ | Discovery + small messages. **Not** for large file transfer. |

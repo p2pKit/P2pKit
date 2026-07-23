@@ -494,6 +494,17 @@ public final class dev/p2pkit/core/P2pError$TransportStartFailed : dev/p2pkit/co
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class dev/p2pkit/core/P2pError$UnsupportedFeature : dev/p2pkit/core/P2pError {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Ldev/p2pkit/core/P2pError$UnsupportedFeature;
+	public static synthetic fun copy$default (Ldev/p2pkit/core/P2pError$UnsupportedFeature;Ljava/lang/String;ILjava/lang/Object;)Ldev/p2pkit/core/P2pError$UnsupportedFeature;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFeature ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class dev/p2pkit/core/P2pError$VersionMismatch : dev/p2pkit/core/P2pError {
 	public fun <init> (II)V
 	public final fun component1 ()I
@@ -603,11 +614,13 @@ public abstract interface class dev/p2pkit/core/P2pSession {
 	public abstract fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public abstract fun send (Ldev/p2pkit/core/P2pMessage;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun sendFile (Ljava/lang/String;JLjava/lang/String;Lkotlinx/io/RawSource;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun sendFile (Ljava/lang/String;Ljava/lang/String;Ldev/p2pkit/core/transfer/PreparedFileSource;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class dev/p2pkit/core/P2pSession$DefaultImpls {
 	public static fun getPeerIdentity (Ldev/p2pkit/core/P2pSession;)Ldev/p2pkit/core/PeerIdentity;
 	public static fun getPendingFileOffers (Ldev/p2pkit/core/P2pSession;)Lkotlinx/coroutines/flow/StateFlow;
+	public static fun sendFile (Ldev/p2pkit/core/P2pSession;Ljava/lang/String;Ljava/lang/String;Ldev/p2pkit/core/transfer/PreparedFileSource;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public abstract class dev/p2pkit/core/P2pState {
@@ -1442,6 +1455,16 @@ public final class dev/p2pkit/core/transfer/FileTransferConfig {
 	public fun toString ()Ljava/lang/String;
 }
 
+public abstract interface class dev/p2pkit/core/transfer/FileTransferDestination {
+	public abstract fun abort (Ldev/p2pkit/core/P2pError$FileTransferFailed;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun commit (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun openSink ()Lkotlinx/io/RawSink;
+}
+
+public final class dev/p2pkit/core/transfer/FileTransferDestinationJvmKt {
+	public static final fun durableFileDestination (Ljava/io/File;)Ldev/p2pkit/core/transfer/FileTransferDestination;
+}
+
 public final class dev/p2pkit/core/transfer/FileTransferJvmKt {
 	public static final fun sendFile (Ldev/p2pkit/core/P2pSession;Ljava/io/File;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
@@ -1515,6 +1538,7 @@ public final class dev/p2pkit/core/transfer/FileTransferState$Sending : dev/p2pk
 }
 
 public abstract interface class dev/p2pkit/core/transfer/P2pFileOffer {
+	public fun accept (Ldev/p2pkit/core/transfer/FileTransferDestination;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun accept (Lkotlinx/io/RawSink;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun getId ()Ljava/lang/String;
 	public abstract fun getMimeType ()Ljava/lang/String;
@@ -1526,6 +1550,7 @@ public abstract interface class dev/p2pkit/core/transfer/P2pFileOffer {
 }
 
 public final class dev/p2pkit/core/transfer/P2pFileOffer$DefaultImpls {
+	public static fun accept (Ldev/p2pkit/core/transfer/P2pFileOffer;Ldev/p2pkit/core/transfer/FileTransferDestination;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun reject$default (Ldev/p2pkit/core/transfer/P2pFileOffer;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
@@ -1543,6 +1568,25 @@ public abstract interface class dev/p2pkit/core/transfer/P2pFileTransfer {
 
 public final class dev/p2pkit/core/transfer/P2pFileTransfer$DefaultImpls {
 	public static synthetic fun cancel$default (Ldev/p2pkit/core/transfer/P2pFileTransfer;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public abstract interface class dev/p2pkit/core/transfer/PreparedFileSource {
+	public abstract fun getSha256 ()Ldev/p2pkit/core/transfer/Sha256Digest;
+	public abstract fun getSizeBytes ()J
+	public abstract fun open ()Lkotlinx/io/RawSource;
+}
+
+public final class dev/p2pkit/core/transfer/Sha256Digest {
+	public static final field Companion Ldev/p2pkit/core/transfer/Sha256Digest$Companion;
+	public static final field SIZE_BYTES I
+	public fun <init> ([B)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBytes ()[B
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/transfer/Sha256Digest$Companion {
 }
 
 public abstract interface class dev/p2pkit/core/transport/DataTransport {

@@ -1,5 +1,6 @@
 package dev.p2pkit.core.transfer
 
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.Peer
 import kotlinx.io.RawSink
 
@@ -9,8 +10,9 @@ import kotlinx.io.RawSink
  * [dev.p2pkit.core.P2pSession.sendFile]. The deprecated `incomingFiles` flow
  * also emits newly admitted offers, but can miss offers before subscription.
  *
- * The receiver must respond by calling either [accept] (which provides a
- * [RawSink] for the bytes) or [reject]. If neither is called within the
+ * The receiver must respond by calling either [accept] with a transactional
+ * [FileTransferDestination], the deprecated legacy [RawSink] overload, or
+ * [reject]. If neither is called within the
  * configured `offerTimeoutMillis` (default 30 s), the offer is auto-rejected
  * with reason `"timeout"`; both sides terminalize as
  * [FileTransferState.Rejected]. A later sender watchdog exists only for an
@@ -34,7 +36,7 @@ public interface P2pFileOffer {
     public val mimeType: String?
 
     /**
-     * Accept the offer and stream incoming bytes into [sink]. The returned
+     * Accept a legacy protocol-v1 offer and stream incoming bytes into [sink]. The returned
      * [P2pFileTransfer] tracks progress; on [FileTransferState.Completed] the
      * sink has been flushed but not closed — the caller is responsible for
      * closing it.
@@ -43,8 +45,26 @@ public interface P2pFileOffer {
      * rejected, cancelled, or timed out. Once the FILE_ACCEPT write commits,
      * this offer is removed from the session's retained pending snapshot.
      */
+    @Deprecated("Legacy flush-only transfer; use accept(FileTransferDestination)")
     @Throws(Exception::class)
     public suspend fun accept(sink: RawSink): P2pFileTransfer
+
+    /**
+     * Accept into a transactional destination. Available only when both peers
+     * negotiated authenticated `file-commit-sha256-v1`; there is no
+     * flush-only fallback. The sender completes only after [destination]
+     * commits and the acknowledgement is written. The SDK owns the
+     * destination after acceptance starts and invokes its terminal cleanup.
+     */
+    @Throws(Exception::class)
+    public suspend fun accept(destination: FileTransferDestination): P2pFileTransfer =
+        throw P2pError.FileTransferFailed(
+            kind = dev.p2pkit.core.FileTransferFailureKind.UNSUPPORTED_FEATURE,
+            phase = dev.p2pkit.core.FileTransferPhase.ACCEPT,
+            retryability = dev.p2pkit.core.Retryability.NOT_RETRYABLE,
+            transferId = id,
+            reason = "Transactional authenticated file transfer is not implemented by this offer"
+        )
 
     /**
      * Decline the offer. The sender observes [FileTransferState.Rejected].

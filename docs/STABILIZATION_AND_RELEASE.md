@@ -236,12 +236,11 @@ exact assertions and bounded timeouts.
 - [ ] Release notes state the trust model honestly: secure-v2 is the default
       authenticated/encrypted mode; deprecated `NoneForMvp` is explicit legacy
       only, with cryptographic audit and physical interoperability still open.
-- [x] **Decision box — `P2pMessage.metadata` (decision #3): DECIDED, option
-      (c), 2026-07-04.** Metadata is documented as **not transmitted in
-      protocol v1** (`P2pMessage` KDoc + spec §9.4), the receive side is
-      pinned empty by `MessageMetadataContractTest` (P1-06), and real
-      transmission is scheduled as the post-RC `metadata-wire` milestone
-      (C4). The RC must not tag with this line undecided (DOCA-14).
+- [x] **Decision box — `P2pMessage.metadata`: SUPERSEDED AND IMPLEMENTED.**
+      The 2026-07-04 legacy-v1 decision remains true for explicit legacy
+      sessions. On 2026-07-22 the owner approved `PARSE-META-01`: authenticated
+      secure peers negotiate a canonical metadata envelope in encrypted HELLO;
+      non-empty metadata never silently downgrades. See C4 and spec §9.4.
 - [x] **Decision box — `P2pPermission.ChangeWifiState` disambiguation (C:54;
       decision #4a): DECIDED, deferral recorded, 2026-07-04.** The A09
       re-verification confirmed the enum member has a single Android mapping
@@ -252,37 +251,20 @@ exact assertions and bounded timeouts.
       for the member appears.
 - [ ] Tag `v0.6.0-rc1` (or chosen RC id) and capture the device-matrix logs.
 
-### C4 — Post-RC milestone: `metadata-wire` (from decision #3, recorded 2026-07-04)
+### C4 — Negotiated secure metadata envelope (implemented from PARSE-META-01)
 
-Owner-approved follow-up to decision #3 option (c): protocol v1 does not
-transmit `P2pMessage.metadata` (see the C3 decision box). The owner wants
-metadata transmission to land **soon after the RC line** — this section is
-the durable record of that milestone.
+Explicit legacy protocol v1 remains metadata-free. The owner approved the
+authenticated, negotiated secure-v2 envelope on 2026-07-22.
 
-- **What:** serialize `metadata` in a DATA-payload **envelope**. The PP2K
-  magic, version byte, 36-byte header, frame types, and `ProtocolConstants`
-  limits stay untouched; only the DATA payload encoding gains an envelope
-  (metadata + payload). The codec lives in commonMain, so all three
-  platforms share one implementation — no per-platform mirroring needed.
-- **Where:** `p2p-core` `protocol/` — encode in `Chunker.chunk` (today it
-  reads only `value`/`bytes`), decode in `Reassembler.decodePayload` (today
-  it reconstructs with the `emptyMap()` default); update `P2pMessage` KDoc,
-  spec §9.4, and **consciously flip the P1-06 pin** in
-  `MessageMetadataContractTest` from asserted-empty to round-trip equality
-  in the same commit.
-- **Prerequisites (must be decided before any bytes change):**
-  1. **Cross-version interop stance** — a metadata-capable sender to a v1
-     receiver (and the reverse) must have defined behavior: candidate
-     mechanisms are a HELLO-negotiated capability, a reserved DATA flag bit,
-     or a protocol version bump. Pick one and document the compatibility
-     matrix; a v1 receiver must never misparse an envelope as payload bytes.
-  2. **Bounds and input validation on receive** — metadata key/value/count
-     limits sized against the 4 MiB message cap and the reassembly caps, so
-     malformed or excessive metadata from a peer is rejected as a typed,
-     bounded failure rather than growing memory or throwing untyped.
-  3. **Protocol version consideration** — decide whether this is v1.1
-     (envelope negotiated in-band, version byte unchanged) or v2 (version
-     byte bump); the wire-parity rule (identical across jvmMain/androidMain/
-     appleMain) applies to whichever is chosen.
-- **Not before:** the v0.6 RC tag — this work is scoped post-RC by decision
-  #3(c); the RC ships the documented local-only contract above.
+- **Negotiation:** encrypted HELLO features include
+  `app-message-envelope-v1`; capability intersection is immutable for one
+  connection epoch.
+- **Envelope:** canonical commonMain binary encoding authenticates type, frame
+  id, monotonic per-direction sequence, sender, recipient, sorted metadata,
+  content length, content digest, and content through the secure record AEAD.
+- **Compatibility:** empty-metadata raw DATA remains readable when a secure
+  peer lacks the feature; non-empty metadata fails typed. Legacy v1 bytes are
+  unchanged. Invalid envelopes fail the session closed.
+- **Bounds/tests:** entry/key/value/aggregate bounds, canonical ordering,
+  identity mismatch, digest tamper, id reuse, sequence replay, feature
+  downgrade, and end-to-end metadata round-trip are deterministic tests.

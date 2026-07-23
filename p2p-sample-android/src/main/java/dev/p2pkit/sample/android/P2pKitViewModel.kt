@@ -60,9 +60,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.io.asSink
 import java.io.File
-import java.io.OutputStream
 
 /**
  * Owns the [P2pKit] instance and the **room** state of the sample, which
@@ -229,15 +227,6 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      * the message one.
      */
     private val sessionJobs: MutableMap<String, List<Job>> = mutableMapOf()
-
-    /**
-     * AUDIT-2026-06: A-G8-samples-android-07 — open destination streams of
-     * in-flight incoming transfers, keyed by transfer id. Normally closed by
-     * the per-transfer state collector on a terminal state; [stop] /
-     * [onCleared] close whatever is left after cancelling those collectors.
-     * Main-thread confined (registered/removed from runScope + stop()).
-     */
-    private val activeIncomingStreams: MutableMap<String, OutputStream> = mutableMapOf()
 
     /**
      * AUDIT-2026-06: ARCH-samples-18 — the in-flight teardown job launched by
@@ -695,17 +684,31 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun wireIncomingFiles(session: P2pSession, scope: CoroutineScope): Job {
         return scope.launch {
-            session.incomingFiles.collect { offer ->
-                pendingFileOffers.add(
-                    IncomingFileOffer(
-                        id = offer.id,
-                        name = offer.name,
-                        sizeBytes = offer.sizeBytes,
-                        peerName = session.peer.name,
-                        offer = offer
-                    )
-                )
-                appendSystemMessage("incoming file '${offer.name}' from ${session.peer.name} — awaiting consent")
+            var previousIds: Set<String> = emptySet()
+            try {
+                session.pendingFileOffers.collect { offers ->
+                    val currentIds = offers.mapTo(mutableSetOf()) { it.id }
+                    pendingFileOffers.removeAll { it.id in previousIds && it.id !in currentIds }
+                    for (offer in offers) {
+                        if (pendingFileOffers.none { it.id == offer.id }) {
+                            pendingFileOffers.add(
+                                IncomingFileOffer(
+                                    id = offer.id,
+                                    name = offer.name,
+                                    sizeBytes = offer.sizeBytes,
+                                    peerName = session.peer.name,
+                                    offer = offer
+                                )
+                            )
+                            appendSystemMessage(
+                                "incoming file '${offer.name}' from ${session.peer.name} — awaiting consent"
+                            )
+                        }
+                    }
+                    previousIds = currentIds
+                }
+            } finally {
+                pendingFileOffers.removeAll { it.id in previousIds }
             }
         }
     }
@@ -736,6 +739,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 val baseDir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
                 val saveDir = File(baseDir, "p2pkit-incoming/${sanitize(pending.peerName)}")
                     .also { it.mkdirs() }
+                cleanupStaleTransferPartsOnce(saveDir)
                 val allocatableBytes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     val storage = ctx.getSystemService(StorageManager::class.java)
                         ?: error("storage service unavailable")
@@ -748,26 +752,32 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 val saveFile = uniqueDestination(saveDir, pending.name)
                     ?: error("destination namespace exhausted")
-                saveFile to saveFile.outputStream()
+                saveFile
             }
         }
-        val (saveFile, out) = opened.getOrElse { e ->
+        val saveFile = opened.getOrElse { e ->
             runCatchingNonCancel { pending.offer.reject("receiver storage unavailable") }
             appendSystemMessage("rejected '${pending.name}': ${e.message ?: "storage unavailable"}")
             return
         }
         Log.i(LOG_TAG, "incoming file offer ${pending.name} (${pending.sizeBytes}B) → ${saveFile.absolutePath}")
-        val incoming = runCatchingNonCancel { pending.offer.accept(out.asSink()) }
+        val destination = runCatchingNonCancel { reservedFileDestination(saveFile) }
+            .getOrElse { e ->
+                runCatchingNonCancel { pending.offer.reject("destination preparation failed") }
+                runCatchingNonCancel { saveFile.delete() }
+                appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
+                return
+            }
+        val incoming = runCatchingNonCancel { pending.offer.accept(destination) }
             .getOrElse { e ->
                 runCatchingNonCancel { pending.offer.reject("accept failed on receiver") }
                 withContext(Dispatchers.IO) {
-                    runCatchingNonCancel { out.close() }
                     runCatchingNonCancel { saveFile.delete() }
                 }
                 appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
                 return
             }
-        registerIncomingTransfer(incoming, pending.peerName, saveFile.absolutePath, scope, out)
+        registerIncomingTransfer(incoming, pending.peerName, saveFile.absolutePath, scope)
     }
 
     private fun registerOutgoingTransfer(
@@ -796,8 +806,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         transfer: P2pFileTransfer,
         peerName: String,
         destinationPath: String,
-        scope: CoroutineScope,
-        out: OutputStream
+        scope: CoroutineScope
     ) {
         addRow(
             FileTransferRow(
@@ -812,11 +821,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 transfer = transfer
             )
         )
-        // AUDIT-2026-06: A-G8-samples-android-07 — track the stream so stop()
-        // can close it if this collector is cancelled mid-transfer.
-        activeIncomingStreams[transfer.id] = out
+        // The transactional destination is SDK-owned and is committed or
+        // aborted even if this UI collector is cancelled.
         appendSystemMessage("receiving file '${transfer.name}' from $peerName → $destinationPath")
-        watchTransfer(transfer, scope, destinationPath, out)
+        watchTransfer(transfer, scope, destinationPath)
     }
 
     /**
@@ -827,8 +835,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     private fun watchTransfer(
         transfer: P2pFileTransfer,
         scope: CoroutineScope,
-        destinationPath: String? = null,
-        incomingOut: OutputStream? = null
+        destinationPath: String? = null
     ) {
         scope.launch {
             var completed = false
@@ -848,14 +855,9 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             } finally {
                 withContext(NonCancellable) {
                     bytesJob.cancelAndJoin()
-                    val out = incomingOut
-                    if (out != null) {
-                        activeIncomingStreams.remove(transfer.id)
+                    if (!completed && destinationPath != null) {
                         withContext(Dispatchers.IO) {
-                            runCatching { out.close() }
-                            if (!completed && destinationPath != null) {
-                                runCatching { File(destinationPath).delete() }
-                            }
+                            runCatching { File(destinationPath).delete() }
                         }
                     }
                 }
@@ -906,8 +908,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      * AUDIT-2026-06: A-G8-samples-android-04 — pick a destination path that
      * does not collide with an existing file. Uses [File.createNewFile] so
      * the claim is atomic even when two offers race; the caller's
-     * `outputStream()` then opens the (empty) claimed file. Runs on
-     * Dispatchers.IO.
+     * transactional destination then replaces the claimed file only after a
+     * verified durable commit, or removes it on abort. Runs on Dispatchers.IO.
      */
     private fun uniqueDestination(dir: File, rawName: String): File? {
         val base = sanitize(rawName)
@@ -1066,11 +1068,6 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         _missingPermissions.value = emptyList()
         _provisioningBusy.value = false
         _networkPathStatus.value = NetworkPathStatus.Unknown
-        // AUDIT-2026-06: A-G8-samples-android-07 — cancelling runScope killed
-        // the collectors that close incoming-file streams; close the leftovers
-        // here (after kit.stop() has quiesced the writers).
-        val streamsToClose = activeIncomingStreams.values.toList()
-        activeIncomingStreams.clear()
         // Best-effort tear down the hotspot too. Cleared via cleanupScope
         // (not runScope, which we just cancelled) so the stop call survives.
         pendingStopJob = cleanupScope.launch {
@@ -1090,9 +1087,6 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         appendSystemMessage("stop failed: ${it.message ?: it::class.simpleName}")
                     }
                 }
-                withContext(Dispatchers.IO) {
-                    streamsToClose.forEach { s -> runCatchingNonCancel { s.close() } }
-                }
             } finally {
                 _isStopping.value = false
             }
@@ -1105,8 +1099,6 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         kit = null
         val offersToReject = pendingFileOffers.toList()
         pendingFileOffers.clear()
-        val streamsToClose = activeIncomingStreams.values.toList()
-        activeIncomingStreams.clear()
         // AUDIT-2026-06: ARCH-samples-18 — never cancel cleanupScope while a
         // stop() teardown launched into it is still in flight; join it first,
         // then finish our own teardown, and only cancel the scope at the end.
@@ -1118,11 +1110,6 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 runCatchingNonCancel { toStop.networkProvisioning.stopLocalNetwork() }
                 runCatchingNonCancel { toStop.stop() }
-            }
-            if (streamsToClose.isNotEmpty()) {
-                withContext(Dispatchers.IO) {
-                    streamsToClose.forEach { s -> runCatchingNonCancel { s.close() } }
-                }
             }
         }
         finalCleanup.invokeOnCompletion { cleanupScope.cancel() }

@@ -42,6 +42,7 @@ import kotlin.test.assertTrue
  * Runs with `strictInvariants = true` so a refusal that corrupted the
  * store's bookkeeping would fail loudly.
  */
+@Suppress("OVERRIDE_DEPRECATION")
 class SessionStoreCapacityTest {
 
     private fun newStore() = SessionStore(P2pLogger.NoOp, strictInvariants = true)
@@ -223,6 +224,7 @@ private class CapStubSession(
     override suspend fun send(message: P2pMessage): Unit =
         error("CapStubSession.send is not supported")
 
+    @Deprecated("Legacy fixture overload")
     override suspend fun sendFile(
         name: String,
         sizeBytes: Long,

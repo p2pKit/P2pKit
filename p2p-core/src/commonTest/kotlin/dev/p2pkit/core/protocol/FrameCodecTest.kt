@@ -17,6 +17,7 @@ class FrameCodecTest {
             PacketType.HELLO, PacketType.FILE_OFFER -> byteArrayOf(1)
             PacketType.DATA, PacketType.FILE_DATA -> byteArrayOf(1, 2, 3)
             PacketType.ERROR, PacketType.FILE_REJECT, PacketType.FILE_CANCEL -> "reason".encodeToByteArray()
+            PacketType.FILE_FINISH, PacketType.FILE_COMMIT, PacketType.FILE_RESULT -> byteArrayOf(1)
             PacketType.ACK, PacketType.PING, PacketType.PONG, PacketType.CLOSE,
             PacketType.FILE_ACCEPT, PacketType.FILE_DONE -> ByteArray(0)
         }

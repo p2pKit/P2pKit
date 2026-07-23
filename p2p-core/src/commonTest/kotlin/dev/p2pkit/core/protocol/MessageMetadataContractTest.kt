@@ -17,15 +17,12 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
- * AUDIT-2026-07 (API-1, P1-06; decision #3c): pins the protocol v1 metadata
- * contract — [P2pMessage.Text.metadata] / [P2pMessage.Binary.metadata] are
- * NOT transmitted. A message sent with non-empty metadata arrives with an
- * empty metadata map, and the DATA payload bytes contain only the value/bytes
- * (no serialized metadata).
+ * Pins explicit legacy protocol-v1 compatibility: metadata is not transmitted,
+ * its DATA bytes remain unchanged, and received metadata is empty.
  *
- * This pin is deliberate: the post-RC `metadata-wire` milestone
- * (`docs/STABILIZATION_AND_RELEASE.md` §C4) must consciously flip these
- * assertions to round-trip equality when metadata is wired onto the wire.
+ * Negotiated authenticated envelope behavior is covered separately by
+ * [SecureMessageEnvelopeTest]. These legacy assertions must not be flipped:
+ * they prevent a secure-v2 feature from silently changing v1 wire bytes.
  */
 class MessageMetadataContractTest {
 

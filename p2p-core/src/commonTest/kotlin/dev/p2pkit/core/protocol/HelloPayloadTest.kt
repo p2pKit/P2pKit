@@ -20,6 +20,25 @@ class HelloPayloadTest {
         val encoded = HelloPayload.encode(original)
         val decoded = HelloPayload.decode(encoded)
         assertEquals(original, decoded)
+        assertTrue(!encoded.decodeToString().contains("\"features\""))
+    }
+
+    @Test
+    fun secureFeaturesAreCanonicalAndEncodedOnlyWhenPresent() {
+        val features = ProtocolFeatures.SECURE_V2.sorted()
+        val original = HelloPayload(
+            appId = "com.example.transfer",
+            peerId = "abc-123",
+            deviceName = "Secure",
+            platform = "JVM",
+            supportedTransports = listOf("LAN"),
+            protocolVersion = ProtocolConstants.SECURE_VERSION.toInt(),
+            features = features
+        )
+
+        val encoded = HelloPayload.encode(original)
+        assertTrue(encoded.decodeToString().contains("\"features\""))
+        assertEquals(features, HelloPayload.decode(encoded).features)
     }
 
     @Test

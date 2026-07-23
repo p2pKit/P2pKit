@@ -2,6 +2,7 @@ package dev.p2pkit.core
 
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
+import dev.p2pkit.core.transfer.PreparedFileSource
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -100,9 +101,9 @@ public interface P2pSession {
     public val incomingFiles: SharedFlow<P2pFileOffer>
 
     /**
-     * Offer a file to the peer. The peer receives a [P2pFileOffer] in its
-     * retained [pendingFileOffers] state and must call `accept(sink)` or
-     * `reject(reason)` for the transfer to make progress.
+     * Offer a legacy, flush-only file stream to the peer. The peer receives a
+     * [P2pFileOffer] in its retained [pendingFileOffers] state and must use the
+     * deprecated raw-sink accept overload or reject the offer.
      *
      * Bytes are pulled from [source] in chunks of the configured
      * [dev.p2pkit.core.transfer.FileTransferConfig.chunkSizeBytes]; the whole
@@ -145,6 +146,9 @@ public interface P2pSession {
      * @throws P2pError.FileTransferFailed for invalid metadata, a disconnected
      *   session, offer timeout/write failure, or another transfer-owned error.
      */
+    @Deprecated(
+        "Legacy protocol-v1 transfer only; use sendFile(name, mimeType, PreparedFileSource)"
+    )
     @Throws(Exception::class)
     public suspend fun sendFile(
         name: String,
@@ -152,6 +156,32 @@ public interface P2pSession {
         mimeType: String?,
         source: RawSource
     ): P2pFileTransfer
+
+    /**
+     * Offer a repeatable, SHA-256-prepared source over authenticated secure
+     * protocol v2. Both peers must negotiate `file-commit-sha256-v1`.
+     *
+     * The SDK opens [source] only after the peer accepts, hashes the streamed
+     * bytes again, and completes the returned handle only after the receiver
+     * verifies the digest, flushes, durably commits its destination, and sends
+     * the authenticated commit acknowledgement.
+     *
+     * [PreparedFileSource.open] is not called until the offer is accepted. A
+     * peer that lacks the feature fails with `UNSUPPORTED_FEATURE`. No
+     * plaintext or flush-only downgrade is attempted.
+     */
+    @Throws(Exception::class)
+    public suspend fun sendFile(
+        name: String,
+        mimeType: String?,
+        source: PreparedFileSource
+    ): P2pFileTransfer = throw P2pError.FileTransferFailed(
+        kind = FileTransferFailureKind.UNSUPPORTED_FEATURE,
+        phase = FileTransferPhase.OFFER,
+        retryability = Retryability.NOT_RETRYABLE,
+        transferId = null,
+        reason = "Prepared authenticated file transfer is not implemented by this session"
+    )
 
     /**
      * Close the session and release all owned resources. Cleanup attempts are

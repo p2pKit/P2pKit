@@ -227,19 +227,13 @@ class FrameReaderTest {
 
     @Test
     fun allPacketFamiliesEnforceTheirDeclaredLimitFromTheHeader() {
-        val cases = listOf(
-            PacketType.FILE_OFFER to ProtocolConstants.MAX_FILE_OFFER_PAYLOAD_BYTES,
-            PacketType.ERROR to ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
-            PacketType.FILE_REJECT to ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
-            PacketType.DATA to ProtocolConstants.MAX_DATA_FRAME_PAYLOAD_BYTES,
-            PacketType.FILE_DATA to ProtocolConstants.MAX_DATA_FRAME_PAYLOAD_BYTES,
-            PacketType.ACK to 0,
-            PacketType.PING to 0,
-            PacketType.FILE_ACCEPT to 0
-        )
+        val cases = PacketType.entries.map { type ->
+            type to FrameValidation.maxPayloadBytes(type)
+        }
         for ((type, maximum) in cases) {
             val payload = when (type) {
-                PacketType.FILE_OFFER, PacketType.ERROR, PacketType.FILE_REJECT,
+                PacketType.HELLO, PacketType.FILE_OFFER, PacketType.ERROR,
+                PacketType.FILE_FINISH, PacketType.FILE_COMMIT, PacketType.FILE_RESULT,
                 PacketType.DATA, PacketType.FILE_DATA -> byteArrayOf(1)
                 else -> ByteArray(0)
             }

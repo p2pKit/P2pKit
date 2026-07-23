@@ -9,6 +9,8 @@ import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.dsl.jvmSecureIdentityStore
 import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.core.transfer.durableFileDestination
+import dev.p2pkit.core.transfer.sendFile
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
@@ -16,8 +18,6 @@ import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import kotlinx.io.asSink
-import kotlinx.io.asSource
 import java.io.File
 import java.net.Inet4Address
 import java.net.InetAddress
@@ -46,6 +46,7 @@ import org.junit.Assume
  * block multicast even on loopback. Allow up to 30 s for discovery.
  */
 @OptIn(ExplicitSecurityRisk::class)
+@Suppress("DEPRECATION")
 class JvmLanLoopbackTest {
 
     private val unique = "p2pkit-itest-${System.currentTimeMillis()}"
@@ -231,32 +232,21 @@ class JvmLanLoopbackTest {
             }
             offerReady.await()
 
-            val transfer = srcFile.inputStream().use { stream ->
-                outgoing.sendFile(
-                    name = srcFile.name,
-                    sizeBytes = srcFile.length(),
-                    mimeType = "application/octet-stream",
-                    source = stream.asSource()
-                ).also {
-                    // Wait for offer arrival + accept BEFORE the input stream
-                    // closes. We accept inside the .use block to keep the
-                    // stream alive while the dispatcher pulls from it.
-                    val offer = withTimeout(MESSAGE_TIMEOUT_MS) { offerDeferred.await() }
-                    val sink = dstFile.outputStream().asSink()
-                    val incomingTransfer = offer.accept(sink)
-                    val senderFinal = withTimeout(FILE_TRANSFER_TIMEOUT_MS) {
-                        it.state.first { s ->
-                            s is FileTransferState.Completed || s is FileTransferState.Failed
-                        }
+            val transfer = outgoing.sendFile(srcFile).also {
+                val offer = withTimeout(MESSAGE_TIMEOUT_MS) { offerDeferred.await() }
+                val incomingTransfer = offer.accept(durableFileDestination(dstFile))
+                val senderFinal = withTimeout(FILE_TRANSFER_TIMEOUT_MS) {
+                    it.state.first { s ->
+                        s is FileTransferState.Completed || s is FileTransferState.Failed
                     }
-                    val receiverFinal = withTimeout(FILE_TRANSFER_TIMEOUT_MS) {
-                        incomingTransfer.state.first { s ->
-                            s is FileTransferState.Completed || s is FileTransferState.Failed
-                        }
-                    }
-                    assertIs<FileTransferState.Completed>(senderFinal)
-                    assertIs<FileTransferState.Completed>(receiverFinal)
                 }
+                val receiverFinal = withTimeout(FILE_TRANSFER_TIMEOUT_MS) {
+                    incomingTransfer.state.first { s ->
+                        s is FileTransferState.Completed || s is FileTransferState.Failed
+                    }
+                }
+                assertIs<FileTransferState.Completed>(senderFinal)
+                assertIs<FileTransferState.Completed>(receiverFinal)
             }
             assertEquals(srcFile.length(), transfer.bytesTransferred.value)
             assertEquals(srcFile.length(), dstFile.length())

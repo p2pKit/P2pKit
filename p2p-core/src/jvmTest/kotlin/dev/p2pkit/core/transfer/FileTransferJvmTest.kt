@@ -27,6 +27,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 
@@ -38,7 +39,11 @@ class FileTransferJvmTest {
 
     @AfterTest
     fun cleanup() {
-        tempFiles.forEach { runCatching { it.delete() } }
+        tempFiles.forEach { file ->
+            runCatching {
+                if (file.isDirectory) file.deleteRecursively() else file.delete()
+            }
+        }
         tempFiles.clear()
     }
 
@@ -156,6 +161,43 @@ class FileTransferJvmTest {
             alice.stop()
             bob.stop()
         }
+    }
+
+    @Test
+    fun durableDestinationPublishesOnlyAfterCommitAndCommitIsIdempotent() = runBlocking {
+        val directory = Files.createTempDirectory("p2pkit-durable-destination-").toFile()
+        tempFiles.add(directory)
+        val target = File(directory, "received.bin")
+        val payload = ByteArray(4096) { (it * 17).toByte() }
+        val destination = durableFileDestination(target)
+        val sink = destination.openSink()
+        val buffer = Buffer().apply { write(payload) }
+
+        sink.write(buffer, buffer.size)
+        assertFalse(target.exists())
+
+        destination.commit()
+        destination.commit()
+
+        assertContentEquals(payload, target.readBytes())
+        assertEquals(listOf(target.name), directory.list()?.sorted())
+    }
+
+    @Test
+    fun durableDestinationAbortRemovesPartialAndPreservesExistingTarget() = runBlocking {
+        val directory = Files.createTempDirectory("p2pkit-durable-abort-").toFile()
+        tempFiles.add(directory)
+        val target = File(directory, "received.bin").also { it.writeText("existing") }
+        val destination = durableFileDestination(target)
+        val sink = destination.openSink()
+        val buffer = Buffer().apply { write(byteArrayOf(1, 2, 3, 4)) }
+        sink.write(buffer, buffer.size)
+
+        destination.abort(cause = null)
+        destination.abort(cause = null)
+
+        assertEquals("existing", target.readText())
+        assertEquals(listOf(target.name), directory.list()?.sorted())
     }
 }
 

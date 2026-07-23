@@ -13,9 +13,11 @@ import dev.p2pkit.core.PeerIdentity
 import dev.p2pkit.core.Retryability
 import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
+import dev.p2pkit.core.protocol.ProtocolSessionState
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
+import dev.p2pkit.core.transfer.PreparedFileSource
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -115,6 +117,7 @@ internal class P2pSessionImpl(
     override val peerIdentity: PeerIdentity = PeerIdentity(peer.id),
     initialConnection: RawConnection,
     initialEvents: ReceiveChannel<ProtocolEvent>,
+    initialProtocolState: ProtocolSessionState = ProtocolSessionState.legacy(),
     private val protocol: P2pProtocol,
     private val parentScope: CoroutineScope,
     private val keepAlive: KeepAliveConfig,
@@ -136,6 +139,9 @@ internal class P2pSessionImpl(
      */
     private val lookupRegistration: ((P2pSession) -> SessionRegistration)? = null
 ) : P2pSession {
+
+    internal val usesAuthenticatedFileTransfer: Boolean
+        get() = protocolState.secure
 
     private val sessionJob = SupervisorJob(parent = parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + sessionJob)
@@ -171,6 +177,7 @@ internal class P2pSessionImpl(
 
     private var connection: RawConnection = initialConnection
     private var events: ReceiveChannel<ProtocolEvent> = initialEvents
+    private var protocolState: ProtocolSessionState = initialProtocolState
 
     /**
      * Job that owns this epoch's [routeEvents] and [keepAliveLoop]. Cancelled
@@ -192,6 +199,7 @@ internal class P2pSessionImpl(
             remotePeer = peer,
             protocol = protocol,
             getConnection = { connection },
+            getProtocolState = { protocolState },
             sendMutex = sendMutex,
             config = fileTransferConfig,
             scope = scope,
@@ -354,11 +362,14 @@ internal class P2pSessionImpl(
         // AUDIT-2026-07 (API-2): see [typedSendBoundary].
         typedSendBoundary("send") {
             sendMutex.withLock {
-                protocol.sendMessage(connection, message)
+                protocol.sendMessage(connection, message, protocolState)
             }
         }
     }
 
+    @Deprecated(
+        "Legacy protocol-v1 transfer only; use sendFile(name, mimeType, PreparedFileSource)"
+    )
     override suspend fun sendFile(
         name: String,
         sizeBytes: Long,
@@ -381,6 +392,25 @@ internal class P2pSessionImpl(
         // handle's terminal transition (FIL-1 close-once guard).
         return typedFileTransferBoundary {
             fileTransferDispatcher.sendFile(name, sizeBytes, mimeType, source)
+        }
+    }
+
+    override suspend fun sendFile(
+        name: String,
+        mimeType: String?,
+        source: PreparedFileSource
+    ): P2pFileTransfer {
+        if (_state.value != ConnectionState.Connected) {
+            throw P2pError.FileTransferFailed(
+                kind = FileTransferFailureKind.REMOTE_DISCONNECTED,
+                phase = FileTransferPhase.OFFER,
+                retryability = Retryability.RETRY_NEW_SESSION,
+                transferId = null,
+                reason = "Session $id is ${_state.value}; cannot send file"
+            )
+        }
+        return typedFileTransferBoundary {
+            fileTransferDispatcher.sendPreparedFile(name, mimeType, source)
         }
     }
 
@@ -484,7 +514,8 @@ internal class P2pSessionImpl(
      */
     internal suspend fun rearmWith(
         newConnection: RawConnection,
-        newEvents: ReceiveChannel<ProtocolEvent>
+        newEvents: ReceiveChannel<ProtocolEvent>,
+        newProtocolState: ProtocolSessionState = ProtocolSessionState.legacy()
     ) {
         connectionLock.withLock {
             val s = _state.value
@@ -512,6 +543,7 @@ internal class P2pSessionImpl(
             runCatching { connection.close() }
             connection = newConnection
             events = newEvents
+            protocolState = newProtocolState
             // V0.5.1-RECONNECT-RACE (issue #15): flip to Connected BEFORE
             // launching the new epoch. `keepAliveLoop` gates its outer
             // `while` on `_state.value == Connected`; on a multi-thread
@@ -802,11 +834,18 @@ internal class P2pSessionImpl(
                         onConnectionLost("peer error: ${event.reason}")
                         return
                     }
-                    is ProtocolEvent.FileOffer -> fileTransferDispatcher.onFileOffer(event.transferId, event.payload)
+                    is ProtocolEvent.FileOffer -> fileTransferDispatcher.onFileOffer(
+                        event.transferId,
+                        event.payload,
+                        event.secureOffer
+                    )
                     is ProtocolEvent.FileAccept -> fileTransferDispatcher.onFileAccept(event.transferId)
                     is ProtocolEvent.FileReject -> fileTransferDispatcher.onFileReject(event.transferId, event.reason)
                     is ProtocolEvent.FileData -> fileTransferDispatcher.onFileData(event.frame)
                     is ProtocolEvent.FileDone -> fileTransferDispatcher.onFileDone(event.transferId)
+                    is ProtocolEvent.FileFinish -> fileTransferDispatcher.onFileFinish(event.payload)
+                    is ProtocolEvent.FileCommit -> fileTransferDispatcher.onFileCommit(event.payload)
+                    is ProtocolEvent.FileResult -> fileTransferDispatcher.onFileResult(event.payload)
                     is ProtocolEvent.FileCancel -> fileTransferDispatcher.onFileCancel(event.transferId, event.reason)
                 }
             }
@@ -844,6 +883,22 @@ internal class P2pSessionImpl(
                 logger.warn("Session $id: routeEvents file-transfer failure", e)
                 onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}")
             }
+        } catch (e: P2pError.ProtocolError) {
+            logger.warn("Session $id: authenticated protocol violation", e)
+            transitionToTerminal(
+                target = ConnectionState.Failed,
+                cause = e.reason,
+                fileFailureKind = FileTransferFailureKind.TRANSFER_PROTOCOL,
+                fileRetryability = Retryability.NOT_RETRYABLE
+            )
+        } catch (e: P2pError.AuthenticatedIdentityMismatch) {
+            logger.warn("Session $id: authenticated envelope identity mismatch", e)
+            transitionToTerminal(
+                target = ConnectionState.Failed,
+                cause = e.reason,
+                fileFailureKind = FileTransferFailureKind.AUTHENTICATION,
+                fileRetryability = Retryability.NOT_RETRYABLE
+            )
         } catch (e: Throwable) {
             logger.warn("Session $id: routeEvents failed", e)
             onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}")

@@ -156,11 +156,16 @@ import dev.p2pkit.core.transport.TransportDescriptor
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
 import dev.p2pkit.core.transfer.P2pFileOffer
+import dev.p2pkit.core.transfer.FileTransferDestination
+import dev.p2pkit.core.transfer.PreparedFileSource
+import dev.p2pkit.core.transfer.Sha256Digest
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.io.RawSink
+import kotlinx.io.RawSource
+import kotlinx.io.Buffer
 
 fun coreState(kit: P2pKit, sink: RawSink): StateFlow<P2pState> {
     sink.flush()
@@ -184,6 +189,29 @@ fun constructTransferFailure(): P2pError.FileTransferFailed =
         transferId = "0123456789abcdef0123456789abcdef",
         reason = "fixture"
     )
+
+class ExternalPreparedFileSource(private val content: ByteArray) : PreparedFileSource {
+    override val sizeBytes: Long = content.size.toLong()
+    override val sha256: Sha256Digest = Sha256Digest(ByteArray(32))
+    override fun open(): RawSource = Buffer().apply { write(content) }
+}
+
+class ExternalFileDestination : FileTransferDestination {
+    override fun openSink(): RawSink = Buffer()
+    override suspend fun commit() = Unit
+    override suspend fun abort(cause: P2pError.FileTransferFailed?) = Unit
+}
+
+suspend fun secureTransferSurface(
+    session: P2pSession,
+    offer: P2pFileOffer,
+    source: PreparedFileSource,
+    destination: FileTransferDestination
+) {
+    session.sendFile("fixture.bin", "application/octet-stream", source)
+    offer.accept(destination)
+    P2pError.UnsupportedFeature("fixture-feature").feature
+}
 
 fun copyPeer(peer: Peer): Peer {
     val (id, name, platform, transports) = peer
@@ -248,6 +276,9 @@ import dev.p2pkit.core.transport.TransportCapability;
 import dev.p2pkit.core.transport.TransportDescriptor;
 import dev.p2pkit.core.transport.TransportPair;
 import dev.p2pkit.core.transport.TransportHint;
+import dev.p2pkit.core.transfer.Sha256Digest;
+import dev.p2pkit.core.transfer.PreparedFileSource;
+import dev.p2pkit.core.transfer.FileTransferDestination;
 import java.util.List;
 import java.util.Map;
 
@@ -282,6 +313,13 @@ final class ImmutableModelJavaConsumer {
         failure.getPhase();
         failure.getRetryability();
         failure.getTransferId();
+        Sha256Digest digest = new Sha256Digest(new byte[32]);
+        digest.getBytes();
+        Class<PreparedFileSource> preparedType = PreparedFileSource.class;
+        Class<FileTransferDestination> destinationType = FileTransferDestination.class;
+        preparedType.getName();
+        destinationType.getName();
+        new P2pError.UnsupportedFeature("fixture-feature").getFeature();
     }
 }
 EOF
@@ -395,9 +433,14 @@ import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.FileTransferFailureKind
 import dev.p2pkit.core.FileTransferPhase
 import dev.p2pkit.core.Retryability
+import dev.p2pkit.core.transfer.FileTransferDestination
+import dev.p2pkit.core.transfer.PreparedFileSource
+import dev.p2pkit.core.transfer.Sha256Digest
 import dev.p2pkit.core.provisioning.NetworkState
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.io.RawSink
+import kotlinx.io.RawSource
+import kotlinx.io.Buffer
 
 fun commonState(kit: P2pKit, sink: RawSink): StateFlow<P2pState> {
     sink.flush()
@@ -414,6 +457,18 @@ fun commonTransferFailure(): P2pError.FileTransferFailed =
         null,
         "fixture"
     )
+
+class CommonPreparedSource(private val content: ByteArray) : PreparedFileSource {
+    override val sizeBytes: Long = content.size.toLong()
+    override val sha256: Sha256Digest = Sha256Digest(ByteArray(32))
+    override fun open(): RawSource = Buffer().apply { write(content) }
+}
+
+class CommonDestination : FileTransferDestination {
+    override fun openSink(): RawSink = Buffer()
+    override suspend fun commit() = Unit
+    override suspend fun abort(cause: P2pError.FileTransferFailed?) = Unit
+}
 
 fun immutableValues(): Pair<P2pMessage.Text, NetworkState.ConnectedToEthernet> =
     P2pMessage.Text("hello", mapOf("key" to "value")) to

@@ -53,7 +53,7 @@ import kotlin.test.assertTrue
  * (see [SessionStore.forceInvariantViolationForTest]).
  */
 @OptIn(ExplicitSecurityRisk::class)
-@Suppress("DEPRECATION")
+@Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
 class KitStrictInvariantsTest {
 
     @Test
@@ -147,6 +147,7 @@ private class KitStubSession(
     override suspend fun send(message: P2pMessage): Unit =
         error("KitStubSession.send is not supported")
 
+    @Deprecated("Legacy fixture overload")
     override suspend fun sendFile(
         name: String,
         sizeBytes: Long,

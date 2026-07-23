@@ -1,41 +1,53 @@
 package dev.p2pkit.core.transfer
 
 import dev.p2pkit.core.P2pSession
+import dev.p2pkit.core.internal.P2pSessionImpl
 import kotlinx.io.asSource
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.io.RawSource
 import java.io.File
 
 /**
  * Send a file from the local filesystem to the peer.
  *
- * Convenience wrapper over [P2pSession.sendFile] that opens [file] for
- * reading, wraps the `InputStream` as a `kotlinx.io.RawSource`, and forwards
- * to the core API. The underlying stream is closed automatically when the
- * returned [P2pFileTransfer] reaches any terminal state (Completed, Rejected,
- * Cancelled, Failed) — the caller does not need to manage it.
+ * Secure SDK sessions hash one opened snapshot on [Dispatchers.IO], retain no
+ * stream while the offer is pending, and reopen [file] only after acceptance.
+ * The streamed bytes are hashed again, so mutation between preparation and
+ * transfer fails as `SOURCE_CHANGED`. Explicit legacy or third-party session
+ * implementations retain the deprecated one-shot `RawSource` behavior.
  *
- * The transfer's [P2pFileTransfer.name] is `file.name`, and `sizeBytes` is
- * measured from the opened file descriptor. This avoids a path-stat/open race;
- * mutation after the descriptor is opened is outside the snapshot contract and
- * causes the transfer to fail if the promised byte count can no longer be read.
+ * The transfer's [P2pFileTransfer.name] is `file.name`; the prepared size is
+ * measured while hashing rather than trusted from an earlier path stat.
  *
  * @throws IllegalArgumentException if [file] does not exist or is not a regular file
  */
+@Suppress("DEPRECATION")
 public suspend fun P2pSession.sendFile(file: File): P2pFileTransfer {
     require(file.exists()) { "File does not exist: ${file.absolutePath}" }
     require(file.isFile) { "Not a regular file: ${file.absolutePath}" }
-    val stream = file.inputStream()
-    val source = stream.asSource()
-    return try {
-        val openedSize = stream.channel.size()
-        require(openedSize >= 0L) { "Cannot determine opened file size: ${file.absolutePath}" }
-        sendFile(
-            name = file.name,
-            sizeBytes = openedSize,
-            mimeType = null,
-            source = source
-        )
-    } catch (e: Throwable) {
-        runCatching { source.close() }
-        throw e
+    if (this !is P2pSessionImpl || !usesAuthenticatedFileTransfer) {
+        val stream = file.inputStream()
+        val source = stream.asSource()
+        return try {
+            sendFile(file.name, stream.channel.size(), null, source)
+        } catch (e: Throwable) {
+            runCatching { source.close() }
+            throw e
+        }
     }
+    val prepared = withContext(Dispatchers.IO) {
+        val source = file.inputStream().asSource()
+        val hash = try {
+            hashPreparedSource(source)
+        } finally {
+            source.close()
+        }
+        object : PreparedFileSource {
+            override val sizeBytes: Long = hash.sizeBytes
+            override val sha256: Sha256Digest = hash.digest
+            override fun open(): RawSource = file.inputStream().asSource()
+        }
+    }
+    return sendFile(name = file.name, mimeType = null, source = prepared)
 }

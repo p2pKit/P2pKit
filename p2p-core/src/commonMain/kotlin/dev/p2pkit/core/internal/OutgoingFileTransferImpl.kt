@@ -3,6 +3,8 @@ package dev.p2pkit.core.internal
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.protocol.MessageId
+import dev.p2pkit.core.transfer.PreparedFileSource
+import dev.p2pkit.core.transfer.Sha256Digest
 import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transfer.isTerminal
@@ -28,7 +30,10 @@ internal class OutgoingFileTransferImpl(
     override val sizeBytes: Long,
     override val mimeType: String?,
     val transferId: MessageId,
-    source: RawSource,
+    source: RawSource?,
+    internal val preparedSource: PreparedFileSource? = null,
+    internal val expectedDigest: Sha256Digest? = null,
+    internal val offerHash: Sha256Digest? = null,
     private val dispatcher: FileTransferDispatcher
 ) : P2pFileTransfer {
 
@@ -55,6 +60,17 @@ internal class OutgoingFileTransferImpl(
 
     internal fun sourceOrThrow(): RawSource =
         sourceRef.value ?: throw IllegalStateException("Transfer $id no longer owns its source")
+
+    internal fun openPreparedSource(): RawSource {
+        val prepared = checkNotNull(preparedSource) { "Transfer $id has no prepared source" }
+        check(sourceRef.value == null) { "Transfer $id source is already open" }
+        val opened = prepared.open()
+        if (!sourceRef.compareAndSet(null, opened)) {
+            runCatching { opened.close() }
+            throw IllegalStateException("Transfer $id source was opened concurrently")
+        }
+        return opened
+    }
 
     internal fun retainsSource(): Boolean = sourceRef.value != null
 

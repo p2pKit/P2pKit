@@ -36,7 +36,6 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import kotlinx.io.asSink
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -834,16 +833,28 @@ private fun wireIncoming(
             }
         }
         .launchIn(scope)
-    session.incomingFiles
-        .onEach { offer ->
-            pendingFileOffers[offer.id] = offer
-            println(
-                "[file ← ${session.peer.name.sanitizedForTerminal()}] offered " +
-                    "${offer.name.sanitizedForTerminal()} (${offer.sizeBytes}B), " +
-                    "id=${offer.id.take(8)}…; use `accept ${offer.id.take(8)}` or `reject ${offer.id.take(8)}`"
-            )
+    scope.launch {
+        var previousIds: Set<String> = emptySet()
+        try {
+            session.pendingFileOffers.collect { offers ->
+                val currentIds = offers.mapTo(mutableSetOf()) { it.id }
+                (previousIds - currentIds).forEach(pendingFileOffers::remove)
+                for (offer in offers) {
+                    if (pendingFileOffers.put(offer.id, offer) == null) {
+                        println(
+                            "[file ← ${session.peer.name.sanitizedForTerminal()}] offered " +
+                                "${offer.name.sanitizedForTerminal()} (${offer.sizeBytes}B), " +
+                                "id=${offer.id.take(8)}…; use `accept ${offer.id.take(8)}` or " +
+                                "`reject ${offer.id.take(8)}`"
+                        )
+                    }
+                }
+                previousIds = currentIds
+            }
+        } finally {
+            previousIds.forEach(pendingFileOffers::remove)
         }
-        .launchIn(scope)
+    }
 }
 
 private const val MAX_INCOMING_FILE_BYTES: Long = 50L * 1024L * 1024L
@@ -878,6 +889,13 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
         System.err.println("[file ← $peerName] cannot create ${saveDir.absolutePath}")
         return
     }
+    runCatching { cleanupStaleTransferPartsOnce(saveDir) }.getOrElse { error ->
+        runCatching { offer.reject("cannot clean stale destination parts") }
+        System.err.println(
+            "[file ← $peerName] stale-part cleanup failed: ${error.message}".sanitizedForTerminal()
+        )
+        return
+    }
 
     // AUDIT-2026-06 (A-G9-samples-desktop-ios-19): atomically claim a unique
     // destination only after the operator consents and storage checks pass.
@@ -889,14 +907,13 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
             )
             return
         }
-    val out = runCatching { saveFile.outputStream() }.getOrElse { error ->
+    val destination = runCatching { reservedFileDestination(saveFile) }.getOrElse { error ->
         runCatching { saveFile.delete() }
-        runCatching { offer.reject("cannot open destination: ${error.message}") }
-        System.err.println("[file ← $peerName] open failed: ${error.message}".sanitizedForTerminal())
+        runCatching { offer.reject("cannot prepare destination: ${error.message}") }
+        System.err.println("[file ← $peerName] destination failed: ${error.message}".sanitizedForTerminal())
         return
     }
-    val transfer = runCatching { offer.accept(out.asSink()) }.getOrElse { error ->
-        runCatching { out.close() }
+    val transfer = runCatching { offer.accept(destination) }.getOrElse { error ->
         runCatching { saveFile.delete() }
         runCatching { offer.reject("accept failed: ${error.message}") }
         System.err.println("[file ← $peerName] accept failed: ${error.message}".sanitizedForTerminal())
@@ -920,7 +937,6 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
         }
     } finally {
         withContext(NonCancellable) {
-            runCatching { out.close() }
             if (!completed) runCatching { saveFile.delete() }
         }
     }
@@ -961,7 +977,8 @@ internal fun String.sanitizedForTerminal(): String = filterNot { it.isISOControl
 // transfer is writing to. createNewFile() atomically claims the name, so a
 // repeated offer with the same name lands in "<base> (n)<ext>" instead of
 // truncating the previous copy, and two concurrent same-named offers can
-// never open two streams onto the same path.
+// never open two transfers onto the same path. The reserved destination
+// wrapper removes this sample-owned placeholder if the transfer aborts.
 private fun uniqueSaveFile(dir: File, sanitizedName: String): File {
     val safeName = sanitizedName
         .filterNot { it.isISOControl() }

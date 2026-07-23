@@ -37,7 +37,7 @@ import kotlin.test.assertIs
  * fresh UUID. Once the kit captures its id during construction, later
  * defaults edits don't affect it.
  */
-@Suppress("DEPRECATION")
+@Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
 class IosLanLoopbackTest {
 
     private lateinit var unique: String

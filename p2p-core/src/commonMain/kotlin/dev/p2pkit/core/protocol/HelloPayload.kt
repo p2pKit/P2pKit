@@ -1,6 +1,8 @@
 package dev.p2pkit.core.protocol
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 
 /**
@@ -19,7 +21,10 @@ internal data class HelloPayload(
     val deviceName: String,
     val platform: String,
     val supportedTransports: List<String>,
-    val protocolVersion: Int = ProtocolConstants.LEGACY_VERSION.toInt()
+    val protocolVersion: Int = ProtocolConstants.LEGACY_VERSION.toInt(),
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val features: List<String> = emptyList()
 ) {
     companion object {
         private val json = Json {
@@ -35,6 +40,12 @@ internal data class HelloPayload(
 
         /** Max number of advertised transport tags accepted from a peer. */
         const val MAX_TRANSPORTS: Int = 32
+
+        /** Maximum authenticated feature tokens accepted from a peer. */
+        const val MAX_FEATURES: Int = 32
+
+        /** UTF-8/character limit for one canonical ASCII feature token. */
+        const val MAX_FEATURE_BYTES: Int = 128
 
         fun encode(payload: HelloPayload): ByteArray {
             validate(payload)
@@ -76,6 +87,26 @@ internal data class HelloPayload(
                     MAX_FIELD_UTF8_BYTES,
                     true
                 )
+            }
+            require(payload.features.size <= MAX_FEATURES) {
+                "HELLO advertised too many features: ${payload.features.size}"
+            }
+            var previous: String? = null
+            payload.features.forEachIndexed { index, feature ->
+                validateWireText(
+                    feature,
+                    "HELLO features[$index]",
+                    MAX_FEATURE_BYTES,
+                    MAX_FEATURE_BYTES,
+                    true
+                )
+                require(feature.all { it in 'a'..'z' || it in '0'..'9' || it == '-' }) {
+                    "HELLO features[$index] must be canonical lowercase ASCII"
+                }
+                require(previous == null || checkNotNull(previous) < feature) {
+                    "HELLO features must be strictly sorted and unique"
+                }
+                previous = feature
             }
             require(payload.protocolVersion in 1..255) {
                 "HELLO protocolVersion must be in 1..255, got ${payload.protocolVersion}"

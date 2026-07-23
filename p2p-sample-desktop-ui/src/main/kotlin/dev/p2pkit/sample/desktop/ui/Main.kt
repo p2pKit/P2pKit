@@ -104,11 +104,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.io.asSink
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
-import java.io.OutputStream
 
 // =====================================================================
 // Entry point
@@ -260,21 +258,10 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     private val discoveryToggleMutex = Mutex()
 
     // AUDIT-2026-06 (A-G9-samples-desktop-ios-21): track ALL per-session collector
-    // jobs (incoming messages, state, incomingFiles) so every one of them is
+    // jobs (incoming messages, state, pendingFileOffers) so every one of them is
     // cancelled when the session leaves kit.sessions — previously only the
     // incoming-message job was tracked and the rest leaked until kit stop.
     private val sessionJobs: MutableMap<String, List<Job>> = mutableMapOf()
-
-    // AUDIT-2026-06 (A-G9-samples-desktop-ios-20): open incoming-file sinks keyed
-    // by transfer id so stop() can close them deterministically even after the
-    // run-scope collectors are cancelled.
-    private val activeIncomingSinks: MutableMap<String, ActiveIncomingSink> = mutableMapOf()
-
-    private data class ActiveIncomingSink(
-        val transferId: String,
-        val stream: OutputStream,
-        val destinationPath: String
-    )
 
     private var nextMessageId: Long = 1L
 
@@ -663,10 +650,6 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         runScope?.cancel()
         runScope = null
         sessionJobs.clear()
-        // AUDIT-2026-06 (A-G9-samples-desktop-ios-20): the per-transfer collectors
-        // were just cancelled with runScope — close any still-open incoming sinks
-        // deterministically instead of leaving them to the GC cleaner.
-        closeAllIncomingSinks()
         _peers.value = emptyList()
         connectedSessions.clear()
         pendingConnectPeerIds.clear()
@@ -778,15 +761,29 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
     // reconcileSessions can track and cancel it with the session.
     private fun wireIncomingFiles(session: P2pSession, scope: CoroutineScope): Job =
         scope.launch {
-            session.incomingFiles.collect { offer ->
-                pendingFileOffers += IncomingFileOffer(
-                    id = offer.id,
-                    name = offer.name,
-                    sizeBytes = offer.sizeBytes,
-                    peerName = session.peer.name,
-                    offer = offer
-                )
-                appendSystemMessage("incoming file '${offer.name}' from ${session.peer.name} — awaiting consent")
+            var previousIds: Set<String> = emptySet()
+            try {
+                session.pendingFileOffers.collect { offers ->
+                    val currentIds = offers.mapTo(mutableSetOf()) { it.id }
+                    pendingFileOffers.removeAll { it.id in previousIds && it.id !in currentIds }
+                    for (offer in offers) {
+                        if (pendingFileOffers.none { it.id == offer.id }) {
+                            pendingFileOffers += IncomingFileOffer(
+                                id = offer.id,
+                                name = offer.name,
+                                sizeBytes = offer.sizeBytes,
+                                peerName = session.peer.name,
+                                offer = offer
+                            )
+                            appendSystemMessage(
+                                "incoming file '${offer.name}' from ${session.peer.name} — awaiting consent"
+                            )
+                        }
+                    }
+                    previousIds = currentIds
+                }
+            } finally {
+                pendingFileOffers.removeAll { it.id in previousIds }
             }
         }
 
@@ -799,6 +796,14 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         }
         val baseDir = File(System.getProperty("user.home") ?: ".", ".p2pkit/incoming")
         val saveDir = File(baseDir, sanitize(pending.peerName)).also { it.mkdirs() }
+        runCatching { cleanupStaleTransferPartsOnce(saveDir) }
+            .getOrElse { error ->
+                runCatchingCancellable { pending.offer.reject("cannot clean stale destination parts") }
+                appendSystemMessage(
+                    "rejected '${pending.name}': ${error.message ?: "stale-part cleanup failed"}"
+                )
+                return
+            }
         if (saveDir.usableSpace < pending.sizeBytes + 1L * 1024 * 1024) {
             runCatchingCancellable { pending.offer.reject("receiver free space is insufficient") }
             appendSystemMessage("rejected '${pending.name}': insufficient free space")
@@ -810,22 +815,21 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                 appendSystemMessage("rejected '${pending.name}': ${error.message ?: "cannot claim destination"}")
                 return
             }
-        val out = runCatching { saveFile.outputStream() }
+        val destination = runCatching { reservedFileDestination(saveFile) }
             .getOrElse { e ->
                 runCatching { saveFile.delete() }
                 runCatchingCancellable { pending.offer.reject("cannot open destination") }
                 appendSystemMessage("rejected '${pending.name}': ${e.message ?: "cannot open destination"}")
                 return
             }
-        val incoming = runCatchingCancellable { pending.offer.accept(out.asSink()) }
+        val incoming = runCatchingCancellable { pending.offer.accept(destination) }
             .getOrElse { e ->
-                runCatching { out.close() }
                 runCatching { saveFile.delete() }
                 runCatchingCancellable { pending.offer.reject("accept failed on receiver") }
                 appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
                 return
             }
-        registerIncomingTransfer(incoming, pending.peerName, saveFile.absolutePath, scope, out)
+        registerIncomingTransfer(incoming, pending.peerName, saveFile.absolutePath, scope)
     }
 
     private fun registerOutgoingTransfer(
@@ -854,8 +858,7 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
         transfer: P2pFileTransfer,
         peerName: String,
         destinationPath: String,
-        scope: CoroutineScope,
-        out: OutputStream
+        scope: CoroutineScope
     ) {
         addRow(
             FileTransferRow(
@@ -871,12 +874,10 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
             )
         )
         appendSystemMessage("receiving file '${transfer.name}' from $peerName → $destinationPath")
-        // AUDIT-2026-06 (A-G9-samples-desktop-ios-20): register the sink and close
-        // it when the transfer reaches a terminal state OR the collector is
-        // cancelled (Stop mid-transfer) — not only via a live happy-path collector.
-        activeIncomingSinks[transfer.id] = ActiveIncomingSink(transfer.id, out, destinationPath)
+        // The transactional destination is owned by the SDK and is committed
+        // or aborted even if this UI collector is cancelled.
         watchTransfer(transfer, scope) { completed ->
-            closeIncomingSink(transfer.id, destinationPath, completed)
+            if (!completed) runCatching { File(destinationPath).delete() }
         }
     }
 
@@ -914,28 +915,6 @@ private class DesktopP2pState(private val appScope: CoroutineScope) {
                     onFinally?.invoke(completed)
                 }
             }
-        }
-    }
-
-    private fun closeIncomingSink(transferId: String, destinationPath: String, completed: Boolean) {
-        activeIncomingSinks.remove(transferId)?.stream?.let { sink ->
-            runCatching { sink.close() }
-                .onFailure {
-                    System.err.println(
-                        "[p2pkit WARN] closing incoming sink failed: ${it.message}".sanitizedForTerminal()
-                    )
-                }
-        }
-        if (!completed) runCatching { File(destinationPath).delete() }
-    }
-
-    private fun closeAllIncomingSinks() {
-        val sinks = activeIncomingSinks.values.toList()
-        activeIncomingSinks.clear()
-        for (sink in sinks) {
-            runCatching { sink.stream.close() }
-            val completed = fileTransfers.firstOrNull { it.id == sink.transferId }?.state is FileTransferState.Completed
-            if (!completed) runCatching { File(sink.destinationPath).delete() }
         }
     }
 

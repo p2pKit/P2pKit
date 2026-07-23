@@ -264,6 +264,12 @@ abstract interface dev.p2pkit.core.security/SecurityManager { // dev.p2pkit.core
     abstract suspend fun performHandshake(dev.p2pkit.core.transport/RawConnection, dev.p2pkit.core/Peer): dev.p2pkit.core.security/SecureConnection // dev.p2pkit.core.security/SecurityManager.performHandshake|performHandshake(dev.p2pkit.core.transport.RawConnection;dev.p2pkit.core.Peer){}[0]
 }
 
+abstract interface dev.p2pkit.core.transfer/FileTransferDestination { // dev.p2pkit.core.transfer/FileTransferDestination|null[0]
+    abstract fun openSink(): kotlinx.io/RawSink // dev.p2pkit.core.transfer/FileTransferDestination.openSink|openSink(){}[0]
+    abstract suspend fun abort(dev.p2pkit.core/P2pError.FileTransferFailed?) // dev.p2pkit.core.transfer/FileTransferDestination.abort|abort(dev.p2pkit.core.P2pError.FileTransferFailed?){}[0]
+    abstract suspend fun commit() // dev.p2pkit.core.transfer/FileTransferDestination.commit|commit(){}[0]
+}
+
 abstract interface dev.p2pkit.core.transfer/P2pFileOffer { // dev.p2pkit.core.transfer/P2pFileOffer|null[0]
     abstract val id // dev.p2pkit.core.transfer/P2pFileOffer.id|{}id[0]
         abstract fun <get-id>(): kotlin/String // dev.p2pkit.core.transfer/P2pFileOffer.id.<get-id>|<get-id>(){}[0]
@@ -278,6 +284,7 @@ abstract interface dev.p2pkit.core.transfer/P2pFileOffer { // dev.p2pkit.core.tr
 
     abstract suspend fun accept(kotlinx.io/RawSink): dev.p2pkit.core.transfer/P2pFileTransfer // dev.p2pkit.core.transfer/P2pFileOffer.accept|accept(kotlinx.io.RawSink){}[0]
     abstract suspend fun reject(kotlin/String? = ...) // dev.p2pkit.core.transfer/P2pFileOffer.reject|reject(kotlin.String?){}[0]
+    open suspend fun accept(dev.p2pkit.core.transfer/FileTransferDestination): dev.p2pkit.core.transfer/P2pFileTransfer // dev.p2pkit.core.transfer/P2pFileOffer.accept|accept(dev.p2pkit.core.transfer.FileTransferDestination){}[0]
 }
 
 abstract interface dev.p2pkit.core.transfer/P2pFileTransfer { // dev.p2pkit.core.transfer/P2pFileTransfer|null[0]
@@ -297,6 +304,15 @@ abstract interface dev.p2pkit.core.transfer/P2pFileTransfer { // dev.p2pkit.core
         abstract fun <get-state>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.core.transfer/FileTransferState> // dev.p2pkit.core.transfer/P2pFileTransfer.state.<get-state>|<get-state>(){}[0]
 
     abstract suspend fun cancel(kotlin/String? = ...) // dev.p2pkit.core.transfer/P2pFileTransfer.cancel|cancel(kotlin.String?){}[0]
+}
+
+abstract interface dev.p2pkit.core.transfer/PreparedFileSource { // dev.p2pkit.core.transfer/PreparedFileSource|null[0]
+    abstract val sha256 // dev.p2pkit.core.transfer/PreparedFileSource.sha256|{}sha256[0]
+        abstract fun <get-sha256>(): dev.p2pkit.core.transfer/Sha256Digest // dev.p2pkit.core.transfer/PreparedFileSource.sha256.<get-sha256>|<get-sha256>(){}[0]
+    abstract val sizeBytes // dev.p2pkit.core.transfer/PreparedFileSource.sizeBytes|{}sizeBytes[0]
+        abstract fun <get-sizeBytes>(): kotlin/Long // dev.p2pkit.core.transfer/PreparedFileSource.sizeBytes.<get-sizeBytes>|<get-sizeBytes>(){}[0]
+
+    abstract fun open(): kotlinx.io/RawSource // dev.p2pkit.core.transfer/PreparedFileSource.open|open(){}[0]
 }
 
 abstract interface dev.p2pkit.core.transport/DataTransport { // dev.p2pkit.core.transport/DataTransport|null[0]
@@ -434,6 +450,7 @@ abstract interface dev.p2pkit.core/P2pSession { // dev.p2pkit.core/P2pSession|nu
     abstract suspend fun close() // dev.p2pkit.core/P2pSession.close|close(){}[0]
     abstract suspend fun send(dev.p2pkit.core/P2pMessage) // dev.p2pkit.core/P2pSession.send|send(dev.p2pkit.core.P2pMessage){}[0]
     abstract suspend fun sendFile(kotlin/String, kotlin/Long, kotlin/String?, kotlinx.io/RawSource): dev.p2pkit.core.transfer/P2pFileTransfer // dev.p2pkit.core/P2pSession.sendFile|sendFile(kotlin.String;kotlin.Long;kotlin.String?;kotlinx.io.RawSource){}[0]
+    open suspend fun sendFile(kotlin/String, kotlin/String?, dev.p2pkit.core.transfer/PreparedFileSource): dev.p2pkit.core.transfer/P2pFileTransfer // dev.p2pkit.core/P2pSession.sendFile|sendFile(kotlin.String;kotlin.String?;dev.p2pkit.core.transfer.PreparedFileSource){}[0]
 }
 
 sealed interface dev.p2pkit.core.transport/PeerAuthenticationHint { // dev.p2pkit.core.transport/PeerAuthenticationHint|null[0]
@@ -733,6 +750,22 @@ final class dev.p2pkit.core.transfer/FileTransferConfig { // dev.p2pkit.core.tra
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core.transfer/FileTransferConfig.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.p2pkit.core.transfer/FileTransferConfig.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.p2pkit.core.transfer/FileTransferConfig.toString|toString(){}[0]
+}
+
+final class dev.p2pkit.core.transfer/Sha256Digest { // dev.p2pkit.core.transfer/Sha256Digest|null[0]
+    constructor <init>(kotlin/ByteArray) // dev.p2pkit.core.transfer/Sha256Digest.<init>|<init>(kotlin.ByteArray){}[0]
+
+    final val bytes // dev.p2pkit.core.transfer/Sha256Digest.bytes|{}bytes[0]
+        final fun <get-bytes>(): kotlin/ByteArray // dev.p2pkit.core.transfer/Sha256Digest.bytes.<get-bytes>|<get-bytes>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core.transfer/Sha256Digest.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // dev.p2pkit.core.transfer/Sha256Digest.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // dev.p2pkit.core.transfer/Sha256Digest.toString|toString(){}[0]
+
+    final object Companion { // dev.p2pkit.core.transfer/Sha256Digest.Companion|null[0]
+        final const val SIZE_BYTES // dev.p2pkit.core.transfer/Sha256Digest.Companion.SIZE_BYTES|{}SIZE_BYTES[0]
+            final fun <get-SIZE_BYTES>(): kotlin/Int // dev.p2pkit.core.transfer/Sha256Digest.Companion.SIZE_BYTES.<get-SIZE_BYTES>|<get-SIZE_BYTES>(){}[0]
+    }
 }
 
 final class dev.p2pkit.core.transport/InternalPeer { // dev.p2pkit.core.transport/InternalPeer|null[0]
@@ -1829,6 +1862,19 @@ sealed class dev.p2pkit.core/P2pError : kotlin/Exception { // dev.p2pkit.core/P2
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/P2pError.TransportStartFailed.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.p2pkit.core/P2pError.TransportStartFailed.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // dev.p2pkit.core/P2pError.TransportStartFailed.toString|toString(){}[0]
+    }
+
+    final class UnsupportedFeature : dev.p2pkit.core/P2pError { // dev.p2pkit.core/P2pError.UnsupportedFeature|null[0]
+        constructor <init>(kotlin/String) // dev.p2pkit.core/P2pError.UnsupportedFeature.<init>|<init>(kotlin.String){}[0]
+
+        final val feature // dev.p2pkit.core/P2pError.UnsupportedFeature.feature|{}feature[0]
+            final fun <get-feature>(): kotlin/String // dev.p2pkit.core/P2pError.UnsupportedFeature.feature.<get-feature>|<get-feature>(){}[0]
+
+        final fun component1(): kotlin/String // dev.p2pkit.core/P2pError.UnsupportedFeature.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): dev.p2pkit.core/P2pError.UnsupportedFeature // dev.p2pkit.core/P2pError.UnsupportedFeature.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/P2pError.UnsupportedFeature.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.p2pkit.core/P2pError.UnsupportedFeature.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.p2pkit.core/P2pError.UnsupportedFeature.toString|toString(){}[0]
     }
 
     final class VersionMismatch : dev.p2pkit.core/P2pError { // dev.p2pkit.core/P2pError.VersionMismatch|null[0]

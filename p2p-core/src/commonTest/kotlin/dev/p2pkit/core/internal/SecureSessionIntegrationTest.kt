@@ -3,6 +3,8 @@ package dev.p2pkit.core.internal
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.ExplicitSecurityRisk
+import dev.p2pkit.core.FileTransferFailureKind
+import dev.p2pkit.core.FileTransferPhase
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
@@ -19,6 +21,7 @@ import dev.p2pkit.core.security.IdentityNamespace
 import dev.p2pkit.core.security.LocalSecureIdentity
 import dev.p2pkit.core.security.SecureIdentityService
 import dev.p2pkit.core.security.platformSecurityCryptography
+import dev.p2pkit.core.internal.security.sha256
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.transport.RawConnection
@@ -27,6 +30,10 @@ import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
 import dev.p2pkit.core.transport.TransportSecurityProfile
+import dev.p2pkit.core.transfer.FileTransferDestination
+import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.core.transfer.PreparedFileSource
+import dev.p2pkit.core.transfer.Sha256Digest
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.test.Test
@@ -34,6 +41,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.async
@@ -50,6 +58,11 @@ import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
+import kotlinx.io.Buffer
+import kotlinx.io.RawSink
+import kotlinx.io.RawSource
+import kotlinx.io.readByteArray
+import kotlinx.io.write
 
 /** End-to-end proof that SessionManager never parses protocol v2 on the raw stream. */
 @OptIn(ExplicitSecurityRisk::class, ExperimentalAtomicApi::class)
@@ -275,8 +288,9 @@ class SecureSessionIntegrationTest {
                     }
                 }
                 subscribed.await()
-                outgoing.send(P2pMessage.Text(secret))
-                assertEquals(P2pMessage.Text(secret), received.await())
+                val metadata = mapOf("content-type" to "text/plain", "trace" to "secure-v2")
+                outgoing.send(P2pMessage.Text(secret, metadata))
+                assertEquals(P2pMessage.Text(secret, metadata), received.await())
 
                 val aliceWire = aliceRaw.writtenBytes()
                 assertFalse(aliceWire.containsSubsequence(secret.encodeToByteArray()))
@@ -290,6 +304,99 @@ class SecureSessionIntegrationTest {
                 bobIdentity.clearPrivate()
             }
         }
+
+    @Test
+    fun securePreparedTransferCompletesAfterReceiverCommit() = runBlocking {
+        val appId = AppId("secure.session.file-commit")
+        val pair = FakeConnectionPair()
+        val alice = secureKit(
+            appId,
+            "Alice",
+            MemorySecureIdentityStorage(),
+            FakeDataTransport(outgoingConnection = { CopyingRawConnection(pair.a) }),
+            PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+        )
+        val bob = secureKit(
+            appId,
+            "Bob",
+            MemorySecureIdentityStorage(),
+            FakeDataTransport(preStagedIncoming = listOf(CopyingRawConnection(pair.b))),
+            PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+        )
+        try {
+            val incomingDeferred = async { withTimeout(5_000) { bob.incomingSessions.first() } }
+            bob.start()
+            val outgoing = withTimeout(5_000) { alice.connect(peerFor(bob)) }
+            val incoming = incomingDeferred.await()
+            val bytes = ByteArray(130_000) { (it and 0xff).toByte() }
+            val sender = outgoing.sendFile("secure.bin", "application/octet-stream", TestPreparedSource(bytes))
+            val offer = withTimeout(5_000) { incoming.pendingFileOffers.first { it.isNotEmpty() }.single() }
+            val destination = TestCommitDestination()
+            val receiver = offer.accept(destination)
+
+            withTimeout(5_000) { sender.state.first { it is FileTransferState.Completed } }
+            withTimeout(5_000) { receiver.state.first { it is FileTransferState.Completed } }
+            assertTrue(destination.committed)
+            assertContentEquals(bytes, destination.buffer.readByteArray())
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
+    fun secureReceiverCommitFailureReachesSenderAsTypedTerminalResult() = runBlocking {
+        val appId = AppId("secure.session.file-commit-failure")
+        val pair = FakeConnectionPair()
+        val alice = secureKit(
+            appId,
+            "Alice",
+            MemorySecureIdentityStorage(),
+            FakeDataTransport(outgoingConnection = { CopyingRawConnection(pair.a) }),
+            PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+        )
+        val bob = secureKit(
+            appId,
+            "Bob",
+            MemorySecureIdentityStorage(),
+            FakeDataTransport(preStagedIncoming = listOf(CopyingRawConnection(pair.b))),
+            PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+        )
+        try {
+            val incomingDeferred = async { withTimeout(5_000) { bob.incomingSessions.first() } }
+            bob.start()
+            val outgoing = withTimeout(5_000) { alice.connect(peerFor(bob)) }
+            val incoming = incomingDeferred.await()
+            val bytes = ByteArray(4096) { (it * 31).toByte() }
+            val sender = outgoing.sendFile("commit-fails.bin", null, TestPreparedSource(bytes))
+            val offer = withTimeout(5_000) {
+                incoming.pendingFileOffers.first { it.isNotEmpty() }.single()
+            }
+            val receiver = offer.accept(
+                TestCommitDestination(commitFailure = IllegalStateException("fsync failed"))
+            )
+
+            val senderFailure = withTimeout(5_000) {
+                assertIs<FileTransferState.Failed>(
+                    sender.state.first { it is FileTransferState.Failed }
+                )
+            }
+            val receiverFailure = withTimeout(5_000) {
+                assertIs<FileTransferState.Failed>(
+                    receiver.state.first { it is FileTransferState.Failed }
+                )
+            }
+            val senderError = assertIs<P2pError.FileTransferFailed>(senderFailure.error)
+            val receiverError = assertIs<P2pError.FileTransferFailed>(receiverFailure.error)
+            assertEquals(FileTransferFailureKind.STORAGE, senderError.kind)
+            assertEquals(FileTransferPhase.DURABLE_COMMIT, senderError.phase)
+            assertEquals(FileTransferFailureKind.STORAGE, receiverError.kind)
+            assertEquals(FileTransferPhase.DURABLE_COMMIT, receiverError.phase)
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
 
     @Test
     fun kitSnapshotsCallerOwnedPinnedAuthorizationSets() = runBlocking {
@@ -658,6 +765,30 @@ private class CopyingRawConnection(
     override fun read(): Flow<ByteArray> = delegate.read()
 
     override suspend fun close() = delegate.close()
+}
+
+private class TestPreparedSource(private val content: ByteArray) : PreparedFileSource {
+    override val sizeBytes: Long = content.size.toLong()
+    override val sha256: Sha256Digest = sha256(content)
+    override fun open(): RawSource = Buffer().apply { write(content) }
+}
+
+private class TestCommitDestination(
+    private val commitFailure: Throwable? = null
+) : FileTransferDestination {
+    val buffer = Buffer()
+    var committed: Boolean = false
+
+    override fun openSink(): RawSink = buffer
+
+    override suspend fun commit() {
+        commitFailure?.let { throw it }
+        committed = true
+    }
+
+    override suspend fun abort(cause: P2pError.FileTransferFailed?) {
+        buffer.clear()
+    }
 }
 
 private fun ByteArray.containsSubsequence(needle: ByteArray): Boolean {

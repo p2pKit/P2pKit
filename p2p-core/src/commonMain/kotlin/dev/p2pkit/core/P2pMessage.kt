@@ -12,31 +12,33 @@ import dev.p2pkit.core.internal.immutableMapSnapshot
  * messages may be split into chunks for transport, but chunking is invisible
  * to the application.
  *
- * ### `metadata` is NOT transmitted in protocol v1 (AUDIT-2026-07 API-1, decision #3c)
+ * ### Metadata compatibility
  *
- * Protocol v1 DATA frames carry only the text/binary payload. The
- * [Text.metadata] / [Binary.metadata] maps are **local-only on send** — they
- * are never serialized onto the wire — and messages received from a peer
- * **always** carry an empty metadata map, regardless of what the sender
- * attached. This contract is pinned by `MessageMetadataContractTest`.
- * Transmitting metadata is scheduled as the post-RC `metadata-wire`
- * milestone (see `docs/STABILIZATION_AND_RELEASE.md` §C4).
+ * Authenticated secure sessions negotiate `app-message-envelope-v1` inside
+ * their encrypted HELLO exchange. When negotiated, message type, id,
+ * per-session sequence, sender, recipient, metadata, content length, and the
+ * content SHA-256 are carried in the authenticated canonical envelope.
+ * Metadata keys are serialized in raw UTF-8 byte order.
+ *
+ * Explicit legacy protocol v1 remains byte-compatible and metadata-free. A
+ * secure peer that does not negotiate the envelope may exchange messages with
+ * empty metadata, but [P2pSession.send] fails with
+ * [P2pError.UnsupportedFeature] rather than dropping non-empty metadata.
  */
 public sealed class P2pMessage {
 
     /**
      * UTF-8 text payload with optional string metadata.
      *
-     * @property value the UTF-8 text payload — the only part transmitted.
-     * @property metadata NOT transmitted in protocol v1: visible only within
-     *   the sender's process; received [Text] messages always have an empty
-     *   map. See [P2pMessage] docs and the post-RC `metadata-wire` milestone.
+     * @property value the UTF-8 text payload.
+     * @property metadata immutable metadata transmitted by negotiated secure
+     *   sessions; explicit legacy protocol v1 does not transmit it.
      */
     public class Text(
         public val value: String,
         metadata: Map<String, String> = emptyMap()
     ) : P2pMessage() {
-        /** Stable, unmodifiable snapshot of sender-local metadata. */
+        /** Stable, unmodifiable snapshot of message metadata. */
         public val metadata: Map<String, String> = immutableMapSnapshot(metadata)
 
         public operator fun component1(): String = value
@@ -58,10 +60,9 @@ public sealed class P2pMessage {
     /**
      * Arbitrary binary payload with optional string metadata.
      *
-     * @property bytes the binary payload — the only part transmitted.
-     * @property metadata NOT transmitted in protocol v1: visible only within
-     *   the sender's process; received [Binary] messages always have an empty
-     *   map. See [P2pMessage] docs and the post-RC `metadata-wire` milestone.
+     * @property bytes the binary payload.
+     * @property metadata immutable metadata transmitted by negotiated secure
+     *   sessions; explicit legacy protocol v1 does not transmit it.
      */
     public class Binary(
         bytes: ByteArray,

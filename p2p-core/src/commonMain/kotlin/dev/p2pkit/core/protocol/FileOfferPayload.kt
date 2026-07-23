@@ -34,6 +34,9 @@ internal data class FileOfferPayload(
         /** Max accepted length (chars) for the peer-supplied MIME type. */
         const val MAX_MIME_LEN: Int = 255
 
+        /** Maximum UTF-8 bytes for the peer-supplied MIME type. */
+        const val MAX_MIME_UTF8_BYTES: Int = MAX_MIME_LEN
+
         fun encode(payload: FileOfferPayload): ByteArray {
             validate(payload)
             val encoded = json.encodeToString(serializer(), payload).encodeToByteArray()

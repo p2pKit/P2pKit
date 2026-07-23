@@ -44,6 +44,7 @@ import kotlin.test.assertTrue
  *  2. the same inconsistency only warns under the production default;
  *  3. a valid mutation sequence never false-positives under strict mode.
  */
+@Suppress("OVERRIDE_DEPRECATION")
 class SessionStoreInvariantTest {
 
     @Test
@@ -255,6 +256,7 @@ private class StubSession(
     override suspend fun send(message: P2pMessage): Unit =
         error("StubSession.send is not supported")
 
+    @Deprecated("Legacy fixture overload")
     override suspend fun sendFile(
         name: String,
         sizeBytes: Long,

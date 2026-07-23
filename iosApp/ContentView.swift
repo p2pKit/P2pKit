@@ -1,5 +1,7 @@
 import SwiftUI
 import P2pKitShared
+import CryptoKit
+import Darwin
 
 struct ContentView: View {
     // MARK: - Public state shown in the UI
@@ -43,6 +45,8 @@ struct ContentView: View {
     // SharedFlow collect) across every Stop/Start cycle.
     @State private var messageCollectorTasks: [String: Task<Void, Never>] = [:]
     @State private var fileCollectorTasks: [String: Task<Void, Never>] = [:]
+    @State private var fileOfferIdsBySession: [String: Set<String>] = [:]
+    @State private var cleanedTransferDirectories: Set<String> = []
     @State private var transferWatchTasks: [String: Task<Void, Never>] = [:]
 
     // MARK: - In-flight guards (prevent rapid double-taps from spawning
@@ -54,7 +58,7 @@ struct ContentView: View {
     @State private var pendingConnectPeerIds: Set<String> = []
     @State private var sendingFileSessionIds: Set<String> = []
 
-    /// Session ids whose `incoming`/`incomingFiles` flows we've already
+    /// Session ids whose `incoming`/`pendingFileOffers` flows we've already
     /// subscribed to, so duplicate Connect taps don't attach a second
     /// collector and echo every received message.
     @State private var collectedSessionIds: Set<String> = []
@@ -862,6 +866,9 @@ struct ContentView: View {
             messageCollectorTasks[prev.id] = nil
             fileCollectorTasks[prev.id]?.cancel()
             fileCollectorTasks[prev.id] = nil
+            for offerId in fileOfferIdsBySession.removeValue(forKey: prev.id) ?? [] {
+                pendingOffers[offerId] = nil
+            }
             collectedSessionIds.remove(prev.id)
         }
 
@@ -914,8 +921,8 @@ struct ContentView: View {
         }
     }
 
-    /// Subscribe to a session's `incoming` (messages) and `incomingFiles`
-    /// (file offers) flows.
+    /// Subscribe to a session's `incoming` messages and authoritative retained
+    /// `pendingFileOffers` snapshots.
     ///
     /// AUDIT-2026-06 (B-G9-samples-desktop-ios-03): both flows are hot
     /// SharedFlows whose `collect` NEVER completes, so this function spawns
@@ -954,15 +961,13 @@ struct ContentView: View {
             _ = try? await session.incoming.collect(collector: collector)
         }
 
-        // AUDIT-2026-06 (A-G9-samples-desktop-ios-07): subscribe to file
-        // offers — previously nothing collected incomingFiles on iOS, so
-        // offers from desktop/Android peers invisibly auto-rejected as
-        // "timeout" after 30 s.
         fileCollectorTasks[sid] = Task {
-            let collector = FileOfferCollector { offer in
-                await self.handleIncomingOffer(offer)
+            let collector = FileOfferSnapshotCollector { offers in
+                await MainActor.run {
+                    self.reconcileIncomingOffers(offers, sessionId: sid)
+                }
             }
-            _ = try? await session.incomingFiles.collect(collector: collector)
+            _ = try? await session.pendingFileOffers.collect(collector: collector)
         }
     }
 
@@ -973,13 +978,24 @@ struct ContentView: View {
     /// The old auto-accept policy let an untrusted peer consume disk space
     /// without consent and bypassed quota/free-space checks.
     @MainActor
-    private func handleIncomingOffer(_ offer: P2pFileOffer) async {
-        diag(
-            "file",
-            "offer id=\(offer.id.prefix(8)) name='\(offer.name)' size=\(offer.sizeBytes) mime=\(offer.mimeType ?? "-") from \(offer.peer.name)"
-        )
-        pendingOffers[offer.id] = offer
-        appendMessage("incoming file offer '\(offer.name)' — review to accept or reject", kind: .info)
+    private func reconcileIncomingOffers(_ offers: [P2pFileOffer], sessionId: String) {
+        let previous = fileOfferIdsBySession[sessionId] ?? []
+        let current = Set(offers.map(\.id))
+        for removedId in previous.subtracting(current) {
+            pendingOffers[removedId] = nil
+        }
+        for offer in offers {
+            if !previous.contains(offer.id) {
+                diag(
+                    "file",
+                    "offer id=\(offer.id.prefix(8)) name='\(offer.name)' size=\(offer.sizeBytes) " +
+                        "mime=\(offer.mimeType ?? "-") from \(offer.peer.name)"
+                )
+                appendMessage("incoming file offer '\(offer.name)' — review to accept or reject", kind: .info)
+            }
+            pendingOffers[offer.id] = offer
+        }
+        fileOfferIdsBySession[sessionId] = current
     }
 
     @MainActor
@@ -1006,6 +1022,10 @@ struct ContentView: View {
             .appendingPathComponent("P2pKitInbox", isDirectory: true)
         do {
             try fm.createDirectory(at: inbox, withIntermediateDirectories: true)
+            if !cleanedTransferDirectories.contains(inbox.path) {
+                try cleanupStaleTransferParts(in: inbox, fileManager: fm)
+                cleanedTransferDirectories.insert(inbox.path)
+            }
         } catch {
             appendMessage("file offer '\(offer.name)': cannot create inbox dir — rejecting", kind: .error)
             try? await offer.reject(reason: "receiver storage unavailable")
@@ -1024,32 +1044,23 @@ struct ContentView: View {
             try? await offer.reject(reason: "receiver could not open destination")
             return
         }
-        guard let handle = FileHandle(forWritingAtPath: dest.path) else {
+        let destination: AtomicFileTransferDestination
+        do {
+            destination = try AtomicFileTransferDestination(target: dest)
+        } catch {
             try? fm.removeItem(at: dest)
-            appendMessage("file offer '\(offer.name)': cannot open destination — rejecting", kind: .error)
-            try? await offer.reject(reason: "receiver could not open destination")
+            appendMessage("file offer '\(offer.name)': cannot prepare destination — rejecting", kind: .error)
+            try? await offer.reject(reason: "receiver could not prepare destination")
             return
         }
-        let sink = FileHandleRawSink(handle: handle)
         do {
-            let transfer = try await offer.accept(sink: sink)
+            let transfer = try await offer.accept(destination: destination)
             appendMessage(
                 "receiving '\(dest.lastPathComponent)' (\(fmtBytes(offer.sizeBytes))) from \(offer.peer.name)",
                 kind: .info
             )
-            watchTransfer(transfer, direction: .receive, detail: dest.lastPathComponent) {
-                completed in
-                sink.close()
-                if let failure = sink.failureDescription {
-                    try? fm.removeItem(at: dest)
-                    return failure
-                }
-                if !completed { try? fm.removeItem(at: dest) }
-                return nil
-            }
+            watchTransfer(transfer, direction: .receive, detail: dest.lastPathComponent) { _ in nil }
         } catch {
-            sink.close()
-            try? fm.removeItem(at: dest)
             diag("file", "accept THREW for '\(offer.name)': \(error.localizedDescription)")
             appendMessage("accept failed for '\(offer.name)': \(error.localizedDescription)", kind: .error)
         }
@@ -1090,7 +1101,7 @@ struct ContentView: View {
     /// AUDIT-2026-06 (D-G9-samples-desktop-ios-03): demonstrate the outgoing
     /// file path. Generates a deterministic 200 KB blob in memory (the
     /// README's "200KB binary preset") and streams it through
-    /// `sendFile(name:sizeBytes:mimeType:source:)` via a RawSource adapter —
+    /// the prepared SHA-256 `sendFile(name:mimeType:source:)` API —
     /// no document picker needed, so the flow is one tap on the test bench.
     @MainActor
     private func sendTestFile(to row: SessionRow) async {
@@ -1104,23 +1115,17 @@ struct ContentView: View {
             data[i] = UInt8(truncatingIfNeeded: i &* 31 &+ 7)   // deterministic pattern
         }
         let name = "ios-test-\(Int(Date().timeIntervalSince1970)).bin"
-        let source = DataRawSource(data: data)
+        let source = PreparedDataSource(data: data)
         diag("file", "sendFile '\(name)' (\(size) B) -> \(row.peerName)")
         do {
             let transfer = try await row.session.sendFile(
                 name: name,
-                sizeBytes: Int64(size),
                 mimeType: "application/octet-stream",
                 source: source
             )
             appendMessage("offering file '\(name)' (\(fmtBytes(Int64(size)))) to \(row.peerName)", kind: .sent)
-            watchTransfer(transfer, direction: .send, detail: nil) {
-                _ in
-                source.close()
-                return nil
-            }
+            watchTransfer(transfer, direction: .send, detail: nil) { _ in nil }
         } catch {
-            source.close()
             diag("file", "sendFile THREW for \(row.peerId.prefix(8)): \(error.localizedDescription)")
             appendMessage("sendFile failed (\(row.peerName)): \(error.localizedDescription)", kind: .error)
             errorBanner = "Send file to \(row.peerName) failed: \(error.localizedDescription)"
@@ -1128,8 +1133,8 @@ struct ContentView: View {
     }
 
     /// Track one transfer's StateFlows into a UI row until it reaches a
-    /// terminal state, then run `onTerminal` (the SDK leaves closing the
-    /// sink/source to the caller). Polled at 5 Hz rather than collected —
+    /// terminal state, then run the sample's UI-only `onTerminal` hook. Secure
+    /// source/destination resources are terminalized by the SDK. Polled at 5 Hz rather than collected —
     /// `StateFlow<T>.value` generic-erases to `Any?` across the bridge
     /// (see IosSwiftHelpers.kt), so we cast per read; a poll loop that exits
     /// on terminal/cancel is simpler and self-cleaning compared to two more
@@ -1476,6 +1481,7 @@ struct ContentView: View {
         fileCollectorTasks.values.forEach { $0.cancel() }
         messageCollectorTasks = [:]
         fileCollectorTasks = [:]
+        fileOfferIdsBySession = [:]
 
         for offer in pendingOffers.values {
             try? await offer.reject(reason: "sample stopped before consent")
@@ -1594,41 +1600,72 @@ final class StringCollector: NSObject, Kotlinx_coroutines_coreFlowCollector {
     }
 }
 
-/// AUDIT-2026-06 (A-G9-samples-desktop-ios-07): Swift adapter for
-/// `kotlinx.coroutines.flow.FlowCollector<P2pFileOffer>` — mirrors
-/// MessageCollector for the `session.incomingFiles` stream.
-final class FileOfferCollector: NSObject, Kotlinx_coroutines_coreFlowCollector {
-    private let onOffer: (P2pFileOffer) async -> Void
-    init(_ onOffer: @escaping (P2pFileOffer) async -> Void) {
-        self.onOffer = onOffer
+/// Swift adapter for retained `List<P2pFileOffer>` StateFlow snapshots.
+final class FileOfferSnapshotCollector: NSObject, Kotlinx_coroutines_coreFlowCollector {
+    private let onOffers: ([P2pFileOffer]) async -> Void
+    init(_ onOffers: @escaping ([P2pFileOffer]) async -> Void) {
+        self.onOffers = onOffers
     }
     func emit(value: Any?, completionHandler: @escaping (Error?) -> Void) {
-        if let offer = value as? P2pFileOffer {
+        if let offers = value as? [P2pFileOffer] {
             Task {
-                await onOffer(offer)
+                await onOffers(offers)
+                completionHandler(nil)
+            }
+        } else if let values = value as? NSArray {
+            let offers = values.compactMap { $0 as? P2pFileOffer }
+            Task {
+                await onOffers(offers)
                 completionHandler(nil)
             }
         } else {
-            completionHandler(nil)
+            completionHandler(
+                NSError(
+                    domain: "dev.p2pkit.sample.file",
+                    code: 4,
+                    userInfo: [NSLocalizedDescriptionKey: "pendingFileOffers emitted a non-list value"]
+                )
+            )
         }
     }
 }
 
 // MARK: - kotlinx-io adapters
 //
-// AUDIT-2026-06 (D-G9-samples-desktop-ios-03): `sendFile` takes a
-// `kotlinx.io.RawSource` and `P2pFileOffer.accept` takes a
-// `kotlinx.io.RawSink`. kotlinx-io is not export()-ed into the XCFramework,
+// Secure-v2 prepares a repeatable `RawSource` plus SHA-256 and receives into a
+// transactional destination backed by a `RawSink`. kotlinx-io is not
+// export()-ed into the XCFramework,
 // so its interfaces surface in Swift with the `Kotlinx_io_core` prefix —
 // they are plain (non-suspend) protocols, implementable from Swift. Bytes
 // cross the bridge through `KotlinByteArray`, element-by-element via
 // get/set — a sample-grade simplification (~tens of ms per MiB), fine for
 // the 200 KB preset and multi-MiB test files.
 
-/// `kotlinx.io.RawSource` over in-memory bytes. Used by the "Send file"
-/// button to stream a generated test blob through `P2pSession.sendFile`.
-/// The SDK pulls chunks sequentially from a background dispatcher, so no
-/// internal locking is required.
+/// Immutable prepared snapshot used by the secure-v2 send API. `open()`
+/// returns a fresh source only after the peer accepts the offer.
+final class PreparedDataSource: NSObject, PreparedFileSource {
+    private let data: Data
+    let sizeBytes: Int64
+    let sha256: Sha256Digest
+
+    init(data: Data) {
+        self.data = data
+        self.sizeBytes = Int64(data.count)
+        let digest = Array(CryptoKit.SHA256.hash(data: data))
+        let bytes = KotlinByteArray(size: Int32(digest.count))
+        for (index, byte) in digest.enumerated() {
+            bytes.set(index: Int32(index), value: Int8(bitPattern: byte))
+        }
+        self.sha256 = Sha256Digest(bytes: bytes)
+    }
+
+    func open() -> Kotlinx_io_coreRawSource {
+        DataRawSource(data: data)
+    }
+}
+
+/// `kotlinx.io.RawSource` over one immutable in-memory snapshot. The SDK pulls
+/// chunks sequentially from a background dispatcher, so no locking is needed.
 final class DataRawSource: NSObject, Kotlinx_io_coreRawSource {
     private let data: Data
     private var offset: Int = 0
@@ -1654,11 +1691,8 @@ final class DataRawSource: NSObject, Kotlinx_io_coreRawSource {
     }
 }
 
-/// `kotlinx.io.RawSink` writing to a local file via `FileHandle`. Used to
-/// receive accepted file offers into Documents/P2pKitInbox. The SDK's
-/// receive loop calls `write` sequentially off the main thread; on
-/// `Completed` the SDK flushes but does NOT close — the transfer watcher
-/// closes this sink once the transfer reaches a terminal state.
+/// `kotlinx.io.RawSink` writing to a local file via `FileHandle`. The durable
+/// destination below owns and terminalizes it.
 final class FileHandleRawSink: NSObject, Kotlinx_io_coreRawSink {
     private let handle: FileHandle
     private let stateLock = NSLock()
@@ -1716,11 +1750,158 @@ final class FileHandleRawSink: NSObject, Kotlinx_io_coreRawSink {
         // FileHandle writes are unbuffered at this layer; nothing to do.
     }
 
+    func synchronizeAndClose() throws {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !closed else { return }
+        if let failure {
+            throw NSError(
+                domain: "dev.p2pkit.sample.file",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: failure]
+            )
+        }
+        try handle.synchronize()
+        try handle.close()
+        closed = true
+    }
+
     func close() {
         stateLock.lock()
         defer { stateLock.unlock() }
         guard !closed else { return }
         closed = true
         try? handle.close()
+    }
+}
+
+/// Sibling temporary file + fsync + atomic replacement. The empty target file
+/// created by `claimUniqueDestination` is a namespace reservation and is
+/// replaced only after verification succeeds.
+final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
+    private enum Phase { case active, committing, committed, aborted }
+
+    private let target: URL
+    private let temporary: URL
+    private let sink: FileHandleRawSink
+    private let stateLock = NSLock()
+    private var phase: Phase = .active
+    private var opened = false
+
+    init(target: URL) throws {
+        self.target = target
+        let directory = target.deletingLastPathComponent()
+        var claimed: URL?
+        for attempt in 0...100 {
+            let boundedName = String(target.lastPathComponent.prefix(48))
+            let candidate = directory.appendingPathComponent(
+                ".\(boundedName).\(UUID().uuidString)-\(attempt).p2pkit-part"
+            )
+            if FileManager.default.createFile(atPath: candidate.path, contents: nil) {
+                claimed = candidate
+                break
+            }
+        }
+        guard let temporary = claimed else {
+            throw NSError(
+                domain: "dev.p2pkit.sample.file",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "could not claim a temporary destination"]
+            )
+        }
+        self.temporary = temporary
+        do {
+            self.sink = FileHandleRawSink(handle: try FileHandle(forWritingTo: temporary))
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            throw error
+        }
+    }
+
+    func openSink() -> Kotlinx_io_coreRawSink {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        precondition(phase == .active && !opened, "destination opened more than once")
+        opened = true
+        return sink
+    }
+
+    func commit(completionHandler: @escaping (Error?) -> Void) {
+        stateLock.lock()
+        if phase == .committed {
+            stateLock.unlock()
+            completionHandler(nil)
+            return
+        }
+        guard phase == .active else {
+            stateLock.unlock()
+            completionHandler(destinationError("destination is not commit-ready"))
+            return
+        }
+        phase = .committing
+
+        do {
+            try sink.synchronizeAndClose()
+            _ = try FileManager.default.replaceItemAt(target, withItemAt: temporary)
+            try fsyncDirectory(target.deletingLastPathComponent())
+            phase = .committed
+            stateLock.unlock()
+            completionHandler(nil)
+        } catch {
+            phase = .active
+            stateLock.unlock()
+            completionHandler(error)
+        }
+    }
+
+    func abort(cause: P2pError.FileTransferFailed?, completionHandler: @escaping (Error?) -> Void) {
+        stateLock.lock()
+        if phase == .committed || phase == .aborted {
+            stateLock.unlock()
+            completionHandler(nil)
+            return
+        }
+        phase = .aborted
+
+        sink.close()
+        var cleanupError: Error?
+        for url in [temporary, target] where FileManager.default.fileExists(atPath: url.path) {
+            do { try FileManager.default.removeItem(at: url) } catch { cleanupError = error }
+        }
+        stateLock.unlock()
+        completionHandler(cleanupError)
+    }
+}
+
+private func destinationError(_ message: String) -> NSError {
+    NSError(
+        domain: "dev.p2pkit.sample.file",
+        code: 3,
+        userInfo: [NSLocalizedDescriptionKey: message]
+    )
+}
+
+private func cleanupStaleTransferParts(in directory: URL, fileManager: FileManager) throws {
+    let entries = try fileManager.contentsOfDirectory(
+        at: directory,
+        includingPropertiesForKeys: [.isRegularFileKey],
+        options: []
+    )
+    for entry in entries where entry.lastPathComponent.hasSuffix(".p2pkit-part") {
+        let values = try entry.resourceValues(forKeys: [.isRegularFileKey])
+        if values.isRegularFile == true {
+            try fileManager.removeItem(at: entry)
+        }
+    }
+}
+
+private func fsyncDirectory(_ directory: URL) throws {
+    let descriptor = Darwin.open(directory.path, O_RDONLY)
+    guard descriptor >= 0 else {
+        throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+    }
+    defer { Darwin.close(descriptor) }
+    guard Darwin.fsync(descriptor) == 0 else {
+        throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
     }
 }

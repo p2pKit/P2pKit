@@ -4,10 +4,12 @@ import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -117,5 +119,32 @@ class UniqueSaveFileTest {
         val missing = File(newTempDir(), "does/not/exist")
 
         assertFailsWith<java.io.IOException> { uniqueSaveFile(missing, "ghost.txt") }
+    }
+
+    @Test
+    fun reservedDestinationAbortRemovesTheSampleOwnedClaim() = runBlocking {
+        val dir = newTempDir()
+        val claimed = uniqueSaveFile(dir, "cancelled.bin")
+        val destination = reservedFileDestination(claimed)
+        destination.openSink()
+
+        destination.abort(cause = null)
+        destination.abort(cause = null)
+
+        assertFalse(claimed.exists(), "aborting must remove the empty namespace reservation")
+        assertEquals(emptyList(), dir.list()?.toList())
+    }
+
+    @Test
+    fun firstUseCleanupRemovesOnlySdkPartFiles() {
+        val dir = newTempDir()
+        val stale = File(dir, ".p2pkit-crashed.123.part").also { it.writeText("partial") }
+        val unrelated = File(dir, "keep.part").also { it.writeText("user data") }
+
+        cleanupStaleTransferPartsOnce(dir)
+
+        assertFalse(stale.exists())
+        assertTrue(unrelated.exists())
+        assertEquals("user data", unrelated.readText())
     }
 }

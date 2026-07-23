@@ -296,6 +296,34 @@ class DefaultP2pProtocolTest {
     }
 
     @Test
+    fun malformedAuthenticatedFileOfferFailsClosed() {
+        runBlocking {
+            val pair = FakeConnectionPair()
+            val protocol = DefaultP2pProtocol(
+                clock = { 0L },
+                version = ProtocolConstants.SECURE_VERSION
+            )
+            val state = ProtocolSessionState("receiver", secure = true).also {
+                it.completeHello("sender", ProtocolFeatures.SECURE_V2)
+            }
+            val scope = newScope()
+            try {
+                val received = scope.async { protocol.events(pair.b, state).first() }
+                pair.a.write(
+                    FrameCodec.encode(
+                        rawControlFrame(PacketType.FILE_OFFER, "###".encodeToByteArray())
+                            .withVersion(ProtocolConstants.SECURE_VERSION)
+                    )
+                )
+
+                assertFailsWith<P2pError.ProtocolError> { received.await() }
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
+
+    @Test
     fun fileOfferBodyFailingValidationIsSkippedWithWarnAndSubsequentOfferDelivered() {
         runBlocking {
             val pair = FakeConnectionPair()

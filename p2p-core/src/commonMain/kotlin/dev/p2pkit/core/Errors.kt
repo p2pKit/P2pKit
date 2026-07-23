@@ -171,6 +171,10 @@ public sealed class P2pError(message: String? = null, cause: Throwable? = null) 
     public data class PayloadTooLarge(val maxBytes: Long, val actualBytes: Long) :
         P2pError("Payload too large: $actualBytes > $maxBytes")
 
+    /** A negotiated peer/session feature required by the operation is absent. */
+    public data class UnsupportedFeature(val feature: String) :
+        P2pError("Peer did not negotiate required feature: $feature")
+
     /** Peer rejected the HELLO handshake (typically appId mismatch). */
     public data class HandshakeRejected(val reason: String) : P2pError(reason)
 

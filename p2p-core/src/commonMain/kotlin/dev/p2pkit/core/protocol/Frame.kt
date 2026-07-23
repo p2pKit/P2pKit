@@ -20,6 +20,7 @@ internal class Frame(
     val needsAck: Boolean get() = (flags.toInt() and FrameFlags.NEEDS_ACK) != 0
     val isLastChunk: Boolean get() = (flags.toInt() and FrameFlags.LAST_CHUNK) != 0
     val isText: Boolean get() = (flags.toInt() and FrameFlags.IS_TEXT) != 0
+    val isEnvelope: Boolean get() = (flags.toInt() and FrameFlags.IS_ENVELOPE) != 0
 
     fun withVersion(value: Byte): Frame = if (version == value) this else Frame(
         type = type,
@@ -76,7 +77,10 @@ internal enum class PacketType(val code: Byte) {
     FILE_REJECT(0x12),
     FILE_DATA(0x13),
     FILE_DONE(0x14),
-    FILE_CANCEL(0x15);
+    FILE_CANCEL(0x15),
+    FILE_FINISH(0x16),
+    FILE_COMMIT(0x17),
+    FILE_RESULT(0x18);
 
     companion object {
         fun fromCode(code: Byte): PacketType? = entries.firstOrNull { it.code == code }
@@ -88,6 +92,7 @@ internal object FrameFlags {
     const val NEEDS_ACK: Int = 0x01
     const val LAST_CHUNK: Int = 0x02
     const val IS_TEXT: Int = 0x04
+    const val IS_ENVELOPE: Int = 0x08
 }
 
 /**

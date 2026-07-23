@@ -40,7 +40,7 @@ import kotlin.test.assertTrue
  *   handle N > 2. Catches stupid bugs like accidentally indexing on
  *   `peers.first()` somewhere.
  */
-@Suppress("DEPRECATION")
+@Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
 class IosLanLifecycleTest {
 
     private lateinit var unique: String

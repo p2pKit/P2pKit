@@ -46,6 +46,7 @@ import kotlin.test.assertTrue
  * messages) keeps flowing. Before the fix, the non-P2pError escaped into
  * P2pSessionImpl.routeEvents' catch(Throwable) and tore the whole session down.
  */
+@Suppress("DEPRECATION")
 class FileTransferErrorIsolationTest {
 
     private fun outgoingKit(name: String, outgoing: RawConnection): P2pKit =

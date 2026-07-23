@@ -13,8 +13,9 @@ import java.io.IOException
  * The desktop UI, CLI, Android, and Apple samples implement this same
  * platform-neutral contract with their native filesystem APIs: sanitize the
  * name, atomically claim a numbered candidate, and fail after a bounded
- * namespace. `UniqueSaveFileTest` in this module pins the JVM contract; keep
- * the platform copies behaviorally aligned.
+ * namespace. The reserved destination wrapper owns and removes this
+ * placeholder if a transfer aborts. `UniqueSaveFileTest` in this module pins
+ * the JVM contract; keep the platform copies behaviorally aligned.
  */
 internal fun uniqueSaveFile(dir: File, sanitizedName: String): File {
     val safeName = sanitizedName

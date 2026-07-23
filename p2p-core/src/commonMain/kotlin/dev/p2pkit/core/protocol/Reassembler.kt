@@ -23,12 +23,14 @@ import dev.p2pkit.core.P2pMessage
  */
 internal class Reassembler(
     private val clock: () -> Long,
-    private val reassemblyTimeoutMillis: Long = ProtocolConstants.DEFAULT_REASSEMBLY_TIMEOUT_MS
+    private val reassemblyTimeoutMillis: Long = ProtocolConstants.DEFAULT_REASSEMBLY_TIMEOUT_MS,
+    private val sessionState: ProtocolSessionState? = null
 ) {
 
     private data class Pending(
         val totalChunks: Int,
         val isText: Boolean,
+        val isEnvelope: Boolean,
         val needsAck: Boolean,
         val chunks: MutableMap<Int, ByteArray>,
         val firstSeenMillis: Long,
@@ -66,13 +68,18 @@ internal class Reassembler(
         // MAX_PAYLOAD_BYTES and MAX_FRAME_PAYLOAD_BYTES would bypass the cap
         // the multi-chunk path enforces via bufferedBytes (AUDIT-2026-06 fix).
         if (frame.totalChunks == 1) {
-            if (frame.payload.size > ProtocolConstants.MAX_PAYLOAD_BYTES) {
+            val maximum = if (frame.isEnvelope) {
+                ProtocolConstants.MAX_APP_MESSAGE_ENVELOPE_BYTES.toLong()
+            } else {
+                ProtocolConstants.MAX_PAYLOAD_BYTES
+            }
+            if (frame.payload.size.toLong() > maximum) {
                 throw P2pError.ProtocolError(
                     "single-frame message ${frame.payload.size} exceeds " +
-                        "MAX_PAYLOAD_BYTES (${ProtocolConstants.MAX_PAYLOAD_BYTES})"
+                        "maximum $maximum"
                 )
             }
-            return decodePayload(frame.payload, frame.isText)
+            return decodePayload(frame.payload, frame.isText, frame.isEnvelope, frame.messageId)
         }
 
         // Untrusted-input guards (frame.totalChunks is peer-controlled):
@@ -98,6 +105,7 @@ internal class Reassembler(
             Pending(
                 totalChunks = frame.totalChunks,
                 isText = frame.isText,
+                isEnvelope = frame.isEnvelope,
                 needsAck = frame.needsAck,
                 chunks = mutableMapOf(),
                 firstSeenMillis = now,
@@ -111,11 +119,13 @@ internal class Reassembler(
                     "first saw ${state.totalChunks}, now ${frame.totalChunks}"
             )
         }
-        if (state.isText != frame.isText || state.needsAck != frame.needsAck) {
+        if (state.isText != frame.isText || state.isEnvelope != frame.isEnvelope ||
+            state.needsAck != frame.needsAck
+        ) {
             removePending(frame.messageId)
             throw P2pError.ProtocolError(
                 "Mismatched DATA flags for messageId=${frame.messageId}: " +
-                    "IS_TEXT and NEEDS_ACK must remain stable"
+                    "IS_TEXT, IS_ENVELOPE, and NEEDS_ACK must remain stable"
             )
         }
         // A well-behaved sender never repeats or invents chunk indices, so a
@@ -142,11 +152,16 @@ internal class Reassembler(
         // aggregate allocation.
         state.bufferedBytes += frame.payload.size.toLong()
         totalPendingBytes += frame.payload.size.toLong()
-        if (state.bufferedBytes > ProtocolConstants.MAX_PAYLOAD_BYTES) {
+        val messageMaximum = if (state.isEnvelope) {
+            ProtocolConstants.MAX_APP_MESSAGE_ENVELOPE_BYTES.toLong()
+        } else {
+            ProtocolConstants.MAX_PAYLOAD_BYTES
+        }
+        if (state.bufferedBytes > messageMaximum) {
             removePending(frame.messageId)
             throw P2pError.ProtocolError(
                 "Reassembled message for messageId=${frame.messageId} would exceed " +
-                    "MAX_PAYLOAD_BYTES (${ProtocolConstants.MAX_PAYLOAD_BYTES})"
+                    "maximum $messageMaximum"
             )
         }
         if (totalPendingBytes > ProtocolConstants.MAX_TOTAL_PENDING_BYTES) {
@@ -173,7 +188,7 @@ internal class Reassembler(
             offset += piece.size
         }
         removePending(frame.messageId)
-        return decodePayload(combined, state.isText)
+        return decodePayload(combined, state.isText, state.isEnvelope, frame.messageId)
     }
 
     /** Drop partial messages that have received no chunk for the timeout. */
@@ -196,7 +211,17 @@ internal class Reassembler(
         pending.remove(id)?.let { totalPendingBytes -= it.bufferedBytes }
     }
 
-    private fun decodePayload(bytes: ByteArray, isText: Boolean): P2pMessage {
+    private fun decodePayload(
+        bytes: ByteArray,
+        isText: Boolean,
+        isEnvelope: Boolean,
+        messageId: MessageId
+    ): P2pMessage {
+        if (isEnvelope) {
+            val state = sessionState
+                ?: throw P2pError.ProtocolError("Application message envelope has no session context")
+            return AppMessageEnvelope.decode(bytes, messageId, state)
+        }
         if (!isText) return P2pMessage.Binary(bytes)
         return try {
             P2pMessage.Text(bytes.decodeStrictUtf8("DATA text payload"))

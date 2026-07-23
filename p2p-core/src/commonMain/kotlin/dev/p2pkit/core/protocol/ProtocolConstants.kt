@@ -30,6 +30,10 @@ internal object ProtocolConstants {
     /** Maximum size of a single P2pMessage payload in v0.1. */
     const val MAX_PAYLOAD_BYTES: Long = 4L * 1024 * 1024
 
+    /** Maximum encoded authenticated application envelope including metadata. */
+    const val MAX_APP_MESSAGE_ENVELOPE_BYTES: Int =
+        MAX_PAYLOAD_BYTES.toInt() + AppMessageEnvelope.MAX_ENVELOPE_OVERHEAD_BYTES
+
     /**
      * Hard upper bound on a single inbound frame's payload length, enforced on
      * the RECEIVE path ([FrameReader.feed], [FrameCodec.decode]) before any
