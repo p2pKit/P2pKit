@@ -362,9 +362,25 @@ class FileTransferFlowTest {
                 source = Buffer().apply { write(ByteArray(8)) }
             )
             val offer = withTimeout(5_000) { offerDeferred.await() }
+
+            // Hold the sender's first FILE_DATA write so this is genuinely a
+            // mid-stream cancellation test. With an eight-byte source and an
+            // unconstrained in-memory wire, the transfer could complete
+            // before cancel() was invoked, making the asserted lifecycle
+            // outcome scheduler-dependent.
+            pair.a.suspendWrites()
+            val writesBeforeAccept = pair.a.writeAttempts
             val incomingTransfer = offer.accept(Buffer())
 
-            transfer.cancel("user aborted")
+            withTimeout(5_000) {
+                while (pair.a.writeAttempts == writesBeforeAccept) yield()
+            }
+            val cancellation = async { transfer.cancel("user aborted") }
+            withTimeout(5_000) {
+                transfer.state.first { it is FileTransferState.Cancelled }
+            }
+            pair.a.resumeWrites()
+            withTimeout(5_000) { cancellation.await() }
 
             val senderTerminal = withTimeout(5_000) {
                 transfer.state.first {
@@ -378,18 +394,16 @@ class FileTransferFlowTest {
                         it is FileTransferState.Failed
                 }
             }
-            // Sender always reaches Cancelled. Receiver normally reaches
-            // Cancelled (via inbound FILE_CANCEL); on a race where Completed
-            // arrived first, accept that too.
             assertTrue(
                 senderTerminal is FileTransferState.Cancelled,
                 "Sender should observe Cancelled, got $senderTerminal"
             )
             assertTrue(
-                receiverTerminal is FileTransferState.Cancelled || receiverTerminal is FileTransferState.Completed,
-                "Receiver should reach Cancelled or Completed, got $receiverTerminal"
+                receiverTerminal is FileTransferState.Cancelled,
+                "Receiver should observe Cancelled, got $receiverTerminal"
             )
         } finally {
+            pair.a.resumeWrites()
             alice.stop()
             bob.stop()
         }
