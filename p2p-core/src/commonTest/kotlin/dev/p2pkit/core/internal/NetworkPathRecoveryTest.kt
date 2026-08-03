@@ -169,6 +169,14 @@ class NetworkPathRecoveryTest {
                     ConnectionState.Failed,
                     withTimeout(5_000) { first.state.first { it == ConnectionState.Failed } }
                 )
+                // The local terminal transition closes the raw connection,
+                // but the remote reader observes that close asynchronously.
+                // Establish the next-dial precondition from Bob's public
+                // session state instead of racing its terminal watcher under
+                // a saturated full-suite run.
+                withTimeout(5_000) {
+                    bob.sessions.first { it.isEmpty() }
+                }
 
                 // Do not emit path state again. A StateFlow will not re-emit
                 // the same value, so registration must consume the manager's

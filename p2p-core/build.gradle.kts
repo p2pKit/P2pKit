@@ -145,7 +145,7 @@ publishing {
         pom {
             name.set("P2pKit ${project.name}")
             description.set("P2pKit — cross-platform peer-to-peer local-network library (Android, iOS, JVM/desktop).")
-            url.set("https://github.com/Apdelrahman1911/P2pKit")
+            url.set("https://github.com/p2pKit/P2pKit")
             licenses {
                 license {
                     name.set("The Apache License, Version 2.0")
@@ -159,9 +159,9 @@ publishing {
                 }
             }
             scm {
-                url.set("https://github.com/Apdelrahman1911/P2pKit")
-                connection.set("scm:git:https://github.com/Apdelrahman1911/P2pKit.git")
-                developerConnection.set("scm:git:ssh://git@github.com/Apdelrahman1911/P2pKit.git")
+                url.set("https://github.com/p2pKit/P2pKit")
+                connection.set("scm:git:https://github.com/p2pKit/P2pKit.git")
+                developerConnection.set("scm:git:ssh://git@github.com/p2pKit/P2pKit.git")
             }
         }
     }

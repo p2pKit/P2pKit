@@ -4,6 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 if [[ $# -ge 1 ]]; then
     JSON="$1"
     XML="${2:-${1%.json}.xml}"
@@ -18,12 +19,12 @@ command -v xmllint >/dev/null 2>&1 || { echo "FATAL: xmllint is required" >&2; e
 [[ -s "$JSON" ]] || { echo "FATAL: missing JSON SBOM: $JSON" >&2; exit 1; }
 [[ -s "$XML" ]] || { echo "FATAL: missing XML SBOM: $XML" >&2; exit 1; }
 
-jq -e '
+jq --arg version "$VERSION" -e '
     .bomFormat == "CycloneDX" and
     .specVersion == "1.6" and
     .metadata.component.group == "dev.p2pkit" and
     .metadata.component.name == "p2pkit" and
-    .metadata.component.version == "0.6.0" and
+    .metadata.component.version == $version and
     (.components | length > 0) and
     ([.components[].name] | contains([
         "p2p-core",

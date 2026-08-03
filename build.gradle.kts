@@ -9,6 +9,7 @@ import org.gradle.api.services.BuildService
 import org.gradle.api.services.BuildServiceParameters
 import org.cyclonedx.gradle.CyclonedxDirectTask
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
+import java.util.Base64
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform) apply false
@@ -200,11 +201,37 @@ subprojects {
         sub.apply(plugin = "signing")
         val publishing = sub.extensions.getByType(PublishingExtension::class.java)
         sub.extensions.configure(SigningExtension::class.java) {
-            val signingKey = sub.findProperty("signingInMemoryKey") as String?
-            val signingPassword = sub.findProperty("signingInMemoryKeyPassword") as String?
-            isRequired = signingKey != null
-            if (signingKey != null) {
-                useInMemoryPgpKeys(signingKey, signingPassword)
+            val signingKey = (sub.findProperty("signingInMemoryKey") as String?)
+                ?.takeUnless(String::isBlank)
+            val signingKeyBase64 = (sub.findProperty("signingInMemoryKeyBase64") as String?)
+                ?.takeUnless(String::isBlank)
+            val signingPassword = (sub.findProperty("signingInMemoryKeyPassword") as String?)
+                ?.takeUnless(String::isBlank)
+            val releasePublication = sub.findProperty("releasePublication")
+                ?.toString()
+                ?.toBooleanStrictOrNull()
+                ?: false
+            check(signingKey == null || signingKeyBase64 == null) {
+                "Configure only one of signingInMemoryKey or signingInMemoryKeyBase64"
+            }
+            val decodedSigningKey = signingKey ?: signingKeyBase64?.let { encoded ->
+                try {
+                    String(Base64.getDecoder().decode(encoded.trim()), Charsets.UTF_8)
+                } catch (error: IllegalArgumentException) {
+                    throw GradleException("signingInMemoryKeyBase64 is not valid base64", error)
+                }
+            }
+            if (releasePublication) {
+                check(!decodedSigningKey.isNullOrBlank()) {
+                    "Release publication requires an in-memory PGP signing key"
+                }
+                check(!signingPassword.isNullOrBlank()) {
+                    "Release publication requires a non-empty signing key password"
+                }
+            }
+            isRequired = releasePublication || decodedSigningKey != null
+            if (decodedSigningKey != null) {
+                useInMemoryPgpKeys(decodedSigningKey, signingPassword)
             }
             // Live collection — also covers KMP's per-target publications,
             // which the multiplatform plugin creates lazily in afterEvaluate.

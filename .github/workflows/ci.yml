@@ -30,14 +30,20 @@ jobs:
       - name: Validate wrapper and configure Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
 
-      - name: Install Android API 37
-        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-37'
+      - name: Install Android SDK platforms
+        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37'
 
       - name: Verify repository entry points
         run: |
           scripts/check-gradle-wrapper.sh
           scripts/tests/check-gradle-wrapper-test.sh
           scripts/tests/check-release-tag-test.sh
+          scripts/check-release-metadata.sh
+          scripts/tests/check-maven-release-environment-test.sh
+          scripts/tests/check-maven-central-version-test.sh
+          scripts/tests/publish-central-portal-bundle-test.sh
+          scripts/tests/build-central-portal-bundle-test.sh
+          scripts/tests/release-workflow-test.sh
           scripts/tests/check-sample-run-profiles.sh
           scripts/run-ios-ui-tests.sh
           scripts/tests/run-ios-app-test.sh

@@ -10,6 +10,7 @@ VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:spa
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-consumer-check.XXXXXX")"
 REPO_DIR="$WORK_DIR/repository"
 FIXTURE_DIR="$WORK_DIR/consumer"
+REMOTE_REPOSITORY_URL="${P2PKIT_CONSUMER_REPOSITORY_URL:-}"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 fail() {
@@ -40,8 +41,29 @@ assert_scope() {
         fail "$(basename "$(dirname "$pom")")/$artifact scope was '${actual:-missing}', expected '$expected'"
 }
 
-echo "==> Publishing $VERSION to isolated repository"
-(cd "$ROOT" && ./gradlew --console=plain publishToMavenLocal -Dmaven.repo.local="$REPO_DIR")
+if [[ -n "$REMOTE_REPOSITORY_URL" ]]; then
+    [[ "$REMOTE_REPOSITORY_URL" == https://* ]] ||
+        fail "remote consumer repository must use HTTPS"
+    command -v curl >/dev/null 2>&1 || fail "curl is required for remote consumer verification"
+    echo "==> Downloading $VERSION POMs from remote repository"
+    mkdir -p "$REPO_DIR/dev/p2pkit"
+    for artifact in \
+        p2p-core-jvm \
+        p2p-transport-lan-jvm \
+        p2p-network-provisioning-android-android \
+        p2p-network-provisioning-desktop; do
+        directory="$REPO_DIR/dev/p2pkit/$artifact/$VERSION"
+        mkdir -p "$directory"
+        curl --fail --silent --show-error --location \
+            "$REMOTE_REPOSITORY_URL/dev/p2pkit/$artifact/$VERSION/$artifact-$VERSION.pom" \
+            --output "$directory/$artifact-$VERSION.pom"
+    done
+    CONSUMER_REPOSITORY="$REMOTE_REPOSITORY_URL"
+else
+    echo "==> Publishing $VERSION to isolated repository"
+    (cd "$ROOT" && ./gradlew --console=plain publishToMavenLocal -Dmaven.repo.local="$REPO_DIR")
+    CONSUMER_REPOSITORY="$REPO_DIR"
+fi
 
 BASE="$REPO_DIR/dev/p2pkit"
 CORE_JVM="$BASE/p2p-core-jvm/$VERSION/p2p-core-jvm-$VERSION.pom"
@@ -503,8 +525,16 @@ fun iosEvents(): SharedFlow<String> = IosLanDebug.events
 EOF
 
 echo "==> Compiling isolated published consumers"
-(cd "$ROOT" && ./gradlew --console=plain -p "$FIXTURE_DIR" \
-    -PconsumerRepo="$REPO_DIR" \
+run_consumer_gradle() {
+    if [[ -n "$REMOTE_REPOSITORY_URL" ]]; then
+        GRADLE_USER_HOME="$WORK_DIR/gradle-home" "$@"
+    else
+        "$@"
+    fi
+}
+(cd "$ROOT" && run_consumer_gradle ./gradlew --console=plain -p "$FIXTURE_DIR" \
+    -PconsumerRepo="$CONSUMER_REPOSITORY" \
+    ${REMOTE_REPOSITORY_URL:+--refresh-dependencies} \
     :coreJvm:compileKotlin \
     :coreJvm:compileJava \
     :lanJvm:compileKotlin \

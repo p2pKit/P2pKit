@@ -1,8 +1,14 @@
 # Workspace Sync Dashboard
 
-**Last updated:** 2026-06-12
-**Current state:** `VERSION_NAME=0.6.0` — since the last update here, `v0.4-internal` was tagged (stabilization + real-device LAN hardening), v0.5 shipped the Android in-process JmDNS discovery rewrite, and v0.6 added the iOS cellular-interface prohibition. The iOS sample app (`iosApp/`) shipped in v0.4.
-**Host context:** macOS, post-Windows-migration. iOS Simulator loopback tests green.
+**Last updated:** 2026-07-28
+**Current state:** `VERSION_NAME=0.7.0` release candidate — authenticated Noise
+v2 and fail-closed authorization are the default; secure discovery uses
+`_p2pkit2._tcp`. Published `0.6.x` artifacts are immutable. Automated
+JVM/Android-host/Apple-simulator, ABI, publication-shape, consumer, and SBOM
+gates are available; physical-device and remote Central release gates remain
+open in `docs/STABILIZATION_AND_RELEASE.md`.
+**Host context:** macOS. iOS Simulator loopback tests green; physical-radio
+results must be recorded separately.
 
 This file is the running scratchpad for state that isn't otherwise captured in
 README / INTERNAL_TESTING / git. Update freely as work moves; don't treat it

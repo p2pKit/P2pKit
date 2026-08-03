@@ -1,6 +1,6 @@
-# P2pKit v0.6 — Internal Testing Guide
+# P2pKit v0.7 — Internal Testing Guide
 
-How to validate v0.6-dev by hand. Read top to bottom on the first run; the checklist at the end is what to re-check before tagging future internal builds. Recipes were added incrementally from v0.2 onwards (the milestone tags in section headings are historical). For the v0.4 runtime-foundation hardware tests (Wi-Fi flap, hotspot switch, rebind log signatures) use `docs/v0.4-cumulative-validation-runbook.md`; for the five-test phone checklist use `docs/hardware-validation-checklist.md`.
+How to validate the authenticated-v2 `0.7.0` candidate by hand. Read top to bottom on the first run; the checklist at the end is what to re-check before tagging future builds. Recipes were added incrementally from v0.2 onwards (the milestone tags in section headings are historical). For the v0.4 runtime-foundation hardware tests (Wi-Fi flap, hotspot switch, rebind log signatures) use `docs/v0.4-cumulative-validation-runbook.md`; for the five-test phone checklist use `docs/hardware-validation-checklist.md`.
 
 The four canonical test harnesses:
 - **`:p2p-sample-android`** — the primary visual harness on mobile (room mode, reconnect picker, log strip, chip state).
@@ -181,12 +181,12 @@ Verifies the Android side actually receives mDNS broadcasts. The `AndroidLanDisc
 
 ## F. iOS support status (v0.3+)
 
-iOS LAN shipped in v0.3 — the same `transports { lan() }` API, the same `_p2pkit._tcp` service type, the same TXT record keys. Backed by `nw_listener_t` + `nw_connection_t` + `nw_browser_t` from `Network.framework`. The SwiftUI sample app (`iosApp/`, with `NSLocalNetworkUsageDescription` + `NSBonjourServices` wired in its `Info.plist`) shipped in v0.4, and v0.6 prohibits the cellular interface on the TCP parameters.
+iOS LAN shipped in v0.3 with the same `transports { lan() }` API and profile-specific wire contract as Android/JVM. The v0.7 sample selects authenticated v2, so it uses `_p2pkit2._tcp`, protocol version 2, and the secure fingerprint TXT field. It is backed by `nw_listener_t` + `nw_connection_t` + `nw_browser_t` from `Network.framework`; cellular interfaces remain prohibited for LAN TCP parameters.
 
 What works:
-- Discovery via `NWBrowser` against the `_p2pkit._tcp` Bonjour service.
+- Discovery via `NWBrowser` against the `_p2pkit2._tcp` Bonjour service.
 - Advertise via `nw_listener_set_advertise_descriptor` on the inbound listener.
-- TCP data via `NWConnection` (non-TLS, matching `SecurityMode.NoneForMvp` on JVM/Android).
+- TCP data via `NWConnection`, protected by authenticated Noise v2 before P2pKit frames are exchanged.
 - File transfer, ReconnectPolicy, keep-alive — all the common-code features, since they're transport-agnostic.
 - **iOS sample app** — Xcode project + SwiftUI UI under `iosApp/`; run it per §K.2. Consuming apps still need to wire their own `Info.plist` entries the same way.
 
@@ -374,7 +374,7 @@ If the test stalls on discovery, check the simulator runtime is actually install
 
 ### K.2 — iOS Simulator ↔ JVM CLI
 
-Launch the iOS sample in the Simulator: `cd iosApp && xcodegen generate` if Xcode complains the project is stale, `open p2pkit-sample.xcodeproj`, pick an iPhone Simulator destination, ⌘R (the pre-build script refreshes the XCFramework via `sh ./gradlew`). In the app, enter a device name and tap **Start** — the SwiftUI sample registers itself for `_p2pkit._tcp` and runs a long-lived kit. From a Terminal on the same Mac:
+Launch the iOS sample in the Simulator: `cd iosApp && xcodegen generate` if Xcode complains the project is stale, `open p2pkit-sample.xcodeproj`, pick an iPhone Simulator destination, ⌘R (the pre-build script refreshes the XCFramework via `sh ./gradlew`). In the app, enter a device name and tap **Start** — the SwiftUI sample registers itself for `_p2pkit2._tcp` and runs a long-lived authenticated-v2 kit. From a Terminal on the same Mac:
 
 ```bash
 ./gradlew :p2p-sample-desktop:installDist
@@ -384,20 +384,20 @@ Launch the iOS sample in the Simulator: `cd iosApp && xcodegen generate` if Xcod
 With the iOS sample running in the simulator and the JVM CLI in a terminal:
 - The CLI's `peers` command should list the simulator within ~5 s.
 - `connect <iosPeerId>` opens a session through `nw_connection_t` on the iOS side and `Socket` on the JVM side.
-- `send hello iphone` round-trips through the same `_p2pkit._tcp` Bonjour service as Android peers use.
+- `send hello iphone` round-trips through the same `_p2pkit2._tcp` Bonjour service as Android peers use.
 
-The wire format is additionally pinned by §K.1 plus the §A Android ↔ JVM recipe — an iOS peer is wire-indistinguishable from an Android peer because both use the same protocol version (`pv=1`), same TXT keys, same service type.
+The wire format is additionally pinned by §K.1 plus the §A Android ↔ JVM recipe — an iOS peer is wire-indistinguishable from an Android peer because both use the same authenticated profile (`pv=2`), TXT keys, secure service type, and Noise record protocol.
 
 **Common failure reasons:**
 - `iosSimulatorArm64Test` task missing: install the iOS simulator runtime through Xcode → Settings → Platforms.
 - Compile-time crash mentioning `Kotlin_Interop_refFromObjC` on a void block: a new `nw_*` block macro slipped into the iOS code path. Wrap it in a static-inline helper in `src/nativeInterop/cinterop/p2pkit_nw.h` so the void-block global never round-trips through Kotlin/Native (rationale documented in that file's header comment).
-- Discovery never resolves: Bonjour on the simulator can be flaky on some macOS versions when the host firewall is strict. `sudo lsof -nP -i UDP:5353` should show `mDNSResponder` listening; `dns-sd -B _p2pkit._tcp local.` should list every peer.
+- Discovery never resolves: Bonjour on the simulator can be flaky on some macOS versions when the host firewall is strict. `sudo lsof -nP -i UDP:5353` should show `mDNSResponder` listening; `dns-sd -B _p2pkit2._tcp local.` should list every secure peer.
 
 ### K.3 — Simulator install provenance (2026-07, IOSB-3 / P1-30 / P1-31)
 
 `./gradlew :iosApp:runIosSimulator` (which drives `scripts/run-ios-app.sh`) now builds into a **repo-local DerivedData** at `iosApp/build/DerivedData` and installs the bundle from the fixed path `iosApp/build/DerivedData/Build/Products/Debug-iphonesimulator/p2pkit-sample.app` — never from a `find` over the global `~/Library/Developer/Xcode/DerivedData`, which with multiple checkouts/worktrees could silently install a stale bundle from a different tree. The script also self-checks two provenance gates and fails loudly on either:
 
-- **P1-30 (built-bundle plist keys):** after `xcodebuild`, the built `.app`'s Info.plist must contain `NSLocalNetworkUsageDescription` and `NSBonjourServices` with `_p2pkit._tcp` (the keys iOS 14+ requires for Bonjour; missing keys = the documented zero-discovery failure mode). The keys must live in `iosApp/project.yml`'s `info.properties` block — xcodegen regenerates the project, so keys added anywhere else are silently dropped.
+- **P1-30 (built-bundle plist keys):** after `xcodebuild`, the built `.app`'s Info.plist must contain `NSLocalNetworkUsageDescription` and `NSBonjourServices` with `_p2pkit2._tcp` (the exact authenticated-v2 service; missing keys = the documented zero-discovery failure mode). The keys must live in `iosApp/project.yml`'s `info.properties` block — xcodegen regenerates the project, so keys added anywhere else are silently dropped.
 - **P1-31 (installed bundle is THIS build):** after `simctl install`, the script resolves the installed container via `xcrun simctl get_app_container <UDID> dev.p2pkit.sample` and requires the installed executable's SHA-256 to match the one just built under this checkout's `iosApp/build/DerivedData`.
 
 **Manual verification recipe (P1-31), for any smoke-matrix run whose result you intend to record:**

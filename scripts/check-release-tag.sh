@@ -9,8 +9,8 @@ TAG="${1:-${GITHUB_REF_NAME:-}}"
 [[ -n "$VERSION" ]] || { echo "FATAL: VERSION_NAME is empty" >&2; exit 2; }
 [[ -n "$TAG" ]] || { echo "FATAL: pass a release tag or set GITHUB_REF_NAME" >&2; exit 2; }
 
-if [[ "$TAG" != "v$VERSION" && ! "$TAG" =~ ^v${VERSION//./\.}-rc[0-9]+$ ]]; then
-    echo "FATAL: tag '$TAG' does not match VERSION_NAME=$VERSION (expected v$VERSION or v$VERSION-rcN)" >&2
+if [[ "$TAG" != "v$VERSION" ]]; then
+    echo "FATAL: tag '$TAG' does not exactly match VERSION_NAME=$VERSION (expected v$VERSION)" >&2
     exit 1
 fi
 

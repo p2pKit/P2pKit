@@ -1,0 +1,158 @@
+name: Publish Maven Central
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maven-central-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify-release:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact tagged commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure Java 17
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Install Android SDK platforms
+        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37'
+
+      - name: Validate immutable release identity
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+          scripts/check-release-tag.sh "$RELEASE_TAG"
+          scripts/check-release-metadata.sh
+          scripts/check-maven-central-version.sh absent
+
+      - name: Verify release tooling
+        run: |
+          scripts/tests/check-release-tag-test.sh
+          scripts/tests/check-maven-release-environment-test.sh
+          scripts/tests/check-maven-central-version-test.sh
+          scripts/tests/publish-central-portal-bundle-test.sh
+          scripts/tests/build-central-portal-bundle-test.sh
+          scripts/tests/release-workflow-test.sh
+
+      - name: Run complete release gate
+        run: scripts/run-release-gate.sh
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: maven-central-verification-${{ github.ref_name }}
+          path: |
+            build/reports/release/**
+            build/reports/cyclonedx/bom.*
+            p2p-core/api/**
+            p2p-transport-lan/api/**
+            p2p-network-provisioning-desktop/api/**
+          if-no-files-found: warn
+
+  publish-release:
+    needs: verify-release
+    runs-on: macos-15
+    timeout-minutes: 90
+    environment:
+      name: maven-central
+      url: https://central.sonatype.com/publishing
+    steps:
+      - name: Check out exact approved commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure Java 17
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Install Android SDK platforms
+        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37'
+
+      - name: Revalidate approved release and credentials
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_SIGNING_KEY_B64: ${{ secrets.MAVEN_SIGNING_KEY_B64 }}
+          MAVEN_SIGNING_PASSWORD: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+          MAVEN_SIGNING_KEY_FINGERPRINT: ${{ vars.MAVEN_SIGNING_KEY_FINGERPRINT }}
+          MAVEN_CENTRAL_TOKEN_ROTATE_BY: ${{ vars.MAVEN_CENTRAL_TOKEN_ROTATE_BY }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+          scripts/check-release-tag.sh "$RELEASE_TAG"
+          scripts/check-release-metadata.sh
+          scripts/check-maven-release-environment.sh
+          scripts/check-maven-central-version.sh absent
+
+      - name: Build and inspect signed Central bundle
+        env:
+          ORG_GRADLE_PROJECT_signingInMemoryKeyBase64: ${{ secrets.MAVEN_SIGNING_KEY_B64 }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+          MAVEN_SIGNING_KEY_FINGERPRINT: ${{ vars.MAVEN_SIGNING_KEY_FINGERPRINT }}
+        run: |
+          VERSION="$(sed -n 's/^VERSION_NAME=//p' gradle.properties | tr -d '[:space:]')"
+          scripts/build-central-portal-bundle.sh "build/central/p2pkit-$VERSION-central-bundle.zip"
+
+      - name: Upload once and wait for publication
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        run: |
+          VERSION="$(sed -n 's/^VERSION_NAME=//p' gradle.properties | tr -d '[:space:]')"
+          scripts/publish-central-portal-bundle.sh \
+            "build/central/p2pkit-$VERSION-central-bundle.zip" \
+            build/reports/maven-central
+
+      - name: Verify immutable remote bytes and consumers
+        run: |
+          VERSION="$(sed -n 's/^VERSION_NAME=//p' gradle.properties | tr -d '[:space:]')"
+          scripts/check-maven-central-version.sh published \
+            "build/central/p2pkit-$VERSION-central-bundle.zip"
+          P2PKIT_CONSUMER_REPOSITORY_URL=https://repo.maven.apache.org/maven2 \
+            scripts/check-published-consumers.sh
+
+      - name: Upload publication evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: maven-central-publication-${{ github.ref_name }}
+          path: |
+            build/central/*.zip
+            build/central/*.sha256
+            build/central/*.json
+            build/reports/maven-central/**
+          if-no-files-found: warn

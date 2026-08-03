@@ -1,8 +1,8 @@
 # Stabilization & Release Checklist (RC gating)
 
-**Status:** active worklist for the remediation branch
-`remediation/full-register-2026-07` (current `VERSION_NAME=0.6.0`).
-**Owner:** maintainer. **Updated:** 2026-07-22.
+**Status:** active gate for the authenticated-v2 `0.7.0-rc1` release candidate.
+Existing `0.6.x` artifacts are immutable.
+**Owner:** maintainer. **Updated:** 2026-07-28.
 
 This document is the gate between "the audit branch is green in CI" and "we tag
 an RC and publish artifacts." It has three parts:
@@ -48,9 +48,9 @@ Build the harnesses first:
 
 | # | Scenario | Devices | What it proves | Status |
 |---|----------|---------|----------------|--------|
-| A1 | Discover + connect + text round-trip | Android ↔ JVM | mDNS Found + HELLO handshake + DATA framing cross-platform | ▢ |
-| A2 | Discover + connect + text round-trip | iOS ↔ JVM | Network.framework ↔ JmDNS wire-compat | ▢ |
-| A3 | Discover + connect + text round-trip | iOS ↔ Android | both non-JVM stacks interop | ▢ |
+| A1 | Discover + pinned connect + text round-trip | Android ↔ JVM | secure namespace + Noise XX + authorization + encrypted HELLO/DATA cross-platform | ▢ |
+| A2 | Discover + pinned connect + text round-trip | iOS ↔ JVM | Network.framework ↔ JmDNS secure-v2 wire compatibility | ▢ |
+| A3 | Discover + pinned connect + text round-trip | iOS ↔ Android | both non-JVM secure stacks interoperate | ▢ |
 | A4 | **Peer Lost** on remote stop (all pairs) | each pair | removal/`PeerEvent.Lost` delivery on real radios (the path the simulator suite can't reliably exercise — see C2) | ▢ |
 | A5 | File transfer (≥5 MiB), SHA-256 verify both directions | each pair | FILE_* frames, chunking, reassembly, backpressure | ▢ |
 | A6 | File transfer **cancel** mid-stream, session survives | iOS ↔ Android | per-transfer cancel ≠ session teardown | ▢ |
@@ -116,31 +116,52 @@ of the four library modules:
 scripts/check-publish-artifacts.sh           # run on macOS for the iOS klib rows
 ```
 
-Manual equivalent:
+Manual unsigned shape equivalent:
 
 ```bash
-./gradlew publishToMavenLocal
-ls ~/.m2/repository/dev/p2pkit/*/0.6.0/      # jars, -sources, -javadoc, .pom, .module
+./gradlew publishToMavenLocal \
+  -Dmaven.repo.local=/absolute/path/to/isolated-p2pkit-repository
+ls /absolute/path/to/isolated-p2pkit-repository/dev/p2pkit/*/0.7.0-rc1/
 ```
 
 The checker validates every JVM, Android, and Apple publication (15 on macOS):
 readable main/sources/Dokka archives, `.module`, and complete Central-shaped
 POM metadata. With no key, `sign*Publication` reports `SKIPPED`.
 
-### Signed release (CI / Central)
+### Signed Central Portal bundle (local only)
 
 ```bash
-ORG_GRADLE_PROJECT_signingInMemoryKey="$(cat secret.asc)" \
+ORG_GRADLE_PROJECT_signingInMemoryKeyBase64="$BASE64_SECRET_KEY" \
 ORG_GRADLE_PROJECT_signingInMemoryKeyPassword="$PASSPHRASE" \
-  ./gradlew publishToMavenLocal      # confirm .asc signatures now appear
+MAVEN_SIGNING_KEY_FINGERPRINT="$FULL_PUBLIC_FINGERPRINT" \
+  scripts/build-central-portal-bundle.sh \
+    build/central/p2pkit-0.7.0-rc1-central-bundle.zip
 ```
 
-> **REL-REMOTE-01 / BUILD-02 remains blocked:** no remote Maven repository or
-> release-service credentials are configured in this repository. An owner must
-> choose the Central Portal/OSSRH workflow and authorize its namespace,
-> credentials, signing identity, and upload validation. Until that decision,
-> local publication shape and signing checks are the complete in-scope gate;
-> do not add a third-party publishing plugin or retry an upload by assumption.
+The script publishes into an isolated temporary repository, re-runs the
+artifact-shape checks, requires a PGP `.asc` signature for every deployed file,
+generates Central-required MD5/SHA-1 plus SHA-256/SHA-512 checksums, and archives
+the Maven repository layout. It refuses to overwrite an existing output and
+**never uploads**.
+
+This bundle-upload approach follows the
+[Central Portal bundle format](https://central.sonatype.org/publish/publish-portal-upload/)
+and [component requirements](https://central.sonatype.org/publish/requirements/)
+without introducing a third-party Gradle publishing plugin.
+
+The tag-only `Publish Maven Central` workflow repeats the full gate without
+secrets. Its publishing job then waits on the protected `maven-central`
+environment, builds the signed bundle, and uploads it exactly once with Central
+Portal `AUTOMATIC` publishing. Status and public-repository reads are bounded;
+an ambiguous upload is never retried. After `PUBLISHED`, every remote file is
+compared with the reviewed bundle and isolated JVM/Android/KMP/iOS consumers
+compile using only Maven Central.
+
+> **REL-REMOTE-01 / BUILD-02 remains an external gate until executed:** the
+> verified namespace, Portal token, protected GitHub environment, public key
+> fingerprint, tag push, approval, Portal `PUBLISHED` state, and remote consumer
+> evidence are all required. Repository code alone does not claim that
+> `0.7.0-rc1` is remotely available.
 
 ### XCFramework provenance guard (manual verification)
 
@@ -231,8 +252,9 @@ exact assertions and bounded timeouts.
 - [ ] `scripts/check-publish-artifacts.sh` PASSes on macOS (full Central
       artifact set — main artifact + sources + javadoc + pom + module — for
       every publication of all four modules); `sign*` SKIPPED without a key.
-- [ ] One signed `publishToMavenLocal` run with a test key produces `.asc`
-      signatures.
+- [ ] `scripts/build-central-portal-bundle.sh` with the release key PASSes,
+      every deployed file has a signature/checksum, and the recorded archive
+      SHA-256 matches the reviewed upload.
 - [ ] Release notes state the trust model honestly: secure-v2 is the default
       authenticated/encrypted mode; deprecated `NoneForMvp` is explicit legacy
       only, with cryptographic audit and physical interoperability still open.
@@ -249,7 +271,8 @@ exact assertions and bounded timeouts.
       permission-gate fix — so the C:54 deferral is assessed sound and no
       enum rework is warranted. Revisit only if a second platform mapping
       for the member appears.
-- [ ] Tag `v0.6.0-rc1` (or chosen RC id) and capture the device-matrix logs.
+- [ ] Tag `v0.7.0-rc1` only after the preceding gates and
+      capture the device-matrix, bundle, and Portal-validation evidence.
 
 ### C4 — Negotiated secure metadata envelope (implemented from PARSE-META-01)
 

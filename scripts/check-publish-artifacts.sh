@@ -100,10 +100,11 @@ check() {
     [[ "$pom_group" == "$GROUP" ]] || invalid="$invalid pom-group"
     [[ "$pom_artifact" == "$artifact" ]] || invalid="$invalid pom-artifact"
     [[ "$pom_version" == "$VERSION" ]] || invalid="$invalid pom-version"
-    [[ -n "$pom_name" && -n "$pom_description" && "$pom_url" == https://* ]] ||
+    [[ -n "$pom_name" && -n "$pom_description" && "$pom_url" == "https://github.com/p2pKit/P2pKit" ]] ||
         invalid="$invalid pom-project-metadata"
     [[ "$pom_license" == "The Apache License, Version 2.0" ]] || invalid="$invalid pom-license"
-    [[ -n "$pom_developer" && "$pom_scm" == https://* ]] || invalid="$invalid pom-ownership"
+    [[ -n "$pom_developer" && "$pom_scm" == "https://github.com/p2pKit/P2pKit" ]] ||
+        invalid="$invalid pom-ownership"
 
     local component_artifact="$artifact"
     case "$artifact" in

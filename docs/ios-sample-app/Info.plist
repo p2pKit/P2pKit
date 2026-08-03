@@ -28,7 +28,7 @@
     <string>P2pKit needs local network access to discover nearby devices over Bonjour and exchange messages over TCP.</string>
     <key>NSBonjourServices</key>
     <array>
-        <string>_p2pkit._tcp</string>
+        <string>_p2pkit2._tcp</string>
     </array>
 
     <key>UIApplicationSceneManifest</key>

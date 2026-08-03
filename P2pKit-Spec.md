@@ -1,8 +1,44 @@
 # P2pKit — Kotlin Multiplatform P2P Data Transfer SDK
 
-**Version:** 0.6 specification (v0.1 baseline plus amendments through v0.6 — iOS LAN shipped v0.3, file transfer v0.2.2, Android JmDNS migration v0.5, iOS cellular prohibition v0.6)
+**Version:** 0.7 specification (historical v0.1 baseline plus shipped amendments through authenticated protocol v2)
 **Status:** Living contract — the locked API shapes below are amended in place as features ship; public-API changes require a spec rev
-**Last updated:** 2026-06-12
+**Last updated:** 2026-07-28
+
+---
+
+## 0. Normative v0.7 amendment
+
+This section summarizes the current release contract. Historical milestone
+sections remain below to preserve design rationale; where a historical
+v0.1-v0.6 statement conflicts with this amendment or the current public API,
+this amendment and the checked ABI declarations are authoritative.
+
+- `SecurityMode.AuthenticatedV2(PeerAuthorizationPolicy.RejectUnknown)` is the
+  default. The fixed profile is `Noise_XX_25519_ChaChaPoly_SHA256`.
+- Authenticated v2 uses protocol version 2 and the `_p2pkit2._tcp` Bonjour
+  namespace (`_p2pkit2._tcp.local.` for JmDNS). A failed secure handshake is
+  terminal and never retries as plaintext.
+- Deprecated `SecurityMode.NoneForMvp` explicitly selects legacy plaintext
+  protocol version 1 and `_p2pkit._tcp`. It exists only for migration and is
+  never auto-negotiated.
+- mDNS/TXT identity and fingerprint values are discovery claims, not trust
+  decisions. Secure authorization requires an exact per-connect pin,
+  `PinnedOnly`, or the explicit-risk `AcceptAnyAuthenticatedSameApp` policy.
+- Android secure identity uses Keystore-wrapped no-backup storage after
+  `P2pKitAndroid.initialize(applicationContext)`. iOS uses a device-only
+  Keychain item. JVM consumers must provide a protected, durable
+  `JvmSecureIdentityStore`; core has no plaintext fallback.
+- `send()` confirms a local transport write, not remote application handling.
+  `P2pSession.incoming` remains hot and replay-zero. Applications own admission,
+  readiness, ids/sequences, deduplication, acknowledgements, and state repair.
+- LAN remains the only shipped data/discovery transport. It provides no public
+  internet reachability, NAT traversal, rendezvous, or relay.
+- Version `0.7.0` is staged as new immutable coordinates; remote Central
+  publication remains an external release gate. No `0.6.x` artifact may be
+  replaced with v0.7 bytes.
+
+The operational migration contract is
+[`docs/MIGRATING_TO_0.7.md`](docs/MIGRATING_TO_0.7.md).
 
 ---
 
@@ -31,7 +67,7 @@ P2pKit is **transport-agnostic by design**. v0.1 ships with a LAN/TCP transport.
 
 - v0.1 will not include BLE, Wi-Fi Direct, Multipeer, or relay transports.
 - v0.1 will not include iOS or macOS native support.
-- v0.1 will not include encryption (`SecurityMode.NoneForMvp` only).
+- v0.1 did not include encryption; v0.7 defaults to authenticated encryption.
 - v0.1 will not provide file transfer with resume semantics.
 - The library will not request runtime permissions. The app is responsible for that.
 - The library will not promise automatic LAN bring-up across platforms. Network provisioning is a v0.2 sidecar.
@@ -94,7 +130,7 @@ Explicitly **not** in v0.2:
 - iOS sample app.
 - iOS Network Provisioning.
 
-iOS LAN/TCP cross-talk with Android/JVM peers ships in **v0.3**, using Apple's `Network.framework` (`NWBrowser` + `NWListener` + `NWConnection`) and the same `_p2pkit._tcp` Bonjour service type and v0.1 wire protocol unchanged. Until v0.3 ships, an iOS-targeting consumer can compile core types but cannot exchange messages with Android/JVM peers.
+iOS LAN/TCP cross-talk with Android/JVM peers shipped in **v0.3**, using Apple's `Network.framework` (`NWBrowser` + `NWListener` + `NWConnection`). In v0.7 all platforms use `_p2pkit2._tcp` and protocol version 2 for authenticated mode; explicit deprecated legacy mode remains on `_p2pkit._tcp` and protocol version 1.
 
 iOS Network Provisioning is **never planned**. Apple does not allow third-party apps to create Wi-Fi hotspots, and silent Wi-Fi join is not exposed to third-party apps. `P2pKit.networkProvisioning` will continue to throw `Unsupported` on iOS in every future version.
 
@@ -136,7 +172,7 @@ P2pKit public API
        ↓
      Protocol Layer               ← framing, chunking, ACK, keepalive
        ↓
-     SecurityManager              ← NoOp in v0.1; encrypted in future
+     Security engine             ← authenticated Noise v2 by default; explicit legacy v1
        ↓
      TransportManager             ← picks best DataTransport per peer
        ↓
@@ -170,10 +206,7 @@ val p2p = P2pKit.create {
         onBackground = BackgroundPolicy.CloseActiveSessions
         onAppKilled = AppKilledPolicy.NoPersistenceForMvp
     }
-
-    security {
-        mode = SecurityMode.NoneForMvp
-    }
+    // AuthenticatedV2(RejectUnknown) is the default.
 
     logger = P2pLogger.NoOp
 }
@@ -186,8 +219,14 @@ interface P2pKit {
     val appId: AppId               // v0.2 identity accessors — see §5.2
     val localDeviceName: String
     val localPeerId: PeerId
+    val localFingerprint: PeerFingerprint?
+    val localPairingQr: String?
+
+    fun parsePeerPairingQr(value: String): PeerFingerprint?
 
     val state: StateFlow<P2pState>
+    val advertisingState: StateFlow<FeatureState>
+    val discoveryState: StateFlow<FeatureState>
 
     val peers: StateFlow<List<Peer>>
     val incomingSessions: SharedFlow<P2pSession>
@@ -235,6 +274,7 @@ interface P2pKit {
      * (when the implicit lazy start fails).
      */
     suspend fun connect(peer: Peer): P2pSession
+    suspend fun connect(peer: Peer, expectedFingerprint: PeerFingerprint): P2pSession
 
     fun lastSeen(peerId: PeerId): Long?   // epoch millis, null if unknown
 
@@ -472,7 +512,7 @@ P2pKitImpl
  ├── SessionManager              — creates/accepts/tracks sessions
  ├── TransportManager            — picks the best DataTransport per peer
  ├── P2pProtocol                 — framing, chunking, ACK, ping/pong
- ├── SecurityManager             — NoOp in v0.1; performs handshake
+ ├── Security engine            — Noise-v2 handshake/records or explicit legacy passthrough
  ├── P2pPermissionManager        — platform-provided
  ├── NetworkProvisioningManager  — platform-provided (no-op in v0.1)
  └── P2pLogger                   — caller-provided
@@ -684,8 +724,23 @@ sealed class AppKilledPolicy {
 }
 
 sealed class SecurityMode {
+    data class AuthenticatedV2(
+        val authorization: PeerAuthorizationPolicy =
+            PeerAuthorizationPolicy.RejectUnknown
+    ) : SecurityMode()
+
+    @Deprecated("Use AuthenticatedV2 and configure peer authorization")
     data object NoneForMvp : SecurityMode()
-    // Future: PairingCode, QrCode
+}
+
+sealed interface PeerAuthorizationPolicy {
+    data object RejectUnknown : PeerAuthorizationPolicy
+    class PinnedOnly(
+        val fingerprints: Set<PeerFingerprint>
+    ) : PeerAuthorizationPolicy
+
+    @ExplicitSecurityRisk
+    data object AcceptAnyAuthenticatedSameApp : PeerAuthorizationPolicy
 }
 ```
 
@@ -959,7 +1014,7 @@ enum class P2pPermission {
 |---|---|
 | Android (LAN only) | none for plain LAN/mDNS on most versions; document `NearbyWifiDevices` if discovery requires it on the device's API level. Hotspot/Wi-Fi-join provisioning (v0.2.1) needs `NEARBY_WIFI_DEVICES` (API 33+) / `ACCESS_FINE_LOCATION` (API ≤ 32) |
 | JVM desktop | none |
-| iOS (LAN, v0.3+) | none in the `P2pPermission` sense — the OS shows the Local Network privacy prompt on first use; the app must declare `NSLocalNetworkUsageDescription` and `NSBonjourServices = ["_p2pkit._tcp"]` in Info.plist |
+| iOS (LAN, v0.3+) | none in the `P2pPermission` sense — the OS shows the Local Network privacy prompt on first use; the app must declare `NSLocalNetworkUsageDescription` and the exact selected service (`NSBonjourServices = ["_p2pkit2._tcp"]` for default authenticated v2; legacy `_p2pkit._tcp` only for an explicit plaintext build) |
 
 ---
 
@@ -1062,49 +1117,53 @@ Fallback rules:
 
 ## 18. Security Abstraction
 
-### 18.1 Interfaces
+### 18.1 Authenticated protocol v2
 
-```kotlin
-interface SecurityManager {
-    suspend fun performHandshake(connection: RawConnection, peer: Peer): SecureConnection
-}
+The default fixed profile is `Noise_XX_25519_ChaChaPoly_SHA256`:
 
-// Public, not internal: the public SecurityManager.performHandshake returns
-// it, so Kotlin visibility rules force it public. Apps should treat it as
-// opaque and never depend on it directly.
-public interface SecureConnection : RawConnection {
-    val peerIdentity: PeerIdentity
-}
+1. Each kit loads or creates one persistent X25519 static identity for the
+   exact `AppId`.
+2. Both sides exchange fixed secure-v2 prefaces and complete Noise XX before
+   any P2pKit HELLO/frame parsing.
+3. The remote proves possession of its static private key. P2pKit derives the
+   canonical `PeerFingerprint` and AppId-bound `PeerId`.
+4. Authorization evaluates the proven fingerprint against an exact
+   per-connect/manual pin or the configured policy.
+5. Only after authentication and authorization succeeds does the encrypted
+   connection carry HELLO, DATA, keepalive, close, and file-transfer records.
 
-data class PeerIdentity(
-    val peerId: PeerId,
-    val publicKeyFingerprint: String?   // null under SecurityMode.NoneForMvp
-)
-```
+All handshake/record inputs are bounded and time-limited. AEAD failure,
+unexpected role/version/cipher suite, wrong pin, AppId mismatch, replayed
+record nonce, malformed record, or authorization rejection closes the
+connection. There is no downgrade path.
 
-### 18.2 v0.1 implementation
+`RejectUnknown` is the default. `PinnedOnly` admits only its immutable set of
+full canonical fingerprints. `AcceptAnyAuthenticatedSameApp` is an explicit
+security-risk policy: it authenticates a key and exact AppId binding but does
+not authorize a human/device because AppId is public.
 
-`NoOpSecurityManager` returns a passthrough wrapper. No keys, no encryption.
+Discovery's fingerprint is only an `UntrustedDiscoveryClaim`; the handshake
+must prove the key, and `RejectUnknown` does not turn that claim into a pin.
 
-### 18.3 Future shape (v0.3+, not in v0.1)
+### 18.2 Identity storage
 
-```kotlin
-sealed class SecurityMode {
-    data object NoneForMvp : SecurityMode()
-    data class PairingCode(val trustedDeviceStore: TrustedDeviceStore) : SecurityMode()
-    data class QrCode(val trustedDeviceStore: TrustedDeviceStore) : SecurityMode()
-}
+- Android: Keystore-wrapped identity record in no-backup app storage.
+  `P2pKitAndroid.initialize(applicationContext)` is required before kit
+  construction.
+- iOS: device-only Keychain item.
+- JVM: the host must provide `JvmSecureIdentityStore` through
+  `jvmSecureIdentityStore(store)`. Core deliberately provides no
+  passwordless/plain-file secure default.
 
-interface TrustedDeviceStore {
-    suspend fun trust(peerId: PeerId, fingerprint: String)
-    suspend fun isTrusted(peerId: PeerId, fingerprint: String): Boolean
-    suspend fun forget(peerId: PeerId)
-}
-```
+Resetting or losing the secure identity changes both fingerprint and peer id;
+remote applications must treat it as a new identity and approve it again.
 
-Encryption primitives planned: X25519 key exchange, HKDF, AES-GCM or ChaCha20-Poly1305.
+### 18.3 Explicit legacy compatibility
 
-The public API does not need to change to add encryption. `SecurityManager.performHandshake` is the extension point.
+`SecurityMode.NoneForMvp` and the old `SecurityManager`/`SecureConnection`
+extension point remain deprecated for source/binary migration. They select the
+separate plaintext-v1 wire/discovery profile and are never used by the built-in
+authenticated-v2 engine. New production code must not depend on them.
 
 ---
 
@@ -1151,14 +1210,20 @@ fun TransportsBuilder.lan(applicationContext: Context)
 
 ### 19.2 mDNS
 
-- Service type: `_p2pkit._tcp.`
+- Authenticated-v2 service type: `_p2pkit2._tcp.local.` on JmDNS and
+  `_p2pkit2._tcp` on Bonjour.
+- Explicit deprecated legacy-v1 service type: `_p2pkit._tcp.local.` on JmDNS
+  and `_p2pkit._tcp` on Bonjour.
+- A kit browses/advertises only its selected profile. Profiles never
+  auto-negotiate or downgrade.
 - TXT record fields:
   - `pid` — peer id
   - `app` — app id
   - `name` — device name (URL-encoded)
   - `plat` — `ANDROID` / `JVM_DESKTOP` / etc.
   - `caps` — comma-separated `TransportKind` values
-  - `pv` — protocol version (currently `1`)
+  - `pv` — selected protocol version (`2` authenticated, `1` legacy)
+  - `fp` — canonical fingerprint in authenticated v2; absent in legacy
 - Android: in-process `JmDNS` for both advertising and discovery (**v0.5+** — replaced the v0.1–v0.4 `NsdManager` implementation so the SDK owns the mDNS cache and can force re-queries during reconnect; do not reintroduce `NsdManager`).
 - JVM: `JmDNS` (jmdns library) for both advertising and discovery.
 - iOS (v0.3+): `nw_browser_t` for discovery, `nw_listener_set_advertise_descriptor` for advertising — same service type and TXT keys, wire-indistinguishable from JmDNS peers.
@@ -1353,13 +1418,13 @@ If discovery fails, the app may call `createManualPeer(host, port)` to produce a
 - It does **not** claim silent Wi-Fi join on Android. User confirmation is often required.
 - It does **not** claim mDNS works on every network. Corporate, guest, and some mobile networks block it.
 
-### 21.3 Per-platform reality (v0.6)
+### 21.3 Per-platform reality (v0.7)
 
 | Platform | Discovery | Transport | Provisioning |
 |---|---|---|---|
-| Android | mDNS via in-process `JmDNS` (v0.5+; `NsdManager` in v0.1–v0.4) | TCP via `java.net.Socket` | `LocalOnlyHotspot` host + Wi-Fi join via `:p2p-network-provisioning-android` (v0.2.1) |
-| JVM (Win/Lin/Mac) | mDNS via `JmDNS` | TCP via `java.net.Socket` | manual-IP fallback via `:p2p-network-provisioning-desktop` (v0.2.1) |
-| iOS | Bonjour via `nw_browser_t` (v0.3+) | TCP via `nw_connection_t`; cellular interface prohibited (v0.6) | never — Apple policy; always `Unsupported` |
+| Android | mDNS via in-process `JmDNS`; secure identity requires application-context initialization | TCP via `java.net.Socket`, authenticated Noise v2 by default | `LocalOnlyHotspot` host + Wi-Fi join via `:p2p-network-provisioning-android` |
+| JVM (Win/Lin/Mac) | mDNS via `JmDNS`; host-provided protected identity store required | TCP via `java.net.Socket`, authenticated Noise v2 by default | manual-IP fallback via `:p2p-network-provisioning-desktop` |
+| iOS | Bonjour via `nw_browser_t`; device-only Keychain identity | TCP via `nw_connection_t`, authenticated Noise v2 by default; cellular interface prohibited | hotspot/join unsupported; manual-IP fallback available |
 | macOS native | not shipped (v0.3.x candidate) | not shipped | not shipped |
 
 ### 21.4 Firewall and network notes (document in README)
@@ -1416,7 +1481,7 @@ If discovery fails, the app may call `createManualPeer(host, port)` to produce a
 
 ---
 
-## 23. Implementation Order
+## 23. Historical implementation order
 
 1. `:p2p-core` — models, interfaces, errors, `P2pState`, `ConnectionState`, `TransportManager`, `PeerRegistry`, `SessionManager` skeleton, `NoOpSecurityManager`, `P2pLogger`, DSL builder. Unit tests for `TransportManager` and `PeerRegistry`.
 2. Protocol framing and encoding/decoding in `:p2p-core`. Unit tests for round-trip, chunking, packet handling, HELLO validation.
@@ -1436,17 +1501,20 @@ Each step lands as its own PR with passing tests before the next begins.
 The published README must contain:
 
 1. **What P2pKit is** — one-paragraph elevator pitch.
-2. **What P2pKit is not** — explicit non-goals (no encryption in v0.1, no iOS in v0.1, no automatic cross-platform LAN setup).
-3. **v0.1 platform support matrix** — section 21.3 table.
-4. **Quick start** — the recommended usage pattern from section 7.5.
-5. **Required permissions** — runtime list per platform plus install-time permissions to declare in `AndroidManifest.xml`.
-6. **Why LAN/TCP is the first transport** — short rationale.
-7. **Future transport roadmap** — BLE, Wi-Fi Direct, Multipeer, Relay, with realistic expectations.
-8. **Network provisioning vs transport** — explain the distinction; mark provisioning as v0.2.
-9. **Recommended connection flow** — same LAN → manual fallback. (Hotspot flow added in v0.2.)
-10. **Firewall and network notes** — section 21.4.
-11. **Architecture diagram** — section 6.
-12. **Example app links** — `:p2p-sample-android`, `:p2p-sample-desktop`.
+2. **What P2pKit is not** — especially no internet/NAT/relay, room protocol,
+   user identity, or application delivery guarantee.
+3. **Current platform support matrix** — section 21.3.
+4. **Secure quick start** — default fail-closed authorization plus exact
+   fingerprint/QR pinning.
+5. **Identity-store requirements** — Android initialization, iOS Keychain, and
+   required JVM protected store.
+6. **Required permissions/privacy declarations** — Android install/runtime
+   distinction and exact iOS Bonjour service.
+7. **Protocol migration** — secure v2 versus explicit deprecated plaintext v1,
+   separate namespaces, and no downgrade.
+8. **Session/lifecycle contract** — replay-zero receive flow, local-write send
+   semantics, reconnect direction, and terminal cleanup.
+9. **Architecture, modules, limits, verification, and publication status.**
 
 ---
 
@@ -1472,14 +1540,21 @@ The published README must contain:
 - iOS / macOS LAN transport (Bonjour + `Network.framework`) — iOS shipped in v0.3; macOS native remains a candidate
 - iOS sample app (shipped v0.4 as the `iosApp/` Xcode project)
 
-### v0.4+
+### v0.4-v0.6
 
 - `:p2p-transport-ble` — small messages and discovery
 - `:p2p-transport-android-wifidirect`
 - `:p2p-transport-apple-multipeer`
 - `:p2p-transport-relay` — internet fallback
-- Encryption: `SecurityMode.PairingCode`, `SecurityMode.QrCode`; X25519 + HKDF + AES-GCM / ChaCha20-Poly1305
 - Windows / Linux native Wi-Fi Direct bridges (long-term, opportunistic)
+
+### v0.7
+
+- Authenticated Noise v2 default with fail-closed authorization.
+- Platform-protected persistent identity and canonical fingerprints/pairing QR.
+- Separate secure-v2/legacy-v1 discovery and wire profiles with no downgrade.
+- Authenticated message metadata and durable SHA-256 file commit.
+- Central-shaped immutable `0.7.0` artifacts and local Portal bundle gate.
 
 ---
 

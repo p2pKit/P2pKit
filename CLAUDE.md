@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-P2pKit is a Kotlin Multiplatform SDK for discovering nearby devices and exchanging messages/files over the local network (mDNS discovery + TCP data). Targets: JVM desktop, Android (minSdk 24), iOS. The public API (`P2pKit`, `Peer`, `P2pSession`, `send`, flows for receive) hides transport selection, framing, chunking, and keep-alive. The API contract is locked by `P2pKit-Spec.md` — don't change public API shape casually. Current line is v0.6 (`VERSION_NAME` in `gradle.properties`), in RC stabilization — the gate to the first RC tag is `docs/STABILIZATION_AND_RELEASE.md`.
+P2pKit is a Kotlin Multiplatform SDK for discovering nearby devices and exchanging messages/files over the local network (mDNS discovery + TCP data). Targets: JVM desktop, Android (minSdk 24), iOS. The public API (`P2pKit`, `Peer`, `P2pSession`, `send`, flows for receive) hides transport selection, framing, chunking, and keep-alive. The API contract is locked by `P2pKit-Spec.md` — don't change public API shape casually. Current line is v0.7 (`VERSION_NAME` in `gradle.properties`), with authenticated protocol v2 as the fail-closed default. The release gate is `docs/STABILIZATION_AND_RELEASE.md`; v0.6 artifacts are immutable and must never be overwritten.
 
 ## Commands
 
@@ -35,11 +35,12 @@ Java 17 required (`jvmToolchain(17)`); iOS targets compile only on a macOS host.
 ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance
 ./gradlew :iosApp:runIosSimulator                   # exact SIM_UDID, or an unambiguous SIM_NAME; isolated DerivedData per run
 
-# Publishing — local shape gate only; remote release is owner-authorized
+# Publishing — local shape/bundle gates only; remote release is owner-authorized
 ./gradlew publishToMavenLocal                       # dev.p2pkit:<module>:<version> for the four library modules
+scripts/build-central-portal-bundle.sh <output.zip> # requires an in-memory PGP key; never uploads
 ```
 
-There is no lint/format task configured. Maven coordinates come from `gradle.properties` (`GROUP` / `VERSION_NAME`) applied to all modules in the root `build.gradle.kts`. `maven-publish` + Central-shaped POMs are wired on all four library modules; strict Dokka archives, ABI baselines, dependency locks/verification, and CycloneDX SBOM validation are part of the local release gate. Artifact signing is wired centrally and activates only when a PGP key is supplied via the `signingInMemoryKey`(+`Password`) properties (`ORG_GRADLE_PROJECT_…` env vars) — without a key, Sign tasks are SKIPPED and `publishToMavenLocal` needs no secrets. A remote Central/OSSRH target remains blocked on explicit owner/service authorization; do not add one by assumption. Release recipe: `docs/STABILIZATION_AND_RELEASE.md` Part B.
+There is no lint/format task configured. Maven coordinates come from `gradle.properties` (`GROUP` / `VERSION_NAME`) applied to all modules in the root `build.gradle.kts`. `maven-publish` + Central-shaped POMs are wired on all four library modules; strict Dokka archives, ABI baselines, dependency locks/verification, and CycloneDX SBOM validation are part of the local release gate. Artifact signing is wired centrally and activates only when a PGP key is supplied via the `signingInMemoryKey`(+`Password`) properties (`ORG_GRADLE_PROJECT_…` env vars) — without a key, Sign tasks are SKIPPED and `publishToMavenLocal` needs no secrets. `scripts/build-central-portal-bundle.sh` creates and validates a signed, checksummed Central Portal upload bundle without uploading it. Namespace verification, credentials, upload, validation, and publication remain explicit maintainer-controlled external gates. Release recipe: `docs/STABILIZATION_AND_RELEASE.md` Part B.
 
 ## Module structure
 
@@ -70,7 +71,7 @@ Transports plug in via `TransportFactory` and the `transports { lan() }` DSL —
 
 ### Wire protocol — keep platforms identical
 
-The three platform transport implementations must stay wire-compatible: Bonjour service type `_p2pkit._tcp`, identical TXT record keys, and the binary frame format in `protocol/` (magic "PP2K", version 1, 36-byte header; frame types DATA/HELLO/ACK/PING/PONG/CLOSE/ERROR/FILE_OFFER/FILE_ACCEPT/FILE_REJECT/FILE_DATA/FILE_DONE/FILE_CANCEL). Limits live in `ProtocolConstants`: 4 MiB max per `send()` message, 8 MiB max frame payload (DoS guard), 64 KiB default chunks, reassembly caps/timeouts. A change to any of these must be mirrored across jvmMain/androidMain/appleMain or cross-platform interop breaks. Behavioral parity matters too: `JvmRawConnection` and `AndroidRawConnection` share the same 30 s write-timeout watchdog (`WRITE_TIMEOUT_MILLIS`) so a peer that stops draining fails the connection instead of wedging writes — keep such fixes in sync across the platform pairs.
+The three platform transport implementations must stay wire-compatible. Authenticated v2 uses Bonjour service type `_p2pkit2._tcp`, protocol version 2, and a Noise-protected record layer; explicit deprecated plaintext v1 uses the separate `_p2pkit._tcp` namespace and protocol version 1. There is no negotiation or automatic downgrade between them. TXT record keys and the binary frame format in `protocol/` must remain identical across platforms (magic "PP2K", 36-byte header; DATA/HELLO/ACK/PING/PONG/CLOSE/ERROR and file-transfer frame types). Limits live in `ProtocolConstants`: 4 MiB max per `send()` message, 8 MiB max frame payload (DoS guard), 64 KiB default chunks, reassembly caps/timeouts. A change to any of these must be mirrored across jvmMain/androidMain/appleMain or cross-platform interop breaks. Behavioral parity matters too: `JvmRawConnection` and `AndroidRawConnection` share the same 30 s write-timeout watchdog (`WRITE_TIMEOUT_MILLIS`) so a peer that stops draining fails the connection instead of wedging writes — keep such fixes in sync across the platform pairs.
 
 ### Reconnect semantics (subtle, frequently touched)
 

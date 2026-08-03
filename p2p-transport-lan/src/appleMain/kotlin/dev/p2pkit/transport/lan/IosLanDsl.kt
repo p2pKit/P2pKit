@@ -17,10 +17,11 @@ import dev.p2pkit.core.transport.TransportPair
  * transports { lan() }
  * ```
  *
- * Same public API as on JVM and Android — wire-compatible with the JVM/Android
- * in-process `JmDNS` implementation (`_p2pkit._tcp` service type, identical TXT
- * record keys). See `IosLanDataTransport` / `IosLanDiscoveryTransport` for the
- * implementations.
+ * Same public API as on JVM and Android. The selected whole-kit security
+ * profile chooses the cross-platform namespace: `_p2pkit2._tcp` for
+ * authenticated v2 or `_p2pkit._tcp` for explicit deprecated plaintext v1.
+ * TXT records and protocol bytes remain identical across the iOS and
+ * JVM/Android implementations of the selected profile.
  */
 public fun TransportsBuilder.lan() {
     register(IosLanTransportFactory)

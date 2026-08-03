@@ -130,7 +130,7 @@ Build the maintained iOS sample from `iosApp/` (see its build steps) and follow
 | T1.5 | Bidirectional text | Both messages arrive verbatim | Screenshots of both sides |
 | T1.6 | 200 KB binary | SHA-256 matches both directions | `shasum -a 256` outputs |
 | T1.7 | 5 MB file | SHA-256 matches; state walks Offered → Completed | `shasum -a 256` outputs + screenshot of Completed row |
-| T1.8 | Stop / restart cycle | Same `localPeerId` post-restart (NSUserDefaults persistence); no leaked Bonjour entry | `dns-sd -B _p2pkit._tcp local.` before / during / after |
+| T1.8 | Stop / restart cycle | Same authenticated `localPeerId` post-restart (Keychain identity persistence); no leaked Bonjour entry | `dns-sd -B _p2pkit2._tcp local.` before / during / after |
 | T1.9 | Background → foreground | No crash; session either survives or is observably re-established | Console log of foreground transition |
 | T1.10 | Wi-Fi off → on | No crash; no hung `Connecting`; kit recovers without restart | Same |
 

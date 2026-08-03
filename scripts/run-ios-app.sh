@@ -180,7 +180,7 @@ main() {
     echo "[ios-run] Checking load-bearing Info.plist keys in the built bundle..."
     plist_dump="$(plutil -p "$app_path/Info.plist")"
     local required
-    for required in NSLocalNetworkUsageDescription NSBonjourServices _p2pkit._tcp; do
+    for required in NSLocalNetworkUsageDescription NSBonjourServices _p2pkit2._tcp; do
         if ! printf '%s' "$plist_dump" | grep -qF "$required"; then
             echo "[ios-run] FATAL: built Info.plist is missing '$required'."
             echo "         Keep local-network keys in iosApp/project.yml; xcodegen regenerates the project."

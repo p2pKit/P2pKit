@@ -15,14 +15,15 @@ proposal time, with per-section status notes.
 Wi-Fi drops, network handover (Wi-Fi → Wi-Fi, Wi-Fi → hotspot), OS-suspended
 apps, screen-off Doze on Android. Keep sessions through ≤ 30 s outages.
 
-**Non-goals (v0.3).** Process-death state restoration, NAT traversal,
-TLS/pairing, cross-LAN reachability. `AppKilledPolicy` stays
-`NoPersistenceForMvp`. New peers go through full discovery + handshake.
+**Non-goals.** Process-death session restoration, NAT traversal, relay, and
+cross-LAN reachability. `AppKilledPolicy` stays `NoPersistenceForMvp`. New
+peers go through full discovery plus the authenticated-v2 handshake and
+authorization policy.
 
 ## 2. Reconnect strategy
 
 *Status: still proposed — `ReconnectPolicy.Enabled` remains fixed-delay as of
-v0.6. Note one part of the "Today" snapshot has since improved: `V0.4-RECONNECT`
+v0.7. Note one part of the "Today" snapshot has since improved: `V0.4-RECONNECT`
 replaced the captured-`InternalPeer` reuse with per-attempt endpoint
 re-resolution from fresh discovery data.*
 
