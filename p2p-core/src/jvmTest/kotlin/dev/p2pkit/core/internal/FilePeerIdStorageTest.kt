@@ -140,6 +140,10 @@ class FilePeerIdStorageTest {
         val processes = readyFiles.zip(outputFiles).map { (ready, output) ->
             ProcessBuilder(
                 java,
+                "-Xms16m",
+                "-Xmx64m",
+                "-XX:+UseSerialGC",
+                "-XX:ActiveProcessorCount=1",
                 "-cp",
                 classpath,
                 FilePeerIdStorageProcessProbe::class.java.name,
@@ -356,13 +360,17 @@ internal object FilePeerIdStorageProcessProbe {
         val appId = args[1]
         val go = File(args[2])
         val ready = File(args[3])
+        // Load the storage implementation before entering the barrier. The
+        // measured section is the cross-process storage transaction, not JVM
+        // class loading under an unrelated parallel Gradle workload.
+        val storage = FilePeerIdStorage(root, appId, P2pLogger.NoOp)
         check(ready.createNewFile())
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
         while (!go.exists()) {
             check(System.nanoTime() < deadline) { "Parent did not release process barrier" }
             Thread.sleep(5)
         }
-        val id = FilePeerIdStorage(root, appId, P2pLogger.NoOp).loadOrGenerate()
+        val id = storage.loadOrGenerate()
         println("PEER_ID=${id.value}")
     }
 }
