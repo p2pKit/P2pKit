@@ -134,9 +134,10 @@ class FilePeerIdStorageTest {
         val processCount = 4
         val go = File(tempDir, "go")
         val readyFiles = (0 until processCount).map { File(tempDir, "ready-$it") }
+        val outputFiles = (0 until processCount).map { File(tempDir, "output-$it.log") }
         val java = File(System.getProperty("java.home"), "bin/java").absolutePath
         val classpath = currentTestClasspath()
-        val processes = readyFiles.map { ready ->
+        val processes = readyFiles.zip(outputFiles).map { (ready, output) ->
             ProcessBuilder(
                 java,
                 "-cp",
@@ -146,14 +147,20 @@ class FilePeerIdStorageTest {
                 "cross-process-app",
                 go.absolutePath,
                 ready.absolutePath
-            ).redirectErrorStream(true).start()
+            )
+                .redirectErrorStream(true)
+                .redirectOutput(output)
+                .start()
         }
         try {
             awaitFiles(readyFiles)
             assertTrue(go.createNewFile(), "parent must release the child-process barrier once")
-            val outputs = processes.map { process ->
-                assertTrue(process.waitFor(20, TimeUnit.SECONDS), "PeerId child process timed out")
-                val output = process.inputStream.bufferedReader().readText().trim()
+            val outputs = processes.zip(outputFiles).map { (process, outputFile) ->
+                assertTrue(
+                    process.waitFor(20, TimeUnit.SECONDS),
+                    "PeerId child process timed out; output=${outputFile.readText().trim()}"
+                )
+                val output = outputFile.readText().trim()
                 assertEquals(0, process.exitValue(), output)
                 output.lineSequence().last { it.startsWith("PEER_ID=") }.removePrefix("PEER_ID=")
             }

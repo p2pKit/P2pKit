@@ -185,7 +185,10 @@ internal class FilePeerIdStorage(
     }
 
     private fun ensureStorageDirectory() {
-        if (!storageDir.isDirectory && !storageDir.mkdirs()) {
+        // mkdirs() reports false when a competing process creates the same
+        // directory first. Judge the durable postcondition after the attempt
+        // so concurrent first use does not fall back to a divergent identity.
+        if (!storageDir.isDirectory && !storageDir.mkdirs() && !storageDir.isDirectory) {
             throw IOException("Could not create PeerId storage directory ${storageDir.absolutePath}")
         }
         if (!storageDir.isDirectory) {
