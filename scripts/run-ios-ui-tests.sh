@@ -39,7 +39,7 @@ trap cleanup EXIT
 device_list="$(xcrun simctl list devices available)"
 udid="$(resolve_simulator_udid "$SIM_NAME" "$SIM_UDID" "$device_list")"
 if [[ -z "$RUN_DIR" ]]; then
-    RUN_DIR="$(mktemp -d "$PROJECT_DIR/build/ios-ui-run.XXXXXX")"
+    RUN_DIR="$(create_ios_run_dir "$PROJECT_DIR/build" "ios-ui-run")"
     OWN_RUN_DIR=1
 else
     mkdir -p -- "$RUN_DIR"

@@ -86,6 +86,13 @@ if [[ "$RUN_A" == "$RUN_B" || ! -d "$RUN_A" || ! -d "$RUN_B" ]]; then
     echo "FAIL: concurrent run directories must be distinct and materialized" >&2
     exit 1
 fi
+MISSING_PARENT="$TMP_ROOT/not-created/ui"
+UI_RUN="$(create_ios_run_dir "$MISSING_PARENT" "ios-ui-run")"
+if [[ ! -d "$UI_RUN" || "$UI_RUN" != "$MISSING_PARENT"/ios-ui-run.* ]]; then
+    echo "FAIL: UI run directory must create its missing parent with the requested prefix" >&2
+    exit 1
+fi
+assert_fails "unsupported run-directory prefix is rejected" create_ios_run_dir "$TMP_ROOT" "../escape"
 
 LOCK_DIR="$TMP_ROOT/launcher.lock"
 acquire_ios_run_lock "$LOCK_DIR"
@@ -94,4 +101,4 @@ release_ios_run_lock "$LOCK_DIR"
 acquire_ios_run_lock "$LOCK_DIR"
 release_ios_run_lock "$LOCK_DIR"
 
-echo "run-ios-app tests: 9 passed"
+echo "run-ios-app tests: 11 passed"

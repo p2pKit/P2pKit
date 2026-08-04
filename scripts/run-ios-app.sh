@@ -102,8 +102,17 @@ select_latest_available_simulator_udid() {
 
 create_ios_run_dir() {
     local build_root="$1"
+    local run_prefix="${2:-ios-run}"
+
+    case "$run_prefix" in
+        ios-run|ios-ui-run) ;;
+        *)
+            echo "[ios-run] FATAL: unsupported run-directory prefix '$run_prefix'." >&2
+            return 1
+            ;;
+    esac
     mkdir -p -- "$build_root"
-    mktemp -d "$build_root/ios-run.XXXXXX"
+    mktemp -d "$build_root/$run_prefix.XXXXXX"
 }
 
 acquire_ios_run_lock() {
