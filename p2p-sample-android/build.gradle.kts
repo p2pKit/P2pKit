@@ -5,11 +5,10 @@ plugins {
 
 android {
     namespace = "dev.p2pkit.sample.android"
-    // The published libraries intentionally retain minCompileSdk 36 so
-    // consumers such as Parlor are not forced onto an unreleased toolchain.
-    // The executable sample targets the newest installed SDK and therefore
-    // remains the strict Android manifest/permission lint gate.
-    compileSdk = libs.versions.android.sample.compileSdk.get().toInt()
+    // Compile against the stable, installable SDK platform used by the
+    // published Android library. The executable sample still opts into the
+    // newest manifest behavior so warnings-as-errors lint remains strict.
+    compileSdk = libs.versions.android.compileSdk.get().toInt()
 
     defaultConfig {
         applicationId = "dev.p2pkit.sample.android"

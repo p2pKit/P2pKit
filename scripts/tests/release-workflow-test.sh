@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORKFLOW="$ROOT/.github/workflows/publish-maven-central.yml"
+CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
+DRY_RUN_WORKFLOW="$ROOT/.github/workflows/release-dry-run.yml"
+ANDROID_LOCK="$ROOT/p2p-sample-android/gradle.lockfile"
 
 [[ -f "$WORKFLOW" ]] || { echo "FATAL: Maven Central workflow is missing" >&2; exit 1; }
 ruby -e 'require "yaml"; YAML.safe_load_file(ARGV.fetch(0), aliases: true)' "$WORKFLOW"
@@ -64,4 +67,28 @@ while IFS= read -r use; do
     }
 done < <(sed -n 's/^[[:space:]]*uses:[[:space:]]*//p' "$WORKFLOW")
 
-echo "RESULT: PASS — release workflow trigger, approval, permissions, pins, and commands are locked"
+for workflow in "$CI_WORKFLOW" "$DRY_RUN_WORKFLOW" "$WORKFLOW"; do
+    grep -Fq "'platforms;android-36'" "$workflow" || {
+        echo "FATAL: workflow does not install the stable Android API-36 platform: $workflow" >&2
+        exit 1
+    }
+    if grep -Fq "platforms;android-37" "$workflow"; then
+        echo "FATAL: workflow requests unavailable Android API-37 platform: $workflow" >&2
+        exit 1
+    fi
+done
+
+grep -Fq '"io.netty" -> "4.1.136.Final"' "$ROOT/build.gradle.kts" || {
+    echo "FATAL: Netty advisory floor is not 4.1.136.Final" >&2
+    exit 1
+}
+grep -Fq 'io.netty:netty-codec-http:4.1.136.Final=' "$ANDROID_LOCK" || {
+    echo "FATAL: Android test tooling is not locked to patched Netty" >&2
+    exit 1
+}
+if grep -Fq 'io.netty:netty-codec-http:4.1.135.Final=' "$ANDROID_LOCK"; then
+    echo "FATAL: vulnerable Netty remains in the Android test-tooling lock" >&2
+    exit 1
+fi
+
+echo "RESULT: PASS — release workflow, Android SDK, and Netty security policy are locked"

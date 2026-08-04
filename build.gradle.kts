@@ -91,7 +91,7 @@ allprojects {
             val requestedGroup = requested.group ?: return@eachDependency
             val requestedModule = "$requestedGroup:${requested.name}"
             val minimumVersion = when (requestedGroup) {
-                "io.netty" -> "4.1.135.Final"
+                "io.netty" -> "4.1.136.Final"
                 "org.bouncycastle" -> "1.85"
                 else -> advisoryMinimumVersions[requestedModule]
             }
@@ -144,6 +144,7 @@ tasks.register("resolveAndLockAll") {
         ":p2p-transport-lan:check",
         ":p2p-network-provisioning-android:check",
         ":p2p-network-provisioning-desktop:check",
+        ":p2p-sample-diagnostics:check",
         ":p2p-sample-android:check",
         ":p2p-sample-desktop:check",
         ":p2p-sample-desktop-ui:check",
