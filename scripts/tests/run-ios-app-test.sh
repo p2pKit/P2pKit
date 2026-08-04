@@ -94,6 +94,32 @@ if [[ ! -d "$UI_RUN" || "$UI_RUN" != "$MISSING_PARENT"/ios-ui-run.* ]]; then
 fi
 assert_fails "unsupported run-directory prefix is rejected" create_ios_run_dir "$TMP_ROOT" "../escape"
 
+FAKE_REPO="$TMP_ROOT/fake-repo"
+mkdir -p "$FAKE_REPO"
+printf '%s\n' \
+    '#!/bin/sh' \
+    'framework=p2p-transport-lan/build/XCFrameworks/release/P2pKitShared.xcframework' \
+    'mkdir -p "$framework/ios-arm64/P2pKitShared.framework" "$framework/ios-arm64_x86_64-simulator/P2pKitShared.framework"' \
+    ': > "$framework/ios-arm64/P2pKitShared.framework/P2pKitShared"' \
+    ': > "$framework/ios-arm64_x86_64-simulator/P2pKitShared.framework/P2pKitShared"' \
+    'printf '\''invoked\n'\'' >> gradle-invocations.txt' \
+    > "$FAKE_REPO/gradlew"
+chmod +x "$FAKE_REPO/gradlew"
+ensure_ios_xcframework_present "$FAKE_REPO"
+ensure_ios_xcframework_present "$FAKE_REPO"
+if [[ "$(wc -l < "$FAKE_REPO/gradle-invocations.txt" | tr -d '[:space:]')" != "1" ]]; then
+    echo "FAIL: missing XCFramework must bootstrap exactly once" >&2
+    exit 1
+fi
+
+EMPTY_REPO="$TMP_ROOT/empty-repo"
+mkdir -p "$EMPTY_REPO"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$EMPTY_REPO/gradlew"
+chmod +x "$EMPTY_REPO/gradlew"
+assert_fails \
+    "successful Gradle exit without XCFramework is rejected" \
+    ensure_ios_xcframework_present "$EMPTY_REPO"
+
 LOCK_DIR="$TMP_ROOT/launcher.lock"
 acquire_ios_run_lock "$LOCK_DIR"
 assert_fails "concurrent launcher lock is rejected" acquire_ios_run_lock "$LOCK_DIR"
@@ -101,4 +127,4 @@ release_ios_run_lock "$LOCK_DIR"
 acquire_ios_run_lock "$LOCK_DIR"
 release_ios_run_lock "$LOCK_DIR"
 
-echo "run-ios-app tests: 11 passed"
+echo "run-ios-app tests: 14 passed"

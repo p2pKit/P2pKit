@@ -49,6 +49,7 @@ DERIVED_DATA="$RUN_DIR/DerivedData"
 
 acquire_ios_run_lock "$LOCK_DIR"
 OWN_LOCK=1
+ensure_ios_xcframework_present "$REPO_ROOT"
 (cd "$PROJECT_DIR" && xcodegen generate) | tail -3
 xcrun simctl boot "$udid" 2>/dev/null || true
 

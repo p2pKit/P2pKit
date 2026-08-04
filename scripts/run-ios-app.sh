@@ -115,6 +115,26 @@ create_ios_run_dir() {
     mktemp -d "$build_root/$run_prefix.XXXXXX"
 }
 
+ensure_ios_xcframework_present() {
+    local repo_root="$1"
+    local framework="$repo_root/p2p-transport-lan/build/XCFrameworks/release/P2pKitShared.xcframework"
+    local device_binary="$framework/ios-arm64/P2pKitShared.framework/P2pKitShared"
+    local simulator_binary="$framework/ios-arm64_x86_64-simulator/P2pKitShared.framework/P2pKitShared"
+
+    if [[ -f "$device_binary" && -f "$simulator_binary" ]]; then
+        return 0
+    fi
+
+    echo "[ios-run] Bootstrapping the missing P2pKitShared XCFramework..."
+    (cd "$repo_root" && sh ./gradlew \
+        :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance \
+        --console=plain)
+    if [[ ! -f "$device_binary" || ! -f "$simulator_binary" ]]; then
+        echo "[ios-run] FATAL: XCFramework verification completed without both required slices." >&2
+        return 1
+    fi
+}
+
 acquire_ios_run_lock() {
     local lock_dir="$1"
     if ! mkdir -- "$lock_dir" 2>/dev/null; then
@@ -191,6 +211,8 @@ main() {
         return 1
     fi
     owns_run_lock=1
+
+    ensure_ios_xcframework_present "$repo_root"
 
     echo "[ios-run] Regenerating Xcode project (xcodegen)..."
     (cd "$project_dir" && xcodegen generate) | tail -3
