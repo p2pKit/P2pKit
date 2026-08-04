@@ -124,6 +124,30 @@ class HostSelectorTest {
     }
 
     @Test
+    fun discoverySelectionRejectsLoopbackByDefault() {
+        assertTrue(
+            selectDiscoveryHosts(
+                candidates = listOf(ipv4("127.0.0.1")),
+                allowTestLoopback = false
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun explicitlyEnabledTestSelectionRetainsOnlyBoundedLoopbackCandidates() {
+        val selected = selectDiscoveryHosts(
+            candidates = listOf(
+                ipv4("127.0.0.1"),
+                ipv4("127.0.0.1"),
+                ipv6("::1")
+            ),
+            allowTestLoopback = true
+        )
+
+        assertEquals(listOf("127.0.0.1", ipv6("::1").hostAddress), selected)
+    }
+
+    @Test
     fun ipv4PreferredOverScopedIpv6() {
         // Even a perfectly-routable scoped IPv6 should lose to IPv4.
         val scoped = scopedIpv6("fe80::1", scopeId = 5)

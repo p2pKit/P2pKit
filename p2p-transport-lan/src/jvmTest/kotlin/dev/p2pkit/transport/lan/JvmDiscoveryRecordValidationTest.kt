@@ -4,31 +4,22 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.transport.PeerEvent
-import java.net.Inet4Address
-import java.net.InetAddress
-import java.net.NetworkInterface
-import javax.jmdns.JmDNS
 import javax.jmdns.ServiceInfo
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import kotlin.test.AfterTest
-import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertTrue
-import org.junit.Assume
 
 /**
  * AUDIT-2026-07 (RBS-1) / P1-25 integration leg: crafted-advertiser loopback
  * test for discovery-record input validation in [JvmLanDiscoveryTransport].
  *
- * A separate JmDNS instance (the "crafter") advertises real
- * `_p2pkit._tcp.local.` services with non-conforming TXT records — a
+ * A deterministic callback crafter supplies real [ServiceInfo] values with
+ * non-conforming TXT records — a
  * whitespace-only `pid` value, a record for a different appId, and a
  * service-instance/TXT identity mismatch — alongside conforming ones. The
  * transport under test must:
@@ -42,36 +33,18 @@ import org.junit.Assume
  *    residual without assigning a deterministic deadline to UDP goodbye.
  *
  * JmDNS goodbye delivery is multicast/TTL-timed and cannot provide a stable
- * unit-test clock. [JvmServiceAdmissionsTest] deterministically proves that a
- * TXT-less removal consumes only an exactly admitted service identity, while
- * this test keeps the real multicast parsing and listener-survival coverage.
+ * unit-test clock. [JvmServiceAdmissionsTest] proves exact TXT-less removal
+ * ownership; this test deterministically exercises the production
+ * [ServiceInfo] parsing and listener-survival path.
  *
- * Like [JvmLanLoopbackTest], this depends on multicast working on the test
- * machine and skips (Assume) when no routable IPv4 interface is available.
+ * Like [JvmLanLoopbackTest], this uses the explicitly gated in-process test
+ * discovery path so hosted network topology cannot skip or randomize the
+ * callback sequence. Production discovery remains JmDNS-only.
  */
 class JvmDiscoveryRecordValidationTest {
 
     private val unique = "p2pkit-rbs1-${System.currentTimeMillis()}"
-    private var bindAddress: String? = null
-    private var globalStateLease: JvmGlobalStateTestGuard.Lease? = null
-
-    @BeforeTest
-    fun setup() {
-        val routable = findRoutableIpv4()
-        Assume.assumeTrue(
-            "No routable IPv4 interface available for JmDNS loopback test",
-            routable != null
-        )
-        bindAddress = routable
-        globalStateLease = JvmGlobalStateTestGuard.acquire(JMDNS_BIND_PROPERTY)
-        globalStateLease?.set(JMDNS_BIND_PROPERTY, routable!!)
-    }
-
-    @AfterTest
-    fun teardown() {
-        globalStateLease?.close()
-        globalStateLease = null
-    }
+    private val discoveryBackend = JvmDeterministicDiscoveryTestBackend()
 
     @Test
     fun malformedAndOtherAppRecordsAreSkippedWhileConformingRecordsStillFlow() {
@@ -88,7 +61,7 @@ class JvmDiscoveryRecordValidationTest {
                 platform = Platform.JVM_DESKTOP,
                 tcpPort = 45000
             )
-            val transport = JvmLanDiscoveryTransport(registration)
+            val transport = JvmLanDiscoveryTransport(registration, discoveryBackend)
             val seen = mutableListOf<PeerEvent>()
             val subscribed = CompletableDeferred<Unit>()
             val collector = launch {
@@ -103,9 +76,7 @@ class JvmDiscoveryRecordValidationTest {
             subscribed.await()
             transport.startDiscovery()
 
-            val crafter = withContext(Dispatchers.IO) {
-                JmDNS.create(InetAddress.getByName(bindAddress))
-            }
+            val advertisedInstances = mutableListOf<String>()
             try {
                 val blankPidService = craftedService(
                     instanceName = "blank-pid-$unique",
@@ -135,16 +106,13 @@ class JvmDiscoveryRecordValidationTest {
                     app = unique,
                     deviceName = "Mismatched"
                 )
-                withContext(Dispatchers.IO) {
-                    // Non-conforming records first, so the listener processes
-                    // them before (or alongside) the conforming one — the
-                    // conforming events arriving proves the callback survived
-                    // the malformed input.
-                    crafter.registerService(blankPidService)
-                    crafter.registerService(otherAppService)
-                    crafter.registerService(mismatchedService)
-                    crafter.registerService(conformingService)
-                }
+                // Non-conforming records first, so the listener processes
+                // them before the conforming one. Its arrival proves the
+                // callback survived malformed input.
+                advertise(blankPidService, advertisedInstances)
+                advertise(otherAppService, advertisedInstances)
+                advertise(mismatchedService, advertisedInstances)
+                advertise(conformingService, advertisedInstances)
 
                 // Found path: the conforming record still resolves and emits
                 // even though the blank-pid record went through the same
@@ -159,12 +127,8 @@ class JvmDiscoveryRecordValidationTest {
                 // prove the same listener still accepts a fresh conforming
                 // record. Exact removal ownership is deterministic in
                 // JvmServiceAdmissionsTest rather than coupled to UDP timing.
-                withContext(Dispatchers.IO) {
-                    crafter.unregisterService(blankPidService)
-                    crafter.unregisterService(otherAppService)
-                    crafter.unregisterService(mismatchedService)
-                    crafter.unregisterService(conformingService)
-                }
+                advertisedInstances.toList().forEach(discoveryBackend::withdraw)
+                advertisedInstances.clear()
 
                 // Listener survival after advertiser withdrawal: a fresh
                 // conforming record must still be discovered.
@@ -175,7 +139,7 @@ class JvmDiscoveryRecordValidationTest {
                     app = unique,
                     deviceName = "PostRemoval"
                 )
-                withContext(Dispatchers.IO) { crafter.registerService(postRemovalService) }
+                advertise(postRemovalService, advertisedInstances)
                 awaitCondition {
                     synchronized(seen) {
                         seen.any { it is PeerEvent.Found && pidOf(it) == postRemovalPid }
@@ -196,7 +160,7 @@ class JvmDiscoveryRecordValidationTest {
                     "service-instance/TXT identity mismatch must not emit any event: $snapshot"
                 )
             } finally {
-                withContext(Dispatchers.IO) { runCatching { crafter.close() } }
+                advertisedInstances.forEach(discoveryBackend::withdraw)
                 runCatching { transport.stopDiscovery() }
                 collector.cancel()
             }
@@ -225,6 +189,16 @@ class JvmDiscoveryRecordValidationTest {
         )
     )
 
+    private fun advertise(service: ServiceInfo, advertisedInstances: MutableList<String>) {
+        advertisedInstances += service.name
+        discoveryBackend.advertise(
+            JvmTestDiscoveryAdvertisement(
+                instanceName = service.name,
+                info = service
+            )
+        )
+    }
+
     private suspend fun awaitCondition(condition: () -> Boolean) {
         withTimeout(DISCOVERY_TIMEOUT_MS) {
             while (!condition()) {
@@ -241,20 +215,5 @@ class JvmDiscoveryRecordValidationTest {
 
     private companion object {
         const val DISCOVERY_TIMEOUT_MS: Long = 30_000
-        const val JMDNS_BIND_PROPERTY: String = "dev.p2pkit.test.jmdnsBindAddress"
-
-        /** Mirrors [JvmLanLoopbackTest]'s interface selection. */
-        fun findRoutableIpv4(): String? {
-            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
-            for (iface in interfaces) {
-                if (!iface.isUp || iface.isLoopback) continue
-                for (addr in iface.inetAddresses) {
-                    if (addr !is Inet4Address) continue
-                    if (addr.isLoopbackAddress || addr.isLinkLocalAddress) continue
-                    return addr.hostAddress
-                }
-            }
-            return null
-        }
     }
 }

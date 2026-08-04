@@ -4,8 +4,6 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.dsl.jvmSecureIdentityStore
 import java.io.File
-import java.net.Inet4Address
-import java.net.NetworkInterface
 import java.nio.file.Files
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -15,36 +13,28 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertTrue
-import org.junit.Assume
 
 /**
  * LAN discovery lifetime integration: DNS-SD owns TTL/removal and core does
  * not age a healthy native-browser contribution out after 15 seconds.
  *
- * Exact TXT-less removal ownership is covered without UDP timing in
- * [JvmServiceAdmissionsTest]. Real multicast delivery remains exercised by
- * discovery here, while clean/abrupt departure timing is hostile-network
- * evidence rather than a deterministic unit-test clock.
+ * Exact TXT-less removal ownership is covered in [JvmServiceAdmissionsTest].
+ * This same-process integration uses the gated deterministic discovery
+ * callback path; real multicast and clean/abrupt departure timing remain
+ * hostile-network evidence rather than a deterministic unit-test clock.
  *
- * Like [JvmLanLoopbackTest], this depends on multicast working on the test
- * machine and skips (Assume) when no routable IPv4 interface is available.
+ * Production discovery remains JmDNS-only; the callback backend is supplied
+ * by an internal constructor and an implementation compiled in test sources.
  */
 class JvmLanDiscoveryHeartbeatTest {
 
     private val unique = "p2pkit-dsc1-${System.currentTimeMillis()}"
-    private var bindAddress: String? = null
+    private val discoveryBackend = JvmDeterministicDiscoveryTestBackend()
     private var globalStateLease: JvmGlobalStateTestGuard.Lease? = null
 
     @BeforeTest
     fun setup() {
-        val routable = findRoutableIpv4()
-        Assume.assumeTrue(
-            "No routable IPv4 interface available for JmDNS loopback test",
-            routable != null
-        )
-        bindAddress = routable
-        globalStateLease = JvmGlobalStateTestGuard.acquire(JMDNS_BIND_PROPERTY, "user.home")
-        globalStateLease?.set(JMDNS_BIND_PROPERTY, routable!!)
+        globalStateLease = JvmGlobalStateTestGuard.acquire("user.home")
     }
 
     private val toStop = mutableListOf<P2pKit>()
@@ -66,7 +56,7 @@ class JvmLanDiscoveryHeartbeatTest {
     }
 
     /**
-     * Two full kits over real mDNS + loopback-adjacent multicast, no connect
+     * Two full kits over deterministic discovery callbacks, no connect
      * activity at all:
      *
      *  1. Bob stays in Alice's `kit.peers` at t = 20 s and t = 35 s idle —
@@ -111,7 +101,7 @@ class JvmLanDiscoveryHeartbeatTest {
         deviceName = name
         jvmSecureIdentityStore(InMemoryTestJvmSecureIdentityStore())
         transports {
-            lan()
+            register(JvmDeterministicLanTestFactory(discoveryBackend))
         }
     }
 
@@ -136,21 +126,5 @@ class JvmLanDiscoveryHeartbeatTest {
 
     private companion object {
         const val DISCOVERY_TIMEOUT_MS: Long = 30_000
-
-        const val JMDNS_BIND_PROPERTY: String = "dev.p2pkit.test.jmdnsBindAddress"
-
-        /** Mirrors [JvmLanLoopbackTest]'s interface selection. */
-        fun findRoutableIpv4(): String? {
-            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
-            for (iface in interfaces) {
-                if (!iface.isUp || iface.isLoopback) continue
-                for (addr in iface.inetAddresses) {
-                    if (addr !is Inet4Address) continue
-                    if (addr.isLoopbackAddress || addr.isLinkLocalAddress) continue
-                    return addr.hostAddress
-                }
-            }
-            return null
-        }
     }
 }

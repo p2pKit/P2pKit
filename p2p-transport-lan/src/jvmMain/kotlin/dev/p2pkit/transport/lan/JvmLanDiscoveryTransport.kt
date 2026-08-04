@@ -80,6 +80,30 @@ internal class JvmServiceAdmissions {
     }
 }
 
+/** One process-local advertisement accepted by the internal test backend seam. */
+internal data class JvmTestDiscoveryAdvertisement(
+    val instanceName: String,
+    val info: ServiceInfo,
+    val candidates: List<InetAddress> = listOf(InetAddress.getLoopbackAddress())
+)
+
+/**
+ * Internal constructor seam for deterministic JVM integration tests. The
+ * implementation lives in `jvmTest`, so production artifacts contain no
+ * process-local discovery bus and expose no switch that can activate one.
+ */
+internal interface JvmTestDiscoveryBackend {
+    fun advertise(advertisement: JvmTestDiscoveryAdvertisement)
+    fun withdraw(instanceName: String)
+    fun subscribe(
+        localPeerId: PeerId,
+        resolved: (JvmTestDiscoveryAdvertisement) -> Unit,
+        removed: (String) -> Unit
+    )
+    fun unsubscribe(localPeerId: PeerId)
+    fun refresh(localPeerId: PeerId)
+}
+
 /**
  * [DiscoveryTransport] backed by JmDNS for service registration and browsing.
  *
@@ -96,8 +120,11 @@ internal class JvmServiceAdmissions {
  *     and lazily created on first use; closed when both sides have stopped.
  */
 internal class JvmLanDiscoveryTransport(
-    private val registration: LanServiceRegistration
+    private val registration: LanServiceRegistration,
+    private val testDiscoveryBackend: JvmTestDiscoveryBackend? = null
 ) : DiscoveryTransport {
+
+    private val allowTestLoopbackCandidates: Boolean = testDiscoveryBackend != null
 
     override val type: TransportKind = TransportKind.LAN
 
@@ -127,15 +154,100 @@ internal class JvmLanDiscoveryTransport(
     /** Service-instance ownership admitted only after full record validation. */
     private val serviceAdmissions = JvmServiceAdmissions()
 
-    override suspend fun startAdvertising(localPeer: LocalPeerInfo) =
-        coordinator.startAdvertising(localPeer)
+    private val testLifecycleLock = Any()
+    private var testAdvertising: Boolean = false
+    private var testListenerLease: JvmListenerLease? = null
 
-    override suspend fun stopAdvertising() = coordinator.stopAdvertising()
+    override suspend fun startAdvertising(localPeer: LocalPeerInfo) {
+        val backend = testDiscoveryBackend
+        if (backend == null) {
+            coordinator.startAdvertising(localPeer)
+            return
+        }
+        val info = buildServiceInfo(localPeer)
+        val shouldAdvertise = synchronized(testLifecycleLock) {
+            if (testAdvertising) false else {
+                testAdvertising = true
+                true
+            }
+        }
+        if (shouldAdvertise) {
+            try {
+                backend.advertise(
+                    JvmTestDiscoveryAdvertisement(
+                        instanceName = registration.localPeerId.value,
+                        info = info
+                    )
+                )
+            } catch (error: Throwable) {
+                synchronized(testLifecycleLock) { testAdvertising = false }
+                throw error
+            }
+        }
+    }
 
-    override suspend fun startDiscovery() = coordinator.startDiscovery()
+    override suspend fun stopAdvertising() {
+        val backend = testDiscoveryBackend
+        if (backend == null) {
+            coordinator.stopAdvertising()
+            return
+        }
+        val shouldWithdraw = synchronized(testLifecycleLock) {
+            val wasAdvertising = testAdvertising
+            testAdvertising = false
+            wasAdvertising
+        }
+        if (shouldWithdraw) {
+            backend.withdraw(registration.localPeerId.value)
+        }
+    }
+
+    override suspend fun startDiscovery() {
+        val backend = testDiscoveryBackend
+        if (backend == null) {
+            coordinator.startDiscovery()
+            return
+        }
+        val lease = synchronized(testLifecycleLock) {
+            if (testListenerLease != null) null else JvmListenerLease().also {
+                testListenerLease = it
+            }
+        } ?: return
+        try {
+            backend.subscribe(
+                localPeerId = registration.localPeerId,
+                resolved = { advertisement ->
+                    processResolvedService(
+                        instanceName = advertisement.instanceName,
+                        info = advertisement.info,
+                        candidates = advertisement.candidates,
+                        lease = lease
+                    )
+                },
+                removed = { instanceName -> processRemovedService(instanceName, lease) }
+            )
+        } catch (error: Throwable) {
+            lease.deactivate()
+            synchronized(testLifecycleLock) {
+                if (testListenerLease === lease) testListenerLease = null
+            }
+            throw error
+        }
+    }
 
     override suspend fun stopDiscovery() {
-        coordinator.stopDiscovery()
+        val backend = testDiscoveryBackend
+        if (backend == null) {
+            coordinator.stopDiscovery()
+        } else {
+            val lease = synchronized(testLifecycleLock) {
+                testListenerLease.also { testListenerLease = null }
+            }
+            if (lease != null) {
+                lease.deactivate()
+                backend.unsubscribe(registration.localPeerId)
+            }
+        }
         serviceAdmissions.drain().forEach { _events.tryEmit(PeerEvent.Lost(it)) }
     }
 
@@ -186,56 +298,72 @@ internal class JvmLanDiscoveryTransport(
             }
 
             override fun serviceRemoved(event: ServiceEvent) {
-                lease.publishIfActive {
-                    val peerId = serviceAdmissions.remove(event.name, lease)
-                        ?: return@publishIfActive
-                    JvmLanDiag.log(
-                        "browse",
-                        "serviceRemoved instance=${event.name} " +
-                            "pid=${peerId.value.take(8)} — emitting Lost"
-                    )
-                    _events.tryEmit(PeerEvent.Lost(peerId))
-                }
+                processRemovedService(event.name, lease)
             }
 
             override fun serviceResolved(event: ServiceEvent) {
                 if (!lease.isActive()) return
                 val info = event.info ?: return
-                val record = validatedRecord(info) ?: return
-                if (event.name != record.peerId.value || info.name != record.peerId.value) {
-                    JvmLanDiag.log("browse", "serviceResolved: service/TXT identity mismatch — skipping")
-                    return
-                }
-                // Issue #2: log every advertised address and the ordered,
-                // bounded candidates retained for fallback. A peer that only
-                // advertises non-routable addresses (e.g. an unscoped fe80::)
-                // shows up here as "no routable host".
-                val candidates = info.inetAddresses.toList()
-                val hosts = selectRoutableHosts(candidates, localLanInterfaceAddresses())
-                if (hosts.isEmpty()) {
-                    JvmLanDiag.log(
-                        "browse",
-                        "serviceResolved pid=${record.peerId.value.take(8)} name=${record.deviceName} " +
-                            "candidates=[${candidates.joinToString(",") { it.hostAddress }}] " +
-                            "— NO routable host, skipping (will re-fire)"
-                    )
-                    return
-                }
-                val port = info.port
-                if (port !in 1..65_535) return
-                val internalPeer = record.toInternalPeer(lanTransportHints(hosts, port))
-                lease.publishIfActive {
-                    serviceAdmissions.admit(event.name, record.peerId, lease)
-                    JvmLanDiag.log(
-                        "browse",
-                        "serviceResolved pid=${record.peerId.value.take(8)} " +
-                            "name=${record.deviceName} plat=${record.platform} " +
-                            "candidates=[${candidates.joinToString(",") { it.hostAddress }}] " +
-                            "ordered=${hosts.joinToString(",") { "$it:$port" }} — emitting PeerEvent.Found"
-                    )
-                    _events.tryEmit(PeerEvent.Found(internalPeer))
-                }
+                processResolvedService(event.name, info, info.inetAddresses.toList(), lease)
             }
+    }
+
+    private fun processRemovedService(instanceName: String, lease: JvmListenerLease) {
+        lease.publishIfActive {
+            val peerId = serviceAdmissions.remove(instanceName, lease)
+                ?: return@publishIfActive
+            JvmLanDiag.log(
+                "browse",
+                "serviceRemoved instance=$instanceName " +
+                    "pid=${peerId.value.take(8)} — emitting Lost"
+            )
+            _events.tryEmit(PeerEvent.Lost(peerId))
+        }
+    }
+
+    private fun processResolvedService(
+        instanceName: String,
+        info: ServiceInfo,
+        candidates: List<InetAddress>,
+        lease: JvmListenerLease
+    ) {
+        if (!lease.isActive()) return
+        val record = validatedRecord(info) ?: return
+        if (instanceName != record.peerId.value || info.name != record.peerId.value) {
+            JvmLanDiag.log("browse", "serviceResolved: service/TXT identity mismatch — skipping")
+            return
+        }
+        // Issue #2: log every advertised address and the ordered, bounded
+        // candidates retained for fallback. A peer that only advertises
+        // non-routable addresses shows up here as "no routable host".
+        val hosts = selectDiscoveryHosts(
+            candidates = candidates,
+            localAddresses = localLanInterfaceAddresses(),
+            allowTestLoopback = allowTestLoopbackCandidates
+        )
+        if (hosts.isEmpty()) {
+            JvmLanDiag.log(
+                "browse",
+                "serviceResolved pid=${record.peerId.value.take(8)} name=${record.deviceName} " +
+                    "candidates=[${candidates.joinToString(",") { it.hostAddress }}] " +
+                    "— NO routable host, skipping (will re-fire)"
+            )
+            return
+        }
+        val port = info.port
+        if (port !in 1..65_535) return
+        val internalPeer = record.toInternalPeer(lanTransportHints(hosts, port))
+        lease.publishIfActive {
+            serviceAdmissions.admit(instanceName, record.peerId, lease)
+            JvmLanDiag.log(
+                "browse",
+                "serviceResolved pid=${record.peerId.value.take(8)} " +
+                    "name=${record.deviceName} plat=${record.platform} " +
+                    "candidates=[${candidates.joinToString(",") { it.hostAddress }}] " +
+                    "ordered=${hosts.joinToString(",") { "$it:$port" }} — emitting PeerEvent.Found"
+            )
+            _events.tryEmit(PeerEvent.Found(internalPeer))
+        }
     }
 
     /**
@@ -260,7 +388,9 @@ internal class JvmLanDiscoveryTransport(
      * dead until a full stopDiscovery/startDiscovery cycle. With add-first
      * ordering every failure path leaves at least one listener registered.
      */
-    override suspend fun refresh(): Unit = coordinator.refreshDiscovery { handle ->
+    override suspend fun refresh(): Unit = if (testDiscoveryBackend != null) {
+        testDiscoveryBackend.refresh(registration.localPeerId)
+    } else coordinator.refreshDiscovery { handle ->
         val cached = withContext(Dispatchers.IO) {
             runCatching { handle.list(registration.serviceTypeJmdns, JMDNS_LIST_SNAPSHOT_TIMEOUT_MS) }
                 .getOrDefault(emptyArray())
@@ -277,7 +407,7 @@ internal class JvmLanDiscoveryTransport(
     private fun buildLifecycleOps(): JmdnsLifecycleOps<String, JmDNS> =
         object : JmdnsLifecycleOps<String, JmDNS> {
             override fun createHandleBlocking(target: String?, forRebind: Boolean): JmDNS {
-                val bindAddress = System.getProperty("dev.p2pkit.test.jmdnsBindAddress")
+                val bindAddress = System.getProperty(TEST_JMDNS_BIND_PROPERTY)
                 JvmLanDiag.log(
                     "bind",
                     "ensureJmdns: " +
@@ -422,6 +552,29 @@ internal data class LanInterfaceAddress(
     val address: InetAddress,
     val prefixLength: Int
 )
+
+internal const val TEST_JMDNS_BIND_PROPERTY: String = "dev.p2pkit.test.jmdnsBindAddress"
+
+/**
+ * Apply production routing policy, with a constructor-injected loopback path
+ * for same-host integration tests. The injection interface and implementation
+ * are internal/test-only; production callers always reject loopback discovery
+ * candidates.
+ */
+internal fun selectDiscoveryHosts(
+    candidates: List<InetAddress>,
+    localAddresses: List<LanInterfaceAddress> = emptyList(),
+    allowTestLoopback: Boolean = false
+): List<String> {
+    val routable = selectRoutableHosts(candidates, localAddresses)
+    if (!allowTestLoopback) return routable
+    return (routable + candidates.asSequence()
+        .filter { it.isLoopbackAddress }
+        .map { it.hostAddress }
+        .toList())
+        .distinct()
+        .take(LanConstants.MAX_DIAL_CANDIDATES)
+}
 
 /**
  * Return every safe candidate in deterministic dial order. When local

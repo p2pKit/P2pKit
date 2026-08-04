@@ -19,10 +19,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import java.io.File
-import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.file.Files
@@ -34,42 +32,33 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
-import org.junit.Assume
 
 /**
  * Integration test: two [P2pKit] instances on `127.0.0.1`, both using the
- * `lan()` transport, discover each other via mDNS and exchange messages over
- * TCP.
+ * real JVM LAN data transport, discover each other via deterministic
+ * production-parser callbacks, and exchange messages over real TCP.
  *
- * This test depends on multicast working on the test machine (UDP 5353 to
- * 224.0.0.251). Most desktops are fine; corporate or hardened networks may
- * block multicast even on loopback. Allow up to 30 s for discovery.
+ * The test exercises real TCP, secure-v2, message, and durable-transfer paths.
+ * Real multicast remains a physical/hostile-network validation because hosted
+ * macOS networks do not reliably reflect mDNS. Production discovery remains
+ * JmDNS-only; the callback backend implementation is test-source-only.
  */
 @OptIn(ExplicitSecurityRisk::class)
 @Suppress("DEPRECATION")
 class JvmLanLoopbackTest {
 
     private val unique = "p2pkit-itest-${System.currentTimeMillis()}"
+    private val discoveryBackend = JvmDeterministicDiscoveryTestBackend()
     private var globalStateLease: JvmGlobalStateTestGuard.Lease? = null
 
     /**
-     * Pin JmDNS to a routable IPv4 interface for these tests. On macOS,
-     * `InetAddress.getLocalHost()` resolves to 127.0.0.1 when the machine's
-     * `.local` hostname isn't published on the LAN; JmDNS then binds to the
-     * loopback interface and `selectRoutableHost` (in production code) drops
-     * the resulting hints because they're loopback addresses. Pinning to a
-     * non-loopback IPv4 sidesteps that and gives the test a deterministic
-     * interface to discover on. Production callers don't set this property.
+     * Select the process-local callback backend so hosted CI does not depend
+     * on its virtual LAN reflecting multicast. The production path remains
+     * unchanged because only an internal constructor accepts this backend.
      */
     @BeforeTest
     fun setupBindAddress() {
-        val routable = findRoutableIpv4()
-        Assume.assumeTrue(
-            "No routable IPv4 interface available for JmDNS loopback test",
-            routable != null
-        )
-        globalStateLease = JvmGlobalStateTestGuard.acquire(JMDNS_BIND_PROPERTY, "user.home")
-        globalStateLease?.set(JMDNS_BIND_PROPERTY, routable!!)
+        globalStateLease = JvmGlobalStateTestGuard.acquire("user.home")
     }
 
     private fun newKit(name: String): P2pKit = P2pKit.create {
@@ -86,7 +75,7 @@ class JvmLanLoopbackTest {
             timeoutMillis = 120_000
         }
         transports {
-            lan()
+            register(JvmDeterministicLanTestFactory(discoveryBackend))
         }
     }
 
@@ -330,26 +319,5 @@ class JvmLanLoopbackTest {
         const val HANDSHAKE_TIMEOUT_MS: Long = 10_000
         const val MESSAGE_TIMEOUT_MS: Long = 10_000
         const val FILE_TRANSFER_TIMEOUT_MS: Long = 60_000
-        const val JMDNS_BIND_PROPERTY: String = "dev.p2pkit.test.jmdnsBindAddress"
-
-        /**
-         * First IPv4 address on an up, non-loopback interface, excluding
-         * link-local (169.254/16) which JmDNS multicast doesn't reliably
-         * traverse on macOS. Returns `null` when no such interface exists
-         * (CI sandboxes with only loopback, network-off laptops); the
-         * caller skips the test in that case.
-         */
-        fun findRoutableIpv4(): String? {
-            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
-            for (iface in interfaces) {
-                if (!iface.isUp || iface.isLoopback) continue
-                for (addr in iface.inetAddresses) {
-                    if (addr !is Inet4Address) continue
-                    if (addr.isLoopbackAddress || addr.isLinkLocalAddress) continue
-                    return addr.hostAddress
-                }
-            }
-            return null
-        }
     }
 }
