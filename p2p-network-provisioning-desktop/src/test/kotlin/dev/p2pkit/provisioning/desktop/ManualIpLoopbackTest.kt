@@ -10,6 +10,7 @@ import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.dsl.jvmSecureIdentityStore
 import dev.p2pkit.transport.lan.lan
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
@@ -87,11 +88,13 @@ class ManualIpLoopbackTest {
         )
 
         // Subscribe BEFORE connect so we don't miss Alice's incoming-session emission.
+        val incomingSubscribed = CompletableDeferred<Unit>()
         val incomingDeferred = async {
             alice.incomingSessions
-                .onSubscription { /* subscribed */ }
+                .onSubscription { incomingSubscribed.complete(Unit) }
                 .first()
         }
+        withTimeout(5_000) { incomingSubscribed.await() }
 
         val outgoing = withTimeout(10_000) { bob.connect(syntheticPeer) }
         val incoming = withTimeout(10_000) { incomingDeferred.await() }
@@ -100,9 +103,13 @@ class ManualIpLoopbackTest {
         assertEquals(aliceInfo.fingerprint, outgoing.peerIdentity.fingerprint)
 
         // Round-trip a Text message in each direction.
+        val messageSubscribed = CompletableDeferred<Unit>()
         val incomingMessageDeferred = async {
-            incoming.incoming.onSubscription { }.first()
+            incoming.incoming
+                .onSubscription { messageSubscribed.complete(Unit) }
+                .first()
         }
+        withTimeout(5_000) { messageSubscribed.await() }
         outgoing.send(P2pMessage.Text("hello from Bob"))
         val received = withTimeout(5_000) { incomingMessageDeferred.await() }
         val text = assertIs<P2pMessage.Text>(received)
