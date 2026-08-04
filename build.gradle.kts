@@ -11,6 +11,50 @@ import org.cyclonedx.gradle.CyclonedxDirectTask
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 import java.util.Base64
 
+// Plugin DSL dependencies resolve before the allprojects rules below exist.
+// Apply the same advisory floors to the root build classpath so build tools
+// cannot execute an older vulnerable transitive dependency in trusted CI.
+buildscript {
+    configurations.configureEach {
+        resolutionStrategy.eachDependency {
+            val requestedGroup = requested.group ?: return@eachDependency
+            val requestedModule = "$requestedGroup:${requested.name}"
+            val minimumVersion = when (requestedGroup) {
+                "org.bouncycastle" -> "1.85"
+                else -> mapOf(
+                    "com.fasterxml.jackson.core:jackson-core" to "2.21.5",
+                    "com.fasterxml.jackson.core:jackson-databind" to "2.21.5",
+                    "org.bitbucket.b_c:jose4j" to "0.9.6",
+                    "org.jdom:jdom2" to "2.0.6.1",
+                )[requestedModule]
+            }
+            if (minimumVersion != null) {
+                val numericComponent = Regex("\\d+")
+                val requestedParts = numericComponent.findAll(requested.version.orEmpty())
+                    .mapNotNull { it.value.toIntOrNull() }
+                    .toList()
+                val minimumParts = numericComponent.findAll(minimumVersion)
+                    .mapNotNull { it.value.toIntOrNull() }
+                    .toList()
+                val requestedIsBelow = requestedParts.isEmpty() ||
+                    (0 until maxOf(requestedParts.size, minimumParts.size)).firstNotNullOfOrNull { index ->
+                        val requestedPart = requestedParts.getOrElse(index) { 0 }
+                        val minimumPart = minimumParts.getOrElse(index) { 0 }
+                        when {
+                            requestedPart < minimumPart -> true
+                            requestedPart > minimumPart -> false
+                            else -> null
+                        }
+                    } == true
+                if (requestedIsBelow) {
+                    useVersion(minimumVersion)
+                    because("ENV-06 root build-plugin advisory minimum")
+                }
+            }
+        }
+    }
+}
+
 plugins {
     alias(libs.plugins.kotlin.multiplatform) apply false
     alias(libs.plugins.kotlin.jvm) apply false
@@ -123,6 +167,54 @@ allprojects {
     }
 }
 
+val verifyBuildPluginSecurityFloors = tasks.register("verifyBuildPluginSecurityFloors") {
+    group = "verification"
+    description = "Fails when the trusted root build classpath resolves below an advisory floor."
+    doLast {
+        val required = setOf(
+            "com.fasterxml.jackson.core:jackson-core",
+            "com.fasterxml.jackson.core:jackson-databind",
+            "org.bitbucket.b_c:jose4j",
+            "org.bouncycastle:bcpkix-jdk18on",
+            "org.bouncycastle:bcprov-jdk18on",
+            "org.jdom:jdom2",
+        )
+        val checked = mutableSetOf<String>()
+        val violations = mutableListOf<String>()
+        buildscript.configurations.getByName("classpath")
+            .incoming.resolutionResult.allComponents
+            .mapNotNull { it.id as? org.gradle.api.artifacts.component.ModuleComponentIdentifier }
+            .forEach { component ->
+                val module = "${component.group}:${component.module}"
+                val minimum = when (component.group) {
+                    "org.bouncycastle" -> "1.85"
+                    else -> advisoryMinimumVersions[module]
+                }
+                if (minimum != null) {
+                    checked += module
+                    if (isVersionBelow(component.version, minimum)) {
+                        violations += "$module:${component.version} < $minimum"
+                    }
+                }
+            }
+        check(checked.containsAll(required)) {
+            "Root build-plugin security verification did not resolve: ${(required - checked).sorted()}"
+        }
+        check(violations.isEmpty()) {
+            "Root build-plugin advisory floors failed: ${violations.sorted()}"
+        }
+        logger.lifecycle("Root build-plugin advisory floors verified for ${checked.size} modules")
+    }
+}
+
+// `./gradlew check` is the repository's standard gate. Give the root project a
+// check task so plugin-classpath verification runs alongside every subproject.
+tasks.register("check") {
+    group = "verification"
+    description = "Runs root build-tool security verification."
+    dependsOn(verifyBuildPluginSecurityFloors)
+}
+
 val resolveAndLockRequested = gradle.startParameter.taskNames.any {
     it == "resolveAndLockAll" || it.endsWith(":resolveAndLockAll")
 }
@@ -139,6 +231,7 @@ tasks.register("resolveAndLockAll") {
         }
     }
     dependsOn(
+        verifyBuildPluginSecurityFloors,
         "cyclonedxBom",
         ":p2p-core:check",
         ":p2p-transport-lan:check",
