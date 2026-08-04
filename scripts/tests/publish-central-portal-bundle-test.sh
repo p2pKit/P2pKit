@@ -24,6 +24,9 @@ run_case() {
     rm -rf "$WORK_DIR/state" "$WORK_DIR/evidence-$name"
     mkdir -p "$WORK_DIR/state"
     set +e
+    # The runner interprets add-mask commands only when they reach its stdout.
+    # This fixture captures subprocess output to a file, where an add-mask
+    # command would instead be raw synthetic credential material.
     PATH="$WORK_DIR/bin:$PATH" \
         FAKE_CENTRAL_STATE_DIR="$WORK_DIR/state" \
         FAKE_CENTRAL_UPLOAD_MODE="$upload_mode" \
@@ -32,6 +35,7 @@ run_case() {
         P2PKIT_CENTRAL_TEST_MODE=1 \
         P2PKIT_CENTRAL_POLL_SECONDS=0 \
         P2PKIT_CENTRAL_MAX_POLLS="$max_polls" \
+        GITHUB_ACTIONS=false \
         MAVEN_CENTRAL_USERNAME="$USERNAME" \
         MAVEN_CENTRAL_PASSWORD="$PASSWORD" \
         GITHUB_SHA="$COMMIT" \
