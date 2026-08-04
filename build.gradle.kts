@@ -67,19 +67,26 @@ plugins {
     alias(libs.plugins.cyclonedx)
 }
 
-abstract class AppleSimulatorTestService : BuildService<BuildServiceParameters.None>
+abstract class NetworkIntegrationTestService : BuildService<BuildServiceParameters.None>
 
-val appleSimulatorTestService = gradle.sharedServices.registerIfAbsent(
-    "appleSimulatorTests",
-    AppleSimulatorTestService::class,
+val networkIntegrationTestService = gradle.sharedServices.registerIfAbsent(
+    "networkIntegrationTests",
+    NetworkIntegrationTestService::class,
 ) {
     // Kotlin/Native test binaries share one simulator host and process-global
-    // Apple services. Cross-module overlap caused immediate raw-channel churn
-    // and Bonjour lifecycle timeouts even though each complete suite passed
-    // alone. Serialize execution, while leaving compilation and other targets
-    // parallel, so the repository gate has one deterministic simulator owner.
+    // Apple services. Real JVM LAN suites also share one host interface,
+    // multicast group, and JmDNS lifecycle. Cross-task overlap caused raw-
+    // channel churn and multicast/TCP timeouts even though every complete
+    // suite passed alone. Serialize only those integration-test tasks while
+    // leaving compilation and deterministic non-network tests parallel.
     maxParallelUsages.set(1)
 }
+
+val serializedJvmNetworkTestTasks = mapOf(
+    ":p2p-transport-lan" to setOf("jvmTest"),
+    ":sample-kmp-shared" to setOf("jvmTest"),
+    ":p2p-network-provisioning-desktop" to setOf("test"),
+)
 
 // ENV-06: build, documentation, and test plugins bring their own dependency
 // graphs, which are not part of the published SDK SBOM but still execute in
@@ -275,8 +282,11 @@ tasks.cyclonedxBom {
 subprojects {
     val sub = this
 
-    tasks.matching { it.name == "iosSimulatorArm64Test" }.configureEach {
-        usesService(appleSimulatorTestService)
+    tasks.matching {
+        it.name == "iosSimulatorArm64Test" ||
+            it.name in serializedJvmNetworkTestTasks[sub.path].orEmpty()
+    }.configureEach {
+        usesService(networkIntegrationTestService)
     }
 
     // REL-GATE-01 (BUILD-14): warnings are regressions, not informational
