@@ -2,6 +2,7 @@ package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
@@ -20,6 +21,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -211,6 +213,7 @@ class IosLanLifecycleTest {
     }
 
     @Test
+    @OptIn(ExperimentalP2pApi::class)
     fun cleanRemoteKitStopClosesSessionWithoutReconnect() {
         // A normal kit stop sends a CLOSE frame. That frame is authoritative
         // even when reconnect is enabled, so the exact terminal outcome is
@@ -218,10 +221,17 @@ class IosLanLifecycleTest {
         runBlocking {
             val alice = newKitWithReconnect("Alice")
             val bob = newKitWithReconnect("Bob")
-            alice.startAdvertising(); alice.startDiscovery()
-            bob.startAdvertising(); bob.startDiscovery()
+            alice.start()
+            bob.start()
 
-            val bobPeer = alice.awaitPeer(bob)
+            // This test owns the CLOSE/reconnect contract, not Bonjour. Dial
+            // Bob's real NWListener over loopback so virtual-host multicast
+            // timing cannot delay Bob's otherwise clean stop.
+            val bobInfo = assertNotNull(bob.networkProvisioning.getManualConnectionInfo())
+            val bobPeer = alice.networkProvisioning.createManualPeer(
+                host = "127.0.0.1",
+                port = bobInfo.port
+            )
             val session = withTimeout(HANDSHAKE_TIMEOUT_MS) { alice.connect(bobPeer) }
             withTimeout(HANDSHAKE_TIMEOUT_MS) {
                 session.state.first { it == ConnectionState.Connected }
@@ -254,6 +264,9 @@ class IosLanLifecycleTest {
             }
             transports {
                 lan()
+            }
+            networkProvisioning {
+                iosManualIp()
             }
         }
         toStop.add(kit)
