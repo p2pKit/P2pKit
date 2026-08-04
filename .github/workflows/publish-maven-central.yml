@@ -35,6 +35,11 @@ jobs:
       - name: Configure Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
 
+      - name: Install pinned XcodeGen
+        run: |
+          xcodegen_bin_dir="$(scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen")"
+          echo "$xcodegen_bin_dir" >> "$GITHUB_PATH"
+
       - name: Install Android SDK platforms
         run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36'
 
@@ -56,6 +61,7 @@ jobs:
           scripts/tests/check-maven-central-version-test.sh
           scripts/tests/publish-central-portal-bundle-test.sh
           scripts/tests/build-central-portal-bundle-test.sh
+          scripts/tests/install-xcodegen-test.sh
           scripts/tests/release-workflow-test.sh
 
       - name: Run complete release gate

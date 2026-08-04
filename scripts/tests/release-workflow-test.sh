@@ -6,6 +6,7 @@ WORKFLOW="$ROOT/.github/workflows/publish-maven-central.yml"
 CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 DRY_RUN_WORKFLOW="$ROOT/.github/workflows/release-dry-run.yml"
 ANDROID_LOCK="$ROOT/p2p-sample-android/gradle.lockfile"
+XCODEGEN_INSTALLER="$ROOT/scripts/install-xcodegen.sh"
 
 [[ -f "$WORKFLOW" ]] || { echo "FATAL: Maven Central workflow is missing" >&2; exit 1; }
 ruby -e 'require "yaml"; YAML.safe_load_file(ARGV.fetch(0), aliases: true)' "$WORKFLOW"
@@ -76,7 +77,20 @@ for workflow in "$CI_WORKFLOW" "$DRY_RUN_WORKFLOW" "$WORKFLOW"; do
         echo "FATAL: workflow requests unavailable Android API-37 platform: $workflow" >&2
         exit 1
     fi
+    grep -Fq 'scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen"' "$workflow" || {
+        echo "FATAL: workflow does not install the pinned XcodeGen tool: $workflow" >&2
+        exit 1
+    }
 done
+
+grep -Fq 'XCODEGEN_VERSION="2.45.4"' "$XCODEGEN_INSTALLER" || {
+    echo "FATAL: XcodeGen installer version is not pinned" >&2
+    exit 1
+}
+grep -Fq 'XCODEGEN_SHA256="090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef"' "$XCODEGEN_INSTALLER" || {
+    echo "FATAL: XcodeGen installer checksum is not pinned" >&2
+    exit 1
+}
 
 grep -Fq '"io.netty" -> "4.1.136.Final"' "$ROOT/build.gradle.kts" || {
     echo "FATAL: Netty advisory floor is not 4.1.136.Final" >&2
