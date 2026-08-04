@@ -68,6 +68,38 @@ resolve_simulator_udid() {
     esac
 }
 
+select_latest_available_simulator_udid() {
+    local requested_name="$1"
+    local device_json="$2"
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "[ios-run] FATAL: jq is required to select a CI simulator runtime." >&2
+        return 1
+    fi
+
+    jq -er --arg name "$requested_name" '
+        [
+            .devices
+            | to_entries[]
+            | select(.key | test("\\.SimRuntime\\.iOS-[0-9-]+$"))
+            | (
+                .key
+                | capture("iOS-(?<version>[0-9-]+)$").version
+                | split("-")
+                | map(tonumber)
+              ) as $version
+            | .value[]
+            | select(.name == $name and .isAvailable != false)
+            | {version: $version, udid: .udid}
+        ]
+        | if length == 0 then
+              error("no available iOS simulator named \($name)")
+          else
+              sort_by([.version, .udid]) | last.udid
+          end
+    ' <<< "$device_json"
+}
+
 create_ios_run_dir() {
     local build_root="$1"
     mkdir -p -- "$build_root"

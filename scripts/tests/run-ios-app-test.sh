@@ -57,6 +57,27 @@ assert_fails \
     "unavailable UDID is rejected" \
     resolve_simulator_udid "iPhone 17" "44444444-4444-4444-4444-444444444444" "$DEVICE_LIST"
 
+DEVICE_JSON="$(printf '%s\n' \
+    '{"devices":{' \
+    '"com.apple.CoreSimulator.SimRuntime.iOS-25-4":[' \
+    "{\"name\":\"iPhone 17\",\"udid\":\"$UUID_PHONE_17_A\",\"isAvailable\":true}]," \
+    '"com.apple.CoreSimulator.SimRuntime.iOS-26-0":[' \
+    "{\"name\":\"iPhone 17\",\"udid\":\"$UUID_PHONE_17_B\",\"isAvailable\":true}]," \
+    '"com.apple.CoreSimulator.SimRuntime.iOS-27-0":[' \
+    '{"name":"iPhone 17","udid":"44444444-4444-4444-4444-444444444444","isAvailable":false}],' \
+    '"com.apple.CoreSimulator.SimRuntime.tvOS-27-0":[' \
+    '{"name":"iPhone 17","udid":"55555555-5555-5555-5555-555555555555","isAvailable":true}]' \
+    '}}')"
+
+assert_equal \
+    "$UUID_PHONE_17_B" \
+    "$(select_latest_available_simulator_udid "iPhone 17" "$DEVICE_JSON")" \
+    "newest available iOS runtime selection"
+
+assert_fails \
+    "missing CI simulator name is rejected" \
+    select_latest_available_simulator_udid "iPhone 18" "$DEVICE_JSON"
+
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-ios-run-test.XXXXXX")"
 trap 'rm -rf -- "$TMP_ROOT"' EXIT
 RUN_A="$(create_ios_run_dir "$TMP_ROOT")"
@@ -73,4 +94,4 @@ release_ios_run_lock "$LOCK_DIR"
 acquire_ios_run_lock "$LOCK_DIR"
 release_ios_run_lock "$LOCK_DIR"
 
-echo "run-ios-app tests: 7 passed"
+echo "run-ios-app tests: 9 passed"
