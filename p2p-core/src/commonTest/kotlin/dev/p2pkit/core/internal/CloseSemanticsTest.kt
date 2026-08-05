@@ -14,12 +14,15 @@ import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.transport.RawConnection
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Runnable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +34,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
+import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -48,6 +52,47 @@ import kotlin.test.assertTrue
  * writer.
  */
 class CloseSemanticsTest {
+
+    @Test
+    fun closeAttemptsFrameBeforeParentDispatcherSchedulesChildren() = runBlocking {
+        val dispatcher = QueuedDispatcher()
+        val connection = RecordingCloseFrameConnection()
+        val supervisor = SupervisorJob()
+        val session = P2pSessionImpl(
+            id = "close-dispatch-admission",
+            peer = Peer(
+                id = PeerId("test-close-dispatch-admission"),
+                name = "Test",
+                platform = Platform.JVM_DESKTOP,
+                supportedTransports = setOf(TransportKind.LAN)
+            ),
+            initialConnection = connection,
+            initialEvents = Channel(Channel.UNLIMITED),
+            protocol = DefaultP2pProtocol(clock = { systemTimeMillis() }),
+            parentScope = CoroutineScope(dispatcher + supervisor),
+            keepAlive = KeepAliveConfig(60_000, 120_000),
+            clock = { systemTimeMillis() },
+            logger = P2pLogger.NoOp
+        )
+
+        // Safety release for the pre-fix behavior: its normally-started
+        // CLOSE child remains queued until after the internal two-second
+        // join window. The corrected undispatched child never needs this.
+        val releaseQueuedWork = launch {
+            delay(2_100)
+            dispatcher.runQueued()
+        }
+        try {
+            withTimeout(6_000) { session.close() }
+            assertEquals(1, connection.writeAttempts)
+            assertEquals(ConnectionState.Closed, session.state.value)
+            assertEquals(ConnectionState.Closed, connection.state.value)
+        } finally {
+            releaseQueuedWork.cancel()
+            dispatcher.runQueued()
+            supervisor.cancel()
+        }
+    }
 
     @Test
     fun closeReturnsPromptlyAndClosesConnectionWhenCloseFrameWriteWedges() {
@@ -287,6 +332,39 @@ class CloseSemanticsTest {
             connection.releaseWrite.complete(Unit)
             supervisor.cancel()
         }
+    }
+}
+
+/** Queues child dispatches until the test explicitly admits them. */
+private class QueuedDispatcher : CoroutineDispatcher() {
+    private val queued: MutableList<Runnable> = mutableListOf()
+
+    override fun dispatch(context: CoroutineContext, block: Runnable) {
+        queued += block
+    }
+
+    fun runQueued() {
+        while (queued.isNotEmpty()) {
+            queued.removeAt(0).run()
+        }
+    }
+}
+
+private class RecordingCloseFrameConnection : RawConnection {
+    private val _state = MutableStateFlow(ConnectionState.Connected)
+    override val state: StateFlow<ConnectionState> = _state.asStateFlow()
+
+    var writeAttempts: Int = 0
+        private set
+
+    override suspend fun write(bytes: ByteArray) {
+        writeAttempts += 1
+    }
+
+    override fun read(): Flow<ByteArray> = emptyFlow()
+
+    override suspend fun close() {
+        _state.value = ConnectionState.Closed
     }
 }
 

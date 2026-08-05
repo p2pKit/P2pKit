@@ -23,6 +23,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
@@ -461,7 +462,14 @@ internal class P2pSessionImpl(
                 // once the epoch is gone, [connection] is closed and the
                 // protocol writer would throw. Only the WAIT is bounded; raw
                 // close below is what unblocks a cancellation-ignoring write.
-                val closeSend = scope.launch {
+                // Start inline through the first real suspension so the
+                // bounded wait measures send/mutex progress, not admission
+                // latency on a saturated dispatcher. Without UNDISTPATCHED,
+                // the child could remain queued for the whole two-second
+                // window; teardown would then cancel the raw connection
+                // without ever attempting the CLOSE frame, causing a clean
+                // peer shutdown to look like a reconnectable network loss.
+                val closeSend = scope.launch(start = CoroutineStart.UNDISPATCHED) {
                     runCatching { sendMutex.withLock { protocol.sendClose(connection) } }
                 }
                 withTimeoutOrNull(CLOSE_FRAME_TIMEOUT_MS) { closeSend.join() }
