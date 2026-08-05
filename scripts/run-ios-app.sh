@@ -100,6 +100,30 @@ select_latest_available_simulator_udid() {
     ' <<< "$device_json"
 }
 
+boot_and_wait_for_simulator() {
+    local udid="$1"
+    local device_list
+
+    # `simctl boot` returns before CoreSimulator is always ready to expose the
+    # destination to xcodebuild. `bootstatus -b` is both idempotent and
+    # synchronous: it boots a shutdown device and waits for boot completion.
+    # Revalidate afterward so a runtime/device that disappeared during a long
+    # framework build fails here with a precise error, never later as a vague
+    # xcodebuild destination failure.
+    if ! xcrun simctl bootstatus "$udid" -b; then
+        echo "[ios-run] FATAL: simulator '$udid' did not reach boot-ready state." >&2
+        return 1
+    fi
+    if ! device_list="$(xcrun simctl list devices available)"; then
+        echo "[ios-run] FATAL: unable to revalidate simulators after boot." >&2
+        return 1
+    fi
+    if ! resolve_simulator_udid "ignored for exact UDID" "$udid" "$device_list" >/dev/null; then
+        echo "[ios-run] FATAL: simulator '$udid' disappeared after boot." >&2
+        return 1
+    fi
+}
+
 create_ios_run_dir() {
     local build_root="$1"
     local run_prefix="${2:-ios-run}"
@@ -252,8 +276,8 @@ main() {
     done
     echo "[ios-run] Info.plist keys OK."
 
-    echo "[ios-run] Booting simulator (no-op if already booted)..."
-    xcrun simctl boot "$udid" 2>/dev/null || true
+    echo "[ios-run] Booting simulator and waiting for CoreSimulator readiness..."
+    boot_and_wait_for_simulator "$udid"
 
     echo "[ios-run] Installing app bundle..."
     xcrun simctl install "$udid" "$app_path"

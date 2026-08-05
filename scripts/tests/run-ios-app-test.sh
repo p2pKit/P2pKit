@@ -80,6 +80,44 @@ assert_fails \
 
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-ios-run-test.XXXXXX")"
 trap 'rm -rf -- "$TMP_ROOT"' EXIT
+
+FAKE_BIN="$TMP_ROOT/fake-bin"
+FAKE_XCRUN_LOG="$TMP_ROOT/xcrun.log"
+mkdir -p "$FAKE_BIN"
+printf '%s\n' \
+    '#!/bin/sh' \
+    'printf '\''%s\n'\'' "$*" >> "$FAKE_XCRUN_LOG"' \
+    '[ "$1" = simctl ] || exit 64' \
+    'case "$2" in' \
+    '  bootstatus) exit "${FAKE_BOOTSTATUS_EXIT:-0}" ;;' \
+    '  list) printf '\''%s\n'\'' "$FAKE_DEVICE_LIST" ;;' \
+    '  *) exit 64 ;;' \
+    'esac' \
+    > "$FAKE_BIN/xcrun"
+chmod +x "$FAKE_BIN/xcrun"
+
+run_fake_boot_wait() (
+    export PATH="$FAKE_BIN:$PATH"
+    export FAKE_XCRUN_LOG
+    export FAKE_BOOTSTATUS_EXIT="$1"
+    export FAKE_DEVICE_LIST="$2"
+    boot_and_wait_for_simulator "$UUID_PHONE_17_B"
+)
+
+: > "$FAKE_XCRUN_LOG"
+run_fake_boot_wait 0 "$DEVICE_LIST"
+if ! grep -qF "simctl bootstatus $UUID_PHONE_17_B -b" "$FAKE_XCRUN_LOG" ||
+    ! grep -qF "simctl list devices available" "$FAKE_XCRUN_LOG"; then
+    echo "FAIL: simulator readiness must synchronously boot and revalidate the exact UDID" >&2
+    exit 1
+fi
+assert_fails \
+    "simulator bootstatus failure is not ignored" \
+    run_fake_boot_wait 42 "$DEVICE_LIST"
+assert_fails \
+    "simulator disappearance after boot is rejected" \
+    run_fake_boot_wait 0 "${DEVICE_LIST//$UUID_PHONE_17_B/66666666-6666-6666-6666-666666666666}"
+
 RUN_A="$(create_ios_run_dir "$TMP_ROOT")"
 RUN_B="$(create_ios_run_dir "$TMP_ROOT")"
 if [[ "$RUN_A" == "$RUN_B" || ! -d "$RUN_A" || ! -d "$RUN_B" ]]; then
@@ -127,4 +165,4 @@ release_ios_run_lock "$LOCK_DIR"
 acquire_ios_run_lock "$LOCK_DIR"
 release_ios_run_lock "$LOCK_DIR"
 
-echo "run-ios-app tests: 14 passed"
+echo "run-ios-app tests: 17 passed"

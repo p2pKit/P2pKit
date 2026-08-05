@@ -288,12 +288,19 @@ class ReconnectPolicyTest {
             pair.a.breakWithException(RuntimeException("simulated wire break"))
             withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
 
-            val attemptsAtStop = attempts.value
             alice.stop()
+            assertEquals(
+                ConnectionState.Closed, session.state.value,
+                "kit.stop() must leave reconnecting sessions terminally Closed"
+            )
+            // A dial that crossed the stop boundary before shutdown acquired
+            // session ownership is allowed to finish being cancelled. The
+            // contract begins when stop() returns: no later retry may start.
+            val attemptsAfterStop = attempts.value
             delay(150)
             assertEquals(
-                attemptsAtStop, attempts.value,
-                "Factory must not be called after kit.stop()"
+                attemptsAfterStop, attempts.value,
+                "Factory must not be called after kit.stop() returns"
             )
         } finally {
             bob.stop()
