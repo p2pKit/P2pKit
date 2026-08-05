@@ -15,17 +15,23 @@ import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 /**
  * Exercises [ReconnectPolicy.Enabled] behavior at the kit boundary.
@@ -382,6 +388,50 @@ class ReconnectPolicyTest {
     }
 
     @Test
+    fun responderStopDuringAsymmetricHandshakeSendsCloseBeforeTransportTeardown() = runBlocking<Unit> {
+        // Reproduce the hosted Apple race without scheduler timing: Alice's
+        // HELLO write reports success but is withheld from Bob, while Bob's
+        // HELLO reaches Alice. Alice can therefore publish Connected while
+        // Bob is still an in-flight handshake absent from bob.sessions.
+        val pair = FakeConnectionPair()
+        val withheldAlice = FirstWriteWithheldConnection(pair.a)
+        val attempts = MutableStateFlow(0)
+        val alice = outgoingKit(
+            "Alice",
+            ReconnectPolicy.Enabled(maxAttempts = 3, retryDelayMillis = 500)
+        ) {
+            val n = attempts.value
+            attempts.update { it + 1 }
+            if (n == 0) withheldAlice else throw RuntimeException("unexpected reconnect")
+        }
+        val bob = incomingKit("Bob", listOf(pair.b))
+        try {
+            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+            withheldAlice.firstWriteWithheld.await()
+            assertEquals(ConnectionState.Connected, session.state.value)
+            assertTrue(
+                bob.sessions.value.isEmpty(),
+                "the fixture must stop Bob inside the pre-registration handshake gap"
+            )
+            val terminal = async(start = CoroutineStart.UNDISPATCHED) {
+                session.state.first { it == ConnectionState.Closed }
+            }
+
+            bob.stop()
+
+            assertEquals(ConnectionState.Closed, withTimeout(5_000) { terminal.await() })
+            assertEquals(
+                1,
+                attempts.value,
+                "tracked setup shutdown must send CLOSE and never trigger Alice reconnect"
+            )
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
     fun remoteCloseFrameYieldsExactlyClosedAndNeverRedials() = runBlocking<Unit> {
         // AUDIT-2026-07 (SES-1) / P1-02: a peer-initiated clean close — CLOSE
         // frame, then the socket goes down — must end exactly Closed, never
@@ -471,6 +521,37 @@ class ReconnectPolicyTest {
             }
         }
     }
+}
+
+/** Holds exactly the first write while allowing the reverse direction through. */
+private class FirstWriteWithheldConnection(
+    private val delegate: RawConnection
+) : RawConnection {
+    val firstWriteWithheld = CompletableDeferred<Unit>()
+    private val writeLock = Mutex()
+    private var withholdFirst = true
+
+    override val state: StateFlow<ConnectionState> = delegate.state
+
+    override suspend fun write(bytes: ByteArray) {
+        val withheld = writeLock.withLock {
+            if (withholdFirst) {
+                withholdFirst = false
+                true
+            } else {
+                false
+            }
+        }
+        if (withheld) {
+            firstWriteWithheld.complete(Unit)
+        } else {
+            delegate.write(bytes)
+        }
+    }
+
+    override fun read(): Flow<ByteArray> = delegate.read()
+
+    override suspend fun close() = delegate.close()
 }
 
 private class ReconnectTestFactory(private val transport: FakeDataTransport) : TransportFactory {

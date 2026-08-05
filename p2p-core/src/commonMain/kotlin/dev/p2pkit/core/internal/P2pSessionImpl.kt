@@ -727,17 +727,6 @@ internal class P2pSessionImpl(
         sessionJob.join()
     }
 
-    /** Roll back a session that never crossed the public ownership commit. */
-    internal suspend fun abortUncommitted() {
-        transitionToTerminal(
-            target = ConnectionState.Closed,
-            cause = "uncommitted session rollback",
-            fileFailureKind = FileTransferFailureKind.TRANSPORT,
-            fileRetryability = Retryability.NOT_RETRYABLE
-        )
-        sessionJob.join()
-    }
-
     /**
      * Final transition when the reconnect handler exhausts its retry budget.
      * No-op if the session is already in a terminal state (e.g., the user

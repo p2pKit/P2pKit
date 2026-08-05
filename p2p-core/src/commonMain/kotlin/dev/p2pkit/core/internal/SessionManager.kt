@@ -33,6 +33,7 @@ import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
@@ -193,6 +194,16 @@ internal class SessionManager(
      * gated. See [MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS].
      */
     private val preHandshakeGate = Semaphore(MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS)
+
+    /**
+     * Initial incoming and outgoing setups are registered before their
+     * handshake coroutine starts. Terminal shutdown seals this registry and
+     * cancels its jobs while the transport is still open. This covers the
+     * interval where the peer has completed HELLO but our side has not yet
+     * published a [P2pSession], so the ordinary session store cannot own the
+     * connection yet.
+     */
+    private val setupRegistry = MutableStateFlow(SessionSetupRegistry())
 
     private val _incomingSessions = MutableSharedFlow<P2pSession>(
         replay = 0,
@@ -406,15 +417,17 @@ internal class SessionManager(
             // setupSession owns rawConnection from this point and closes it
             // on every pre-registration failure/cancellation path.
             uncommittedConnection = null
-            val session = setupSession(
-                rawConnection = rawConnection,
-                expectedPeer = peer,
-                expectedFingerprint = expectedFingerprint,
-                isIncoming = false,
-                internalPeerForReconnect = internalPeer,
-                isManualPeer = internalPeer.origin == PeerOrigin.Manual,
-                lifecycleGeneration = lifecycleGeneration
-            )
+            val session = runTrackedSessionSetup(rawConnection) {
+                setupSession(
+                    rawConnection = rawConnection,
+                    expectedPeer = peer,
+                    expectedFingerprint = expectedFingerprint,
+                    isIncoming = false,
+                    internalPeerForReconnect = internalPeer,
+                    isManualPeer = internalPeer.origin == PeerOrigin.Manual,
+                    lifecycleGeneration = lifecycleGeneration
+                )
+            }
             completedSession = session
             return session
         } catch (e: Throwable) {
@@ -483,16 +496,18 @@ internal class SessionManager(
                 }
             }
             try {
-                setupSession(
-                    rawConnection = connection,
-                    expectedPeer = null,
-                    expectedFingerprint = null,
-                    isIncoming = true,
-                    internalPeerForReconnect = null,
-                    isManualPeer = false,
-                    lifecycleGeneration = null,
-                    onHandshakeSettled = releaseOnce
-                )
+                runTrackedSessionSetup(connection) {
+                    setupSession(
+                        rawConnection = connection,
+                        expectedPeer = null,
+                        expectedFingerprint = null,
+                        isIncoming = true,
+                        internalPeerForReconnect = null,
+                        isManualPeer = false,
+                        lifecycleGeneration = null,
+                        onHandshakeSettled = releaseOnce
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -500,6 +515,64 @@ internal class SessionManager(
                 runCatching { connection.close() }
             } finally {
                 releaseOnce()
+            }
+        }
+    }
+
+    /**
+     * Run one initial session setup in its own cancellable child and publish
+     * that child to [setupRegistry] before it starts. The separate child lets
+     * kit shutdown cancel only the setup transaction (not an application's
+     * entire calling coroutine for an outgoing `connect`) and gives
+     * [cleanupHandshake] a chance to send CLOSE before transport teardown.
+     */
+    private suspend fun runTrackedSessionSetup(
+        rawConnection: RawConnection,
+        block: suspend () -> P2pSession
+    ): P2pSession = coroutineScope {
+        val bodyStarted = CompletableDeferred<Unit>()
+        val setupJob = async(start = CoroutineStart.LAZY) {
+            bodyStarted.complete(Unit)
+            block()
+        }
+        val setup = ActiveSessionSetup(setupJob, rawConnection, bodyStarted)
+        setupJob.invokeOnCompletion { unregisterSessionSetup(setup) }
+
+        if (!registerSessionSetup(setup)) {
+            setupJob.cancel(CancellationException("P2pKit stopped before session setup started"))
+            withContext(NonCancellable) { closeUncommittedConnection(rawConnection) }
+            throw lifecycleStoppedFailure()
+        }
+
+        setupJob.start()
+        setupJob.await()
+    }
+
+    private fun registerSessionSetup(setup: ActiveSessionSetup): Boolean {
+        while (true) {
+            val current = setupRegistry.value
+            if (!current.accepting) return false
+            val updated = current.copy(active = current.active + setup)
+            if (setupRegistry.compareAndSet(current, updated)) return true
+        }
+    }
+
+    private fun unregisterSessionSetup(setup: ActiveSessionSetup) {
+        while (true) {
+            val current = setupRegistry.value
+            if (setup !in current.active) return
+            val updated = current.copy(active = current.active - setup)
+            if (setupRegistry.compareAndSet(current, updated)) return
+        }
+    }
+
+    /** Atomically refuse future setups and return every setup already owned. */
+    private fun sealSessionSetups(): Set<ActiveSessionSetup> {
+        while (true) {
+            val current = setupRegistry.value
+            val sealed = if (current.accepting) current.copy(accepting = false) else current
+            if (sealed === current || setupRegistry.compareAndSet(current, sealed)) {
+                return sealed.active
             }
         }
     }
@@ -627,11 +700,12 @@ internal class SessionManager(
         withContext(NonCancellable) {
             val closed = withTimeoutOrNull(SESSION_COMMIT_CLEANUP_TIMEOUT_MS) {
                 try {
-                    if (session is P2pSessionImpl) {
-                        session.abortUncommitted()
-                    } else {
-                        session.close()
-                    }
+                    // HELLO has completed by the time a session exists. Even
+                    // though public ownership was not committed, the peer may
+                    // already have committed its symmetric session; close it
+                    // with the normal protocol-level CLOSE transaction rather
+                    // than exposing a reconnectable EOF.
+                    session.close()
                 } catch (error: Throwable) {
                     logger.warn("Uncommitted session cleanup failed", error)
                 }
@@ -823,7 +897,12 @@ internal class SessionManager(
                 )
             }
         } catch (e: CancellationException) {
-            cleanupHandshake(rawConnection, selectedConnection, readerJob)?.let(e::addSuppressed)
+            cleanupHandshake(
+                rawConnection,
+                selectedConnection,
+                readerJob,
+                sendCleanClose = true
+            )?.let(e::addSuppressed)
             throw e
         } catch (e: P2pError) {
             cleanupHandshake(rawConnection, selectedConnection, readerJob)?.let(e::addSuppressed)
@@ -845,16 +924,30 @@ internal class SessionManager(
     private suspend fun cleanupHandshake(
         rawConnection: RawConnection,
         selectedConnection: RawConnection?,
-        readerJob: Job?
+        readerJob: Job?,
+        sendCleanClose: Boolean = false
     ): Throwable? = withContext(NonCancellable) {
         var cleanupFailure: Throwable? = null
-        readerJob?.cancel()
         // Before a secure stream is returned, AuthenticatedV2SecurityEngine
         // exclusively owns and closes rawConnection on every failure. Closing
         // it again here would violate close-once transport contracts.
         val connectionToClose = selectedConnection ?: rawConnection.takeIf {
             securityMode !is SecurityMode.AuthenticatedV2
         }
+        // Targeted setup cancellation happens while the transport is still
+        // open. Keep the reader alive until CLOSE has had its bounded send
+        // opportunity: cancelling an Apple receive first calls
+        // nw_connection_cancel and makes the clean frame impossible.
+        val closeSend = if (sendCleanClose && selectedConnection != null) {
+            CoroutineScope(currentCoroutineContext()).launch(start = CoroutineStart.UNDISPATCHED) {
+                runCatching { protocol.sendClose(selectedConnection) }
+            }.also { job ->
+                withTimeoutOrNull(HANDSHAKE_CLEANUP_TIMEOUT_MS) { job.join() }
+            }
+        } else {
+            null
+        }
+        readerJob?.cancel()
         if (connectionToClose != null) {
             val closed = withTimeoutOrNull(HANDSHAKE_CLEANUP_TIMEOUT_MS) {
                 try {
@@ -869,6 +962,18 @@ internal class SessionManager(
                     "Handshake connection cleanup exceeded $HANDSHAKE_CLEANUP_TIMEOUT_MS ms"
                 )
             }
+        }
+        closeSend?.cancel()
+        val closeSendJoined = withTimeoutOrNull(HANDSHAKE_CLEANUP_TIMEOUT_MS) {
+            closeSend?.join()
+            true
+        } ?: false
+        if (!closeSendJoined) {
+            val timeout = IllegalStateException(
+                "Handshake CLOSE sender cleanup exceeded $HANDSHAKE_CLEANUP_TIMEOUT_MS ms"
+            )
+            if (cleanupFailure == null) cleanupFailure = timeout
+            else cleanupFailure?.addSuppressed(timeout)
         }
         val joined = withTimeoutOrNull(HANDSHAKE_CLEANUP_TIMEOUT_MS) {
             readerJob?.cancelAndJoin()
@@ -1253,13 +1358,47 @@ internal class SessionManager(
 
     /** Terminal kit shutdown: detach public state before watcher scope cancellation. */
     suspend fun shutdownAllSessions(): List<CleanupIssue> {
+        // Seal and cancel setup transactions before any DataTransport is
+        // closed. A setup is not present in SessionStore until after HELLO,
+        // but its peer may already have published a session and therefore
+        // requires a protocol CLOSE rather than a reconnectable EOF.
+        val activeSetups = sealSessionSetups()
+        val setupIssues = cancelSessionSetupSnapshot(activeSetups)
         val snapshot = store.drainForShutdown()
         snapshot.pending.forEach { pending ->
             pending.completeExceptionally(lifecycleStoppedFailure())
         }
-        val issues = closeSessionSnapshot(snapshot.sessions, preserveCancellation = false)
+        val issues = setupIssues + closeSessionSnapshot(
+            snapshot.sessions,
+            preserveCancellation = false
+        )
         logCleanupIssues(logger, "session shutdown", issues)
         return issues
+    }
+
+    private suspend fun cancelSessionSetupSnapshot(
+        setups: Set<ActiveSessionSetup>
+    ): List<CleanupIssue> = coroutineScope {
+        setups.mapIndexed { index, setup ->
+            async {
+                setup.job.cancel(CancellationException("P2pKit stopped during session setup"))
+                captureCleanupIssue(
+                    resource = "session setup ${index + 1}",
+                    timeoutMillis = SESSION_CLOSE_TIMEOUT_MS,
+                    preserveCancellation = false
+                ) {
+                    setup.job.join()
+                    // A lazily-created setup cancelled before its body began
+                    // never acquired protocol ownership, so close its raw
+                    // connection here. Started bodies own cleanup themselves
+                    // (including the bounded CLOSE send) and must not be
+                    // double-closed through a secure wrapper.
+                    if (!setup.bodyStarted.isCompleted) {
+                        setup.rawConnection.close()
+                    }
+                }
+            }
+        }.awaitAll().filterNotNull()
     }
 
     private suspend fun closeSessionSnapshot(
@@ -1374,6 +1513,17 @@ internal const val SESSION_CLOSE_TIMEOUT_MS: Long = 10_000
 internal const val INCOMING_RECOLLECT_INITIAL_DELAY_MS: Long = 100
 internal const val INCOMING_RECOLLECT_MAX_DELAY_MS: Long = 5_000
 internal const val MAX_INCOMING_RECOLLECT_EXPONENT: Int = 6
+
+private data class ActiveSessionSetup(
+    val job: Job,
+    val rawConnection: RawConnection,
+    val bodyStarted: CompletableDeferred<Unit>
+)
+
+private data class SessionSetupRegistry(
+    val accepting: Boolean = true,
+    val active: Set<ActiveSessionSetup> = emptySet()
+)
 
 private data class AuthoritativePath(
     val status: NetworkPathStatus,
