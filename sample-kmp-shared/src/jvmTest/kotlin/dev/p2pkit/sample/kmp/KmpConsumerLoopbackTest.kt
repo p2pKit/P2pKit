@@ -67,15 +67,10 @@ class KmpConsumerLoopbackTest {
 
             try {
                 val incomingReady = CompletableDeferred<Unit>()
-                val firstMessage = async {
+                val incomingSession = async {
                     responder.incomingSessions
                         .onSubscription { incomingReady.complete(Unit) }
                         .first()
-                        .let { session ->
-                            session.incoming
-                                .onSubscription { /* eager subscribe */ }
-                                .first()
-                        }
                 }
                 responder.start()
                 greeter.start()
@@ -92,10 +87,30 @@ class KmpConsumerLoopbackTest {
                 val outgoing = withTimeout(10_000) { greeter.connect(responderPeer) }
                 assertEquals(ConnectionState.Connected, outgoing.state.value)
                 assertEquals(responderInfo.fingerprint, outgoing.peerIdentity.fingerprint)
-                outgoing.send(P2pMessage.Text("hello from Alice"))
 
-                val msg = assertIs<P2pMessage.Text>(withTimeout(10_000) { firstMessage.await() })
-                assertEquals("hello from Alice", msg.value)
+                withTimeout(10_000) {
+                    val incoming = incomingSession.await()
+                    val messageReady = CompletableDeferred<Unit>()
+                    val firstMessage = async {
+                        incoming.incoming
+                            .onSubscription { messageReady.complete(Unit) }
+                            .first()
+                    }
+
+                    // P2pSession.incoming is a replay-0 SharedFlow: sending
+                    // before the receiver collector is active legitimately
+                    // drops the message. A loaded hosted runner exposed that
+                    // race even though the incoming-session collector was
+                    // already active. Acknowledge both subscriptions before
+                    // exercising the wire path; the existing 10-second bound
+                    // still covers session delivery, subscription, send, and
+                    // receive as one terminal operation.
+                    messageReady.await()
+                    outgoing.send(P2pMessage.Text("hello from Alice"))
+
+                    val msg = assertIs<P2pMessage.Text>(firstMessage.await())
+                    assertEquals("hello from Alice", msg.value)
+                }
             } finally {
                 greeter.stop()
                 responder.stop()
