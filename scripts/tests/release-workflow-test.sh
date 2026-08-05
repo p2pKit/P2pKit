@@ -83,6 +83,14 @@ for workflow in "$CI_WORKFLOW" "$DRY_RUN_WORKFLOW" "$WORKFLOW"; do
     }
 done
 
+ruby - "$CI_WORKFLOW" <<'RUBY'
+require "yaml"
+
+workflow = YAML.safe_load_file(ARGV.fetch(0), aliases: true)
+timeout = workflow.fetch("jobs").fetch("complete-gate").fetch("timeout-minutes")
+raise "CI complete-gate timeout must be at least 60 minutes" unless timeout >= 60
+RUBY
+
 grep -Fq 'XCODEGEN_VERSION="2.45.4"' "$XCODEGEN_INSTALLER" || {
     echo "FATAL: XcodeGen installer version is not pinned" >&2
     exit 1
