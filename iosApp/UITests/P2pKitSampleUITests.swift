@@ -20,7 +20,23 @@ final class P2pKitSampleUITests: XCTestCase {
 
         let start = app.buttons["start-kit"]
         XCTAssertTrue(start.exists, "start control should be visible before launch")
+        XCTAssertTrue(start.isHittable, "start control should be hittable before launch")
         start.tap()
+
+        // Do not send the generic tap used to trigger the interruption monitor
+        // until SwiftUI has acknowledged the Start action. On a loaded hosted
+        // simulator, sending both input events back-to-back can overtake the
+        // button action and leave the app in its untouched initial state.
+        let status = app.staticTexts["sample-status"]
+        let startAcknowledged = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label != %@", "Status: Not started"),
+            object: status
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [startAcknowledged], timeout: 10),
+            .completed,
+            "the Start tap must be acknowledged before permission handling"
+        )
         app.tap()
 
         let stop = app.buttons["stop-kit"]
