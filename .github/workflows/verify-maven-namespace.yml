@@ -1,0 +1,35 @@
+name: Verify Maven Central namespace
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-namespace:
+    runs-on: macos-15
+    timeout-minutes: 5
+    environment:
+      name: maven-central
+      url: https://central.sonatype.com/publishing/namespaces
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Verify exact namespace and token access
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_CENTRAL_NAMESPACE: io.github.apdelrahman1911
+        run: scripts/check-maven-namespace-access.sh
+
+      - name: Upload sanitized namespace evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: maven-central-namespace-access
+          path: build/reports/maven-central/namespace-access.json
+          if-no-files-found: warn
