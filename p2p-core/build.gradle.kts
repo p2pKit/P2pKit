@@ -136,7 +136,7 @@ dokka {
 // Maven publishing (fixes no-publishing-plugin / no-pom-metadata). The KMP +
 // Android-KMP-library plugins auto-create the per-target publications once
 // `maven-publish` is applied; group/version come from the root `allprojects`
-// block (dev.p2pkit / VERSION_NAME). We enrich the POM here so artifacts carry
+// block (io.github.apdelrahman1911 / VERSION_NAME). We enrich the POM here so artifacts carry
 // the metadata Maven Central requires. Signing is wired centrally in the root
 // build (conditional on a PGP key being supplied), so local `publishToMavenLocal`
 // stays keyless while a Central release just sets the signing properties.

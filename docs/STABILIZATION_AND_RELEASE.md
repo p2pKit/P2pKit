@@ -1,8 +1,8 @@
 # Stabilization & Release Checklist (RC gating)
 
-**Status:** active gate for the authenticated-v2 `0.7.0-rc1` release candidate.
+**Status:** active gate for the authenticated-v2 `0.7.0-rc2` release candidate.
 Existing `0.6.x` artifacts are immutable.
-**Owner:** maintainer. **Updated:** 2026-07-28.
+**Owner:** maintainer. **Updated:** 2026-08-06.
 
 This document is the gate between "the audit branch is green in CI" and "we tag
 an RC and publish artifacts." It has three parts:
@@ -33,9 +33,11 @@ an RC and publish artifacts." It has three parts:
 
 ## Part A — Device smoke matrix
 
-Run each row on real hardware before the RC tag. Recipes live in
-`INTERNAL_TESTING.md` (§A–§K); this matrix is the *minimum* pass set. Mark
-PASS/FAIL/▢ and link logs.
+These rows remain explicitly pending external evidence and are deferred until
+after the `0.7.0-rc2` publication. They do not become verified merely because
+the automated release gate passes. Run them before stable promotion or any
+production-readiness claim. Recipes live in `INTERNAL_TESTING.md` (§A–§K);
+mark PASS/FAIL/▢ and link logs.
 
 Build the harnesses first:
 
@@ -75,7 +77,7 @@ confirm the sender fails the connection instead of blocking forever.
   `:p2p-transport-lan`, `:p2p-network-provisioning-android`,
   `:p2p-network-provisioning-desktop`. (The two provisioning sidecars were
   previously unpublishable — fixed in the audit.)
-- Coordinates `dev.p2pkit:<module>:<VERSION_NAME>` from `gradle.properties`
+- Coordinates `io.github.apdelrahman1911:<module>:<VERSION_NAME>` from `gradle.properties`
   via the root `allprojects` block.
 - Per-module POM metadata (name, description, license Apache-2.0, url, scm,
   developer) — Maven-Central-shaped.
@@ -121,7 +123,7 @@ Manual unsigned shape equivalent:
 ```bash
 ./gradlew publishToMavenLocal \
   -Dmaven.repo.local=/absolute/path/to/isolated-p2pkit-repository
-ls /absolute/path/to/isolated-p2pkit-repository/dev/p2pkit/*/0.7.0-rc1/
+ls /absolute/path/to/isolated-p2pkit-repository/io/github/apdelrahman1911/*/0.7.0-rc2/
 ```
 
 The checker validates every JVM, Android, and Apple publication (15 on macOS):
@@ -135,7 +137,7 @@ ORG_GRADLE_PROJECT_signingInMemoryKeyBase64="$BASE64_SECRET_KEY" \
 ORG_GRADLE_PROJECT_signingInMemoryKeyPassword="$PASSPHRASE" \
 MAVEN_SIGNING_KEY_FINGERPRINT="$FULL_PUBLIC_FINGERPRINT" \
   scripts/build-central-portal-bundle.sh \
-    build/central/p2pkit-0.7.0-rc1-central-bundle.zip
+    build/central/p2pkit-0.7.0-rc2-central-bundle.zip
 ```
 
 The script publishes into an isolated temporary repository, re-runs the
@@ -161,7 +163,7 @@ compile using only Maven Central.
 > verified namespace, Portal token, protected GitHub environment, public key
 > fingerprint, tag push, approval, Portal `PUBLISHED` state, and remote consumer
 > evidence are all required. Repository code alone does not claim that
-> `0.7.0-rc1` is remotely available.
+> `0.7.0-rc2` is remotely available.
 
 ### XCFramework provenance guard (manual verification)
 
@@ -247,8 +249,9 @@ exact assertions and bounded timeouts.
 - [ ] JVM, Android, and iOS-simulator targets all **compile**.
 - [ ] `iosSimulatorArm64Test` green for all executed tests; complete the manual
       diagnostic and physical-radio evidence in A1–A8.
-- [ ] Part A device smoke matrix: A1–A8, A10–A12 PASS; A9 PASS or explicitly
-      waived for the RC.
+- [ ] Part A device smoke matrix remains pending external evidence after the
+      RC publication; it is required before stable promotion or a
+      production-readiness claim.
 - [ ] `scripts/check-publish-artifacts.sh` PASSes on macOS (full Central
       artifact set — main artifact + sources + javadoc + pom + module — for
       every publication of all four modules); `sign*` SKIPPED without a key.
@@ -271,8 +274,10 @@ exact assertions and bounded timeouts.
       permission-gate fix — so the C:54 deferral is assessed sound and no
       enum rework is warranted. Revisit only if a second platform mapping
       for the member appears.
-- [ ] Tag `v0.7.0-rc1` only after the preceding gates and
-      capture the device-matrix, bundle, and Portal-validation evidence.
+- [ ] Tag `v0.7.0-rc2` only after the automated release, signing, provenance,
+      publication-shape, isolated-consumer, namespace, and owner-authorization
+      gates. Capture bundle and Portal-validation evidence; keep the deferred
+      physical/interoperability/audit matrix explicitly pending.
 
 ### C4 — Negotiated secure metadata envelope (implemented from PARSE-META-01)
 

@@ -58,6 +58,7 @@ jobs:
         run: |
           scripts/tests/check-release-tag-test.sh
           scripts/tests/check-maven-release-environment-test.sh
+          scripts/tests/check-maven-namespace-access-test.sh
           scripts/tests/check-maven-central-version-test.sh
           scripts/tests/publish-central-portal-bundle-test.sh
           scripts/tests/build-central-portal-bundle-test.sh
@@ -116,6 +117,7 @@ jobs:
           MAVEN_SIGNING_PASSWORD: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
           MAVEN_SIGNING_KEY_FINGERPRINT: ${{ vars.MAVEN_SIGNING_KEY_FINGERPRINT }}
           MAVEN_CENTRAL_TOKEN_ROTATE_BY: ${{ vars.MAVEN_CENTRAL_TOKEN_ROTATE_BY }}
+          MAVEN_CENTRAL_NAMESPACE: io.github.apdelrahman1911
         run: |
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
           git merge-base --is-ancestor "$RELEASE_SHA" origin/main

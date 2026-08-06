@@ -4,9 +4,16 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
+GROUP="$(sed -n 's/^GROUP=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
+EXPECTED_GROUP="io.github.apdelrahman1911"
 
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || {
     echo "FATAL: VERSION_NAME must be a release SemVer with an optional prerelease, got '$VERSION'" >&2
+    exit 1
+}
+
+[[ "$GROUP" == "$EXPECTED_GROUP" ]] || {
+    echo "FATAL: GROUP must equal owner-verified Central namespace $EXPECTED_GROUP, got '$GROUP'" >&2
     exit 1
 }
 
@@ -20,10 +27,15 @@ require_text() {
 }
 
 require_text README.md "**Current source version:** \`$VERSION\` release candidate."
+require_text README.md "\`$GROUP:p2p-core:$VERSION\`"
 require_text P2pKit-Spec.md "**Version:** 0.7 specification"
 require_text CHANGELOG.md "## $VERSION — release candidate"
 require_text docs/MIGRATING_TO_0.7.md "# Migrating from 0.6.x to $VERSION"
+require_text docs/MIGRATING_TO_0.7.md "\`$GROUP\`"
 require_text docs/STABILIZATION_AND_RELEASE.md "\`$VERSION\` release candidate"
+require_text docs/STABILIZATION_AND_RELEASE.md "Coordinates \`$GROUP:<module>:<VERSION_NAME>\`"
+require_text docs/MAVEN_CENTRAL_RELEASE.md "\`$GROUP:*:$VERSION\`"
+require_text build.gradle.kts "?: \"$GROUP\""
 require_text p2p-core/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
 require_text p2p-transport-lan/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
 require_text p2p-network-provisioning-android/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
@@ -41,4 +53,19 @@ if grep -qF -- '- "_p2pkit._tcp"' "$ROOT/iosApp/project.yml"; then
     exit 1
 fi
 
-echo "RESULT: PASS — $VERSION release metadata and secure-v2 iOS namespace agree"
+for current_release_file in \
+    README.md \
+    CLAUDE.md \
+    gradle.properties \
+    build.gradle.kts \
+    docs/MAVEN_CENTRAL_RELEASE.md \
+    docs/MIGRATING_TO_0.7.md \
+    docs/STABILIZATION_AND_RELEASE.md \
+    scripts/check-published-consumers.sh; do
+    if grep -qF -- 'dev.p2pkit:' "$ROOT/$current_release_file"; then
+        echo "FATAL: $current_release_file still contains the former Maven group" >&2
+        exit 1
+    fi
+done
+
+echo "RESULT: PASS — $GROUP:$VERSION release metadata and secure-v2 iOS namespace agree"

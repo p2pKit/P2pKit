@@ -5,7 +5,7 @@
 // - Show manifest properties: true
 // - Show declarations: true
 
-// Library unique name: <dev.p2pkit:p2p-transport-lan>
+// Library unique name: <io.github.apdelrahman1911:p2p-transport-lan>
 final class dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager : dev.p2pkit.core.provisioning/NetworkProvisioningManager { // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager|null[0]
     final val events // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.events|{}events[0]
         final fun <get-events>(): kotlinx.coroutines.flow/Flow<dev.p2pkit.core.provisioning/NetworkProvisioningEvent> // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.events.<get-events>|<get-events>(){}[0]

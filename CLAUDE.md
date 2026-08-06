@@ -36,7 +36,7 @@ Java 17 required (`jvmToolchain(17)`); iOS targets compile only on a macOS host.
 ./gradlew :iosApp:runIosSimulator                   # exact SIM_UDID, or an unambiguous SIM_NAME; isolated DerivedData per run
 
 # Publishing — local shape/bundle gates only; remote release is owner-authorized
-./gradlew publishToMavenLocal                       # dev.p2pkit:<module>:<version> for the four library modules
+./gradlew publishToMavenLocal                       # io.github.apdelrahman1911:<module>:<version> for the four library modules
 scripts/build-central-portal-bundle.sh <output.zip> # requires an in-memory PGP key; never uploads
 ```
 

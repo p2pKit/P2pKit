@@ -45,6 +45,7 @@ jobs:
           scripts/tests/check-release-tag-test.sh
           scripts/check-release-metadata.sh
           scripts/tests/check-maven-release-environment-test.sh
+          scripts/tests/check-maven-namespace-access-test.sh
           scripts/tests/check-maven-central-version-test.sh
           scripts/tests/publish-central-portal-bundle-test.sh
           scripts/tests/build-central-portal-bundle-test.sh

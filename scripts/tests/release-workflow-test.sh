@@ -46,9 +46,15 @@ require_text 'environment:'
 require_text 'name: maven-central'
 require_text 'persist-credentials: false'
 require_text 'scripts/check-maven-central-version.sh absent'
+require_text 'MAVEN_CENTRAL_NAMESPACE: io.github.apdelrahman1911'
+require_text 'scripts/tests/check-maven-namespace-access-test.sh'
 require_text 'scripts/build-central-portal-bundle.sh'
 require_text 'scripts/publish-central-portal-bundle.sh'
 require_text 'cancel-in-progress: false'
+if grep -Fq 'MAVEN_CENTRAL_NAMESPACE: io.github.p2pkit' "$WORKFLOW"; then
+    echo "FATAL: release workflow contains the unverified io.github.p2pkit namespace" >&2
+    exit 1
+fi
 grep -Fq 'publishingType=AUTOMATIC' "$ROOT/scripts/publish-central-portal-bundle.sh" || {
     echo "FATAL: Portal client is not locked to automatic publication" >&2
     exit 1

@@ -44,7 +44,7 @@ dokka {
 // AUDIT-2026-06: this provisioning sidecar was previously unpublishable
 // (no `maven-publish`). The KMP + Android-KMP-library plugins auto-create the
 // per-target publications once the plugin is applied; group/version come from
-// the root `allprojects` block (dev.p2pkit / VERSION_NAME) and signing is wired
+// the root `allprojects` block (io.github.apdelrahman1911 / VERSION_NAME) and signing is wired
 // centrally in the root build. POM enriched here for Central-readiness.
 publishing {
     publications.withType<MavenPublication>().configureEach {

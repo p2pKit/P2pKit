@@ -5,7 +5,7 @@
 // - Show manifest properties: true
 // - Show declarations: true
 
-// Library unique name: <dev.p2pkit:p2p-core>
+// Library unique name: <io.github.apdelrahman1911:p2p-core>
 open annotation class dev.p2pkit.core.dsl/P2pKitDsl : kotlin/Annotation { // dev.p2pkit.core.dsl/P2pKitDsl|null[0]
     constructor <init>() // dev.p2pkit.core.dsl/P2pKitDsl.<init>|<init>(){}[0]
 }

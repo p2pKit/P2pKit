@@ -6,10 +6,11 @@ transport-independent API for Android, iOS, and JVM desktop while the shipped
 LAN module owns mDNS/Bonjour discovery, TCP connections, framing, keepalive,
 reconnect, and authenticated encryption.
 
-**Current source version:** `0.7.0-rc1` release candidate. The repository can
+**Current source version:** `0.7.0-rc2` release candidate. The repository can
 produce complete signed Maven Central Portal bundles, but no remote publication
-is claimed here. Published `0.6.x` coordinates are immutable; `0.7.0-rc1` is a new
-version and wire/security migration.
+is claimed here. Published `0.6.x` coordinates and the immutable, unpublished
+`v0.7.0-rc1` tag are preserved; `0.7.0-rc2` is the corrected release candidate
+under the owner-verified GitHub namespace.
 
 ## Scope and guarantees
 
@@ -38,10 +39,10 @@ block multicast discovery or peer-to-peer TCP.
 
 | Module | Purpose |
 |---|---|
-| `dev.p2pkit:p2p-core:0.7.0-rc1` | Public API, protocol, security, sessions, file transfer |
-| `dev.p2pkit:p2p-transport-lan:0.7.0-rc1` | Android/JVM JmDNS, iOS Bonjour, TCP transport |
-| `dev.p2pkit:p2p-network-provisioning-android:0.7.0-rc1` | Optional Android LocalOnlyHotspot/Wi-Fi join sidecar |
-| `dev.p2pkit:p2p-network-provisioning-desktop:0.7.0-rc1` | Optional JVM manual-IP sidecar |
+| `io.github.apdelrahman1911:p2p-core:0.7.0-rc2` | Public API, protocol, security, sessions, file transfer |
+| `io.github.apdelrahman1911:p2p-transport-lan:0.7.0-rc2` | Android/JVM JmDNS, iOS Bonjour, TCP transport |
+| `io.github.apdelrahman1911:p2p-network-provisioning-android:0.7.0-rc2` | Optional Android LocalOnlyHotspot/Wi-Fi join sidecar |
+| `io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.7.0-rc2` | Optional JVM manual-IP sidecar |
 
 The LAN module exposes core transitively. Use only the modules your app needs.
 For local source validation before a remote release, publish to an isolated
@@ -274,8 +275,9 @@ bundle without uploading it. The protected tag workflow can upload an approved
 bundle and then verifies the immutable bytes and isolated consumers from Maven
 Central.
 
-Maven Central namespace ownership, release credentials, final Portal
-validation, and publication are external maintainer actions. A local build or
-successful bundle does not prove that `0.7.0-rc1` is available from Maven Central.
+The `io.github.apdelrahman1911` namespace and publisher access were
+owner-confirmed in Central Portal. Final signed-bundle validation and
+publication remain protected maintainer actions. A local build or successful
+bundle does not prove that `0.7.0-rc2` is available from Maven Central.
 
 P2pKit is licensed under Apache-2.0. See [`LICENSE`](LICENSE).

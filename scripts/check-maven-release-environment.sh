@@ -3,6 +3,10 @@
 # printing any credential value.
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+GROUP="$(sed -n 's/^GROUP=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
+EXPECTED_NAMESPACE="io.github.apdelrahman1911"
+
 fail() {
     echo "FATAL: $*" >&2
     exit 1
@@ -15,6 +19,12 @@ for name in \
     MAVEN_SIGNING_PASSWORD; do
     [[ -n "${!name:-}" ]] || fail "$name is required"
 done
+
+namespace="${MAVEN_CENTRAL_NAMESPACE:-}"
+[[ "$namespace" == "$EXPECTED_NAMESPACE" ]] ||
+    fail "MAVEN_CENTRAL_NAMESPACE must be the owner-verified namespace $EXPECTED_NAMESPACE"
+[[ "$GROUP" == "$namespace" ]] ||
+    fail "published GROUP does not match MAVEN_CENTRAL_NAMESPACE"
 
 fingerprint="$(printf '%s' "${MAVEN_SIGNING_KEY_FINGERPRINT:-}" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')"
 [[ "$fingerprint" =~ ^[A-F0-9]{40}$|^[A-F0-9]{64}$ ]] ||
@@ -35,4 +45,4 @@ minimum_epoch=$((now_epoch + 14 * 24 * 60 * 60))
 [[ "$rotate_by_epoch" -gt "$minimum_epoch" ]] ||
     fail "Maven Central token reaches its rotation deadline within 14 days; rotate it before release"
 
-echo "RESULT: PASS — release credentials are present and public metadata is valid"
+echo "RESULT: PASS — release credentials, approved namespace, and public metadata are valid"

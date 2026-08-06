@@ -17,6 +17,8 @@ trap cleanup EXIT
 OUTPUT="$WORK_DIR/p2pkit-test-central-bundle.zip"
 GNUPGHOME="$WORK_DIR/gnupg"
 PASSWORD="p2pkit-disposable-test-key"
+GROUP="$(sed -n 's/^GROUP=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
+VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 mkdir -m 700 "$GNUPGHOME"
 
 secret_appears_in_log() {
@@ -53,7 +55,7 @@ gpg --batch --homedir "$GNUPGHOME" \
     --pinentry-mode loopback \
     --passphrase "$PASSWORD" \
     --quick-generate-key \
-    "P2pKit disposable CI key <ci-test@p2pkit.dev>" rsa2048 sign 1d \
+    "P2pKit disposable CI key <p2pkit-ci@users.noreply.github.com>" rsa2048 sign 1d \
     >"$WORK_DIR/keygen.log" 2>&1 || {
         tail -n 20 "$WORK_DIR/keygen.log" >&2
         exit 1
@@ -97,7 +99,10 @@ unzip -tq "$OUTPUT" >/dev/null
 [[ -s "${OUTPUT%.zip}.manifest.sha256" ]] || { echo "FATAL: bundle manifest is missing" >&2; exit 1; }
 jq -e \
     --arg fingerprint "$FINGERPRINT" \
-    '.schemaVersion == 1 and .signingKeyFingerprint == $fingerprint and .signedFiles > 0' \
+    --arg group "$GROUP" \
+    --arg version "$VERSION" \
+    '.schemaVersion == 1 and .group == $group and .version == $version and
+     .signingKeyFingerprint == $fingerprint and .signedFiles > 0' \
     "${OUTPUT%.zip}.summary.json" >/dev/null
 
 echo "RESULT: PASS — disposable-key signed bundle, signatures, checksums, manifest, and secret safety passed"

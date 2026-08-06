@@ -99,6 +99,9 @@ if [[ "$url" == *"/api/v1/publisher/status?id="* ]]; then
 fi
 
 if [[ "$url" == https://repo.maven.apache.org/maven2/* ]]; then
+    if [[ -n "${FAKE_MAVEN_REQUIRED_PATH:-}" && "$url" != *"${FAKE_MAVEN_REQUIRED_PATH}"* ]]; then
+        exit 67
+    fi
     artifact="${FAKE_MAVEN_EXISTING_ARTIFACT:-}"
     code="${FAKE_MAVEN_CODE:-404}"
     if [[ -n "$artifact" && "$url" == *"/$artifact/"* ]]; then

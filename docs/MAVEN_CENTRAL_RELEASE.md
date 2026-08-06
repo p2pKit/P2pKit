@@ -1,8 +1,35 @@
 # Maven Central release workflow
 
 P2pKit publishes immutable release-candidate artifacts from an exact Git tag.
-The current release identity is `dev.p2pkit:*:0.7.0-rc1`, derived from
-`gradle.properties`, and the only accepted tag is `v0.7.0-rc1`.
+The current release identity is `io.github.apdelrahman1911:*:0.7.0-rc2`,
+derived from `gradle.properties`, and the only accepted release tag for this
+candidate is `v0.7.0-rc2`. The existing `v0.7.0-rc1` tag is immutable and must
+not be moved, deleted, or reused.
+
+`CENTRAL-NAMESPACE-01` was owner-confirmed on 2026-08-06: Central Portal shows
+the exact namespace `io.github.apdelrahman1911` as `Verified`, and the user token
+configured in GitHub belongs to a listed publisher. `io.github.p2pkit` is not
+approved and must not be substituted.
+
+The complete immutable `0.7.0-rc2` publication set is:
+
+| Coordinate |
+|---|
+| `io.github.apdelrahman1911:p2p-core:0.7.0-rc2` |
+| `io.github.apdelrahman1911:p2p-core-jvm:0.7.0-rc2` |
+| `io.github.apdelrahman1911:p2p-core-android:0.7.0-rc2` |
+| `io.github.apdelrahman1911:p2p-core-iosarm64:0.7.0-rc2` |
+| `io.github.apdelrahman1911:p2p-core-iossimulatorarm64:0.7.0-rc2` |
+| `io.github.apdelrahman1911:p2p-core-iosx64:0.7.0-rc2` |
+| `io.github.apdelrahman1911:p2p-transport-lan:0.7.0-rc2` |
+| `io.github.apdelrahman1911:p2p-transport-lan-jvm:0.7.0-rc2` |
+| `io.github.apdelrahman1911:p2p-transport-lan-android:0.7.0-rc2` |
+| `io.github.apdelrahman1911:p2p-transport-lan-iosarm64:0.7.0-rc2` |
+| `io.github.apdelrahman1911:p2p-transport-lan-iossimulatorarm64:0.7.0-rc2` |
+| `io.github.apdelrahman1911:p2p-transport-lan-iosx64:0.7.0-rc2` |
+| `io.github.apdelrahman1911:p2p-network-provisioning-android:0.7.0-rc2` |
+| `io.github.apdelrahman1911:p2p-network-provisioning-android-android:0.7.0-rc2` |
+| `io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.7.0-rc2` |
 
 ## Trust boundary
 
@@ -41,6 +68,10 @@ Environment variables:
 | `MAVEN_SIGNING_KEY_FINGERPRINT` | Complete uppercase primary-key fingerprint |
 | `MAVEN_CENTRAL_TOKEN_ROTATE_BY` | Maintainer-enforced token rotation deadline as `YYYY-MM-DD`, more than 14 days away |
 
+The workflow also binds the non-secret constant
+`MAVEN_CENTRAL_NAMESPACE=io.github.apdelrahman1911` to the `GROUP` in
+`gradle.properties` before any bundle is built or uploaded.
+
 The rotation deadline is a conservative local control and may be earlier than
 the expiration selected in Central Portal. Replacing the Portal token must also
 move this date and update both Central environment secrets together.
@@ -54,7 +85,7 @@ without printing values and masks the derived Portal bearer value.
 The complete secret-free release gate is:
 
 ```bash
-scripts/check-release-tag.sh v0.7.0-rc1
+scripts/check-release-tag.sh v0.7.0-rc2
 scripts/run-release-gate.sh
 ```
 
@@ -74,8 +105,8 @@ use the production secrets.
 ## Publication sequence
 
 1. Merge the verified release commit into `main`.
-2. Confirm `dev.p2pkit:*:0.7.0-rc1` is absent from Maven Central.
-3. Push the exact tag `v0.7.0-rc1` only with owner authorization.
+2. Confirm `io.github.apdelrahman1911:*:0.7.0-rc2` is absent from Maven Central.
+3. Push the exact tag `v0.7.0-rc2` only with owner authorization.
 4. Review the secret-free job results and commit SHA.
 5. Approve the pending `maven-central` environment deployment.
 6. Do not cancel the workflow after upload begins; Central may continue even if

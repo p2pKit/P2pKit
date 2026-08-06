@@ -7,6 +7,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
+GROUP="$(sed -n 's/^GROUP=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
+GROUP_PATH="${GROUP//.//}"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-consumer-check.XXXXXX")"
 REPO_DIR="$WORK_DIR/repository"
 FIXTURE_DIR="$WORK_DIR/consumer"
@@ -46,16 +48,16 @@ if [[ -n "$REMOTE_REPOSITORY_URL" ]]; then
         fail "remote consumer repository must use HTTPS"
     command -v curl >/dev/null 2>&1 || fail "curl is required for remote consumer verification"
     echo "==> Downloading $VERSION POMs from remote repository"
-    mkdir -p "$REPO_DIR/dev/p2pkit"
+    mkdir -p "$REPO_DIR/$GROUP_PATH"
     for artifact in \
         p2p-core-jvm \
         p2p-transport-lan-jvm \
         p2p-network-provisioning-android-android \
         p2p-network-provisioning-desktop; do
-        directory="$REPO_DIR/dev/p2pkit/$artifact/$VERSION"
+        directory="$REPO_DIR/$GROUP_PATH/$artifact/$VERSION"
         mkdir -p "$directory"
         curl --fail --silent --show-error --location \
-            "$REMOTE_REPOSITORY_URL/dev/p2pkit/$artifact/$VERSION/$artifact-$VERSION.pom" \
+            "$REMOTE_REPOSITORY_URL/$GROUP_PATH/$artifact/$VERSION/$artifact-$VERSION.pom" \
             --output "$directory/$artifact-$VERSION.pom"
     done
     CONSUMER_REPOSITORY="$REMOTE_REPOSITORY_URL"
@@ -65,7 +67,7 @@ else
     CONSUMER_REPOSITORY="$REPO_DIR"
 fi
 
-BASE="$REPO_DIR/dev/p2pkit"
+BASE="$REPO_DIR/$GROUP_PATH"
 CORE_JVM="$BASE/p2p-core-jvm/$VERSION/p2p-core-jvm-$VERSION.pom"
 LAN_JVM="$BASE/p2p-transport-lan-jvm/$VERSION/p2p-transport-lan-jvm-$VERSION.pom"
 PROV_ANDROID="$BASE/p2p-network-provisioning-android-android/$VERSION/p2p-network-provisioning-android-android-$VERSION.pom"
@@ -144,7 +146,7 @@ EOF
 cat > "$FIXTURE_DIR/coreJvm/build.gradle.kts" <<EOF
 plugins { kotlin("jvm") }
 kotlin { jvmToolchain(17) }
-dependencies { implementation("dev.p2pkit:p2p-core-jvm:$VERSION") }
+dependencies { implementation("$GROUP:p2p-core-jvm:$VERSION") }
 EOF
 cat > "$FIXTURE_DIR/coreJvm/src/main/kotlin/consumer/CoreConsumer.kt" <<'EOF'
 package consumer
@@ -349,7 +351,7 @@ EOF
 cat > "$FIXTURE_DIR/lanJvm/build.gradle.kts" <<EOF
 plugins { kotlin("jvm") }
 kotlin { jvmToolchain(17) }
-dependencies { implementation("dev.p2pkit:p2p-transport-lan-jvm:$VERSION") }
+dependencies { implementation("$GROUP:p2p-transport-lan-jvm:$VERSION") }
 EOF
 cat > "$FIXTURE_DIR/lanJvm/src/main/kotlin/consumer/LanConsumer.kt" <<'EOF'
 package consumer
@@ -367,7 +369,7 @@ EOF
 cat > "$FIXTURE_DIR/desktopJvm/build.gradle.kts" <<EOF
 plugins { kotlin("jvm") }
 kotlin { jvmToolchain(17) }
-dependencies { implementation("dev.p2pkit:p2p-network-provisioning-desktop:$VERSION") }
+dependencies { implementation("$GROUP:p2p-network-provisioning-desktop:$VERSION") }
 EOF
 cat > "$FIXTURE_DIR/desktopJvm/src/main/kotlin/consumer/DesktopConsumer.kt" <<'EOF'
 package consumer
@@ -395,8 +397,8 @@ android {
         minSdk = 24
     }
 }
-dependencies { implementation("dev.p2pkit:p2p-network-provisioning-android-android:$VERSION") }
-dependencies { implementation("dev.p2pkit:p2p-transport-lan-android:$VERSION") }
+dependencies { implementation("$GROUP:p2p-network-provisioning-android-android:$VERSION") }
+dependencies { implementation("$GROUP:p2p-transport-lan-android:$VERSION") }
 EOF
 cat > "$FIXTURE_DIR/androidConsumer/src/main/AndroidManifest.xml" <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
@@ -439,7 +441,7 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            implementation("dev.p2pkit:p2p-transport-lan:$VERSION")
+            implementation("$GROUP:p2p-transport-lan:$VERSION")
         }
     }
 }
