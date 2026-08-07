@@ -1,8 +1,7 @@
 # Changelog
 
-This file records release-facing behavior. Historical internal milestone tags
-and audit implementation details remain in the repository's stabilization
-documents.
+This file records release-facing behavior. Historical internal milestone tags,
+audits, trackers, and implementation evidence remain under `docs/archive/`.
 
 ## Unreleased
 
