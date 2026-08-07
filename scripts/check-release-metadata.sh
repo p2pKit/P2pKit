@@ -36,19 +36,19 @@ require_text docs/STABILIZATION_AND_RELEASE.md "\`$VERSION\` release candidate"
 require_text docs/STABILIZATION_AND_RELEASE.md "Coordinates \`$GROUP:<module>:<VERSION_NAME>\`"
 require_text docs/MAVEN_CENTRAL_RELEASE.md "\`$GROUP:*:$VERSION\`"
 require_text build.gradle.kts "?: \"$GROUP\""
-require_text p2p-core/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
-require_text p2p-transport-lan/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
-require_text p2p-network-provisioning-android/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
-require_text p2p-network-provisioning-desktop/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
-require_text iosApp/Info.plist "<string>_p2pkit2._tcp</string>"
-require_text iosApp/project.yml '- "_p2pkit2._tcp"'
+require_text library/p2p-core/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
+require_text library/p2p-transport-lan/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
+require_text library/p2p-network-provisioning-android/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
+require_text library/p2p-network-provisioning-desktop/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
+require_text samples/iosApp/Info.plist "<string>_p2pkit2._tcp</string>"
+require_text samples/iosApp/project.yml '- "_p2pkit2._tcp"'
 require_text scripts/run-ios-app.sh "_p2pkit2._tcp"
 
-if grep -qF -- "<string>_p2pkit._tcp</string>" "$ROOT/iosApp/Info.plist"; then
+if grep -qF -- "<string>_p2pkit._tcp</string>" "$ROOT/samples/iosApp/Info.plist"; then
     echo "FATAL: maintained secure-v2 iOS sample still declares legacy Bonjour" >&2
     exit 1
 fi
-if grep -qF -- '- "_p2pkit._tcp"' "$ROOT/iosApp/project.yml"; then
+if grep -qF -- '- "_p2pkit._tcp"' "$ROOT/samples/iosApp/project.yml"; then
     echo "FATAL: generated secure-v2 iOS sample still declares legacy Bonjour" >&2
     exit 1
 fi

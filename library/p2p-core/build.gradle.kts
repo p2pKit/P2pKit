@@ -41,8 +41,8 @@ val buildInfoCommitTime = providers.of(GitCommitTimeValueSource::class) {
 
 val buildInfoRelevantPaths = listOf(
     "buildSrc/src/main/java/dev/p2pkit/build",
-    "p2p-core/src",
-    "p2p-core/build.gradle.kts",
+    "library/p2p-core/src",
+    "library/p2p-core/build.gradle.kts",
     "build.gradle.kts",
     "settings.gradle.kts",
     "gradle.properties",

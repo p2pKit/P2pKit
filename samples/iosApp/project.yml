@@ -46,9 +46,9 @@ targets:
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_FILE: Info.plist
-        # XCFramework path is relative to the Xcode project root (iosApp/).
-        # `..` walks up to the repo root.
-        FRAMEWORK_SEARCH_PATHS: "$(SRCROOT)/../p2p-transport-lan/build/XCFrameworks/release"
+        # XCFramework path is relative to the Xcode project root (samples/iosApp/).
+        # `../..` walks up to the repo root.
+        FRAMEWORK_SEARCH_PATHS: "$(SRCROOT)/../../library/p2p-transport-lan/build/XCFrameworks/release"
         # AUDIT-2026-06 (ARCH-samples-24): automatic signing is the default —
         # Xcode picks a development team itself once you've logged into your
         # Apple ID (one-time, see README). For manual provisioning-profile
@@ -61,7 +61,7 @@ targets:
           - "-framework"
           - "P2pKitShared"
     dependencies:
-      - framework: ../p2p-transport-lan/build/XCFrameworks/release/P2pKitShared.xcframework
+      - framework: ../../library/p2p-transport-lan/build/XCFrameworks/release/P2pKitShared.xcframework
         embed: true
         codeSign: true
     preBuildScripts:

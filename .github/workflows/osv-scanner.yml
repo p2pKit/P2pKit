@@ -23,11 +23,11 @@ jobs:
       upload-sarif: true
       scan-args: |-
         --lockfile=./gradle.lockfile
-        --lockfile=./p2p-core/gradle.lockfile
-        --lockfile=./p2p-transport-lan/gradle.lockfile
-        --lockfile=./p2p-network-provisioning-android/gradle.lockfile
-        --lockfile=./p2p-network-provisioning-desktop/gradle.lockfile
-        --lockfile=./p2p-sample-android/gradle.lockfile
-        --lockfile=./p2p-sample-desktop/gradle.lockfile
-        --lockfile=./p2p-sample-desktop-ui/gradle.lockfile
-        --lockfile=./sample-kmp-shared/gradle.lockfile
+        --lockfile=./library/p2p-core/gradle.lockfile
+        --lockfile=./library/p2p-transport-lan/gradle.lockfile
+        --lockfile=./library/p2p-network-provisioning-android/gradle.lockfile
+        --lockfile=./library/p2p-network-provisioning-desktop/gradle.lockfile
+        --lockfile=./samples/p2p-sample-android/gradle.lockfile
+        --lockfile=./samples/p2p-sample-desktop/gradle.lockfile
+        --lockfile=./samples/p2p-sample-desktop-ui/gradle.lockfile
+        --lockfile=./samples/sample-kmp-shared/gradle.lockfile

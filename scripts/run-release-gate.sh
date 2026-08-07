@@ -19,7 +19,7 @@ scripts/check-published-consumers.sh
 
 set +e
 xcodebuild \
-    -project iosApp/p2pkit-sample.xcodeproj \
+    -project samples/iosApp/p2pkit-sample.xcodeproj \
     -scheme p2pkit-sample-ui \
     -configuration Debug \
     -sdk iphonesimulator \

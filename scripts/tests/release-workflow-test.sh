@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORKFLOW="$ROOT/.github/workflows/publish-maven-central.yml"
 CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 DRY_RUN_WORKFLOW="$ROOT/.github/workflows/release-dry-run.yml"
-ANDROID_LOCK="$ROOT/p2p-sample-android/gradle.lockfile"
+ANDROID_LOCK="$ROOT/samples/p2p-sample-android/gradle.lockfile"
 XCODEGEN_INSTALLER="$ROOT/scripts/install-xcodegen.sh"
 
 [[ -f "$WORKFLOW" ]] || { echo "FATAL: Maven Central workflow is missing" >&2; exit 1; }

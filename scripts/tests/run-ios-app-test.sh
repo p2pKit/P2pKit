@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 bash -n "$REPO_ROOT/scripts/run-ios-app.sh" "$REPO_ROOT/scripts/tests/run-ios-app-test.sh"
-sh -n "$REPO_ROOT/iosApp/scripts/check-xcframework.sh"
+sh -n "$REPO_ROOT/samples/iosApp/scripts/check-xcframework.sh"
 # shellcheck source=../run-ios-app.sh
 source "$REPO_ROOT/scripts/run-ios-app.sh"
 
@@ -136,7 +136,7 @@ FAKE_REPO="$TMP_ROOT/fake-repo"
 mkdir -p "$FAKE_REPO"
 printf '%s\n' \
     '#!/bin/sh' \
-    'framework=p2p-transport-lan/build/XCFrameworks/release/P2pKitShared.xcframework' \
+    'framework=library/p2p-transport-lan/build/XCFrameworks/release/P2pKitShared.xcframework' \
     'mkdir -p "$framework/ios-arm64/P2pKitShared.framework" "$framework/ios-arm64_x86_64-simulator/P2pKitShared.framework"' \
     ': > "$framework/ios-arm64/P2pKitShared.framework/P2pKitShared"' \
     ': > "$framework/ios-arm64_x86_64-simulator/P2pKitShared.framework/P2pKitShared"' \

@@ -7,7 +7,7 @@
 #   SIM_NAME     — exact simulator device name. Default: "iPhone 17".
 #   SIM_UDID     — exact available simulator UDID. Required when SIM_NAME is
 #                  ambiguous across installed runtimes; takes precedence.
-#   BUNDLE_ID    — must match PRODUCT_BUNDLE_IDENTIFIER in iosApp/project.yml.
+#   BUNDLE_ID    — must match PRODUCT_BUNDLE_IDENTIFIER in samples/iosApp/project.yml.
 #   IOS_RUN_DIR  — optional caller-owned build directory. By default every
 #                  invocation gets an isolated temporary directory.
 #   KEEP_IOS_RUN_ARTIFACTS=1 — retain an automatically created run directory.
@@ -141,7 +141,7 @@ create_ios_run_dir() {
 
 ensure_ios_xcframework_present() {
     local repo_root="$1"
-    local framework="$repo_root/p2p-transport-lan/build/XCFrameworks/release/P2pKitShared.xcframework"
+    local framework="$repo_root/library/p2p-transport-lan/build/XCFrameworks/release/P2pKitShared.xcframework"
     local device_binary="$framework/ios-arm64/P2pKitShared.framework/P2pKitShared"
     local simulator_binary="$framework/ios-arm64_x86_64-simulator/P2pKitShared.framework/P2pKitShared"
 
@@ -192,7 +192,7 @@ main() {
 
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     repo_root="$(cd "$script_dir/.." && pwd)"
-    project_dir="$repo_root/iosApp"
+    project_dir="$repo_root/samples/iosApp"
 
     echo "[ios-run] Resolving one exact available simulator..."
     device_list="$(xcrun simctl list devices available)"
@@ -270,7 +270,7 @@ main() {
     for required in NSLocalNetworkUsageDescription NSBonjourServices _p2pkit2._tcp; do
         if ! printf '%s' "$plist_dump" | grep -qF "$required"; then
             echo "[ios-run] FATAL: built Info.plist is missing '$required'."
-            echo "         Keep local-network keys in iosApp/project.yml; xcodegen regenerates the project."
+            echo "         Keep local-network keys in samples/iosApp/project.yml; xcodegen regenerates the project."
             return 1
         fi
     done

@@ -30,7 +30,7 @@ tasks.register<Exec>("runIosUiTests") {
 }
 
 tasks.register<Exec>("regenerateXcodeProject") {
-    description = "Re-run xcodegen against iosApp/project.yml."
+    description = "Re-run xcodegen against samples/iosApp/project.yml."
     group = "p2pkit"
     workingDir = projectDir
     commandLine("xcodegen", "generate")

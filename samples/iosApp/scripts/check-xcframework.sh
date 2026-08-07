@@ -3,7 +3,7 @@
 # V0.4-PROVENANCE (L3): Xcode pre-build validation for the
 # P2pKitShared XCFramework.
 #
-# Wired as a Run Script build phase in iosApp/p2pkit-sample.xcodeproj
+# Wired as a Run Script build phase in samples/iosApp/p2pkit-sample.xcodeproj
 # BEFORE the "Compile Sources" phase. Guarantees that every Xcode build
 # links against an XCFramework whose framework sources match the current
 # `git rev-parse HEAD`. A stale XCFramework cannot silently reach the
@@ -17,15 +17,15 @@
 
 set -e
 
-# When invoked as an Xcode build phase, $SRCROOT is iosApp/. Step out to
+# When invoked as an Xcode build phase, $SRCROOT is samples/iosApp/. Step out to
 # the repo root so Gradle finds the wrapper.
-cd "${SRCROOT:-$(dirname "$0")/..}/.."
+cd "${SRCROOT:-$(dirname "$0")/..}/../.."
 
 echo "→ V0.4-PROVENANCE: ensuring P2pKitShared XCFramework is up to date..."
 sh ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance \
   -q --console=plain
 
-XCF_DIR="p2p-transport-lan/build/XCFrameworks/release"
+XCF_DIR="library/p2p-transport-lan/build/XCFrameworks/release"
 XCF_COMMIT_FILE="$XCF_DIR/BUILD_COMMIT.txt"
 XCF_STATE_FILE="$XCF_DIR/BUILD_SOURCE_STATE.txt"
 XCF_FINGERPRINT_FILE="$XCF_DIR/BUILD_INPUTS_SHA256.txt"
