@@ -8,6 +8,8 @@ mkdir -p "$REPORT_DIR"
 
 cd "$ROOT"
 scripts/check-gradle-wrapper.sh
+scripts/tests/check-repository-layout.sh
+scripts/tests/check-osv-lockfile-coverage.sh
 scripts/check-release-metadata.sh
 git diff --check
 ./gradlew check --console=plain

@@ -30,4 +30,7 @@ jobs:
         --lockfile=./samples/p2p-sample-android/gradle.lockfile
         --lockfile=./samples/p2p-sample-desktop/gradle.lockfile
         --lockfile=./samples/p2p-sample-desktop-ui/gradle.lockfile
+        --lockfile=./samples/p2p-sample-diagnostics/gradle.lockfile
         --lockfile=./samples/sample-kmp-shared/gradle.lockfile
+        --lockfile=gradle.lockfile:./settings-gradle.lockfile
+        --lockfile=./gradle/verification-metadata.xml
