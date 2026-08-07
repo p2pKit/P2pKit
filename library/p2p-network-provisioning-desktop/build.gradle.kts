@@ -1,3 +1,5 @@
+import dev.p2pkit.build.P2pPomMetadata
+
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.dokka)
@@ -53,24 +55,7 @@ publishing {
                     "P2pKit desktop network-provisioning sidecar — manual-IP fallback " +
                         "(NetworkProvisioningManager) for mDNS-blocked LANs on JVM."
                 )
-                url.set("https://github.com/p2pKit/P2pKit")
-                licenses {
-                    license {
-                        name.set("The Apache License, Version 2.0")
-                        url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
-                    }
-                }
-                developers {
-                    developer {
-                        id.set("Apdelrahman1911")
-                        name.set("Abdelrahman")
-                    }
-                }
-                scm {
-                    url.set("https://github.com/p2pKit/P2pKit")
-                    connection.set("scm:git:https://github.com/p2pKit/P2pKit.git")
-                    developerConnection.set("scm:git:ssh://git@github.com/p2pKit/P2pKit.git")
-                }
+                P2pPomMetadata.configure(this)
             }
         }
     }

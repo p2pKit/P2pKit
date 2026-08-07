@@ -1,3 +1,5 @@
+import dev.p2pkit.build.P2pPomMetadata
+
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.kmp.library)
@@ -54,24 +56,7 @@ publishing {
                 "P2pKit Android network-provisioning sidecar — LocalOnlyHotspot host " +
                     "+ Wi-Fi join (NetworkProvisioningManager)."
             )
-            url.set("https://github.com/p2pKit/P2pKit")
-            licenses {
-                license {
-                    name.set("The Apache License, Version 2.0")
-                    url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
-                }
-            }
-            developers {
-                developer {
-                    id.set("Apdelrahman1911")
-                    name.set("Abdelrahman")
-                }
-            }
-            scm {
-                url.set("https://github.com/p2pKit/P2pKit")
-                connection.set("scm:git:https://github.com/p2pKit/P2pKit.git")
-                developerConnection.set("scm:git:ssh://git@github.com/p2pKit/P2pKit.git")
-            }
+            P2pPomMetadata.configure(this)
         }
     }
 }

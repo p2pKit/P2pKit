@@ -1,5 +1,6 @@
 import dev.p2pkit.build.GitCommitValueSource
 import dev.p2pkit.build.GitDirtyValueSource
+import dev.p2pkit.build.P2pPomMetadata
 import dev.p2pkit.build.VerifyXcframeworkProvenanceTask
 import dev.p2pkit.build.WriteXcframeworkProvenanceTask
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
@@ -183,24 +184,7 @@ publishing {
         pom {
             name.set("P2pKit ${project.name}")
             description.set("P2pKit LAN transport — Bonjour/JmDNS discovery + TCP data over Network.framework/sockets.")
-            url.set("https://github.com/p2pKit/P2pKit")
-            licenses {
-                license {
-                    name.set("The Apache License, Version 2.0")
-                    url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
-                }
-            }
-            developers {
-                developer {
-                    id.set("Apdelrahman1911")
-                    name.set("Abdelrahman")
-                }
-            }
-            scm {
-                url.set("https://github.com/p2pKit/P2pKit")
-                connection.set("scm:git:https://github.com/p2pKit/P2pKit.git")
-                developerConnection.set("scm:git:ssh://git@github.com/p2pKit/P2pKit.git")
-            }
+            P2pPomMetadata.configure(this)
         }
     }
 }

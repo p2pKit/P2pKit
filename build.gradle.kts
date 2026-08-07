@@ -124,8 +124,9 @@ fun isVersionBelow(requestedVersion: String?, minimumVersion: String): Boolean {
 // io.github.apdelrahman1911:<module>:<version>.
 // AUDIT-2026-06: `maven-publish` now ships on all four library modules
 // (:p2p-core, :p2p-transport-lan, :p2p-network-provisioning-android,
-// :p2p-network-provisioning-desktop). Per-module POM metadata lives in each
-// module's own build script; signing is wired centrally below.
+// :p2p-network-provisioning-desktop). Module names/descriptions live beside
+// each publication; shared repository, license, developer, and SCM metadata
+// comes from buildSrc's P2pPomMetadata helper. Signing is wired centrally below.
 allprojects {
     group = (findProperty("GROUP") as String?) ?: "io.github.apdelrahman1911"
     version = (findProperty("VERSION_NAME") as String?) ?: "0.0.0-SNAPSHOT"

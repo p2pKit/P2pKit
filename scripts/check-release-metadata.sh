@@ -36,10 +36,14 @@ require_text docs/STABILIZATION_AND_RELEASE.md "\`$VERSION\` release candidate"
 require_text docs/STABILIZATION_AND_RELEASE.md "Coordinates \`$GROUP:<module>:<VERSION_NAME>\`"
 require_text docs/MAVEN_CENTRAL_RELEASE.md "\`$GROUP:*:$VERSION\`"
 require_text build.gradle.kts "?: \"$GROUP\""
-require_text library/p2p-core/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
-require_text library/p2p-transport-lan/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
-require_text library/p2p-network-provisioning-android/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
-require_text library/p2p-network-provisioning-desktop/build.gradle.kts 'url.set("https://github.com/p2pKit/P2pKit")'
+require_text buildSrc/src/main/java/dev/p2pkit/build/P2pPomMetadata.java 'private static final String REPOSITORY_URL = "https://github.com/p2pKit/P2pKit";'
+for publication_build in \
+    library/p2p-core/build.gradle.kts \
+    library/p2p-transport-lan/build.gradle.kts \
+    library/p2p-network-provisioning-android/build.gradle.kts \
+    library/p2p-network-provisioning-desktop/build.gradle.kts; do
+    require_text "$publication_build" 'P2pPomMetadata.configure(this)'
+done
 require_text samples/iosApp/Info.plist "<string>_p2pkit2._tcp</string>"
 require_text samples/iosApp/project.yml '- "_p2pkit2._tcp"'
 require_text scripts/run-ios-app.sh "_p2pkit2._tcp"
