@@ -4,11 +4,16 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
+LATEST_PUBLISHED="$(sed -n 's/^LATEST_PUBLISHED_VERSION=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 GROUP="$(sed -n 's/^GROUP=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 EXPECTED_GROUP="io.github.apdelrahman1911"
 
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || {
-    echo "FATAL: VERSION_NAME must be a release SemVer with an optional prerelease, got '$VERSION'" >&2
+    echo "FATAL: VERSION_NAME must be SemVer with an optional prerelease/snapshot, got '$VERSION'" >&2
+    exit 1
+}
+[[ "$LATEST_PUBLISHED" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ && "$LATEST_PUBLISHED" != *-SNAPSHOT ]] || {
+    echo "FATAL: LATEST_PUBLISHED_VERSION must be a non-snapshot SemVer, got '$LATEST_PUBLISHED'" >&2
     exit 1
 }
 
@@ -26,15 +31,22 @@ require_text() {
     fi
 }
 
-require_text README.md "**Current source version:** \`$VERSION\` release candidate."
-require_text README.md "\`$GROUP:p2p-core:$VERSION\`"
+if [[ "$VERSION" == *-SNAPSHOT ]]; then
+    require_text README.md "**Development version:** \`$VERSION\`."
+    require_text CHANGELOG.md "## Unreleased"
+else
+    require_text README.md "**Current source version:** \`$VERSION\` release candidate."
+    require_text CHANGELOG.md "## $VERSION — release candidate"
+fi
+require_text README.md "**Latest published version:** \`$LATEST_PUBLISHED\`."
+require_text README.md "\`$GROUP:p2p-core:$LATEST_PUBLISHED\`"
 require_text P2pKit-Spec.md "**Version:** 0.7 specification"
-require_text CHANGELOG.md "## $VERSION — release candidate"
-require_text docs/MIGRATING_TO_0.7.md "# Migrating from 0.6.x to $VERSION"
+require_text CHANGELOG.md "## $LATEST_PUBLISHED — release candidate"
+require_text docs/MIGRATING_TO_0.7.md "# Migrating from 0.6.x to $LATEST_PUBLISHED"
 require_text docs/MIGRATING_TO_0.7.md "\`$GROUP\`"
-require_text docs/STABILIZATION_AND_RELEASE.md "\`$VERSION\` release candidate"
+require_text docs/STABILIZATION_AND_RELEASE.md "\`$LATEST_PUBLISHED\` release candidate"
 require_text docs/STABILIZATION_AND_RELEASE.md "Coordinates \`$GROUP:<module>:<VERSION_NAME>\`"
-require_text docs/MAVEN_CENTRAL_RELEASE.md "\`$GROUP:*:$VERSION\`"
+require_text docs/MAVEN_CENTRAL_RELEASE.md "\`$GROUP:*:$LATEST_PUBLISHED\`"
 require_text build.gradle.kts "?: \"$GROUP\""
 require_text buildSrc/src/main/java/dev/p2pkit/build/P2pPomMetadata.java 'private static final String REPOSITORY_URL = "https://github.com/p2pKit/P2pKit";'
 for publication_build in \
@@ -72,4 +84,4 @@ for current_release_file in \
     fi
 done
 
-echo "RESULT: PASS — $GROUP:$VERSION release metadata and secure-v2 iOS namespace agree"
+echo "RESULT: PASS — source $VERSION and published $GROUP:*:$LATEST_PUBLISHED metadata agree"

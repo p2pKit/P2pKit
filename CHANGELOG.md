@@ -4,6 +4,11 @@ This file records release-facing behavior. Historical internal milestone tags
 and audit implementation details remain in the repository's stabilization
 documents.
 
+## Unreleased
+
+- Opened the `0.7.0-rc3-SNAPSHOT` development line after publishing
+  `0.7.0-rc2`; no API or wire-protocol change is included yet.
+
 ## 0.7.0-rc2 — release candidate (2026-08-06)
 
 This candidate preserves the `0.7.0-rc1` API, protocol, and implementation and
@@ -12,8 +17,8 @@ the owner-verified Central Portal namespace `io.github.apdelrahman1911`. The
 `v0.7.0-rc1` tag remains immutable and was not published after Central rejected
 the former unowned namespace during validation.
 
-Remote Maven Central publication is not asserted by this source state. Android
-and Apple physical-device validation, two-machine hostile-network testing, CLI
+Published to Maven Central under `io.github.apdelrahman1911`. Android and Apple
+physical-device validation, two-machine hostile-network testing, CLI
 fault injection/headful Desktop observation, independent secure-v2
 interoperability, and professional cryptographic audit remain explicitly
 pending external evidence.

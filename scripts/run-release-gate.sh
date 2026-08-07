@@ -41,5 +41,5 @@ grep -Fq '** BUILD SUCCEEDED **' "$REPORT_DIR/xcodebuild.log" || {
 }
 
 git rev-parse HEAD >"$REPORT_DIR/commit-sha.txt"
-sed -n 's/^GROUP=//p; s/^VERSION_NAME=//p' gradle.properties >"$REPORT_DIR/coordinates.txt"
+sed -n 's/^GROUP=//p; s/^VERSION_NAME=//p; s/^LATEST_PUBLISHED_VERSION=//p' gradle.properties >"$REPORT_DIR/coordinates.txt"
 echo "RESULT: PASS — complete release gate succeeded"

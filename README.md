@@ -6,11 +6,11 @@ transport-independent API for Android, iOS, and JVM desktop while the shipped
 LAN module owns mDNS/Bonjour discovery, TCP connections, framing, keepalive,
 reconnect, and authenticated encryption.
 
-**Current source version:** `0.7.0-rc2` release candidate. The repository can
-produce complete signed Maven Central Portal bundles, but no remote publication
-is claimed here. Published `0.6.x` coordinates and the immutable, unpublished
-`v0.7.0-rc1` tag are preserved; `0.7.0-rc2` is the corrected release candidate
-under the owner-verified GitHub namespace.
+**Development version:** `0.7.0-rc3-SNAPSHOT`.
+**Latest published version:** `0.7.0-rc2`.
+The `0.7.0-rc2` artifacts are available from Maven Central under the
+owner-verified GitHub namespace. The immutable `v0.7.0-rc1` and
+`v0.7.0-rc2` tags remain preserved.
 
 ## Scope and guarantees
 
@@ -276,8 +276,9 @@ bundle and then verifies the immutable bytes and isolated consumers from Maven
 Central.
 
 The `io.github.apdelrahman1911` namespace and publisher access were
-owner-confirmed in Central Portal. Final signed-bundle validation and
-publication remain protected maintainer actions. A local build or successful
-bundle does not prove that `0.7.0-rc2` is available from Maven Central.
+owner-confirmed in Central Portal. Version `0.7.0-rc2` passed the protected
+signed-bundle workflow and is available from Maven Central. Future publication
+remains a protected maintainer action; a local build alone never proves that a
+new coordinate was published.
 
 P2pKit is licensed under Apache-2.0. See [`LICENSE`](LICENSE).
