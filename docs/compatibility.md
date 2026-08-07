@@ -1,0 +1,19 @@
+# Compatibility policy
+
+P2pKit is currently a release candidate. The project protects published
+artifacts and reviews API/protocol compatibility, but reserves the right to
+make documented breaking changes before `1.0.0` in a new version.
+
+- Published Maven coordinates and Git tags are immutable.
+- All P2pKit modules used by one application should have the same version.
+- Kotlin and Java compatibility is guarded by committed ABI baselines.
+- Swift consumes a source-built XCFramework; generated names and exported ABI
+  are checked by Apple builds and Swift warnings-as-errors gates.
+- Protocol v2 changes require explicit negotiation and must fail closed with
+  older peers. Protocol v1 and v2 never silently downgrade or share discovery.
+- A repository directory move does not change Gradle project names, artifact
+  IDs, packages, public API, or wire behavior.
+
+Supported build targets for the `0.7` line are Android API 24+, JVM 17, and
+`iosArm64`, `iosSimulatorArm64`, and `iosX64`. Exact toolchain versions are
+locked in the Gradle wrapper, version catalog, and CI workflows.

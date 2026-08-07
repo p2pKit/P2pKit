@@ -40,13 +40,12 @@ else
 fi
 require_text README.md "**Latest published version:** \`$LATEST_PUBLISHED\`."
 require_text README.md "\`$GROUP:p2p-core:$LATEST_PUBLISHED\`"
-require_text P2pKit-Spec.md "**Version:** 0.7 specification"
+require_text docs/architecture/specification.md "# Current API and protocol specification"
 require_text CHANGELOG.md "## $LATEST_PUBLISHED — release candidate"
-require_text docs/MIGRATING_TO_0.7.md "# Migrating from 0.6.x to $LATEST_PUBLISHED"
-require_text docs/MIGRATING_TO_0.7.md "\`$GROUP\`"
-require_text docs/STABILIZATION_AND_RELEASE.md "\`$LATEST_PUBLISHED\` release candidate"
-require_text docs/STABILIZATION_AND_RELEASE.md "Coordinates \`$GROUP:<module>:<VERSION_NAME>\`"
-require_text docs/MAVEN_CENTRAL_RELEASE.md "\`$GROUP:*:$LATEST_PUBLISHED\`"
+require_text docs/guides/migrating-to-0.7.md "# Migrating from 0.6.x to $LATEST_PUBLISHED"
+require_text docs/guides/migrating-to-0.7.md "\`$GROUP\`"
+require_text docs/releases/0.7.0-rc2.md "\`$GROUP:p2p-core:$LATEST_PUBLISHED\`"
+require_text docs/releasing/maven-central.md "\`$GROUP\`"
 require_text build.gradle.kts "?: \"$GROUP\""
 require_text buildSrc/src/main/java/dev/p2pkit/build/P2pPomMetadata.java 'private static final String REPOSITORY_URL = "https://github.com/p2pKit/P2pKit";'
 for publication_build in \
@@ -74,9 +73,9 @@ for current_release_file in \
     CLAUDE.md \
     gradle.properties \
     build.gradle.kts \
-    docs/MAVEN_CENTRAL_RELEASE.md \
-    docs/MIGRATING_TO_0.7.md \
-    docs/STABILIZATION_AND_RELEASE.md \
+    docs/releases/0.7.0-rc2.md \
+    docs/guides/migrating-to-0.7.md \
+    docs/releasing/maven-central.md \
     scripts/check-published-consumers.sh; do
     if grep -qF -- 'dev.p2pkit:' "$ROOT/$current_release_file"; then
         echo "FATAL: $current_release_file still contains the former Maven group" >&2

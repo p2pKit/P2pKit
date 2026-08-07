@@ -10,9 +10,12 @@ do not replace it with a branch name. A passing build or a code review is not
 external evidence. Do not change a blocked tracker row to `Verified` until
 the required evidence below has been collected and reviewed.
 
-At the time this document was prepared, the remediation branch and `main`
-contained the same pushed history. The final test run must still record the
-actual SHA used by the tester.
+The repository cleanup does not close any external validation. The following
+six areas remain pending until this plan is executed and its evidence reviewed:
+Android physical devices; Apple devices/AWDL/path rotation/background/restart;
+two-machine hostile networks; CLI fault injection and headful Desktop
+observation; independent secure-v2 interoperability; and a professional
+cryptographic audit. Every run must record the actual SHA used by the tester.
 
 ## 1. Shared execution contract
 
@@ -24,8 +27,8 @@ The baseline workstation must have:
   `xcrun`, `simctl`, `dns-sd`, `log`, `Console.app`, and XcodeGen.
 * JDK 17, Gradle wrapper from this repository, Kotlin/Native toolchains
   resolved by Gradle, and Git.
-* Android SDK Platform 37, build-tools, platform-tools, an API-26 through
-  API-37 emulator, and at least one physical Android device. Install
+* Android SDK Platform 36, build-tools, platform-tools, an API-26 through
+  API-36 emulator, and at least one physical Android device. Install
   `adb`, `apkanalyzer`, and Android Studio Logcat or `adb logcat`.
 * Two independent network interfaces where possible: Wi-Fi and Ethernet or
   a USB Ethernet adapter. The hostile-network tests additionally need a
@@ -84,7 +87,7 @@ Install Android:
 ```sh
 adb -s "$ANDROID_SERIAL" uninstall dev.p2pkit.sample.android || true
 adb -s "$ANDROID_SERIAL" install \
-  p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk
+  samples/p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk
 adb -s "$ANDROID_SERIAL" shell am force-stop dev.p2pkit.sample.android
 adb -s "$ANDROID_SERIAL" shell monkey -p dev.p2pkit.sample.android 1
 ```
@@ -92,8 +95,8 @@ adb -s "$ANDROID_SERIAL" shell monkey -p dev.p2pkit.sample.android 1
 Generate and build the iOS sample:
 
 ```sh
-(cd iosApp && xcodegen generate)
-xcodebuild -project iosApp/p2pkit-sample.xcodeproj \
+(cd samples/iosApp && xcodegen generate)
+xcodebuild -project samples/iosApp/p2pkit-sample.xcodeproj \
   -scheme p2pkit-sample-ui -configuration Debug \
   -destination "platform=iOS,id=$IOS_UDID" build
 ```
@@ -102,7 +105,7 @@ Install/run the iOS app with Xcode or:
 
 ```sh
 xcrun devicectl device install app --device "$IOS_UDID" \
-  iosApp/build/Build/Products/Debug-iphoneos/p2pkit-sample.app
+  samples/iosApp/build/Build/Products/Debug-iphoneos/p2pkit-sample.app
 xcrun devicectl device process launch --device "$IOS_UDID" dev.p2pkit.sample
 ```
 
@@ -400,7 +403,7 @@ Wi-Fi/Hotspot settings.
 Purpose and risk: combine the supported platform/runtime matrix into one
 repeatable acceptance run.
 
-Required setup: one API-26, one API-32, one API-37 Android device or approved
+Required setup: one API-26, one API-32, one API-36 Android device or approved
 emulator set, two physical Apple devices, a Mac, USB cables, private AP, and
 the exact release/debug artifacts produced from the pinned SHA.
 
@@ -746,9 +749,16 @@ production claims. Fail: missing source/artifact provenance, unreviewed
 dependency/provider, absent vectors, or an audit performed against a
 different SHA.
 
-## 9. Remote Central/Portal publication
+## 9. Published release reference
 
-### BUILD-02 / ENV-07 — credentialed publication and remote status
+### BUILD-02 / ENV-07 — credentialed publication and remote status (completed)
+
+These two rows are no longer external blockers. The `0.7.0-rc2` publication
+completed through the protected workflow and was verified from Maven Central.
+The immutable evidence is summarized in
+[`../releases/0.7.0-rc2.md`](../releases/0.7.0-rc2.md). The procedure below is
+retained as the required pattern for future releases; it must not be used to
+claim that a new version was published before equivalent evidence exists.
 
 Purpose and risk: verify release publication, signing, namespace ownership,
 metadata, checksum, and remote availability through the owner-approved
@@ -860,7 +870,7 @@ the row's expected failure sequence.
 | PS-T06 | Desktop UI startup/window, discovery/connection, transfer progress/hash/commit, background/foreground, export/clear, final outcome | Diagnostics screen fields, Compose state, file chooser, progress, hashes, export folder | Success: UI and event timeline agree through soak/restart. Failure: UI-only success, mixed simultaneous transfers, unbounded viewer | Desktop ZIP, screenshots/video, terminal/OS logs, generated file hashes |
 | SECURE-V2-INTEROP-01 | Negotiation/version, authenticated metadata created/sent/received/validated/rejected, packet sent/received/rejected, transfer commit/hash/outcome | Selected protocol version, peer identity, metadata/integrity result | Success: independent peer accepts exact vectors and durable acknowledgement. Failure: downgrade, unauthenticated metadata, digest mismatch accepted | ZIP from both implementations, wire transcript/PCAP, independent implementation version/config |
 | CRYPTO-AUDIT-01 | Exported schema/privacy review fields, protocol event names, no secret/payload fields, commit/build provenance | Build identity and test-mode indicator | Success: auditor can map events to wire code without secrets. Failure: missing provenance, ambiguous authentication, or sensitive export | Sample ZIPs, source/tag/SBOM/provenance, threat model, audit workpapers; independent auditor required |
-| BUILD-02 / ENV-07 | Build/publish provenance fields, version/namespace/configuration, final test outcome | Build identity and exact coordinates/Portal status | Success: remote artifact metadata/checksums/signature and clean consumer match the tested SHA. Failure: wrong namespace, missing platform, credential leak | ZIP from publication consumer, local checksums/SBOM, Portal/CI audit trail; credentials and remote status required |
+| BUILD-02 / ENV-07 (completed for `0.7.0-rc2`) | Build/publish provenance fields, version/namespace/configuration, final test outcome | Build identity and exact coordinates/Portal status | Success: remote artifact metadata/checksums/signature and clean consumer match the tested SHA. Failure: wrong namespace, missing platform, credential leak | Preserved CI/Portal audit trail and release record; repeat for every future version |
 
 For every row, the tester must verify that the ZIP's `testId` and
 `testSessionId` equal the values shown in the UI or CLI at the start of the
@@ -905,7 +915,6 @@ The following remain externally blocked until the evidence above exists:
 * Controlled CLI/Desktop UI fault-injection and iOS sink-failure/device
   cancellation evidence.
 * Independent secure-v2 interoperability and professional cryptographic audit.
-* Credentialed Central/Portal publication and remote consumer verification.
 
 No one of these requirements may be marked `Verified` from compilation,
 simulator output, or a single happy-path run.

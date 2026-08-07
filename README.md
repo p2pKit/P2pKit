@@ -1,136 +1,139 @@
 # P2pKit
 
-P2pKit is a Kotlin Multiplatform SDK for discovering nearby devices and
-exchanging messages or files over a reachable local network. It provides one
-transport-independent API for Android, iOS, and JVM desktop while the shipped
-LAN module owns mDNS/Bonjour discovery, TCP connections, framing, keepalive,
-reconnect, and authenticated encryption.
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.apdelrahman1911/p2p-core?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.apdelrahman1911/p2p-core/0.7.0-rc2)
+[![CI](https://github.com/p2pKit/P2pKit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/p2pKit/P2pKit/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+P2pKit is a Kotlin Multiplatform library for authenticated peer discovery,
+messaging, and durable file transfer over a reachable local network. It
+supports Android, JVM/Desktop, and iOS through one transport-independent API.
 
 **Development version:** `0.7.0-rc3-SNAPSHOT`.
 **Latest published version:** `0.7.0-rc2`.
-The `0.7.0-rc2` artifacts are available from Maven Central under the
-owner-verified GitHub namespace. The immutable `v0.7.0-rc1` and
-`v0.7.0-rc2` tags remain preserved.
 
-## Scope and guarantees
+`0.7.0-rc2` is available from Maven Central under
+`io.github.apdelrahman1911`. It is a release candidate: the automated release
+gates are extensive, but the external validation areas listed below remain
+pending.
 
-P2pKit provides:
+## What it provides
 
-- Android API 24+, JVM desktop, and iOS (`iosArm64`, `iosSimulatorArm64`,
-  `iosX64`) targets.
-- LAN discovery through in-process JmDNS on Android/JVM and Bonjour through
-  `Network.framework` on iOS.
-- TCP message transport, 4 MiB text/binary message limit, streaming file
-  transfer, keepalive, and outgoing-session reconnect.
-- Authenticated protocol v2 by default:
-  `Noise_XX_25519_ChaChaPoly_SHA256`, persistent X25519 identities, encrypted
-  records, and explicit peer authorization.
-- Typed failures, coroutine/Flow APIs, explicit lifecycle ownership, and no
-  SDK-initiated runtime permission prompts.
+- Android API 24+, JVM 17, `iosArm64`, `iosSimulatorArm64`, and `iosX64`.
+- Android/JVM JmDNS and Apple Bonjour discovery with TCP transport.
+- Authenticated protocol v2 by default using
+  `Noise_XX_25519_ChaChaPoly_SHA256` and persistent X25519 identities.
+- Independent advertising/discovery states, typed failures, bounded framing,
+  keepalive, and outgoing-session reconnect.
+- Authenticated metadata envelopes and streaming file transfer with negotiated
+  SHA-256 verification and receiver durable-commit acknowledgement.
+- Coroutine/Flow APIs and explicit host ownership of lifecycle and permission
+  presentation.
 
-P2pKit does **not** provide internet connectivity, NAT traversal, signaling,
-relay, user accounts, room membership, application-level authorization,
-delivery acknowledgements, host migration, or game-state synchronization.
-Both peers must already be able to reach each other over the same LAN (or use a
-supported provisioning/manual-IP path). Guest and enterprise Wi-Fi commonly
-block multicast discovery or peer-to-peer TCP.
+P2pKit does not provide internet signaling, NAT traversal, relays, accounts,
+rooms, or application-level authorization. Both peers must already be mutually
+reachable on the LAN. Guest/enterprise Wi-Fi may block multicast or peer TCP.
 
-## Modules
+## Install
 
-| Module | Purpose |
-|---|---|
-| `io.github.apdelrahman1911:p2p-core:0.7.0-rc2` | Public API, protocol, security, sessions, file transfer |
-| `io.github.apdelrahman1911:p2p-transport-lan:0.7.0-rc2` | Android/JVM JmDNS, iOS Bonjour, TCP transport |
-| `io.github.apdelrahman1911:p2p-network-provisioning-android:0.7.0-rc2` | Optional Android LocalOnlyHotspot/Wi-Fi join sidecar |
-| `io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.7.0-rc2` | Optional JVM manual-IP sidecar |
+Use `mavenCentral()` and keep all P2pKit modules on the same version.
 
-The LAN module exposes core transitively. Use only the modules your app needs.
-For local source validation before a remote release, publish to an isolated
-repository and point the consumer at that repository explicitly:
+| Published module | Purpose |
+| --- | --- |
+| `io.github.apdelrahman1911:p2p-core:0.7.0-rc2` | Public API, protocol, security, sessions, and file transfer |
+| `io.github.apdelrahman1911:p2p-transport-lan:0.7.0-rc2` | Multiplatform LAN discovery and TCP transport |
+| `io.github.apdelrahman1911:p2p-network-provisioning-android:0.7.0-rc2` | Optional Android provisioning sidecar |
+| `io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.7.0-rc2` | Optional JVM/Desktop manual-endpoint sidecar |
 
-```bash
-./gradlew publishToMavenLocal \
-  -Dmaven.repo.local=/absolute/path/to/isolated-p2pkit-repository
+### Kotlin Multiplatform
+
+```kotlin
+kotlin {
+    sourceSets {
+        commonMain.dependencies {
+            implementation("io.github.apdelrahman1911:p2p-core:0.7.0-rc2")
+            implementation("io.github.apdelrahman1911:p2p-transport-lan:0.7.0-rc2")
+        }
+    }
+}
 ```
 
-Do not make consumer builds silently prefer a developer's global `~/.m2`.
+### Android
+
+```kotlin
+dependencies {
+    implementation("io.github.apdelrahman1911:p2p-transport-lan-android:0.7.0-rc2")
+    // Optional hotspot/Wi-Fi provisioning:
+    implementation("io.github.apdelrahman1911:p2p-network-provisioning-android-android:0.7.0-rc2")
+}
+```
+
+### JVM/Desktop
+
+```kotlin
+dependencies {
+    implementation("io.github.apdelrahman1911:p2p-transport-lan-jvm:0.7.0-rc2")
+    // Optional manual-endpoint provisioning:
+    implementation("io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.7.0-rc2")
+}
+```
+
+Kotlin Multiplatform root coordinates select their platform variants. The
+complete 15-coordinate publication set is recorded in the
+[`0.7.0-rc2` release record](docs/releases/0.7.0-rc2.md).
+
+### Direct Swift application
+
+The Maven publications serve Kotlin Multiplatform consumers. A direct Swift
+application builds `P2pKitShared.xcframework` from this repository:
+
+```bash
+./gradlew :p2p-transport-lan:assembleP2pKitSharedReleaseXCFramework
+```
+
+The maintained Swift sample and provenance-checked integration live under
+[`samples/iosApp`](samples/iosApp).
 
 ## Secure quick start
 
-Authenticated v2 is the default and fails closed. Its default authorization
-policy, `RejectUnknown`, does not trust an mDNS fingerprint claim. Exchange the
-full pairing QR or fingerprint through a trusted out-of-band channel, parse it
-against the exact `AppId`, then pin it on connect:
+Authenticated v2 is the default and fails closed. Exchange the full pairing QR
+or fingerprint through a trusted channel, then pin the expected identity:
 
 ```kotlin
 import dev.p2pkit.core.AppId
-import dev.p2pkit.core.BackgroundPolicy
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
-import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.flow.first
 
-val p2p = P2pKit.create {
+val kit = P2pKit.create {
     appId = AppId("com.example.transfer")
-    deviceName = "My Phone"
-    transports { lan() } // JVM/iOS; Android: lan(applicationContext)
-    lifecycle {
-        reconnectPolicy = ReconnectPolicy.Enabled(
-            maxAttempts = 8,
-            retryDelayMillis = 500,
-        )
-        onBackground = BackgroundPolicy.CloseActiveSessions
-    }
-    // SecurityMode.AuthenticatedV2(RejectUnknown) is already the default.
+    deviceName = "My device"
+    transports { lan() } // Android: lan(applicationContext)
 }
 
-p2p.start()
-p2p.startAdvertising()
-p2p.startDiscovery()
+kit.start()
+kit.startAdvertising()
+kit.startDiscovery()
 
 val expectedFingerprint =
-    requireNotNull(p2p.parsePeerPairingQr(qrTextFromTrustedChannel))
-val peer = p2p.peers.first { it.isNotEmpty() }.first()
-val session = p2p.connect(peer, expectedFingerprint)
+    requireNotNull(kit.parsePeerPairingQr(qrFromTrustedChannel))
+val peer = kit.peers.first { it.isNotEmpty() }.first()
+val session = kit.connect(peer, expectedFingerprint)
 session.send(P2pMessage.Text("hello"))
 ```
 
-`localPairingQr` contains this device's AppId-bound canonical QR text. A
-discovered name, peer id, TXT record, room code, or short human-entered value is
-not a cryptographic identity pin.
-
-For inbound sessions under `RejectUnknown`, construct the kit with the set of
-identities that may connect:
-
-```kotlin
-security {
-    mode = SecurityMode.AuthenticatedV2(
-        PeerAuthorizationPolicy.PinnedOnly(approvedFingerprints),
-    )
-}
-```
-
-Applications that intentionally admit any authenticated key using the same
-public `AppId` may opt into
-`PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp`. That policy still
-encrypts traffic and proves key possession, but `AppId` is not a secret and the
-policy does not identify or authorize a human/device. It is marked
-`@ExplicitSecurityRisk`; pair it with an application-level admission protocol
-and document the residual active-MITM/relay and peer-impersonation model.
-
-There is no automatic fallback from authenticated v2 to plaintext.
-`SecurityMode.NoneForMvp` remains deprecated only so existing consumers can
-perform an explicit migration. See
-[`docs/MIGRATING_TO_0.7.md`](docs/MIGRATING_TO_0.7.md).
+Subscribe to `incomingSessions` before advertising and attach each
+`session.incoming` collector promptly; these are hot event streams. `send()`
+confirms a local transport write, not remote application processing. Add
+domain-level IDs, ordering, deduplication, acknowledgements, and repair where
+your application requires them.
 
 ## Platform setup
 
 ### Android
 
-Initialize P2pKit once from `Application.onCreate()` before constructing a
-secure kit. Authenticated v2 uses Android Keystore-wrapped, no-backup storage;
-missing initialization fails with a typed local-identity configuration error.
+Initialize secure identity storage once from `Application.onCreate()` before
+constructing a kit:
 
 ```kotlin
 class MyApplication : Application() {
@@ -141,7 +144,7 @@ class MyApplication : Application() {
 }
 ```
 
-Declare the base LAN transport's install-time permissions:
+Declare the base LAN permissions:
 
 ```xml
 <uses-permission android:name="android.permission.INTERNET" />
@@ -150,16 +153,14 @@ Declare the base LAN transport's install-time permissions:
 <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 ```
 
-Base LAN discovery does not require a runtime nearby/location permission on the
-supported API range. The optional hotspot/Wi-Fi-join sidecar has separate
-permission requirements; query its permission manager immediately before those
-provisioning operations instead of gating the base transport.
+The optional network-provisioning sidecar has separate runtime permission and
+system-state requirements. Query its permission manager immediately before a
+provisioning operation; do not gate the base LAN transport on those permissions.
 
 ### iOS
 
-Authenticated v2 uses a device-only Keychain identity. The host app must include
-a nonblank local-network usage description and the exact service type selected
-by its security mode:
+The final application Info.plist must contain a nonblank local-network reason
+and the secure-v2 Bonjour service:
 
 ```xml
 <key>NSLocalNetworkUsageDescription</key>
@@ -170,20 +171,18 @@ by its security mode:
 </array>
 ```
 
-Use `_p2pkit2._tcp` for authenticated v2. Add `_p2pkit._tcp` only if the app
-deliberately constructs a deprecated plaintext-v1 kit. The profiles use
-separate discovery namespaces and cannot interoperate. Keep these keys in the
-source that generates the final Info.plist; the maintained sample stores them
-in `iosApp/project.yml`.
+Keep these values in the source that generates the final plist. The sample uses
+[`samples/iosApp/project.yml`](samples/iosApp/project.yml). Add the legacy
+`_p2pkit._tcp` service only for an explicitly configured deprecated plaintext-v1
+build; v1 and v2 do not interoperate or downgrade.
 
-### JVM desktop
+### JVM/Desktop
 
-Core deliberately has no passwordless/plain-file secure identity default.
-Provide a durable, confidential, integrity-protected implementation backed by
-the operating system's credential/secret store:
+Core intentionally has no plaintext secure-identity default. Install a durable,
+confidential, integrity-protected operating-system-backed store:
 
 ```kotlin
-val p2p = P2pKit.create {
+val kit = P2pKit.create {
     appId = AppId("com.example.transfer")
     deviceName = "Desktop"
     jvmSecureIdentityStore(protectedIdentityStore)
@@ -191,94 +190,67 @@ val p2p = P2pKit.create {
 }
 ```
 
-`JvmSecureIdentityStore` must make `putIfAbsent` atomic across processes,
-persist before returning, return defensive copies, and protect values at rest.
-The samples' in-memory store is development-only and deliberately loses
-identity on process exit.
+`putIfAbsent` must be atomic across processes and durable before returning.
+The samples' in-memory stores are development-only.
 
-## Session and lifecycle contract
+## Modules and repository structure
 
-- Subscribe eagerly to `incomingSessions` before advertising and attach each
-  `session.incoming` collector immediately. Both are hot streams and
-  `session.incoming` has `replay = 0`; an application protocol should exchange
-  a ready/admission message before sending real payloads.
-- `send()` means the message was written to the local transport. It is not a
-  remote application acknowledgement. Add command ids, sequence/revision
-  checks, deduplication, acknowledgements, and snapshots in the application
-  protocol when the domain requires them.
-- Only outgoing sessions auto-reconnect. An incoming session fails and the
-  remote outgoing owner redials. A clean close never reconnects.
-- Call `notifyAppBackgrounded()` and `notifyAppForegrounded()` from the host
-  lifecycle. The default background policy closes sessions and stops
-  advertising/discovery.
-- `stop()` is terminal and performs bounded cleanup. Cancel and join
-  application collectors, close sessions, then call `stop()` exactly once per
-  kit ownership lifecycle.
-- Payloads and discovered peers are untrusted input even inside encrypted
-  transport. Bound and validate the application's serialized envelope before
-  decoding game/business state.
+| Directory / project | Purpose |
+| --- | --- |
+| `library/p2p-core` / `:p2p-core` | API, protocol, security, sessions, file transfer |
+| `library/p2p-transport-lan` / `:p2p-transport-lan` | JmDNS/Bonjour and TCP transport |
+| `library/p2p-network-provisioning-android` | Optional Android network provisioning |
+| `library/p2p-network-provisioning-desktop` | Optional JVM manual-endpoint provisioning |
+| `samples/` | Android, JVM CLI, Desktop UI, KMP, iOS, and shared diagnostics samples |
+| `buildSrc/` | Build provenance and canonical publication metadata logic |
+| `scripts/` | Release, security, publication, consumer, and repository gates |
 
-## File transfer
+See the [architecture overview](docs/architecture/overview.md) and
+[current specification](docs/architecture/specification.md).
 
-Files stream in configurable chunks and are never buffered wholly in memory.
-Authenticated v2 completes an outgoing transfer only after the receiver
-validates SHA-256 and durably commits the destination. Observe retained
-`pendingFileOffers`; the older replay-zero `incomingFiles` stream and raw
-flush-only source/sink overloads are deprecated migration APIs.
+## Security and stability
 
-Text and binary `send()` payloads are capped at 4 MiB. Use file transfer for
-larger content and apply a lower application-specific cap whenever possible.
+Discovery TXT records, names, peer IDs, and `AppId` are untrusted. The default
+`RejectUnknown` policy requires an exact trusted identity. The explicit-risk
+`AcceptAnyAuthenticatedSameApp` policy encrypts and authenticates key possession
+but does not identify a person/device; it requires application-level admission.
+There is no automatic fallback to plaintext.
 
-## Architecture
+Public collection models are snapshot values. Text/binary messages are capped
+at 4 MiB. File transfer is streaming and completes only after the authenticated
+receiver verifies the sender's prepared SHA-256 snapshot and durably commits
+the destination.
 
-```text
-Host application
-  ├─ application identity, admission, room/game protocol
-  ├─ lifecycle and coroutine ownership
-  └─ P2pKit public API
-       ├─ PeerRegistry / discovery state
-       ├─ SessionManager / reconnect / simultaneous-open arbitration
-       ├─ Noise v2 security + frame/message/file protocol
-       ├─ LAN transport (JmDNS or Bonjour + TCP)
-       └─ optional network-provisioning sidecar
-```
+Read the [security model](docs/security/model.md),
+[compatibility policy](docs/compatibility.md), and
+[0.6-to-0.7 migration guide](docs/guides/migrating-to-0.7.md).
 
-The API and wire contract live in [`P2pKit-Spec.md`](P2pKit-Spec.md).
+## Validation status
 
-## Verification
+The automated module/platform, ABI, strict Dokka, publication-shape, isolated
+consumer, SBOM, signing, provenance, Swift warnings-as-errors, and XCFramework
+gates passed for the published `0.7.0-rc2` commit. This does not replace
+external evidence.
 
-Java 17 and macOS are required for the complete local matrix:
+These areas remain explicitly pending:
 
-```bash
-./gradlew check
-./gradlew :p2p-core:allTests
-./gradlew :p2p-transport-lan:jvmTest
-./gradlew :p2p-transport-lan:iosSimulatorArm64Test
-scripts/check-sbom.sh
-scripts/check-publish-artifacts.sh
-scripts/check-published-consumers.sh
-./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance
-```
+1. Android physical-device validation.
+2. Apple device, AWDL, path-rotation, background, and restart validation.
+3. Two-machine hostile-network validation.
+4. CLI fault injection and headful Desktop observation.
+5. Independent secure-v2 interoperability validation.
+6. Professional cryptographic audit.
 
-Simulator and loopback tests cannot prove physical-radio behavior. Real-device
-Bonjour/JmDNS removal, Wi-Fi/cellular path changes, LocalOnlyHotspot, hostile
-network departure, and cross-platform interoperability remain explicit manual
-release gates in [`docs/STABILIZATION_AND_RELEASE.md`](docs/STABILIZATION_AND_RELEASE.md).
+See [validation status](docs/testing/validation-status.md) and the executable
+[external validation plan](docs/testing/external-validation.md). Do not treat
+this release candidate as fully production validated or independently audited.
 
-## Publication status
+## Contributing and support
 
-All four library modules produce Central-shaped POMs, sources, strict Dokka
-documentation, Gradle module metadata, ABI baselines, dependency locks, and an
-SBOM. Signing activates only when an in-memory PGP key is supplied.
-`scripts/build-central-portal-bundle.sh` creates a signed, checksummed upload
-bundle without uploading it. The protected tag workflow can upload an approved
-bundle and then verifies the immutable bytes and isolated consumers from Maven
-Central.
+- [Documentation index](docs/README.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security reporting](SECURITY.md)
+- [Support policy](SUPPORT.md)
+- [Changelog](CHANGELOG.md)
 
-The `io.github.apdelrahman1911` namespace and publisher access were
-owner-confirmed in Central Portal. Version `0.7.0-rc2` passed the protected
-signed-bundle workflow and is available from Maven Central. Future publication
-remains a protected maintainer action; a local build alone never proves that a
-new coordinate was published.
-
-P2pKit is licensed under Apache-2.0. See [`LICENSE`](LICENSE).
+P2pKit is licensed under the [Apache License 2.0](LICENSE).

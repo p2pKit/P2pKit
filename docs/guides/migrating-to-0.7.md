@@ -164,4 +164,5 @@ At minimum:
 6. Verify consumer dependency provenance and run the published-consumer gate.
 
 The complete automated and physical-device release matrix is in
-[`STABILIZATION_AND_RELEASE.md`](STABILIZATION_AND_RELEASE.md).
+the [local testing guide](../testing/local.md) and
+[external validation plan](../testing/external-validation.md).
