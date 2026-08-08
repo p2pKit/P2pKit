@@ -9,12 +9,22 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 LATEST_PUBLISHED="$(sed -n 's/^LATEST_PUBLISHED_VERSION=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 GROUP="$(sed -n 's/^GROUP=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
+KOTLIN_VERSION="$(sed -n 's/^kotlin = "\([^"]*\)"/\1/p' "$ROOT/gradle/libs.versions.toml")"
+AGP_VERSION="$(sed -n 's/^agp = "\([^"]*\)"/\1/p' "$ROOT/gradle/libs.versions.toml")"
+IOS_MIN_VERSION="$(sed -n 's/^IOS_MIN_VERSION=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 GROUP_PATH="${GROUP//.//}"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-consumer-check.XXXXXX")"
 REPO_DIR="$WORK_DIR/repository"
 FIXTURE_DIR="$WORK_DIR/consumer"
 REMOTE_REPOSITORY_URL="${P2PKIT_CONSUMER_REPOSITORY_URL:-}"
 trap 'rm -rf "$WORK_DIR"' EXIT
+
+for required_value in KOTLIN_VERSION AGP_VERSION IOS_MIN_VERSION; do
+    [[ -n "${!required_value}" ]] || {
+        echo "FAIL: $required_value is missing from the repository version sources" >&2
+        exit 2
+    }
+done
 
 if [[ "${1:-}" == "--latest-published" ]]; then
     [[ $# -eq 1 ]] || { echo "FAIL: --latest-published accepts no additional arguments" >&2; exit 2; }
@@ -150,13 +160,13 @@ rootProject.name = "p2pkit-published-consumers"
 include(":coreJvm", ":lanJvm", ":desktopJvm", ":androidConsumer", ":kmpConsumer")
 EOF
 
-cat > "$FIXTURE_DIR/build.gradle.kts" <<'EOF'
+cat > "$FIXTURE_DIR/build.gradle.kts" <<EOF
 plugins {
-    kotlin("jvm") version "2.3.21" apply false
-    kotlin("multiplatform") version "2.3.21" apply false
-    id("com.android.application") version "9.1.1" apply false
-    id("com.android.library") version "9.1.1" apply false
-    id("com.android.kotlin.multiplatform.library") version "9.1.1" apply false
+    kotlin("jvm") version "$KOTLIN_VERSION" apply false
+    kotlin("multiplatform") version "$KOTLIN_VERSION" apply false
+    id("com.android.application") version "$AGP_VERSION" apply false
+    id("com.android.library") version "$AGP_VERSION" apply false
+    id("com.android.kotlin.multiplatform.library") version "$AGP_VERSION" apply false
 }
 EOF
 
@@ -454,7 +464,13 @@ kotlin {
         compileSdk = 36
         minSdk = 24
     }
-    iosSimulatorArm64()
+    iosSimulatorArm64 {
+        binaries.framework {
+            baseName = "P2pKitConsumer"
+            freeCompilerArgs +=
+                "-Xoverride-konan-properties=minVersion.ios=$IOS_MIN_VERSION"
+        }
+    }
 
     sourceSets {
         commonMain.dependencies {
@@ -562,7 +578,16 @@ run_consumer_gradle() {
     :androidConsumer:processDebugManifest \
     :kmpConsumer:compileKotlinJvm \
     :kmpConsumer:compileAndroidMain \
-    :kmpConsumer:compileKotlinIosSimulatorArm64)
+    :kmpConsumer:compileKotlinIosSimulatorArm64 \
+    :kmpConsumer:linkDebugFrameworkIosSimulatorArm64)
+
+CONSUMER_FRAMEWORK="$FIXTURE_DIR/kmpConsumer/build/bin/iosSimulatorArm64/debugFramework/P2pKitConsumer.framework/P2pKitConsumer"
+[[ -f "$CONSUMER_FRAMEWORK" ]] || fail "iOS 14 consumer framework was not linked"
+CONSUMER_BUILD_INFO="$(xcrun vtool -show-build "$CONSUMER_FRAMEWORK")"
+[[ "$(printf '%s\n' "$CONSUMER_BUILD_INFO" | awk '$1 == "platform" { print $2 }')" == "IOSSIMULATOR" ]] ||
+    fail "isolated iOS consumer framework is not an iOS Simulator binary"
+[[ "$(printf '%s\n' "$CONSUMER_BUILD_INFO" | awk '$1 == "minos" { print $2 }')" == "$IOS_MIN_VERSION" ]] ||
+    fail "isolated iOS consumer framework does not preserve the $IOS_MIN_VERSION deployment floor"
 
 MERGED_MANIFEST="$(find "$FIXTURE_DIR/androidConsumer/build/intermediates" \
     -path '*/processDebugManifest/AndroidManifest.xml' -print -quit)"
@@ -576,4 +601,4 @@ for permission in \
         fail "Android consumer merged manifest is missing $permission"
 done
 
-echo "RESULT: PASS — published scopes, Android LAN permissions, and isolated JVM/Android/KMP/iOS consumers are complete"
+echo "RESULT: PASS — published scopes, Android LAN permissions, and isolated JVM/Android/KMP/iOS 14 consumers are complete"

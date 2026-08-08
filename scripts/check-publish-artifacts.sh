@@ -21,20 +21,32 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 command -v jq >/dev/null 2>&1 || { echo "FATAL: jq is required" >&2; exit 2; }
 command -v xmllint >/dev/null 2>&1 || { echo "FATAL: xmllint is required" >&2; exit 2; }
 command -v unzip >/dev/null 2>&1 || { echo "FATAL: unzip is required" >&2; exit 2; }
+command -v javap >/dev/null 2>&1 || { echo "FATAL: javap from JDK 17 is required" >&2; exit 2; }
 VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 GROUP="$(sed -n 's/^GROUP=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
-if [[ -z "$VERSION" || -z "$GROUP" ]]; then
-    echo "FATAL: could not read GROUP/VERSION_NAME from $ROOT/gradle.properties" >&2
+KOTLIN_VERSION="$(sed -n 's/^kotlin = "\([^"]*\)"/\1/p' "$ROOT/gradle/libs.versions.toml")"
+if [[ -z "$VERSION" || -z "$GROUP" || -z "$KOTLIN_VERSION" ]]; then
+    echo "FATAL: could not read publication/toolchain versions from repository sources" >&2
     exit 2
 fi
 GROUP_PATH="${GROUP//.//}"
+INSPECTION_DIR="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-artifact-inspection.XXXXXX")"
+OWN_REPO=0
+
+cleanup() {
+    rm -rf "$INSPECTION_DIR"
+    if [[ "$OWN_REPO" == "1" ]]; then
+        rm -rf "$REPO_DIR"
+    fi
+}
+trap cleanup EXIT
 
 if [[ $# -ge 1 ]]; then
     REPO_DIR="$1"
     echo "==> Verifying existing repo: $REPO_DIR (group $GROUP, version $VERSION)"
 else
     REPO_DIR="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-publish-check.XXXXXX")"
-    trap 'rm -rf "$REPO_DIR"' EXIT
+    OWN_REPO=1
     echo "==> Publishing $GROUP:*:$VERSION to throwaway repo: $REPO_DIR"
     (cd "$ROOT" && ./gradlew --console=plain publishToMavenLocal -Dmaven.repo.local="$REPO_DIR")
 fi
@@ -129,6 +141,110 @@ check() {
     fi
 }
 
+check_kotlin_module() {
+    local artifact="$1" packaging="$2" expected_module="$3"
+    local container="$BASE/$artifact/$VERSION/$artifact-$VERSION.$packaging"
+    if [[ ! -f "$container" ]]; then
+        fail=1
+        echo "FAIL $artifact — cannot inspect missing $packaging"
+        return
+    fi
+
+    local module_container="$container"
+    if [[ "$packaging" == "aar" ]]; then
+        module_container="$INSPECTION_DIR/$artifact-classes.jar"
+        if ! unzip -p "$container" classes.jar >"$module_container"; then
+            fail=1
+            echo "FAIL $artifact — classes.jar is missing or unreadable"
+            return
+        fi
+    fi
+
+    local actual expected
+    actual="$(unzip -Z1 "$module_container" | awk '/^META-INF\/.*\.kotlin_module$/ { print }')"
+    expected="META-INF/$expected_module.kotlin_module"
+    if [[ "$actual" != "$expected" ]]; then
+        fail=1
+        echo "FAIL $artifact — Kotlin module identity was '${actual:-missing}', expected '$expected'"
+    else
+        echo "OK   $artifact  (Kotlin module identity $expected_module)"
+    fi
+}
+
+check_klib_identity() {
+    local artifact="$1" expected_short_name="$2" expected_native_target="$3"
+    local klib="$BASE/$artifact/$VERSION/$artifact-$VERSION.klib"
+    if [[ ! -f "$klib" ]]; then
+        fail=1
+        echo "FAIL $artifact — cannot inspect missing klib"
+        return
+    fi
+
+    local manifest compiler_version short_name unique_name native_targets
+    if ! manifest="$(unzip -p "$klib" default/manifest)"; then
+        fail=1
+        echo "FAIL $artifact — default/manifest is missing or unreadable"
+        return
+    fi
+    compiler_version="$(printf '%s\n' "$manifest" | sed -n 's/^compiler_version=//p')"
+    short_name="$(printf '%s\n' "$manifest" | sed -n 's/^short_name=//p')"
+    unique_name="$(printf '%s\n' "$manifest" | sed -n 's/^unique_name=//p')"
+    native_targets="$(printf '%s\n' "$manifest" | sed -n 's/^native_targets=//p')"
+
+    local expected_unique_name="${GROUP}\\:${expected_short_name}"
+    local invalid=""
+    [[ "$compiler_version" == "$KOTLIN_VERSION" ]] || invalid="$invalid compiler-version"
+    [[ "$short_name" == "$expected_short_name" ]] || invalid="$invalid short-name"
+    [[ "$unique_name" == "$expected_unique_name" ]] || invalid="$invalid unique-name"
+    [[ "$native_targets" == "$expected_native_target" ]] || invalid="$invalid native-target"
+    if [[ -n "$invalid" ]]; then
+        fail=1
+        echo "FAIL $artifact — invalid KLIB identity:$invalid"
+    else
+        echo "OK   $artifact  (Kotlin $KOTLIN_VERSION KLIB identity, $expected_native_target)"
+    fi
+}
+
+check_rc2_legacy_jvm_symbols() {
+    local core_jar="$BASE/p2p-core-jvm/$VERSION/p2p-core-jvm-$VERSION.jar"
+    local desktop_jar="$BASE/p2p-network-provisioning-desktop/$VERSION/p2p-network-provisioning-desktop-$VERSION.jar"
+    if [[ ! -f "$core_jar" || ! -f "$desktop_jar" ]]; then
+        fail=1
+        echo "FAIL JVM artifacts — cannot inspect RC2 compatibility symbols"
+        return
+    fi
+
+    local p2p_error unsupported_manager desktop_manager
+    p2p_error="$(javap -classpath "$core_jar" -p -s dev.p2pkit.core.P2pError)"
+    unsupported_manager="$(
+        javap -classpath "$core_jar" -p -s \
+            dev.p2pkit.core.provisioning.UnsupportedNetworkProvisioningManager
+    )"
+    desktop_manager="$(
+        javap -classpath "$desktop_jar" -p -s \
+            dev.p2pkit.provisioning.desktop.JvmNetworkProvisioningManager
+    )"
+
+    # Kotlin 2.4's ABI dumper no longer lists these compiler-generated public
+    # symbols even though its JVM backend still emits them. They exist in rc2,
+    # so inspect the actual class files rather than weakening binary coverage.
+    local invalid=""
+    grep -Fq \
+        'descriptor: (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V' \
+        <<<"$p2p_error" || invalid="$invalid P2pError-default-constructor"
+    grep -Fq 'public static final java.lang.String NOT_IN_V01;' \
+        <<<"$unsupported_manager" || invalid="$invalid provisioning-constant"
+    grep -Fq 'public static final long DEFAULT_POLL_INTERVAL_MS;' \
+        <<<"$desktop_manager" || invalid="$invalid desktop-poll-constant"
+
+    if [[ -n "$invalid" ]]; then
+        fail=1
+        echo "FAIL JVM artifacts — missing RC2 compatibility symbols:$invalid"
+    else
+        echo "OK   JVM artifacts  (RC2 compiler-generated symbols preserved)"
+    fi
+}
+
 # All hosts: root KMP metadata publication, JVM, Android, plain-JVM sidecar.
 check p2p-core                                 .jar
 check p2p-core-jvm                             .jar
@@ -140,11 +256,29 @@ check p2p-network-provisioning-android         .jar
 check p2p-network-provisioning-android-android .aar
 check p2p-network-provisioning-desktop         .jar
 
+# Kotlin 2.4 changes default JVM module names. These checks prevent a toolchain
+# update from silently changing the rc2 module identity embedded in JAR/AAR
+# consumers even when the public declarations remain ABI-compatible.
+check_kotlin_module p2p-core-jvm                             jar p2p-core
+check_kotlin_module p2p-core-android                         aar p2p-core
+check_kotlin_module p2p-transport-lan-jvm                    jar p2p-transport-lan
+check_kotlin_module p2p-transport-lan-android                aar p2p-transport-lan
+check_kotlin_module p2p-network-provisioning-android-android aar p2p-network-provisioning-android
+check_kotlin_module p2p-network-provisioning-desktop         jar p2p-network-provisioning-desktop
+check_rc2_legacy_jvm_symbols
+
 # iOS targets publish only from a macOS host.
 if [[ "$(uname -s)" == "Darwin" ]]; then
     for target in iosarm64 iossimulatorarm64 iosx64; do
         check "p2p-core-$target"          .klib
         check "p2p-transport-lan-$target" .klib
+        case "$target" in
+            iosarm64) native_target="ios_arm64" ;;
+            iossimulatorarm64) native_target="ios_simulator_arm64" ;;
+            iosx64) native_target="ios_x64" ;;
+        esac
+        check_klib_identity "p2p-core-$target" p2p-core "$native_target"
+        check_klib_identity "p2p-transport-lan-$target" p2p-transport-lan "$native_target"
     done
 else
     echo "WARN non-macOS host: skipped the 6 iOS klib publications"

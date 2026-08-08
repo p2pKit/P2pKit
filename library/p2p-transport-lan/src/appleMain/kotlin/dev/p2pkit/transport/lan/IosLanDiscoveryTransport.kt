@@ -592,7 +592,7 @@ internal class IosLanDiscoveryTransport(
         }
 
         nw_browser_set_queue(b, dataTransport.queue)
-        nw_browser_set_state_changed_handler(b) { state, error ->
+        nw_browser_set_state_changed_handler(b) browserStateHandler@ { state, error ->
             val label = when (state) {
                 nw_browser_state_ready -> "ready"
                 nw_browser_state_waiting -> "waiting"
@@ -648,9 +648,9 @@ internal class IosLanDiscoveryTransport(
                     }
                 }
             }
-            Unit
+            return@browserStateHandler
         }
-        nw_browser_set_browse_results_changed_handler(b) { old, new, batchComplete ->
+        nw_browser_set_browse_results_changed_handler(b) browserResultsHandler@ { old, new, batchComplete ->
             // AUDIT-2026-06 (#15): same identity guard as the state handler
             // above — refresh()/rebind cancel this browser and install a
             // replacement, and a stale instance's queued result callbacks
@@ -665,7 +665,7 @@ internal class IosLanDiscoveryTransport(
                     generation = lease.generation
                 )
             }
-            Unit
+            return@browserResultsHandler
         }
         nw_browser_start(b)
         IosLanDebug.log("browse", "nw_browser_start invoked")

@@ -3,7 +3,6 @@ public final class dev/p2pkit/provisioning/desktop/JvmDslKt {
 }
 
 public final class dev/p2pkit/provisioning/desktop/JvmNetworkProvisioningManager : dev/p2pkit/core/provisioning/NetworkProvisioningManager {
-	public static final field DEFAULT_POLL_INTERVAL_MS J
 	public fun <init> (Ldev/p2pkit/core/provisioning/ProvisioningContext;J)V
 	public synthetic fun <init> (Ldev/p2pkit/core/provisioning/ProvisioningContext;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;

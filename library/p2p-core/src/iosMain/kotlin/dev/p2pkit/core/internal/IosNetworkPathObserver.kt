@@ -56,9 +56,11 @@ import platform.darwin.dispatch_queue_create
  * void. Kotlin/Native infers the lambda's ObjC return type from its last
  * expression; if that's the return value of `_status.value =`
  * (incidentally `Unit` here, but not guaranteed by the language), we still
- * append an explicit `Unit` to match what we had to do in the LAN
- * transport's handlers — without it Kotlin/Native has historically tried
- * to box the result and crash libdispatch.
+ * finish with an explicit labeled return to match what we had to do in the
+ * LAN transport's handlers — without it Kotlin/Native has historically tried
+ * to box the result and crash libdispatch. Kotlin 2.4 diagnoses a trailing
+ * `Unit` expression as unused under `-Werror`, while the labeled return keeps
+ * the required void control flow explicit.
  */
 internal class IosNetworkPathObserver(
     private val logger: P2pLogger
@@ -106,7 +108,7 @@ internal class IosNetworkPathObserver(
             withCallbackStateLock {
                 callbackState.publish(generation, mapped)?.let { _status.value = it }
             }
-            Unit
+            return@nw_path_monitor_set_update_handler
         }
         nw_path_monitor_start(m)
         monitor = m

@@ -408,7 +408,7 @@ internal class IosLanDataTransport(
         nw_listener_set_queue(l, queue)
         IosLanDebug.log("data", "buildListener: queue attached, wiring handlers")
 
-        nw_listener_set_new_connection_handler(l) { conn ->
+        nw_listener_set_new_connection_handler(l) connectionHandler@ { conn ->
             if (conn != null && !closed && startedByHost) {
                 IosLanDebug.log("data", "listener: accepted inbound nw_connection")
                 val raw = connectionFactory(conn, queue)
@@ -424,7 +424,7 @@ internal class IosLanDataTransport(
                         "(conn=${conn != null} closed=$closed started=$startedByHost)"
                 )
             }
-            Unit
+            return@connectionHandler
         }
 
         val readyListener = try {
@@ -436,7 +436,7 @@ internal class IosLanDataTransport(
                         _tcpPort.value = null
                         nw_listener_cancel(l)
                     }
-                    nw_listener_set_state_changed_handler(l) { state, error ->
+                    nw_listener_set_state_changed_handler(l) listenerStateHandler@ { state, error ->
                         val label = when (state) {
                             nw_listener_state_ready -> "ready"
                             nw_listener_state_failed -> "failed"
@@ -470,7 +470,7 @@ internal class IosLanDataTransport(
                                 onNativeListenerTerminated(lease, label)
                             }
                         }
-                        Unit
+                        return@listenerStateHandler
                     }
                     IosLanDebug.log(
                         "data",
@@ -747,7 +747,7 @@ internal class IosLanDataTransport(
             return
         }
         nw_path_monitor_set_queue(m, pathQueue)
-        nw_path_monitor_set_update_handler(m) { path ->
+        nw_path_monitor_set_update_handler(m) pathHandler@ { path ->
             // All invocations of this handler are serialized on pathQueue
             // (created as a serial dispatch queue). State reads/writes
             // below are safe without explicit synchronization; the
@@ -809,7 +809,7 @@ internal class IosLanDataTransport(
                     addressChanged = addressChanged
                 )
             ) {
-                return@nw_path_monitor_set_update_handler Unit
+                return@pathHandler
             }
             when {
                 becameSatisfied && !isFirstEver -> {
@@ -823,7 +823,7 @@ internal class IosLanDataTransport(
                     )
                 }
             }
-            Unit
+            return@pathHandler
         }
         nw_path_monitor_start(m)
         pathMonitor = m
@@ -860,13 +860,13 @@ internal class IosLanDataTransport(
             name = UIApplicationWillEnterForegroundNotification,
             `object` = null,
             queue = null
-        ) { _: NSNotification? ->
+        ) foregroundHandler@ { _: NSNotification? ->
             IosLanDebug.log(
                 "data",
                 "foreground notification observed (UIApplicationWillEnterForeground)"
             )
             scheduleRebind("returning to foreground")
-            Unit
+            return@foregroundHandler
         }
         foregroundObserver = token
         IosLanDebug.log(

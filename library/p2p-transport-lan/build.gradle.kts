@@ -14,9 +14,7 @@ plugins {
 
 kotlin {
     @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class)
-    abiValidation {
-        enabled.set(true)
-    }
+    abiValidation()
 
     // Bundles all three iOS arch slices (device arm64 + sim arm64 + sim x64)
     // into a single .xcframework so the Xcode app at samples/iosApp/ can pick the
@@ -25,9 +23,15 @@ kotlin {
     val xcf = XCFramework("P2pKitShared")
 
     jvmToolchain(17)
-    jvm()
+    // Kotlin 2.4 defaults JVM module names to `<group>:<project>`. Preserve
+    // the published META-INF/p2p-transport-lan.kotlin_module identity.
+    jvm {
+        compilerOptions.moduleName.set(project.name)
+    }
 
     android {
+        // Android KMP also emits JVM-style module metadata. Keep the rc2 name.
+        compilerOptions.moduleName.set(project.name)
         namespace = "dev.p2pkit.transport.lan"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
@@ -37,8 +41,20 @@ kotlin {
     // JVM/Android (`transports { lan() }`), backed by NWBrowser / NWListener
     // / NWConnection. Requires iOS 13+; minimum is enforced by the Network
     // framework symbols themselves.
+    val iosMinimumVersion = providers.gradleProperty("IOS_MIN_VERSION").get()
+    require(iosMinimumVersion.matches(Regex("[0-9]+\\.[0-9]+"))) {
+        "IOS_MIN_VERSION must be a major.minor version"
+    }
+    val iosMinimumVersionOverride =
+        "-Xoverride-konan-properties=minVersion.ios=$iosMinimumVersion"
     val iosTargets = listOf(iosX64(), iosArm64(), iosSimulatorArm64())
     iosTargets.forEach { target ->
+        // Kotlin 2.4 raises the default iOS floor to 15. Apply the documented
+        // Kotlin/Native override to every framework and test binary so the
+        // repository's iOS 14 compatibility contract remains explicit.
+        target.binaries.configureEach {
+            freeCompilerArgs += iosMinimumVersionOverride
+        }
         // Wraps NW_PARAMETERS_DISABLE_PROTOCOL / NW_PARAMETERS_DEFAULT_CONFIGURATION
         // in a static-inline C helper so Kotlin never has to box those
         // void-returning block globals as kotlin.Any. See

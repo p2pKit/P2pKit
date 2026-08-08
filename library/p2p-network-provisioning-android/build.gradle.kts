@@ -9,13 +9,13 @@ plugins {
 
 kotlin {
     @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class)
-    abiValidation {
-        enabled.set(true)
-    }
+    abiValidation()
 
     jvmToolchain(17)
 
     android {
+        // Preserve the published rc2 META-INF Kotlin module identity.
+        compilerOptions.moduleName.set(project.name)
         namespace = "dev.p2pkit.provisioning.android"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()

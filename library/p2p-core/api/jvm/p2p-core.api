@@ -308,7 +308,6 @@ public final class dev/p2pkit/core/NetworkProvisioningError$PlatformError : dev/
 }
 
 public abstract class dev/p2pkit/core/P2pError : java/lang/Exception {
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 }
 
@@ -1362,7 +1361,6 @@ public final class dev/p2pkit/core/provisioning/ProvisioningContext {
 }
 
 public final class dev/p2pkit/core/provisioning/UnsupportedNetworkProvisioningManager : dev/p2pkit/core/provisioning/NetworkProvisioningManager {
-	public static final field NOT_IN_V01 Ljava/lang/String;
 	public fun <init> ()V
 	public fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun createManualPeer (Ljava/lang/String;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;

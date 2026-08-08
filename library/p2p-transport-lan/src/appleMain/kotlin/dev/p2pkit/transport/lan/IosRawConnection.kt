@@ -137,7 +137,7 @@ internal class IosRawConnection private constructor(
 
     init {
         nw_connection_set_queue(connection, queue)
-        nw_connection_set_state_changed_handler(connection) { st, err ->
+        nw_connection_set_state_changed_handler(connection) connectionStateHandler@ { st, err ->
             val label = when (st) {
                 nw_connection_state_ready -> "ready"
                 nw_connection_state_preparing -> "preparing"
@@ -184,7 +184,7 @@ internal class IosRawConnection private constructor(
                     // .invalid / .preparing — keep as Connecting.
                 }
             }
-            Unit
+            return@connectionStateHandler
         }
         if (startNativeConnection) {
             nw_connection_start(connection)
@@ -256,7 +256,7 @@ internal class IosRawConnection private constructor(
                                 buffer = pinned.addressOf(0),
                                 size = bytes.size.convert(),
                                 is_complete = false,
-                                completion = { error ->
+                                completion = sendCompletion@ { error ->
                                     if (error != null) {
                                         IosLanDebug.log("conn", "write(${bytes.size}): completion ERROR — flipping state to Closed")
                                         // Flip state to Closed AND latch closed=true
@@ -274,7 +274,7 @@ internal class IosRawConnection private constructor(
                                     } else {
                                         cont.resume(Unit)
                                     }
-                                    Unit
+                                    return@sendCompletion
                                 }
                             )
                         }
@@ -313,7 +313,7 @@ internal class IosRawConnection private constructor(
                     connection = connection,
                     min_incomplete_length = 1u,
                     max_length = RECEIVE_MAX_LENGTH,
-                    completion = { buffer, size, isComplete, error ->
+                    completion = receiveCompletion@ { buffer, size, isComplete, error ->
                         val out: ByteArray? = if (buffer != null && size.toInt() > 0) {
                             buffer.reinterpret<uint8_tVar>().readBytes(size.toInt())
                         } else {
@@ -345,7 +345,7 @@ internal class IosRawConnection private constructor(
                                 cancelOnce("read half-close")
                             }
                         }
-                        Unit
+                        return@receiveCompletion
                     }
                 )
             }

@@ -12,6 +12,7 @@ scripts/tests/check-repository-layout.sh
 scripts/tests/check-osv-lockfile-coverage.sh
 scripts/tests/check-markdown-links.sh
 scripts/tests/classify-ci-scope-test.sh
+scripts/tests/check-kotlin-toolchain-policy-test.sh
 scripts/check-release-metadata.sh
 git diff --check
 ./gradlew check --console=plain
@@ -19,6 +20,7 @@ scripts/check-sbom.sh
 scripts/check-publish-artifacts.sh
 scripts/check-published-consumers.sh
 ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance --console=plain
+scripts/check-xcframework-minimum-os.sh
 ./gradlew :iosApp:regenerateXcodeProject --console=plain
 
 set +e
