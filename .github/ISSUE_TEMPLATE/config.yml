@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/p2pKit/P2pKit/security/advisories/new
+    about: Report vulnerabilities privately; do not disclose them in a public issue.
+  - name: Documentation
+    url: https://github.com/p2pKit/P2pKit/blob/main/docs/README.md
+    about: Review current setup, testing, compatibility, and release guidance.

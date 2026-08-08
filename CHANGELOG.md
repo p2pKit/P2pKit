@@ -65,7 +65,7 @@ Remote Maven Central publication is not asserted by this source state.
 - A credential-gated script builds a signed/checksummed Central Portal bundle
   without performing a remote upload.
 
-See [`docs/MIGRATING_TO_0.7.md`](docs/MIGRATING_TO_0.7.md) before upgrading.
+See [`docs/guides/migrating-to-0.7.md`](docs/guides/migrating-to-0.7.md) before upgrading.
 
 ## 0.6.x
 

@@ -1,0 +1,58 @@
+name: Bug report
+description: Report reproducible incorrect behavior in P2pKit.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not report security vulnerabilities here. Use private vulnerability reporting.
+  - type: input
+    id: version
+    attributes:
+      label: P2pKit version or commit
+      placeholder: 0.7.0-rc2 or full commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [Android, iOS, JVM CLI, Desktop UI, Kotlin Multiplatform consumer, Build or publication]
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS version, device/runtime, JDK/Gradle/Xcode/Android SDK as applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Exact code, commands, and UI actions. Remove secrets and personal information.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized evidence
+      description: Include stable event names, error codes, and evidence paths when available; never include credentials or payloads.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, private keys, tokens, personal identifiers, and private payload contents.
+          required: true
+        - label: This report does not disclose an unpatched security vulnerability.
+          required: true

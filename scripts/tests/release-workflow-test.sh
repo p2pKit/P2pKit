@@ -101,6 +101,15 @@ grep -Fq 'XCODEGEN_VERSION="2.45.4"' "$XCODEGEN_INSTALLER" || {
     echo "FATAL: XcodeGen installer version is not pinned" >&2
     exit 1
 }
+
+grep -Fq 'scripts/tests/check-markdown-links.sh' "$CI_WORKFLOW" || {
+    echo "FATAL: CI does not validate active Markdown links" >&2
+    exit 1
+}
+grep -Fq 'scripts/tests/check-markdown-links.sh' "$ROOT/scripts/run-release-gate.sh" || {
+    echo "FATAL: release gate does not validate active Markdown links" >&2
+    exit 1
+}
 grep -Fq 'XCODEGEN_SHA256="090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef"' "$XCODEGEN_INSTALLER" || {
     echo "FATAL: XcodeGen installer checksum is not pinned" >&2
     exit 1
