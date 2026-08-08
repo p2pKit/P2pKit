@@ -94,3 +94,7 @@ protected merge. No permanent development branch is retained beside `main`.
 Published tags were not moved, deleted, or rewritten. In particular,
 `v0.7.0-rc2^{commit}` remained
 `90acb29583ea11d18685cf1315476756e7618245` throughout the audit.
+
+The selected diagnostic content and the proof required before removing the
+stash are preserved in
+[`issue-21-stash-forensics-2026-08.md`](issue-21-stash-forensics-2026-08.md).

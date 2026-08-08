@@ -403,11 +403,15 @@ Wi-Fi/Hotspot settings.
 Purpose and risk: combine the supported platform/runtime matrix into one
 repeatable acceptance run.
 
-Required setup: one API-26, one API-32, one API-36 Android device or approved
-emulator set, two physical Apple devices, a Mac, USB cables, private AP, and
+Required setup: one API-24-or-25, one API-32, one API-36 Android device or
+approved emulator set, two physical Apple devices including iOS/iPadOS 14, a
+Mac, USB cables, private AP, and
 the exact release/debug artifacts produced from the pinned SHA.
 
-Run PS-T01, PS-T02, PS-T04, LAN-T01, and LAN-T07 once per device pair. Record
+Run PS-T01, PS-T02, PS-T04, LAN-T01, and LAN-T07 for Android↔Android,
+iOS↔iOS, Android↔iOS, Android↔JVM, and iOS↔JVM on infrastructure LAN, with
+both connection-initiation and transfer directions where the platform roles
+apply. Add a three-peer discovery/concurrent-traffic run. Record
 OS/build, ABI, target SDK, permission prompts, background/foreground behavior,
 process restart, transfer hashes, and all terminal errors. PASS requires every
 pair's supported conjunct to pass; any unsupported device is recorded as
@@ -491,7 +495,7 @@ surface loads and runs on Android and that the generated XCFramework/Swift
 consumer loads and runs on a physical iOS device. Host compilation and
 simulator launch do not close this gap.
 
-Required setup: one API-26+ Android device, one physical iOS 15+ device, Mac
+Required setup: one API-24+ Android device, one physical iOS 14+ device, Mac
 with Xcode, USB cables, private AP, and a JVM/Desktop peer using App ID
 `p2pkit-desktop-sample`. The Android consumer must call
 `initP2pKitAndroid(applicationContext)` before `createP2pKit`; the iOS target

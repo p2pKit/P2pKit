@@ -20,6 +20,10 @@ Use the [current documentation index](../README.md) for active guidance.
 - `validation/legacy/` — superseded testing dashboards, stabilization/release
   runbooks, hardware checklists, and the pre-publication Maven guide.
 - `evidence/v0.3/` — retained historical diagnostic evidence.
+- [`branch-cleanup-2026-08.md`](branch-cleanup-2026-08.md) and
+  [`issue-21-stash-forensics-2026-08.md`](issue-21-stash-forensics-2026-08.md)
+  — final branch decisions and the selectively preserved Issue #21 diagnostic
+  experiment.
 
 The archived `P2PKIT_REMEDIATION_TRACKER_2026-07.md` preserves all finding and
 test-gap dispositions from the remediation program. Living external status is

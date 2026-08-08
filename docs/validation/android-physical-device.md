@@ -21,7 +21,7 @@ and `PS-T09`. Use the corresponding entries in
   machine with the repository JDK, Android SDK, `adb`, and Gradle toolchain.
 - A normal WPA2/WPA3 access point with administrative access, plus a topology
   where one device can host LocalOnlyHotspot. Record AP model and firmware.
-- Minimum OS matrix: oldest supported API 26, one API 29-32 device, one API
+- Minimum OS matrix: one API 24-25 device, one API 29-32 device, one API
   33-34 device, and one API 35-or-newer device. A device may cover multiple
   scenarios, but the two-manufacturer rule remains.
 - At least 2 GiB free storage per device. Disable battery saver for the baseline

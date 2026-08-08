@@ -18,7 +18,8 @@ pending.
 
 ## What it provides
 
-- Android API 24+, JVM 17, `iosArm64`, `iosSimulatorArm64`, and `iosX64`.
+- Android API 24+, JVM 17, and iOS/iPadOS 14+ through `iosArm64`,
+  `iosSimulatorArm64`, and `iosX64`.
 - Android/JVM JmDNS and Apple Bonjour discovery with TCP transport.
 - Authenticated protocol v2 by default using
   `Noise_XX_25519_ChaChaPoly_SHA256` and persistent X25519 identities.
