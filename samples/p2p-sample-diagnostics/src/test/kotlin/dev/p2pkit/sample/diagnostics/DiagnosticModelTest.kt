@@ -1,6 +1,7 @@
 package dev.p2pkit.sample.diagnostics
 
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
@@ -14,6 +15,61 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class DiagnosticModelTest {
+    @Test
+    fun representativeEventJsonSchemaRemainsCanonical() {
+        val event = DiagnosticEvent(
+            index = 7,
+            timestamp = "2026-07-23T15:45:00.123Z",
+            platform = "jvm",
+            operatingSystem = "TestOS 1",
+            applicationVersion = "1.2.3",
+            buildNumber = "42",
+            gitCommitSha = "0123456789abcdef0123456789abcdef01234567",
+            safeDeviceId = "safe-device",
+            testSessionId = "session-1",
+            testId = "PS-T05",
+            role = "sender",
+            peerId = "anon-peer",
+            connectionId = "conn-1",
+            transferId = "transfer-1",
+            category = "transfer",
+            eventName = "transfer.completed",
+            severity = DiagnosticSeverity.INFO,
+            currentState = "completed",
+            previousState = "transferring",
+            protocolVersion = "secure-v2",
+            packetType = "file_commit",
+            direction = DiagnosticDirection.RECEIVED,
+            payloadSizeBytes = 1024,
+            sequenceNumber = 9,
+            chunkNumber = 4,
+            chunkCount = 4,
+            retryNumber = 1,
+            timeoutMillis = 5_000,
+            retryDelayMillis = 250,
+            durationMillis = 321,
+            outcome = DiagnosticOutcome.SUCCESS,
+            details = mapOf("sha256" to "abc"),
+            redactedFields = listOf("token")
+        )
+
+        assertEquals(
+            "{\"schemaVersion\":1,\"index\":7,\"timestamp\":\"2026-07-23T15:45:00.123Z\"," +
+                "\"platform\":\"jvm\",\"operatingSystem\":\"TestOS 1\",\"applicationVersion\":\"1.2.3\"," +
+                "\"buildNumber\":\"42\",\"gitCommitSha\":\"0123456789abcdef0123456789abcdef01234567\"," +
+                "\"safeDeviceId\":\"safe-device\",\"testSessionId\":\"session-1\",\"testId\":\"PS-T05\"," +
+                "\"role\":\"sender\",\"peerId\":\"anon-peer\",\"connectionId\":\"conn-1\"," +
+                "\"transferId\":\"transfer-1\",\"category\":\"transfer\",\"eventName\":\"transfer.completed\"," +
+                "\"severity\":\"INFO\",\"currentState\":\"completed\",\"previousState\":\"transferring\"," +
+                "\"protocolVersion\":\"secure-v2\",\"packetType\":\"file_commit\",\"direction\":\"RECEIVED\"," +
+                "\"payloadSizeBytes\":1024,\"sequenceNumber\":9,\"chunkNumber\":4,\"chunkCount\":4," +
+                "\"retryNumber\":1,\"timeoutMillis\":5000,\"retryDelayMillis\":250,\"durationMillis\":321," +
+                "\"errorCode\":null,\"errorDescription\":null,\"outcome\":\"SUCCESS\"," +
+                "\"details\":{\"sha256\":\"abc\"},\"redactedFields\":[\"token\"]}",
+            JSON.encodeToString(event)
+        )
+    }
+
     @Test
     fun requiredFieldsCorrelationAndShaAreRecorded() {
         val recorder = recorder()

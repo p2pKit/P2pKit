@@ -2,6 +2,7 @@ package dev.p2pkit.core.protocol
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -25,6 +26,31 @@ class FileOfferPayloadTest {
         val decoded = FileOfferPayload.decode(FileOfferPayload.encode(payload))
         assertEquals(payload, decoded)
         assertNull(decoded.mimeType)
+    }
+
+    @Test
+    fun wireJsonWithMimeRemainsCanonical() {
+        val encoded = FileOfferPayload.encode(
+            FileOfferPayload(
+                name = "report.pdf",
+                sizeBytes = 1_234_567L,
+                mimeType = "application/pdf"
+            )
+        ).decodeToString()
+
+        assertEquals(
+            "{\"name\":\"report.pdf\",\"sizeBytes\":1234567,\"mimeType\":\"application/pdf\"}",
+            encoded
+        )
+    }
+
+    @Test
+    fun wireJsonWithoutMimeRemainsCanonical() {
+        val encoded = FileOfferPayload.encode(
+            FileOfferPayload(name = "blob.bin", sizeBytes = 0L)
+        ).decodeToString()
+
+        assertEquals("{\"name\":\"blob.bin\",\"sizeBytes\":0,\"mimeType\":null}", encoded)
     }
 
     @Test
@@ -64,6 +90,17 @@ class FileOfferPayloadTest {
         val failure = assertFailsWith<IllegalArgumentException> { FileOfferPayload.decode(invalid) }
 
         assertTrue(failure.message!!.contains("UTF-8"))
+    }
+
+    @Test
+    fun malformedJsonExceptionDoesNotContainPeerInput() {
+        val secret = "FILE_OFFER_SECRET_SENTINEL_DO_NOT_LOG"
+        val invalid =
+            "{\"name\":{\"peerControlled\":\"$secret\"},\"sizeBytes\":1}".encodeToByteArray()
+
+        val failure = assertFailsWith<IllegalArgumentException> { FileOfferPayload.decode(invalid) }
+
+        assertFalse(failure.message.orEmpty().contains(secret), failure.message)
     }
 
     @Test

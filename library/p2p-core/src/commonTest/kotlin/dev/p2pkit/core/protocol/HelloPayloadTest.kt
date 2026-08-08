@@ -2,6 +2,7 @@ package dev.p2pkit.core.protocol
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
@@ -21,6 +22,50 @@ class HelloPayloadTest {
         val decoded = HelloPayload.decode(encoded)
         assertEquals(original, decoded)
         assertTrue(!encoded.decodeToString().contains("\"features\""))
+    }
+
+    @Test
+    fun legacyWireJsonRemainsCanonical() {
+        val encoded = HelloPayload.encode(
+            HelloPayload(
+                appId = "com.example.transfer",
+                peerId = "peer-01",
+                deviceName = "Desk",
+                platform = "JVM_DESKTOP",
+                supportedTransports = listOf("LAN"),
+                protocolVersion = 1
+            )
+        ).decodeToString()
+
+        assertEquals(
+            "{\"appId\":\"com.example.transfer\",\"peerId\":\"peer-01\"," +
+                "\"deviceName\":\"Desk\",\"platform\":\"JVM_DESKTOP\"," +
+                "\"supportedTransports\":[\"LAN\"],\"protocolVersion\":1}",
+            encoded
+        )
+    }
+
+    @Test
+    fun secureWireJsonRemainsCanonical() {
+        val encoded = HelloPayload.encode(
+            HelloPayload(
+                appId = "com.example.transfer",
+                peerId = "peer-02",
+                deviceName = "Phone",
+                platform = "ANDROID",
+                supportedTransports = listOf("LAN"),
+                protocolVersion = ProtocolConstants.SECURE_VERSION.toInt(),
+                features = ProtocolFeatures.SECURE_V2.sorted()
+            )
+        ).decodeToString()
+
+        assertEquals(
+            "{\"appId\":\"com.example.transfer\",\"peerId\":\"peer-02\"," +
+                "\"deviceName\":\"Phone\",\"platform\":\"ANDROID\"," +
+                "\"supportedTransports\":[\"LAN\"],\"protocolVersion\":2," +
+                "\"features\":[\"app-message-envelope-v1\",\"file-commit-sha256-v1\"]}",
+            encoded
+        )
     }
 
     @Test
@@ -107,6 +152,22 @@ class HelloPayloadTest {
         assertFailsWith<IllegalArgumentException> {
             HelloPayload.decode("{definitely not json".encodeToByteArray())
         }
+    }
+
+    @Test
+    fun malformedJsonExceptionDoesNotContainPeerInput() {
+        val secret = "HELLO_SECRET_SENTINEL_DO_NOT_LOG"
+        val invalid = """{
+            "appId":{"peerControlled":"$secret"},
+            "peerId":"p1",
+            "deviceName":"Dev",
+            "platform":"JVM_DESKTOP",
+            "supportedTransports":["LAN"]
+        }""".trimIndent().encodeToByteArray()
+
+        val failure = assertFailsWith<IllegalArgumentException> { HelloPayload.decode(invalid) }
+
+        assertFalse(failure.message.orEmpty().contains(secret), failure.message)
     }
 
     /** Structurally valid JSON missing a required field (peerId) is rejected. */

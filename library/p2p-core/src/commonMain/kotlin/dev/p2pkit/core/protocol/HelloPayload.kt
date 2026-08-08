@@ -1,8 +1,8 @@
 package dev.p2pkit.core.protocol
 
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
@@ -27,9 +27,12 @@ internal data class HelloPayload(
     val features: List<String> = emptyList()
 ) {
     companion object {
+        @OptIn(ExperimentalSerializationApi::class)
         private val json = Json {
             ignoreUnknownKeys = true
             encodeDefaults = true
+            // Decode failures can reach bounded warnings; never echo peer JSON.
+            exceptionsWithDebugInfo = false
         }
 
         /** Max accepted length (chars) for an untrusted HELLO string field. */

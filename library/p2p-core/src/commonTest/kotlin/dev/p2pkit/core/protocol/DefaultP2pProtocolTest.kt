@@ -296,6 +296,40 @@ class DefaultP2pProtocolTest {
     }
 
     @Test
+    fun malformedBodyWarningsNeverContainPeerJsonInput() {
+        runBlocking {
+            val pair = FakeConnectionPair()
+            val logger = RecordingLogger()
+            val protocol = DefaultP2pProtocol(clock = { 0L }, logger = logger)
+            val scope = newScope()
+            try {
+                val delivered = scope.async { protocol.events(pair.b).take(1).toList() }
+                val helloSecret = "HELLO_SECRET_SENTINEL_DO_NOT_LOG"
+                val offerSecret = "FILE_OFFER_SECRET_SENTINEL_DO_NOT_LOG"
+                val malformedHello = """{
+                    "appId":{"peerControlled":"$helloSecret"},
+                    "peerId":"p1",
+                    "deviceName":"D",
+                    "platform":"ANDROID",
+                    "supportedTransports":["LAN"]
+                }""".trimIndent().encodeToByteArray()
+                val malformedOffer =
+                    "{\"name\":{\"peerControlled\":\"$offerSecret\"},\"sizeBytes\":1}".encodeToByteArray()
+                pair.a.write(FrameCodec.encode(rawControlFrame(PacketType.HELLO, malformedHello)))
+                pair.a.write(FrameCodec.encode(rawControlFrame(PacketType.FILE_OFFER, malformedOffer)))
+                protocol.sendPing(pair.a)
+
+                assertEquals(ProtocolEvent.Ping, delivered.await().single())
+                assertTrue(logger.warnings.any { it.contains("malformed HELLO") })
+                assertTrue(logger.warnings.any { it.contains("malformed FILE_OFFER") })
+                assertTrue(logger.warnings.none { it.contains(helloSecret) || it.contains(offerSecret) })
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
+
+    @Test
     fun malformedAuthenticatedFileOfferFailsClosed() {
         runBlocking {
             val pair = FakeConnectionPair()

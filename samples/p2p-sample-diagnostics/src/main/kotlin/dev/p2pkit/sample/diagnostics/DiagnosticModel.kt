@@ -1,6 +1,7 @@
 package dev.p2pkit.sample.diagnostics
 
 import dev.p2pkit.core.P2pLogger
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -951,8 +952,11 @@ public val DEFAULT_MANUAL_EVIDENCE: List<String> = listOf(
     "OS/device metadata and external system logs when required by the validation-plan row"
 )
 
+@OptIn(ExperimentalSerializationApi::class)
 internal val JSON: Json = Json {
     encodeDefaults = true
     explicitNulls = true
     prettyPrint = false
+    // Imported/rejected JSON must not leak into shareable evidence errors.
+    exceptionsWithDebugInfo = false
 }
