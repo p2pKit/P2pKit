@@ -17,7 +17,8 @@ remediation records. Start with the repository [README](../README.md).
 
 - [Local testing](testing/local.md)
 - [Validation status](testing/validation-status.md)
-- [External validation test plan](testing/external-validation.md)
+- [Real-world and independent validation handbook](validation/README.md)
+- [Cross-platform validation test catalog](validation/test-catalog.md)
 - [Release checklist](releasing/checklist.md)
 - [Maven Central procedure](releasing/maven-central.md)
 - [`0.7.0-rc2` release evidence](releases/0.7.0-rc2.md)
@@ -25,3 +26,6 @@ remediation records. Start with the repository [README](../README.md).
 Historical audits, remediation trackers, superseded runbooks, and old evidence
 are indexed under [`archive/`](archive/README.md). An archived status is not a
 current product claim.
+
+Dated branch and GitHub tracker decisions are indexed under
+[`maintenance/`](maintenance/README.md).

@@ -241,9 +241,9 @@ These areas remain explicitly pending:
 5. Independent secure-v2 interoperability validation.
 6. Professional cryptographic audit.
 
-See [validation status](docs/testing/validation-status.md) and the executable
-[external validation plan](docs/testing/external-validation.md). Do not treat
-this release candidate as fully production validated or independently audited.
+See [validation status](docs/testing/validation-status.md) and the operational
+[real-world validation handbook](docs/validation/README.md). Do not treat this
+release candidate as fully production validated or independently audited.
 
 ## Contributing and support
 
