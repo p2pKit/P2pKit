@@ -76,14 +76,10 @@ while IFS= read -r use; do
 done < <(sed -n 's/^[[:space:]]*uses:[[:space:]]*//p' "$WORKFLOW")
 
 for workflow in "$CI_WORKFLOW" "$DRY_RUN_WORKFLOW" "$WORKFLOW"; do
-    grep -Fq "'platforms;android-36'" "$workflow" || {
-        echo "FATAL: workflow does not install the stable Android API-36 platform: $workflow" >&2
+    grep -Fq "'platforms;android-36' 'platforms;android-37'" "$workflow" || {
+        echo "FATAL: workflow does not install API 36 for libraries and API 37 for the Android sample: $workflow" >&2
         exit 1
     }
-    if grep -Fq "platforms;android-37" "$workflow"; then
-        echo "FATAL: workflow requests unavailable Android API-37 platform: $workflow" >&2
-        exit 1
-    fi
     grep -Fq 'scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen"' "$workflow" || {
         echo "FATAL: workflow does not install the pinned XcodeGen tool: $workflow" >&2
         exit 1

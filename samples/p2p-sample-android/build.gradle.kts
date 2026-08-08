@@ -5,10 +5,9 @@ plugins {
 
 android {
     namespace = "dev.p2pkit.sample.android"
-    // Compile against the stable, installable SDK platform used by the
-    // published Android library. The executable sample still opts into the
-    // newest manifest behavior so warnings-as-errors lint remains strict.
-    compileSdk = libs.versions.android.compileSdk.get().toInt()
+    // AndroidX Core 1.19 requires API 37 at compile time. Published library
+    // modules remain on the independently versioned API 36 compile SDK.
+    compileSdk = libs.versions.android.sample.compileSdk.get().toInt()
 
     defaultConfig {
         applicationId = "dev.p2pkit.sample.android"
@@ -50,6 +49,9 @@ dependencies {
     implementation(project(":sample-kmp-shared"))
     implementation(project(":p2p-sample-diagnostics"))
 
+    // Core 1.19 moved the Kotlin extensions into `core`; keeping the empty
+    // compatibility artifact as a direct constraint also aligns transitive
+    // `core-ktx` requests on compile and runtime classpaths.
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
