@@ -1,5 +1,6 @@
 package dev.p2pkit.core.protocol
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -20,9 +21,12 @@ internal data class FileOfferPayload(
     val mimeType: String? = null
 ) {
     companion object {
+        @OptIn(ExperimentalSerializationApi::class)
         private val json = Json {
             ignoreUnknownKeys = true
             encodeDefaults = true
+            // Decode failures can reach bounded warnings; never echo peer JSON.
+            exceptionsWithDebugInfo = false
         }
 
         /** Max accepted length (chars) for the peer-supplied file name. */
