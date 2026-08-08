@@ -100,6 +100,8 @@ dokka {
         moduleVersion.set(project.version.toString())
         outputDirectory.set(layout.buildDirectory.dir("dokka/html"))
         failOnWarning.set(true)
+        // Release artifacts must not depend on remote package-list availability.
+        offlineMode.set(true)
     }
 }
 

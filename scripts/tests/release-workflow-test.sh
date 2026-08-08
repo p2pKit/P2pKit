@@ -128,4 +128,15 @@ if grep -Fq 'io.netty:netty-codec-http:4.1.135.Final=' "$ANDROID_LOCK"; then
     exit 1
 fi
 
-echo "RESULT: PASS — release workflow, Android SDK, and Netty security policy are locked"
+for module in \
+    library/p2p-core \
+    library/p2p-transport-lan \
+    library/p2p-network-provisioning-android \
+    library/p2p-network-provisioning-desktop; do
+    grep -Fq 'offlineMode.set(true)' "$ROOT/$module/build.gradle.kts" || {
+        echo "FATAL: published-module Dokka is not deterministic/offline: $module" >&2
+        exit 1
+    }
+done
+
+echo "RESULT: PASS — release workflow, deterministic Dokka, Android SDK, and Netty security policy are locked"
