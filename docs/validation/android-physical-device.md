@@ -38,7 +38,8 @@ From a clean checkout of the candidate commit:
 ```bash
 export P2PKIT_SHA="$(git rev-parse HEAD)"
 test -z "$(git status --short)"
-test "$(git describe --tags --exact-match v0.7.0-rc2 2>/dev/null || true)" = "" || true
+test "$(git rev-parse 'v0.7.0-rc2^{commit}')" = \
+  "90acb29583ea11d18685cf1315476756e7618245"
 ./gradlew --no-daemon :p2p-sample-android:clean \
   :p2p-sample-android:assembleDebug \
   :p2p-sample-android:assembleDebugAndroidTest
