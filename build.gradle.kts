@@ -138,6 +138,15 @@ allprojects {
     // one explicit --write-locks operation; ordinary builds never rewrite it.
     dependencyLocking {
         lockAllConfigurations()
+        if (project.path == ":p2p-sample-desktop-ui") {
+            // Compose Desktop and Skiko use OS/architecture-specific module
+            // names. The direct Compose coordinate and common Skiko modules
+            // pin their versions, while strict verification authenticates the
+            // platform bytes. Ignore only those classifier module families so
+            // one common lock remains valid on every supported Desktop host.
+            ignoredDependencies.add("org.jetbrains.compose.desktop:desktop-jvm-*")
+            ignoredDependencies.add("org.jetbrains.skiko:skiko-awt-runtime-*")
+        }
     }
 
     configurations.configureEach {

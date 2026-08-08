@@ -5,12 +5,18 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORKFLOW="$ROOT/.github/workflows/publish-maven-central.yml"
 CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 DRY_RUN_WORKFLOW="$ROOT/.github/workflows/release-dry-run.yml"
+DESKTOP_WORKFLOW="$ROOT/.github/workflows/desktop-cross-host.yml"
 ANDROID_LOCK="$ROOT/samples/p2p-sample-android/gradle.lockfile"
+DESKTOP_BUILD="$ROOT/samples/p2p-sample-desktop-ui/build.gradle.kts"
+DESKTOP_LOCK="$ROOT/samples/p2p-sample-desktop-ui/gradle.lockfile"
+VERSION_CATALOG="$ROOT/gradle/libs.versions.toml"
 XCODEGEN_INSTALLER="$ROOT/scripts/install-xcodegen.sh"
 CI_SCOPE_CLASSIFIER="$ROOT/scripts/classify-ci-scope.sh"
 
 [[ -f "$WORKFLOW" ]] || { echo "FATAL: Maven Central workflow is missing" >&2; exit 1; }
+[[ -f "$DESKTOP_WORKFLOW" ]] || { echo "FATAL: Desktop cross-host workflow is missing" >&2; exit 1; }
 ruby -e 'require "yaml"; YAML.safe_load_file(ARGV.fetch(0), aliases: true)' "$WORKFLOW"
+ruby -e 'require "yaml"; YAML.safe_load_file(ARGV.fetch(0), aliases: true)' "$DESKTOP_WORKFLOW"
 ruby - "$WORKFLOW" <<'RUBY'
 require "json"
 require "yaml"
@@ -85,6 +91,57 @@ for workflow in "$CI_WORKFLOW" "$DRY_RUN_WORKFLOW" "$WORKFLOW"; do
         exit 1
     }
 done
+
+grep -Fq 'os: [ubuntu-latest, windows-latest]' "$DESKTOP_WORKFLOW" || {
+    echo "FATAL: Desktop cross-host workflow does not cover Linux and Windows" >&2
+    exit 1
+}
+for task in \
+    ':p2p-sample-desktop-ui:test' \
+    ':p2p-sample-desktop-ui:checkRuntime' \
+    ':p2p-sample-desktop-ui:hotRunArgfile' \
+    ':p2p-sample-desktop-ui:createDistributable'; do
+    grep -Fq -- "$task" "$DESKTOP_WORKFLOW" || {
+        echo "FATAL: Desktop cross-host workflow is missing $task" >&2
+        exit 1
+    }
+done
+if grep -Eq -- 'continue-on-error|--offline|--write-locks|--write-verification-metadata' "$DESKTOP_WORKFLOW"; then
+    echo "FATAL: Desktop cross-host verification is non-blocking, assumes a warm cache, or rewrites dependency state" >&2
+    exit 1
+fi
+while IFS= read -r use; do
+    revision="${use##*@}"
+    revision="${revision%% *}"
+    [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || {
+        echo "FATAL: Desktop cross-host action is not pinned by full commit: $use" >&2
+        exit 1
+    }
+done < <(sed -n 's/^[[:space:]]*uses:[[:space:]]*//p' "$DESKTOP_WORKFLOW")
+
+for target in linux-arm64 linux-x64 macos-arm64 macos-x64 windows-arm64 windows-x64; do
+    grep -Fq "\"$target\"" "$DESKTOP_BUILD" || {
+        echo "FATAL: Desktop build does not declare lock target $target" >&2
+        exit 1
+    }
+    catalog_target="${target//-/.}"
+    grep -Fq "libs.jetbrains.compose.desktop.$catalog_target" "$DESKTOP_BUILD" || {
+        echo "FATAL: Desktop build does not map lock target $target to the catalog" >&2
+        exit 1
+    }
+    grep -Fq "jetbrains-compose-desktop-$target" "$VERSION_CATALOG" || {
+        echo "FATAL: version catalog is missing Desktop target $target" >&2
+        exit 1
+    }
+done
+grep -Fq 'p2pkit.desktop.lockTarget is for dependency resolution only' "$DESKTOP_BUILD" || {
+    echo "FATAL: foreign Desktop runtime execution is not guarded" >&2
+    exit 1
+}
+if grep -Eq 'org\.jetbrains\.compose\.desktop:desktop-jvm-(linux|macos|windows)|org\.jetbrains\.skiko:skiko-awt-runtime-(linux|macos|windows)' "$DESKTOP_LOCK"; then
+    echo "FATAL: Desktop lock remains tied to one operating system or architecture" >&2
+    exit 1
+fi
 
 ruby - "$CI_WORKFLOW" <<'RUBY'
 require "yaml"
@@ -172,4 +229,4 @@ for module in \
     }
 done
 
-echo "RESULT: PASS — release workflow, deterministic Dokka, Android SDK, and build-tool security policy are locked"
+echo "RESULT: PASS — release and Desktop cross-host workflows, deterministic Dokka, Android SDK, and build-tool security policy are locked"
