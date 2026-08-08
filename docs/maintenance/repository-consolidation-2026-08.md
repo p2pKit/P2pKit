@@ -69,6 +69,8 @@ The detailed item-by-item disposition rules and cross-links are in
   [branch cleanup record](../archive/branch-cleanup-2026-08.md).
 - The issue and pull-request acceptance review is in the
   [GitHub audit](github-audit-2026-08.md).
+- The protected integration is
+  [PR #60](https://github.com/p2pKit/P2pKit/pull/60).
 - Issue #45 was closed only after its stronger atomic implementation and focused
   regression passed. All partially completed network/device issues remain open.
 - PR #49 was merged through the protected path. Applicable workflow-action PRs

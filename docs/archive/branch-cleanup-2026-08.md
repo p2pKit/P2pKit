@@ -47,6 +47,21 @@ reason for deletion; the unique behavior and its current replacement are.
 | `perf/issue-20-android-startup-lock` | `3e2b4d8877a719fd5cb709700c57548fdae11499`; 173 behind, 4 topology commits | Wraps the old startup entrypoints in `Dispatchers.Default`, plus inherited issue-10 and iOS sample work. | **Delete local and remote.** Current `P2pKitImpl` owns a Default-dispatcher scope and a transactional, mutex-serialized feature lifecycle with rollback/cancellation semantics absent from the old patch. PR #24 preserves authorship/history. |
 | `v0.6-dev` | `ea436b9b2a16bb7f13295d0a8f79599248f2ab10`; 173 behind, 5 topology commits (3 non-merge) | Historical issue-10 bind selection, PR #22 iOS sample change, and PR #24 startup change. | **Delete local and remote.** All useful root causes were incorporated or superseded by the 0.7 lifecycle, selected-network, secure-v2, and sample architecture. The merge PRs and this record preserve provenance; keeping an untagged divergent development line would imply unsupported 0.6 maintenance. |
 
+### Final deletion execution
+
+After this record and the consolidation candidate were preserved remotely in
+[PR #60](https://github.com/p2pKit/P2pKit/pull/60), the five extant obsolete
+remote branches were deleted: `diag/issue-10-addServiceListener-timing`,
+`fix/issue-19-ios-auto-mesh`, `fix/issue-45-manual-peer-ids-thread-safe`,
+`perf/issue-20-android-startup-lock`, and `v0.6-dev`. The two remaining audited
+diagnostic names existed only locally. All seven local names in the table were
+then deleted.
+
+A fresh `git fetch --prune` and `git ls-remote --heads origin` confirmed that no
+audited diagnostic, fix, performance, or `v0.6-dev` branch remained. The only
+non-`main` remote branches were PR #60 and the live Dependabot PR branches. No
+tag changed, and the issue-21 stash described below remained present.
+
 ### Local diagnostic stash
 
 `stash@{0}` (`5ae6b82201e631ec9966742284aff7e8d46b1ff0`) remains intentionally retained.
@@ -64,9 +79,10 @@ They remain governed by their live PRs and may be deleted only when merged,
 superseded, or closed. Their applicability and required-gate state is recorded
 in [`../maintenance/github-audit-2026-08.md`](../maintenance/github-audit-2026-08.md).
 
-The temporary `cleanup/final-consolidation-2026-08` branch exists only to pass
-the protected-`main` PR process and will be deleted after merge. No permanent
-development branch is retained beside `main`.
+The temporary `cleanup/final-consolidation-2026-08` branch exists only as
+[PR #60](https://github.com/p2pKit/P2pKit/pull/60) for the protected-`main`
+process and will be deleted after merge. No permanent development branch is
+retained beside `main`.
 
 Published tags were not moved, deleted, or rewritten. In particular,
 `v0.7.0-rc2^{commit}` remained
