@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" tests="14" skipped="0" failures="0" errors="0" timestamp="2026-07-04T18:45:48.119Z" hostname="192.168.1.19" time="0.006">
+  <properties/>
+  <testcase name="singleFrameYieldsMessageImmediately[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="multipleFramesReassembleInOrder[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="multipleFramesReassembleOutOfOrder[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="textFlagIsPreservedAcrossChunks[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="nonDataFrameReturnsNull[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="stalePartialMessageIsEvicted[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="freshPartialMessageIsNotEvicted[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="mismatchedTotalChunksThrowsProtocolError[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="duplicateChunkIndexThrowsAndDoesNotReplaceStoredBytes[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" time="0.003"/>
+  <testcase name="outOfRangeChunkIndexThrowsProtocolError[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="singleFrameOverMaxPayloadBytesThrowsProtocolError[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" time="0.002"/>
+  <testcase name="aggregatePendingBytesAcrossMessagesIsCapped[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" time="0.001"/>
+  <testcase name="slowButSteadyPartialIsNotEvictedAndCompletes[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="idlePartialIsEvictedByInactivityNotByAge[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

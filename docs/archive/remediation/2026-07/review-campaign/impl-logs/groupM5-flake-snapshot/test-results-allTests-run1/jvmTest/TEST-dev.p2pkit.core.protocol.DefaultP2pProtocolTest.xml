@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="DefaultP2pProtocolTest[jvm]" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-07-04T18:46:29.420Z" hostname="192.168.1.19" time="0.012">
+  <properties/>
+  <testcase name="binaryRoundsTripViaLoopback[jvm]" classname="dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.001"/>
+  <testcase name="malformedHelloBodyIsSkippedWithWarnAndSubsequentFramesStillDelivered[jvm]" classname="dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.002"/>
+  <testcase name="closeEventIsEmitted[jvm]" classname="dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.001"/>
+  <testcase name="pingAndPongAreDistinctEvents[jvm]" classname="dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.001"/>
+  <testcase name="textRoundsTripViaLoopback[jvm]" classname="dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.001"/>
+  <testcase name="helloRoundTripsAsEvent[jvm]" classname="dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.001"/>
+  <testcase name="peerErrorCarriesReason[jvm]" classname="dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.001"/>
+  <testcase name="helloBodyFailingValidationIsSkippedWithWarnNotThrown[jvm]" classname="dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.001"/>
+  <testcase name="largePayloadChunksAndReassembles[jvm]" classname="dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.001"/>
+  <testcase name="malformedFileOfferBodyIsSkippedWithWarnAndSubsequentFramesStillDelivered[jvm]" classname="dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.001"/>
+  <testcase name="fileOfferBodyFailingValidationIsSkippedWithWarnAndSubsequentOfferDelivered[jvm]" classname="dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

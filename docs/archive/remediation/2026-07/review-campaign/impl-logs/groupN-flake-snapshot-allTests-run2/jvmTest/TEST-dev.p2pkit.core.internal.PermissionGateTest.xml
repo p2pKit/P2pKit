@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="PermissionGateTest[jvm]" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:14:59.620Z" hostname="192.168.1.19" time="0.004">
+  <properties/>
+  <testcase name="defaultPermissionPathDoesNotGateStartAdvertisingOrDiscovery[jvm]" classname="dev.p2pkit.core.internal.PermissionGateTest" time="0.002"/>
+  <testcase name="missingRuntimePermissionStillGatesBothEntryPoints[jvm]" classname="dev.p2pkit.core.internal.PermissionGateTest" time="0.001"/>
+  <testcase name="requiredButGrantedPermissionsDoNotGate[jvm]" classname="dev.p2pkit.core.internal.PermissionGateTest" time="0.001"/>
+  <testcase name="noOpManagerReportsNoRuntimePermissions[jvm]" classname="dev.p2pkit.core.internal.PermissionGateTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

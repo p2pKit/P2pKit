@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="FileTransferFlowTest[jvm]" tests="21" skipped="0" failures="0" errors="0" timestamp="2026-07-04T18:46:08.083Z" hostname="192.168.1.19" time="4.565">
+  <properties/>
+  <testcase name="offerTimeoutAutoCancelsOnSender[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.211"/>
+  <testcase name="sourceClosedExactlyOnceOnCancelAfterAccept[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.001"/>
+  <testcase name="senderSourceExhaustionNotifiesReceiverAndKeepsSessionConnected[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.063"/>
+  <testcase name="senderSourceReadFailureSendsFileCancelAndFailsOnlyThatTransfer[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.001"/>
+  <testcase name="sourceClosedExactlyOnceOnOfferWriteFailure[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.001"/>
+  <testcase name="duplicateFileAcceptDoesNotLaunchSecondStreamer[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.002"/>
+  <testcase name="sourceClosedExactlyOnceOnRejectedOffer[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.001"/>
+  <testcase name="offerExceedingReceiverLimitAutoRejects[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.083"/>
+  <testcase name="sourceClosedExactlyOnceOnCompletedTransfer[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.001"/>
+  <testcase name="offerProcessedWhileDispatcherClosedIsDroppedAndLeaksNoEntry[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.001"/>
+  <testcase name="cancelMidStreamPropagatesToReceiver[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.004"/>
+  <testcase name="kitStopMidTransferTerminalizesBothSidesAndClosesSource[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="2.084"/>
+  <testcase name="localPayloadTooLargeThrowsImmediately[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.009"/>
+  <testcase name="acceptThenImmediateCancelNeverStreamsOrSendsFileDone[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.003"/>
+  <testcase name="smallFileTransfersEndToEnd[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.008"/>
+  <testcase name="rejectedOfferSurfacesOnSender[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.008"/>
+  <testcase name="sourceClosedExactlyOnceOnCancelBeforeAccept[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.001"/>
+  <testcase name="fileTransfersDoNotBlockMessages[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.007"/>
+  <testcase name="sessionCloseMidTransferTerminalizesBothSidesAndClosesSource[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="2.068"/>
+  <testcase name="sendFileOnClosedDispatcherThrowsWithoutLeakingEntry[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.003"/>
+  <testcase name="sourceClosedExactlyOnceOnRearmCloseAll[jvm]" classname="dev.p2pkit.core.internal.FileTransferFlowTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

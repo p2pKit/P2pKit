@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="MessageMetadataContractTest[jvm]" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:13:06.613Z" hostname="192.168.1.19" time="0.002">
+  <properties/>
+  <testcase name="textMetadataIsDroppedOverProtocolLoopback[jvm]" classname="dev.p2pkit.core.protocol.MessageMetadataContractTest" time="0.001"/>
+  <testcase name="textMetadataIsDroppedOnMultiChunkRoundTrip[jvm]" classname="dev.p2pkit.core.protocol.MessageMetadataContractTest" time="0.0"/>
+  <testcase name="binaryMetadataIsDroppedOverProtocolLoopback[jvm]" classname="dev.p2pkit.core.protocol.MessageMetadataContractTest" time="0.001"/>
+  <testcase name="binaryMetadataIsDroppedOnMultiChunkRoundTrip[jvm]" classname="dev.p2pkit.core.protocol.MessageMetadataContractTest" time="0.0"/>
+  <testcase name="textMetadataIsDroppedOnSingleChunkRoundTrip[jvm]" classname="dev.p2pkit.core.protocol.MessageMetadataContractTest" time="0.0"/>
+  <testcase name="binaryMetadataIsDroppedOnSingleChunkRoundTrip[jvm]" classname="dev.p2pkit.core.protocol.MessageMetadataContractTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

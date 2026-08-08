@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="iosSimulatorArm64Test.dev.p2pkit.core.protocol.StreamingFileReceiverTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-07-04T18:45:48.125Z" hostname="192.168.1.19" time="0.001">
+  <properties/>
+  <testcase name="acceptsInOrderChunksAndFlushesOnFinish[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.StreamingFileReceiverTest" time="0.0"/>
+  <testcase name="outOfOrderChunkIsRejected[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.StreamingFileReceiverTest" time="0.0"/>
+  <testcase name="overSizeChunkIsRejected[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.StreamingFileReceiverTest" time="0.0"/>
+  <testcase name="finishBeforeCompleteFails[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.StreamingFileReceiverTest" time="0.0"/>
+  <testcase name="wrongTransferIdFails[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.StreamingFileReceiverTest" time="0.0"/>
+  <testcase name="zeroByteFileCompletesWithJustFinish[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.StreamingFileReceiverTest" time="0.0"/>
+  <testcase name="nonFileDataFrameRejected[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.StreamingFileReceiverTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

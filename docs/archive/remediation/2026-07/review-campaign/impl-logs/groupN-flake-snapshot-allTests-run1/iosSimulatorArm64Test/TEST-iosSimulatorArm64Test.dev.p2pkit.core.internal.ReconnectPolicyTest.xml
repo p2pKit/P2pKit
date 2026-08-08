@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="iosSimulatorArm64Test.dev.p2pkit.core.internal.ReconnectPolicyTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:12:27.940Z" hostname="192.168.1.19" time="0.549">
+  <properties/>
+  <testcase name="disabledPolicyTransitionsDirectlyToFailed[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.001"/>
+  <testcase name="enabledPolicyEmitsReconnectingOnConnectionLoss[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.002"/>
+  <testcase name="enabledPolicyReturnsToConnectedOnSuccessfulRetry[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.023"/>
+  <testcase name="enabledPolicyFailsAfterMaxAttempts[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.044"/>
+  <testcase name="closeDuringReconnectStopsRetriesAndEndsClosed[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.153"/>
+  <testcase name="kitStopDuringReconnectStopsRetries[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.153"/>
+  <testcase name="concurrentConnectDuringReconnectReturnsSameSession[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.002"/>
+  <testcase name="abruptRemoteTerminationWithoutCloseFrameDeterministicallyEntersReconnecting[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.001"/>
+  <testcase name="remoteCloseFrameYieldsExactlyClosedAndNeverRedials[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.16"/>
+  <testcase name="remoteCloseThenImmediateSocketCloseClassifiesCleanlyUnderRepetition[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.01"/>
+  <system-out><![CDATA[p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

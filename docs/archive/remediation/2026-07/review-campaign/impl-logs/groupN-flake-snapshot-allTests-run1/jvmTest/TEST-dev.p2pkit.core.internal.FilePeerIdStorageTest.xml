@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="FilePeerIdStorageTest[jvm]" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:12:45.231Z" hostname="192.168.1.19" time="0.018">
+  <properties/>
+  <testcase name="secondCallReturnsTheSameIdFromDisk[jvm]" classname="dev.p2pkit.core.internal.FilePeerIdStorageTest" time="0.008"/>
+  <testcase name="differentAppIdsGetIndependentIds[jvm]" classname="dev.p2pkit.core.internal.FilePeerIdStorageTest" time="0.002"/>
+  <testcase name="migratedIdIsLoadedFromHiddenDirBySubsequentInstances[jvm]" classname="dev.p2pkit.core.internal.FilePeerIdStorageTest" time="0.002"/>
+  <testcase name="corruptFileRegeneratesAndOverwrites[jvm]" classname="dev.p2pkit.core.internal.FilePeerIdStorageTest" time="0.001"/>
+  <testcase name="appIdSanitisationKeepsFilesUnderRoot[jvm]" classname="dev.p2pkit.core.internal.FilePeerIdStorageTest" time="0.001"/>
+  <testcase name="existingHiddenDirIdTakesPrecedenceOverLegacyId[jvm]" classname="dev.p2pkit.core.internal.FilePeerIdStorageTest" time="0.001"/>
+  <testcase name="firstCallCreatesFileAndReturnsId[jvm]" classname="dev.p2pkit.core.internal.FilePeerIdStorageTest" time="0.001"/>
+  <testcase name="sanitizationFunctionStripsTraversal[jvm]" classname="dev.p2pkit.core.internal.FilePeerIdStorageTest" time="0.001"/>
+  <testcase name="legacyVisibleDirIdIsAdoptedAndRePersistedUnderHiddenDir[jvm]" classname="dev.p2pkit.core.internal.FilePeerIdStorageTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

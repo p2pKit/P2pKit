@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="FileTransferProtocolTest[jvm]" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:13:06.599Z" hostname="192.168.1.19" time="0.004">
+  <properties/>
+  <testcase name="fileDataFrameRoundTrips[jvm]" classname="dev.p2pkit.core.protocol.FileTransferProtocolTest" time="0.001"/>
+  <testcase name="rejectWithoutReason[jvm]" classname="dev.p2pkit.core.protocol.FileTransferProtocolTest" time="0.0"/>
+  <testcase name="rejectWithReason[jvm]" classname="dev.p2pkit.core.protocol.FileTransferProtocolTest" time="0.001"/>
+  <testcase name="offerRoundTrip[jvm]" classname="dev.p2pkit.core.protocol.FileTransferProtocolTest" time="0.0"/>
+  <testcase name="cancelCarriesReason[jvm]" classname="dev.p2pkit.core.protocol.FileTransferProtocolTest" time="0.001"/>
+  <testcase name="doneCarriesTransferId[jvm]" classname="dev.p2pkit.core.protocol.FileTransferProtocolTest" time="0.001"/>
+  <testcase name="acceptCarriesTransferId[jvm]" classname="dev.p2pkit.core.protocol.FileTransferProtocolTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="iosSimulatorArm64Test.dev.p2pkit.core.protocol.DefaultP2pProtocolTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:14:21.433Z" hostname="192.168.1.19" time="0.002">
+  <properties/>
+  <testcase name="textRoundsTripViaLoopback[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.0"/>
+  <testcase name="binaryRoundsTripViaLoopback[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.001"/>
+  <testcase name="largePayloadChunksAndReassembles[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.0"/>
+  <testcase name="pingAndPongAreDistinctEvents[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.0"/>
+  <testcase name="helloRoundTripsAsEvent[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.0"/>
+  <testcase name="closeEventIsEmitted[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.0"/>
+  <testcase name="peerErrorCarriesReason[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.0"/>
+  <testcase name="malformedHelloBodyIsSkippedWithWarnAndSubsequentFramesStillDelivered[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.0"/>
+  <testcase name="helloBodyFailingValidationIsSkippedWithWarnNotThrown[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.0"/>
+  <testcase name="malformedFileOfferBodyIsSkippedWithWarnAndSubsequentFramesStillDelivered[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.0"/>
+  <testcase name="fileOfferBodyFailingValidationIsSkippedWithWarnAndSubsequentOfferDelivered[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.DefaultP2pProtocolTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

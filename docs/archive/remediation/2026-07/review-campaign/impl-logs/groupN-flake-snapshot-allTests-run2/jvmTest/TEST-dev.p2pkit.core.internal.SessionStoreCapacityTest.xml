@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="SessionStoreCapacityTest[jvm]" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:15:01.050Z" hostname="192.168.1.19" time="0.048">
+  <properties/>
+  <testcase name="simultaneousOpenArbitrationStillRunsAtCapacity[jvm]" classname="dev.p2pkit.core.internal.SessionStoreCapacityTest" time="0.018"/>
+  <testcase name="netNewIncomingBeyondTheBoundIsRefusedAndStoreIsUntouched[jvm]" classname="dev.p2pkit.core.internal.SessionStoreCapacityTest" time="0.012"/>
+  <testcase name="outgoingRegistrationIsNeverRefusedByTheBound[jvm]" classname="dev.p2pkit.core.internal.SessionStoreCapacityTest" time="0.01"/>
+  <testcase name="terminalSessionsDoNotCountTowardTheBound[jvm]" classname="dev.p2pkit.core.internal.SessionStoreCapacityTest" time="0.008"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

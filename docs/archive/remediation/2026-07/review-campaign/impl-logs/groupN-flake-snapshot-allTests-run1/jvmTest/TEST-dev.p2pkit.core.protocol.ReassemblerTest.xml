@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="ReassemblerTest[jvm]" tests="14" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:13:06.616Z" hostname="192.168.1.19" time="0.005">
+  <properties/>
+  <testcase name="freshPartialMessageIsNotEvicted[jvm]" classname="dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="nonDataFrameReturnsNull[jvm]" classname="dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="duplicateChunkIndexThrowsAndDoesNotReplaceStoredBytes[jvm]" classname="dev.p2pkit.core.protocol.ReassemblerTest" time="0.002"/>
+  <testcase name="multipleFramesReassembleOutOfOrder[jvm]" classname="dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="textFlagIsPreservedAcrossChunks[jvm]" classname="dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="stalePartialMessageIsEvicted[jvm]" classname="dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="singleFrameOverMaxPayloadBytesThrowsProtocolError[jvm]" classname="dev.p2pkit.core.protocol.ReassemblerTest" time="0.001"/>
+  <testcase name="singleFrameYieldsMessageImmediately[jvm]" classname="dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="idlePartialIsEvictedByInactivityNotByAge[jvm]" classname="dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="multipleFramesReassembleInOrder[jvm]" classname="dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="outOfRangeChunkIndexThrowsProtocolError[jvm]" classname="dev.p2pkit.core.protocol.ReassemblerTest" time="0.001"/>
+  <testcase name="slowButSteadyPartialIsNotEvictedAndCompletes[jvm]" classname="dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="mismatchedTotalChunksThrowsProtocolError[jvm]" classname="dev.p2pkit.core.protocol.ReassemblerTest" time="0.0"/>
+  <testcase name="aggregatePendingBytesAcrossMessagesIsCapped[jvm]" classname="dev.p2pkit.core.protocol.ReassemblerTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

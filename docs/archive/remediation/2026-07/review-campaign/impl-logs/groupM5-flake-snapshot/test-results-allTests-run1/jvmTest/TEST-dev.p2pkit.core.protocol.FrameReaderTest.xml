@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="FrameReaderTest[jvm]" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-07-04T18:46:29.443Z" hostname="192.168.1.19" time="0.001">
+  <properties/>
+  <testcase name="feedingCompleteFrameYieldsIt[jvm]" classname="dev.p2pkit.core.protocol.FrameReaderTest" time="0.0"/>
+  <testcase name="headerCompletePayloadPartialBuffers[jvm]" classname="dev.p2pkit.core.protocol.FrameReaderTest" time="0.0"/>
+  <testcase name="byteAtATimeStillReconstructs[jvm]" classname="dev.p2pkit.core.protocol.FrameReaderTest" time="0.0"/>
+  <testcase name="corruptedFrameRaisesProtocolError[jvm]" classname="dev.p2pkit.core.protocol.FrameReaderTest" time="0.0"/>
+  <testcase name="emptyFeedReturnsEmpty[jvm]" classname="dev.p2pkit.core.protocol.FrameReaderTest" time="0.0"/>
+  <testcase name="unknownPacketTypeIsSkippedAndSurroundingFramesStillDecode[jvm]" classname="dev.p2pkit.core.protocol.FrameReaderTest" time="0.0"/>
+  <testcase name="maxDeclaredPayloadLengthIsAcceptedAtTheBoundary[jvm]" classname="dev.p2pkit.core.protocol.FrameReaderTest" time="0.0"/>
+  <testcase name="oversizeDeclaredPayloadLengthIsRejectedOnHeaderAloneWithoutBuffering[jvm]" classname="dev.p2pkit.core.protocol.FrameReaderTest" time="0.0"/>
+  <testcase name="feedingTwoBackToBackFramesYieldsBoth[jvm]" classname="dev.p2pkit.core.protocol.FrameReaderTest" time="0.0"/>
+  <testcase name="partialHeaderIsBufferedNotEmitted[jvm]" classname="dev.p2pkit.core.protocol.FrameReaderTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

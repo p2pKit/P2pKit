@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="FileTransferErrorIsolationTest[jvm]" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:14:44.271Z" hostname="192.168.1.19" time="0.008">
+  <properties/>
+  <testcase name="sinkFlushFailureOnFinishFailsOnlyThatTransfer[jvm]" classname="dev.p2pkit.core.internal.FileTransferErrorIsolationTest" time="0.008"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
