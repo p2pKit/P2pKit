@@ -15,5 +15,9 @@ make documented breaking changes before `1.0.0` in a new version.
   IDs, packages, public API, or wire behavior.
 
 Supported build targets for the `0.7` line are Android API 24+, JVM 17, and
-`iosArm64`, `iosSimulatorArm64`, and `iosX64`. Exact toolchain versions are
-locked in the Gradle wrapper, version catalog, and CI workflows.
+iOS/iPadOS 14+ through `iosArm64`, `iosSimulatorArm64`, and `iosX64`. The iOS
+sample currently targets iOS 15 for its application UI; that does not raise
+the library compatibility floor. Exact toolchain versions are locked in the
+Gradle wrapper, version catalog, and CI workflows. Physical validation at the
+Android and Apple minimums remains pending until the evidence handbook is
+completed.

@@ -30,6 +30,11 @@ handbooks add equipment-specific procedures, environmental manipulation,
 failure criteria, and cleanup steps. Read both the relevant handbook and the
 catalog entry before execution.
 
+The [evidence schema](evidence-schema.md) defines the permanent redacted record
+format and the relationship between repository summaries and private immutable
+raw evidence. Use the [result template](templates/result-record.md) for every
+run; do not invent a second status format.
+
 Every accepted result must include:
 
 1. The exact commit SHA, a clean checkout, application/build versions, UTC

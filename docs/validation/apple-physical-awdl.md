@@ -17,8 +17,10 @@ iPhone/iPad hardware. This covers `LAN-T07`, `ENV-01`, `ENV-04`, `PS-T07`,
 
 - Two physical Apple devices signed by a development team; one iPhone and one
   iPad are preferred. Add a third device when testing discovery churn.
-- Cover the oldest supported iOS/iPadOS release, one intermediate release, and
-  the newest available release, with at least two hardware generations.
+- Cover iOS/iPadOS 14, one intermediate release, and the newest available
+  release, with at least two hardware generations. The checked-in sample may
+  retain a newer UI deployment target, but the candidate library/XCFramework
+  must be built with and prove the documented iOS 14 compatibility floor.
 - A Mac with compatible Xcode, command-line tools, repository JDK, Kotlin/Native
   toolchain, free USB ports/cables, and permission to install development apps.
 - A normal Wi-Fi LAN and an AWDL peer-to-peer topology. Administrative access
