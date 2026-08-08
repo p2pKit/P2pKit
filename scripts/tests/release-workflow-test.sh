@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORKFLOW="$ROOT/.github/workflows/publish-maven-central.yml"
 CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 DRY_RUN_WORKFLOW="$ROOT/.github/workflows/release-dry-run.yml"
-ANDROID_LOCK="$ROOT/p2p-sample-android/gradle.lockfile"
+ANDROID_LOCK="$ROOT/samples/p2p-sample-android/gradle.lockfile"
 XCODEGEN_INSTALLER="$ROOT/scripts/install-xcodegen.sh"
 
 [[ -f "$WORKFLOW" ]] || { echo "FATAL: Maven Central workflow is missing" >&2; exit 1; }
@@ -101,6 +101,15 @@ grep -Fq 'XCODEGEN_VERSION="2.45.4"' "$XCODEGEN_INSTALLER" || {
     echo "FATAL: XcodeGen installer version is not pinned" >&2
     exit 1
 }
+
+grep -Fq 'scripts/tests/check-markdown-links.sh' "$CI_WORKFLOW" || {
+    echo "FATAL: CI does not validate active Markdown links" >&2
+    exit 1
+}
+grep -Fq 'scripts/tests/check-markdown-links.sh' "$ROOT/scripts/run-release-gate.sh" || {
+    echo "FATAL: release gate does not validate active Markdown links" >&2
+    exit 1
+}
 grep -Fq 'XCODEGEN_SHA256="090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef"' "$XCODEGEN_INSTALLER" || {
     echo "FATAL: XcodeGen installer checksum is not pinned" >&2
     exit 1
@@ -108,6 +117,10 @@ grep -Fq 'XCODEGEN_SHA256="090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc8
 
 grep -Fq '"io.netty" -> "4.1.136.Final"' "$ROOT/build.gradle.kts" || {
     echo "FATAL: Netty advisory floor is not 4.1.136.Final" >&2
+    exit 1
+}
+[[ "$(grep -Fc '"org.jsoup:jsoup" to "1.23.1"' "$ROOT/build.gradle.kts")" == "2" ]] || {
+    echo "FATAL: root and project build-tool jsoup advisory floors are not 1.23.1" >&2
     exit 1
 }
 grep -Fq 'io.netty:netty-codec-http:4.1.136.Final=' "$ANDROID_LOCK" || {
@@ -119,4 +132,15 @@ if grep -Fq 'io.netty:netty-codec-http:4.1.135.Final=' "$ANDROID_LOCK"; then
     exit 1
 fi
 
-echo "RESULT: PASS — release workflow, Android SDK, and Netty security policy are locked"
+for module in \
+    library/p2p-core \
+    library/p2p-transport-lan \
+    library/p2p-network-provisioning-android \
+    library/p2p-network-provisioning-desktop; do
+    grep -Fq 'offlineMode.set(true)' "$ROOT/$module/build.gradle.kts" || {
+        echo "FATAL: published-module Dokka is not deterministic/offline: $module" >&2
+        exit 1
+    }
+done
+
+echo "RESULT: PASS — release workflow, deterministic Dokka, Android SDK, and build-tool security policy are locked"

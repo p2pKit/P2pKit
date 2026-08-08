@@ -8,6 +8,9 @@ mkdir -p "$REPORT_DIR"
 
 cd "$ROOT"
 scripts/check-gradle-wrapper.sh
+scripts/tests/check-repository-layout.sh
+scripts/tests/check-osv-lockfile-coverage.sh
+scripts/tests/check-markdown-links.sh
 scripts/check-release-metadata.sh
 git diff --check
 ./gradlew check --console=plain
@@ -19,7 +22,7 @@ scripts/check-published-consumers.sh
 
 set +e
 xcodebuild \
-    -project iosApp/p2pkit-sample.xcodeproj \
+    -project samples/iosApp/p2pkit-sample.xcodeproj \
     -scheme p2pkit-sample-ui \
     -configuration Debug \
     -sdk iphonesimulator \
@@ -39,5 +42,5 @@ grep -Fq '** BUILD SUCCEEDED **' "$REPORT_DIR/xcodebuild.log" || {
 }
 
 git rev-parse HEAD >"$REPORT_DIR/commit-sha.txt"
-sed -n 's/^GROUP=//p; s/^VERSION_NAME=//p' gradle.properties >"$REPORT_DIR/coordinates.txt"
+sed -n 's/^GROUP=//p; s/^VERSION_NAME=//p; s/^LATEST_PUBLISHED_VERSION=//p' gradle.properties >"$REPORT_DIR/coordinates.txt"
 echo "RESULT: PASS — complete release gate succeeded"

@@ -2,13 +2,16 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SCRIPT="$ROOT/scripts/build-central-portal-bundle.sh"
 WORK_DIR="$(mktemp -d "${P2PKIT_RELEASE_TMPDIR:-/tmp}/p2pkit-central-bundle-test.XXXXXX")"
 PHASE="initialization"
+RELEASE_WORKTREE=""
 cleanup() {
     status=$?
     if [[ $status -ne 0 ]]; then
         echo "FATAL: disposable-key bundle test failed during: $PHASE" >&2
+    fi
+    if [[ -n "$RELEASE_WORKTREE" ]]; then
+        git -C "$ROOT" worktree remove --force "$RELEASE_WORKTREE" >/dev/null 2>&1 || true
     fi
     rm -rf "$WORK_DIR"
     exit "$status"
@@ -20,6 +23,39 @@ PASSWORD="p2pkit-disposable-test-key"
 GROUP="$(sed -n 's/^GROUP=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 mkdir -m 700 "$GNUPGHOME"
+
+ORIGINAL_SCRIPT="$ROOT/scripts/build-central-portal-bundle.sh"
+bash -n "$ORIGINAL_SCRIPT"
+"$ORIGINAL_SCRIPT" --help >/dev/null
+
+if [[ "$VERSION" == *-SNAPSHOT ]]; then
+    PHASE="snapshot rejection"
+    if env -u ORG_GRADLE_PROJECT_signingInMemoryKey \
+        -u ORG_GRADLE_PROJECT_signingInMemoryKeyBase64 \
+        -u ORG_GRADLE_PROJECT_signingInMemoryKeyPassword \
+        -u MAVEN_SIGNING_KEY_FINGERPRINT \
+        "$ORIGINAL_SCRIPT" "$OUTPUT" >"$WORK_DIR/snapshot.log" 2>&1; then
+        echo "FATAL: bundle builder accepted a SNAPSHOT version" >&2
+        exit 1
+    fi
+    grep -Fq 'cannot use a SNAPSHOT version' "$WORK_DIR/snapshot.log" || {
+        echo "FATAL: bundle builder did not identify the SNAPSHOT rejection" >&2
+        exit 1
+    }
+
+    PHASE="release fixture checkout"
+    RELEASE_WORKTREE="$WORK_DIR/release-source"
+    git -C "$ROOT" worktree add --detach "$RELEASE_WORKTREE" HEAD >/dev/null
+    VERSION="9.8.7-rc6"
+    sed -i.bak "s/^VERSION_NAME=.*/VERSION_NAME=$VERSION/" "$RELEASE_WORKTREE/gradle.properties"
+    rm -f "$RELEASE_WORKTREE/gradle.properties.bak"
+    if [[ -f "$ROOT/local.properties" ]]; then
+        cp "$ROOT/local.properties" "$RELEASE_WORKTREE/local.properties"
+    fi
+    SCRIPT="$RELEASE_WORKTREE/scripts/build-central-portal-bundle.sh"
+else
+    SCRIPT="$ORIGINAL_SCRIPT"
+fi
 
 secret_appears_in_log() {
     local secret="$1" log="$2" offset=0 chunk

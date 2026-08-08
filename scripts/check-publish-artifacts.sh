@@ -6,7 +6,7 @@
 # the full Maven-Central-required artifact set:
 #   main artifact (.jar / .aar / .klib) + -sources.jar + -javadoc.jar + .pom + .module
 #
-# Referenced from docs/STABILIZATION_AND_RELEASE.md Part B (local dry-run gate).
+# Referenced from docs/releasing/checklist.md (local release-shape gate).
 # The six iOS klib publications require a macOS host (iOS targets compile only
 # there); on other hosts those rows are skipped with a warning.
 #

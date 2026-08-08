@@ -23,7 +23,7 @@ bob_profile="$(profile_from "$BOB")"
 
 grep -Fq -- '--args=&quot;Alice&quot;' "$ALICE" || fail "Alice run configuration changed its device-name arguments"
 grep -Fq -- '--args=&quot;Bob&quot;' "$BOB" || fail "Bob run configuration changed its device-name arguments"
-grep -Fq 'p2pkit.sample.identityProfile' "$ROOT/p2p-sample-desktop/build.gradle.kts" ||
+grep -Fq 'p2pkit.sample.identityProfile' "$ROOT/samples/p2p-sample-desktop/build.gradle.kts" ||
     fail "desktop run task does not consume the identity-profile property"
 
 echo "RESULT: PASS — Alice/Bob share the default appId and persist under distinct identity profiles"

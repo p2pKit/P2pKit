@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PROJECT_DIR="$REPO_ROOT/iosApp"
+PROJECT_DIR="$REPO_ROOT/samples/iosApp"
 SCRIPT_NAME="run-ios-ui-tests"
 SIM_NAME="${SIM_NAME:-iPhone 17}"
 SIM_UDID="${SIM_UDID:-}"

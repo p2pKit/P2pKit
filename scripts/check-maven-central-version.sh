@@ -5,6 +5,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
+LATEST_PUBLISHED="$(sed -n 's/^LATEST_PUBLISHED_VERSION=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 GROUP="$(sed -n 's/^GROUP=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 GROUP_PATH="${GROUP//.//}"
 CENTRAL_REPOSITORY="https://repo.maven.apache.org/maven2"
@@ -14,6 +15,7 @@ usage() {
 Usage:
   scripts/check-maven-central-version.sh absent
   scripts/check-maven-central-version.sh published BUNDLE.zip
+  scripts/check-maven-central-version.sh --latest-published published BUNDLE.zip
 EOF
 }
 
@@ -46,6 +48,13 @@ ARTIFACTS=(
     p2p-network-provisioning-desktop
 )
 
+use_latest_published=0
+if [[ "${1:-}" == "--latest-published" ]]; then
+    use_latest_published=1
+    VERSION="$LATEST_PUBLISHED"
+    shift
+fi
+
 [[ $# -ge 1 ]] || {
     usage >&2
     exit 2
@@ -58,6 +67,8 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 case "$MODE" in
     absent)
         [[ $# -eq 1 ]] || fail "absent mode does not accept a bundle"
+        [[ $use_latest_published -eq 0 ]] || fail "absent mode must check VERSION_NAME, not an existing release"
+        [[ "$VERSION" != *-SNAPSHOT ]] || fail "snapshot VERSION_NAME=$VERSION cannot be a release collision target"
         collision=0
         for artifact in "${ARTIFACTS[@]}"; do
             url="$CENTRAL_REPOSITORY/$GROUP_PATH/$artifact/$VERSION/$artifact-$VERSION.pom"
@@ -81,6 +92,12 @@ case "$MODE" in
         ;;
     published)
         [[ $# -eq 2 && -f "$2" ]] || fail "published mode requires an existing bundle ZIP"
+        [[ "$VERSION" != *-SNAPSHOT ]] ||
+            fail "snapshot VERSION_NAME=$VERSION cannot be verified as a published release; use --latest-published"
+        if [[ $use_latest_published -eq 1 ]]; then
+            [[ -n "$LATEST_PUBLISHED" && "$LATEST_PUBLISHED" != *-SNAPSHOT ]] ||
+                fail "LATEST_PUBLISHED_VERSION must identify a non-snapshot release"
+        fi
         command -v openssl >/dev/null 2>&1 || fail "openssl is required"
         command -v unzip >/dev/null 2>&1 || fail "unzip is required"
         BUNDLE="$2"

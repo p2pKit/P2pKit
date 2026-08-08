@@ -52,6 +52,9 @@ jobs:
           scripts/tests/install-xcodegen-test.sh
           scripts/tests/release-workflow-test.sh
           scripts/tests/check-sample-run-profiles.sh
+          scripts/tests/check-repository-layout.sh
+          scripts/tests/check-osv-lockfile-coverage.sh
+          scripts/tests/check-markdown-links.sh
           source scripts/run-ios-app.sh
           device_json="$(xcrun simctl list -j devices available)"
           SIM_UDID="$(select_latest_available_simulator_udid "iPhone 17" "$device_json")"

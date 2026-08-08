@@ -7,6 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
+LATEST_PUBLISHED="$(sed -n 's/^LATEST_PUBLISHED_VERSION=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 GROUP="$(sed -n 's/^GROUP=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 GROUP_PATH="${GROUP//.//}"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-consumer-check.XXXXXX")"
@@ -14,6 +15,22 @@ REPO_DIR="$WORK_DIR/repository"
 FIXTURE_DIR="$WORK_DIR/consumer"
 REMOTE_REPOSITORY_URL="${P2PKIT_CONSUMER_REPOSITORY_URL:-}"
 trap 'rm -rf "$WORK_DIR"' EXIT
+
+if [[ "${1:-}" == "--latest-published" ]]; then
+    [[ $# -eq 1 ]] || { echo "FAIL: --latest-published accepts no additional arguments" >&2; exit 2; }
+    [[ -n "$LATEST_PUBLISHED" && "$LATEST_PUBLISHED" != *-SNAPSHOT ]] || {
+        echo "FAIL: LATEST_PUBLISHED_VERSION must identify a non-snapshot release" >&2
+        exit 2
+    }
+    [[ -n "$REMOTE_REPOSITORY_URL" ]] || {
+        echo "FAIL: --latest-published requires P2PKIT_CONSUMER_REPOSITORY_URL" >&2
+        exit 2
+    }
+    VERSION="$LATEST_PUBLISHED"
+elif [[ $# -ne 0 ]]; then
+    echo "FAIL: usage: scripts/check-published-consumers.sh [--latest-published]" >&2
+    exit 2
+fi
 
 fail() {
     echo "FAIL: $*" >&2

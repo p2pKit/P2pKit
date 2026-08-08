@@ -1,8 +1,12 @@
 # Changelog
 
-This file records release-facing behavior. Historical internal milestone tags
-and audit implementation details remain in the repository's stabilization
-documents.
+This file records release-facing behavior. Historical internal milestone tags,
+audits, trackers, and implementation evidence remain under `docs/archive/`.
+
+## Unreleased
+
+- Opened the `0.7.0-rc3-SNAPSHOT` development line after publishing
+  `0.7.0-rc2`; no API or wire-protocol change is included yet.
 
 ## 0.7.0-rc2 — release candidate (2026-08-06)
 
@@ -12,8 +16,8 @@ the owner-verified Central Portal namespace `io.github.apdelrahman1911`. The
 `v0.7.0-rc1` tag remains immutable and was not published after Central rejected
 the former unowned namespace during validation.
 
-Remote Maven Central publication is not asserted by this source state. Android
-and Apple physical-device validation, two-machine hostile-network testing, CLI
+Published to Maven Central under `io.github.apdelrahman1911`. Android and Apple
+physical-device validation, two-machine hostile-network testing, CLI
 fault injection/headful Desktop observation, independent secure-v2
 interoperability, and professional cryptographic audit remain explicitly
 pending external evidence.
@@ -61,7 +65,7 @@ Remote Maven Central publication is not asserted by this source state.
 - A credential-gated script builds a signed/checksummed Central Portal bundle
   without performing a remote upload.
 
-See [`docs/MIGRATING_TO_0.7.md`](docs/MIGRATING_TO_0.7.md) before upgrading.
+See [`docs/guides/migrating-to-0.7.md`](docs/guides/migrating-to-0.7.md) before upgrading.
 
 ## 0.6.x
 
