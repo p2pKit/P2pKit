@@ -91,6 +91,6 @@ org.jetbrains:annotations:23.0.0=compileClasspath,dokkaHtmlGeneratorRuntimeResol
 org.jetbrains:markdown-jvm:0.7.3=dokkaHtmlGeneratorRuntimeResolver~internal
 org.jetbrains:markdown:0.7.3=dokkaHtmlGeneratorRuntimeResolver~internal
 org.jmdns:jmdns:3.6.3=testRuntimeClasspath
-org.jsoup:jsoup:1.16.1=dokkaHtmlGeneratorRuntimeResolver~internal
+org.jsoup:jsoup:1.23.1=dokkaHtmlGeneratorRuntimeResolver~internal
 org.slf4j:slf4j-api:2.0.7=testRuntimeClasspath
 empty=annotationProcessor,dokkaHtmlModuleOutputDirectoriesResolver~internal,dokkaHtmlPublicationPluginResolver~internal,implementationDependenciesMetadata,kotlinCompilerPluginClasspath,kotlinNativeCompilerPluginClasspath,kotlinScriptDefExtensions,testAnnotationProcessor,testImplementationDependenciesMetadata,testKotlinScriptDefExtensions

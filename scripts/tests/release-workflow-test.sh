@@ -119,6 +119,10 @@ grep -Fq '"io.netty" -> "4.1.136.Final"' "$ROOT/build.gradle.kts" || {
     echo "FATAL: Netty advisory floor is not 4.1.136.Final" >&2
     exit 1
 }
+[[ "$(grep -Fc '"org.jsoup:jsoup" to "1.23.1"' "$ROOT/build.gradle.kts")" == "2" ]] || {
+    echo "FATAL: root and project build-tool jsoup advisory floors are not 1.23.1" >&2
+    exit 1
+}
 grep -Fq 'io.netty:netty-codec-http:4.1.136.Final=' "$ANDROID_LOCK" || {
     echo "FATAL: Android test tooling is not locked to patched Netty" >&2
     exit 1
@@ -139,4 +143,4 @@ for module in \
     }
 done
 
-echo "RESULT: PASS — release workflow, deterministic Dokka, Android SDK, and Netty security policy are locked"
+echo "RESULT: PASS — release workflow, deterministic Dokka, Android SDK, and build-tool security policy are locked"

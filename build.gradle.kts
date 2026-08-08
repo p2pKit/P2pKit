@@ -26,6 +26,7 @@ buildscript {
                     "com.fasterxml.jackson.core:jackson-databind" to "2.21.5",
                     "org.bitbucket.b_c:jose4j" to "0.9.6",
                     "org.jdom:jdom2" to "2.0.6.1",
+                    "org.jsoup:jsoup" to "1.23.1",
                 )[requestedModule]
             }
             if (minimumVersion != null) {
@@ -103,6 +104,7 @@ val advisoryMinimumVersions = mapOf(
     "org.apache.httpcomponents:httpclient" to "4.5.13",
     "org.bitbucket.b_c:jose4j" to "0.9.6",
     "org.jdom:jdom2" to "2.0.6.1",
+    "org.jsoup:jsoup" to "1.23.1",
 )
 
 fun isVersionBelow(requestedVersion: String?, minimumVersion: String): Boolean {

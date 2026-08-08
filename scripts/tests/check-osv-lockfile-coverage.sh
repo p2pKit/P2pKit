@@ -17,7 +17,13 @@ while IFS= read -r lockfile; do
         expected+=("--lockfile=./$lockfile")
     fi
 done < <(git -C "$ROOT" ls-files '*gradle.lockfile' | LC_ALL=C sort)
-expected+=("--lockfile=./gradle/verification-metadata.xml")
+
+# Gradle verification metadata is a checksum allowlist that retains historical
+# artifacts. It is not resolved dependency state, so treating it as a lockfile
+# reports removed versions as current vulnerabilities.
+if grep -Fq -- '--lockfile=./gradle/verification-metadata.xml' "$WORKFLOW"; then
+    fail "OSV workflow must not scan Gradle verification metadata as dependency state"
+fi
 
 for argument in "${expected[@]}"; do
     count="$(grep -Fxc "        $argument" "$WORKFLOW" || true)"
@@ -29,4 +35,4 @@ actual_count="$(grep -Ec '^[[:space:]]+--lockfile=' "$WORKFLOW")"
 [[ "$actual_count" == "${#expected[@]}" ]] ||
     fail "OSV workflow has $actual_count lockfile arguments; expected ${#expected[@]} tracked dependency inputs"
 
-echo "RESULT: PASS — OSV scans all ${#expected[@]} tracked Gradle lock and verification inputs"
+echo "RESULT: PASS — OSV scans all ${#expected[@]} tracked Gradle dependency locks"
