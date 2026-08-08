@@ -2,7 +2,7 @@
 kotlin = "2.3.21"
 agp = "9.1.1"
 coroutines = "1.11.0"
-serialization = "1.10.0"
+serialization = "1.11.0"
 kotlinx-io = "0.9.0"
 cryptography = "0.6.0"
 bouncycastle = "1.85"
