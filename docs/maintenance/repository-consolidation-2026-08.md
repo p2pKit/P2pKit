@@ -12,6 +12,9 @@ and why material was removed or archived.
 - Development remains `0.7.0-rc3-SNAPSHOT`; no RC3 release or tag was created.
 - Maven coordinates remain `io.github.apdelrahman1911` and published RC2
   artifacts were not changed.
+- The canonical Apache-2.0 text replaced the incomplete license, and GitHub
+  subsequently detected the repository as `Apache License 2.0` instead of
+  `NOASSERTION`.
 - No public API, wire-format, cryptographic default, or release-history rewrite
   was part of this cleanup.
 
@@ -69,24 +72,32 @@ The detailed item-by-item disposition rules and cross-links are in
   [branch cleanup record](../archive/branch-cleanup-2026-08.md).
 - The issue and pull-request acceptance review is in the
   [GitHub audit](github-audit-2026-08.md).
-- The protected integration is
-  [PR #60](https://github.com/p2pKit/P2pKit/pull/60).
+- The protected integration was
+  [PR #60](https://github.com/p2pKit/P2pKit/pull/60), merged normally as
+  `0a6c6bac28f9f99bab96d3753992994b867d6dad` without an administrator bypass.
 - Issue #45 was closed only after its stronger atomic implementation and focused
   regression passed. All partially completed network/device issues remain open.
 - PR #49 was merged through the protected path. Applicable workflow-action PRs
-  #50, #51, #57, and #58 were preserved as authored commits in the consolidation
-  candidate and passed together. Library/toolchain PRs #52–#56 remain open until
-  their dependency-verification and compatibility gates pass.
+  #50, #51, #57, and #58 were preserved as authored commits in PR #60, passed
+  together, and then closed as redundant; their remote branches were removed.
+  Library/toolchain PRs #52–#56 remain open until their dependency-verification
+  and compatibility gates pass.
 
 ## Validation status
 
-The complete local release gate passed at candidate
-`9f7b865f6bb4239eb2143c87ecf7b47b9cbd7afe` on 2026-08-08. It covered repository
-entry tests, complete Gradle checks, ABI, Android lint, Dokka, SBOM, signed
-publication shape, isolated JVM/Android/KMP/iOS consumers, release XCFramework
-and provenance, Swift warnings-as-errors, and iOS sample/UI checks. Hosted PR
-checks and a fresh run against the final exact merge commit remain required
-before this record can be treated as final-main validation.
+The complete local release gate passed on exact merged `main` commit
+`0a6c6bac28f9f99bab96d3753992994b867d6dad` on 2026-08-08. It covered
+repository entry tests, complete Gradle checks, ABI, Android lint, Dokka, a
+38-component SBOM, signed publication shape, isolated JVM/Android/KMP/iOS
+consumers, release XCFramework and provenance, Swift warnings-as-errors, and
+iOS sample/UI checks. The independent hosted
+[exact-main CI run](https://github.com/p2pKit/P2pKit/actions/runs/31239454112)
+also passed all of those stages in 28 minutes 7 seconds. The exact-main
+[OSV advisory scan](https://github.com/p2pKit/P2pKit/actions/runs/31239454300)
+and [dependency submission](https://github.com/p2pKit/P2pKit/actions/runs/31239454093)
+passed as well. The pre-merge required dependency review, OSV scanner, OSV
+advisory scan, and complete gate all passed on PR #60's exact head before the
+protected merge.
 
 The six non-local areas remain deliberately unverified:
 
