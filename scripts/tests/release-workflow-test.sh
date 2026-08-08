@@ -76,7 +76,7 @@ while IFS= read -r use; do
 done < <(sed -n 's/^[[:space:]]*uses:[[:space:]]*//p' "$WORKFLOW")
 
 for workflow in "$CI_WORKFLOW" "$DRY_RUN_WORKFLOW" "$WORKFLOW"; do
-    grep -Fq "'platforms;android-36' 'platforms;android-37'" "$workflow" || {
+    grep -Fq "'platforms;android-36' 'platforms;android-37.0'" "$workflow" || {
         echo "FATAL: workflow does not install API 36 for libraries and API 37 for the Android sample: $workflow" >&2
         exit 1
     }

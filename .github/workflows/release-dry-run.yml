@@ -32,7 +32,7 @@ jobs:
           xcodegen_bin_dir="$(scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen")"
           echo "$xcodegen_bin_dir" >> "$GITHUB_PATH"
       - name: Install Android SDK platforms
-        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37'
+        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
       - name: Validate release identity
         run: |
           scripts/check-release-tag.sh "$RELEASE_TAG"

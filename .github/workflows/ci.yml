@@ -108,7 +108,7 @@ jobs:
 
       - name: Install Android SDK platforms
         if: steps.scope.outputs.full == 'true'
-        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37'
+        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
 
       - name: Verify repository entry points
         if: steps.scope.outputs.full == 'true'
