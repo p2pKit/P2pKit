@@ -1516,7 +1516,6 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         diagnostics.shutdown()
-        super.onCleared()
         val toStop = kit
         kit = null
         val offersToReject = pendingFileOffers.toList()
