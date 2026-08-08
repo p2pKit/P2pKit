@@ -7,6 +7,7 @@ CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 DRY_RUN_WORKFLOW="$ROOT/.github/workflows/release-dry-run.yml"
 ANDROID_LOCK="$ROOT/samples/p2p-sample-android/gradle.lockfile"
 XCODEGEN_INSTALLER="$ROOT/scripts/install-xcodegen.sh"
+CI_SCOPE_CLASSIFIER="$ROOT/scripts/classify-ci-scope.sh"
 
 [[ -f "$WORKFLOW" ]] || { echo "FATAL: Maven Central workflow is missing" >&2; exit 1; }
 ruby -e 'require "yaml"; YAML.safe_load_file(ARGV.fetch(0), aliases: true)' "$WORKFLOW"
@@ -104,6 +105,38 @@ grep -Fq 'XCODEGEN_VERSION="2.45.4"' "$XCODEGEN_INSTALLER" || {
 
 grep -Fq 'scripts/tests/check-markdown-links.sh' "$CI_WORKFLOW" || {
     echo "FATAL: CI does not validate active Markdown links" >&2
+    exit 1
+}
+grep -Fq 'id: scope' "$CI_WORKFLOW" || {
+    echo "FATAL: CI does not classify full versus lightweight required checks" >&2
+    exit 1
+}
+grep -Fq 'protected merge push reuses the required PR gate' "$CI_WORKFLOW" || {
+    echo "FATAL: CI does not avoid the redundant post-merge complete gate" >&2
+    exit 1
+}
+grep -Fq "if: steps.scope.outputs.full == 'true'" "$CI_WORKFLOW" || {
+    echo "FATAL: CI full-gate steps are not scope guarded" >&2
+    exit 1
+}
+grep -Fq "if: steps.scope.outputs.full != 'true'" "$CI_WORKFLOW" || {
+    echo "FATAL: CI does not provide the lightweight required-check path" >&2
+    exit 1
+}
+grep -Fq 'fetch-depth: 0' "$CI_WORKFLOW" || {
+    echo "FATAL: CI cannot classify changes without complete comparison history" >&2
+    exit 1
+}
+[[ -x "$CI_SCOPE_CLASSIFIER" ]] || {
+    echo "FATAL: CI scope classifier is missing or not executable" >&2
+    exit 1
+}
+grep -Fq 'scripts/tests/classify-ci-scope-test.sh' "$CI_WORKFLOW" || {
+    echo "FATAL: CI scope classifier regression test is not wired into CI" >&2
+    exit 1
+}
+grep -Fq 'scripts/tests/classify-ci-scope-test.sh' "$ROOT/scripts/run-release-gate.sh" || {
+    echo "FATAL: CI scope classifier regression test is not in the release gate" >&2
     exit 1
 }
 grep -Fq 'scripts/tests/check-markdown-links.sh' "$ROOT/scripts/run-release-gate.sh" || {

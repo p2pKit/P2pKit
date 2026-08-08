@@ -20,25 +20,98 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Classify required-check scope
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          scope="full"
+          reason="fail-closed default"
+          base="$GITHUB_SHA"
+          head="$GITHUB_SHA"
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            reason="manual dispatch"
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE_SHA"
+            head="$PR_HEAD_SHA"
+            changed_files="$RUNNER_TEMP/p2pkit-ci-changed-files"
+            git diff --name-only -z "$base...$head" > "$changed_files"
+            scope="$(scripts/classify-ci-scope.sh < "$changed_files")"
+            reason="pull request changed-file classification"
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            head="$GITHUB_SHA"
+            parent_count="$(git rev-list --parents -n 1 "$head" | awk '{print NF - 1}')"
+            if [[ "$REF_NAME" == "main" && "$parent_count" -gt 1 ]]; then
+              base="$(git rev-parse "$head^1")"
+              scope="lightweight"
+              reason="protected merge push reuses the required PR gate"
+            elif [[ -n "$BEFORE_SHA" && ! "$BEFORE_SHA" =~ ^0+$ ]] && git cat-file -e "$BEFORE_SHA^{commit}"; then
+              base="$BEFORE_SHA"
+              changed_files="$RUNNER_TEMP/p2pkit-ci-changed-files"
+              git diff --name-only -z "$base" "$head" > "$changed_files"
+              scope="$(scripts/classify-ci-scope.sh < "$changed_files")"
+              reason="direct push changed-file classification"
+            else
+              reason="push base unavailable"
+            fi
+          fi
+
+          if [[ "$scope" == "full" ]]; then
+            echo "full=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$scope" == "lightweight" ]]; then
+            echo "full=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "FATAL: unsupported CI scope: $scope" >&2
+            exit 1
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "CI scope: $scope ($reason)"
+
+      - name: Verify lightweight documentation change
+        if: steps.scope.outputs.full != 'true'
+        env:
+          BASE_SHA: ${{ steps.scope.outputs.base }}
+          HEAD_SHA: ${{ steps.scope.outputs.head }}
+        run: |
+          git diff --check "$BASE_SHA" "$HEAD_SHA"
+          scripts/tests/classify-ci-scope-test.sh
+          scripts/check-release-metadata.sh
+          scripts/tests/check-repository-layout.sh
+          scripts/tests/check-markdown-links.sh
 
       - name: Configure Java 17
+        if: steps.scope.outputs.full == 'true'
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Validate wrapper and configure Gradle
+        if: steps.scope.outputs.full == 'true'
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
 
       - name: Install pinned XcodeGen
+        if: steps.scope.outputs.full == 'true'
         run: |
           xcodegen_bin_dir="$(scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen")"
           echo "$xcodegen_bin_dir" >> "$GITHUB_PATH"
 
       - name: Install Android SDK platforms
+        if: steps.scope.outputs.full == 'true'
         run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36'
 
       - name: Verify repository entry points
+        if: steps.scope.outputs.full == 'true'
         run: |
           scripts/check-gradle-wrapper.sh
           scripts/tests/check-gradle-wrapper-test.sh
@@ -55,6 +128,7 @@ jobs:
           scripts/tests/check-repository-layout.sh
           scripts/tests/check-osv-lockfile-coverage.sh
           scripts/tests/check-markdown-links.sh
+          scripts/tests/classify-ci-scope-test.sh
           source scripts/run-ios-app.sh
           device_json="$(xcrun simctl list -j devices available)"
           SIM_UDID="$(select_latest_available_simulator_udid "iPhone 17" "$device_json")"
@@ -64,22 +138,25 @@ jobs:
           scripts/tests/run-ios-app-test.sh
 
       - name: Run complete module and platform checks
+        if: steps.scope.outputs.full == 'true'
         run: ./gradlew check --console=plain
 
       - name: Verify API, documentation, and SBOM
+        if: steps.scope.outputs.full == 'true'
         run: |
           ./gradlew :p2p-core:checkKotlinAbi :p2p-transport-lan:checkKotlinAbi :p2p-network-provisioning-android:checkKotlinAbi :p2p-network-provisioning-desktop:checkKotlinAbi --console=plain
           ./gradlew :p2p-core:dokkaGeneratePublicationHtml :p2p-transport-lan:dokkaGeneratePublicationHtml :p2p-network-provisioning-android:dokkaGeneratePublicationHtml :p2p-network-provisioning-desktop:dokkaGeneratePublicationHtml --console=plain
           scripts/check-sbom.sh
 
       - name: Verify local release artifacts and consumers
+        if: steps.scope.outputs.full == 'true'
         run: |
           scripts/check-publish-artifacts.sh
           scripts/check-published-consumers.sh
           ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance --console=plain
 
       - name: Upload SBOM evidence
-        if: always()
+        if: ${{ always() && steps.scope.outputs.full == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cyclonedx-sbom

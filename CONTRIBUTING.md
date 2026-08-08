@@ -33,6 +33,24 @@ Before requesting a release-facing review, follow
 [`docs/testing/local.md`](docs/testing/local.md) and the complete
 [`docs/releasing/checklist.md`](docs/releasing/checklist.md).
 
+## CI scope policy
+
+The required `complete-gate` check classifies each change conservatively:
+
+- a non-empty Markdown-only change runs link, layout, release-metadata, scope,
+  and whitespace checks;
+- any source, build, workflow, script, dependency, security, license, API, or
+  release change runs the complete module/platform, ABI, Dokka, SBOM,
+  publication-consumer, XCFramework, provenance, and Swift gate;
+- an empty or unclassifiable change set fails closed to the complete gate;
+- a protected merge push reuses the complete check already required on the
+  exact pull-request tree instead of repeating the expensive gate; and
+- a manual workflow dispatch always runs the complete gate.
+
+The lightweight path does not weaken branch protection: it produces the same
+required check name after executing the checks appropriate to documentation
+only. Adding any non-Markdown file automatically selects the complete path.
+
 ## Change rules
 
 - Keep production modules under `library/` and test/sample applications under
