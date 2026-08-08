@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="ChunkerTest[jvm]" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-07-04T18:46:29.417Z" hostname="192.168.1.19" time="0.001">
+  <properties/>
+  <testcase name="payloadEqualToChunkSizeProducesExactlyOneFrame[jvm]" classname="dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="emptyPayloadStillProducesOneFrame[jvm]" classname="dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="allChunksShareSameMessageId[jvm]" classname="dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="separateMessagesGetDifferentMessageIds[jvm]" classname="dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="binaryMessageProducesOneFrameWithoutTextFlag[jvm]" classname="dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="payloadOverMaxThrowsPayloadTooLarge[jvm]" classname="dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="largePayloadSplitsAcrossManyFrames[jvm]" classname="dev.p2pkit.core.protocol.ChunkerTest" time="0.001"/>
+  <testcase name="payloadOneByteOverChunkSizeSplitsIntoTwoFrames[jvm]" classname="dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="needsAckFlagPropagatesToEveryFrame[jvm]" classname="dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="textMessageProducesOneFrameWithIsTextFlag[jvm]" classname="dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="NetworkPathRecoveryTest[jvm]" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-07-04T18:46:27.891Z" hostname="192.168.1.19" time="0.142">
+  <properties/>
+  <testcase name="pathUnsatisfiedTransitionsToFailedWhenReconnectDisabled[jvm]" classname="dev.p2pkit.core.internal.NetworkPathRecoveryTest" time="0.003"/>
+  <testcase name="observerLifecycleIsTiedToKitLifecycle[jvm]" classname="dev.p2pkit.core.internal.NetworkPathRecoveryTest" time="0.002"/>
+  <testcase name="pathUnknownIsANoOp[jvm]" classname="dev.p2pkit.core.internal.NetworkPathRecoveryTest" time="0.113"/>
+  <testcase name="pathUnsatisfiedTransitionsConnectedSessionToReconnecting[jvm]" classname="dev.p2pkit.core.internal.NetworkPathRecoveryTest" time="0.013"/>
+  <testcase name="pathSatisfiedWakesParkedReconnectHandlerBeforeDelayExpires[jvm]" classname="dev.p2pkit.core.internal.NetworkPathRecoveryTest" time="0.011"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

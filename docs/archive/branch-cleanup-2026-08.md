@@ -30,19 +30,60 @@ The local remediation branch had the later ancestor tip
 `c1161d0b7dda4827069763c3cd039bd5aa073ce2`; it also had zero commits outside
 `main`, so its local name was safe to remove.
 
-## Deliberately retained
+## Final consolidation audit
 
-| Branch or ref | Tip | Unique commits relative to `main` | Reason retained |
-| --- | --- | ---: | --- |
-| `diag/issue-10-addServiceListener-timing` | `100b049f4a9df1e7d1ac279be72823f69d9f4736` | 1 | Unique diagnostic work; local and remote refs retained. |
-| `diag/issue-10-p3-measurement` | `d778b3338cf3c92f3fad02d74711d604e54b7ef2` | 2 | Unique local diagnostic work. |
-| `diag/issue-21-android-discovery-trace` | `ea436b9b2a16bb7f13295d0a8f79599248f2ab10` | 5 | Unique local diagnostic work. |
-| `fix/issue-19-ios-auto-mesh` | `03fa81451af4db5c41ff2a0bd527ff6ff464a59d` | 2 | Unique fix work; local and remote refs retained. |
-| `fix/issue-45-manual-peer-ids-thread-safe` | `6f45d5369f6b3a5e103f1f530d225ac2ad1c3d46` | 1 | Unique fix work; local and remote refs retained. |
-| `perf/issue-20-android-startup-lock` | `3e2b4d8877a719fd5cb709700c57548fdae11499` | 4 | Unique performance work; local and remote refs retained. |
-| `v0.6-dev` | `ea436b9b2a16bb7f13295d0a8f79599248f2ab10` | 5 | Contains unique unmerged history; local and remote refs retained. |
-| `stash@{0}` | `5ae6b82201e631ec9966742284aff7e8d46b1ff0` | not a branch | User work was left untouched. |
-| active Dependabot branches | varying | automated open updates | Left for their pull-request lifecycle. |
+The branches initially retained above were re-audited file-by-file against
+`main` at `e6091eeeff1d86aad266bf2d43f33aa8e80e575e`. The left/right counts below
+were captured after fetching/pruning on 2026-08-08. “Behind” counts are not the
+reason for deletion; the unique behavior and its current replacement are.
 
-Published tags, including `v0.7.0-rc1` and `v0.7.0-rc2`, were not moved,
-deleted, or rewritten.
+| Branch | Tip and relationship to audited `main` | Unique work | Final decision and preservation rationale |
+| --- | --- | --- | --- |
+| `diag/issue-10-addServiceListener-timing` | `100b049f4a9df1e7d1ac279be72823f69d9f4736`; 173 behind, 1 unique | Five temporary `Log.d` timing markers in Android JmDNS listener registration; commit is explicitly diagnostic/not for merge. | **Delete local and remote.** Current structured diagnostics provide bounded, correlated lifecycle events. The exact commit/file/intent is preserved here; merging unbounded ad-hoc logging would regress diagnostic policy. |
+| `diag/issue-10-p3-measurement` | `d778b3338cf3c92f3fad02d74711d604e54b7ef2`; 173 behind, 2 unique | Old “prefer Wi-Fi/Ethernet” initial bind patch plus the same five temporary markers. | **Delete local and remote.** Current `bestLanNetwork`, `AndroidLanNetworkState`, lifecycle coordinator, and selected-network socket factory implement the production correction more completely. The remaining issue-specific hardware work is tracked by issues #26/#28/#33. |
+| `diag/issue-21-android-discovery-trace` | `ea436b9b2a16bb7f13295d0a8f79599248f2ab10`; 173 behind, 5 topology commits | The branch tip is exactly `v0.6-dev`; it contains no trace commit. The trace itself exists only in the retained stash below. | **Delete local branch.** It duplicates `v0.6-dev` and has no distinct evidence. Issue #21 remains open and its operational evidence procedure is in the Android handbook. |
+| `fix/issue-19-ios-auto-mesh` | `03fa81451af4db5c41ff2a0bd527ff6ff464a59d`; 173 behind, 2 unique including its inherited issue-10 patch | Old iOS automatic-connect tie-break sample behavior. | **Delete local and remote.** The production library does not require sample auto-mesh, and the post-secure-v2 sample uses explicit authenticated/session controls and stronger diagnostics. Reapplying the old pre-v2 sample patch would conflict with later consent/authorization/UI architecture. PR #22 preserves authorship and discussion. |
+| `fix/issue-45-manual-peer-ids-thread-safe` | `6f45d5369f6b3a5e103f1f530d225ac2ad1c3d46`; 172 behind, 1 unique | Synchronizes the former standalone `manualPeerIds` set. | **Delete local and remote.** Commit `ee2cae5` removed the split state and atomically stores manual/discovery contributions in `TrackedPeer`; focused `PeerRegistryTest` passed on 2026-08-08. Issue #45 and PR #46 were closed with this evidence; the PR preserves the contributor patch. |
+| `perf/issue-20-android-startup-lock` | `3e2b4d8877a719fd5cb709700c57548fdae11499`; 173 behind, 4 topology commits | Wraps the old startup entrypoints in `Dispatchers.Default`, plus inherited issue-10 and iOS sample work. | **Delete local and remote.** Current `P2pKitImpl` owns a Default-dispatcher scope and a transactional, mutex-serialized feature lifecycle with rollback/cancellation semantics absent from the old patch. PR #24 preserves authorship/history. |
+| `v0.6-dev` | `ea436b9b2a16bb7f13295d0a8f79599248f2ab10`; 173 behind, 5 topology commits (3 non-merge) | Historical issue-10 bind selection, PR #22 iOS sample change, and PR #24 startup change. | **Delete local and remote.** All useful root causes were incorporated or superseded by the 0.7 lifecycle, selected-network, secure-v2, and sample architecture. The merge PRs and this record preserve provenance; keeping an untagged divergent development line would imply unsupported 0.6 maintenance. |
+
+### Final deletion execution
+
+After this record and the consolidation candidate were preserved remotely in
+[PR #60](https://github.com/p2pKit/P2pKit/pull/60), the five extant obsolete
+remote branches were deleted: `diag/issue-10-addServiceListener-timing`,
+`fix/issue-19-ios-auto-mesh`, `fix/issue-45-manual-peer-ids-thread-safe`,
+`perf/issue-20-android-startup-lock`, and `v0.6-dev`. The two remaining audited
+diagnostic names existed only locally. All seven local names in the table were
+then deleted.
+
+A fresh `git fetch --prune` and `git ls-remote --heads origin` confirmed that no
+audited diagnostic, fix, performance, or `v0.6-dev` branch remained. The only
+non-`main` remote branches were PR #60 and the live Dependabot PR branches. No
+tag changed, and the issue-21 stash described below remained present.
+
+### Local diagnostic stash
+
+`stash@{0}` (`5ae6b82201e631ec9966742284aff7e8d46b1ff0`) remains intentionally retained.
+It contains 72 lines of uncommitted issue-21 Android trace instrumentation plus
+obsolete `dev.p2pkit`/`0.6.0` publication edits. It is unsafe to merge and is not
+part of the clean worktree/index, but it is the only surviving copy of the
+original issue-21 diagnostic experiment. Keep it until issue #21's physical
+validation is complete; do not apply its publication changes. This is a
+concrete diagnostic-evidence retention reason, not a second development line.
+
+### Automated dependency branches
+
+Dependabot branches for PRs #49–#58 are not historical development branches.
+They remain governed by their live PRs and may be deleted only when merged,
+superseded, or closed. Their applicability and required-gate state is recorded
+in [`../maintenance/github-audit-2026-08.md`](../maintenance/github-audit-2026-08.md).
+
+The temporary `cleanup/final-consolidation-2026-08` branch exists only as
+[PR #60](https://github.com/p2pKit/P2pKit/pull/60) for the protected-`main`
+process and will be deleted after merge. No permanent development branch is
+retained beside `main`.
+
+Published tags were not moved, deleted, or rewritten. In particular,
+`v0.7.0-rc2^{commit}` remained
+`90acb29583ea11d18685cf1315476756e7618245` throughout the audit.

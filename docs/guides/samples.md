@@ -28,4 +28,5 @@ under `samples/p2p-sample-desktop/build/install/`. The iOS project is generated
 from `samples/iosApp/project.yml`; do not hand-edit the ignored `.xcodeproj`.
 
 For validation controls, event names, evidence export, and two-peer
-correlation, follow the [external validation plan](../testing/external-validation.md).
+correlation, follow the [validation handbook](../validation/README.md) and
+[test catalog](../validation/test-catalog.md).

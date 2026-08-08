@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="ReconnectPolicyTest[jvm]" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:13:05.187Z" hostname="192.168.1.19" time="0.613">
+  <properties/>
+  <testcase name="disabledPolicyTransitionsDirectlyToFailed[jvm]" classname="dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.002"/>
+  <testcase name="remoteCloseFrameYieldsExactlyClosedAndNeverRedials[jvm]" classname="dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.163"/>
+  <testcase name="closeDuringReconnectStopsRetriesAndEndsClosed[jvm]" classname="dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.168"/>
+  <testcase name="concurrentConnectDuringReconnectReturnsSameSession[jvm]" classname="dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.01"/>
+  <testcase name="enabledPolicyReturnsToConnectedOnSuccessfulRetry[jvm]" classname="dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.037"/>
+  <testcase name="enabledPolicyFailsAfterMaxAttempts[jvm]" classname="dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.055"/>
+  <testcase name="kitStopDuringReconnectStopsRetries[jvm]" classname="dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.155"/>
+  <testcase name="enabledPolicyEmitsReconnectingOnConnectionLoss[jvm]" classname="dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.004"/>
+  <testcase name="abruptRemoteTerminationWithoutCloseFrameDeterministicallyEntersReconnecting[jvm]" classname="dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.003"/>
+  <testcase name="remoteCloseThenImmediateSocketCloseClassifiesCleanlyUnderRepetition[jvm]" classname="dev.p2pkit.core.internal.ReconnectPolicyTest" time="0.014"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ChunkerTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-07-04T18:45:48.105Z" hostname="192.168.1.19" time="0.0">
+  <properties/>
+  <testcase name="textMessageProducesOneFrameWithIsTextFlag[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="binaryMessageProducesOneFrameWithoutTextFlag[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="emptyPayloadStillProducesOneFrame[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="payloadEqualToChunkSizeProducesExactlyOneFrame[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="payloadOneByteOverChunkSizeSplitsIntoTwoFrames[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="largePayloadSplitsAcrossManyFrames[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="allChunksShareSameMessageId[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="separateMessagesGetDifferentMessageIds[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="needsAckFlagPropagatesToEveryFrame[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <testcase name="payloadOverMaxThrowsPayloadTooLarge[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.ChunkerTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

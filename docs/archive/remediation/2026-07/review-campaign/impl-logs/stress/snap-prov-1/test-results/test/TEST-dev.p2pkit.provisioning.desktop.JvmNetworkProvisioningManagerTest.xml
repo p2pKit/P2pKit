@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.p2pkit.provisioning.desktop.JvmNetworkProvisioningManagerTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-07-04T23:56:08.238Z" hostname="192.168.1.19" time="0.068">
+  <properties/>
+  <testcase name="createManualPeerDelegatesToRegistrar" classname="dev.p2pkit.provisioning.desktop.JvmNetworkProvisioningManagerTest" time="0.055"/>
+  <testcase name="manualConnectionInfoCarriesIdentityAndPortWhenPresent" classname="dev.p2pkit.provisioning.desktop.JvmNetworkProvisioningManagerTest" time="0.004"/>
+  <testcase name="startLocalNetworkReturnsUnsupported" classname="dev.p2pkit.provisioning.desktop.JvmNetworkProvisioningManagerTest" time="0.006"/>
+  <testcase name="joinLocalNetworkReturnsUnsupported" classname="dev.p2pkit.provisioning.desktop.JvmNetworkProvisioningManagerTest" time="0.001"/>
+  <testcase name="manualConnectionInfoReturnsNullWhenLanPortMissing" classname="dev.p2pkit.provisioning.desktop.JvmNetworkProvisioningManagerTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

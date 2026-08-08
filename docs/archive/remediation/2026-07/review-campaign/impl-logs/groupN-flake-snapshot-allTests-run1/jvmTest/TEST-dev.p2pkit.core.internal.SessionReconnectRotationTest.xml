@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="SessionReconnectRotationTest[jvm]" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:13:05.829Z" hostname="192.168.1.19" time="0.657">
+  <properties/>
+  <testcase name="reconnectUsesRefreshedHintsAfterPeerRegistryUpdate[jvm]" classname="dev.p2pkit.core.internal.SessionReconnectRotationTest" time="0.216"/>
+  <testcase name="discoveryRefreshFiresOnReconnectingTransition[jvm]" classname="dev.p2pkit.core.internal.SessionReconnectRotationTest" time="0.219"/>
+  <testcase name="reconnectFallsBackToOriginalWhenRegistryHasNoEntry[jvm]" classname="dev.p2pkit.core.internal.SessionReconnectRotationTest" time="0.222"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="iosSimulatorArm64Test.dev.p2pkit.core.internal.PeerRegistryTest" tests="13" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:14:20.123Z" hostname="192.168.1.19" time="0.001">
+  <properties/>
+  <testcase name="directProcessEventBypassesFlow[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="foundEventAddsPeer[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="updatedEventReplacesPeerWithSameId[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="lostEventRemovesPeer[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="evictStalePeersRemovesPeerOlderThanTimeout[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="evictStalePeersKeepsRecentPeer[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="lastSeenReflectsLatestEvent[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.PeerRegistryTest" time="0.001"/>
+  <testcase name="manualPeerSurvivesStalenessEvictionWhileDiscoveredPeerIsEvicted[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="manualPeerSurvivesRepeatedEvictionPassesAfterLargeClockAdvance[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="registerManualPeerSameEndpointReturnsSamePeerAndKeepsOneEntry[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="registerManualPeerDedupeWithNullOrBlankNameKeepsExistingName[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="registerManualPeerNewEndpointMintsNewId[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="registerManualPeerSameHostPortDifferentKindMintsNewId[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

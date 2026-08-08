@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="HelloPayloadTest[jvm]" tests="16" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:13:06.607Z" hostname="192.168.1.19" time="0.006">
+  <properties/>
+  <testcase name="appIdOverMaxLenIsRejected[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="deviceNameOverMaxLenIsRejected[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="transportsAtMaxCountAreAcceptedAndOneOverIsRejected[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="overLimitPlatformStringIsRejected[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.003"/>
+  <testcase name="unknownFieldsAreIgnoredOnDecode[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.001"/>
+  <testcase name="missingProtocolVersionDefaultsToCurrentVersion[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="missingRequiredFieldIsRejected[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="roundTripPreservesAllFields[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="malformedJsonBodyIsRejected[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="overLimitPerTransportStringIsRejected[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.002"/>
+  <testcase name="peerIdOverMaxLenIsRejected[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="fieldsAtMaxLenAreAccepted[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="encodedJsonIsUtf8[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="emptySupportedTransportsListIsPreserved[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="blankAppIdIsRejected[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="blankPeerIdIsRejected[jvm]" classname="dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

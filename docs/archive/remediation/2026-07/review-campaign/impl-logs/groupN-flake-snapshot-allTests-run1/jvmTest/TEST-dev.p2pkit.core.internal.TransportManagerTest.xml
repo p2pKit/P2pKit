@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="TransportManagerTest[jvm]" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:13:06.588Z" hostname="192.168.1.19" time="0.0">
+  <properties/>
+  <testcase name="throwsNoTransportAvailableWhenNoneMatch[jvm]" classname="dev.p2pkit.core.internal.TransportManagerTest" time="0.0"/>
+  <testcase name="ignoresTransportsThatCannotConnect[jvm]" classname="dev.p2pkit.core.internal.TransportManagerTest" time="0.0"/>
+  <testcase name="throwsNoTransportAvailableForEmptyTransportList[jvm]" classname="dev.p2pkit.core.internal.TransportManagerTest" time="0.0"/>
+  <testcase name="selectsHighestPriorityTransport[jvm]" classname="dev.p2pkit.core.internal.TransportManagerTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

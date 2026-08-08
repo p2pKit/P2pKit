@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="FixtureContractTest[jvm]" tests="15" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:15:01.223Z" hostname="192.168.1.19" time="0.007">
+  <properties/>
+  <testcase name="startFailureKnobMakesStartReportFailure[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="closeReleasesAParkedWriteWithAFailure[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.001"/>
+  <testcase name="startAfterCloseReportsFailurePerTheShippedContract[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="emitIncomingAfterCloseFailsLoudly[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.001"/>
+  <testcase name="breakWithExceptionThrowsFromReadForDefensivePathTests[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.001"/>
+  <testcase name="failNextWriteFailsOnceAndConnectionStaysOpen[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="discoveryEventsDeliverToAnActiveCollectorInBothModes[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="recordingLoggerCapturesEntriesAndTeardownConventionWorks[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.001"/>
+  <testcase name="peerSideClosePropagatesToPartner[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="writeFailureFailsEveryWriteWhileSet[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.001"/>
+  <testcase name="breakWithCompletesReadNormallyAndFlipsState[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="failIncomingTerminatesIncomingFlowWithCause[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="startRecordsCallsAndSucceedsByDefault[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.001"/>
+  <testcase name="suspendWritesParksWriterUntilResumed[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="hangUpPropagatesRemoteTerminationToPartner[jvm]" classname="dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

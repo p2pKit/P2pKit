@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="iosSimulatorArm64Test.dev.p2pkit.core.internal.NetworkPathRecoveryTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-07-04T18:45:43.261Z" hostname="192.168.1.19" time="0.109">
+  <properties/>
+  <testcase name="pathUnsatisfiedTransitionsConnectedSessionToReconnecting[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.NetworkPathRecoveryTest" time="0.002"/>
+  <testcase name="pathUnsatisfiedTransitionsToFailedWhenReconnectDisabled[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.NetworkPathRecoveryTest" time="0.0"/>
+  <testcase name="pathSatisfiedWakesParkedReconnectHandlerBeforeDelayExpires[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.NetworkPathRecoveryTest" time="0.003"/>
+  <testcase name="pathUnknownIsANoOp[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.NetworkPathRecoveryTest" time="0.103"/>
+  <testcase name="observerLifecycleIsTiedToKitLifecycle[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.NetworkPathRecoveryTest" time="0.001"/>
+  <system-out><![CDATA[p2pkit: [buildInfo] p2pkit@549998e-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T18:45:08.860171Z)
+p2pkit: [buildInfo] p2pkit@549998e-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T18:45:08.860171Z)
+p2pkit: [buildInfo] p2pkit@549998e-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T18:45:08.860171Z)
+p2pkit: [buildInfo] p2pkit@549998e-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T18:45:08.860171Z)
+p2pkit: [buildInfo] p2pkit@549998e-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T18:45:08.860171Z)
+p2pkit: [buildInfo] p2pkit@549998e-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T18:45:08.860171Z)
+p2pkit: [buildInfo] p2pkit@549998e-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T18:45:08.860171Z)
+p2pkit: [buildInfo] p2pkit@549998e-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T18:45:08.860171Z)
+p2pkit: [buildInfo] p2pkit@549998e-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T18:45:08.860171Z)
+p2pkit: [buildInfo] p2pkit@549998e-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T18:45:08.860171Z)
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

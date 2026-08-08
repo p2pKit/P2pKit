@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="iosSimulatorArm64Test.dev.p2pkit.core.internal.SendErrorContractTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:14:20.690Z" hostname="192.168.1.19" time="0.009">
+  <properties/>
+  <testcase name="singleChunkWriteFailureSurfacesAsConnectionFailedWithCausePreserved[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SendErrorContractTest" time="0.0"/>
+  <testcase name="rawIllegalStateExceptionNeverEscapesSend[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SendErrorContractTest" time="0.0"/>
+  <testcase name="multiChunkMidStreamWriteFailureSurfacesAsConnectionFailedWithCause[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <testcase name="rearmSwapBetweenStateCheckAndWriteSurfacesTypedErrorAndKeepsRearmedSessionHealthy[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <testcase name="cancellationDuringSendPassesThroughUnwrapped[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <testcase name="notConnectedPreCheckRefusalPassesThroughUnchanged[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <testcase name="payloadTooLargePassesThroughUnwrapped[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SendErrorContractTest" time="0.002"/>
+  <testcase name="sendFileOfferWriteFailureSurfacesAsConnectionFailedWithCausePreserved[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SendErrorContractTest" time="0.0"/>
+  <testcase name="sendFileNegativeSizeRefusalIsTypedWithArgumentCause[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <testcase name="sendFilePayloadTooLargePassesThroughUnwrapped[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SendErrorContractTest" time="0.0"/>
+  <testcase name="cancellationDuringSendFilePassesThroughUnwrapped[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

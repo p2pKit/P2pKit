@@ -1,0 +1,196 @@
+# Apple physical-device and AWDL validation
+
+**Status: NOT STARTED.** Simulator compilation and simulator UI tests do not
+prove Local Network permission, AWDL, radio/path changes, suspension, or
+real-device process recovery.
+
+## Purpose and scope
+
+Validate Bonjour/AWDL discovery, Network.framework listener/browser behavior,
+authenticated sessions, bidirectional durable transfer, path rotation,
+foreground/background behavior, process restart, and the Swift sample on real
+iPhone/iPad hardware. This covers `LAN-T07`, `ENV-01`, `ENV-04`, `PS-T07`,
+`PS-T08`, and `PS-T09`; use the matching diagnostic sequences in
+[`test-catalog.md`](test-catalog.md).
+
+## Required equipment and coverage
+
+- Two physical Apple devices signed by a development team; one iPhone and one
+  iPad are preferred. Add a third device when testing discovery churn.
+- Cover the oldest supported iOS/iPadOS release, one intermediate release, and
+  the newest available release, with at least two hardware generations.
+- A Mac with compatible Xcode, command-line tools, repository JDK, Kotlin/Native
+  toolchain, free USB ports/cables, and permission to install development apps.
+- A normal Wi-Fi LAN and an AWDL peer-to-peer topology. Administrative access
+  to the AP is required for path rotation and packet-capture correlation.
+- A valid non-production signing team/profile and an app identifier allowed to
+  request Local Network access. Never commit signing identifiers or profiles.
+
+`ENV-04` additionally requires a real Intel Mac or a supported x86_64 runtime.
+Rosetta alone does not prove an x86_64 iOS simulator/runtime path; record the
+actual host architecture and destination.
+
+## Build, sign, and install
+
+From a clean immutable checkout:
+
+```bash
+export P2PKIT_SHA="$(git rev-parse HEAD)"
+test -z "$(git status --short)"
+./gradlew --no-daemon :p2p-core:iosSimulatorArm64Test \
+  :p2p-transport-lan:iosSimulatorArm64Test \
+  :p2p-transport-lan:assembleP2pKitSharedReleaseXCFramework
+cd samples/iosApp
+xcodegen generate
+xcodebuild -project p2pkit-sample.xcodeproj \
+  -scheme p2pkit-sample-ui \
+  -configuration Debug \
+  -destination 'generic/platform=iOS' \
+  CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=<team-id> build
+```
+
+Use Xcode's Devices and Simulators window or `xcrun devicectl` to identify and
+install the built `.app`:
+
+```bash
+xcrun devicectl list devices
+xcrun devicectl device install app --device <device-id> <path-to-p2pkit-sample.app>
+xcrun devicectl device process launch --device <device-id> dev.p2pkit.sample
+```
+
+Record the full `xcodebuild` command, Xcode/Swift version, signing team name
+(not credentials), app bundle version, device model, OS build, and candidate
+SHA. Generate the Xcode project from `project.yml`; do not hand-edit the
+generated project.
+
+## Diagnostics and permissions
+
+On first launch, capture the Local Network prompt. Test allow and deny on a
+clean install. For a denied app, confirm the UI and `discovery` state report a
+permission/error outcome and never claim peers were found. Re-enable under
+Settings > Privacy & Security > Local Network, then tap **Stop** and **Start**.
+
+Open **Test Diagnostics**, enter the test ID and a shared session ID used on
+both peers, choose the role, and start the session. Record the displayed build,
+peer, connection, transfer, protocol, path, hash, and final-result values. Use
+**Export Test Evidence** and save the share-sheet ZIP for each peer.
+
+Collect an external unified log in parallel:
+
+```bash
+log stream --level debug --style compact \
+  --predicate 'process == "p2pkit-sample" OR eventMessage CONTAINS[c] "P2pKit"' \
+  > <evidence-dir>/<role>-apple-unified.log
+xcrun devicectl device info details --device <device-id> \
+  > <evidence-dir>/<role>-device.txt
+```
+
+Use only synthetic payloads. Apple system logs can contain device identifiers;
+redact those before sharing while retaining a private unredacted original.
+
+## Test cases
+
+### B1 — permission, Bonjour, and baseline LAN
+
+Run `LAN-T07` on the normal Wi-Fi LAN. Start both samples; **Start** must create
+one listener and one browser and reach their ready states. Discover each peer,
+connect manually, then repeat through auto-mesh where supported. Verify
+`secure-v2`, authenticated remote fingerprint/policy, and matched peer/session
+identity in both exports.
+
+Send text and deterministic 1-byte, 200 KiB, 5 MiB, and 49 MiB files in both
+directions. Exercise accept, reject, cancel before acceptance, cancel during
+transfer, and success. Success requires exact source/receiver size and SHA-256,
+durable commit before acknowledgment, one final outcome, and no partial output.
+
+### B2 — AWDL peer-to-peer path
+
+Disconnect both devices from the test Wi-Fi AP while leaving Wi-Fi enabled so
+the OS may use peer-to-peer interfaces. Start advertising/discovery on both
+devices, wait the catalog timeout, and record Network.framework path/interface
+diagnostics. Establish a session and transfer in both directions.
+
+Pass requires discovery and data to use an Apple-supported peer-to-peer path,
+with no hidden cellular fallback, and recovery/teardown events on both peers.
+If the OS does not expose a shareable interface name, retain the safely exposed
+path flags, `dns-sd` observation from the Mac, timestamps, and a packet capture
+where lawful. “Peers connected” without path evidence does not prove AWDL.
+
+### B3 — path and interface rotation
+
+During discovery, handshake, idle connected state, and mid-transfer separately:
+
+1. Join and leave the Wi-Fi AP.
+2. Switch between two APs/subnets.
+3. Disable/enable Wi-Fi while cellular remains available.
+4. Move from infrastructure Wi-Fi to the AWDL topology and back.
+
+Expected behavior is a bounded path-change/rebind sequence, removal of stale
+endpoints, a new connection ID after reconnection, and either a typed transfer
+interruption/recovery or an explicit terminal failure. It must never silently
+route over prohibited cellular, preserve a ghost peer indefinitely, reuse a
+stale endpoint after restart, or show `Connected` after the transport is gone.
+
+### B4 — lifecycle, lock, termination, and restart
+
+Run each action while idle, connected, and transferring:
+
+- background for 30 seconds and for 5 minutes, then foreground;
+- lock for 30 seconds, unlock, and foreground;
+- swipe-kill the app and relaunch;
+- terminate with `devicectl`, relaunch, and start a new diagnostic session;
+- tap **Stop** while browser/listener readiness is pending, then **Start**.
+
+Record `WillEnterForeground`/`DidBecomeActive`-equivalent observable events,
+listener/browser state, temporary-file cleanup, and whether a transfer was
+durably committed before termination. A pre-commit transfer must not be shown
+as successful after restart. The app must not retain stale collectors or
+duplicate sessions.
+
+### B5 — sink failure, collision, and hostile values
+
+Run `PS-T07` and `PS-T08` with an owner-approved test harness or controlled
+filesystem condition. Exercise destination collision, unwritable destination,
+bounded storage exhaustion, export failure, hostile file names, maximum safe
+metadata, invalid UTF-8/wire forms, and scoped IPv6 endpoints.
+
+Every failure must be typed and redacted, leave no escaped or committed partial
+file, clean temporary state, and leave the protocol usable for the next valid
+transfer. If evidence export itself fails, copy the live JSONL/text and unified
+log; do not mark the case passed without reconstructable evidence.
+
+### B6 — KMP consumer and x86_64 coverage
+
+Run `PS-T09` using the checked-in Swift/XCFramework sample on each physical
+device. For `ENV-04`, build and launch the x86_64 simulator/runtime on an Intel
+host and repeat start/stop plus a JVM-peer connection when networking permits.
+Record architecture with `uname -m` and the exact Xcode destination.
+
+## Pass/fail and evidence
+
+Each mandatory case must pass three consecutive times on every required
+device/OS/topology cell. Fail on false connected/completed UI, cellular
+fallback, missing Local Network error, duplicate session/collector, ghost peer,
+unbounded retry, crash/hang, unmatched hash, partial durable file, incorrect
+post-restart success, or an export that cannot correlate both peers.
+
+Retain both evidence ZIPs, UI screenshots/video, unified logs, build log,
+device/OS inventory, `dns-sd` output, path evidence, source/receiver hashes,
+router/AP events, packet capture where required, and the completed catalog
+result record.
+
+## Cleanup
+
+Stop the kit on both peers, remove only synthetic received files, uninstall the
+development app where required, reset Local Network permission for the next
+deny test, restore Wi-Fi/cellular/AP settings, stop log capture, delete any
+temporary test profile, and hash the immutable evidence directory.
+
+## Completion checklist
+
+- [ ] Physical device/OS matrix and Intel/x86_64 case completed.
+- [ ] Local Network deny/allow and baseline Bonjour cases passed.
+- [ ] AWDL path proven independently of the UI.
+- [ ] Path rotation, lifecycle, lock, termination, and recovery passed.
+- [ ] Sink/hostile-input and KMP consumer cases passed.
+- [ ] Both-peer evidence reviewed and signed off independently.

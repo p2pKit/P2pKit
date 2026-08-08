@@ -60,15 +60,13 @@ is ignored and must not become a source of truth.
 - `docs/architecture/specification.md` — maintained API/protocol contract.
 - `docs/security/model.md` — threat model and limitations.
 - `docs/testing/local.md` — automated checks.
-- `docs/testing/external-validation.md` — physical/external test execution.
+- `docs/validation/` — physical, hostile-network, independent, and audit execution handbooks.
 - `docs/releasing/checklist.md` — release process.
 - `docs/releases/0.7.0-rc2.md` — immutable publication evidence.
 
-The six external areas in `docs/testing/validation-status.md` remain pending;
+The six external areas in `docs/validation/README.md` remain pending;
 do not promote them from compilation or simulator results.
 
-If present in a local workspace, `.review-2026-07/`,
-`DEFERRED_ITEMS_REGISTER_2026-07.md`,
-`P2PKIT_FULL_CODE_REVIEW_2026-07-17.md`, and
-`P2PKIT_REMEDIATION_HANDOFF_2026-07-22.md` are user-owned/protected and must not
-be read, modified, staged, or committed.
+The owner-authorized July review corpus is historical and lives under
+`docs/archive/remediation/2026-07/`. Do not treat archived status or test logs
+as current evidence and do not edit them to describe later runs.

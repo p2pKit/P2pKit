@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="SendErrorContractTest[jvm]" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:13:05.801Z" hostname="192.168.1.19" time="0.013">
+  <properties/>
+  <testcase name="sendFileNegativeSizeRefusalIsTypedWithArgumentCause[jvm]" classname="dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <testcase name="payloadTooLargePassesThroughUnwrapped[jvm]" classname="dev.p2pkit.core.internal.SendErrorContractTest" time="0.002"/>
+  <testcase name="cancellationDuringSendFilePassesThroughUnwrapped[jvm]" classname="dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <testcase name="rawIllegalStateExceptionNeverEscapesSend[jvm]" classname="dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <testcase name="singleChunkWriteFailureSurfacesAsConnectionFailedWithCausePreserved[jvm]" classname="dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <testcase name="cancellationDuringSendPassesThroughUnwrapped[jvm]" classname="dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <testcase name="notConnectedPreCheckRefusalPassesThroughUnchanged[jvm]" classname="dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <testcase name="rearmSwapBetweenStateCheckAndWriteSurfacesTypedErrorAndKeepsRearmedSessionHealthy[jvm]" classname="dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <testcase name="sendFileOfferWriteFailureSurfacesAsConnectionFailedWithCausePreserved[jvm]" classname="dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <testcase name="sendFilePayloadTooLargePassesThroughUnwrapped[jvm]" classname="dev.p2pkit.core.internal.SendErrorContractTest" time="0.001"/>
+  <testcase name="multiChunkMidStreamWriteFailureSurfacesAsConnectionFailedWithCause[jvm]" classname="dev.p2pkit.core.internal.SendErrorContractTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

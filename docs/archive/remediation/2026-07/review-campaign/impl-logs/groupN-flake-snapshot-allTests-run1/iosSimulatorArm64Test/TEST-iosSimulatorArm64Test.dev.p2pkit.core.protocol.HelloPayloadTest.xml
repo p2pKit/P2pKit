@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" tests="16" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:12:29.236Z" hostname="192.168.1.19" time="0.008">
+  <properties/>
+  <testcase name="roundTripPreservesAllFields[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="unknownFieldsAreIgnoredOnDecode[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="encodedJsonIsUtf8[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="emptySupportedTransportsListIsPreserved[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="malformedJsonBodyIsRejected[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="missingRequiredFieldIsRejected[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="missingProtocolVersionDefaultsToCurrentVersion[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="blankAppIdIsRejected[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="blankPeerIdIsRejected[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="fieldsAtMaxLenAreAccepted[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="appIdOverMaxLenIsRejected[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="peerIdOverMaxLenIsRejected[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="deviceNameOverMaxLenIsRejected[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="transportsAtMaxCountAreAcceptedAndOneOverIsRejected[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.0"/>
+  <testcase name="overLimitPlatformStringIsRejected[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.004"/>
+  <testcase name="overLimitPerTransportStringIsRejected[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.HelloPayloadTest" time="0.004"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

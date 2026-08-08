@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="FrameCodecTest[jvm]" tests="13" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:13:06.604Z" hostname="192.168.1.19" time="0.001">
+  <properties/>
+  <testcase name="magicBytesAreCorrect[jvm]" classname="dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeRejectsTruncatedPayload[jvm]" classname="dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeRejectsBadMagic[jvm]" classname="dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="emptyPayloadIsValid[jvm]" classname="dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeRejectsNegativePayloadLength[jvm]" classname="dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeRejectsZeroTotalChunks[jvm]" classname="dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeRejectsTooShort[jvm]" classname="dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeRejectsInvalidChunkIndex[jvm]" classname="dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeRejectsOversizeDeclaredPayloadLength[jvm]" classname="dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="roundTripEveryPacketType[jvm]" classname="dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="flagsBitsRoundTripIndependently[jvm]" classname="dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="roundTripDataFrame[jvm]" classname="dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeThrowsUnknownPacketTypeForUnrecognizedTypeCode[jvm]" classname="dev.p2pkit.core.protocol.FrameCodecTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="InboundAcceptResilienceTest[jvm]" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:14:44.291Z" hostname="192.168.1.19" time="0.008">
+  <properties/>
+  <testcase name="acceptLoopFailureIsSurfacedAndKitSurvives[jvm]" classname="dev.p2pkit.core.internal.InboundAcceptResilienceTest" time="0.005"/>
+  <testcase name="incomingSetupFailureDoesNotPreventSubsequentInboundSessions[jvm]" classname="dev.p2pkit.core.internal.InboundAcceptResilienceTest" time="0.002"/>
+  <testcase name="cleanStopProducesNoInboundAcceptanceDiagnostics[jvm]" classname="dev.p2pkit.core.internal.InboundAcceptResilienceTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

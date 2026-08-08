@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" tests="15" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:14:21.503Z" hostname="192.168.1.19" time="0.004">
+  <properties/>
+  <testcase name="breakWithCompletesReadNormallyAndFlipsState[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="hangUpPropagatesRemoteTerminationToPartner[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.001"/>
+  <testcase name="peerSideClosePropagatesToPartner[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="breakWithExceptionThrowsFromReadForDefensivePathTests[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="failNextWriteFailsOnceAndConnectionStaysOpen[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="writeFailureFailsEveryWriteWhileSet[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="suspendWritesParksWriterUntilResumed[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.001"/>
+  <testcase name="closeReleasesAParkedWriteWithAFailure[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.001"/>
+  <testcase name="failIncomingTerminatesIncomingFlowWithCause[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="startRecordsCallsAndSucceedsByDefault[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="startAfterCloseReportsFailurePerTheShippedContract[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="startFailureKnobMakesStartReportFailure[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="emitIncomingAfterCloseFailsLoudly[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <testcase name="discoveryEventsDeliverToAnActiveCollectorInBothModes[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.001"/>
+  <testcase name="recordingLoggerCapturesEntriesAndTeardownConventionWorks[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.testfixtures.FixtureContractTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FileTransferProtocolTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:14:21.436Z" hostname="192.168.1.19" time="0.001">
+  <properties/>
+  <testcase name="offerRoundTrip[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FileTransferProtocolTest" time="0.0"/>
+  <testcase name="acceptCarriesTransferId[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FileTransferProtocolTest" time="0.0"/>
+  <testcase name="rejectWithReason[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FileTransferProtocolTest" time="0.0"/>
+  <testcase name="rejectWithoutReason[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FileTransferProtocolTest" time="0.0"/>
+  <testcase name="fileDataFrameRoundTrips[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FileTransferProtocolTest" time="0.0"/>
+  <testcase name="doneCarriesTransferId[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FileTransferProtocolTest" time="0.001"/>
+  <testcase name="cancelCarriesReason[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FileTransferProtocolTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

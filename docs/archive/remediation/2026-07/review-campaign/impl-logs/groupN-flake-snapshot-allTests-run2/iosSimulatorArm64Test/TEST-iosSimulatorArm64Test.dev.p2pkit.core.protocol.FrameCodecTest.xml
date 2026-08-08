@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FrameCodecTest" tests="13" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:14:21.437Z" hostname="192.168.1.19" time="0.0">
+  <properties/>
+  <testcase name="roundTripDataFrame[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="roundTripEveryPacketType[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="emptyPayloadIsValid[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="magicBytesAreCorrect[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeRejectsBadMagic[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeRejectsTooShort[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeRejectsTruncatedPayload[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeThrowsUnknownPacketTypeForUnrecognizedTypeCode[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeRejectsInvalidChunkIndex[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeRejectsZeroTotalChunks[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeRejectsNegativePayloadLength[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="decodeRejectsOversizeDeclaredPayloadLength[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <testcase name="flagsBitsRoundTripIndependently[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.protocol.FrameCodecTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

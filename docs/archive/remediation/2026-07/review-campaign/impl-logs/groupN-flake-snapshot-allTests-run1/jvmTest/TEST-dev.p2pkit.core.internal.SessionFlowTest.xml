@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="SessionFlowTest[jvm]" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:13:05.815Z" hostname="192.168.1.19" time="0.013">
+  <properties/>
+  <testcase name="outgoingSessionExchangesBinary[jvm]" classname="dev.p2pkit.core.internal.SessionFlowTest" time="0.003"/>
+  <testcase name="connectIsIdempotentForSamePeer[jvm]" classname="dev.p2pkit.core.internal.SessionFlowTest" time="0.001"/>
+  <testcase name="outgoingSessionExchangesText[jvm]" classname="dev.p2pkit.core.internal.SessionFlowTest" time="0.002"/>
+  <testcase name="closeTransitionsSessionToClosed[jvm]" classname="dev.p2pkit.core.internal.SessionFlowTest" time="0.001"/>
+  <testcase name="concurrentConnectCallsForSamePeerReturnTheSameSession[jvm]" classname="dev.p2pkit.core.internal.SessionFlowTest" time="0.002"/>
+  <testcase name="incomingSessionFailsDeterministicallyOnAbruptRemoteTermination[jvm]" classname="dev.p2pkit.core.internal.SessionFlowTest" time="0.001"/>
+  <testcase name="concurrentSendsDoNotInterleave[jvm]" classname="dev.p2pkit.core.internal.SessionFlowTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

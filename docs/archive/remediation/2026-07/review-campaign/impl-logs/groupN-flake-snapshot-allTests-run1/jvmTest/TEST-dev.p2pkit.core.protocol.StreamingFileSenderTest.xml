@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="StreamingFileSenderTest[jvm]" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:13:06.622Z" hostname="192.168.1.19" time="0.012">
+  <properties/>
+  <testcase name="exactMultipleOfChunkSizeSplitsCleanly[jvm]" classname="dev.p2pkit.core.protocol.StreamingFileSenderTest" time="0.001"/>
+  <testcase name="largeFileStreamsWithoutBufferingAll[jvm]" classname="dev.p2pkit.core.protocol.StreamingFileSenderTest" time="0.01"/>
+  <testcase name="nonMultipleOfChunkSizeSplitsLastShort[jvm]" classname="dev.p2pkit.core.protocol.StreamingFileSenderTest" time="0.0"/>
+  <testcase name="singleChunkFileFitsInOneFrame[jvm]" classname="dev.p2pkit.core.protocol.StreamingFileSenderTest" time="0.0"/>
+  <testcase name="emptyFileEmitsNoFrames[jvm]" classname="dev.p2pkit.core.protocol.StreamingFileSenderTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="iosSimulatorArm64Test.dev.p2pkit.core.internal.SessionFlowTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:12:28.498Z" hostname="192.168.1.19" time="0.007">
+  <properties/>
+  <testcase name="outgoingSessionExchangesText[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SessionFlowTest" time="0.001"/>
+  <testcase name="outgoingSessionExchangesBinary[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SessionFlowTest" time="0.001"/>
+  <testcase name="concurrentConnectCallsForSamePeerReturnTheSameSession[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SessionFlowTest" time="0.001"/>
+  <testcase name="connectIsIdempotentForSamePeer[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SessionFlowTest" time="0.001"/>
+  <testcase name="concurrentSendsDoNotInterleave[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SessionFlowTest" time="0.001"/>
+  <testcase name="closeTransitionsSessionToClosed[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SessionFlowTest" time="0.001"/>
+  <testcase name="incomingSessionFailsDeterministicallyOnAbruptRemoteTermination[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.SessionFlowTest" time="0.0"/>
+  <system-out><![CDATA[p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:11:52.960720Z)
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

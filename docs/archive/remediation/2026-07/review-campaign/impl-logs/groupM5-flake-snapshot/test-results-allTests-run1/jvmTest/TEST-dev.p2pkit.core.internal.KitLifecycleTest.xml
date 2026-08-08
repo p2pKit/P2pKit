@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="KitLifecycleTest[jvm]" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-07-04T18:46:12.796Z" hostname="192.168.1.19" time="15.059">
+  <properties/>
+  <testcase name="cancelledStopCallerStillClosesObserverAndLatchesStopped[jvm]" classname="dev.p2pkit.core.internal.KitLifecycleTest" time="0.002"/>
+  <testcase name="stopCompletesWhenATransportStartHangs[jvm]" classname="dev.p2pkit.core.internal.KitLifecycleTest" time="5.013"/>
+  <testcase name="successfulReadvertiseClearsLatchedFailed[jvm]" classname="dev.p2pkit.core.internal.KitLifecycleTest" time="0.007"/>
+  <testcase name="bindFailureSurfacesTypedFailedStateAndDoesNotLatch[jvm]" classname="dev.p2pkit.core.internal.KitLifecycleTest" time="0.004"/>
+  <testcase name="stopClosesDataTransportAndStopsDiscoveryAdvertising[jvm]" classname="dev.p2pkit.core.internal.KitLifecycleTest" time="0.003"/>
+  <testcase name="cancellingStartMidBindPropagatesCancellationAndDoesNotLatchFailed[jvm]" classname="dev.p2pkit.core.internal.KitLifecycleTest" time="0.005"/>
+  <testcase name="stopRemainsBoundedWhenObserverStartHangsAndCloseBlocksOnSameMutex[jvm]" classname="dev.p2pkit.core.internal.KitLifecycleTest" time="10.017"/>
+  <testcase name="startDrivesIdleThroughStartingToRunning[jvm]" classname="dev.p2pkit.core.internal.KitLifecycleTest" time="0.004"/>
+  <testcase name="freshKitAfterStopIsIndependent[jvm]" classname="dev.p2pkit.core.internal.KitLifecycleTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

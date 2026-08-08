@@ -22,4 +22,6 @@ The following remain pending and must not be described as verified:
 
 The exact equipment, steps, UI observations, logs, evidence exports, pass/fail
 criteria, and result templates are in the
-[external validation test plan](external-validation.md).
+[real-world validation handbook](../validation/README.md). The cross-platform
+tracker-ID procedures and logging matrix are in its
+[test catalog](../validation/test-catalog.md).

@@ -165,4 +165,4 @@ At minimum:
 
 The complete automated and physical-device release matrix is in
 the [local testing guide](../testing/local.md) and
-[external validation plan](../testing/external-validation.md).
+[real-world validation handbook](../validation/README.md).

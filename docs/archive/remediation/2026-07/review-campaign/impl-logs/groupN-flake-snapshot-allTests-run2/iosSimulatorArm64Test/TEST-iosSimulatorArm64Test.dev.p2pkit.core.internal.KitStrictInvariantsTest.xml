@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="iosSimulatorArm64Test.dev.p2pkit.core.internal.KitStrictInvariantsTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:14:20.003Z" hostname="192.168.1.19" time="0.0">
+  <properties/>
+  <testcase name="strictTestKitThrowsOnForcedStoreInconsistency[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.KitStrictInvariantsTest" time="0.0"/>
+  <testcase name="plainKitKeepsProductionWarnOnlyDefault[iosSimulatorArm64]" classname="iosSimulatorArm64Test.dev.p2pkit.core.internal.KitStrictInvariantsTest" time="0.0"/>
+  <system-out><![CDATA[p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:13:45.981253Z)
+p2pkit: [buildInfo] p2pkit@b155bd8-DIRTY (audit/exhaustive-review-2026-06, built 2026-07-04T19:13:45.981253Z)
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

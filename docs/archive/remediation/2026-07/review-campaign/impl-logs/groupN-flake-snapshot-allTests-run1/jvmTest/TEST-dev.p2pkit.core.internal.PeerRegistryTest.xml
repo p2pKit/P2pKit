@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="PeerRegistryTest[jvm]" tests="13" skipped="0" failures="0" errors="0" timestamp="2026-07-04T19:13:05.178Z" hostname="192.168.1.19" time="0.005">
+  <properties/>
+  <testcase name="registerManualPeerNewEndpointMintsNewId[jvm]" classname="dev.p2pkit.core.internal.PeerRegistryTest" time="0.001"/>
+  <testcase name="directProcessEventBypassesFlow[jvm]" classname="dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="lastSeenReflectsLatestEvent[jvm]" classname="dev.p2pkit.core.internal.PeerRegistryTest" time="0.001"/>
+  <testcase name="evictStalePeersKeepsRecentPeer[jvm]" classname="dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="foundEventAddsPeer[jvm]" classname="dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="registerManualPeerDedupeWithNullOrBlankNameKeepsExistingName[jvm]" classname="dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="manualPeerSurvivesStalenessEvictionWhileDiscoveredPeerIsEvicted[jvm]" classname="dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="manualPeerSurvivesRepeatedEvictionPassesAfterLargeClockAdvance[jvm]" classname="dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="registerManualPeerSameEndpointReturnsSamePeerAndKeepsOneEntry[jvm]" classname="dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="registerManualPeerSameHostPortDifferentKindMintsNewId[jvm]" classname="dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="evictStalePeersRemovesPeerOlderThanTimeout[jvm]" classname="dev.p2pkit.core.internal.PeerRegistryTest" time="0.001"/>
+  <testcase name="updatedEventReplacesPeerWithSameId[jvm]" classname="dev.p2pkit.core.internal.PeerRegistryTest" time="0.0"/>
+  <testcase name="lostEventRemovesPeer[jvm]" classname="dev.p2pkit.core.internal.PeerRegistryTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
