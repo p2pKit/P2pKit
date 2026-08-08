@@ -13,10 +13,10 @@ android-compileSdk = "36"
 android-targetSdk = "36"
 android-sample-compileSdk = "37"
 android-sample-targetSdk = "37"
-androidx-activity-compose = "1.9.3"
+androidx-activity-compose = "1.13.0"
 androidx-core-ktx = "1.19.0"
-androidx-lifecycle = "2.8.7"
-androidx-compose-bom = "2024.12.01"
+androidx-lifecycle = "2.11.0"
+androidx-compose-bom = "2026.06.01"
 jetbrains-compose = "1.10.3"
 jetbrains-compose-material3 = "1.9.0"
 jetbrains-compose-material-icons = "1.7.3"
@@ -27,6 +27,7 @@ cyclonedx = "3.3.0"
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "serialization" }
 kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinx-io" }
 cryptography-core = { module = "dev.whyoleg.cryptography:cryptography-core", version.ref = "cryptography" }
 cryptography-provider-jdk = { module = "dev.whyoleg.cryptography:cryptography-provider-jdk", version.ref = "cryptography" }
@@ -41,6 +42,7 @@ androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-
 androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "androidx-compose-bom" }
 androidx-compose-ui = { module = "androidx.compose.ui:ui" }
 androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+androidx-compose-material-icons-core = { module = "androidx.compose.material:material-icons-core" }
 androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
 jetbrains-compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "jetbrains-compose-material3" }
 jetbrains-compose-material-icons-extended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "jetbrains-compose-material-icons" }
