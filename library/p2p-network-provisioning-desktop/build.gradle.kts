@@ -8,11 +8,11 @@ plugins {
 
 kotlin {
     @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class)
-    abiValidation {
-        enabled.set(true)
-    }
+    abiValidation()
 
     jvmToolchain(17)
+    // Retain rc2's published META-INF module identity under Kotlin 2.4.
+    compilerOptions.moduleName.set(project.name)
 }
 
 // Sources are supplied by the Java component; real Dokka Javadoc is attached

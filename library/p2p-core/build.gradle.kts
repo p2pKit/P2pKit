@@ -78,14 +78,18 @@ val verifyBuildInfoReproducibility by tasks.registering(VerifyBuildInfoTask::cla
 
 kotlin {
     @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class)
-    abiValidation {
-        enabled.set(true)
-    }
+    abiValidation()
 
     jvmToolchain(17)
-    jvm()
+    // Kotlin 2.4 defaults JVM module names to `<group>:<project>`. Preserve
+    // the published META-INF/p2p-core.kotlin_module identity used by rc2.
+    jvm {
+        compilerOptions.moduleName.set(project.name)
+    }
 
     android {
+        // Android KMP also emits JVM-style module metadata. Keep the rc2 name.
+        compilerOptions.moduleName.set(project.name)
         namespace = "dev.p2pkit.core"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()

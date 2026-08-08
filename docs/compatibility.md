@@ -17,7 +17,27 @@ make documented breaking changes before `1.0.0` in a new version.
 Supported build targets for the `0.7` line are Android API 24+, JVM 17, and
 iOS/iPadOS 14+ through `iosArm64`, `iosSimulatorArm64`, and `iosX64`. The iOS
 sample currently targets iOS 15 for its application UI; that does not raise
-the library compatibility floor. Exact toolchain versions are locked in the
-Gradle wrapper, version catalog, and CI workflows. Physical validation at the
-Android and Apple minimums remains pending until the evidence handbook is
-completed.
+the library compatibility floor. Current development uses Kotlin 2.4.10,
+whose default linked-binary floor is iOS 15. Repository-built XCFrameworks
+override that default with the canonical `IOS_MIN_VERSION=14.0` property, and
+the release gate inspects every Mach-O device/simulator slice.
+
+Kotlin Multiplatform applications that link their own iOS binary with Kotlin
+2.4 must apply the same documented Kotlin/Native override to each binary:
+
+```kotlin
+kotlin {
+    targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget>()
+        .configureEach {
+            binaries.configureEach {
+                freeCompilerArgs +=
+                    "-Xoverride-konan-properties=minVersion.ios=14.0"
+            }
+        }
+}
+```
+
+This changes only the deployment floor; it does not make simulator builds
+physical-device evidence. Exact toolchain versions are locked in the Gradle
+wrapper, version catalog, and CI workflows. Physical validation at the Android
+and Apple minimums remains pending until the evidence handbook is completed.

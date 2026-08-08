@@ -94,6 +94,12 @@ application builds `P2pKitShared.xcframework` from this repository:
 The maintained Swift sample and provenance-checked integration live under
 [`samples/iosApp`](samples/iosApp).
 
+Current development builds with Kotlin 2.4.10 while retaining the iOS 14
+library floor explicitly. Kotlin Multiplatform applications that link their
+own Apple binary must apply the iOS 14 Kotlin/Native override documented in
+the [compatibility policy](docs/compatibility.md); repository-built
+XCFrameworks apply it and verify every Mach-O slice automatically.
+
 ## Secure quick start
 
 Authenticated v2 is the default and fails closed. Exchange the full pairing QR

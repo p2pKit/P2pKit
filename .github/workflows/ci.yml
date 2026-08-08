@@ -129,6 +129,7 @@ jobs:
           scripts/tests/check-osv-lockfile-coverage.sh
           scripts/tests/check-markdown-links.sh
           scripts/tests/classify-ci-scope-test.sh
+          scripts/tests/check-kotlin-toolchain-policy-test.sh
           source scripts/run-ios-app.sh
           device_json="$(xcrun simctl list -j devices available)"
           SIM_UDID="$(select_latest_available_simulator_udid "iPhone 17" "$device_json")"
@@ -154,6 +155,7 @@ jobs:
           scripts/check-publish-artifacts.sh
           scripts/check-published-consumers.sh
           ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance --console=plain
+          scripts/check-xcframework-minimum-os.sh
 
       - name: Upload SBOM evidence
         if: ${{ always() && steps.scope.outputs.full == 'true' }}

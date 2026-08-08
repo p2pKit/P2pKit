@@ -192,6 +192,14 @@ grep -Fq 'scripts/tests/classify-ci-scope-test.sh' "$ROOT/scripts/run-release-ga
     echo "FATAL: CI scope classifier regression test is not in the release gate" >&2
     exit 1
 }
+grep -Fq 'scripts/tests/check-kotlin-toolchain-policy-test.sh' "$CI_WORKFLOW" || {
+    echo "FATAL: CI does not enforce Kotlin/iOS toolchain compatibility policy" >&2
+    exit 1
+}
+grep -Fq 'scripts/tests/check-kotlin-toolchain-policy-test.sh' "$ROOT/scripts/run-release-gate.sh" || {
+    echo "FATAL: release gate does not enforce Kotlin/iOS toolchain compatibility policy" >&2
+    exit 1
+}
 grep -Fq 'scripts/tests/check-markdown-links.sh' "$ROOT/scripts/run-release-gate.sh" || {
     echo "FATAL: release gate does not validate active Markdown links" >&2
     exit 1
