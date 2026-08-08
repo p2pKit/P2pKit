@@ -11,6 +11,7 @@ scripts/check-gradle-wrapper.sh
 scripts/tests/check-repository-layout.sh
 scripts/tests/check-osv-lockfile-coverage.sh
 scripts/tests/check-markdown-links.sh
+scripts/tests/classify-ci-scope-test.sh
 scripts/check-release-metadata.sh
 git diff --check
 ./gradlew check --console=plain
