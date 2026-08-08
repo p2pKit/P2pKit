@@ -58,9 +58,14 @@ diagnostic names existed only locally. All seven local names in the table were
 then deleted.
 
 A fresh `git fetch --prune` and `git ls-remote --heads origin` confirmed that no
-audited diagnostic, fix, performance, or `v0.6-dev` branch remained. The only
-non-`main` remote branches were PR #60 and the live Dependabot PR branches. No
-tag changed, and the issue-21 stash described below remained present.
+audited diagnostic, fix, performance, or `v0.6-dev` branch remained. At that
+checkpoint, the only non-`main` remote branches were PR #60 and the live
+Dependabot PR branches. PR #60 subsequently merged normally as
+`0a6c6bac28f9f99bab96d3753992994b867d6dad`; GitHub deleted its temporary
+branch. The superseded action-update branches were also removed. The final
+remote branch set was `main` plus the five actionable Dependabot branches for
+PRs #52–#56. No tag changed, and the issue-21 stash described below remained
+present.
 
 ### Local diagnostic stash
 
@@ -74,15 +79,17 @@ concrete diagnostic-evidence retention reason, not a second development line.
 
 ### Automated dependency branches
 
-Dependabot branches for PRs #49–#58 are not historical development branches.
-They remain governed by their live PRs and may be deleted only when merged,
-superseded, or closed. Their applicability and required-gate state is recorded
-in [`../maintenance/github-audit-2026-08.md`](../maintenance/github-audit-2026-08.md).
+Dependabot branches are not historical development branches. PR #49 merged;
+the applicable updates from PRs #50, #51, #57, and #58 were integrated with
+Dependabot authorship through PR #60, after which their redundant PRs closed
+and their branches were removed. PRs #52–#56 remain open with their branches
+retained because their acceptance gates have not passed. Their applicability
+and exact blockers are recorded in
+[`../maintenance/github-audit-2026-08.md`](../maintenance/github-audit-2026-08.md).
 
-The temporary `cleanup/final-consolidation-2026-08` branch exists only as
-[PR #60](https://github.com/p2pKit/P2pKit/pull/60) for the protected-`main`
-process and will be deleted after merge. No permanent development branch is
-retained beside `main`.
+The temporary `cleanup/final-consolidation-2026-08` branch was used only for
+[PR #60](https://github.com/p2pKit/P2pKit/pull/60) and was deleted after the
+protected merge. No permanent development branch is retained beside `main`.
 
 Published tags were not moved, deleted, or rewritten. In particular,
 `v0.7.0-rc2^{commit}` remained
