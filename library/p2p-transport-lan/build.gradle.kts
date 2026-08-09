@@ -35,6 +35,7 @@ kotlin {
         namespace = "dev.p2pkit.transport.lan"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
+        withHostTest { }
     }
 
     // iOS LAN/TCP via Bonjour + Network.framework. Same public API as
@@ -106,6 +107,10 @@ kotlin {
         // bits, so the same artifact as jvmMain.
         androidMain.dependencies {
             implementation(libs.jmdns)
+        }
+        getByName("androidHostTest").dependencies {
+            implementation(kotlin("test"))
+            implementation(libs.kotlinx.coroutines.test)
         }
     }
 }

@@ -97,6 +97,12 @@ Do not document a state as connected until both the UI and the correlated
 `connection.state.changed` event say `Connected` after secure-v2 negotiation
 and authentication.
 
+The candidate's automated `:p2p-transport-lan:testAndroidHostTest` suite proves
+selector parity, AP/tether candidate filtering, TXT-less removal ownership,
+and bounded JmDNS-construction cleanup. It does **not** prove that an OEM
+exposes the expected interface, forwards multicast, or orders callbacks the
+same way as the host fakes; those remain mandatory evidence below.
+
 ## Test cases
 
 ### A1 — permission and provisioning terminal-callback matrix
@@ -133,7 +139,12 @@ and then on. Connect manually once and automatically once.
 
 The discovered identity, chosen interface/network, address family, and data
 socket must describe the same LAN. Cellular or VPN must not silently carry the
-session. Send in both directions:
+session. In each evidence ZIP locate `ensureJmdns: active` (initial bind) and
+`rebindNow: rebinding onto` (rotation). Record `iface`, `bindAddr`, the Android
+`Network` when present, and the matching `dumpsys`/`ip addr` entry. A
+hotspot-host bind may correctly say `network=none`, but must name the explicit
+AP/tether interface and its private address; it must never select the cellular
+uplink. Send in both directions:
 
 - empty and 1-byte files;
 - deterministic 200 KiB, 5 MiB, and 49 MiB files;
@@ -157,6 +168,16 @@ Run `PS-T04`. During discovery, handshake, and transfer separately:
    new diagnostic session that records recovery state.
 5. Repeat **Advertise**/**Discover** toggles 50 times and **Stop kit**/start 20
    times, waiting for each terminal state rather than racing the UI.
+
+The two switches represent retained host intent. With either switch enabled,
+backgrounding under the sample's default policy pauses that SDK feature;
+foregrounding must first show the background stop reaching a settled feature
+state and then emit `discovery.started` with
+`advertising-restored-on-foreground` and/or
+`discovery-restored-on-foreground`. A rapid background/foreground cycle must
+not end with the switch enabled while the corresponding SDK feature remains
+idle. If a switch was disabled before backgrounding, no restore event may be
+emitted for it.
 
 The UI must remain responsive, stale peers must disappear, no old transfer may
 be reported complete after process death, and retained durable outputs must be

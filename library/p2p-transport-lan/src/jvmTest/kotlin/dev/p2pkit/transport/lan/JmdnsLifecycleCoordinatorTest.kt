@@ -70,6 +70,7 @@ class JmdnsLifecycleCoordinatorTest {
     private class FakeOps : JmdnsLifecycleOps<FakeNet, FakeHandle> {
         val createCalls = AtomicInteger(0)
         val created = CopyOnWriteArrayList<FakeHandle>()
+        val createdTargets = CopyOnWriteArrayList<FakeNet?>()
         val closed = CopyOnWriteArrayList<FakeHandle>()
         val registrations = CopyOnWriteArrayList<Pair<FakeHandle, LocalPeerInfo>>()
         val unregistrations = CopyOnWriteArrayList<Any>()
@@ -155,6 +156,7 @@ class JmdnsLifecycleCoordinatorTest {
 
         override fun createHandleBlocking(target: FakeNet?, forRebind: Boolean): FakeHandle {
             createCalls.incrementAndGet()
+            createdTargets += target
             createEntered.put(Unit)
             createGate?.let { awaitNonCancellableGate(it, "createGate") }
             if (createFailuresRemaining.get() > 0) {
@@ -885,6 +887,81 @@ class JmdnsLifecycleCoordinatorTest {
             assertEquals(2, ops.createCalls.get())
             assertEquals(1, ops.closed.size)
             assertEquals(2, ops.listenersAdded.size)
+        }
+    }
+
+    @Test
+    fun defaultNetworkSignalTriggersRebindButNeverBecomesBindTarget() {
+        val wifi = FakeNet("wifi0")
+        val cellularA = FakeNet("cellular-a")
+        val cellularB = FakeNet("cellular-b")
+        val ops = FakeOps().apply {
+            current = wifi
+            observed = wifi
+            observedDefault = cellularA
+        }
+        coordinatorTest(ops) { coordinator, _ ->
+            coordinator.startAdvertising(localPeer)
+
+            ops.observedDefault = cellularB
+            coordinator.scheduleRebind("default cellular signal changed")
+            awaitCondition("default-network signal causes a rebind") {
+                ops.createCalls.get() == 2
+            }
+
+            assertEquals(
+                listOf<FakeNet?>(wifi, wifi),
+                ops.createdTargets,
+                "the system default is a change signal, never a LAN bind fallback"
+            )
+        }
+    }
+
+    @Test
+    fun rebindFallsBackToFreshSelectionWhenPrimaryObserverHasNoTarget() {
+        val wifiA = FakeNet("wifi-a")
+        val wifiB = FakeNet("wifi-b")
+        val ops = FakeOps().apply {
+            current = wifiA
+            observed = wifiA
+        }
+        coordinatorTest(ops) { coordinator, _ ->
+            coordinator.startDiscovery()
+
+            ops.observed = null
+            ops.current = wifiB
+            coordinator.scheduleRebind("authoritative selection changed")
+            awaitCondition("fresh selection is rebound") { ops.createCalls.get() == 2 }
+
+            assertEquals(listOf<FakeNet?>(wifiA, wifiB), ops.createdTargets)
+        }
+    }
+
+    @Test
+    fun addingSecondIntentDoesNotRelabelExistingHandleBeforeRebind() {
+        val wifiA = FakeNet("wifi-a")
+        val wifiB = FakeNet("wifi-b")
+        val ops = FakeOps().apply {
+            current = wifiA
+            observed = wifiA
+        }
+        coordinatorTest(ops) { coordinator, _ ->
+            coordinator.startAdvertising(localPeer)
+
+            // The topology rotates before discovery joins the shared handle.
+            // Adding discovery must not claim that the wifi-a socket is
+            // already bound to wifi-b and suppress the pending rebind.
+            ops.current = wifiB
+            ops.observed = wifiB
+            coordinator.startDiscovery()
+            assertEquals(1, ops.createCalls.get())
+
+            coordinator.scheduleRebind("topology rotated while adding second intent")
+            awaitCondition("existing handle is rebound to the new target") {
+                ops.createCalls.get() == 2
+            }
+
+            assertEquals(listOf<FakeNet?>(wifiA, wifiB), ops.createdTargets)
         }
     }
 

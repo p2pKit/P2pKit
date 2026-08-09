@@ -6,10 +6,10 @@ import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerEvent
+import java.io.IOException
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
-import java.net.NetworkInterface
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
@@ -140,12 +140,25 @@ internal class JvmLanDiscoveryTransport(
         CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     @Volatile
-    private var observedNetworkFingerprint: String? = null
+    private var observedNetworkTarget: JvmLanBindTarget? = null
 
     @Volatile
     private var networkWatcherJob: Job? = null
 
-    private val coordinator = JmdnsLifecycleCoordinator<String, JmDNS>(
+    private val handleCreator = BoundedBlockingHandleCreator<JmDNS>(
+        timeoutMillis = JMDNS_CREATE_TIMEOUT_MS,
+        threadName = "p2pkit-jmdns-create-${registration.localPeerId.value.take(8)}",
+        closeOrphan = JmDNS::close,
+        onCleanupFailure = { error ->
+            JvmLanDiag.log(
+                "bind",
+                "late JmDNS handle cleanup failed; further creation is blocked " +
+                    "(${error::class.simpleName}: ${error.message})"
+            )
+        }
+    )
+
+    private val coordinator = JmdnsLifecycleCoordinator<JvmLanBindTarget, JmDNS>(
         ops = buildLifecycleOps(),
         rebindScope = lifecycleScope,
         ioContext = Dispatchers.IO
@@ -338,7 +351,7 @@ internal class JvmLanDiscoveryTransport(
         // non-routable addresses shows up here as "no routable host".
         val hosts = selectDiscoveryHosts(
             candidates = candidates,
-            localAddresses = localLanInterfaceAddresses(),
+            localAddresses = localJvmLanInterfaceAddresses(),
             allowTestLoopback = allowTestLoopbackCandidates
         )
         if (hosts.isEmpty()) {
@@ -404,27 +417,27 @@ internal class JvmLanDiscoveryTransport(
         }
     }
 
-    private fun buildLifecycleOps(): JmdnsLifecycleOps<String, JmDNS> =
-        object : JmdnsLifecycleOps<String, JmDNS> {
-            override fun createHandleBlocking(target: String?, forRebind: Boolean): JmDNS {
-                val bindAddress = System.getProperty(TEST_JMDNS_BIND_PROPERTY)
+    private fun buildLifecycleOps(): JmdnsLifecycleOps<JvmLanBindTarget, JmDNS> =
+        object : JmdnsLifecycleOps<JvmLanBindTarget, JmDNS> {
+            override fun createHandleBlocking(
+                target: JvmLanBindTarget?,
+                forRebind: Boolean
+            ): JmDNS {
+                val selected = target ?: currentJvmLanBindTarget()
+                    ?: throw IOException(
+                        "No up multicast-capable LAN address is available for JmDNS"
+                    )
                 JvmLanDiag.log(
                     "bind",
-                    "ensureJmdns: " +
-                        (bindAddress?.let { "bindOverride=$it" }
-                            ?: "JmDNS default interface selection (no override)")
+                    (if (forRebind) "rebindNow: rebinding onto " else "ensureJmdns: binding onto ") +
+                        selected
                 )
-                runCatching {
-                    JvmLanDiag.log(
-                        "bind",
-                        "InetAddress.getLocalHost()=${InetAddress.getLocalHost().hostAddress}"
-                    )
-                }
                 JvmLanDiag.log("nic", "local interfaces:${JvmLanDiag.describeInterfaces()}")
-                val fresh = if (bindAddress != null) {
-                    JmDNS.create(InetAddress.getByName(bindAddress))
-                } else {
-                    JmDNS.create()
+                val fresh = handleCreator.create {
+                    // Supplying the numeric address as JmDNS's name prevents
+                    // its constructor from performing reverse-DNS hostname
+                    // lookup on the startup path.
+                    JmDNS.create(selected.address, selected.address.hostAddress)
                 }
                 runCatching {
                     JvmLanDiag.log(
@@ -479,8 +492,8 @@ internal class JvmLanDiscoveryTransport(
                 )
             }
 
-            override fun currentNetwork(): String = jvmLanNetworkFingerprint()
-            override fun observedNetwork(): String? = observedNetworkFingerprint
+            override fun currentNetwork(): JvmLanBindTarget? = currentJvmLanBindTarget()
+            override fun observedNetwork(): JvmLanBindTarget? = observedNetworkTarget
             override fun observedDefaultNetwork(): String? = null
             override fun isWatcherActive(): Boolean = networkWatcherJob?.isActive == true
             override fun acquireMulticastLock() = Unit
@@ -502,16 +515,16 @@ internal class JvmLanDiscoveryTransport(
 
     private fun startNetworkWatcherIfNeeded() {
         if (networkWatcherJob?.isActive == true) return
-        observedNetworkFingerprint = jvmLanNetworkFingerprint()
+        observedNetworkTarget = currentJvmLanBindTarget()
         networkWatcherJob = lifecycleScope.launch {
             while (isActive) {
                 delay(NETWORK_WATCH_INTERVAL_MS)
-                val next = jvmLanNetworkFingerprint()
-                val previous = observedNetworkFingerprint
+                val next = currentJvmLanBindTarget()
+                val previous = observedNetworkTarget
                 if (next != previous) {
-                    observedNetworkFingerprint = next
+                    observedNetworkTarget = next
                     coordinator.scheduleRebind(
-                        "JVM interface/address set changed: $previous -> $next"
+                        "JVM LAN bind target changed: $previous -> $next"
                     )
                 }
             }
@@ -521,7 +534,7 @@ internal class JvmLanDiscoveryTransport(
     private fun stopNetworkWatcherNow() {
         networkWatcherJob?.cancel()
         networkWatcherJob = null
-        observedNetworkFingerprint = null
+        observedNetworkTarget = null
     }
 }
 
@@ -642,34 +655,6 @@ private fun sameSubnet(candidate: InetAddress, local: LanInterfaceAddress): Bool
     return true
 }
 
-internal fun localLanInterfaceAddresses(): List<LanInterfaceAddress> = runCatching {
-    NetworkInterface.getNetworkInterfaces().toList()
-        .asSequence()
-        .filter { it.isUp && !it.isLoopback && !it.isPointToPoint && !it.isVirtual }
-        .flatMap { network ->
-            network.interfaceAddresses.asSequence().mapNotNull { entry ->
-                val address = entry.address ?: return@mapNotNull null
-                LanInterfaceAddress(address, entry.networkPrefixLength.toInt())
-            }
-        }
-        .toList()
-}.getOrDefault(emptyList())
-
-internal fun jvmLanNetworkFingerprint(): String = runCatching {
-    NetworkInterface.getNetworkInterfaces().toList()
-        .asSequence()
-        .filter { it.isUp && !it.isLoopback && !it.isPointToPoint && !it.isVirtual }
-        .flatMap { network ->
-            network.interfaceAddresses.asSequence().mapNotNull { entry ->
-                entry.address?.hostAddress?.let { address ->
-                    "${network.name}:$address/${entry.networkPrefixLength}"
-                }
-            }
-        }
-        .sorted()
-        .joinToString("|")
-}.getOrDefault("")
-
 /**
  * Short snapshot timeout for JmDNS.list() during refresh: the default
  * overload waits up to 6 s for service infos, which would stall the
@@ -677,3 +662,4 @@ internal fun jvmLanNetworkFingerprint(): String = runCatching {
  */
 private const val JMDNS_LIST_SNAPSHOT_TIMEOUT_MS: Long = 200
 private const val NETWORK_WATCH_INTERVAL_MS: Long = 1_000
+private const val JMDNS_CREATE_TIMEOUT_MS: Long = 5_000

@@ -30,11 +30,12 @@ import kotlin.coroutines.CoroutineContext
  */
 internal interface JmdnsLifecycleOps<N : Any, H : Any> {
     /**
-     * Create the platform mDNS handle bound to [target]'s address (or the
-     * platform default when no address can be resolved). [forRebind] only
-     * selects the diagnostic-trail wording — the load-bearing log lines
-     * (`rebindNow: rebinding onto …`, referenced from
-     * `docs/LAN_DIAGNOSTICS_PROTOCOL.md`) must keep their original prefixes.
+     * Create the platform mDNS handle bound to [target]'s explicit address.
+     * A null/unusable target must fail visibly rather than delegating to an
+     * unrelated platform-default interface. [forRebind] only selects the
+     * diagnostic-trail wording — the load-bearing log lines
+     * (`rebindNow: rebinding onto …`, consumed by the operational handbooks
+     * under `docs/validation/`) must keep their original prefixes.
      */
     fun createHandleBlocking(target: N?, forRebind: Boolean): H
 
@@ -67,11 +68,17 @@ internal interface JmdnsLifecycleOps<N : Any, H : Any> {
     /** The platform's current active network (bind target for lazy starts). */
     fun currentNetwork(): N?
 
-    /** Most recent network reported by the primary (WIFI|ETHERNET) watcher callback. */
+    /** Most recent usable LAN target derived from the primary platform watcher. */
     fun observedNetwork(): N?
 
-    /** Most recent system-default network reported by the default watcher callback. */
-    fun observedDefaultNetwork(): N?
+    /**
+     * Most recent system-default-network signal reported by the platform
+     * watcher. This value is used only to detect topology changes; it is not
+     * a LAN bind target. Android's default network can be cellular while the
+     * usable multicast carrier is a tether/AP interface that has no
+     * `ConnectivityManager.Network` representation.
+     */
+    fun observedDefaultNetwork(): Any?
 
     /** True while at least one network-watcher callback is registered. */
     fun isWatcherActive(): Boolean
@@ -172,7 +179,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
     private var boundNetwork: N? = null
 
     /** Default network present at the time of the most recent successful bind. */
-    private var boundDefaultNetwork: N? = null
+    private var boundDefaultNetwork: Any? = null
 
     /**
      * Consecutive failed binding transactions in [rebindNow]. The budget is
@@ -184,7 +191,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
     /** Retry budgets are scoped to one observed target pair, including null targets. */
     private var retryTargetInitialized = false
     private var retryTarget: N? = null
-    private var retryDefaultTarget: N? = null
+    private var retryDefaultTarget: Any? = null
 
     /**
      * Pending self-scheduled retry after a failed binding transaction in
@@ -227,8 +234,6 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         advertisingIntent = true
         cachedLocalPeer = localPeer
         bindingHealthy = bindingMatchesIntents()
-        boundNetwork = ops.currentNetwork()
-        boundDefaultNetwork = ops.observedDefaultNetwork()
         ops.logDebug(
             "startAdvertising: registered, " +
                 "boundNetwork=$boundNetwork boundDefaultNetwork=$boundDefaultNetwork"
@@ -283,8 +288,6 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         }
         discoveryIntent = true
         bindingHealthy = bindingMatchesIntents()
-        boundNetwork = ops.currentNetwork()
-        boundDefaultNetwork = ops.observedDefaultNetwork()
         ops.logDebug(
             "startDiscovery: listener added, " +
                 "boundNetwork=$boundNetwork boundDefaultNetwork=$boundDefaultNetwork"
@@ -419,15 +422,19 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
      *   - If BOTH the primary observation AND the default-network observation
      *     are unchanged since the last successful bind, no-op. A `null`
      *     observed network is a legitimate steady state in the hotspot-host
-     *     case, and we still want to re-bind so the handle picks up whatever
-     *     multicast carrier is alive.
+     *     case; the authoritative platform selector can still supply an
+     *     explicit AP/tether bind target after the debounce window.
      */
     private suspend fun rebindNow(reason: String, force: Boolean = false): Unit = lock.withLock {
         if (!ops.isWatcherActive()) {
             ops.logDebug("rebindNow: watcher already stopped; skipping ($reason)")
             return@withLock
         }
-        val target = ops.observedNetwork()
+        // Platform observations must resolve to a usable LAN bind target,
+        // never the raw system-default signal. If the primary observer has no
+        // target (the Android hotspot-host case), re-read the authoritative
+        // selector after debounce so an AP/tether interface can be chosen.
+        val target = ops.observedNetwork() ?: ops.currentNetwork()
         val defaultTarget = ops.observedDefaultNetwork()
 
         if (!retryTargetInitialized || target != retryTarget || defaultTarget != retryDefaultTarget) {
@@ -506,8 +513,16 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
     /** Lazily creates the handle bound to the current active network. Called under [lock]. */
     private suspend fun ensureHandle(): H {
         handle?.let { return it }
-        val fresh = createHandleClosingOrphanOnCancel(ops.currentNetwork(), forRebind = false)
+        val target = ops.currentNetwork()
+        val defaultTarget = ops.observedDefaultNetwork()
+        val fresh = createHandleClosingOrphanOnCancel(target, forRebind = false)
         handle = fresh
+        // Record the exact observations used for this construction. Starting
+        // the second feature on an existing shared handle must not relabel an
+        // old socket as bound to a newly observed interface before the
+        // watcher has actually completed a rebind.
+        boundNetwork = target
+        boundDefaultNetwork = defaultTarget
         bindingHealthy = bindingMatchesIntents()
         return fresh
     }
@@ -523,11 +538,14 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
      */
     private suspend fun installCurrentIntents(
         target: N?,
-        defaultTarget: N?,
+        defaultTarget: Any?,
         forRebind: Boolean
     ) {
         check(handle == null) { "cannot install a binding while another handle is owned" }
-        val fresh = createHandleClosingOrphanOnCancel(target ?: defaultTarget, forRebind)
+        // The default-network value is deliberately bookkeeping only. It may
+        // be a cellular/VPN signal and must never be handed to the multicast
+        // handle creator as a fallback LAN target.
+        val fresh = createHandleClosingOrphanOnCancel(target, forRebind)
         handle = fresh
         bindingHealthy = false
         try {
