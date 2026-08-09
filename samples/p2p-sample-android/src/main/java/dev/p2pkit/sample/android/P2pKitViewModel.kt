@@ -154,9 +154,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     private val _kitState = MutableStateFlow<P2pState>(P2pState.Idle)
     val kitState: StateFlow<P2pState> = _kitState.asStateFlow()
 
+    /** User intent; preserved while the default background policy pauses the feature. */
     private val _advertising = MutableStateFlow(false)
     val advertising: StateFlow<Boolean> = _advertising.asStateFlow()
 
+    /** User intent; preserved while the default background policy pauses the feature. */
     private val _discovering = MutableStateFlow(false)
     val discovering: StateFlow<Boolean> = _discovering.asStateFlow()
 
@@ -1544,7 +1546,12 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 currentState = "foreground"
             )
         )
-        kit?.notifyAppForegrounded()
+        val currentKit = kit ?: return
+        currentKit.notifyAppForegrounded()
+        val scope = runScope ?: return
+        scope.launch {
+            restoreRequestedFeaturesAfterForeground(currentKit)
+        }
     }
 
     fun notifyBackgrounded() {
@@ -1556,6 +1563,68 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             )
         )
         kit?.notifyAppBackgrounded()
+    }
+
+    /**
+     * The SDK's default background policy intentionally pauses advertising
+     * and discovery, while its foreground notification intentionally does not
+     * guess host intent. The sample retains each switch as user intent, waits
+     * for the asynchronous background stop to settle, then explicitly
+     * re-invokes only the requested feature. Waiting for a terminal feature
+     * state prevents a rapid stop/start Activity transition from letting an
+     * early idempotent start lose to the still-pending background stop.
+     */
+    private suspend fun restoreRequestedFeaturesAfterForeground(currentKit: P2pKit) {
+        advertisingToggleMutex.withLock {
+            if (kit !== currentKit || !_advertising.value) return@withLock
+            runCatchingNonCancel {
+                restoreRequestedFeatureAfterForeground(
+                    isStillRequested = { kit === currentKit && _advertising.value },
+                    states = currentKit.advertisingState,
+                    start = currentKit::startAdvertising
+                )
+            }
+                .onSuccess { restored ->
+                    if (restored) {
+                        recordDiagnostic(
+                            DiagnosticRecord(
+                                category = "discovery",
+                                eventName = DiagnosticEventNames.DISCOVERY_STARTED,
+                                currentState = "advertising-restored-on-foreground"
+                            )
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _advertising.value = false
+                    Log.w(LOG_TAG, "foreground advertising restore failed", error)
+                }
+        }
+        discoveryToggleMutex.withLock {
+            if (kit !== currentKit || !_discovering.value) return@withLock
+            runCatchingNonCancel {
+                restoreRequestedFeatureAfterForeground(
+                    isStillRequested = { kit === currentKit && _discovering.value },
+                    states = currentKit.discoveryState,
+                    start = currentKit::startDiscovery
+                )
+            }
+                .onSuccess { restored ->
+                    if (restored) {
+                        recordDiagnostic(
+                            DiagnosticRecord(
+                                category = "discovery",
+                                eventName = DiagnosticEventNames.DISCOVERY_STARTED,
+                                currentState = "discovery-restored-on-foreground"
+                            )
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _discovering.value = false
+                    Log.w(LOG_TAG, "foreground discovery restore failed", error)
+                }
+        }
     }
 
     // --- helpers ----------------------------------------------------------

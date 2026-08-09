@@ -14,6 +14,7 @@ import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerEvent
+import java.io.IOException
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
@@ -24,12 +25,61 @@ import javax.jmdns.ServiceListener
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** One callback generation installed in JmDNS by the lifecycle coordinator. */
+internal class AndroidListenerLease {
+    private val gate = Any()
+
+    @Volatile
+    private var active: Boolean = true
+
+    lateinit var listener: ServiceListener
+
+    /** Lock-free so a callback never nests two listener-generation locks. */
+    fun isActive(): Boolean = active
+
+    fun deactivate() = synchronized(gate) { active = false }
+
+    fun publishIfActive(block: () -> Unit) = synchronized(gate) {
+        if (active) block()
+    }
+}
+
+/** Testable ownership for removals whose JmDNS event has no TXT payload. */
+internal class AndroidServiceAdmissions {
+    private data class Admission(
+        val peerId: PeerId,
+        val owner: AndroidListenerLease
+    )
+
+    private val entries = ConcurrentHashMap<String, Admission>()
+
+    fun admit(instanceName: String, peerId: PeerId, owner: AndroidListenerLease) {
+        entries[instanceName] = Admission(peerId, owner)
+    }
+
+    fun remove(instanceName: String, callbackOwner: AndroidListenerLease): PeerId? {
+        val admission = entries[instanceName] ?: return null
+        if (admission.owner !== callbackOwner && admission.owner.isActive()) return null
+        return if (entries.remove(instanceName, admission)) admission.peerId else null
+    }
+
+    fun drain(): Set<PeerId> {
+        val peers = entries.values.mapTo(mutableSetOf()) { it.peerId }
+        entries.clear()
+        return peers
+    }
+}
 
 /**
  * [DiscoveryTransport] backed by JmDNS — same in-process mDNS stack the JVM
@@ -86,9 +136,10 @@ import kotlinx.coroutines.withContext
  * DSC-3/DSC-13 cleanup guarantees — lives in the platform-neutral
  * [JmdnsLifecycleCoordinator] (commonMain) and is pinned by
  * `JmdnsLifecycleCoordinatorTest` in `:p2p-transport-lan:jvmTest`. This class
- * supplies the JmDNS/Android specifics behind [JmdnsLifecycleOps]. Production
- * behavior is a verbatim port; the extraction exists so the machinery is
- * unit-testable at all (no instrumented Android tests by repo policy).
+ * supplies the JmDNS/Android specifics behind [JmdnsLifecycleOps]. Android's
+ * duplicated routing selector, AP/tether fallback, bounded constructor, and
+ * TXT-less removal ownership are additionally pinned by `androidHostTest`;
+ * physical callback and OEM multicast behavior remain device-validation work.
  */
 internal class AndroidLanDiscoveryTransport(
     private val context: Context,
@@ -153,44 +204,43 @@ internal class AndroidLanDiscoveryTransport(
     /** Most recent system-default network reported by the default callback. */
     private var observedDefaultNetwork: Network? = null
 
+    /** Polling fallback for AP/tether interfaces invisible to ConnectivityManager. */
+    @Volatile
+    private var interfaceWatcherJob: Job? = null
+
+    @Volatile
+    private var observedInterfaceFingerprint: String? = null
+
+    @Volatile
+    private var boundTarget: AndroidLanBindTarget? = null
+
+    private val handleCreator = BoundedBlockingHandleCreator<JmDNS>(
+        timeoutMillis = JMDNS_CREATE_TIMEOUT_MS,
+        threadName = "p2pkit-jmdns-create-${registration.localPeerId.value.take(8)}",
+        closeOrphan = JmDNS::close,
+        onCleanupFailure = { error ->
+            Log.w(
+                TAG,
+                "late JmDNS handle cleanup failed; further creation is blocked",
+                error
+            )
+        }
+    )
+
     /**
      * The lifecycle/rebind state machine (see the class KDoc's 2026-07 note).
      * All start/stop/refresh/rebind serialization happens on the
      * coordinator's internal lock, exactly where the transport's own `Mutex`
      * used to sit.
      */
-    private val coordinator = JmdnsLifecycleCoordinator<Network, JmDNS>(
+    private val coordinator = JmdnsLifecycleCoordinator<AndroidLanBindTarget, JmDNS>(
         ops = buildOps(),
         rebindScope = rebindScope,
         ioContext = Dispatchers.IO
     )
 
-    /** Callback generation owned by one coordinator listener token. */
-    private class ListenerLease {
-        private val gate = Any()
-
-        @Volatile
-        private var active: Boolean = true
-        lateinit var listener: ServiceListener
-
-        // Lock-free so serviceRemoved never nests two generation locks while
-        // comparing current and prior admission ownership.
-        fun isActive(): Boolean = active
-
-        fun deactivate() = synchronized(gate) { active = false }
-
-        fun publishIfActive(block: () -> Unit) = synchronized(gate) {
-            if (active) block()
-        }
-    }
-
-    private data class ServiceAdmission(
-        val peerId: PeerId,
-        val owner: ListenerLease
-    )
-
     /** Service-instance ownership admitted only after full record validation. */
-    private val admittedServices = ConcurrentHashMap<String, ServiceAdmission>()
+    private val admittedServices = AndroidServiceAdmissions()
 
     // ──────────────────────────────────────────────────────────────────
     // DiscoveryTransport API
@@ -205,9 +255,7 @@ internal class AndroidLanDiscoveryTransport(
 
     override suspend fun stopDiscovery() {
         coordinator.stopDiscovery()
-        val lost = admittedServices.values.mapTo(mutableSetOf()) { it.peerId }
-        admittedServices.clear()
-        lost.forEach { _events.tryEmit(PeerEvent.Lost(it)) }
+        admittedServices.drain().forEach { _events.tryEmit(PeerEvent.Lost(it)) }
     }
 
     /**
@@ -282,37 +330,52 @@ internal class AndroidLanDiscoveryTransport(
     // JmdnsLifecycleOps — the JmDNS/Android specifics behind the coordinator
     // ──────────────────────────────────────────────────────────────────
 
-    private fun buildOps(): JmdnsLifecycleOps<Network, JmDNS> =
-        object : JmdnsLifecycleOps<Network, JmDNS> {
+    private fun buildOps(): JmdnsLifecycleOps<AndroidLanBindTarget, JmDNS> =
+        object : JmdnsLifecycleOps<AndroidLanBindTarget, JmDNS> {
 
-            override fun createHandleBlocking(target: Network?, forRebind: Boolean): JmDNS {
+            override fun createHandleBlocking(
+                target: AndroidLanBindTarget?,
+                forRebind: Boolean
+            ): JmDNS {
+                val selected = target ?: currentBindTarget()
+                    ?: throw IOException(
+                        "No Wi-Fi, Ethernet, AP, or tether LAN address is available for JmDNS"
+                    )
                 // Issue #2 smoking gun: classify the network we're binding
-                // JmDNS to. If transports=[CELLULAR] or [VPN] the bind picked
-                // an interface that cannot carry LAN multicast/TCP —
-                // discovery and dials will fail. The two prefixes below are
-                // load-bearing diagnostic lines (docs/LAN_DIAGNOSTICS_PROTOCOL.md).
+                // JmDNS to. A null Network is expected only for an explicitly
+                // selected AP/tether Java interface; cellular/VPN never enters
+                // the bind target. The two prefixes below are load-bearing
+                // diagnostic lines used by docs/validation/ procedures.
                 if (forRebind) {
                     Log.d(
                         TAG,
-                        "rebindNow: rebinding onto ${Log.describeNetwork(connectivity, target)}"
+                        "rebindNow: rebinding onto $selected " +
+                            Log.describeNetwork(connectivity, selected.network)
                     )
                 } else {
-                    Log.d(TAG, "ensureJmdns: active ${Log.describeNetwork(connectivity, target)}")
+                    Log.d(
+                        TAG,
+                        "ensureJmdns: active $selected " +
+                            Log.describeNetwork(connectivity, selected.network)
+                    )
                     Log.d(TAG, "ensureJmdns: NICs:${Log.describeInterfaces()}")
                 }
-                val bindAddr = resolveBindAddress(target)
-                val fresh = if (bindAddr != null) JmDNS.create(bindAddr) else JmDNS.create()
-                networkState.select(target)
+                val fresh = handleCreator.create {
+                    JmDNS.create(selected.address, selected.address.hostAddress)
+                }
+                boundTarget = selected
+                networkState.select(selected.network)
                 Log.d(
                     TAG,
                     (if (forRebind) "rebindNow: JmDNS recreated" else "ensureJmdns: created handle") +
-                        " bindAddr=${bindAddr?.hostAddress ?: "default"}"
+                        " bindAddr=${selected.address.hostAddress} iface=${selected.interfaceName}"
                 )
                 return fresh
             }
 
             override fun closeHandleBlocking(handle: JmDNS) {
                 handle.close()
+                boundTarget = null
                 networkState.select(null)
             }
 
@@ -333,31 +396,37 @@ internal class AndroidLanDiscoveryTransport(
             override fun addListenerBlocking(handle: JmDNS, token: Any) {
                 handle.addServiceListener(
                     registration.serviceTypeJmdns,
-                    (token as ListenerLease).listener
+                    (token as AndroidListenerLease).listener
                 )
             }
 
             override fun deactivateListenerToken(token: Any) {
-                (token as ListenerLease).deactivate()
+                (token as AndroidListenerLease).deactivate()
             }
 
             override fun removeListenerBlocking(handle: JmDNS, token: Any) {
                 handle.removeServiceListener(
                     registration.serviceTypeJmdns,
-                    (token as ListenerLease).listener
+                    (token as AndroidListenerLease).listener
                 )
             }
 
-            override fun currentNetwork(): Network? = bestLanNetwork()
+            override fun currentNetwork(): AndroidLanBindTarget? = currentBindTarget()
 
-            override fun observedNetwork(): Network? =
+            override fun observedNetwork(): AndroidLanBindTarget? =
                 synchronized(networkLock) { this@AndroidLanDiscoveryTransport.observedNetwork }
+                    ?.takeIf(::isLanNetwork)
+                    ?.let(::bindTargetForNetwork)
 
-            override fun observedDefaultNetwork(): Network? =
-                synchronized(networkLock) { this@AndroidLanDiscoveryTransport.observedDefaultNetwork }
+            override fun observedDefaultNetwork(): String? =
+                synchronized(networkLock) {
+                    this@AndroidLanDiscoveryTransport.observedDefaultNetwork?.toString()
+                }
 
             override fun isWatcherActive(): Boolean =
-                networkCallback != null || defaultNetworkCallback != null
+                networkCallback != null ||
+                    defaultNetworkCallback != null ||
+                    interfaceWatcherJob?.isActive == true
 
             override fun acquireMulticastLock() = acquireMulticastLockIfNeeded()
 
@@ -387,24 +456,23 @@ internal class AndroidLanDiscoveryTransport(
      * given [Network]'s [android.net.LinkProperties]. Returns the first
      * non-loopback non-link-local IPv4 address; falls back to any
      * non-loopback IPv4 (covering 169.254/16 link-local on direct-cable
-     * segments), then a scoped/routable IPv6 address. `null` lets JmDNS use
-     * its default enumeration for hotspot-host cases without a client Network.
+     * segments), then a scoped/routable IPv6 address. A missing address is
+     * rejected; AP/tether fallback is selected explicitly by
+     * [currentBindTarget].
      */
-    private fun resolveBindAddress(network: Network?): InetAddress? {
-        val net = network ?: return null
-        val props = runCatching { connectivity.getLinkProperties(net) }.getOrNull() ?: return null
-        props.linkAddresses
+    private fun resolveBindAddress(properties: LinkProperties): InetAddress? {
+        properties.linkAddresses
             .map { it.address }
             .firstOrNull { addr ->
                 addr is Inet4Address &&
                     !addr.isLoopbackAddress &&
                     !addr.isLinkLocalAddress
             }?.let { return it }
-        props.linkAddresses
+        properties.linkAddresses
             .map { it.address }
             .firstOrNull { addr -> addr is Inet4Address && !addr.isLoopbackAddress }
             ?.let { return it }
-        return props.linkAddresses
+        return properties.linkAddresses
             .map { it.address }
             .firstOrNull { addr ->
                 addr is Inet6Address &&
@@ -429,11 +497,34 @@ internal class AndroidLanDiscoveryTransport(
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
     }
 
-    private fun localLanInterfaceAddresses(): List<LanInterfaceAddress> {
-        val network = networkState.selectedNetwork() ?: bestLanNetwork() ?: return emptyList()
+    private fun currentBindTarget(): AndroidLanBindTarget? {
+        bestLanNetwork()?.let(::bindTargetForNetwork)?.let { return it }
+        return currentAndroidFallbackBindTarget()
+    }
+
+    private fun bindTargetForNetwork(network: Network): AndroidLanBindTarget? {
+        if (!isLanNetwork(network)) return null
         val properties = runCatching { connectivity.getLinkProperties(network) }.getOrNull()
-            ?: return emptyList()
-        return properties.toLanInterfaceAddresses()
+            ?: return null
+        val address = resolveBindAddress(properties) ?: return null
+        val localAddresses = properties.toLanInterfaceAddresses()
+        val fingerprint = localAddresses
+            .map { "${properties.interfaceName}:${it.address.hostAddress}/${it.prefixLength}" }
+            .sorted()
+            .joinToString("|")
+        return AndroidLanBindTarget(
+            network = network,
+            interfaceName = properties.interfaceName ?: "network-$network",
+            address = address,
+            localAddresses = localAddresses,
+            fingerprint = "network=$network|$fingerprint"
+        )
+    }
+
+    private fun localLanInterfaceAddresses(): List<LanInterfaceAddress> {
+        return boundTarget?.localAddresses
+            ?: currentBindTarget()?.localAddresses
+            ?: emptyList()
     }
 
     private fun LinkProperties.toLanInterfaceAddresses(): List<LanInterfaceAddress> =
@@ -486,15 +577,15 @@ internal class AndroidLanDiscoveryTransport(
      * the next natural re-announce will arrive with the routable
      * address and `serviceResolved` will fire again.
      */
-    private fun buildListenerLease(handle: JmDNS): ListenerLease {
-        val lease = ListenerLease()
+    private fun buildListenerLease(handle: JmDNS): AndroidListenerLease {
+        val lease = AndroidListenerLease()
         lease.listener = buildServiceListener(handle, lease)
         return lease
     }
 
     private fun buildServiceListener(
         handle: JmDNS,
-        lease: ListenerLease
+        lease: AndroidListenerLease
     ): ServiceListener = object : ServiceListener {
         override fun serviceAdded(event: ServiceEvent) {
             if (!lease.isActive()) return
@@ -503,17 +594,14 @@ internal class AndroidLanDiscoveryTransport(
 
         override fun serviceRemoved(event: ServiceEvent) {
             lease.publishIfActive {
-                val admission = admittedServices[event.name] ?: return@publishIfActive
-                if (admission.owner !== lease && admission.owner.isActive()) {
-                    return@publishIfActive
-                }
-                if (!admittedServices.remove(event.name, admission)) return@publishIfActive
+                val peerId = admittedServices.remove(event.name, lease)
+                    ?: return@publishIfActive
                 Log.d(
                     TAG,
                     "serviceRemoved: instance=${sanitizeLanDiagnostic(event.name)} " +
-                        "pid=${admission.peerId.value.take(8)} — emitting Lost"
+                        "pid=${peerId.value.take(8)} — emitting Lost"
                 )
-                _events.tryEmit(PeerEvent.Lost(admission.peerId))
+                _events.tryEmit(PeerEvent.Lost(peerId))
             }
         }
 
@@ -544,7 +632,7 @@ internal class AndroidLanDiscoveryTransport(
             if (port !in 1..65_535) return
             val internalPeer = record.toInternalPeer(lanTransportHints(hosts, port))
             lease.publishIfActive {
-                admittedServices[event.name] = ServiceAdmission(record.peerId, lease)
+                admittedServices.admit(event.name, record.peerId, lease)
                 Log.d(
                     TAG,
                     "serviceResolved: pid=${record.peerId.value.take(8)} " +
@@ -583,8 +671,9 @@ internal class AndroidLanDiscoveryTransport(
     // ──────────────────────────────────────────────────────────────────
 
     /**
-     * Registers BOTH the primary `TRANSPORT_WIFI|ETHERNET` callback (V0.4-NSD)
-     * AND the default-network callback (V0.4-AP). The two signals are
+     * Registers the primary `TRANSPORT_WIFI|ETHERNET` callback (V0.4-NSD),
+     * the default-network callback (V0.4-AP), and a bounded Java-interface
+     * fingerprint watcher. The three signals are
      * complementary: the primary covers client-mode LAN rotation; the
      * default covers everything else that mutates the system default,
      * most importantly the device-becomes-hotspot-host transition where
@@ -619,6 +708,25 @@ internal class AndroidLanDiscoveryTransport(
             } catch (error: Exception) {
                 Log.w(TAG, "ensureNetworkWatcherStarted: registerDefaultNetworkCallback failed", error)
             }
+        }
+        if (interfaceWatcherJob?.isActive != true) {
+            observedInterfaceFingerprint = androidLanInterfaceFingerprint()
+            interfaceWatcherJob = rebindScope.launch {
+                while (isActive) {
+                    delay(INTERFACE_WATCH_INTERVAL_MS)
+                    val next = androidLanInterfaceFingerprint()
+                    val previous = observedInterfaceFingerprint
+                    if (next != previous) {
+                        observedInterfaceFingerprint = next
+                        Log.d(TAG, "AP/tether interface fingerprint changed: $previous -> $next")
+                        coordinator.scheduleRebind(
+                            "AP/tether interface/address set changed",
+                            force = true
+                        )
+                    }
+                }
+            }
+            Log.d(TAG, "ensureNetworkWatcherStarted: started AP/tether interface watcher")
         }
     }
 
@@ -717,12 +825,15 @@ internal class AndroidLanDiscoveryTransport(
      * state. Invoked by the coordinator only when **both** advertising and
      * discovery intents have been cleared (its AUDIT-2026-06 #5 intent-based
      * idle check); the coordinator also cancels any pending debounced
-     * rebind/retry in the same step. The two callbacks are registered
-     * together (`ensureNetworkWatcherStarted`) and unregistered together to
-     * keep the lifecycle invariant tight.
+     * rebind/retry in the same step. Both callbacks and the interface watcher
+     * are started/stopped as one ownership group to keep the lifecycle
+     * invariant tight.
      */
     private fun stopNetworkWatcherNow() {
         var firstFailure: Exception? = null
+        interfaceWatcherJob?.cancel()
+        interfaceWatcherJob = null
+        observedInterfaceFingerprint = null
         networkCallback?.let { cb ->
             try {
                 connectivity.unregisterNetworkCallback(cb)
@@ -747,13 +858,15 @@ internal class AndroidLanDiscoveryTransport(
                 observedNetwork = null
                 observedDefaultNetwork = null
             }
-            Log.d(TAG, "stopNetworkWatcherIfIdle: unregistered both callbacks and reset state")
+            Log.d(TAG, "stopNetworkWatcherIfIdle: stopped callbacks/interface watcher and reset state")
         }
         firstFailure?.let { throw it }
     }
 
     private companion object {
         const val TAG = "P2pKitJmDNS"
+        const val JMDNS_CREATE_TIMEOUT_MS: Long = 5_000
+        const val INTERFACE_WATCH_INTERVAL_MS: Long = 1_000
     }
 }
 
