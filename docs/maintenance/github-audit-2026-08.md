@@ -10,6 +10,8 @@ acceptance criterion or required real-world measurement remains unproved.
 | Issue | Classification and evidence | Action |
 | --- | --- | --- |
 | [#45 — PeerRegistry manualPeerIds race](https://github.com/p2pKit/P2pKit/issues/45) | **Completed differently.** Commit `ee2cae5` replaced the split mutable set with one atomically updated `StateFlow<Map<PeerId, TrackedPeer>>` containing manual and per-discovery-source contributions. `PeerRegistryTest` covers repeated manual-peer eviction immunity and mixed ownership. The focused JVM suite passed on the current development lineage on 2026-08-08. | Closed with the implementation/test evidence. PR #46 was closed as superseded. |
+| [#42 — JmDNS.create may block indefinitely](https://github.com/p2pKit/P2pKit/issues/42) | **Completed.** Commit `d21d065` adds bounded construction, one outstanding attempt per transport, late-handle cleanup, poisoned recovery after cleanup failure, and deterministic timeout/orphan tests. PR [#70](https://github.com/p2pKit/P2pKit/pull/70) passed the complete gate on its exact tree. | Closed automatically by the protected merge `8bf8aec4eb1901bde17098bdc7bcf82545bb1d64`. Hostile-network timing remains external performance evidence, not an implementation blocker. |
+| [#47 — duplicate Android HostSelector lacks test](https://github.com/p2pKit/P2pKit/issues/47) | **Completed.** Commit `d21d065` enables AGP-KMP `androidHostTest`, ports the complete selector contract, and wires its 39 passing tests into `:p2p-transport-lan:check`. | Closed automatically by PR #70 after its exact tree passed the complete gate. |
 
 ## Issues remaining open
 
@@ -34,10 +36,8 @@ acceptance criterion or required real-world measurement remains unproved.
 | [#39 — JmDNS cache growth during long idle](https://github.com/p2pKit/P2pKit/issues/39) | Rebind closes old instances and diagnostics expose generation/resource behavior. | A 6–12 hour multi-peer idle/appearance churn run with heap/cache/resource measurements has not been performed. | **Medium.** Long-running physical lab. Execute a bounded soak and retain heap/descriptor evidence. |
 | [#40 — asymmetric TCP connect timeouts](https://github.com/p2pKit/P2pKit/issues/40) | Platform timeouts are bounded and reconnect budgets are explicit. | JVM/Android remain 5 s and Apple 10 s; no hostile-network measurement justifies convergence or documents intentional asymmetry. | **Medium.** Two-machine/Apple timing. Measure first; change API/values only from evidence. |
 | [#41 — iOS write-ready 10 s wedge](https://github.com/p2pKit/P2pKit/issues/41) | Write and connection paths have bounded terminal cleanup. | A connection stuck in `Connecting` can still wait the full 10-second write-ready timeout; cancellation/path-change responsiveness needs device proof and possibly a state-triggered wakeup. | **Medium.** Apple path fault injection. Add deterministic state-transition coverage, then run device interruption cases. |
-| [#42 — JmDNS.create may block indefinitely](https://github.com/p2pKit/P2pKit/issues/42) | Commit `d21d065` isolates each construction on one daemon worker with a five-second deadline, permits at most one outstanding attempt per transport, closes a late handle before recovery, and poisons creation if orphan cleanup fails. Supplying an explicit numeric JmDNS name also avoids reverse-hostname lookup. | Protected merge is pending. Captive-portal/hostile-DNS startup timing remains useful external performance evidence but no longer leaves an unbounded succession of workers or sockets. | **High until merged.** Close the implementation issue after the exact tree passes the hosted complete gate; retain real-network timing in `ENV-02`. |
 | [#43 — Android serviceRemoved has null ServiceInfo](https://github.com/p2pKit/P2pKit/issues/43) | Commit `d21d065` owns admitted instance-name→peer mappings by listener generation and adds deterministic Android host tests for metadata-free removal, stale/current generation ownership, and terminal drain. | Prove the real null/stub-info callback shape and eviction timing under graceful stop, force-stop, and packet loss on physical devices. | **Medium.** Hardware confirmation. Run `LAN-T01` add/remove churn and retain both-peer logs. |
 | [#44 — link-local asymmetry](https://github.com/p2pKit/P2pKit/issues/44) | Shared routable-host validation and platform selectors now retain valid IPv4 link-local/scoped IPv6 candidates where appropriate. | Cross-platform link-local-only discovery/connectivity has not been exercised on physical interfaces; zone/scope handling needs evidence. | **Medium.** Two-machine/device link-local topology. Execute `PS-T08` plus PCAP/path logs. |
-| [#47 — duplicate Android HostSelector lacks test](https://github.com/p2pKit/P2pKit/issues/47) | Commit `d21d065` enables AGP-KMP `androidHostTest`, ports the complete selector contract, and makes `:p2p-transport-lan:check` execute the task. The final local run passed all 39 Android host tests. | Protected merge is pending; no implementation or test gap remains after the exact tree passes the hosted complete gate. | **Low until merged.** Close with the PR, exact commit, and hosted-gate evidence. |
 
 No partially completed issue was closed. Related external evidence is organized
 under [`../validation/`](../validation/README.md), but those handbooks do not
@@ -73,6 +73,15 @@ Final local exact-tree verification on 2026-08-09:
 - `./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance` and `scripts/check-xcframework-minimum-os.sh` — **PASS**; provenance matched and all release slices retained the iOS 14 floor.
 - `scripts/check-sbom.sh`, OSV lock coverage, Markdown links, repository layout, and `git diff --check` — **PASS**.
 
+PR [#70](https://github.com/p2pKit/P2pKit/pull/70) ran the hosted complete
+gate successfully on head `21fc3e2433231d2ab93c8fdbec69b2858d69807f`:
+[run 31287800890](https://github.com/p2pKit/P2pKit/actions/runs/31287800890).
+The protected normal merge produced
+`8bf8aec4eb1901bde17098bdc7bcf82545bb1d64`; its tree
+`7aeaff888eb734ea422616fac3950a76b7bef32a` is byte-for-byte identical to
+the tested PR tree, so the exact-tree reuse policy correctly avoids a redundant
+complete-gate run.
+
 The workstream does not change public ABI, Maven coordinates, secure-v2 or LAN
 wire formats, the iOS deployment floor, or published `0.7.0-rc2` artifacts.
 Android OEM multicast/callback behavior, Mac/Linux interface rotation, and
@@ -96,6 +105,7 @@ claimed as verified here.
 | [#58 — setup-java 5.7.0](https://github.com/p2pKit/P2pKit/pull/58) | Applicable build-action maintenance. Its pinned action update was applied as commit `9f7b865` with Dependabot authorship preserved and passed the combined complete release gate. | Integrated through PR #60; the redundant single-update PR closed with commit-specific evidence and its branch was removed. |
 | [#59 — public repository reorganization](https://github.com/p2pKit/P2pKit/pull/59) | Production-grade layout, documentation, sample, and release-tooling consolidation; no published API, coordinates, protocol, or tag rewrite. | **Merged** normally through the protected path as `98a210e3572ad59b9256cf2ba3113f7b9a912099`; its temporary branch was deleted. |
 | [#60 — final consolidation and validation handbook](https://github.com/p2pKit/P2pKit/pull/60) | Canonical Apache license, July evidence disposition, operational six-area validation handbook, final branch/GitHub audit, and four pinned action updates. All four required checks passed on exact head. | **Merged** normally through the protected path as `0a6c6bac28f9f99bab96d3753992994b867d6dad`; its temporary branch was deleted. |
+| [#70 — harden JVM and Android LAN binding and recovery](https://github.com/p2pKit/P2pKit/pull/70) | Deterministic JVM/Android LAN bind selection, bounded JmDNS construction, serialized rebind ownership, metadata-free Android removal, and host-driven sample foreground restoration. Focused platform/publication checks and the complete gate passed on the exact PR tree. | **Merged** normally through the protected path as `8bf8aec4eb1901bde17098bdc7bcf82545bb1d64`; its temporary branch was deleted. Issues #42 and #47 closed, while hardware-dependent LAN issues remain open pending their required evidence. |
 
 The recently closed, unmerged PRs were #46, whose stronger replacement is
 documented above, and #50, #51, #57, and #58, whose exact updates and authorship
