@@ -90,7 +90,7 @@ if [[ -n "$REMOTE_REPOSITORY_URL" ]]; then
     CONSUMER_REPOSITORY="$REMOTE_REPOSITORY_URL"
 else
     echo "==> Publishing $VERSION to isolated repository"
-    (cd "$ROOT" && ./gradlew --console=plain publishToMavenLocal -Dmaven.repo.local="$REPO_DIR")
+    (cd "$ROOT" && ./gradlew --no-daemon --console=plain publishToMavenLocal -Dmaven.repo.local="$REPO_DIR")
     CONSUMER_REPOSITORY="$REPO_DIR"
 fi
 
@@ -567,7 +567,7 @@ run_consumer_gradle() {
         "$@"
     fi
 }
-(cd "$ROOT" && run_consumer_gradle ./gradlew --console=plain -p "$FIXTURE_DIR" \
+(cd "$ROOT" && run_consumer_gradle ./gradlew --no-daemon --console=plain -p "$FIXTURE_DIR" \
     -PconsumerRepo="$CONSUMER_REPOSITORY" \
     ${REMOTE_REPOSITORY_URL:+--refresh-dependencies} \
     :coreJvm:compileKotlin \
