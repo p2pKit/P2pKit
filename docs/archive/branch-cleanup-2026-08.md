@@ -82,9 +82,9 @@ concrete diagnostic-evidence retention reason, not a second development line.
 Dependabot branches are not historical development branches. PR #49 merged;
 the applicable updates from PRs #50, #51, #57, and #58 were integrated with
 Dependabot authorship through PR #60, after which their redundant PRs closed
-and their branches were removed. PRs #52–#56 remain open with their branches
-retained because their acceptance gates have not passed. Their applicability
-and exact blockers are recorded in
+and their branches were removed. At that checkpoint PRs #52–#56 remained open
+with their branches retained because their acceptance gates had not passed.
+Their applicability and exact blockers were recorded in
 [`../maintenance/github-audit-2026-08.md`](../maintenance/github-audit-2026-08.md).
 
 The temporary `cleanup/final-consolidation-2026-08` branch was used only for
@@ -98,3 +98,29 @@ Published tags were not moved, deleted, or rewritten. In particular,
 The selected diagnostic content and the proof required before removing the
 stash are preserved in
 [`issue-21-stash-forensics-2026-08.md`](issue-21-stash-forensics-2026-08.md).
+
+## Post-dependency and LAN cleanup — 2026-08-09
+
+All five raw Dependabot PRs were subsequently closed only after their curated
+replacements passed focused checks and one complete gate per coherent
+workstream. PRs #64, #65, #67, #68, and #69 merged the AndroidX Core, Android
+application stack, Desktop Compose, serialization, and Kotlin toolchain work.
+Their remote source branches were removed.
+
+The JVM/Android LAN branch merged through PR #70, and the Apple LAN branch
+merged through PR #72. Both exact PR trees passed the complete gate before a
+normal protected merge; their remote branches were deleted afterward. The
+following last local-only branch names were then rechecked against `main` at
+`35305d251198aebdba436ee77b696ce60ccb8b50` and deleted with `git branch -d`:
+
+| Local branch | Tip before deletion | Unique commits outside `main` | Preserving merge | Decision |
+| --- | --- | ---: | --- | --- |
+| `docs/stash-validation-foundation` | `b8a79c1f4cbbd0cb7f489e7250d23e522741d4cf` | 0 | PR #63 / `0db09b365f668e74fa649d6ef860522892596c3d` | Fully merged; delete local name. |
+| `deps/desktop-compose-2026` | `74dd759f571e44f5655bcf51fba766b74d3dec19` | 0 | PR #67 / `ded15735b58ff11fc7c726f6e3924edfccc1ec0f` | Fully merged; delete local name. |
+| `deps/serialization-1.11.0` | `759f9edb46030bf98559412f8a2947d17a2980c8` | 0 | PR #68 / `090f672d1bcb883468c0a231844bf64ce174aa0b` | Fully merged; delete local name. |
+| `fix/lan-jmdns-binding` | `21fc3e2433231d2ab93c8fdbec69b2858d69807f` | 0 | PR #70 / `8bf8aec4eb1901bde17098bdc7bcf82545bb1d64` | Fully merged; delete local name. |
+
+A fetched/pruned local view and `git ls-remote --heads origin` then showed
+only `main`; no open pull request remained. The issue-21 stash remains the one
+intentional non-branch exception and is still governed by the forensic record
+above. No tag, commit, or unique work was deleted.

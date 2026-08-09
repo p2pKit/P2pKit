@@ -20,9 +20,10 @@ and why material was removed or archived.
 
 ## Repository inventory and disposition
 
-The audited candidate contains 768 tracked paths and ten included Gradle
-subprojects. `scripts/tests/check-repository-layout.sh` is the executable layout
-contract.
+The initial PR #60 candidate contained 768 tracked paths and ten included
+Gradle subprojects. Later dependency/LAN work adds tests and focused records
+without changing that ten-project layout. `scripts/tests/check-repository-layout.sh`
+is the executable layout contract.
 
 | Area | Canonical location | Disposition and evidence |
 | --- | --- | --- |
@@ -80,8 +81,14 @@ The detailed item-by-item disposition rules and cross-links are in
 - PR #49 was merged through the protected path. Applicable workflow-action PRs
   #50, #51, #57, and #58 were preserved as authored commits in PR #60, passed
   together, and then closed as redundant; their remote branches were removed.
-  Library/toolchain PRs #52–#56 remain open until their dependency-verification
-  and compatibility gates pass.
+  Library/toolchain PRs #52–#56 were later closed as superseded after curated
+  replacements #64, #68, #65, #67, and #69 passed their dependency,
+  cross-platform, publication, and complete gates.
+- PRs #70 and #72 subsequently merged the JVM/Android and Apple LAN
+  remediation batches through the same protected exact-tree process. After
+  pruning their temporary branches, the canonical remote contains only
+  `main`; the intentionally retained issue-21 stash is not a branch or part of
+  the worktree.
 
 ## Validation status
 

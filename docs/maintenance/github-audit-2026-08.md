@@ -184,6 +184,8 @@ is claimed as verified by simulator or host checks.
 | [#59 — public repository reorganization](https://github.com/p2pKit/P2pKit/pull/59) | Production-grade layout, documentation, sample, and release-tooling consolidation; no published API, coordinates, protocol, or tag rewrite. | **Merged** normally through the protected path as `98a210e3572ad59b9256cf2ba3113f7b9a912099`; its temporary branch was deleted. |
 | [#60 — final consolidation and validation handbook](https://github.com/p2pKit/P2pKit/pull/60) | Canonical Apache license, July evidence disposition, operational six-area validation handbook, final branch/GitHub audit, and four pinned action updates. All four required checks passed on exact head. | **Merged** normally through the protected path as `0a6c6bac28f9f99bab96d3753992994b867d6dad`; its temporary branch was deleted. |
 | [#70 — harden JVM and Android LAN binding and recovery](https://github.com/p2pKit/P2pKit/pull/70) | Deterministic JVM/Android LAN bind selection, bounded JmDNS construction, serialized rebind ownership, metadata-free Android removal, and host-driven sample foreground restoration. Focused platform/publication checks and the complete gate passed on the exact PR tree. | **Merged** normally through the protected path as `8bf8aec4eb1901bde17098bdc7bcf82545bb1d64`; its temporary branch was deleted. Issues #42 and #47 closed, while hardware-dependent LAN issues remain open pending their required evidence. |
+| [#71 — LAN merge evidence](https://github.com/p2pKit/P2pKit/pull/71) | Documentation-only exact-tree evidence for PR #70 and its still-external hardware requirements. The CI classifier selected the lightweight path. | **Merged** normally as `e9b372f501705413d80218e950a31c2666f38a65`; its temporary branch was deleted. |
+| [#72 — Apple LAN recovery](https://github.com/p2pKit/P2pKit/pull/72) | Browser-generation endpoint ownership, path/lifecycle coalescing, symmetric Network.framework policy, terminal write-ready cleanup, deterministic Apple tests, and an evidence-backed iOS UI input correction. All required security, cross-host, and complete-gate checks passed on exact head `0a8209d0ab9980eaa1eff003a3d83ce92ef51f62`. | **Merged** normally as `35305d251198aebdba436ee77b696ce60ccb8b50`; its tree `02c86aac80cfabcf69da44abee35ae329b44ba49` is identical to the tested PR tree. Physical Apple evidence remains pending. |
 
 The recently closed, unmerged PRs were #46, whose stronger replacement is
 documented above, and #50, #51, #57, and #58, whose exact updates and authorship
@@ -192,3 +194,27 @@ production work requiring recovery. PRs #52–#56 are now closed as superseded
 by curated PRs #64, #68, #65, #67, and #69 respectively. Each replacement
 resolved its complete dependency graph, locks, and verification metadata
 without bypassing fail-closed checks; no raw Dependabot branch remains live.
+
+## Live GitHub configuration audit — 2026-08-09
+
+After PR #72, a fetched/pruned audit found no open pull requests and only
+`main` on the canonical remote. The two active rulesets protect `main` from
+deletion/non-fast-forward updates and require a pull request plus
+`complete-gate`, dependency review, and both OSV contexts; `v*` tags are
+protected from deletion and non-fast-forward updates. Those protections were
+not bypassed or weakened.
+
+All nine registered workflows remain current: CI, dependency review,
+dependency submission, Desktop cross-host, OSV advisory scanning, Maven
+Central publication/dry-run/namespace verification, and Dependabot updates.
+The sole stale live reference was the CI push trigger for deleted
+`remediation/**` branches; the final cleanup removes it and locks that absence
+in the workflow regression test. Historical branch names inside the archive
+remain provenance, not live instructions.
+
+The only GitHub environment is `maven-central`, restricted to `v*` tags and a
+required owner review with administrator bypass disabled at the environment
+level. It contains exactly the four publication secret names and two
+non-secret rotation/fingerprint variables required by the release workflow;
+there are no repository-level secrets or variables. No credential value was
+read, changed, or exposed during this audit.
