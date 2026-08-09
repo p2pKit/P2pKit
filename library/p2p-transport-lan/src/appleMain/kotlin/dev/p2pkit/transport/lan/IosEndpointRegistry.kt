@@ -24,13 +24,41 @@ import platform.Network.nw_endpoint_t
  */
 internal class IosEndpointRegistry {
 
-    private val entries = MutableStateFlow<Map<PeerId, nw_endpoint_t>>(emptyMap())
+    /**
+     * Immutable ownership token for one endpoint published by one browser
+     * generation. Data transport keeps the token (not just the opaque native
+     * endpoint) so a failed dial can invalidate only the stale value it used;
+     * a concurrent fresh browse result must never be deleted by that failure.
+     */
+    internal class Lease(
+        val endpoint: nw_endpoint_t,
+        val browserGeneration: Int
+    )
 
-    fun put(peerId: PeerId, endpoint: nw_endpoint_t) {
-        entries.update { it + (peerId to endpoint) }
+    private val entries = MutableStateFlow<Map<PeerId, Lease>>(emptyMap())
+
+    fun put(peerId: PeerId, endpoint: nw_endpoint_t, browserGeneration: Int): Lease {
+        val lease = Lease(endpoint, browserGeneration)
+        entries.update { it + (peerId to lease) }
+        return lease
     }
 
-    fun get(peerId: PeerId): nw_endpoint_t = entries.value[peerId]
+    fun get(peerId: PeerId): nw_endpoint_t = entries.value[peerId]?.endpoint
+
+    fun lease(peerId: PeerId): Lease? = entries.value[peerId]
+
+    /**
+     * Remove only when [expected] still owns the peer. A TXT update or a
+     * replacement browser may already have installed a fresh endpoint while
+     * the old connection attempt was failing.
+     */
+    fun removeIfCurrent(peerId: PeerId, expected: Lease): Boolean {
+        while (true) {
+            val current = entries.value
+            if (current[peerId] !== expected) return false
+            if (entries.compareAndSet(current, current - peerId)) return true
+        }
+    }
 
     fun remove(peerId: PeerId) {
         entries.update { it - peerId }
@@ -39,4 +67,6 @@ internal class IosEndpointRegistry {
     fun clear() {
         entries.value = emptyMap()
     }
+
+    internal fun sizeForTest(): Int = entries.value.size
 }

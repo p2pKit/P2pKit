@@ -61,6 +61,7 @@ import platform.Network.nw_parameters_get_include_peer_to_peer
 import platform.Network.nw_parameters_set_include_peer_to_peer
 import platform.Network.nw_parameters_t
 import platform.Network.nw_interface_type_cellular
+import platform.Network.nw_interface_type_other
 import platform.Network.nw_interface_type_wifi
 import platform.Network.nw_interface_type_wired
 import platform.Network.nw_path_get_status
@@ -72,7 +73,9 @@ import platform.Network.nw_path_monitor_start
 import platform.Network.nw_path_monitor_t
 import platform.Network.nw_path_status_satisfied
 import platform.Network.nw_path_uses_interface_type
+import platform.UIKit.UIApplicationDidBecomeActiveNotification
 import platform.UIKit.UIApplicationWillEnterForegroundNotification
+import platform.UIKit.UIApplicationWillResignActiveNotification
 import platform.darwin.NSObjectProtocol
 import platform.darwin.dispatch_queue_create
 import platform.darwin.dispatch_queue_t
@@ -246,20 +249,23 @@ internal class IosLanDataTransport(
     private var pathMonitor: nw_path_monitor_t = null
 
     /**
-     * V0.4-IOS-FOREGROUND-REBIND: token returned by NSNotificationCenter
-     * when we subscribe to `UIApplicationWillEnterForegroundNotification`.
-     * Held so we can unregister cleanly in [close]. Non-null iff observer
-     * is registered.
+     * Tokens returned by NSNotificationCenter for the three UIKit lifecycle
+     * signals coordinated by [lifecycleRecoveryCoordinator]. Held so stop and
+     * close can unregister every callback deterministically.
      *
      * Lifecycle-driven rebind is needed because the path-monitor signal
      * is insufficient on its own — iOS may invalidate `nw_listener_t` /
      * `nw_browser_t` during prolonged app suspension while the network
      * path itself remains "satisfied". No `becameSatisfied=true` event
      * fires on wake; our V0.4-IOS-LISTENER-REBIND trigger stays silent.
-     * Subscribing to `WillEnterForeground` gives us the missing trigger.
+     * `WillEnterForeground` covers background return; `DidBecomeActive`
+     * covers inactive-foreground recovery after Control Center or a system
+     * interruption. `WillResignActive` opens the episode that coalesces them.
      */
     @Volatile
-    private var foregroundObserver: NSObjectProtocol? = null
+    private var lifecycleObservers: List<NSObjectProtocol> = emptyList()
+
+    private val lifecycleRecoveryCoordinator = AppleLifecycleRecoveryCoordinator()
 
     /**
      * Whether the most recent path observation was `satisfied`.
@@ -279,12 +285,13 @@ internal class IosLanDataTransport(
     private var hasEverObservedSatisfied: Boolean = false
 
     /**
-     * V0.4-IOS-PATH-INTERFACE-CHANGE: 3-bit fingerprint of which
+     * V0.4-IOS-PATH-INTERFACE-CHANGE: 4-bit fingerprint of which
      * interface types are currently part of the satisfied path:
      *
      *   bit 0 = Wi-Fi   (nw_interface_type_wifi)
      *   bit 1 = cellular (nw_interface_type_cellular)
      *   bit 2 = wired   (nw_interface_type_wired)
+     *   bit 3 = other   (nw_interface_type_other; includes hotspot/AWDL-like paths)
      *
      * Sentinel `-1` = never observed (used to skip first-signal rebind,
      * paralleling [hasEverObservedSatisfied]). Required because Apple's
@@ -374,6 +381,7 @@ internal class IosLanDataTransport(
         )
         listenerLease = l
         startedByHost = true
+        lifecycleRecoveryCoordinator.onSuccessfulRebind()
         IosLanDebug.log("data", "start: SUCCESS port=${_tcpPort.value}")
         startPathMonitor()
         startForegroundObserver()
@@ -518,6 +526,8 @@ internal class IosLanDataTransport(
                     "data",
                     "listener terminal state=$state for current owner — port depublished"
                 )
+                endpointRegistry.clear()
+                stopPendingDials("listener terminal state=$state")
                 invokeBeforeRebindHook("listener terminal state=$state")
                 true
             }
@@ -587,12 +597,14 @@ internal class IosLanDataTransport(
             dialGeneration
         }
         val pid8 = peer.publicPeer.id.value.take(8)
-        val cached = endpointRegistry.get(peer.publicPeer.id)
+        val cachedLease = endpointRegistry.lease(peer.publicPeer.id)
         IosLanDebug.log(
             "connect",
-            "begin peer=$pid8 name=${peer.publicPeer.name} cachedEndpoint=${cached != null}"
+            "begin peer=$pid8 name=${peer.publicPeer.name} " +
+                "cachedEndpoint=${cachedLease != null} " +
+                "browserGeneration=${cachedLease?.browserGeneration ?: -1}"
         )
-        val endpoint: nw_endpoint_t = cached
+        val endpoint: nw_endpoint_t = cachedLease?.endpoint
             ?: peer.transportHints.firstOrNull {
                 it.type == TransportKind.LAN && !it.host.isNullOrBlank() && (it.port ?: 0) > 0
             }?.let { hint ->
@@ -615,10 +627,11 @@ internal class IosLanDataTransport(
         }
         IosLanDebug.log(
             "connect",
-            "peer=$pid8 endpointSource=${if (cached != null) "browse(AWDL-capable)" else "manual-IP-hint"} " +
+            "peer=$pid8 endpointSource=${if (cachedLease != null) "browse(AWDL-capable)" else "manual-IP-hint"} " +
                 "connParams.include_peer_to_peer=true"
         )
         val conn = nw_connection_create(endpoint, params) ?: run {
+            invalidateFailedEndpoint(peer, cachedLease, "nw_connection_create returned null")
             IosLanDebug.log("connect", "ABORT peer=$pid8 — nw_connection_create returned null")
             throw P2pError.ConnectionFailed("nw_connection_create returned null")
         }
@@ -639,6 +652,7 @@ internal class IosLanDataTransport(
             } catch (e: TimeoutCancellationException) {
                 IosLanDebug.log("connect", "TIMEOUT peer=$pid8 after ${CONNECT_TIMEOUT_MILLIS}ms — closing wrapper")
                 raw.cancelNow("outbound connect timeout")
+                invalidateFailedEndpoint(peer, cachedLease, "connect timeout")
                 throw P2pError.ConnectionFailed("iOS LAN connect timed out after ${CONNECT_TIMEOUT_MILLIS}ms")
             } catch (cancelled: CancellationException) {
                 IosLanDebug.log("connect", "CANCELLED peer=$pid8 — closing wrapper")
@@ -654,6 +668,7 @@ internal class IosLanDataTransport(
             }
             if (terminal != ConnectionState.Connected) {
                 raw.cancelNow("outbound connect terminal state=$terminal")
+                invalidateFailedEndpoint(peer, cachedLease, "terminal state=$terminal")
                 IosLanDebug.log("connect", "FAILED peer=$pid8 terminal=$terminal (expected Connected)")
                 throw P2pError.ConnectionFailed("iOS LAN connect failed (state=$terminal)")
             }
@@ -662,6 +677,20 @@ internal class IosLanDataTransport(
         } finally {
             dialMutex.withLock { pendingDials.remove(raw) }
         }
+    }
+
+    private fun invalidateFailedEndpoint(
+        peer: InternalPeer,
+        cachedLease: IosEndpointRegistry.Lease?,
+        reason: String
+    ) {
+        if (cachedLease == null) return
+        val removed = endpointRegistry.removeIfCurrent(peer.publicPeer.id, cachedLease)
+        IosLanDebug.log(
+            "connect",
+            "cached endpoint invalidation peer=${peer.publicPeer.id.value.take(8)} " +
+                "generation=${cachedLease.browserGeneration} removed=$removed reason=$reason"
+        )
     }
 
     override fun incomingConnections(): Flow<RawConnection> = incomingQueue.asFlow()
@@ -700,7 +729,7 @@ internal class IosLanDataTransport(
     /** Caller holds [startMutex]. */
     private suspend fun stopStartedResources(closeQueue: Boolean, clearEndpoints: Boolean) {
         startedByHost = false
-        stopPendingDials()
+        stopPendingDials("transport lifecycle stopped")
         stopPathMonitor()
         stopForegroundObserver()
         cancelPendingRebind()
@@ -712,12 +741,12 @@ internal class IosLanDataTransport(
         if (clearEndpoints) endpointRegistry.clear()
     }
 
-    private suspend fun stopPendingDials() {
+    private suspend fun stopPendingDials(reason: String) {
         val pending = dialMutex.withLock {
             dialGeneration += 1
             pendingDials.toList().also { pendingDials.clear() }
         }
-        pending.forEach { it.cancelNow("transport lifecycle stopped") }
+        pending.forEach { it.cancelNow(reason) }
     }
 
     private fun stoppedDialFailure(): P2pError.ConnectionFailed =
@@ -771,9 +800,13 @@ internal class IosLanDataTransport(
             val usesWifi = nw_path_uses_interface_type(path, nw_interface_type_wifi)
             val usesCellular = nw_path_uses_interface_type(path, nw_interface_type_cellular)
             val usesWired = nw_path_uses_interface_type(path, nw_interface_type_wired)
-            val fingerprint = (if (usesWifi) 1 else 0) or
-                (if (usesCellular) 2 else 0) or
-                (if (usesWired) 4 else 0)
+            val usesOther = nw_path_uses_interface_type(path, nw_interface_type_other)
+            val fingerprint = appleInterfaceFingerprint(
+                usesWifi = usesWifi,
+                usesCellular = usesCellular,
+                usesWired = usesWired,
+                usesOther = usesOther
+            )
             val prevFingerprint = lastInterfaceFingerprint
             val isFirstFingerprint = prevFingerprint == -1
             // Only update fingerprint while satisfied — if we're transiently
@@ -797,6 +830,7 @@ internal class IosLanDataTransport(
                 "path-monitor: status=$status isSatisfied=$isSatisfied " +
                     "becameSatisfied=$becameSatisfied isFirst=$isFirstEver " +
                     "usesWifi=$usesWifi usesCellular=$usesCellular usesWired=$usesWired " +
+                    "usesOther=$usesOther " +
                     "fingerprint=$fingerprint prev=$prevFingerprint " +
                     "interfaceChanged=$interfaceChanged addressFingerprint=$addressFingerprint " +
                     "previousAddressFingerprint=$previousAddressFingerprint addressChanged=$addressChanged"
@@ -819,7 +853,8 @@ internal class IosLanDataTransport(
                     scheduleRebind(
                         "active LAN path changed: interface=$prevFingerprint->$fingerprint " +
                             "addresses=$previousAddressFingerprint->$addressFingerprint " +
-                            "(usesWifi=$usesWifi usesCellular=$usesCellular usesWired=$usesWired)"
+                            "(usesWifi=$usesWifi usesCellular=$usesCellular " +
+                            "usesWired=$usesWired usesOther=$usesOther)"
                     )
                 }
             }
@@ -844,43 +879,68 @@ internal class IosLanDataTransport(
     }
 
     /**
-     * V0.4-IOS-FOREGROUND-REBIND: subscribe to
-     * `UIApplicationWillEnterForegroundNotification`. On wake, schedule
-     * a rebind via the existing [scheduleRebind] machinery — same
-     * 800ms debounce, same cancel-and-recreate cycle as path-driven
-     * rebinds.
+     * Observe the complete UIKit inactive/background return sequence. The
+     * coordinator emits at most one rebind request per inactive episode and
+     * treats a successful path-driven rebind while inactive as satisfying the
+     * later foreground signal. This prevents back-to-back listener rotations
+     * while retaining recovery after Control Center/system-dialog dismissal.
      *
      * Idempotent: a second call while already subscribed is a no-op.
      * Notifications fire on the posting thread (main thread for UIKit
      * notifications); the callback only schedules — it does no I/O.
      */
     private fun startForegroundObserver() {
-        if (foregroundObserver != null) return
-        val token = NSNotificationCenter.defaultCenter.addObserverForName(
-            name = UIApplicationWillEnterForegroundNotification,
+        if (lifecycleObservers.isNotEmpty()) return
+
+        fun observe(
+            name: platform.Foundation.NSNotificationName,
+            signal: AppleLifecycleSignal
+        ): NSObjectProtocol = NSNotificationCenter.defaultCenter.addObserverForName(
+            name = name,
             `object` = null,
             queue = null
-        ) foregroundHandler@ { _: NSNotification? ->
+        ) lifecycleHandler@ { _: NSNotification? ->
+            val shouldRecover = lifecycleRecoveryCoordinator.onSignal(signal)
             IosLanDebug.log(
                 "data",
-                "foreground notification observed (UIApplicationWillEnterForeground)"
+                "lifecycle notification observed signal=$signal " +
+                    "rebindScheduled=$shouldRecover"
             )
-            scheduleRebind("returning to foreground")
-            return@foregroundHandler
+            if (shouldRecover) scheduleRebind("lifecycle recovery signal=$signal")
+            return@lifecycleHandler
         }
-        foregroundObserver = token
+
+        lifecycleObservers = listOf(
+            observe(
+                UIApplicationWillResignActiveNotification,
+                AppleLifecycleSignal.WillResignActive
+            ),
+            observe(
+                UIApplicationWillEnterForegroundNotification,
+                AppleLifecycleSignal.WillEnterForeground
+            ),
+            observe(
+                UIApplicationDidBecomeActiveNotification,
+                AppleLifecycleSignal.DidBecomeActive
+            )
+        )
         IosLanDebug.log(
             "data",
-            "startForegroundObserver: registered for UIApplicationWillEnterForegroundNotification"
+            "startForegroundObserver: registered WillResignActive, " +
+                "WillEnterForeground, and DidBecomeActive"
         )
     }
 
     private fun stopForegroundObserver() {
-        val token = foregroundObserver ?: return
-        foregroundObserver = null
-        NSNotificationCenter.defaultCenter.removeObserver(token)
-        IosLanDebug.log("data", "stopForegroundObserver: unregistered")
+        val tokens = lifecycleObservers
+        if (tokens.isEmpty()) return
+        lifecycleObservers = emptyList()
+        tokens.forEach(NSNotificationCenter.defaultCenter::removeObserver)
+        IosLanDebug.log("data", "stopForegroundObserver: unregistered all lifecycle observers")
     }
+
+    internal val lifecycleObserverCountForTest: Int
+        get() = lifecycleObservers.size
 
     /**
      * Debounce-schedule a rebind. Each call cancels any pending job and
@@ -953,6 +1013,12 @@ internal class IosLanDataTransport(
             IosLanDebug.log("data", "rebindNow: host no longer started; skipping ($reason)")
             return@withLock
         }
+        // A browser-produced endpoint is scoped to the path/browser generation
+        // that created it. Invalidate before any native listener/browser
+        // teardown so a concurrent connect cannot acquire an old endpoint in
+        // the rebind window, and cancel dials already using the old path.
+        endpointRegistry.clear()
+        stopPendingDials("listener/path rebind")
         val old = listenerLease
         val oldPort = _tcpPort.value
         IosLanDebug.log("data", "rebindNow: starting ($reason) oldPort=$oldPort")
@@ -1000,6 +1066,7 @@ internal class IosLanDataTransport(
 
         try {
             afterListenerRebind?.invoke(fresh.handle)
+            lifecycleRecoveryCoordinator.onSuccessfulRebind()
             IosLanDebug.log(
                 "data",
                 "rebindNow: complete (port rotated: $oldPort -> $newPort)"
@@ -1065,3 +1132,13 @@ internal fun applePathNeedsRebind(
     interfaceChanged: Boolean,
     addressChanged: Boolean
 ): Boolean = (becameSatisfied && !isFirstEver) || interfaceChanged || addressChanged
+
+internal fun appleInterfaceFingerprint(
+    usesWifi: Boolean,
+    usesCellular: Boolean,
+    usesWired: Boolean,
+    usesOther: Boolean
+): Int = (if (usesWifi) 1 else 0) or
+    (if (usesCellular) 2 else 0) or
+    (if (usesWired) 4 else 0) or
+    (if (usesOther) 8 else 0)

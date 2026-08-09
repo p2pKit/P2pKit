@@ -18,24 +18,24 @@ acceptance criterion or required real-world measurement remains unproved.
 | Issue | Current implementation | Exact missing work | Priority / blocker / next action |
 | --- | --- | --- | --- |
 | [#21 — idle discovered peer disappears on Android](https://github.com/p2pKit/P2pKit/issues/21) | Transport-managed discovery lifetime, heartbeat/reconciliation, rebind coordination, and structured discovery diagnostics now prevent the old core-only 15-second eviction path. | Reproduce a long idle Android session on multiple real devices and prove JmDNS/service cache and UI retention/removal behavior from logs. | **Medium.** Physical Android hardware. Execute `LAN-T01`/Android long-idle matrix; fix only if evidence identifies a remaining layer. |
-| [#23 — iOS stale Bonjour endpoint after peer restart](https://github.com/p2pKit/P2pKit/issues/23) | Apple endpoint updates, browser generations, announce reconciliation, and path-rebind logic exist. | Prove that restart/path churn cannot leave a stale `nw_endpoint_t`; current listener rebind does not explicitly clear the endpoint registry before re-browse. | **High.** Apple devices/AWDL. Add a deterministic registry-generation test, then run `LAN-T07` restart/path cases. |
+| [#23 — iOS stale Bonjour endpoint after peer restart](https://github.com/p2pKit/P2pKit/issues/23) | Commit `d6efe08` gives cached endpoints immutable browser-generation leases, replaces them on each accepted update, clears them before browser/path ownership changes, and conditionally removes only the failed lease so a concurrent fresh result survives. | Prove peer-restart timing on devices. The first stale attempt can still consume the evidence-dependent 10-second Apple connect ceiling; the fix prevents that failed lease from remaining dialable or deleting a newer endpoint. | **High.** Apple devices/AWDL. Execute `LAN-T07` restart/path cases and retain both-peer endpoint-generation/timing evidence. |
 | [#25 — JVM/macOS no-address JmDNS.create trap](https://github.com/p2pKit/P2pKit/issues/25) | Commit `d21d065` removes the no-argument path, selects one deterministic explicit multicast-capable LAN address, excludes loopback/tunnel/virtual/container interfaces, watches the complete eligible topology, and rebinds through the serialized coordinator. | Prove Mac↔Android and Linux↔mobile discovery plus interface rotation on two physical machines; the implementation now fails visibly rather than binding an unsafe platform default when no eligible LAN exists. | **High.** External macOS/Linux/network evidence. Execute `ENV-02` and retain interface/PCAP evidence. |
 | [#26 — Android hotspot host may bind cellular](https://github.com/p2pKit/P2pKit/issues/26) | Commit `d21d065` uses an explicit Wi-Fi/Ethernet `Network` when available and otherwise selects a private IPv4 only from known AP/tether Java interfaces. The system-default callback is change detection only and can never become the bind fallback. | Prove AP/tether names, multicast readiness, and route behavior across representative OEM kernels; AP-client isolation remains outside application control. | **High.** OEM/hotspot hardware. Run the Android provisioning/LAN matrix with `dumpsys`, `ip addr`, both-peer logs, and PCAP evidence. |
-| [#27 — iOS hotspot rebind/foreground storm](https://github.com/p2pKit/P2pKit/issues/27) | Address fingerprints, serialized rebind, generation ownership, and bounded retries reduce the old storm. | Personal Hotspot Settings transition still needs device evidence; the fixed debounce and foreground trigger may not cover every readiness sequence. | **Medium.** Apple device/Personal Hotspot. Run `LAN-T07` repeated enable/foreground cases with timing evidence. |
+| [#27 — iOS hotspot rebind/foreground storm](https://github.com/p2pKit/P2pKit/issues/27) | Commit `d6efe08` includes `nw_interface_type_other` in the path fingerprint and coalesces WillEnterForeground/DidBecomeActive into one inactive episode. A successful path rebind while inactive satisfies that episode, preventing a second foreground port rotation. | Personal Hotspot path classification and notification timing still need physical-device proof across iOS versions. | **Medium.** Apple device/Personal Hotspot. Run `LAN-T07` repeated enable/foreground cases and prove at most one completed rebind per inactive episode. |
 | [#28 — Android address order may select VPN](https://github.com/p2pKit/P2pKit/issues/28) | Selection uses a Wi-Fi/Ethernet `Network`, `LinkProperties`, routable-address filtering, and shared network state rather than the first process-global address. | Validate VPN plus Wi-Fi/hotspot combinations on real OEM devices and prove both discovery and TCP stay on the chosen LAN. | **High.** Physical VPN/network matrix. Execute `LAN-T01` with PCAP/dumpsys evidence. |
 | [#29 — Android rebind cancellation race](https://github.com/p2pKit/P2pKit/issues/29) | `JmdnsLifecycleCoordinator` serializes transitions and performs non-cancellable rollback/close before recreate. | Reproduce rapid callback/close storms on hardware and prove no zombie listener or overlapping JmDNS generation remains. | **Medium.** Hardware timing. Add any missing Android-host concurrency seam, then run 50-toggle stress. |
 | [#30 — no hotspot bind fallback](https://github.com/p2pKit/P2pKit/issues/30) | Commit `d21d065` adds explicit AP/tether selection, a one-second interface/address-readiness watcher, bounded construction, rollback, and bounded retry/backoff without increasing the 800 ms debounce. | Validate real OEM bind failures and establish whether any safe alternate carrier exists after retries; the code does not guess that a stale or cellular address is a valid fallback. | **Medium.** OEM hotspot evidence. Capture exact readiness/bind errors and implement an alternate only if the hardware evidence proves one is safe. |
 | [#31 — JVM path/interface rebind](https://github.com/p2pKit/P2pKit/issues/31) | Commit `d21d065` polls an immutable full-topology bind target and feeds changes into the serialized rebind coordinator. A regression also proves that adding the second feature cannot relabel an old handle and suppress the required rebind. | Two-machine macOS/Linux Wi-Fi flap and interface-switch evidence is missing. | **Medium.** Physical machines/network. Execute `ENV-02`; close only after reproducible recovery evidence. |
-| [#32 — Apple browser does not prohibit cellular](https://github.com/p2pKit/P2pKit/issues/32) | Listener and outbound connection parameters prohibit cellular and allow peer-to-peer. | The browser parameters do not currently apply an equivalent cellular prohibition. Implement/test browser path policy without harming AWDL. | **High.** Locally actionable, then Apple path validation. |
+| [#32 — Apple browser does not prohibit cellular](https://github.com/p2pKit/P2pKit/issues/32) | Commit `d6efe08` builds browser parameters with cellular prohibited and peer-to-peer enabled, symmetric with listener/outbound policy; an Apple test inspects the actual native parameter object. | Prove the policy neither prevents Personal Hotspot/AWDL discovery nor produces hidden cellular fallback on real devices. | **High.** Apple path evidence. Execute the `LAN-T07` hotspot/AWDL matrix before closure. |
 | [#33 — Android outbound socket may use cellular](https://github.com/p2pKit/P2pKit/issues/33) | `AndroidLanDataTransport` creates outbound sockets through the selected `Network.socketFactory`, an equivalent stronger route binding than a later `bindSocket`. | Prove actual route selection under Wi-Fi+cellular+VPN/hotspot on physical devices. | **High.** Hardware/PCAP. Run `LAN-T01`; close if all acceptance criteria are evidenced. |
-| [#34 — Apple AWDL browser/listener asymmetry](https://github.com/p2pKit/P2pKit/issues/34) | Browser, listener, and outbound Network.framework parameters now opt into peer-to-peer; cellular is prohibited for data/listener. | Real AWDL discovery and bidirectional transfer have not been demonstrated, and browser cellular policy remains issue #32. | **Medium.** Apple devices/AWDL. Execute the AWDL handbook and correlate both peers/path evidence. |
+| [#34 — Apple AWDL browser/listener asymmetry](https://github.com/p2pKit/P2pKit/issues/34) | Browser, listener, and outbound Network.framework parameters all opt into peer-to-peer; commit `d6efe08` also makes cellular prohibition symmetric and tests the native browser/listener parameter objects. | Real AWDL discovery and bidirectional transfer have not been demonstrated. | **Medium.** Apple devices/AWDL. Execute the AWDL handbook and correlate both peers/path evidence. |
 | [#35 — Android 800 ms rebind debounce](https://github.com/p2pKit/P2pKit/issues/35) | Serialized generations, rollback/retry, callback signals, and the new one-second AP-interface readiness watcher cover address arrival after an early callback; the debounce intentionally remains 800 ms. | Measure rapid hotspot/Wi-Fi callback bursts across OEMs and determine whether the current readiness/state model covers every sequence. | **Medium.** Hardware measurement. Do not lengthen a timeout without evidence; run the 50-toggle case. |
 | [#36 — Android foreground refresh missing](https://github.com/p2pKit/P2pKit/issues/36) | Commit `d21d065` wires the official sample's Activity lifecycle into the approved host-driven contract: switches retain user intent, background policy pauses features, and foreground waits for the stop to settle before restarting only requested features. Deterministic tests cover stop/start ordering and revoked intent. | Long-background, Doze/App-Standby, process-restart, and rapid lifecycle behavior still require real-device proof; the SDK intentionally does not infer host intent or install an implicit process-wide observer. | **Medium.** Physical Android lifecycle evidence. Execute the documented background/foreground matrix and correlate the stable restore events. |
-| [#37 — Apple DidBecomeActive not observed](https://github.com/p2pKit/P2pKit/issues/37) | Apple observes `WillEnterForeground` and performs path/fingerprint recovery. | `DidBecomeActive`-only recovery paths are not covered. | **Medium.** Apple lifecycle design/hardware. Add idempotent active-state observation and deterministic notification tests. |
-| [#38 — iOS endpoint registry survives rebind](https://github.com/p2pKit/P2pKit/issues/38) | Generation-aware browse results update/remove endpoints and announce reconciliation prunes ghosts. | Listener/path rebind does not clearly invalidate all old-generation endpoints before reconnect can resolve them. | **High.** Locally actionable plus Apple validation. Define generation ownership/clear semantics and test stale lookup before `LAN-T07`. |
+| [#37 — Apple DidBecomeActive not observed](https://github.com/p2pKit/P2pKit/issues/37) | Commit `d6efe08` observes WillResignActive, WillEnterForeground, and DidBecomeActive; a locked episode coordinator covers DidBecomeActive-only recovery and suppresses duplicate notifications. Tests prove lifecycle sequences and registration cleanup across restartable stop/start. | Control Center, system-dialog, call interruption, split-view, and lock/unlock behavior require real-device evidence. | **Medium.** Apple lifecycle hardware. Execute `LAN-T07` B4 and correlate lifecycle/rebind diagnostics. |
+| [#38 — iOS endpoint registry survives rebind](https://github.com/p2pKit/P2pKit/issues/38) | Commit `d6efe08` invalidates opaque endpoints before stop, refresh, listener rebind, browser terminal recovery, and every new browser generation. Rebind also cancels pending old-path dials; generation/conditional-removal tests prevent stale ownership and fresh-endpoint deletion. | Prove the native path-change race on devices and confirm reconnect waits for a current browser result. | **High.** Apple path hardware. Execute `LAN-T07` B3/B4 with endpoint-generation and connection-ID evidence. |
 | [#39 — JmDNS cache growth during long idle](https://github.com/p2pKit/P2pKit/issues/39) | Rebind closes old instances and diagnostics expose generation/resource behavior. | A 6–12 hour multi-peer idle/appearance churn run with heap/cache/resource measurements has not been performed. | **Medium.** Long-running physical lab. Execute a bounded soak and retain heap/descriptor evidence. |
 | [#40 — asymmetric TCP connect timeouts](https://github.com/p2pKit/P2pKit/issues/40) | Platform timeouts are bounded and reconnect budgets are explicit. | JVM/Android remain 5 s and Apple 10 s; no hostile-network measurement justifies convergence or documents intentional asymmetry. | **Medium.** Two-machine/Apple timing. Measure first; change API/values only from evidence. |
-| [#41 — iOS write-ready 10 s wedge](https://github.com/p2pKit/P2pKit/issues/41) | Write and connection paths have bounded terminal cleanup. | A connection stuck in `Connecting` can still wait the full 10-second write-ready timeout; cancellation/path-change responsiveness needs device proof and possibly a state-triggered wakeup. | **Medium.** Apple path fault injection. Add deterministic state-transition coverage, then run device interruption cases. |
+| [#41 — iOS write-ready 10 s wedge](https://github.com/p2pKit/P2pKit/issues/41) | Commit `d6efe08` makes write-ready expiry terminal: it latches Closed, cancels the native connection exactly once, and makes the next write fail immediately. A deterministic 25 ms seam proves the terminal transition without changing the production 10-second ceiling. | Device evidence must measure cancellation/path-change wakeup and determine whether the 10-second ceiling is appropriate for AWDL. | **Medium.** Apple path fault injection. Run B3/B4 and the #40 timing campaign before changing the value. |
 | [#43 — Android serviceRemoved has null ServiceInfo](https://github.com/p2pKit/P2pKit/issues/43) | Commit `d21d065` owns admitted instance-name→peer mappings by listener generation and adds deterministic Android host tests for metadata-free removal, stale/current generation ownership, and terminal drain. | Prove the real null/stub-info callback shape and eviction timing under graceful stop, force-stop, and packet loss on physical devices. | **Medium.** Hardware confirmation. Run `LAN-T01` add/remove churn and retain both-peer logs. |
 | [#44 — link-local asymmetry](https://github.com/p2pKit/P2pKit/issues/44) | Shared routable-host validation and platform selectors now retain valid IPv4 link-local/scoped IPv6 candidates where appropriate. | Cross-platform link-local-only discovery/connectivity has not been exercised on physical interfaces; zone/scope handling needs evidence. | **Medium.** Two-machine/device link-local topology. Execute `PS-T08` plus PCAP/path logs. |
 
@@ -87,6 +87,84 @@ wire formats, the iOS deployment floor, or published `0.7.0-rc2` artifacts.
 Android OEM multicast/callback behavior, Mac/Linux interface rotation, and
 hostile-network timing remain external evidence requirements and are not
 claimed as verified here.
+
+## Apple LAN remediation workstream evidence
+
+Source commit `d6efe0899d7aabc3dae891b0dda80bb6adec1a4a` is the focused
+implementation and deterministic-regression commit. It changes only:
+
+- `library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/AppleLifecycleRecoveryCoordinator.kt`
+- `library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosEndpointRegistry.kt`
+- `library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosLanDataTransport.kt`
+- `library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosLanDiscoveryTransport.kt`
+- `library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosRawConnection.kt`
+- `library/p2p-transport-lan/src/appleTest/kotlin/dev/p2pkit/transport/lan/AppleLifecycleRecoveryCoordinatorTest.kt`
+- `library/p2p-transport-lan/src/appleTest/kotlin/dev/p2pkit/transport/lan/IosEndpointRegistryTest.kt`
+- `library/p2p-transport-lan/src/appleTest/kotlin/dev/p2pkit/transport/lan/IosLanConnectCancellationTest.kt`
+- `library/p2p-transport-lan/src/appleTest/kotlin/dev/p2pkit/transport/lan/IosLanRecoveryTest.kt`
+- `library/p2p-transport-lan/src/appleTest/kotlin/dev/p2pkit/transport/lan/IosRawConnectionTest.kt`
+
+The architectural corrections are:
+
+- opaque Bonjour endpoints carry immutable browser-generation ownership;
+  every browser/path retirement invalidates old endpoints, and a failed dial
+  can remove only the lease it actually used;
+- rebind begins by invalidating endpoints and cancelling pending old-path
+  dials, preventing connects from escaping through the teardown window;
+- browser/listener/outbound parameters are peer-to-peer enabled and prohibit
+  cellular symmetrically, while `nw_interface_type_other` participates in the
+  path fingerprint;
+- WillResignActive, WillEnterForeground, and DidBecomeActive feed a locked
+  inactive-episode coordinator that emits at most one recovery and recognizes
+  a successful path rebind performed while inactive;
+- write-ready timeout is terminal: it closes state and cancels the native
+  connection exactly once without changing the evidence-dependent 10-second
+  production ceiling.
+
+Focused and complete affected checks on 2026-08-09:
+
+- Apple production/test compilation — **PASS**.
+- Focused endpoint, lifecycle, cancellation, recovery, and raw-connection
+  tests — **PASS**.
+- `:p2p-transport-lan:iosSimulatorArm64Test` — **PASS** after correcting an
+  intermediate native test seam that left asynchronous browser work for later
+  classes; the final side-effect-free generation seam produced 79 tests,
+  zero failures, and one intentionally ignored external diagnostic.
+- `:p2p-transport-lan:check` — **PASS** in 1m20s, including JVM, Android host,
+  iOS simulator, iosArm64 compilation, iosX64 linkage policy, and ABI.
+- strict LAN Dokka, publication shape (15 publications), isolated
+  JVM/Android/KMP/iOS 14 consumers, release-XCFramework provenance, iOS 14
+  minimum-OS inspection, and SBOM (38 release components) — **PASS**.
+- The generated Swift sample compiled for arm64 and x86_64 simulator slices
+  with `SWIFT_TREAT_WARNINGS_AS_ERRORS=YES` — **PASS**.
+
+The first protected-boundary run, [CI run 31292879247](https://github.com/p2pKit/P2pKit/actions/runs/31292879247),
+stopped in the iOS sample UI entry-point test before any P2pKit start action
+was acknowledged. XCTest found a visible, hittable Start button but spent
+about 11 seconds checking an interrupting element, reported that it had
+synthesized the tap, and left the application at `Status: Not started`. The
+exact original test passed locally on a dedicated iPhone 17 simulator, which
+isolated the failure to hosted XCTest input delivery rather than Apple LAN
+startup.
+
+The corrected test keeps the existing aggregate ten-second acknowledgement
+budget. It attempts an alternate center-coordinate input exactly once only
+when the semantic tap left the app foregrounded, the status unchanged, and
+the Start control present and hittable; it never retries an acknowledged app
+action or a P2pKit operation. A debug-only launch argument deterministically
+drops the first app action so a second UI test covers that recovery branch.
+The normal and injected cases passed together, followed by three no-retry
+iterations (six test executions) and a Release warnings-as-errors build. The
+test argument was confirmed absent from the Release binary. CI now retains
+the failed `.xcresult` for seven days, while `check-sbom.sh` remains the
+blocking SBOM presence/content gate and an earlier failure no longer creates
+a misleading second missing-artifact failure.
+
+No public ABI, Maven coordinate, secure-v2/LAN wire format, iOS library floor,
+or published `0.7.0-rc2` artifact changes. Real AWDL, Personal Hotspot,
+Control Center/system interruption, device lock/background, peer restart,
+path rotation, and timeout histograms remain required external evidence; none
+is claimed as verified by simulator or host checks.
 
 ## Pull request audit
 

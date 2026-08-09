@@ -80,11 +80,14 @@ internal class IosRawConnection private constructor(
     private val connection: nw_connection_t,
     private val queue: dispatch_queue_t,
     private val sendOverride: (suspend (ByteArray) -> Unit)? = null,
-    startNativeConnection: Boolean = true
+    startNativeConnection: Boolean = true,
+    initialStateOverride: ConnectionState? = null,
+    private val writeReadyTimeoutMillis: Long = WRITE_READY_TIMEOUT_MILLIS
 ) : IosConnectionHandle {
 
     private val _state = MutableStateFlow(
-        if (startNativeConnection) ConnectionState.Connecting else ConnectionState.Connected
+        initialStateOverride
+            ?: if (startNativeConnection) ConnectionState.Connecting else ConnectionState.Connected
     )
     override val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
@@ -112,7 +115,7 @@ internal class IosRawConnection private constructor(
 
     /**
      * Log which interface type(s) the connection's current path is using.
-     * Issue #3 forensic signal: a connection that reached `ready` over AWDL
+     * Issue #34 forensic signal: a connection that reached `ready` over AWDL
      * shows up as `wifi=true` or `other=true`; a dial that never leaves
      * `waiting`/`preparing` has no usable path. `nw_path_uses_interface_type`
      * is the same primitive [IosLanDataTransport]'s path monitor already uses.
@@ -153,7 +156,7 @@ internal class IosRawConnection private constructor(
             when (st) {
                 nw_connection_state_ready -> {
                     if (!closed) _state.value = ConnectionState.Connected
-                    // Issue #3: log which interface the established connection
+                    // Issue #34: log which interface the established connection
                     // actually uses — reveals whether the dial routed over
                     // Wi-Fi/wired vs. AWDL/peer-to-peer ("other").
                     logConnectionPath("ready")
@@ -198,16 +201,19 @@ internal class IosRawConnection private constructor(
             throw IllegalStateException("connection closed")
         }
         if (_state.value == ConnectionState.Connecting) {
-            IosLanDebug.log("conn", "write(${bytes.size}): state=Connecting, awaiting transition (<=${WRITE_READY_TIMEOUT_MILLIS}ms)")
+            IosLanDebug.log("conn", "write(${bytes.size}): state=Connecting, awaiting transition (<=${writeReadyTimeoutMillis}ms)")
             try {
-                withTimeout(WRITE_READY_TIMEOUT_MILLIS) {
+                withTimeout(writeReadyTimeoutMillis) {
                     _state.first { it != ConnectionState.Connecting }
                 }
             } catch (e: TimeoutCancellationException) {
                 IosLanDebug.log("conn", "write(${bytes.size}): TIMEOUT — connection wedged in Connecting")
+                closed = true
+                _state.value = ConnectionState.Closed
+                cancelOnce("write-ready timeout")
                 throw IllegalStateException(
                     "write timed out waiting for connection to leave Connecting state " +
-                        "after ${WRITE_READY_TIMEOUT_MILLIS}ms"
+                        "after ${writeReadyTimeoutMillis}ms"
                 )
             }
         }
@@ -413,6 +419,19 @@ internal class IosRawConnection private constructor(
             queue = queue,
             sendOverride = send,
             startNativeConnection = false
+        )
+
+        /** Deterministic seam for the Connecting-to-terminal write deadline. */
+        internal fun wrapConnectingForTest(
+            connection: nw_connection_t,
+            queue: dispatch_queue_t,
+            writeReadyTimeoutMillis: Long
+        ): IosRawConnection = IosRawConnection(
+            connection = connection,
+            queue = queue,
+            startNativeConnection = false,
+            initialStateOverride = ConnectionState.Connecting,
+            writeReadyTimeoutMillis = writeReadyTimeoutMillis
         )
     }
 }

@@ -147,8 +147,23 @@ ruby - "$CI_WORKFLOW" <<'RUBY'
 require "yaml"
 
 workflow = YAML.safe_load_file(ARGV.fetch(0), aliases: true)
-timeout = workflow.fetch("jobs").fetch("complete-gate").fetch("timeout-minutes")
+complete_gate = workflow.fetch("jobs").fetch("complete-gate")
+timeout = complete_gate.fetch("timeout-minutes")
 raise "CI complete-gate timeout must be at least 60 minutes" unless timeout >= 60
+
+steps = complete_gate.fetch("steps")
+ui_evidence = steps.find { |step| step["name"] == "Upload iOS UI failure evidence" }
+raise "CI does not retain failed iOS UI results" unless ui_evidence
+raise "iOS UI evidence must be failure-only" unless ui_evidence.fetch("if").include?("failure()")
+raise "iOS UI evidence action is not pinned" unless ui_evidence.fetch("uses") ==
+  "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+raise "iOS UI evidence path is not an xcresult" unless
+  ui_evidence.fetch("with").fetch("path").end_with?("*.xcresult")
+
+sbom_evidence = steps.find { |step| step["name"] == "Upload SBOM evidence" }
+raise "CI SBOM evidence step is missing" unless sbom_evidence
+raise "early failures must not create a second missing-SBOM failure" unless
+  sbom_evidence.fetch("with").fetch("if-no-files-found") == "warn"
 RUBY
 
 grep -Fq 'XCODEGEN_VERSION="2.45.4"' "$XCODEGEN_INSTALLER" || {
