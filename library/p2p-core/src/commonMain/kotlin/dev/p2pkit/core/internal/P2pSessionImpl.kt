@@ -525,44 +525,71 @@ internal class P2pSessionImpl(
         newEvents: ReceiveChannel<ProtocolEvent>,
         newProtocolState: ProtocolSessionState = ProtocolSessionState.legacy()
     ) {
-        connectionLock.withLock {
-            val s = _state.value
-            if (s == ConnectionState.Closing || s == ConnectionState.Closed || s == ConnectionState.Failed) {
-                runCatching { newConnection.close() }
-                return
+        var replacementAccepted = false
+        var previousConnection: RawConnection? = null
+        try {
+            connectionLock.withLock {
+                val s = _state.value
+                if (s == ConnectionState.Closing || s == ConnectionState.Closed || s == ConnectionState.Failed) {
+                    return@withLock
+                }
+                epochJob?.cancelAndJoin()
+                // Fail any in-flight file transfers BEFORE swapping the connection.
+                // The outgoing streamer runs on the session scope (not the epoch
+                // scope), so cancelling epochJob alone does not stop it; without
+                // this it would keep writing mid-stream FILE_DATA chunks onto the
+                // brand-new connection, corrupting the rearmed session. A failure
+                // here aborts the rearm; swallowing it could leave an old transfer
+                // alive and then redirect its writes onto the replacement stream.
+                if (fileTransferDispatcherLazy.isInitialized()) {
+                    fileTransferDispatcher.closeAll("reconnect: connection replaced")
+                    // closeAll also latches the dispatcher's `closed` flag (it is
+                    // shared with the terminal-close path). REOPEN it only after
+                    // the old transfer set has definitely settled.
+                    fileTransferDispatcher.reopen()
+                }
+                previousConnection = connection
+                connection = newConnection
+                events = newEvents
+                protocolState = newProtocolState
+                // V0.5.1-RECONNECT-RACE (issue #15): flip to Connected BEFORE
+                // launching the new epoch. `keepAliveLoop` gates its outer
+                // `while` on `_state.value == Connected`; on a multi-thread
+                // dispatcher the launched coroutine can read the field on
+                // another worker before this thread reaches the assignment,
+                // see Reconnecting, exit immediately, and leave the rearmed
+                // session with no liveness watchdog. Next disconnect goes
+                // undetected (Android stuck in Connected).
+                _state.value = ConnectionState.Connected
+                startEpoch()
+                replacementAccepted = true
             }
-            epochJob?.cancelAndJoin()
-            // Fail any in-flight file transfers BEFORE swapping the connection.
-            // The outgoing streamer runs on the session scope (not the epoch
-            // scope), so cancelling epochJob alone does not stop it; without
-            // this it would keep writing mid-stream FILE_DATA chunks onto the
-            // brand-new connection, corrupting the rearmed session. Matches the
-            // closeAll-on-terminal contract. Only touch the dispatcher if it
-            // was ever used, so reconnects of message-only sessions stay cheap.
-            if (fileTransferDispatcherLazy.isInitialized()) {
-                runCatching { fileTransferDispatcher.closeAll("reconnect: connection replaced") }
-                // closeAll also latches the dispatcher's `closed` flag (it is
-                // shared with the terminal-close path). REOPEN it: the rearmed
-                // session's contract is that the same instance keeps working,
-                // but the latch silently disabled sendFile AND inbound offers
-                // after the first reconnect (AUDIT-2026-06 fix).
-                fileTransferDispatcher.reopen()
+        } finally {
+            if (!replacementAccepted) {
+                closeDetachedConnection(newConnection, "discarded reconnect replacement")
             }
-            runCatching { connection.close() }
-            connection = newConnection
-            events = newEvents
-            protocolState = newProtocolState
-            // V0.5.1-RECONNECT-RACE (issue #15): flip to Connected BEFORE
-            // launching the new epoch. `keepAliveLoop` gates its outer
-            // `while` on `_state.value == Connected`; on a multi-thread
-            // dispatcher the launched coroutine can read the field on
-            // another worker before this thread reaches the assignment,
-            // see Reconnecting, exit immediately, and leave the rearmed
-            // session with no liveness watchdog. Next disconnect goes
-            // undetected (Android stuck in Connected).
-            _state.value = ConnectionState.Connected
-            startEpoch()
         }
+
+        // No epoch references the previous stream after the cancel-and-join
+        // above. Close it outside connectionLock so a broken platform close
+        // cannot prevent a concurrent local close from acquiring the lock and
+        // terminalizing the replacement session.
+        previousConnection?.takeIf { it !== newConnection }?.let { previous ->
+            closeDetachedConnection(previous, "replaced raw connection")
+        }
+    }
+
+    private suspend fun closeDetachedConnection(connection: RawConnection, label: String) {
+        val issue = withContext(NonCancellable) {
+            captureCleanupIssue(
+                resource = "session $id $label",
+                timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
+                preserveCancellation = false
+            ) {
+                connection.close()
+            }
+        }
+        if (issue != null) logCleanupIssues(logger, "session $id reconnect cleanup", listOf(issue))
     }
 
     /**
@@ -723,7 +750,8 @@ internal class P2pSessionImpl(
     internal val runtimeJobIsActiveForTest: Boolean
         get() = sessionJob.isActive
 
-    internal suspend fun awaitRuntimeTerminationForTest() {
+    /** Wait until every child owned by this session has terminated. */
+    internal suspend fun awaitRuntimeTermination() {
         sessionJob.join()
     }
 
@@ -807,9 +835,17 @@ internal class P2pSessionImpl(
                         }
                     }
                     is ProtocolEvent.Ping -> {
-                        runCatching {
+                        try {
                             sendMutex.withLock { protocol.sendPong(connection) }
-                        }.onFailure { logger.warn("Session $id: failed to send PONG", it) }
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (failure: Throwable) {
+                            logger.warn("Session $id: failed to send PONG", failure)
+                            onConnectionLost(
+                                "PONG send failed: ${failure.message ?: failure::class.simpleName}"
+                            )
+                            return
+                        }
                     }
                     is ProtocolEvent.Pong -> lastPongAt.value = monotonicClock()
                     is ProtocolEvent.Hello -> {

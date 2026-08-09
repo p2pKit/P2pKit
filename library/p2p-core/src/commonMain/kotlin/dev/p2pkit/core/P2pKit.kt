@@ -142,9 +142,10 @@ public interface P2pKit {
      * [NetworkPathObserver]:
      *   - iOS: real `nw_path_monitor` events (Wi-Fi / cellular / VPN
      *     transitions).
-     *   - Android: host-provided `AndroidNetworkPathObserver(ctx)`, which
-     *     listens to `ConnectivityManager.NetworkCallback`. Without that
-     *     override the value stays [NetworkPathStatus.Unknown].
+     *   - Android: `P2pKitAndroid.initialize(context)` installs the application
+     *     context used by the default `AndroidNetworkPathObserver`; a lifecycle
+     *     DSL override can supply one explicitly. Without either, the value
+     *     stays [NetworkPathStatus.Unknown].
      *   - JVM desktop: defaults to [NetworkPathStatus.Unknown] unless the
      *     host app supplies a custom observer.
      *
@@ -155,15 +156,20 @@ public interface P2pKit {
     public val networkPathStatus: StateFlow<NetworkPathStatus>
 
     /**
-     * Bring up all registered transports and provisioning sidecar. Optional
-     * to call — if the host app skips it, [startAdvertising], [startDiscovery],
+     * Bring up all registered data transports and the network-path observer.
+     * The provisioning sidecar is constructed with the kit and has no separate
+     * start phase. This is optional to call — if the host app skips it,
+     * [startAdvertising], [startDiscovery],
      * and [connect] each lazily ensure the kit is started on their first
      * invocation. Calling `start()` explicitly is preferable because it
      * surfaces a typed [P2pError.TransportStartFailed] at a single,
      * predictable call site instead of inside the first lifecycle method.
      *
      * Idempotent: subsequent calls after a successful start return without
-     * re-binding. After a failed start, the next call retries.
+     * re-binding. After an ordinary failed start whose rollback completed, the
+     * next call retries. If rollback itself fails or exceeds its deadline, the
+     * instance fails closed: call [stop] and create a replacement instead of
+     * risking a second listener over uncertain native ownership.
      *
      * @throws P2pError.TransportStartFailed if any registered transport's
      *   `start()` returned a failure (port exhaustion, missing entitlement,
@@ -253,9 +259,7 @@ public interface P2pKit {
          * Construction performs a one-time, small-file identity read/write on
          * the calling thread (loading or generating the persistent
          * [localPeerId]) — construct off the main thread on Android to avoid
-         * a first-launch stall (decision #5a, 2026-07-04; async/suspending
-         * construction is a recorded backlog item in
-         * `docs/production-readiness.md`).
+         * a first-launch stall.
          *
          * The implementation is provided by `dev.p2pkit.core.internal.P2pKitImpl`.
          */

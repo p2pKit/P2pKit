@@ -24,17 +24,21 @@ import kotlinx.io.RawSource
  *
  * ### Receive semantics
  *
- * [incoming] is a hot [SharedFlow] with `replay = 0`,
- * `extraBufferCapacity = 64`, `onBufferOverflow = SUSPEND`. **Subscribe
- * immediately after `connect()` or when accepting an incoming session** —
- * messages emitted before any subscriber attaches are not buffered.
+ * [incoming] is a hot [SharedFlow] with `replay = 0`. Decoded application
+ * messages wait in a separately bounded internal queue (at most 64 messages
+ * and 8 MiB) while a subscriber is slow; exceeding that bound fails the
+ * session instead of growing memory without limit. **Subscribe immediately
+ * after `connect()` or when accepting an incoming session** — messages
+ * delivered before any subscriber attaches are not retained.
  *
  * ### Lifecycle
  *
  * `close()` commits [ConnectionState.Closing] before its bounded wire/resource
  * cleanup, then transitions to `Closed`. After [close], the underlying
- * connection is released and [incoming] completes. Concurrent close callers
- * join the same cleanup transaction.
+ * connection is released and terminal cleanup cancels queued application
+ * delivery. [SharedFlow] has no completion signal, so collectors should
+ * observe [state] or be cancelled with their owning scope. Concurrent close
+ * callers join the same cleanup transaction.
  */
 public interface P2pSession {
     /** Stable identifier of this session for the lifetime of the process. */

@@ -576,6 +576,129 @@ class PeerRegistryTest {
         }
     }
 
+    @Test
+    fun staleEvictionUsesMonotonicTimeWhileLastSeenRemainsEpochTime() {
+        val supervisor = SupervisorJob()
+        try {
+            var epochNow = 1_000L
+            var monotonicNow = 50L
+            val registry = PeerRegistry(
+                discoveryTransports = emptyList(),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { epochNow },
+                monotonicClock = { monotonicNow },
+                staleTimeoutMillis = 5_000,
+                evictionPollMillis = Long.MAX_VALUE / 2
+            )
+            registry.processEvent(PeerEvent.Found(peer("clock-safe")))
+            assertEquals(1_000L, registry.lastSeen(PeerId("clock-safe")))
+
+            // A wall-clock correction is not evidence that the peer stopped
+            // emitting discovery observations.
+            epochNow += 24L * 60L * 60L * 1_000L
+            registry.evictStalePeers()
+            assertEquals(1, registry.peers.value.size)
+
+            monotonicNow += 5_001L
+            registry.evictStalePeers()
+            assertTrue(registry.peers.value.isEmpty())
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun manualRegistrationRetriesAtomicallyWhenSameEndpointWinsItsSnapshot() {
+        val supervisor = SupervisorJob()
+        try {
+            lateinit var registry: PeerRegistry
+            var reentered = false
+            var nested: Peer? = null
+            registry = PeerRegistry(
+                discoveryTransports = emptyList(),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2,
+                beforeManualPeerCompareAndSetForTest = {
+                    if (!reentered) {
+                        reentered = true
+                        nested = registry.registerManualPeer("192.0.2.44", 9_044)
+                    }
+                }
+            )
+
+            val outer = registry.registerManualPeer("192.0.2.44", 9_044)
+
+            assertEquals(nested?.id, outer.id)
+            assertEquals(1, registry.peers.value.size)
+            assertEquals(outer.id, registry.peers.value.single().id)
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun closeClearsAllPeersAndRejectsLateEventsAndManualRegistrations() {
+        val supervisor = SupervisorJob()
+        try {
+            val registry = PeerRegistry(
+                discoveryTransports = emptyList(),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2
+            )
+            registry.processEvent(PeerEvent.Found(peer("discovered")))
+            registry.registerManualPeer("192.0.2.45", 9_045)
+            assertEquals(2, registry.peers.value.size)
+
+            registry.close()
+
+            assertTrue(registry.peers.value.isEmpty())
+            assertNull(registry.lastSeen(PeerId("discovered")))
+            registry.processEvent(PeerEvent.Found(peer("late")))
+            assertTrue(registry.peers.value.isEmpty())
+            assertFailsWith<IllegalStateException> {
+                registry.registerManualPeer("192.0.2.46", 9_046)
+            }
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun closeWinsAgainstManualRegistrationAlreadyAtItsCompareAndSetBoundary() {
+        val supervisor = SupervisorJob()
+        try {
+            lateinit var registry: PeerRegistry
+            var closeInjected = false
+            registry = PeerRegistry(
+                discoveryTransports = emptyList(),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2,
+                beforeManualPeerCompareAndSetForTest = {
+                    if (!closeInjected) {
+                        closeInjected = true
+                        registry.close()
+                    }
+                }
+            )
+
+            assertFailsWith<IllegalStateException> {
+                registry.registerManualPeer("192.0.2.47", 9_047)
+            }
+            assertTrue(registry.peers.value.isEmpty())
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
     private class FakeDiscovery(
         override val type: TransportKind = TransportKind.LAN
     ) : DiscoveryTransport {

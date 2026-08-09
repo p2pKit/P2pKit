@@ -12,8 +12,9 @@ import dev.p2pkit.core.permission.P2pPermission
  * [P2pKit.connect]).
  *
  * [Failed] carries the [P2pError] that aborted startup (e.g. a transport bind
- * failure surfaced as [P2pError.TransportStartFailed]); the next lifecycle call
- * retries and moves back through [Starting].
+ * failure surfaced as [P2pError.TransportStartFailed]). A later lifecycle call
+ * retries only when rollback completed. An incomplete/timed-out rollback is
+ * fail-closed: call [P2pKit.stop] and create a replacement instance.
  *
  * [Stopped] is **terminal**: [P2pKit.stop] cancels the kit's internal scope and
  * the instance cannot be restarted — any later lifecycle call throws
@@ -72,11 +73,10 @@ public sealed class FeatureState {
 /**
  * Lifecycle state of a single [P2pSession].
  *
- * `Connecting → Handshaking → Connected` is the happy path. `close()` moves
- * the session directly from `Connected` to `Closed` — the `Closing` constant
- * is declared for completeness but is never emitted by the current
- * implementation, so apps should not wait on it. Connection loss enters
- * `Failed`, or `Reconnecting` if [ReconnectPolicy.Enabled] is configured.
+ * `Connecting → Handshaking → Connected` is the happy path. A local `close()`
+ * commits [Closing] before bounded wire/resource cleanup and then reaches
+ * [Closed]; concurrent close callers join that transaction. Connection loss
+ * enters [Failed], or [Reconnecting] if [ReconnectPolicy.Enabled] is configured.
  */
 public enum class ConnectionState {
     Idle,

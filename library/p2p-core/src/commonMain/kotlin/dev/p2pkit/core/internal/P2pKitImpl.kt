@@ -182,6 +182,13 @@ internal class P2pKitImpl(
     private val startMutex = Mutex()
     private var startResult: Result<Unit>? = null
 
+    /**
+     * A failed/timed-out startup rollback means an old listener may still be
+     * alive. This kit instance must never call start again over that uncertain
+     * ownership; terminal [stop] is the only safe recovery.
+     */
+    private var startupCleanupBlocker: P2pError.TransportStartFailed? = null
+
     // Set once by [stop]. A stopped kit is terminal: its internal scope is
     // cancelled and cannot be revived, so every lifecycle entry point rejects
     // further calls instead of silently returning success onto a dead scope.
@@ -245,6 +252,7 @@ internal class P2pKitImpl(
             discoveryTransports = discoveryTransports,
             scope = scope,
             clock = clock,
+            monotonicClock = monotonicClock,
             securityProfile = securityProfile,
             peerIdFromFingerprint = secureIdentityService?.let { service ->
                 { fingerprint -> service.peerId(appId, fingerprint) }
@@ -289,16 +297,20 @@ internal class P2pKitImpl(
             refreshDiscovery = {
                 // V0.4-DISCOVERY-REFRESH: fan out to every registered
                 // discovery transport. Run sequentially under each
-                // transport's own lock; runCatching keeps one transport's
-                // failure from blocking the others.
+                // transport's own lock. One transport's ordinary failure does
+                // not block the others, while caller cancellation remains
+                // structural and aborts the reconnect operation.
                 discoveryTransports.forEach { transport ->
-                    runCatching { transport.refresh() }
-                        .onFailure { e ->
-                            logger.warn(
-                                "discovery refresh failed for ${transport.type}: " +
-                                    "${e::class.simpleName}: ${e.message ?: ""}"
-                            )
-                        }
+                    try {
+                        transport.refresh()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Throwable) {
+                        logger.warn(
+                            "discovery refresh failed for ${transport.type}: " +
+                                "${failure::class.simpleName}: ${failure.message ?: ""}"
+                        )
+                    }
                 }
             },
             strictInvariants = strictSessionInvariants
@@ -361,10 +373,11 @@ internal class P2pKitImpl(
 
     /**
      * Bring every registered transport up. Idempotent: a successful first
-     * call latches `startResult = success`; subsequent callers no-op. A
-     * failed start does NOT latch — the next call retries the bind, which
-     * matters for transient port-exhaustion or `EADDRINUSE` races where
-     * a second attempt seconds later will succeed.
+     * call latches `startResult = success`; subsequent callers no-op. An
+     * ordinary failed start does not block a retry after its rollback settles,
+     * which matters for transient port-exhaustion or `EADDRINUSE` races. A
+     * failed/timed-out rollback is different: uncertain native ownership is
+     * latched fail-closed until terminal stop.
      *
      * Any per-transport failure surfaces as
      * [P2pError.TransportStartFailed]; we attribute the error to that
@@ -378,6 +391,7 @@ internal class P2pKitImpl(
         }
         startMutex.withLock {
             requireLifecycleActive(generation)
+            startupCleanupBlocker?.let { throw it }
             startResult?.let { prior ->
                 if (prior.isSuccess) return
             }
@@ -401,8 +415,9 @@ internal class P2pKitImpl(
                 // cancelling `kit.start()`) had its CE converted into
                 // TransportStartFailed, `startResult` latched as failure, and
                 // the public state corrupted to Failed. On cancellation we
-                // leave `startResult` and `_state` untouched (still Starting)
-                // so a subsequent start() retries cleanly.
+                // roll back every transport entered by this attempt. A clean
+                // rollback restores Idle; an incomplete rollback latches a
+                // fail-closed error so this instance can never double-bind.
                 // Include the currently-entered transport because a platform
                 // start may acquire a listener before returning failure or
                 // observing caller cancellation.
@@ -411,10 +426,17 @@ internal class P2pKitImpl(
                     transport.start()
                 } catch (e: CancellationException) {
                     if (isLifecycleActive(generation)) {
-                        rollbackDataStartup(attempted)
+                        val rollbackIssues = rollbackDataStartup(attempted)
+                        val blocker = rollbackIssues.takeIf { it.isNotEmpty() }?.let { issues ->
+                            startupRollbackFailure(transport.type, "cancelled data startup", issues)
+                        }
+                        if (blocker != null) {
+                            startupCleanupBlocker = blocker
+                            e.addSuppressed(blocker)
+                        }
                         commitLifecycle(generation) {
-                            startResult = null
-                            _state.value = P2pState.Idle
+                            startResult = blocker?.let { Result.failure(it) }
+                            _state.value = blocker?.let(P2pState::Failed) ?: P2pState.Idle
                         }
                     } else {
                         cleanupLateStart(
@@ -435,15 +457,27 @@ internal class P2pKitImpl(
                 }
                 if (r.isFailure) {
                     val cause = r.exceptionOrNull()
-                    val failed = P2pError.TransportStartFailed(
+                    val startFailure = P2pError.TransportStartFailed(
                         transportKind = transport.type,
                         reason = cause?.message ?: "transport.start() returned failure",
                         underlying = cause
                     )
-                    rollbackDataStartup(attempted)
+                    val rollbackIssues = rollbackDataStartup(attempted)
+                    val failureToReport = if (rollbackIssues.isEmpty()) {
+                        startFailure
+                    } else {
+                        startupRollbackFailure(
+                            transport.type,
+                            "failed data startup",
+                            rollbackIssues
+                        ).also { blocker ->
+                            blocker.addSuppressed(startFailure)
+                            startupCleanupBlocker = blocker
+                        }
+                    }
                     val committed = commitLifecycle(generation) {
-                        startResult = Result.failure(failed)
-                        _state.value = P2pState.Failed(failed)
+                        startResult = Result.failure(failureToReport)
+                        _state.value = P2pState.Failed(failureToReport)
                     }
                     if (!committed) {
                         cleanupLateStart(
@@ -452,7 +486,7 @@ internal class P2pKitImpl(
                         )
                         throw lifecycleStoppedFailure()
                     }
-                    throw failed
+                    throw failureToReport
                 }
             }
             // AUDIT-2026-06 (stop-hang fix): stop() bounds its wait for this
@@ -478,7 +512,39 @@ internal class P2pKitImpl(
             try {
                 pathObserver.start()
             } catch (e: CancellationException) {
-                if (!isLifecycleActive(generation)) {
+                if (isLifecycleActive(generation)) {
+                    // Observer attachment is part of the same startup
+                    // transaction as the data transports. A caller cancelled
+                    // while an observer is acquiring its platform callback
+                    // must not leave a publicly permanent `Starting` state or
+                    // bound listeners behind. Both bundled observers are
+                    // restartable after close, so roll the whole attempt back
+                    // exactly like cancellation during a data-transport start.
+                    withContext(NonCancellable) {
+                        val observerIssue = cleanupStaleResource("network path observer startup") {
+                            pathObserver.close()
+                        }
+                        val rollbackIssues = buildList {
+                            observerIssue?.let(::add)
+                            addAll(rollbackDataStartup(attempted))
+                        }
+                        val blocker = rollbackIssues.takeIf { it.isNotEmpty() }?.let { issues ->
+                            startupRollbackFailure(
+                                transportFactories.first().descriptor.kind,
+                                "cancelled network-path observer startup",
+                                issues
+                            )
+                        }
+                        if (blocker != null) {
+                            startupCleanupBlocker = blocker
+                            e.addSuppressed(blocker)
+                        }
+                        commitLifecycle(generation) {
+                            startResult = blocker?.let { Result.failure(it) }
+                            _state.value = blocker?.let(P2pState::Failed) ?: P2pState.Idle
+                        }
+                    }
+                } else {
                     cleanupLateStart(
                         observerMayHaveStarted = true,
                         dataMayHaveStartedLate = false
@@ -954,12 +1020,25 @@ internal class P2pKitImpl(
                 // applyBackgroundPolicy already closes active sessions; don't
                 // double-close here.
                 scope.launch {
-                    runCatching { stopAdvertising() }
-                    runCatching { stopDiscovery() }
+                    stopFeatureForBackground("advertising", ::stopAdvertising)
+                    stopFeatureForBackground("discovery", ::stopDiscovery)
                 }
                 sessionManager.applyBackgroundPolicy(backgroundPolicy)
             }
             is BackgroundPolicy.KeepRunning -> { /* nothing to do */ }
+        }
+    }
+
+    private suspend fun stopFeatureForBackground(
+        featureName: String,
+        stopFeature: suspend () -> Unit
+    ) {
+        try {
+            stopFeature()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            logger.warn("Background $featureName stop failed", failure)
         }
     }
 
@@ -1134,37 +1213,50 @@ internal class P2pKitImpl(
      * reverse order, including the transport whose `start()` failed after
      * acquiring a platform handle.
      */
-    private suspend fun rollbackDataStartup(attempted: List<DataTransport>) {
+    private suspend fun rollbackDataStartup(attempted: List<DataTransport>): List<CleanupIssue> {
+        val issues = mutableListOf<CleanupIssue>()
         withContext(NonCancellable) {
             for (transport in attempted.asReversed()) {
                 cleanupStaleResource("${transport.type} data startup") {
                     transport.stop()
-                }
+                }?.let(issues::add)
             }
         }
+        return issues
+    }
+
+    private fun startupRollbackFailure(
+        transportKind: TransportKind,
+        operation: String,
+        issues: List<CleanupIssue>
+    ): P2pError.TransportStartFailed {
+        val aggregate = CleanupAggregateException(operation, issues.toList())
+        return P2pError.TransportStartFailed(
+            transportKind = transportKind,
+            reason = "$operation cleanup was incomplete; call stop() and replace this P2pKit instance",
+            underlying = aggregate
+        )
     }
 
     private suspend fun cleanupStaleResource(
         label: String,
         cleanup: suspend () -> Unit
     ): CleanupIssue? {
-        val completed = try {
-            withTimeoutOrNull(STALE_OPERATION_CLEANUP_TIMEOUT_MS) {
-                cleanup()
-                true
-            } ?: false
-        } catch (e: Throwable) {
-            logger.warn("Late lifecycle cleanup failed for $label", e)
-            return CleanupIssue(label, e)
+        // A structured withTimeout cannot bound a platform cleanup that enters
+        // NonCancellable or blocks in native I/O: it still waits for that child
+        // after the deadline. Use the same independently-owned attempt as
+        // terminal teardown so a cancelled start/feature operation always
+        // settles its public lifecycle transaction.
+        val issue = captureCleanupIssue(
+            resource = label,
+            timeoutMillis = STALE_OPERATION_CLEANUP_TIMEOUT_MS,
+            preserveCancellation = false,
+            cleanup = cleanup
+        )
+        if (issue != null) {
+            logger.warn("Late lifecycle cleanup failed for $label", issue.cause)
         }
-        if (!completed) {
-            val failure = IllegalStateException(
-                "cleanup exceeded $STALE_OPERATION_CLEANUP_TIMEOUT_MS ms"
-            )
-            logger.warn("Late lifecycle cleanup failed for $label", failure)
-            return CleanupIssue(label, failure)
-        }
-        return null
+        return issue
     }
 
     /**
@@ -1221,6 +1313,10 @@ internal class P2pKitImpl(
         }
         finishTerminalFeatureTeardown(discoveryFeature, "stop discovery", discoveryIssues)
         issues += discoveryIssues
+        // Discovery/manual entries are process-local runtime state. Seal the
+        // registry before clearing it so a late native discovery callback
+        // cannot repopulate `peers` after the kit has begun terminal stop.
+        peerRegistry.close()
         issues += sessionManager.shutdownAllSessions()
         captureCleanupIssue(
             resource = "network provisioning manager",

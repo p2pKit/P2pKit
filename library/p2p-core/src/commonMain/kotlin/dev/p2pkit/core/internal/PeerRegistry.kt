@@ -44,22 +44,31 @@ import kotlinx.coroutines.launch
  *   evicted. Default 15 s.
  * @param evictionPollMillis How often the eviction loop wakes up. Smaller =
  *   more responsive, larger = cheaper. Default 1 s.
- * @param clock Source of "now" in epoch milliseconds. Must be provided
- *   explicitly because `System.currentTimeMillis` is not available in
- *   commonMain. P2pKitImpl wires up the platform clock; tests inject a fake.
+ * @param clock Source of epoch milliseconds for the public [lastSeen] value.
+ * @param monotonicClock Monotonic elapsed-time source used for staleness. It
+ *   must not jump when the wall clock is corrected. P2pKitImpl wires both
+ *   platform clocks; tests inject fakes.
  */
 @OptIn(ExperimentalP2pApi::class)
 internal class PeerRegistry(
     private val discoveryTransports: List<DiscoveryTransport>,
     private val scope: CoroutineScope,
     private val clock: () -> Long,
+    private val monotonicClock: () -> Long = clock,
     private val staleTimeoutMillis: Long = DEFAULT_STALE_TIMEOUT_MS,
     private val evictionPollMillis: Long = DEFAULT_EVICTION_POLL_MS,
     private val securityProfile: TransportSecurityProfile = TransportSecurityProfile.LegacyPlaintextV1,
-    private val peerIdFromFingerprint: ((PeerFingerprint) -> PeerId)? = null
+    private val peerIdFromFingerprint: ((PeerFingerprint) -> PeerId)? = null,
+    private val beforeManualPeerCompareAndSetForTest: (() -> Unit)? = null
 ) : ManualPeerRegistrar {
 
-    private val tracked: MutableStateFlow<Map<PeerId, TrackedPeer>> = MutableStateFlow(emptyMap())
+    /**
+     * The terminal seal and tracked entries share one compare-and-set record.
+     * A callback that captured the pre-close map therefore cannot commit after
+     * [close], even when the old and cleared maps are both empty/equal.
+     */
+    private val registryState: MutableStateFlow<PeerRegistryState> =
+        MutableStateFlow(PeerRegistryState())
     private val _peers: MutableStateFlow<List<Peer>> =
         MutableStateFlow(immutableListSnapshot(emptyList()))
 
@@ -70,14 +79,16 @@ internal class PeerRegistry(
      */
     val peers: StateFlow<List<Peer>> = _peers.asStateFlow()
 
-    fun lastSeen(peerId: PeerId): Long? = tracked.value[peerId]?.lastSeenAtMillis
+    fun lastSeen(peerId: PeerId): Long? =
+        registryState.value.tracked[peerId]?.lastSeenAtMillis
 
     /**
      * Returns the [InternalPeer] (including transport hints) for [peerId] if
      * still tracked. Used by SessionManager to resolve a public [Peer] back to
      * its discovery-time reach information.
      */
-    fun internalPeer(peerId: PeerId): InternalPeer? = tracked.value[peerId]?.internalPeer
+    fun internalPeer(peerId: PeerId): InternalPeer? =
+        registryState.value.tracked[peerId]?.internalPeer
 
     fun start() {
         discoveryTransports.forEachIndexed { sourceIndex, transport ->
@@ -91,19 +102,39 @@ internal class PeerRegistry(
     internal fun processEvent(event: PeerEvent) = processEvent(DIRECT_SOURCE, event)
 
     private fun processEvent(source: DiscoverySource, event: PeerEvent) {
-        tracked.update { current ->
-            when (event) {
-                is PeerEvent.Found -> current.upsertDiscoveredPeer(source, event.peer)
-                is PeerEvent.Updated -> current.upsertDiscoveredPeer(source, event.peer)
-                is PeerEvent.Lost -> current.removeDiscoveryContribution(source, event.peerId)
+        registryState.update { current ->
+            if (current.closed) {
+                current
+            } else {
+                current.copy(
+                    tracked = when (event) {
+                        is PeerEvent.Found ->
+                            current.tracked.upsertDiscoveredPeer(source, event.peer)
+                        is PeerEvent.Updated ->
+                            current.tracked.upsertDiscoveredPeer(source, event.peer)
+                        is PeerEvent.Lost ->
+                            current.tracked.removeDiscoveryContribution(source, event.peerId)
+                    }
+                )
             }
         }
         publishPeers()
     }
 
     private fun publishPeers() {
-        val newList = tracked.value.values.map { it.internalPeer.publicPeer }
+        val snapshot = registryState.value
+        val newList = if (snapshot.closed) {
+            emptyList()
+        } else {
+            snapshot.tracked.values.map { it.internalPeer.publicPeer }
+        }
         if (_peers.value != newList) _peers.value = immutableListSnapshot(newList)
+        // `_peers` is intentionally de-noised separately from lastSeen. If a
+        // close races the calculation above, make the terminal empty snapshot
+        // authoritative regardless of which writer reached `_peers` first.
+        if (registryState.value.closed && _peers.value.isNotEmpty()) {
+            _peers.value = immutableListSnapshot(emptyList())
+        }
     }
 
     /** A discovery claim can refresh routing, but it can never erase an application-supplied manual pin. */
@@ -116,7 +147,11 @@ internal class PeerRegistry(
         return this + (
             peerId to previous.copy(
                 discoveredBy = previous.discoveredBy + (
-                    source to DiscoveryContribution(discovered.snapshotForRegistry(), clock())
+                    source to DiscoveryContribution(
+                        internalPeer = discovered.snapshotForRegistry(),
+                        lastSeenAtMillis = clock(),
+                        observedAtMonotonicMillis = monotonicClock()
+                    )
                 )
             )
         )
@@ -139,20 +174,32 @@ internal class PeerRegistry(
     }
 
     internal fun evictStalePeers() {
-        val now = clock()
-        tracked.update { current ->
-            current.mapValues { (_, trackedPeer) ->
-                trackedPeer.copy(
-                    discoveredBy = trackedPeer.discoveredBy.filterValues { contribution ->
-                        contribution.internalPeer.discoveryLifetime() == DiscoveryLifetime.TransportManaged ||
-                            now - contribution.lastSeenAtMillis <= staleTimeoutMillis
-                    }
-                )
-            }.filterValues { trackedPeer ->
-                !trackedPeer.isEmpty
-            }
+        val now = monotonicClock()
+        registryState.update { current ->
+            if (current.closed) return@update current
+            current.copy(
+                tracked = current.tracked.mapValues { (_, trackedPeer) ->
+                    trackedPeer.copy(
+                        discoveredBy = trackedPeer.discoveredBy.filterValues { contribution ->
+                            contribution.internalPeer.discoveryLifetime() ==
+                                DiscoveryLifetime.TransportManaged ||
+                                now - contribution.observedAtMonotonicMillis <= staleTimeoutMillis
+                        }
+                    )
+                }.filterValues { trackedPeer ->
+                    !trackedPeer.isEmpty
+                }
+            )
         }
         publishPeers()
+    }
+
+    private fun currentOpenRegistryState(): PeerRegistryState {
+        return registryState.value.also { state ->
+            check(!state.closed) {
+                "P2pKit has been stopped; manual peers cannot be registered"
+            }
+        }
     }
 
     @OptIn(ExperimentalUuidApi::class)
@@ -163,6 +210,7 @@ internal class PeerRegistry(
         deviceName: String?,
         expectedFingerprint: PeerFingerprint?
     ): Peer {
+        currentOpenRegistryState()
         val normalizedHost = normalizeManualHost(host)
         require(port in 1..65_535) { "port out of range: $port" }
         deviceName?.takeIf { it.isNotBlank() }?.let { name ->
@@ -204,51 +252,55 @@ internal class PeerRegistry(
         // Manual peers are session-scoped: they live only in this in-memory
         // map, so they are forgotten on kit.stop() / process exit and a stale
         // IP is never silently redialed in a later session (AUDIT-2026-06).
-        val existing = tracked.value.values.firstOrNull { t ->
-            t.manual?.internalPeer?.transportHints?.any {
-                it.type == kind && it.host == normalizedHost && it.port == port
-            } == true && (authenticatedPeerId == null || t.internalPeer.publicPeer.id == authenticatedPeerId)
-        }
-        if (existing != null) {
-            val existingPeer = existing.internalPeer.publicPeer
-            // AUDIT-2026-07 (IDN-7): a re-registration that supplies a new
-            // non-blank display name refreshes the stored name instead of
-            // silently dropping it — same endpoint keeps the same synthetic
-            // id and single registry entry. Null/blank keeps the old name.
-            val refreshedName = deviceName?.takeIf { it.isNotBlank() }
-            if (refreshedName == null || refreshedName == existingPeer.name) {
-                return existingPeer
+        while (true) {
+            val currentState = currentOpenRegistryState()
+            val current = currentState.tracked
+            val existingEntry = current.entries.firstOrNull { (_, trackedPeer) ->
+                trackedPeer.manual?.internalPeer?.transportHints?.any {
+                    it.type == kind && it.host == normalizedHost && it.port == port
+                } == true && (
+                    authenticatedPeerId == null ||
+                        trackedPeer.internalPeer.publicPeer.id == authenticatedPeerId
+                    )
             }
-            val refreshedManual = checkNotNull(existing.manual).copy(
-                internalPeer = existing.manual.internalPeer.copy(
-                    publicPeer = existing.manual.internalPeer.publicPeer.copy(name = refreshedName)
-                ),
-                registeredAtMillis = clock()
-            )
-            tracked.update { current ->
-                current + (existingPeer.id to existing.copy(manual = refreshedManual))
+            if (existingEntry != null) {
+                val (existingId, existing) = existingEntry
+                val existingPeer = existing.internalPeer.publicPeer
+                val refreshedName = deviceName?.takeIf { it.isNotBlank() }
+                if (refreshedName == null || refreshedName == existingPeer.name) {
+                    return existingPeer
+                }
+                val refreshedManual = checkNotNull(existing.manual).copy(
+                    internalPeer = existing.manual.internalPeer.copy(
+                        publicPeer = existing.manual.internalPeer.publicPeer.copy(name = refreshedName)
+                    ),
+                    registeredAtMillis = clock()
+                )
+                val updated = current + (existingId to existing.copy(manual = refreshedManual))
+                beforeManualPeerCompareAndSetForTest?.invoke()
+                if (registryState.compareAndSet(currentState, currentState.copy(tracked = updated))) {
+                    publishPeers()
+                    return checkNotNull(updated[existingId]).internalPeer.publicPeer
+                }
+                continue
             }
-            publishPeers()
-            return checkNotNull(tracked.value[existingPeer.id]).internalPeer.publicPeer
-        }
 
-        val peerId = authenticatedPeerId ?: PeerId("manual-${Uuid.random()}")
-        val displayName = deviceName?.takeIf { it.isNotBlank() } ?: "manual:$normalizedHost:$port"
-        val publicPeer = Peer(
-            id = peerId,
-            name = displayName,
-            platform = Platform.UNKNOWN,
-            supportedTransports = setOf(kind)
-        )
-        val internal = InternalPeer(
-            publicPeer = publicPeer,
-            transportHints = listOf(TransportHint(type = kind, host = normalizedHost, port = port)),
-            // Explicit provenance: SessionManager keys its manual-peer HELLO
-            // handling off this flag, never off the "manual-" id prefix.
-            origin = PeerOrigin.Manual,
-            authenticationHint = expectedFingerprint?.let(PeerAuthenticationHint::TrustedApplicationPin)
-        )
-        tracked.update { current ->
+            val peerId = authenticatedPeerId ?: PeerId("manual-${Uuid.random()}")
+            val displayName = deviceName?.takeIf { it.isNotBlank() } ?: "manual:$normalizedHost:$port"
+            val publicPeer = Peer(
+                id = peerId,
+                name = displayName,
+                platform = Platform.UNKNOWN,
+                supportedTransports = setOf(kind)
+            )
+            val internal = InternalPeer(
+                publicPeer = publicPeer,
+                transportHints = listOf(TransportHint(type = kind, host = normalizedHost, port = port)),
+                // Explicit provenance: SessionManager keys its manual-peer HELLO
+                // handling off this flag, never off the "manual-" id prefix.
+                origin = PeerOrigin.Manual,
+                authenticationHint = expectedFingerprint?.let(PeerAuthenticationHint::TrustedApplicationPin)
+            )
             val withoutSupersededEndpoint = if (authenticatedPeerId == null) {
                 current
             } else {
@@ -265,12 +317,27 @@ internal class PeerRegistry(
                 }.filterValues { !it.isEmpty }
             }
             val previous = withoutSupersededEndpoint[peerId] ?: TrackedPeer()
-            withoutSupersededEndpoint + (
+            val updated = withoutSupersededEndpoint + (
                 peerId to previous.copy(manual = ManualContribution(internal, clock()))
             )
+            beforeManualPeerCompareAndSetForTest?.invoke()
+            if (registryState.compareAndSet(currentState, currentState.copy(tracked = updated))) {
+                publishPeers()
+                return publicPeer
+            }
         }
-        publishPeers()
-        return publicPeer
+    }
+
+    /** Seal the process-local registry and publish an empty terminal snapshot. */
+    fun close() {
+        registryState.update { current ->
+            if (current.closed && current.tracked.isEmpty()) {
+                current
+            } else {
+                PeerRegistryState(closed = true)
+            }
+        }
+        _peers.value = immutableListSnapshot(emptyList())
     }
 
     private fun normalizeManualHost(host: String): String {
@@ -317,9 +384,15 @@ internal class PeerRegistry(
 @JvmInline
 private value class DiscoverySource(val index: Int)
 
+private data class PeerRegistryState(
+    val closed: Boolean = false,
+    val tracked: Map<PeerId, TrackedPeer> = emptyMap()
+)
+
 private data class DiscoveryContribution(
     val internalPeer: InternalPeer,
-    val lastSeenAtMillis: Long
+    val lastSeenAtMillis: Long,
+    val observedAtMonotonicMillis: Long
 )
 
 private data class ManualContribution(
