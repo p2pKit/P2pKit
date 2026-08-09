@@ -102,22 +102,34 @@ class IosLanRecoveryTest {
 
     @Test
     fun cancellingListenerStartClosesCandidateAndAllowsCleanRetry() = runBlocking {
-        val transport = IosLanDataTransport(context("start-cancel"), IosEndpointRegistry())
+        val candidateReady = CompletableDeferred<Unit>()
+        val allowOwnershipCommit = CompletableDeferred<Unit>()
+        val transport = IosLanDataTransport(
+            transportContext = context("start-cancel"),
+            endpointRegistry = IosEndpointRegistry(),
+            listenerReadyBarrierForTest = {
+                candidateReady.complete(Unit)
+                allowOwnershipCommit.await()
+            }
+        )
         try {
             val starter = launch(start = CoroutineStart.UNDISPATCHED) {
                 transport.start().getOrThrow()
             }
+            withTimeout(RECOVERY_TIMEOUT_MILLIS) { candidateReady.await() }
             starter.cancel()
             starter.cancelAndJoin()
 
-            assertTrue(starter.isCancelled)
-            assertNull(transport.listener)
-            assertNull(transport.tcpPort.value)
+            assertTrue(starter.isCancelled, "the in-flight start must observe caller cancellation")
+            assertNull(transport.listener, "a cancelled start must not commit listener ownership")
+            assertNull(transport.tcpPort.value, "a cancelled start must depublish its candidate port")
 
-            assertTrue(transport.start().isSuccess)
-            assertNotNull(transport.listener)
-            assertNotNull(transport.tcpPort.value)
+            allowOwnershipCommit.complete(Unit)
+            assertTrue(transport.start().isSuccess, "the same transport must retry after cancellation")
+            assertNotNull(transport.listener, "the retry must own a live listener")
+            assertNotNull(transport.tcpPort.value, "the retry must publish its bound port")
         } finally {
+            allowOwnershipCommit.complete(Unit)
             transport.close()
         }
         Unit

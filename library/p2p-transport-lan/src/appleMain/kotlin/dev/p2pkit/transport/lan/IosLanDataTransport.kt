@@ -105,6 +105,8 @@ import platform.darwin.dispatch_queue_t
 internal class IosLanDataTransport(
     @Suppress("unused") private val transportContext: TransportContext,
     private val endpointRegistry: IosEndpointRegistry,
+    /** Test-only suspension point after native readiness but before ownership is committed. */
+    private val listenerReadyBarrierForTest: suspend () -> Unit = {},
     private val connectionFactory: (nw_connection_t, dispatch_queue_t) -> IosConnectionHandle =
         { connection, connectionQueue -> IosRawConnection.wrap(connection, connectionQueue) }
 ) : DataTransport, HasLocalTcpEndpoint {
@@ -436,7 +438,7 @@ internal class IosLanDataTransport(
         }
 
         val readyListener = try {
-            withTimeoutOrNull(LISTENER_READY_TIMEOUT_MILLIS) {
+            val candidate = withTimeoutOrNull(LISTENER_READY_TIMEOUT_MILLIS) {
                 suspendCancellableCoroutine<ListenerLease?> { continuation ->
                     val readinessResolved = kotlin.concurrent.AtomicInt(0)
                     continuation.invokeOnCancellation {
@@ -487,7 +489,10 @@ internal class IosLanDataTransport(
                     nw_listener_start(l)
                 }
             }
+            if (candidate != null) listenerReadyBarrierForTest()
+            candidate
         } catch (cancelled: CancellationException) {
+            _tcpPort.value = null
             releaseOrRetainListener(lease, "cancelled listener start")
             throw cancelled
         }

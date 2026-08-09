@@ -108,7 +108,14 @@ else
 fi
 (
     cd "$ROOT"
-    ./gradlew --console=plain publishToMavenLocal \
+    # Release signatures are key-specific outputs, but Gradle's Sign task does
+    # not safely encode private key material into cache/up-to-date identities.
+    # Rebuild in an ephemeral daemon with caches disabled so a prior local key
+    # rotation or reused local build state cannot contribute stale .asc files
+    # to the immutable Central bundle. Release builds must not run concurrently
+    # in the same worktree.
+    ./gradlew --no-daemon --no-build-cache --rerun-tasks --console=plain \
+        publishToMavenLocal \
         "${signing_isolation_args[@]}" \
         -PreleasePublication=true \
         -Dmaven.repo.local="$REPOSITORY"

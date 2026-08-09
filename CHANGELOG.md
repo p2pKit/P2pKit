@@ -3,10 +3,45 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## Unreleased
+## 0.7.0-rc3 — release candidate (2026-08-09)
 
-- Opened the `0.7.0-rc3-SNAPSHOT` development line after publishing
-  `0.7.0-rc2`; no API or wire-protocol change is included yet.
+This candidate preserves the RC2 public API and secure-v2 wire format while
+incorporating the post-RC2 dependency, LAN recovery, sample-diagnostics, and
+repository-hardening work. It is intended to be the exact artifact set used
+for the remaining real-world and independent validation campaigns.
+
+### LAN reliability
+
+- Selects and owns routable JVM/Android LAN bindings deterministically,
+  including Android selected-network socket routing, bounded JmDNS creation,
+  serialized rebind cleanup, and metadata-free service removal.
+- Hardens Apple browser-generation endpoint ownership, listener/browser path
+  recovery, foreground coalescing, peer-to-peer/cellular policy symmetry, and
+  terminal write-ready cleanup.
+- Adds deterministic lifecycle, callback-race, removal, path-rotation,
+  cancellation, and recovery regression coverage without treating simulator
+  or host checks as physical-device evidence.
+
+### Toolchain and distribution
+
+- Updates to Kotlin 2.4.10 while retaining and inspecting the iOS 14 library
+  deployment floor across every XCFramework slice.
+- Updates Kotlin serialization, AndroidX/Compose, and Desktop Compose with
+  locked dependency graphs, verification metadata, canonical serialization
+  vectors, ABI checks, and cross-host Desktop packaging coverage.
+- Keeps the verified `io.github.apdelrahman1911` namespace, signed Central
+  bundle shape, provenance, SBOM, isolated-consumer, and immutable-tag gates.
+- Rebuilds release signatures with daemon and build-cache reuse disabled so a
+  prior disposable key or maintainer key rotation cannot contribute stale
+  signatures to a Central bundle.
+
+### Validation status
+
+Android and Apple physical-device validation, two-machine hostile-network
+testing, CLI fault injection/headful Desktop observation, independent
+secure-v2 interoperability, and professional cryptographic audit remain
+pending. Publishing this release candidate does not mark any of those areas
+complete or claim production readiness.
 
 ## 0.7.0-rc2 — release candidate (2026-08-06)
 
