@@ -12,6 +12,7 @@ DESKTOP_LOCK="$ROOT/samples/p2p-sample-desktop-ui/gradle.lockfile"
 VERSION_CATALOG="$ROOT/gradle/libs.versions.toml"
 XCODEGEN_INSTALLER="$ROOT/scripts/install-xcodegen.sh"
 CI_SCOPE_CLASSIFIER="$ROOT/scripts/classify-ci-scope.sh"
+BUNDLE_BUILDER="$ROOT/scripts/build-central-portal-bundle.sh"
 
 [[ -f "$WORKFLOW" ]] || { echo "FATAL: Maven Central workflow is missing" >&2; exit 1; }
 [[ -f "$DESKTOP_WORKFLOW" ]] || { echo "FATAL: Desktop cross-host workflow is missing" >&2; exit 1; }
@@ -66,6 +67,12 @@ grep -Fq 'publishingType=AUTOMATIC' "$ROOT/scripts/publish-central-portal-bundle
     echo "FATAL: Portal client is not locked to automatic publication" >&2
     exit 1
 }
+for isolation_flag in --no-daemon --no-build-cache --rerun-tasks; do
+    grep -Fq -- "$isolation_flag" "$BUNDLE_BUILDER" || {
+        echo "FATAL: signed bundle builder does not isolate $isolation_flag" >&2
+        exit 1
+    }
+done
 
 if grep -Eq 'pull_request_target|contents:[[:space:]]*write|id-token:[[:space:]]*write' "$WORKFLOW"; then
     echo "FATAL: release workflow grants an unsafe trigger or permission" >&2
