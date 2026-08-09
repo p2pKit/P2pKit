@@ -59,6 +59,6 @@ binary-compatibility baselines. The detailed design record produced during the
 
 ## Compatibility
 
-The published `0.7.0-rc2` API and wire protocol are immutable. Cleanup commits
+The published `0.7.0-rc3` API and wire protocol are immutable. Later commits
 may change repository paths and documentation but must not rewrite the tag,
 coordinates, artifacts, ABI, or protocol. See [compatibility](../compatibility.md).

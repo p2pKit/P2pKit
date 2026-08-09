@@ -1,12 +1,12 @@
-# Migrating from 0.6.x to 0.7.0-rc2
+# Migrating from 0.6.x to 0.7.0-rc3
 
-P2pKit 0.7.0-rc2 changes the default runtime security profile. This is a deliberate
+P2pKit 0.7.0-rc3 changes the default runtime security profile. This is a deliberate
 new-version migration; do not replace or republish any existing `0.6.x`
 artifact with the 0.7 source.
 
 ## Compatibility summary
 
-| Concern | 0.6.x default | 0.7.0-rc2 default |
+| Concern | 0.6.x default | 0.7.0-rc3 default |
 |---|---|---|
 | Security mode | plaintext protocol v1 | authenticated/encrypted protocol v2 |
 | Peer authorization | none | `RejectUnknown` (fail closed) |
@@ -22,7 +22,7 @@ downgrade to each other.
 
 ## 1. Pin a new artifact version
 
-Update every P2pKit module together to `0.7.0-rc2` under the exact Maven group
+Update every P2pKit module together to `0.7.0-rc3` under the exact Maven group
 `io.github.apdelrahman1911`. Do not rely on a global
 `mavenLocal()` repository that may contain a different build under the same
 coordinate. For source validation, publish to an isolated directory and opt

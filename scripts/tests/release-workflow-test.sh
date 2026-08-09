@@ -13,6 +13,7 @@ VERSION_CATALOG="$ROOT/gradle/libs.versions.toml"
 XCODEGEN_INSTALLER="$ROOT/scripts/install-xcodegen.sh"
 CI_SCOPE_CLASSIFIER="$ROOT/scripts/classify-ci-scope.sh"
 BUNDLE_BUILDER="$ROOT/scripts/build-central-portal-bundle.sh"
+RELEASE_METADATA_CHECK="$ROOT/scripts/check-release-metadata.sh"
 
 [[ -f "$WORKFLOW" ]] || { echo "FATAL: Maven Central workflow is missing" >&2; exit 1; }
 [[ -f "$DESKTOP_WORKFLOW" ]] || { echo "FATAL: Desktop cross-host workflow is missing" >&2; exit 1; }
@@ -73,6 +74,14 @@ for isolation_flag in --no-daemon --no-build-cache --rerun-tasks; do
         exit 1
     }
 done
+grep -Fq 'RELEASE_RECORD="docs/releases/$LATEST_PUBLISHED.md"' "$RELEASE_METADATA_CHECK" || {
+    echo "FATAL: release metadata does not select the current published release record dynamically" >&2
+    exit 1
+}
+if grep -Fq 'docs/releases/0.7.0-rc2.md' "$RELEASE_METADATA_CHECK"; then
+    echo "FATAL: release metadata remains hardcoded to the RC2 release record" >&2
+    exit 1
+fi
 
 if grep -Eq 'pull_request_target|contents:[[:space:]]*write|id-token:[[:space:]]*write' "$WORKFLOW"; then
     echo "FATAL: release workflow grants an unsafe trigger or permission" >&2

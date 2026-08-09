@@ -757,10 +757,10 @@ different SHA.
 
 ### BUILD-02 / ENV-07 — credentialed publication and remote status (completed)
 
-These two rows are no longer external blockers. The `0.7.0-rc2` publication
+These two rows are no longer external blockers. The `0.7.0-rc3` publication
 completed through the protected workflow and was verified from Maven Central.
 The immutable evidence is summarized in
-[`../releases/0.7.0-rc2.md`](../releases/0.7.0-rc2.md). The procedure below is
+[`../releases/0.7.0-rc3.md`](../releases/0.7.0-rc3.md). The procedure below is
 retained as the required pattern for future releases; it must not be used to
 claim that a new version was published before equivalent evidence exists.
 
@@ -874,7 +874,7 @@ the row's expected failure sequence.
 | PS-T06 | Desktop UI startup/window, discovery/connection, transfer progress/hash/commit, background/foreground, export/clear, final outcome | Diagnostics screen fields, Compose state, file chooser, progress, hashes, export folder | Success: UI and event timeline agree through soak/restart. Failure: UI-only success, mixed simultaneous transfers, unbounded viewer | Desktop ZIP, screenshots/video, terminal/OS logs, generated file hashes |
 | SECURE-V2-INTEROP-01 | Negotiation/version, authenticated metadata created/sent/received/validated/rejected, packet sent/received/rejected, transfer commit/hash/outcome | Selected protocol version, peer identity, metadata/integrity result | Success: independent peer accepts exact vectors and durable acknowledgement. Failure: downgrade, unauthenticated metadata, digest mismatch accepted | ZIP from both implementations, wire transcript/PCAP, independent implementation version/config |
 | CRYPTO-AUDIT-01 | Exported schema/privacy review fields, protocol event names, no secret/payload fields, commit/build provenance | Build identity and test-mode indicator | Success: auditor can map events to wire code without secrets. Failure: missing provenance, ambiguous authentication, or sensitive export | Sample ZIPs, source/tag/SBOM/provenance, threat model, audit workpapers; independent auditor required |
-| BUILD-02 / ENV-07 (completed for `0.7.0-rc2`) | Build/publish provenance fields, version/namespace/configuration, final test outcome | Build identity and exact coordinates/Portal status | Success: remote artifact metadata/checksums/signature and clean consumer match the tested SHA. Failure: wrong namespace, missing platform, credential leak | Preserved CI/Portal audit trail and release record; repeat for every future version |
+| BUILD-02 / ENV-07 (completed for `0.7.0-rc3`) | Build/publish provenance fields, version/namespace/configuration, final test outcome | Build identity and exact coordinates/Portal status | Success: remote artifact metadata/checksums/signature and clean consumer match the tested SHA. Failure: wrong namespace, missing platform, credential leak | Preserved CI/Portal audit trail and release record; repeat for every future version |
 
 For every row, the tester must verify that the ZIP's `testId` and
 `testSessionId` equal the values shown in the UI or CLI at the start of the
