@@ -51,6 +51,7 @@ class FileTransferJvmTest {
         appId = AppId("com.example.jvm-ft")
         deviceName = name
         security { mode = SecurityMode.NoneForMvp }
+        peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
         keepAlive {
             pingIntervalMillis = 60_000
             timeoutMillis = 120_000

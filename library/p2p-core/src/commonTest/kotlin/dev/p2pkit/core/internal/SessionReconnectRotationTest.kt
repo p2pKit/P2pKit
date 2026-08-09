@@ -75,6 +75,7 @@ class SessionReconnectRotationTest {
         val alice = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Alice"
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
             keepAlive {
                 // Very long PING so the only thing driving state transitions
                 // in this test is the wire-break + reconnect, not keep-alive
@@ -183,6 +184,7 @@ class SessionReconnectRotationTest {
         val alice = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Alice"
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000
@@ -292,6 +294,7 @@ class SessionReconnectRotationTest {
         val alice = createTestKit {
             appId = AppId("com.example.test")
             deviceName = "Alice"
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000

@@ -58,6 +58,9 @@ class SessionFlowTest {
         createTestKit {
             appId = AppId("com.example.test")
             deviceName = name
+            // Keep the simulated peers hermetic across JVM and iOS runners;
+            // default storage is intentionally persistent production state.
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000

@@ -56,6 +56,7 @@ class NetworkPathRecoveryTest {
     ): P2pKit = createTestKit {
         appId = AppId("com.example.test")
         deviceName = name
+        peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
         keepAlive {
             // Very long PING so the only way `Connected` flips to
             // `Reconnecting` / `Failed` in the test window is via the
