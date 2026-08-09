@@ -77,6 +77,23 @@ both peers, choose the role, and start the session. Record the displayed build,
 peer, connection, transfer, protocol, path, hash, and final-result values. Use
 **Export Test Evidence** and save the share-sheet ZIP for each peer.
 
+For current post-RC2 candidates, search the structured transport observations
+for these stable fields/substrings as applicable:
+
+- `browser params: cellular=PROHIBITED, include_peer_to_peer=true`;
+- `path-monitor:` with `usesWifi`, `usesCellular`, `usesWired`, `usesOther`,
+  address fingerprint, and change flags;
+- `lifecycle notification observed signal=` with `rebindScheduled=`;
+- `rebindNow: starting`, `new listener ready`, and `rebindNow: complete`;
+- `cached endpoint invalidation` with peer, browser generation, removal result,
+  and reason;
+- `write(...): TIMEOUT` followed by `nw_connection_cancel (write-ready timeout)`.
+
+These are internal evidence signals, not standalone PASS criteria. Correlate
+them with the diagnostics screen's test/session/connection identifiers and
+both peers' visible state. Redacted `transport.log` or `network.path.changed`
+events in an evidence export are the expected structured wrappers.
+
 Collect an external unified log in parallel:
 
 ```bash
@@ -114,6 +131,10 @@ diagnostics. Establish a session and transfer in both directions.
 
 Pass requires discovery and data to use an Apple-supported peer-to-peer path,
 with no hidden cellular fallback, and recovery/teardown events on both peers.
+The browser, listener, and outbound connection must all report peer-to-peer
+enabled; the browser policy must report cellular prohibited. A browser that
+fails to become ready under that policy is a FAIL, not permission to remove the
+restriction for the test.
 If the OS does not expose a shareable interface name, retain the safely exposed
 path flags, `dns-sd` observation from the Mac, timestamps, and a packet capture
 where lawful. “Peers connected” without path evidence does not prove AWDL.
@@ -132,6 +153,12 @@ endpoints, a new connection ID after reconnection, and either a typed transfer
 interruption/recovery or an explicit terminal failure. It must never silently
 route over prohibited cellular, preserve a ghost peer indefinitely, reuse a
 stale endpoint after restart, or show `Connected` after the transport is gone.
+An `other=false→true` or `true→false` path transition must participate in the
+fingerprint even if the Wi-Fi/cellular/wired bits do not change. During browser
+or listener replacement, a connection attempt must either use an endpoint
+confirmed by the new browser generation or fail explicitly until one arrives.
+If an old dial fails after a fresh result arrives, `removed=false` is expected
+and the fresh endpoint must remain usable.
 
 ### B4 — lifecycle, lock, termination, and restart
 
@@ -148,6 +175,20 @@ listener/browser state, temporary-file cleanup, and whether a transfer was
 durably committed before termination. A pre-commit transfer must not be shown
 as successful after restart. The app must not retain stale collectors or
 duplicate sessions.
+
+For each inactive episode, retain the ordered lifecycle and rebind events.
+`WillEnterForeground` followed by `DidBecomeActive` may produce only one actual
+rebind; if a path-driven rebind already completed while inactive, both later
+lifecycle events must show `rebindScheduled=false`. A Control Center or system
+dialog path that emits DidBecomeActive without WillEnterForeground must still
+schedule one recovery. More than one completed listener rotation for the same
+episode is a FAIL.
+
+When testing the write-ready wedge, the first timeout must transition the
+connection to Closed and emit exactly one native cancellation. A subsequent
+write must fail immediately instead of waiting another 10 seconds. The current
+10-second production ceiling remains measurement-dependent and is not itself
+accepted or changed by simulator tests.
 
 ### B5 — sink failure, collision, and hostile values
 
