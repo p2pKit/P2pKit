@@ -138,6 +138,28 @@ Focused and complete affected checks on 2026-08-09:
 - The generated Swift sample compiled for arm64 and x86_64 simulator slices
   with `SWIFT_TREAT_WARNINGS_AS_ERRORS=YES` — **PASS**.
 
+The first protected-boundary run, [CI run 31292879247](https://github.com/p2pKit/P2pKit/actions/runs/31292879247),
+stopped in the iOS sample UI entry-point test before any P2pKit start action
+was acknowledged. XCTest found a visible, hittable Start button but spent
+about 11 seconds checking an interrupting element, reported that it had
+synthesized the tap, and left the application at `Status: Not started`. The
+exact original test passed locally on a dedicated iPhone 17 simulator, which
+isolated the failure to hosted XCTest input delivery rather than Apple LAN
+startup.
+
+The corrected test keeps the existing aggregate ten-second acknowledgement
+budget. It attempts an alternate center-coordinate input exactly once only
+when the semantic tap left the app foregrounded, the status unchanged, and
+the Start control present and hittable; it never retries an acknowledged app
+action or a P2pKit operation. A debug-only launch argument deterministically
+drops the first app action so a second UI test covers that recovery branch.
+The normal and injected cases passed together, followed by three no-retry
+iterations (six test executions) and a Release warnings-as-errors build. The
+test argument was confirmed absent from the Release binary. CI now retains
+the failed `.xcresult` for seven days, while `check-sbom.sh` remains the
+blocking SBOM presence/content gate and an earlier failure no longer creates
+a misleading second missing-artifact failure.
+
 No public ABI, Maven coordinate, secure-v2/LAN wire format, iOS library floor,
 or published `0.7.0-rc2` artifact changes. Real AWDL, Personal Hotspot,
 Control Center/system interruption, device lock/background, peer restart,

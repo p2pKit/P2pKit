@@ -62,6 +62,17 @@ struct ContentView: View {
     @State private var pendingConnectPeerIds: Set<String> = []
     @State private var sendingFileSessionIds: Set<String> = []
 
+    /// UI-test-only input-loss seam. This models XCTest reporting a delivered
+    /// tap while leaving the application untouched, without changing release
+    /// behavior or any P2pKit operation. It is compiled out of Release builds.
+    @State private var ignoreNextStartActionForUITest: Bool = {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--p2pkit-ui-test-drop-first-start-action")
+        #else
+        false
+        #endif
+    }()
+
     /// Test-only deterministic file presets. These keep physical-device
     /// transfer runs reproducible without a document-provider fixture.
     private enum TestFilePreset: String, CaseIterable, Identifiable {
@@ -352,6 +363,9 @@ struct ContentView: View {
         HStack {
             if kit == nil {
                 Button(isStarting ? "Starting…" : "Start") {
+                    if consumeIgnoredStartActionForUITest() {
+                        return
+                    }
                     Task { await start() }
                 }
                 .accessibilityIdentifier("start-kit")
@@ -658,6 +672,12 @@ struct ContentView: View {
     }
 
     // MARK: - Actions
+
+    private func consumeIgnoredStartActionForUITest() -> Bool {
+        guard ignoreNextStartActionForUITest else { return false }
+        ignoreNextStartActionForUITest = false
+        return true
+    }
 
     @MainActor
     private func start() async {
