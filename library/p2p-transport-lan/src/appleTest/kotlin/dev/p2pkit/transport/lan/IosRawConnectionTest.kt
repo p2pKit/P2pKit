@@ -39,9 +39,11 @@ import platform.darwin.dispatch_queue_create
  *   (cancelOnce is CAS-guarded).
  * - `write()` on a closed connection is refused promptly — it must throw
  *   from the entry `closed` check without ever suspending into the
- *   nw_connection_send await. (The V0.6-WRITE-TIMEOUT send deadline itself
- *   needs a wedged live peer and is covered by manual verification, not
- *   this suite.)
+ *   nw_connection_send await.
+ * - A write whose connection never leaves `Connecting` reaches one terminal
+ *   timeout, cancels its native handle, and cannot repeat the full wait.
+ *   (The separate V0.6-WRITE-TIMEOUT send-completion deadline still needs a
+ *   wedged live peer and is covered by external fault injection.)
  *
  * The connection dials 127.0.0.1:9 (discard port; nothing listens there in
  * the simulator). The dial's outcome is irrelevant — every assertion
@@ -74,6 +76,21 @@ class IosRawConnectionTest {
         return IosRawConnection.wrapForWriteTest(conn, queue, send)
     }
 
+    private fun newWedgedConnectingConnection(): IosRawConnection {
+        val params = p2pkit_nw_create_plain_tcp_parameters()
+            ?: error("p2pkit_nw_create_plain_tcp_parameters returned null")
+        val endpoint = nw_endpoint_create_host("127.0.0.1", "9")
+            ?: error("nw_endpoint_create_host returned null")
+        val conn = nw_connection_create(endpoint, params)
+            ?: error("nw_connection_create returned null")
+        val queue = dispatch_queue_create("dev.p2pkit.test.rawconn.connecting", null)
+        return IosRawConnection.wrapConnectingForTest(
+            connection = conn,
+            queue = queue,
+            writeReadyTimeoutMillis = 25
+        )
+    }
+
     @Test
     fun writeAfterCloseIsRefusedPromptly() = runBlocking {
         val raw = newStartedConnection()
@@ -100,6 +117,22 @@ class IosRawConnectionTest {
             assertFailsWith<IllegalStateException> { raw.write(byteArrayOf(1)) }
         }
         assertEquals("connection closed", e.message)
+    }
+
+    @Test
+    fun writeReadyTimeoutIsTerminalAndCannotRepeatTheWedge() = runBlocking {
+        val raw = newWedgedConnectingConnection()
+
+        val timeout = assertFailsWith<IllegalStateException> {
+            raw.write(byteArrayOf(1, 2, 3))
+        }
+        assertTrue(timeout.message.orEmpty().contains("25ms"))
+        assertEquals(ConnectionState.Closed, raw.state.value)
+
+        val repeated = withTimeout(2_000) {
+            assertFailsWith<IllegalStateException> { raw.write(byteArrayOf(4)) }
+        }
+        assertEquals("connection closed", repeated.message)
     }
 
     @Test

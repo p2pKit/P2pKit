@@ -57,8 +57,33 @@ import platform.Network.nw_error_get_error_code
 import platform.Network.nw_listener_set_advertise_descriptor
 import platform.Network.nw_listener_t
 import platform.Network.nw_parameters_create
+import platform.Network.nw_parameters_get_include_peer_to_peer
+import platform.Network.nw_parameters_iterate_prohibited_interface_types
+import platform.Network.nw_parameters_prohibit_interface_type
 import platform.Network.nw_parameters_set_include_peer_to_peer
+import platform.Network.nw_parameters_t
+import platform.Network.nw_interface_type_cellular
 import platform.Foundation.NSLock
+
+/** Build one browser policy symmetric with listener/outbound LAN policy. */
+internal fun createAppleLanBrowserParameters(): nw_parameters_t {
+    val parameters = nw_parameters_create()
+    nw_parameters_prohibit_interface_type(parameters, nw_interface_type_cellular)
+    nw_parameters_set_include_peer_to_peer(parameters, true)
+    return parameters
+}
+
+internal fun appleLanBrowserIncludesPeerToPeerForTest(parameters: nw_parameters_t): Boolean =
+    nw_parameters_get_include_peer_to_peer(parameters)
+
+internal fun appleLanBrowserProhibitsCellularForTest(parameters: nw_parameters_t): Boolean {
+    var prohibitsCellular = false
+    nw_parameters_iterate_prohibited_interface_types(parameters) { type ->
+        if (type == nw_interface_type_cellular) prohibitsCellular = true
+        true
+    }
+    return prohibitsCellular
+}
 
 /**
  * iOS LAN [DiscoveryTransport].
@@ -341,6 +366,7 @@ internal class IosLanDiscoveryTransport(
         announceJob?.cancel()
         announceJob = null
         withAnnounceCacheLock { announceCache = emptyMap() }
+        endpointRegistry.clear()
         val lease = browser ?: return@withLock
         IosLanDebug.log("browse", "stopDiscovery: cancelling browser")
         withAnnounceCacheLock {
@@ -372,6 +398,7 @@ internal class IosLanDiscoveryTransport(
         }
         IosLanDebug.log("browse", "refresh: cancel + recreate browser to flush Bonjour cache")
         val previous = browser
+        endpointRegistry.clear()
         withAnnounceCacheLock {
             if (browser === previous) {
                 browser = null
@@ -423,6 +450,7 @@ internal class IosLanDiscoveryTransport(
     private suspend fun onBeforeListenerRebind(): Unit = lock.withLock {
         wasBrowsingBeforeRebind = discoveryStartedByHost
         val previous = browser
+        endpointRegistry.clear()
         withAnnounceCacheLock {
             if (browser === previous) {
                 browser = null
@@ -560,23 +588,18 @@ internal class IosLanDiscoveryTransport(
         // AUDIT-2026-06 (#8): every new browser instance opens a fresh
         // generation. Entries in [announceCache] confirmed by an older
         // generation are ghost candidates until this browser re-adds them.
-        browserGeneration++
+        beginBrowserGeneration()
         val descriptor = nw_browse_descriptor_create_bonjour_service(
             type = transportContext.lanServiceTypeBonjour,
             domain = null
         )
         nw_browse_descriptor_set_include_txt_record(descriptor, true)
 
-        val browserParams = nw_parameters_create()
-        nw_parameters_set_include_peer_to_peer(browserParams, true)
-        // Issue #3 (AWDL asymmetry): the BROWSER opts into peer-to-peer (AWDL),
-        // so it can DISCOVER peers reachable only over awdl0. The data
-        // transport's listener/connection params do NOT set this, so a peer
-        // found here over AWDL may be UNDIALABLE — watch the conn-path lines in
-        // IosRawConnection on the subsequent dial.
+        val browserParams = createAppleLanBrowserParameters()
         IosLanDebug.log(
             "browse",
-            "browser params: include_peer_to_peer=true (AWDL discovery ENABLED)"
+            "browser params: cellular=PROHIBITED, " +
+                "include_peer_to_peer=true (AWDL discovery ENABLED)"
         )
 
         val b = nw_browser_create(descriptor, browserParams)
@@ -635,6 +658,7 @@ internal class IosLanDiscoveryTransport(
                         if (browser === lease) {
                             browserReady = false
                             browser = null
+                            endpointRegistry.clear()
                             true
                         } else {
                             false
@@ -670,6 +694,16 @@ internal class IosLanDiscoveryTransport(
         nw_browser_start(b)
         IosLanDebug.log("browse", "nw_browser_start invoked")
     }
+
+    private fun beginBrowserGeneration() {
+        browserGeneration++
+        // Endpoints are opaque objects owned by the browser/path generation
+        // that produced them. Never let a fresh browser inherit dialable
+        // values from an older native owner.
+        endpointRegistry.clear()
+    }
+
+    internal fun beginBrowserGenerationForTest() = beginBrowserGeneration()
 
     private fun scheduleBrowserRecoveryFromCallback(reason: String, attempt: Int) {
         nudgeScope.launch {
@@ -826,7 +860,7 @@ internal class IosLanDiscoveryTransport(
                 generation == browserGeneration && browser?.generation == generation
             },
             onConfirmed = {
-                endpointRegistry.put(peerId, endpoint)
+                endpointRegistry.put(peerId, endpoint, browserGeneration = generation)
                 val event =
                     if (isUpdate) PeerEvent.Updated(internalPeer) else PeerEvent.Found(internalPeer)
                 _events.tryEmit(event)

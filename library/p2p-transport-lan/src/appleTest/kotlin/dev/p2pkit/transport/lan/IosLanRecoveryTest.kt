@@ -25,6 +25,7 @@ import kotlinx.coroutines.withTimeout
 import platform.posix.sched_yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
@@ -44,6 +45,14 @@ class IosLanRecoveryTest {
     }
 
     @Test
+    fun browserPolicyIsAwDlCapableAndProhibitsCellular() {
+        val parameters = createAppleLanBrowserParameters()
+
+        assertTrue(appleLanBrowserIncludesPeerToPeerForTest(parameters))
+        assertTrue(appleLanBrowserProhibitsCellularForTest(parameters))
+    }
+
+    @Test
     fun sameInterfaceAddressRotationRequiresRebind() {
         assertTrue(
             applePathNeedsRebind(
@@ -53,6 +62,25 @@ class IosLanRecoveryTest {
                 addressChanged = true
             )
         )
+    }
+
+    @Test
+    fun otherInterfaceParticipatesInPathFingerprint() {
+        val ordinaryWifi = appleInterfaceFingerprint(
+            usesWifi = true,
+            usesCellular = false,
+            usesWired = false,
+            usesOther = false
+        )
+        val hotspotOrPeerToPeer = appleInterfaceFingerprint(
+            usesWifi = true,
+            usesCellular = false,
+            usesWired = false,
+            usesOther = true
+        )
+
+        assertFalse(ordinaryWifi == hotspotOrPeerToPeer)
+        assertEquals(8, hotspotOrPeerToPeer and 8)
     }
 
     private fun context(suffix: String): TransportContext = TransportContext(
@@ -149,17 +177,20 @@ class IosLanRecoveryTest {
         val transport = IosLanDataTransport(context("restartable-stop"), IosEndpointRegistry())
         try {
             assertTrue(transport.start().isSuccess)
+            assertEquals(3, transport.lifecycleObserverCountForTest)
             val releasedPort = assertNotNull(transport.tcpPort.value)
 
             transport.stop()
             transport.stop()
             assertNull(transport.listener)
             assertNull(transport.tcpPort.value)
+            assertEquals(0, transport.lifecycleObserverCountForTest)
             assertEquals(0, p2pkit_test_bind_tcp_port(releasedPort.toUShort(), false))
 
             assertTrue(transport.start().isSuccess)
             assertNotNull(transport.listener)
             assertNotNull(transport.tcpPort.value)
+            assertEquals(3, transport.lifecycleObserverCountForTest)
         } finally {
             transport.close()
         }
@@ -198,6 +229,13 @@ class IosLanRecoveryTest {
             discovery.startDiscovery()
             val originalGeneration = discovery.browserGenerationForTest
             assertTrue(discovery.hasBrowserForTest)
+            endpointRegistry.put(
+                PeerId("browser-failure-stale-peer"),
+                assertNotNull(
+                    platform.Network.nw_endpoint_create_host("127.0.0.1", "43003")
+                ),
+                browserGeneration = originalGeneration
+            )
 
             discovery.cancelCurrentBrowserForTest()
 
@@ -211,11 +249,36 @@ class IosLanRecoveryTest {
             }
             assertTrue(discovery.browserGenerationForTest > originalGeneration)
             assertTrue(discovery.hasBrowserForTest)
+            assertEquals(0, endpointRegistry.sizeForTest())
         } finally {
             discovery.stopDiscovery()
             data.close()
         }
         Unit
+    }
+
+    @Test
+    fun newBrowserGenerationInvalidatesOpaqueEndpointsBeforeFreshResults() {
+        val endpointRegistry = IosEndpointRegistry()
+        val data = IosLanDataTransport(context("endpoint-generation"), endpointRegistry)
+        val discovery = IosLanDiscoveryTransport(
+            context("endpoint-generation"),
+            endpointRegistry,
+            data
+        )
+        val peerId = PeerId("endpoint-generation-remote")
+        val endpoint = platform.Network.nw_endpoint_create_host("127.0.0.1", "43001")
+        endpointRegistry.put(
+            peerId,
+            assertNotNull(endpoint),
+            browserGeneration = 1
+        )
+        assertEquals(1, endpointRegistry.sizeForTest())
+
+        discovery.beginBrowserGenerationForTest()
+
+        assertEquals(0, endpointRegistry.sizeForTest())
+        assertEquals(1, discovery.browserGenerationForTest)
     }
 
     @Test

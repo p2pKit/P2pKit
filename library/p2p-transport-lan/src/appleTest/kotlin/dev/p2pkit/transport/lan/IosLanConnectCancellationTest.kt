@@ -24,9 +24,12 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import platform.Network.nw_connection_cancel
 import platform.Network.nw_connection_t
+import platform.Network.nw_endpoint_create_host
 
 class IosLanConnectCancellationTest {
 
@@ -47,6 +50,10 @@ class IosLanConnectCancellationTest {
             cancelled = true
             mutableState.value = ConnectionState.Closed
             nw_connection_cancel(nativeConnection)
+        }
+
+        fun fail() {
+            mutableState.value = ConnectionState.Closed
         }
     }
 
@@ -107,6 +114,43 @@ class IosLanConnectCancellationTest {
             withTimeout(TEST_TIMEOUT_MILLIS) { result.await() }.exceptionOrNull()
         )
         transport.close()
+    }
+
+    @Test
+    fun failedOldDialCannotRemoveConcurrentFreshBrowseEndpoint() = runBlocking {
+        val registry = IosEndpointRegistry()
+        val peer = testPeer("ios-remote-fresh-endpoint")
+        val oldLease = registry.put(
+            peer.publicPeer.id,
+            assertNotNull(nw_endpoint_create_host("127.0.0.1", "44001")),
+            browserGeneration = 1
+        )
+        var freshLease: IosEndpointRegistry.Lease? = null
+        val transport = IosLanDataTransport(
+            TransportContext(
+                appId = AppId("ios-connect-fresh-endpoint"),
+                localPeerId = PeerId("ios-local-fresh-endpoint"),
+                deviceName = "local",
+                platform = Platform.IOS
+            ),
+            registry
+        ) { connection, _ ->
+            freshLease = registry.put(
+                peer.publicPeer.id,
+                assertNotNull(nw_endpoint_create_host("127.0.0.1", "44002")),
+                browserGeneration = oldLease.browserGeneration + 1
+            )
+            ControlledConnection(connection).also(ControlledConnection::fail)
+        }
+
+        try {
+            assertIs<P2pError.ConnectionFailed>(
+                runCatching { transport.connect(peer) }.exceptionOrNull()
+            )
+            assertSame(freshLease, registry.lease(peer.publicPeer.id))
+        } finally {
+            transport.close()
+        }
     }
 
     private fun testPeer(id: String) = InternalPeer(
