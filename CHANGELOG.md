@@ -3,12 +3,20 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
+## Unreleased
+
+`main` is the post-RC3 stabilization line for the eventual `0.7.0` release.
+The six real-world, independent-interoperability, and professional-audit areas
+remain pending; no stable-release readiness claim is implied.
+
 ## 0.7.0-rc3 — release candidate (2026-08-09)
 
 This candidate preserves the RC2 public API and secure-v2 wire format while
 incorporating the post-RC2 dependency, LAN recovery, sample-diagnostics, and
 repository-hardening work. It is intended to be the exact artifact set used
 for the remaining real-world and independent validation campaigns.
+It was published from immutable tag `v0.7.0-rc3` under the verified
+`io.github.apdelrahman1911` Maven Central namespace.
 
 ### LAN reliability
 

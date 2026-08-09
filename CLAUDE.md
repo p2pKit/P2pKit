@@ -2,8 +2,8 @@
 
 P2pKit is a Kotlin Multiplatform local-network P2P library for Android API 24+,
 JVM 17/Desktop, and iOS. Authenticated protocol v2 is the fail-closed default.
-The latest published release is `0.7.0-rc2`; current source prepares the
-`0.7.0-rc3` release candidate for external validation.
+The latest published release is `0.7.0-rc3`; current source is the
+`0.7.0-SNAPSHOT` post-RC3 stabilization line.
 
 ## Repository map
 
@@ -37,8 +37,8 @@ their original project names, for example `:p2p-core:jvmTest`,
 ## Compatibility and security constraints
 
 - Published tags, coordinates, artifacts, API baselines, and release history
-  are immutable. Never move `v0.7.0-rc1` or `v0.7.0-rc2`.
-- Do not change the published `0.7.0-rc2` API or wire protocol during cleanup.
+  are immutable. Never move `v0.7.0-rc1`, `v0.7.0-rc2`, or `v0.7.0-rc3`.
+- Do not retroactively change the published `0.7.0-rc3` API or wire protocol.
 - Keep JVM, Android, and Apple transport/protocol behavior aligned.
 - Never downgrade after authenticated-v2 failure or weaken identity checks.
 - Surface typed failures and preserve cancellation. Do not weaken assertions,
@@ -62,7 +62,7 @@ is ignored and must not become a source of truth.
 - `docs/testing/local.md` — automated checks.
 - `docs/validation/` — physical, hostile-network, independent, and audit execution handbooks.
 - `docs/releasing/checklist.md` — release process.
-- `docs/releases/0.7.0-rc2.md` — immutable publication evidence.
+- `docs/releases/0.7.0-rc3.md` — latest immutable publication evidence.
 
 The six external areas in `docs/validation/README.md` remain pending;
 do not promote them from compilation or simulator results.

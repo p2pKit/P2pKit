@@ -7,6 +7,7 @@ VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:spa
 LATEST_PUBLISHED="$(sed -n 's/^LATEST_PUBLISHED_VERSION=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 GROUP="$(sed -n 's/^GROUP=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 EXPECTED_GROUP="io.github.apdelrahman1911"
+RELEASE_RECORD="docs/releases/$LATEST_PUBLISHED.md"
 
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || {
     echo "FATAL: VERSION_NAME must be SemVer with an optional prerelease/snapshot, got '$VERSION'" >&2
@@ -44,7 +45,7 @@ require_text docs/architecture/specification.md "# Current API and protocol spec
 require_text CHANGELOG.md "## $LATEST_PUBLISHED — release candidate"
 require_text docs/guides/migrating-to-0.7.md "# Migrating from 0.6.x to $LATEST_PUBLISHED"
 require_text docs/guides/migrating-to-0.7.md "\`$GROUP\`"
-require_text docs/releases/0.7.0-rc2.md "\`$GROUP:p2p-core:$LATEST_PUBLISHED\`"
+require_text "$RELEASE_RECORD" "\`$GROUP:p2p-core:$LATEST_PUBLISHED\`"
 require_text docs/releasing/maven-central.md "\`$GROUP\`"
 require_text build.gradle.kts "?: \"$GROUP\""
 require_text buildSrc/src/main/java/dev/p2pkit/build/P2pPomMetadata.java 'private static final String REPOSITORY_URL = "https://github.com/p2pKit/P2pKit";'
@@ -73,7 +74,7 @@ for current_release_file in \
     CLAUDE.md \
     gradle.properties \
     build.gradle.kts \
-    docs/releases/0.7.0-rc2.md \
+    "$RELEASE_RECORD" \
     docs/guides/migrating-to-0.7.md \
     docs/releasing/maven-central.md \
     scripts/check-published-consumers.sh; do

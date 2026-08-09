@@ -11,6 +11,7 @@ The repository uses SemVer-style versions with release-candidate prereleases.
 - Published tags and artifacts are never moved, deleted, overwritten, or
   rebuilt under the same coordinate.
 
-The current source is the `0.7.0-rc3` release candidate; the latest published
-release remains `0.7.0-rc2` until RC3 publication and remote-byte verification
-complete.
+The current source is `0.7.0-SNAPSHOT`, the post-RC3 stabilization line for the
+eventual stable `0.7.0` release. The latest published release is `0.7.0-rc3`.
+External validation for RC3 must use its immutable tag and published artifacts,
+not a later source snapshot.

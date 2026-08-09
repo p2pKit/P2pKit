@@ -41,6 +41,10 @@ grep -Fq 'AGP_VERSION="$(sed ' "$CONSUMER_GATE" ||
     fail "the isolated consumer does not derive AGP from the catalog"
 grep -Fq -- '-Xoverride-konan-properties=minVersion.ios=$IOS_MIN_VERSION' "$CONSUMER_GATE" ||
     fail "the isolated KMP consumer does not link at the canonical iOS floor"
+grep -Fq './gradlew --no-daemon --console=plain publishToMavenLocal' "$CONSUMER_GATE" ||
+    fail "the isolated publication fixture may leave a Gradle daemon racing cleanup"
+grep -Fq './gradlew --no-daemon --console=plain -p "$FIXTURE_DIR"' "$CONSUMER_GATE" ||
+    fail "the isolated consumer fixture may leave a Gradle daemon racing cleanup"
 if grep -Fq 'version "2.3.21"' "$CONSUMER_GATE"; then
     fail "the isolated consumer retains a stale hardcoded Kotlin version"
 fi

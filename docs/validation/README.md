@@ -2,9 +2,9 @@
 
 This directory is the authoritative execution handbook for validation that
 cannot be completed honestly by a single local checkout. The latest published
-release is `0.7.0-rc2`; current source is the `0.7.0-rc3` release candidate for
-these campaigns. No status below is upgraded without retained evidence from
-the exact tested commit and artifacts.
+release is `0.7.0-rc3`, which is the immutable candidate for these campaigns;
+current `main` is a later `0.7.0-SNAPSHOT` development line. No status below is
+upgraded without retained evidence from the exact tested commit and artifacts.
 
 ## Current status
 

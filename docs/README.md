@@ -22,6 +22,7 @@ remediation records. Start with the repository [README](../README.md).
 - [Validation evidence schema](validation/evidence-schema.md)
 - [Release checklist](releasing/checklist.md)
 - [Maven Central procedure](releasing/maven-central.md)
+- [`0.7.0-rc3` release evidence](releases/0.7.0-rc3.md)
 - [`0.7.0-rc2` release evidence](releases/0.7.0-rc2.md)
 
 Historical audits, remediation trackers, superseded runbooks, and old evidence

@@ -5,9 +5,9 @@
 - Complete committed module/platform gate, ABI baselines, strict Dokka,
   publication shape, isolated consumers, SBOM, signing, provenance,
   Swift warnings-as-errors, and XCFramework provenance have passed for the
-  published `0.7.0-rc2` release commit.
+  published `0.7.0-rc3` release commit.
 - `BUILD-02` and `ENV-07` remote publication/consumer evidence are recorded in
-  the [`0.7.0-rc2` release record](../releases/0.7.0-rc2.md).
+  the [`0.7.0-rc3` release record](../releases/0.7.0-rc3.md).
 
 ## Pending external validation
 

@@ -1,6 +1,6 @@
 # P2pKit
 
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.apdelrahman1911/p2p-core?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.apdelrahman1911/p2p-core/0.7.0-rc2)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.apdelrahman1911/p2p-core?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.apdelrahman1911/p2p-core/0.7.0-rc3)
 [![CI](https://github.com/p2pKit/P2pKit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/p2pKit/P2pKit/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -8,18 +8,18 @@ P2pKit is a Kotlin Multiplatform library for authenticated peer discovery,
 messaging, and durable file transfer over a reachable local network. It
 supports Android, JVM/Desktop, and iOS through one transport-independent API.
 
-**Current source version:** `0.7.0-rc3` release candidate.
-**Latest published version:** `0.7.0-rc2`.
+**Development version:** `0.7.0-SNAPSHOT`.
+**Latest published version:** `0.7.0-rc3`.
 
-`0.7.0-rc2` is available from Maven Central under
+`0.7.0-rc3` is available from Maven Central under
 `io.github.apdelrahman1911`. It is a release candidate: the automated release
 gates are extensive, but the external validation areas listed below remain
 pending.
 
-The RC3 source is the candidate for the pending physical-device,
-hostile-network, independent-interoperability, and professional-review
-campaigns. Until RC3 is published, the installation coordinates below remain
-on the latest remotely available version, RC2.
+The immutable RC3 tag and published artifacts are the candidate for the
+pending physical-device, hostile-network, independent-interoperability, and
+professional-review campaigns. Results from later `main` snapshots must not be
+reported as RC3 evidence.
 
 ## What it provides
 
@@ -45,10 +45,10 @@ Use `mavenCentral()` and keep all P2pKit modules on the same version.
 
 | Published module | Purpose |
 | --- | --- |
-| `io.github.apdelrahman1911:p2p-core:0.7.0-rc2` | Public API, protocol, security, sessions, and file transfer |
-| `io.github.apdelrahman1911:p2p-transport-lan:0.7.0-rc2` | Multiplatform LAN discovery and TCP transport |
-| `io.github.apdelrahman1911:p2p-network-provisioning-android:0.7.0-rc2` | Optional Android provisioning sidecar |
-| `io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.7.0-rc2` | Optional JVM/Desktop manual-endpoint sidecar |
+| `io.github.apdelrahman1911:p2p-core:0.7.0-rc3` | Public API, protocol, security, sessions, and file transfer |
+| `io.github.apdelrahman1911:p2p-transport-lan:0.7.0-rc3` | Multiplatform LAN discovery and TCP transport |
+| `io.github.apdelrahman1911:p2p-network-provisioning-android:0.7.0-rc3` | Optional Android provisioning sidecar |
+| `io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.7.0-rc3` | Optional JVM/Desktop manual-endpoint sidecar |
 
 ### Kotlin Multiplatform
 
@@ -56,8 +56,8 @@ Use `mavenCentral()` and keep all P2pKit modules on the same version.
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("io.github.apdelrahman1911:p2p-core:0.7.0-rc2")
-            implementation("io.github.apdelrahman1911:p2p-transport-lan:0.7.0-rc2")
+            implementation("io.github.apdelrahman1911:p2p-core:0.7.0-rc3")
+            implementation("io.github.apdelrahman1911:p2p-transport-lan:0.7.0-rc3")
         }
     }
 }
@@ -67,9 +67,9 @@ kotlin {
 
 ```kotlin
 dependencies {
-    implementation("io.github.apdelrahman1911:p2p-transport-lan-android:0.7.0-rc2")
+    implementation("io.github.apdelrahman1911:p2p-transport-lan-android:0.7.0-rc3")
     // Optional hotspot/Wi-Fi provisioning:
-    implementation("io.github.apdelrahman1911:p2p-network-provisioning-android-android:0.7.0-rc2")
+    implementation("io.github.apdelrahman1911:p2p-network-provisioning-android-android:0.7.0-rc3")
 }
 ```
 
@@ -77,15 +77,15 @@ dependencies {
 
 ```kotlin
 dependencies {
-    implementation("io.github.apdelrahman1911:p2p-transport-lan-jvm:0.7.0-rc2")
+    implementation("io.github.apdelrahman1911:p2p-transport-lan-jvm:0.7.0-rc3")
     // Optional manual-endpoint provisioning:
-    implementation("io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.7.0-rc2")
+    implementation("io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.7.0-rc3")
 }
 ```
 
 Kotlin Multiplatform root coordinates select their platform variants. The
 complete 15-coordinate publication set is recorded in the
-[`0.7.0-rc2` release record](docs/releases/0.7.0-rc2.md).
+[`0.7.0-rc3` release record](docs/releases/0.7.0-rc3.md).
 
 ### Direct Swift application
 
@@ -241,7 +241,7 @@ Read the [security model](docs/security/model.md),
 
 The automated module/platform, ABI, strict Dokka, publication-shape, isolated
 consumer, SBOM, signing, provenance, Swift warnings-as-errors, and XCFramework
-gates passed for the published `0.7.0-rc2` commit. This does not replace
+gates passed for the published `0.7.0-rc3` commit. This does not replace
 external evidence.
 
 These areas remain explicitly pending:

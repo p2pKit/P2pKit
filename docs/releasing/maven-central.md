@@ -25,4 +25,4 @@ to test credentials.
 
 After publication, retain the deployment ID, bundle SHA-256, file counts,
 workflow URL, source/tag SHA, and remote byte/consumer verification in a release
-record. See [`../releases/0.7.0-rc2.md`](../releases/0.7.0-rc2.md).
+record. See [`../releases/0.7.0-rc3.md`](../releases/0.7.0-rc3.md).
