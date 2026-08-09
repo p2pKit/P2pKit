@@ -9,7 +9,8 @@ and why material was removed or archived.
 
 - Published `0.7.0-rc2` remains tag `v0.7.0-rc2` at commit
   `90acb29583ea11d18685cf1315476756e7618245`.
-- Development remains `0.7.0-rc3-SNAPSHOT`; no RC3 release or tag was created.
+- At this consolidation checkpoint, development remained
+  `0.7.0-rc3-SNAPSHOT`; no RC3 release or tag had been created.
 - Maven coordinates remain `io.github.apdelrahman1911` and published RC2
   artifacts were not changed.
 - The canonical Apache-2.0 text replaced the incomplete license, and GitHub

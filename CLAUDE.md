@@ -2,8 +2,8 @@
 
 P2pKit is a Kotlin Multiplatform local-network P2P library for Android API 24+,
 JVM 17/Desktop, and iOS. Authenticated protocol v2 is the fail-closed default.
-The latest published release is `0.7.0-rc2`; `main` develops
-`0.7.0-rc3-SNAPSHOT`.
+The latest published release is `0.7.0-rc2`; current source prepares the
+`0.7.0-rc3` release candidate for external validation.
 
 ## Repository map
 
