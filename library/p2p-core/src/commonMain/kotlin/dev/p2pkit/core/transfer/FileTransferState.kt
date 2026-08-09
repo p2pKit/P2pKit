@@ -31,7 +31,11 @@ public sealed class FileTransferState {
     /** Bytes are flowing. [progress] is `0.0..1.0`. */
     public data class Sending(val progress: Float) : FileTransferState()
 
-    /** All bytes delivered and the sink has been flushed. */
+    /**
+     * All bytes completed under the negotiated protocol: the legacy sink was
+     * flushed, or the secure-v2 destination was digest-verified, durably
+     * committed, and acknowledged.
+     */
     public data object Completed : FileTransferState()
 
     /**

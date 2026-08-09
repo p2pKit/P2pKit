@@ -53,6 +53,7 @@ class FileTransferErrorIsolationTest {
         createTestKit {
             appId = AppId("com.example.ft")
             deviceName = name
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000

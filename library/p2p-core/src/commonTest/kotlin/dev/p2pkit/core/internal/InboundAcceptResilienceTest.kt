@@ -64,6 +64,9 @@ class InboundAcceptResilienceTest {
         createTestKit {
             appId = AppId("com.example.test")
             deviceName = name
+            // Multi-peer protocol fixtures must not inherit platform-persistent
+            // identity from a previous JVM/iOS test process.
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000

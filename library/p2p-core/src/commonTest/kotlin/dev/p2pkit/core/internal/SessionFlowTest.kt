@@ -12,6 +12,7 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.protocol.DefaultP2pProtocol
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -57,6 +58,9 @@ class SessionFlowTest {
         createTestKit {
             appId = AppId("com.example.test")
             deviceName = name
+            // Keep the simulated peers hermetic across JVM and iOS runners;
+            // default storage is intentionally persistent production state.
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000
@@ -246,7 +250,7 @@ class SessionFlowTest {
                 "a received CLOSE frame must yield exactly Closed on the receiving side"
             )
             val incomingImpl = assertIs<P2pSessionImpl>(incomingSession)
-            withTimeout(5_000) { incomingImpl.awaitRuntimeTerminationForTest() }
+            withTimeout(5_000) { incomingImpl.awaitRuntimeTermination() }
             assertTrue(
                 !incomingImpl.runtimeJobIsActiveForTest,
                 "remote CLOSE must terminate the session-wide runtime job"
@@ -291,11 +295,39 @@ class SessionFlowTest {
                     "termination — never the clean-Closed outcome, never Reconnecting"
             )
             val incomingImpl = assertIs<P2pSessionImpl>(incomingSession)
-            withTimeout(5_000) { incomingImpl.awaitRuntimeTerminationForTest() }
+            withTimeout(5_000) { incomingImpl.awaitRuntimeTermination() }
             assertTrue(
                 !incomingImpl.runtimeJobIsActiveForTest,
                 "remote failure must terminate the session-wide runtime job"
             )
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
+    fun failedPongWriteFailsIncomingSessionInsteadOfSilentlyContinuing() = runBlocking {
+        val pair = FakeConnectionPair()
+        val alice = outgoingKit("Alice", pair.a)
+        val bob = incomingKit("Bob", pair.b)
+        try {
+            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+            withTimeout(5_000) { outgoingDeferred.await() }
+
+            pair.b.failNextWrite(IllegalStateException("injected PONG write failure"))
+            DefaultP2pProtocol(clock = { 0L }).sendPing(pair.a)
+
+            assertEquals(
+                ConnectionState.Failed,
+                withTimeout(5_000) {
+                    incomingSession.state.first { it == ConnectionState.Failed }
+                }
+            )
+            val implementation = assertIs<P2pSessionImpl>(incomingSession)
+            withTimeout(5_000) { implementation.awaitRuntimeTermination() }
+            assertTrue(!implementation.runtimeJobIsActiveForTest)
         } finally {
             alice.stop()
             bob.stop()

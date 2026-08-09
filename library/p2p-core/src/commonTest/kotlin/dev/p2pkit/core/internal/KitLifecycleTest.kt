@@ -68,6 +68,36 @@ import kotlin.test.assertTrue
 class KitLifecycleTest {
 
     @Test
+    fun stopClearsPeerRegistrySnapshots() = runBlocking {
+        val transport = TrackingTransport()
+        val kit = createTestKit {
+            appId = AppId("stop-clears-peers-test")
+            deviceName = "Test"
+            transports { register(TrackingFactory(transport)) }
+        }
+        withTimeout(5_000) { transport.awaitPeerCollector() }
+        transport.emitPeer(
+            PeerEvent.Found(
+                InternalPeer(
+                    publicPeer = Peer(
+                        id = PeerId("discovered-before-stop"),
+                        name = "Peer",
+                        platform = Platform.JVM_DESKTOP,
+                        supportedTransports = setOf(TransportKind.LAN)
+                    ),
+                    transportHints = emptyList()
+                )
+            )
+        )
+        assertEquals(1, withTimeout(5_000) { kit.peers.first { it.size == 1 } }.size)
+
+        kit.stop()
+
+        assertTrue(kit.peers.value.isEmpty())
+        assertEquals(null, kit.lastSeen(PeerId("discovered-before-stop")))
+    }
+
+    @Test
     fun stopClosesDataTransportAndStopsDiscoveryAdvertising() {
         runBlocking {
             val transport = TrackingTransport()
@@ -508,6 +538,93 @@ class KitLifecycleTest {
             withTimeout(15_000) { kit.start() }
             assertEquals(P2pState.Running, kit.state.value, "start() after a cancelled attempt must succeed")
 
+            kit.stop()
+        }
+    }
+
+    @Test
+    fun cancellingStartDuringPathObserverAttachmentRollsBackWholeStartup() {
+        runBlocking {
+            val transport = RestartableStartTrackingTransport()
+            val observer = FirstStartSuspendsObserver()
+            val kit = createTestKit {
+                appId = AppId("cancel-observer-start-test")
+                deviceName = "Test"
+                lifecycle { networkPathObserver = observer }
+                transports { register(DataOnlyFactory(transport)) }
+            }
+            try {
+                var thrown: Throwable? = null
+                val starter = launch {
+                    try {
+                        kit.start()
+                    } catch (failure: Throwable) {
+                        thrown = failure
+                        throw failure
+                    }
+                }
+                observer.firstStartEntered.await()
+                assertEquals(P2pState.Starting, kit.state.value)
+
+                starter.cancelAndJoin()
+
+                assertIs<CancellationException>(thrown)
+                assertEquals(P2pState.Idle, kit.state.value)
+                assertEquals(1, transport.stopCalls)
+                assertEquals(1, observer.closeCalls)
+
+                kit.start()
+                assertEquals(P2pState.Running, kit.state.value)
+                assertEquals(2, transport.startCalls)
+                assertEquals(2, observer.startCalls)
+            } finally {
+                kit.stop()
+            }
+        }
+    }
+
+    @Test
+    fun cancellationWithUnsettledDataRollbackFailsClosedAgainstDoubleStart() = runBlocking {
+        val transport = CancellationWithHangingRollbackTransport()
+        val kit = createTestKit {
+            appId = AppId("cancel-hung-rollback-test")
+            deviceName = "Test"
+            transports { register(DataOnlyFactory(transport)) }
+        }
+        try {
+            var cancellation: Throwable? = null
+            val starter = launch {
+                try {
+                    kit.start()
+                } catch (failure: Throwable) {
+                    cancellation = failure
+                    throw failure
+                }
+            }
+            transport.startEntered.await()
+
+            starter.cancelAndJoin()
+
+            val cancelled = assertIs<CancellationException>(cancellation)
+            assertTrue(
+                cancelled.suppressedExceptions.any { it is P2pError.TransportStartFailed },
+                "caller cancellation must retain the fail-closed rollback diagnosis"
+            )
+            val failedState = assertIs<P2pState.Failed>(kit.state.value)
+            val blocker = assertIs<P2pError.TransportStartFailed>(failedState.error)
+            assertTrue(blocker.reason.contains("cleanup was incomplete"))
+            assertEquals(1, transport.startCalls)
+            assertEquals(1, transport.stopCalls)
+
+            val retryFailure = assertFailsWith<P2pError.TransportStartFailed> { kit.start() }
+            assertSame(blocker, retryFailure)
+            assertEquals(
+                1,
+                transport.startCalls,
+                "a cleanup-blocked instance must never attempt a second listener bind"
+            )
+        } finally {
+            transport.releaseHangingStop()
             kit.stop()
         }
     }
@@ -959,6 +1076,14 @@ private class TrackingTransport : DataTransport, DiscoveryTransport {
 
     override val events: Flow<PeerEvent> = eventsFlow.asSharedFlow()
 
+    suspend fun emitPeer(event: PeerEvent) {
+        eventsFlow.emit(event)
+    }
+
+    suspend fun awaitPeerCollector() {
+        eventsFlow.subscriptionCount.first { it > 0 }
+    }
+
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) {
         advertiseFailure?.let { throw it }
         advertisingStarted = true
@@ -1123,6 +1248,86 @@ private class HungStartFactory(private val transport: HungStartTransport) : Tran
         dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = null)
+}
+
+private class RestartableStartTrackingTransport : DataTransport {
+    override val type: TransportKind = TransportKind.LAN
+    override val priority: Int = 100
+    @Volatile var startCalls: Int = 0
+    @Volatile var stopCalls: Int = 0
+    private val incoming = Channel<RawConnection>(Channel.UNLIMITED)
+
+    override suspend fun start(): Result<Unit> {
+        startCalls += 1
+        return Result.success(Unit)
+    }
+
+    override suspend fun stop() {
+        stopCalls += 1
+    }
+
+    override fun canConnect(peer: InternalPeer): Boolean = false
+    override suspend fun connect(peer: InternalPeer): RawConnection = error("not supported")
+    override fun incomingConnections(): Flow<RawConnection> = incoming.receiveAsFlow()
+    override suspend fun close() {
+        incoming.close()
+    }
+}
+
+private class FirstStartSuspendsObserver : NetworkPathObserver {
+    private val _status = MutableStateFlow<NetworkPathStatus>(NetworkPathStatus.Unknown)
+    override val status: StateFlow<NetworkPathStatus> = _status.asStateFlow()
+    val firstStartEntered = CompletableDeferred<Unit>()
+    private val never = CompletableDeferred<Unit>()
+    @Volatile var startCalls: Int = 0
+    @Volatile var closeCalls: Int = 0
+
+    override suspend fun start() {
+        startCalls += 1
+        if (startCalls == 1) {
+            firstStartEntered.complete(Unit)
+            never.await()
+        }
+    }
+
+    override suspend fun close() {
+        closeCalls += 1
+    }
+}
+
+private class CancellationWithHangingRollbackTransport : DataTransport {
+    override val type: TransportKind = TransportKind.LAN
+    override val priority: Int = 100
+    val startEntered = CompletableDeferred<Unit>()
+    private val releaseStop = CompletableDeferred<Unit>()
+    private val incoming = Channel<RawConnection>(Channel.UNLIMITED)
+    @Volatile var startCalls: Int = 0
+    @Volatile var stopCalls: Int = 0
+
+    override suspend fun start(): Result<Unit> {
+        startCalls += 1
+        startEntered.complete(Unit)
+        CompletableDeferred<Unit>().await()
+        return Result.success(Unit)
+    }
+
+    override suspend fun stop() {
+        stopCalls += 1
+        withContext(NonCancellable) { releaseStop.await() }
+    }
+
+    override fun canConnect(peer: InternalPeer): Boolean = false
+    override suspend fun connect(peer: InternalPeer): RawConnection = error("not supported")
+    override fun incomingConnections(): Flow<RawConnection> = incoming.receiveAsFlow()
+
+    override suspend fun close() {
+        releaseStop.complete(Unit)
+        incoming.close()
+    }
+
+    fun releaseHangingStop() {
+        releaseStop.complete(Unit)
+    }
 }
 
 /** Registers any data-only [DataTransport] (e.g. the shared [FakeDataTransport]). */

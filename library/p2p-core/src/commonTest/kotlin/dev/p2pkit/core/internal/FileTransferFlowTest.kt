@@ -90,6 +90,10 @@ class FileTransferFlowTest {
         createTestKit {
             appId = AppId("com.example.ft")
             deviceName = name
+            // The suite simulates two installations in one process. Explicit
+            // storage prevents host-persistent defaults from leaking identity
+            // across test runs and colliding with the seeded receiver.
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
             keepAlive {
                 pingIntervalMillis = 60_000
                 timeoutMillis = 120_000

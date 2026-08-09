@@ -205,6 +205,9 @@ internal class SessionManager(
      */
     private val setupRegistry = MutableStateFlow(SessionSetupRegistry())
 
+    /** Process-local suffix that keeps session ids unique even when the wall clock is fixed or coarse. */
+    private val sessionSequence = MutableStateFlow(0L)
+
     private val _incomingSessions = MutableSharedFlow<P2pSession>(
         replay = 0,
         extraBufferCapacity = 64,
@@ -476,7 +479,13 @@ internal class SessionManager(
                 "Inbound connection refused: pre-handshake setups at capacity " +
                     "($MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS)"
             )
-            scope.launch { runCatching { connection.close() } }
+            // Start cleanup inline through its first suspension. The bounded
+            // independent cleanup owner then survives a kit-scope cancellation,
+            // so terminal shutdown cannot strand a just-refused socket before
+            // a queued fire-and-forget close job ever starts.
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                closeUncommittedConnection(connection)
+            }
             return
         }
         scope.launch {
@@ -512,7 +521,7 @@ internal class SessionManager(
                 throw e
             } catch (e: Throwable) {
                 logger.warn("Incoming session setup failed", e)
-                runCatching { connection.close() }
+                closeUncommittedConnection(connection)
             } finally {
                 releaseOnce()
             }
@@ -614,7 +623,7 @@ internal class SessionManager(
         }
 
         val session = P2pSessionImpl(
-            id = "${if (isIncoming) "in" else "out"}-${handshake.resolvedPeer.id.value}-${clock()}",
+            id = nextSessionId(isIncoming, handshake.resolvedPeer.id),
             peer = handshake.resolvedPeer,
             peerIdentity = handshake.peerIdentity,
             initialConnection = handshake.secureConnection,
@@ -676,65 +685,76 @@ internal class SessionManager(
                 } else {
                     true
                 }
-                CommittedSession(resultSession, published)
+                CommittedSession(resultSession, published, outcome)
             }
             if (committed == null) throw lifecycleStoppedFailure()
-            sessionOwnershipTransferred = true
+            val outcome = committed.outcome
+            sessionOwnershipTransferred = when (outcome) {
+                is RegisterOutcome.Accepted,
+                is RegisterOutcome.Replaced -> true
+                is RegisterOutcome.Rejected,
+                is RegisterOutcome.RefusedAtCapacity -> false
+            }
+
+            // A replaced session is no longer reachable through SessionStore,
+            // so close it here under the setup transaction's non-cancellable,
+            // bounded ownership instead of relying on an untracked scope.launch
+            // that terminal kit shutdown can cancel before it starts.
+            if (outcome is RegisterOutcome.Replaced) {
+                closeDetachedSession(outcome.loser)
+            }
             if (!committed.published) {
                 withContext(NonCancellable) {
                     store.removeIfMatches(handshake.resolvedPeer.id, committed.resultSession)
-                    closeUncommittedSession(committed.resultSession)
+                    closeDetachedSession(committed.resultSession)
                 }
                 throw P2pError.ConnectionFailed(
                     "Incoming session publication capacity was exhausted"
                 )
             }
-            applyAuthoritativePathAfterRegistration(committed.resultSession)
+            if (outcome !is RegisterOutcome.RefusedAtCapacity) {
+                applyAuthoritativePathAfterRegistration(committed.resultSession)
+            }
             return committed.resultSession
         } finally {
-            if (!sessionOwnershipTransferred) closeUncommittedSession(session)
+            if (!sessionOwnershipTransferred) closeDetachedSession(session)
         }
     }
 
-    private suspend fun closeUncommittedSession(session: P2pSession) {
+    private suspend fun closeDetachedSession(session: P2pSession) {
         withContext(NonCancellable) {
-            val closed = withTimeoutOrNull(SESSION_COMMIT_CLEANUP_TIMEOUT_MS) {
-                try {
-                    // HELLO has completed by the time a session exists. Even
-                    // though public ownership was not committed, the peer may
-                    // already have committed its symmetric session; close it
-                    // with the normal protocol-level CLOSE transaction rather
-                    // than exposing a reconnectable EOF.
-                    session.close()
-                } catch (error: Throwable) {
-                    logger.warn("Uncommitted session cleanup failed", error)
-                }
-                true
-            } ?: false
-            if (!closed) {
-                logger.warn(
-                    "Uncommitted session cleanup exceeded " +
-                        "$SESSION_COMMIT_CLEANUP_TIMEOUT_MS ms"
-                )
+            // HELLO has completed by the time a session exists. This covers a
+            // rejected candidate, a capacity refusal, and a previously
+            // published loser that arbitration just detached from the store.
+            // Close it with the normal protocol-level CLOSE transaction rather
+            // than exposing a reconnectable EOF. The independent cleanup owner
+            // is required because P2pSession.close deliberately finishes in
+            // NonCancellable; a structured withTimeout cannot bound such a child.
+            captureCleanupIssue(
+                resource = "detached session ${session.id}",
+                // P2pSession.close has several independently bounded phases;
+                // use the established whole-session bound rather than timing
+                // out at the first phase boundary and orphaning healthy cleanup.
+                timeoutMillis = SESSION_CLOSE_TIMEOUT_MS,
+                preserveCancellation = false
+            ) {
+                session.close()
+            }?.let { issue ->
+                logCleanupIssues(logger, "detached session cleanup", listOf(issue))
             }
         }
     }
 
     private suspend fun closeUncommittedConnection(connection: RawConnection) {
         withContext(NonCancellable) {
-            val closed = withTimeoutOrNull(SESSION_COMMIT_CLEANUP_TIMEOUT_MS) {
-                try {
-                    connection.close()
-                } catch (error: Throwable) {
-                    logger.warn("Uncommitted connection cleanup failed", error)
-                }
-                true
-            } ?: false
-            if (!closed) {
-                logger.warn(
-                    "Uncommitted connection cleanup exceeded " +
-                        "$SESSION_COMMIT_CLEANUP_TIMEOUT_MS ms"
-                )
+            captureCleanupIssue(
+                resource = "uncommitted raw connection",
+                timeoutMillis = SESSION_COMMIT_CLEANUP_TIMEOUT_MS,
+                preserveCancellation = false
+            ) {
+                connection.close()
+            }?.let { issue ->
+                logCleanupIssues(logger, "uncommitted connection cleanup", listOf(issue))
             }
         }
     }
@@ -744,8 +764,19 @@ internal class SessionManager(
 
     private data class CommittedSession(
         val resultSession: P2pSession,
-        val published: Boolean
+        val published: Boolean,
+        val outcome: RegisterOutcome
     )
+
+    private fun nextSessionId(isIncoming: Boolean, peerId: PeerId): String {
+        while (true) {
+            val current = sessionSequence.value
+            val next = if (current == Long.MAX_VALUE) Long.MIN_VALUE else current + 1L
+            if (sessionSequence.compareAndSet(current, next)) {
+                return "${if (isIncoming) "in" else "out"}-${peerId.value}-${clock()}-$next"
+            }
+        }
+    }
 
     /**
      * Establishes the whole-kit security profile and then performs HELLO over
@@ -839,7 +870,7 @@ internal class SessionManager(
                     is SecurityMode.AuthenticatedV2 -> {
                         val authenticated = checkNotNull(peerIdentityBeforeHello)
                         if (peerHello.peerId != authenticated.peerId.value) {
-                            runCatching { protocol.sendError(connection, "authenticated identity mismatch") }
+                            sendHandshakeErrorBestEffort(connection, "authenticated identity mismatch")
                             throw P2pError.AuthenticatedIdentityMismatch(
                                 "Encrypted HELLO did not match the authenticated key-derived identity"
                             )
@@ -850,7 +881,7 @@ internal class SessionManager(
                 }
 
                 if (peerIdentity.peerId == localPeerId) {
-                    runCatching { protocol.sendError(connection, "peer identity collision with local") }
+                    sendHandshakeErrorBestEffort(connection, "peer identity collision with local")
                     throw if (securityMode is SecurityMode.AuthenticatedV2) {
                         P2pError.AuthenticatedIdentityMismatch(
                             "Remote authenticated as the local identity"
@@ -867,7 +898,7 @@ internal class SessionManager(
                         if (expectedPeer != null && !isManualPeer &&
                             peerHello.peerId != expectedPeer.id.value
                         ) {
-                            runCatching { protocol.sendError(connection, "peerId mismatch") }
+                            sendHandshakeErrorBestEffort(connection, "peerId mismatch")
                             throw P2pError.HandshakeRejected(
                                 "Remote HELLO peerId mismatch for the selected peer"
                             )
@@ -989,6 +1020,19 @@ internal class SessionManager(
         cleanupFailure
     }
 
+    private suspend fun sendHandshakeErrorBestEffort(connection: RawConnection, reason: String) {
+        try {
+            protocol.sendError(connection, reason)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            logger.debug(
+                "Unable to send handshake rejection to peer: " +
+                    "${failure::class.simpleName}: ${failure.message ?: ""}"
+            )
+        }
+    }
+
     private data class HandshakeOutputs(
         val secureConnection: RawConnection,
         val events: ReceiveChannel<ProtocolEvent>,
@@ -1081,7 +1125,11 @@ internal class SessionManager(
             // throughout the entire retry budget. Cancelled in the `finally`
             // below on every exit path — success, exhaustion, or session
             // state change.
-            val periodicRefreshJob = launchPeriodicRefresh(session, peerShort)
+            val periodicRefreshJob = launchPeriodicRefresh(
+                ownerScope = CoroutineScope(currentCoroutineContext()),
+                session = session,
+                peerShort = peerShort
+            )
             // Start from the baseline captured at the Reconnecting edge by
             // [onWillReconnect] (NOT a fresh read here — refreshDiscovery above
             // can take long enough under load that a Satisfied landing during
@@ -1160,16 +1208,34 @@ internal class SessionManager(
                         // Session terminated while we were dialling. Discard the
                         // fresh connection; the reader's collect will exit when
                         // we close it.
-                        handshake.readerJob.cancel()
-                        runCatching { handshake.secureConnection.close() }
+                        cleanupUnusedReconnectHandshake(
+                            handshake,
+                            "session left Reconnecting before rearm"
+                        )
                         return
                     }
 
-                    session.rearmWith(
-                        handshake.secureConnection,
-                        handshake.events,
-                        handshake.protocolState
-                    )
+                    try {
+                        session.rearmWith(
+                            handshake.secureConnection,
+                            handshake.events,
+                            handshake.protocolState
+                        )
+                    } catch (cancelled: CancellationException) {
+                        cleanupUnusedReconnectReader(handshake.readerJob)
+                        throw cancelled
+                    } catch (failure: Throwable) {
+                        // rearmWith closes a replacement it did not adopt. The
+                        // protocol reader is owned separately by SessionManager,
+                        // so settle it here and keep the bounded retry loop alive.
+                        cleanupUnusedReconnectReader(handshake.readerJob)
+                        logger.warn(
+                            "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
+                                "name=${expectedPeer.name} REARM_FAILED " +
+                                "reason=${failure::class.simpleName}: ${failure.message ?: ""}"
+                        )
+                        continue
+                    }
                     logger.info(
                         "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
                             "name=${expectedPeer.name} SUCCEEDED dialed=$dialedStr source=$source"
@@ -1178,7 +1244,9 @@ internal class SessionManager(
                 }
                 session.markFailedAfterExhaustion()
             } finally {
-                periodicRefreshJob.cancel()
+                withContext(NonCancellable) {
+                    periodicRefreshJob.cancelAndJoin()
+                }
             }
         }
 
@@ -1195,18 +1263,18 @@ internal class SessionManager(
          * `cancel()` is authoritative, this is just to log a more specific
          * reason than "cancelled" when the state-transition path runs first.
          *
-         * Launched on the SessionManager's [scope] (not the session's scope)
-         * so a session-scope-cancellation race during rearmWith() can't kill
-         * the periodic refresh mid-tick — the outer `finally` cancels it
-         * deterministically.
+         * Launched as a child of the reconnect handler. This makes the refresh
+         * loop part of the session's structured lifetime; the outer `finally`
+         * cancels and joins it before the handler can finish.
          */
         private fun launchPeriodicRefresh(
+            ownerScope: CoroutineScope,
             session: P2pSessionImpl,
             peerShort: String
         ): Job {
             val periodMs = 3000L
             val jitterMs = 400L
-            return scope.launch {
+            return ownerScope.launch {
                 var tick = 0
                 var stopReason = "cancelled"
                 logger.info(
@@ -1243,6 +1311,46 @@ internal class SessionManager(
                         "reconnect: periodic refresh stopped peer=$peerShort " +
                             "name=${expectedPeer.name} ticks=$tick reason=$stopReason"
                     )
+                }
+            }
+        }
+
+        private suspend fun cleanupUnusedReconnectHandshake(
+            handshake: HandshakeOutputs,
+            reason: String
+        ) {
+            withContext(NonCancellable) {
+                handshake.readerJob.cancel()
+                val issues = mutableListOf<CleanupIssue>()
+                captureCleanupIssue(
+                    resource = "unused reconnect connection ($reason)",
+                    timeoutMillis = HANDSHAKE_CLEANUP_TIMEOUT_MS,
+                    preserveCancellation = false
+                ) {
+                    handshake.secureConnection.close()
+                }?.let(issues::add)
+                captureCleanupIssue(
+                    resource = "unused reconnect reader ($reason)",
+                    timeoutMillis = HANDSHAKE_CLEANUP_TIMEOUT_MS,
+                    preserveCancellation = false
+                ) {
+                    handshake.readerJob.join()
+                }?.let(issues::add)
+                logCleanupIssues(logger, "reconnect cleanup", issues)
+            }
+        }
+
+        private suspend fun cleanupUnusedReconnectReader(readerJob: Job) {
+            withContext(NonCancellable) {
+                readerJob.cancel()
+                captureCleanupIssue(
+                    resource = "failed reconnect reader",
+                    timeoutMillis = HANDSHAKE_CLEANUP_TIMEOUT_MS,
+                    preserveCancellation = false
+                ) {
+                    readerJob.join()
+                }?.let { issue ->
+                    logCleanupIssues(logger, "reconnect cleanup", listOf(issue))
                 }
             }
         }
@@ -1304,7 +1412,6 @@ internal class SessionManager(
                         "closing previous"
                 )
                 watchForTerminal(peerId, outcome.winner)
-                scope.launch { runCatching { outcome.loser.close() } }
             }
             is RegisterOutcome.Rejected -> {
                 logger.info(
@@ -1312,7 +1419,6 @@ internal class SessionManager(
                         "rejecting new ${if (isIncoming) "incoming" else "outgoing"} session, " +
                         "existing wins"
                 )
-                scope.launch { runCatching { outcome.loser.close() } }
             }
             is RegisterOutcome.RefusedAtCapacity -> {
                 // AUDIT-2026-07 (SEC-1, decision #9a): inbound admission
@@ -1328,7 +1434,6 @@ internal class SessionManager(
                     "Inbound session refused for peer ${peerId.value.take(8)}: " +
                         "total active sessions at capacity ($MAX_TOTAL_ACTIVE_SESSIONS)"
                 )
-                scope.launch { runCatching { outcome.session.close() } }
             }
         }
         return outcome
@@ -1342,6 +1447,23 @@ internal class SessionManager(
     private fun watchForTerminal(peerId: PeerId, session: P2pSession) {
         scope.launch {
             session.state.first { it == ConnectionState.Closed || it == ConnectionState.Failed }
+            // P2pSessionImpl publishes its terminal state before the bounded
+            // resource transaction finishes so close/loss races classify
+            // deterministically. Keep SessionStore ownership until that runtime
+            // actually terminates; otherwise an in-flight event can look like a
+            // zombie solely because the watcher evicted the session first.
+            if (session is P2pSessionImpl) {
+                val terminated = withTimeoutOrNull(SESSION_CLOSE_TIMEOUT_MS) {
+                    session.awaitRuntimeTermination()
+                    true
+                } ?: false
+                if (!terminated) {
+                    logger.warn(
+                        "Session ${session.id} runtime did not terminate within " +
+                            "$SESSION_CLOSE_TIMEOUT_MS ms before store eviction"
+                    )
+                }
+            }
             beforeTerminalWatcherRemovalForTest?.invoke()
             store.removeIfMatches(peerId, session)
         }
@@ -1503,7 +1625,7 @@ internal const val MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS: Int = 16
 /** Per-resource bound used only while rolling back an incomplete handshake. */
 internal const val HANDSHAKE_CLEANUP_TIMEOUT_MS: Long = 2_000
 
-/** Per-session bound used when terminal lifecycle rejects registration. */
+/** Per-raw-connection bound used while rolling back an incomplete session commit. */
 internal const val SESSION_COMMIT_CLEANUP_TIMEOUT_MS: Long = 2_000
 
 /** Per-session close bound used by background and terminal cleanup. */
