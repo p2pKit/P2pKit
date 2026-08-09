@@ -195,6 +195,14 @@ grep -Fq 'fetch-depth: 0' "$CI_WORKFLOW" || {
     echo "FATAL: CI cannot classify changes without complete comparison history" >&2
     exit 1
 }
+grep -Fq 'branches: [main]' "$CI_WORKFLOW" || {
+    echo "FATAL: CI push validation is not centered on main" >&2
+    exit 1
+}
+if grep -Fq 'remediation/**' "$CI_WORKFLOW"; then
+    echo "FATAL: CI still contains the deleted remediation branch trigger" >&2
+    exit 1
+fi
 [[ -x "$CI_SCOPE_CLASSIFIER" ]] || {
     echo "FATAL: CI scope classifier is missing or not executable" >&2
     exit 1
