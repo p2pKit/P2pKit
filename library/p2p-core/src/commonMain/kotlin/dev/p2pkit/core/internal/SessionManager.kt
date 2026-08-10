@@ -628,6 +628,7 @@ internal class SessionManager(
             peerIdentity = handshake.peerIdentity,
             initialConnection = handshake.secureConnection,
             initialEvents = handshake.events,
+            initialReaderJob = handshake.readerJob,
             initialProtocolState = handshake.protocolState,
             protocol = protocol,
             parentScope = scope,
@@ -958,7 +959,7 @@ internal class SessionManager(
         readerJob: Job?,
         sendCleanClose: Boolean = false
     ): Throwable? = withContext(NonCancellable) {
-        var cleanupFailure: Throwable? = null
+        val issues = mutableListOf<CleanupIssue>()
         // Before a secure stream is returned, AuthenticatedV2SecurityEngine
         // exclusively owns and closes rawConnection on every failure. Closing
         // it again here would violate close-once transport contracts.
@@ -980,44 +981,36 @@ internal class SessionManager(
         }
         readerJob?.cancel()
         if (connectionToClose != null) {
-            val closed = withTimeoutOrNull(HANDSHAKE_CLEANUP_TIMEOUT_MS) {
-                try {
-                    connectionToClose.close()
-                } catch (cause: Throwable) {
-                    cleanupFailure = cause
-                }
-                true
-            } ?: false
-            if (!closed && cleanupFailure == null) {
-                cleanupFailure = IllegalStateException(
-                    "Handshake connection cleanup exceeded $HANDSHAKE_CLEANUP_TIMEOUT_MS ms"
-                )
-            }
+            captureCleanupIssue(
+                resource = "handshake connection",
+                timeoutMillis = HANDSHAKE_CLEANUP_TIMEOUT_MS,
+                preserveCancellation = false
+            ) {
+                connectionToClose.close()
+            }?.let(issues::add)
         }
         closeSend?.cancel()
-        val closeSendJoined = withTimeoutOrNull(HANDSHAKE_CLEANUP_TIMEOUT_MS) {
-            closeSend?.join()
-            true
-        } ?: false
-        if (!closeSendJoined) {
-            val timeout = IllegalStateException(
-                "Handshake CLOSE sender cleanup exceeded $HANDSHAKE_CLEANUP_TIMEOUT_MS ms"
-            )
-            if (cleanupFailure == null) cleanupFailure = timeout
-            else cleanupFailure?.addSuppressed(timeout)
+        closeSend?.let { sender ->
+            captureCleanupIssue(
+                resource = "handshake CLOSE sender",
+                timeoutMillis = HANDSHAKE_CLEANUP_TIMEOUT_MS,
+                preserveCancellation = false
+            ) {
+                sender.join()
+            }?.let(issues::add)
         }
-        val joined = withTimeoutOrNull(HANDSHAKE_CLEANUP_TIMEOUT_MS) {
-            readerJob?.cancelAndJoin()
-            true
-        } ?: false
-        if (!joined) {
-            val timeout = IllegalStateException(
-                "Handshake reader cleanup exceeded $HANDSHAKE_CLEANUP_TIMEOUT_MS ms"
-            )
-            if (cleanupFailure == null) cleanupFailure = timeout
-            else cleanupFailure?.addSuppressed(timeout)
+        readerJob?.let { reader ->
+            captureCleanupIssue(
+                resource = "handshake protocol reader",
+                timeoutMillis = HANDSHAKE_CLEANUP_TIMEOUT_MS,
+                preserveCancellation = false
+            ) {
+                reader.join()
+            }?.let(issues::add)
         }
-        cleanupFailure
+        issues.takeIf { it.isNotEmpty() }?.let {
+            CleanupAggregateException("handshake cleanup", it.toList())
+        }
     }
 
     private suspend fun sendHandshakeErrorBestEffort(connection: RawConnection, reason: String) {
@@ -1215,26 +1208,30 @@ internal class SessionManager(
                         return
                     }
 
-                    try {
+                    val rearmed = try {
                         session.rearmWith(
                             handshake.secureConnection,
                             handshake.events,
-                            handshake.protocolState
+                            handshake.protocolState,
+                            handshake.readerJob
                         )
                     } catch (cancelled: CancellationException) {
-                        cleanupUnusedReconnectReader(handshake.readerJob)
                         throw cancelled
                     } catch (failure: Throwable) {
-                        // rearmWith closes a replacement it did not adopt. The
-                        // protocol reader is owned separately by SessionManager,
-                        // so settle it here and keep the bounded retry loop alive.
-                        cleanupUnusedReconnectReader(handshake.readerJob)
                         logger.warn(
                             "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
                                 "name=${expectedPeer.name} REARM_FAILED " +
                                 "reason=${failure::class.simpleName}: ${failure.message ?: ""}"
                         )
+                        if (session.state.value != ConnectionState.Reconnecting) return
                         continue
+                    }
+                    if (!rearmed) {
+                        logger.info(
+                            "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
+                                "name=${expectedPeer.name} DISCARDED sessionState=${session.state.value}"
+                        )
+                        return
                     }
                     logger.info(
                         "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
@@ -1337,21 +1334,6 @@ internal class SessionManager(
                     handshake.readerJob.join()
                 }?.let(issues::add)
                 logCleanupIssues(logger, "reconnect cleanup", issues)
-            }
-        }
-
-        private suspend fun cleanupUnusedReconnectReader(readerJob: Job) {
-            withContext(NonCancellable) {
-                readerJob.cancel()
-                captureCleanupIssue(
-                    resource = "failed reconnect reader",
-                    timeoutMillis = HANDSHAKE_CLEANUP_TIMEOUT_MS,
-                    preserveCancellation = false
-                ) {
-                    readerJob.join()
-                }?.let { issue ->
-                    logCleanupIssues(logger, "reconnect cleanup", listOf(issue))
-                }
             }
         }
 

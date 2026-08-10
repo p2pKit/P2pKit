@@ -24,13 +24,16 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
@@ -118,6 +121,7 @@ internal class P2pSessionImpl(
     override val peerIdentity: PeerIdentity = PeerIdentity(peer.id),
     initialConnection: RawConnection,
     initialEvents: ReceiveChannel<ProtocolEvent>,
+    initialReaderJob: Job? = null,
     initialProtocolState: ProtocolSessionState = ProtocolSessionState.legacy(),
     private val protocol: P2pProtocol,
     private val parentScope: CoroutineScope,
@@ -163,7 +167,7 @@ internal class P2pSessionImpl(
     private val lastPongAt = MutableStateFlow(monotonicClock())
 
     /**
-     * Lock guarding [connection], [events], [epochJob], and the
+     * Lock guarding [connection], [events], [readerJob], [epochJob], [epochToken], and the
      * [_state] transitions driven by connection loss. Held briefly during
      * [rearmWith] and the `onConnectionLost` decision.
      */
@@ -178,7 +182,9 @@ internal class P2pSessionImpl(
 
     private var connection: RawConnection = initialConnection
     private var events: ReceiveChannel<ProtocolEvent> = initialEvents
+    private var readerJob: Job? = initialReaderJob
     private var protocolState: ProtocolSessionState = initialProtocolState
+    private var epochToken: ConnectionEpochToken = ConnectionEpochToken()
 
     /**
      * Job that owns this epoch's [routeEvents] and [keepAliveLoop]. Cancelled
@@ -186,6 +192,9 @@ internal class P2pSessionImpl(
      * loops exit when the session is torn down.
      */
     private var epochJob: CompletableJob? = null
+
+    /** Serializes reconnect adoption without holding [connectionLock] across cleanup. */
+    private val rearmLock = Mutex()
 
     /**
      * Wired by [SessionManager] for outgoing sessions when
@@ -357,13 +366,32 @@ internal class P2pSessionImpl(
         }
 
     override suspend fun send(message: P2pMessage) {
-        if (_state.value != ConnectionState.Connected) {
-            throw P2pError.ConnectionFailed("Session $id is ${_state.value}; cannot send")
-        }
+        val target = connectedProtocolTarget("send")
         // AUDIT-2026-07 (API-2): see [typedSendBoundary].
         typedSendBoundary("send") {
             sendMutex.withLock {
-                protocol.sendMessage(connection, message, protocolState)
+                ensureProtocolTargetActive(target, "send")
+                protocol.sendMessage(target.connection, message, target.protocolState)
+            }
+        }
+    }
+
+    private suspend fun connectedProtocolTarget(operation: String): ProtocolTarget =
+        connectionLock.withLock {
+            if (_state.value != ConnectionState.Connected) {
+                throw P2pError.ConnectionFailed(
+                    "Session $id is ${_state.value}; cannot $operation"
+                )
+            }
+            ProtocolTarget(connection, protocolState, epochToken)
+        }
+
+    private suspend fun ensureProtocolTargetActive(target: ProtocolTarget, operation: String) {
+        connectionLock.withLock {
+            if (_state.value != ConnectionState.Connected || epochToken !== target.epochToken) {
+                throw P2pError.ConnectionFailed(
+                    "Session $id changed connection epoch before $operation could write"
+                )
             }
         }
     }
@@ -421,6 +449,7 @@ internal class P2pSessionImpl(
         // teardown as an unrelated Failed outcome. Exactly one caller owns
         // the bounded cleanup; concurrent close callers join its result.
         var joinLocalClose = false
+        var localCloseConnection: RawConnection? = null
         val ownsLocalClose = connectionLock.withLock {
             when (_state.value) {
                 ConnectionState.Closed, ConnectionState.Failed -> false
@@ -430,6 +459,7 @@ internal class P2pSessionImpl(
                 }
                 else -> {
                     _state.value = ConnectionState.Closing
+                    localCloseConnection = connection
                     true
                 }
             }
@@ -470,7 +500,11 @@ internal class P2pSessionImpl(
                 // without ever attempting the CLOSE frame, causing a clean
                 // peer shutdown to look like a reconnectable network loss.
                 val closeSend = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                    runCatching { sendMutex.withLock { protocol.sendClose(connection) } }
+                    runCatching {
+                        sendMutex.withLock {
+                            protocol.sendClose(checkNotNull(localCloseConnection))
+                        }
+                    }
                 }
                 withTimeoutOrNull(CLOSE_FRAME_TIMEOUT_MS) { closeSend.join() }
 
@@ -478,7 +512,8 @@ internal class P2pSessionImpl(
                     ConnectionState.Closed,
                     "user close()",
                     fileFailureKind = FileTransferFailureKind.TRANSPORT,
-                    fileRetryability = Retryability.NOT_RETRYABLE
+                    fileRetryability = Retryability.NOT_RETRYABLE,
+                    allowFromClosing = true
                 ).toMutableList()
                 closeSend.cancel()
 
@@ -513,69 +548,278 @@ internal class P2pSessionImpl(
 
     /**
      * Replace the underlying connection after a successful reconnect. The
-     * old epoch is cancelled and the old connection is closed before the new
-     * epoch starts. State transitions to [ConnectionState.Connected].
+     * old epoch, protocol reader, transfers, raw stream, and outbound write
+     * gate are settled before the new epoch starts. State transitions to
+     * [ConnectionState.Connected].
      *
      * No-op if the session was closed concurrently while the caller was
      * dialling the new connection — in that case the freshly-dialled
      * connection is closed and we leave the terminal state alone.
+     * Reusing the installed [RawConnection] instance is rejected and fails
+     * the session closed because ownership cannot be transferred safely.
+     *
+     * @return `true` only when this method installed and started the
+     *   replacement epoch; `false` when a terminal/concurrent transition won.
      */
     internal suspend fun rearmWith(
         newConnection: RawConnection,
         newEvents: ReceiveChannel<ProtocolEvent>,
-        newProtocolState: ProtocolSessionState = ProtocolSessionState.legacy()
-    ) {
+        newProtocolState: ProtocolSessionState = ProtocolSessionState.legacy(),
+        newReaderJob: Job? = null
+    ): Boolean {
+        // The reconnect handler is normally single-owner, but make accidental
+        // concurrent adoption fail closed without suspending before this method
+        // assumes ownership of the replacement connection and reader.
+        if (!rearmLock.tryLock()) {
+            closeDetachedEpoch(newConnection, newReaderJob, "concurrent reconnect replacement")
+            return false
+        }
         var replacementAccepted = false
-        var previousConnection: RawConnection? = null
+        var replacementSharesCurrentEpoch = false
+        var sendGateAcquired = false
         try {
-            connectionLock.withLock {
+            val captured = connectionLock.withLock {
                 val s = _state.value
                 if (s == ConnectionState.Closing || s == ConnectionState.Closed || s == ConnectionState.Failed) {
-                    return@withLock
+                    null
+                } else {
+                    ConnectionEpoch(connection, readerJob, epochJob, epochToken)
                 }
-                epochJob?.cancelAndJoin()
-                // Fail any in-flight file transfers BEFORE swapping the connection.
-                // The outgoing streamer runs on the session scope (not the epoch
-                // scope), so cancelling epochJob alone does not stop it; without
-                // this it would keep writing mid-stream FILE_DATA chunks onto the
-                // brand-new connection, corrupting the rearmed session. A failure
-                // here aborts the rearm; swallowing it could leave an old transfer
-                // alive and then redirect its writes onto the replacement stream.
-                if (fileTransferDispatcherLazy.isInitialized()) {
-                    fileTransferDispatcher.closeAll("reconnect: connection replaced")
-                    // closeAll also latches the dispatcher's `closed` flag (it is
-                    // shared with the terminal-close path). REOPEN it only after
-                    // the old transfer set has definitely settled.
-                    fileTransferDispatcher.reopen()
-                }
-                previousConnection = connection
-                connection = newConnection
-                events = newEvents
-                protocolState = newProtocolState
-                // V0.5.1-RECONNECT-RACE (issue #15): flip to Connected BEFORE
-                // launching the new epoch. `keepAliveLoop` gates its outer
-                // `while` on `_state.value == Connected`; on a multi-thread
-                // dispatcher the launched coroutine can read the field on
-                // another worker before this thread reaches the assignment,
-                // see Reconnecting, exit immediately, and leave the rearmed
-                // session with no liveness watchdog. Next disconnect goes
-                // undetected (Android stuck in Connected).
-                _state.value = ConnectionState.Connected
-                startEpoch()
-                replacementAccepted = true
+            } ?: return false
+
+            if (newConnection === captured.connection) {
+                replacementSharesCurrentEpoch = true
+                val issue = CleanupIssue(
+                    resource = "session $id reconnect replacement",
+                    cause = IllegalArgumentException(
+                        "Reconnect must provide a new RawConnection instance"
+                    )
+                )
+                logCleanupIssues(logger, "session $id reconnect cleanup", listOf(issue))
+                failRearmCleanupIfCurrent(captured, listOf(issue))
+                throw cleanupError("session $id reconnect cleanup", listOf(issue))
             }
+
+            // Cleanup happens outside connectionLock. A cancellation-ignoring
+            // epoch, protocol reader, or host destination must not prevent a
+            // concurrent close() from committing Closing and taking ownership.
+            val cleanupIssues = withContext(NonCancellable) {
+                val issues = mutableListOf<CleanupIssue>()
+                var transferJobs: List<Job>? = null
+                var transferTerminalizationSucceeded = true
+                captured.runtimeJob?.cancel()
+                captured.readerJob?.cancel()
+                if (fileTransferDispatcherLazy.isInitialized()) {
+                    val beginIssue = captureCleanupIssue(
+                        resource = "session $id reconnect file-transfer terminalization",
+                        timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
+                        preserveCancellation = false
+                    ) {
+                        transferJobs = fileTransferDispatcher.beginCloseAll(
+                            "reconnect: connection replaced"
+                        )
+                    }
+                    beginIssue?.let {
+                        transferTerminalizationSucceeded = false
+                        issues += it
+                    }
+                }
+                closeOwnedEpochConnection(
+                    captured,
+                    "session $id replaced raw connection"
+                )?.let(issues::add)
+                transferJobs.takeIf { transferTerminalizationSucceeded }?.let { jobs ->
+                    captureCleanupIssue(
+                        resource = "session $id reconnect file-transfer jobs",
+                        timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
+                        preserveCancellation = false
+                    ) {
+                        fileTransferDispatcher.awaitCloseAll(jobs)
+                    }?.let(issues::add)
+                }
+                captured.runtimeJob?.let { runtime ->
+                    captureCleanupIssue(
+                        resource = "session $id replaced epoch runtime",
+                        timeoutMillis = SESSION_RUNTIME_CLOSE_TIMEOUT_MS,
+                        preserveCancellation = false
+                    ) {
+                        runtime.join()
+                    }?.let(issues::add)
+                }
+                captured.readerJob?.let { reader ->
+                    captureCleanupIssue(
+                        resource = "session $id replaced protocol reader",
+                        timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
+                        preserveCancellation = false
+                    ) {
+                        reader.join()
+                    }?.let(issues::add)
+                }
+                issues
+            }
+            if (cleanupIssues.isNotEmpty()) {
+                logCleanupIssues(logger, "session $id reconnect cleanup", cleanupIssues)
+                failRearmCleanupIfCurrent(captured, cleanupIssues)
+                throw cleanupError("session $id reconnect cleanup", cleanupIssues)
+            }
+
+            // A caller cancellation that arrived during committed cleanup is
+            // rethrown before a replacement can become observable.
+            currentCoroutineContext().ensureActive()
+
+            val sendGateIssue = acquireRearmSendGate()
+            if (sendGateIssue != null) {
+                logCleanupIssues(logger, "session $id reconnect cleanup", listOf(sendGateIssue))
+                failRearmCleanupIfCurrent(captured, listOf(sendGateIssue))
+                throw cleanupError("session $id reconnect cleanup", listOf(sendGateIssue))
+            }
+            sendGateAcquired = true
+            // The non-cancellable acquisition above may have outlived its
+            // caller. Never publish the replacement for a cancelled attempt.
+            currentCoroutineContext().ensureActive()
+
+            val committed = connectionLock.withLock {
+                val stateAllowsRearm = _state.value == ConnectionState.Reconnecting ||
+                    _state.value == ConnectionState.Connected
+                if (!stateAllowsRearm ||
+                    epochToken !== captured.epochToken ||
+                    connection !== captured.connection ||
+                    readerJob !== captured.readerJob ||
+                    epochJob !== captured.runtimeJob
+                ) {
+                    false
+                } else {
+                    connection = newConnection
+                    events = newEvents
+                    readerJob = newReaderJob
+                    protocolState = newProtocolState
+                    epochToken = ConnectionEpochToken()
+                    // closeAll latches the dispatcher closed. Reopen only in
+                    // the same commit that installs a live replacement.
+                    if (fileTransferDispatcherLazy.isInitialized()) {
+                        fileTransferDispatcher.reopen()
+                    }
+                    // V0.5.1-RECONNECT-RACE (issue #15): flip to Connected BEFORE
+                    // launching the new epoch. `keepAliveLoop` gates its outer
+                    // `while` on `_state.value == Connected`; on a multi-thread
+                    // dispatcher the launched coroutine can read the field on
+                    // another worker before this thread reaches the assignment,
+                    // see Reconnecting, exit immediately, and leave the rearmed
+                    // session with no liveness watchdog. Next disconnect goes
+                    // undetected (Android stuck in Connected).
+                    _state.value = ConnectionState.Connected
+                    startEpoch()
+                    true
+                }
+            }
+            if (!committed) return false
+            replacementAccepted = true
         } finally {
+            if (sendGateAcquired) sendMutex.unlock()
             if (!replacementAccepted) {
-                closeDetachedConnection(newConnection, "discarded reconnect replacement")
+                if (replacementSharesCurrentEpoch) {
+                    closeDetachedReader(newReaderJob, "invalid reconnect replacement")
+                } else {
+                    closeDetachedEpoch(newConnection, newReaderJob, "discarded reconnect replacement")
+                }
+            }
+            rearmLock.unlock()
+        }
+        return true
+    }
+
+    /**
+     * Waits for every outbound operation admitted by the old epoch to leave
+     * [sendMutex]. The old raw stream is already closed, so shipped transports
+     * unblock their bounded writers. Holding this gate across the swap makes
+     * queued old-epoch operations observe the new token and fail before write.
+     */
+    private suspend fun acquireRearmSendGate(): CleanupIssue? = try {
+        // Mask caller cancellation until ownership of the mutex is known;
+        // otherwise prompt-cancellation delivery could acquire the mutex and
+        // throw before the caller records that it must unlock it.
+        withContext(NonCancellable + Dispatchers.Default) {
+            withTimeout(SESSION_RESOURCE_CLOSE_TIMEOUT_MS) {
+                sendMutex.lock()
             }
         }
+        null
+    } catch (timeout: TimeoutCancellationException) {
+        CleanupIssue(
+            resource = "session $id replaced outbound writer",
+            cause = IllegalStateException(
+                "old epoch writer did not release within ${SESSION_RESOURCE_CLOSE_TIMEOUT_MS}ms",
+                timeout
+            )
+        )
+    }
 
-        // No epoch references the previous stream after the cancel-and-join
-        // above. Close it outside connectionLock so a broken platform close
-        // cannot prevent a concurrent local close from acquiring the lock and
-        // terminalizing the replacement session.
-        previousConnection?.takeIf { it !== newConnection }?.let { previous ->
-            closeDetachedConnection(previous, "replaced raw connection")
+    private suspend fun failRearmCleanupIfCurrent(
+        captured: ConnectionEpoch,
+        issues: List<CleanupIssue>
+    ) {
+        transitionToTerminal(
+            ConnectionState.Failed,
+            "reconnect cleanup incomplete (${issues.size} resource failure(s))",
+            expectedEpoch = captured
+        )
+    }
+
+    private suspend fun closeDetachedEpoch(
+        connection: RawConnection,
+        readerJob: Job?,
+        label: String
+    ) {
+        withContext(NonCancellable) {
+            readerJob?.cancel()
+            closeDetachedConnection(connection, label)
+            closeDetachedReader(readerJob, label)
+        }
+    }
+
+    private suspend fun closeDetachedReader(readerJob: Job?, label: String) {
+        withContext(NonCancellable) {
+            readerJob?.cancel()
+            readerJob?.let { reader ->
+                captureCleanupIssue(
+                    resource = "session $id $label protocol reader",
+                    timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
+                    preserveCancellation = false
+                ) {
+                    reader.join()
+                }?.let { issue ->
+                    logCleanupIssues(logger, "session $id reconnect cleanup", listOf(issue))
+                }
+            }
+        }
+    }
+
+    /**
+     * Close the raw stream at most once for this installed epoch. Reconnect
+     * cleanup and terminal cleanup may race after each independently captures
+     * the same epoch; the token transfers the single close result between
+     * them instead of requiring third-party transports to tolerate duplicates.
+     */
+    private suspend fun closeOwnedEpochConnection(
+        epoch: ConnectionEpoch,
+        resource: String
+    ): CleanupIssue? {
+        val token = epoch.epochToken
+        token.rawCloseLock.lock()
+        try {
+            if (!token.rawCloseAttempted) {
+                token.rawCloseAttempted = true
+                token.rawCloseIssue = captureCleanupIssue(
+                    resource = resource,
+                    timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
+                    preserveCancellation = false
+                ) {
+                    epoch.connection.close()
+                }
+            }
+            return token.rawCloseIssue
+        } finally {
+            token.rawCloseLock.unlock()
         }
     }
 
@@ -614,11 +858,11 @@ internal class P2pSessionImpl(
      *      raw connection and the file-transfer dispatcher.
      *      Each external resource attempt has an independently owned deadline,
      *      so cancellation-ignoring platform code is reported and abandoned.
-     *   3. Cleanup order: tear down file transfers first (they may be
-     *      writing to the connection); cancel the epoch (stops
-     *      `routeEvents` from emitting to `_incoming` — guarantees contract
-     *      C1: no incoming after terminal); then close the raw connection
-     *      (releases NWConnection / Socket FD).
+     *   3. Cleanup order: seal and terminalize file transfers; cancel the
+     *      epoch and protocol reader (stops `routeEvents` from emitting to
+     *      `_incoming` — guarantees contract C1: no incoming after terminal);
+     *      close the raw connection to unblock stalled writers; then join the
+     *      cancelled transfer jobs and protocol reader.
      *   4. The runtime invariants at the end aren't paranoia — they document
      *      the post-condition and crash early if a future refactor breaks it.
      *
@@ -634,22 +878,36 @@ internal class P2pSessionImpl(
         target: ConnectionState,
         cause: String,
         fileFailureKind: FileTransferFailureKind = FileTransferFailureKind.REMOTE_DISCONNECTED,
-        fileRetryability: Retryability = Retryability.RETRY_NEW_SESSION
+        fileRetryability: Retryability = Retryability.RETRY_NEW_SESSION,
+        allowFromClosing: Boolean = false,
+        expectedEpoch: ConnectionEpoch? = null
     ): List<CleanupIssue> {
         check(target == ConnectionState.Closed || target == ConnectionState.Failed) {
             "transitionToTerminal: target must be Closed or Failed, got $target"
         }
+        var terminalEpoch: ConnectionEpoch? = null
         val didTransition = connectionLock.withLock {
             val current = _state.value
-            if (current == ConnectionState.Closed || current == ConnectionState.Failed) {
-                // I-double-terminal: a second call is idempotent. No cleanup
-                // (the first call did it).
-                return emptyList()
+            val expectedStillCurrent = expectedEpoch == null ||
+                (
+                    epochToken === expectedEpoch.epochToken &&
+                        connection === expectedEpoch.connection &&
+                        readerJob === expectedEpoch.readerJob &&
+                        epochJob === expectedEpoch.runtimeJob
+                    )
+            if (!expectedStillCurrent ||
+                current == ConnectionState.Closed ||
+                current == ConnectionState.Failed ||
+                (current == ConnectionState.Closing && !allowFromClosing)
+            ) {
+                false
+            } else {
+                _state.value = target
+                terminalEpoch = ConnectionEpoch(connection, readerJob, epochJob, epochToken)
+                true
             }
-            _state.value = target
-            true
         }
-        if (!didTransition) return emptyList() // unreachable; defensive.
+        if (!didTransition) return emptyList()
 
         logger.debug("Session $id: terminal → ${target.name} ($cause)")
 
@@ -657,37 +915,60 @@ internal class P2pSessionImpl(
         // the cancellation tree of [epochJob] (the typical case — see KDoc).
         val cleanupIssues = withContext(NonCancellable) {
             val issues = mutableListOf<CleanupIssue>()
+            var transferJobs: List<Job>? = null
+            var transferTerminalizationSucceeded = true
             // File transfers first: they may be mid-write on the connection;
-            // tear them down before we close the socket so they surface a
-            // sensible "session ended" status instead of a mid-write
-            // IOException.
+            // terminalize their handles and cancel their jobs before closing
+            // the socket, then settle those jobs after close has unblocked any
+            // stalled writer.
             if (fileTransferDispatcherLazy.isInitialized()) {
-                captureCleanupIssue(
-                    resource = "session $id file transfers",
+                val beginIssue = captureCleanupIssue(
+                    resource = "session $id file-transfer terminalization",
                     timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
                     preserveCancellation = false
                 ) {
-                    fileTransferDispatcher.closeAll(
+                    transferJobs = fileTransferDispatcher.beginCloseAll(
                         reason = "session $id ${target.name}: $cause",
                         failureKind = fileFailureKind,
                         retryability = fileRetryability
                     )
-                }?.let(issues::add)
+                }
+                beginIssue?.let {
+                    transferTerminalizationSucceeded = false
+                    issues += it
+                }
             }
             // Drops queued application payloads and releases their backing
             // storage before the terminal session can be retained by a host.
             applicationMessages.cancel()
             // Cancel the epoch — stops routeEvents, keepAliveLoop, and the
             // parked observeRawState. Guarantees no further _incoming.emit.
-            epochJob?.cancel()
+            val ownedEpoch = checkNotNull(terminalEpoch)
+            ownedEpoch.runtimeJob?.cancel()
+            ownedEpoch.readerJob?.cancel()
             // Close the underlying raw connection.
-            captureCleanupIssue(
-                resource = "session $id raw connection",
-                timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
-                preserveCancellation = false
-            ) {
-                connection.close()
-            }?.let(issues::add)
+            closeOwnedEpochConnection(
+                ownedEpoch,
+                "session $id raw connection"
+            )?.let(issues::add)
+            transferJobs.takeIf { transferTerminalizationSucceeded }?.let { jobs ->
+                captureCleanupIssue(
+                    resource = "session $id file-transfer jobs",
+                    timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
+                    preserveCancellation = false
+                ) {
+                    fileTransferDispatcher.awaitCloseAll(jobs)
+                }?.let(issues::add)
+            }
+            ownedEpoch.readerJob?.let { reader ->
+                captureCleanupIssue(
+                    resource = "session $id protocol reader",
+                    timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
+                    preserveCancellation = false
+                ) {
+                    reader.join()
+                }?.let(issues::add)
+            }
             issues
         }
         logCleanupIssues(logger, "session $id terminal cleanup", cleanupIssues)
@@ -1135,4 +1416,24 @@ internal class P2pSessionImpl(
          */
         const val RAW_TERMINAL_CLASSIFICATION_GRACE_MS: Long = 250
     }
+}
+
+private data class ProtocolTarget(
+    val connection: RawConnection,
+    val protocolState: ProtocolSessionState,
+    val epochToken: ConnectionEpochToken
+)
+
+private data class ConnectionEpoch(
+    val connection: RawConnection,
+    val readerJob: Job?,
+    val runtimeJob: CompletableJob?,
+    val epochToken: ConnectionEpochToken
+)
+
+/** Referential generation marker and single-close owner; unlike a counter it cannot wrap. */
+private class ConnectionEpochToken {
+    val rawCloseLock: Mutex = Mutex()
+    var rawCloseAttempted: Boolean = false
+    var rawCloseIssue: CleanupIssue? = null
 }

@@ -19,15 +19,22 @@ import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeRawConnection
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -35,6 +42,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 @OptIn(ExplicitSecurityRisk::class, ExperimentalCoroutinesApi::class)
 class AuthenticatedV2SecurityEngineTest {
@@ -364,6 +372,45 @@ class AuthenticatedV2SecurityEngineTest {
         }
     }
 
+    @Test
+    fun invalidLocalMetadataStillBoundsCancellationIgnoringRawCleanup() = runTest {
+        val appId = AppId("engine.invalid-local-bounded-cleanup")
+        val valid = generateIdentity(appId)
+        val invalid = LocalSecureIdentity(
+            peerId = PeerId("invalid-local-peer-id"),
+            fingerprint = valid.fingerprint,
+            keyPair = valid.keyPair,
+        )
+        val fastCleanupEngine = AuthenticatedV2SecurityEngine(
+            cryptography = cryptography,
+            cleanupTimeoutMillis = 100,
+        )
+        try {
+            val failure = withContext(Dispatchers.Default) {
+                withTimeout(2_000) {
+                    assertFailsWith<P2pError.SecurityConfigurationInvalid> {
+                        fastCleanupEngine.establish(
+                            rawConnection = CancellationIgnoringCloseConnection(),
+                            parentScope = this@runTest,
+                            role = NoiseRole.Initiator,
+                            appId = appId,
+                            localIdentity = invalid,
+                            authorization = PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp,
+                        )
+                    }
+                }
+            }
+            assertTrue(
+                failure.suppressedExceptions.any {
+                    it.message?.contains("cleanup exceeded 100ms") == true
+                },
+                "the primary identity failure must retain bounded cleanup evidence"
+            )
+        } finally {
+            valid.clearPrivate()
+        }
+    }
+
     private suspend fun kotlinx.coroutines.CoroutineScope.assertTargetMismatch(
         appId: AppId = AppId("engine.target-mismatch"),
         expectedPeerId: PeerId? = null,
@@ -510,6 +557,18 @@ class AuthenticatedV2SecurityEngineTest {
             publicKey.wipe()
             digest?.wipe()
         }
+    }
+}
+
+private class CancellationIgnoringCloseConnection : RawConnection {
+    override val state: StateFlow<ConnectionState> = MutableStateFlow(ConnectionState.Connected)
+
+    override suspend fun write(bytes: ByteArray) = Unit
+
+    override fun read(): Flow<ByteArray> = emptyFlow()
+
+    override suspend fun close() {
+        withContext(NonCancellable) { awaitCancellation() }
     }
 }
 

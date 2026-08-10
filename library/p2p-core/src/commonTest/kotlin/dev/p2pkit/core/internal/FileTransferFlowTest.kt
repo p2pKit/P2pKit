@@ -1196,6 +1196,82 @@ class FileTransferFlowTest {
     }
 
     @Test
+    fun closeAllJoinsCancelledSenderBeforeDispatcherCanReopen() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol().apply { gateDataFrames = true }
+        val dispatcher = directDispatcher(
+            scope,
+            protocol,
+            FileTransferConfig(offerTimeoutMillis = 60_000L, chunkSizeBytes = 16)
+        )
+        try {
+            val transfer = dispatcher.sendFile(
+                "settle-before-reopen.bin",
+                16L,
+                null,
+                Buffer().apply { write(ByteArray(16) { 9 }) }
+            )
+            dispatcher.onFileAccept(protocol.fileOffers.single())
+            withTimeout(5_000) { while (protocol.fileData.isEmpty()) yield() }
+
+            dispatcher.closeAll("reconnect: connection replaced")
+
+            assertTrue(
+                protocol.dataFrameExited.isCompleted,
+                "closeAll must join the cancelled sender, not merely request cancellation"
+            )
+            assertIs<FileTransferState.Failed>(transfer.state.value)
+            dispatcher.reopen()
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun acceptQueuedBeforeReopenCannotWriteOnReplacementEpoch() = runTest {
+        val protocol = RecordingFileProtocol()
+        val oldConnection = FakeConnectionPair().a
+        val replacementConnection = FakeConnectionPair().a
+        var currentConnection: RawConnection = oldConnection
+        val writeGate = Mutex()
+        writeGate.lock()
+        var gateHeld = true
+        val dispatcher = directDispatcher(
+            backgroundScope,
+            protocol,
+            connectionProvider = { currentConnection },
+            sendMutex = writeGate
+        )
+        try {
+            val id = MessageId.random(Random(8_030))
+            dispatcher.onFileOffer(id, FileOfferPayload("queued-accept.bin", 1L))
+            val offer = dispatcher.pendingFileOffers.value.single()
+            val accepting = async { runCatching { offer.accept(Buffer()) } }
+            runCurrent()
+
+            val jobs = dispatcher.beginCloseAll("reconnect: connection replaced")
+            dispatcher.awaitCloseAll(jobs)
+            currentConnection = replacementConnection
+            dispatcher.reopen()
+            writeGate.unlock()
+            gateHeld = false
+            runCurrent()
+
+            assertIs<P2pError.FileTransferFailed>(accepting.await().exceptionOrNull())
+            assertTrue(
+                protocol.fileAcceptConnections.isEmpty(),
+                "a pre-reconnect accept must fail before invoking the protocol on the replacement"
+            )
+            assertTrue(
+                protocol.fileCancels.isEmpty(),
+                "stale accept compensation must not emit FILE_CANCEL on the replacement"
+            )
+        } finally {
+            if (gateHeld) writeGate.unlock()
+        }
+    }
+
+    @Test
     fun sendFileOnClosedDispatcherThrowsWithoutLeakingEntry() = runBlocking {
         // AUDIT-2026-07 (FIL-6): a sendFile refused because the dispatcher is
         // closed must not leave a half-registered entry behind — after
@@ -2027,16 +2103,18 @@ class FileTransferFlowTest {
         protocol: P2pProtocol,
         config: FileTransferConfig = FileTransferConfig(offerTimeoutMillis = 60_000),
         random: Random = Random(42),
-        protocolState: ProtocolSessionState = ProtocolSessionState.legacy()
+        protocolState: ProtocolSessionState = ProtocolSessionState.legacy(),
+        connectionProvider: (() -> RawConnection)? = null,
+        sendMutex: Mutex = Mutex()
     ): FileTransferDispatcher {
         val pair = FakeConnectionPair()
         return FileTransferDispatcher(
             sessionId = "direct-test",
             remotePeer = syntheticPeer("peer-id", "Peer"),
             protocol = protocol,
-            getConnection = { pair.a },
+            getConnection = connectionProvider ?: { pair.a },
             getProtocolState = { protocolState },
-            sendMutex = Mutex(),
+            sendMutex = sendMutex,
             config = config,
             scope = scope,
             random = random,
@@ -2176,6 +2254,7 @@ private class RecordingFileProtocol : P2pProtocol {
     val fileFinishes = mutableListOf<SecureFileFinish>()
     val fileCommits = mutableListOf<SecureFileCommit>()
     val fileResults = mutableListOf<SecureFileResult>()
+    val fileAcceptConnections = mutableListOf<RawConnection>()
 
     /** (transferId, reason) per FILE_CANCEL, in send order. */
     val fileCancels = mutableListOf<Pair<MessageId, String?>>()
@@ -2199,6 +2278,7 @@ private class RecordingFileProtocol : P2pProtocol {
      */
     var gateDataFrames = false
     val dataFrameReleases = Channel<Unit>(Channel.UNLIMITED)
+    val dataFrameExited = CompletableDeferred<Unit>()
 
     override suspend fun sendMessage(
         connection: RawConnection,
@@ -2227,6 +2307,7 @@ private class RecordingFileProtocol : P2pProtocol {
 
     override suspend fun sendFileAccept(connection: RawConnection, transferId: MessageId) {
         acceptFailure?.let { throw it }
+        fileAcceptConnections += connection
         if (gateAccept) {
             acceptStarted.complete(Unit)
             acceptReleases.receive()
@@ -2244,7 +2325,13 @@ private class RecordingFileProtocol : P2pProtocol {
     override suspend fun sendFileDataFrame(connection: RawConnection, frame: Frame) {
         dataFailure?.let { throw it }
         fileData.add(frame.messageId to frame.chunkIndex)
-        if (gateDataFrames) dataFrameReleases.receive()
+        if (gateDataFrames) {
+            try {
+                dataFrameReleases.receive()
+            } finally {
+                dataFrameExited.complete(Unit)
+            }
+        }
     }
 
     override suspend fun sendFileDone(connection: RawConnection, transferId: MessageId) {

@@ -95,10 +95,21 @@ internal class FileTransferDispatcher(
     @Volatile
     private var closed: Boolean = false
 
+    /**
+     * Referential write generation. [reopen] replaces it while the session
+     * owns [sendMutex] across its raw-connection swap. Every transfer entry
+     * retains the generation in which it was admitted, so an application
+     * coroutine queued before reconnect is rejected after acquiring the mutex
+     * instead of resolving [getConnection] to the replacement stream.
+     */
+    @Volatile
+    private var writeEpoch: FileTransferWriteEpoch = FileTransferWriteEpoch()
+
     private enum class OutgoingPhase { OFFERED, STREAMING, COMMIT_WAIT }
 
     private class OutgoingEntry(
         val handle: OutgoingFileTransferImpl,
+        val writeEpoch: FileTransferWriteEpoch,
         @Volatile
         var phase: OutgoingPhase = OutgoingPhase.OFFERED,
         var timer: Job? = null,
@@ -111,6 +122,7 @@ internal class FileTransferDispatcher(
         val session: IncomingFileSession,
         val payload: FileOfferPayload,
         val secureOffer: SecureFileOffer?,
+        val writeEpoch: FileTransferWriteEpoch,
         @Volatile
         var phase: IncomingPhase = IncomingPhase.OFFERED,
         var offerTimer: Job? = null,
@@ -188,7 +200,7 @@ internal class FileTransferDispatcher(
                     source = source,
                     dispatcher = this
                 )
-                OutgoingEntry(handle).also { outgoing[transferId] = it }
+                OutgoingEntry(handle, writeEpoch).also { outgoing[transferId] = it }
             }
         } catch (e: Throwable) {
             runCatching { source.close() }
@@ -197,8 +209,8 @@ internal class FileTransferDispatcher(
 
         val transferId = entry.handle.transferId
         try {
-            sendMutex.withLock {
-                protocol.sendFileOffer(getConnection(), transferId, payload)
+            withEpochWrite(entry.writeEpoch) { connection ->
+                protocol.sendFileOffer(connection, transferId, payload)
             }
         } catch (e: CancellationException) {
             val removed = removeOutgoing(transferId, entry)
@@ -312,13 +324,13 @@ internal class FileTransferDispatcher(
                 offerHash = secureOffer.offerHash,
                 dispatcher = this
             )
-            OutgoingEntry(handle).also { outgoing[transferId] = it } to secureOffer
+            OutgoingEntry(handle, writeEpoch).also { outgoing[transferId] = it } to secureOffer
         }
         val entry = pair.first
         val secureOffer = pair.second
         try {
-            sendMutex.withLock {
-                protocol.sendSecureFileOffer(getConnection(), secureOffer)
+            withEpochWrite(entry.writeEpoch) { connection ->
+                protocol.sendSecureFileOffer(connection, secureOffer)
             }
         } catch (e: CancellationException) {
             removeOutgoing(entry.handle.transferId, entry)?.cancelJobs()
@@ -351,8 +363,8 @@ internal class FileTransferDispatcher(
             changed
         }
         if (!changed) return
-        sendBestEffort("FILE_CANCEL for ${handle.transferId}") {
-            protocol.sendFileCancel(getConnection(), handle.transferId, reason)
+        sendBestEffort("FILE_CANCEL for ${handle.transferId}", entry.writeEpoch) { connection ->
+            protocol.sendFileCancel(connection, handle.transferId, reason)
         }
     }
 
@@ -387,8 +399,8 @@ internal class FileTransferDispatcher(
 
         try {
             withTimeout(config.offerTimeoutMillis) {
-                sendMutex.withLock {
-                    protocol.sendFileAccept(getConnection(), session.transferId)
+                withEpochWrite(entry.writeEpoch) { connection ->
+                    protocol.sendFileAccept(connection, session.transferId)
                 }
             }
             currentCoroutineContext().ensureActive()
@@ -514,8 +526,8 @@ internal class FileTransferDispatcher(
         }
         try {
             withTimeout(config.offerTimeoutMillis) {
-                sendMutex.withLock {
-                    protocol.sendSecureFileAccept(getConnection(), session.transferId)
+                withEpochWrite(entry.writeEpoch) { connection ->
+                    protocol.sendSecureFileAccept(connection, session.transferId)
                 }
             }
             currentCoroutineContext().ensureActive()
@@ -573,8 +585,8 @@ internal class FileTransferDispatcher(
         entry.acceptanceCommitted.complete(false)
         entry.cancelJobs()
         session.setState(FileTransferState.Rejected(reason))
-        sendBestEffort("FILE_REJECT for ${session.transferId}") {
-            protocol.sendFileReject(getConnection(), session.transferId, reason)
+        sendBestEffort("FILE_REJECT for ${session.transferId}", entry.writeEpoch) { connection ->
+            protocol.sendFileReject(connection, session.transferId, reason)
         }
     }
 
@@ -592,11 +604,11 @@ internal class FileTransferDispatcher(
             changed
         }
         if (!changed) return
-        sendBestEffort("cancel for ${session.transferId}") {
+        sendBestEffort("cancel for ${session.transferId}", entry.writeEpoch) { connection ->
             if (accepted) {
-                protocol.sendFileCancel(getConnection(), session.transferId, reason)
+                protocol.sendFileCancel(connection, session.transferId, reason)
             } else {
-                protocol.sendFileReject(getConnection(), session.transferId, reason)
+                protocol.sendFileReject(connection, session.transferId, reason)
             }
         }
     }
@@ -609,14 +621,15 @@ internal class FileTransferDispatcher(
         secureOffer: SecureFileOffer? = null
     ) {
         if (closed) return
+        val eventEpoch = writeEpoch
         if (payload.sizeBytes > config.maxFileSizeBytes || !hasSupportedChunkCount(payload.sizeBytes)) {
             val reason = if (payload.sizeBytes > config.maxFileSizeBytes) {
                 "sizeBytes ${payload.sizeBytes} exceeds maxFileSizeBytes ${config.maxFileSizeBytes}"
             } else {
                 "file requires more than ${Int.MAX_VALUE} chunks"
             }
-            sendBestEffort("FILE_REJECT for $transferId") {
-                protocol.sendFileReject(getConnection(), transferId, reason)
+            sendBestEffort("FILE_REJECT for $transferId", eventEpoch) { connection ->
+                protocol.sendFileReject(connection, transferId, reason)
             }
             return
         }
@@ -641,7 +654,7 @@ internal class FileTransferDispatcher(
                 outgoing.containsKey(transferId) -> OfferInsertion.CONFLICT
                 incoming.size >= MAX_PENDING_INCOMING_OFFERS -> OfferInsertion.CAPACITY
                 else -> {
-                    val entry = IncomingEntry(session, payload, secureOffer)
+                    val entry = IncomingEntry(session, payload, secureOffer, eventEpoch)
                     incoming[transferId] = entry
                     _pendingFileOffers.value = immutableListSnapshot(
                         _pendingFileOffers.value + session
@@ -664,8 +677,8 @@ internal class FileTransferDispatcher(
                 reason = "Conflicting FILE_OFFER reused transferId $transferId"
             )
             OfferInsertion.CAPACITY -> {
-                sendBestEffort("capacity FILE_REJECT for $transferId") {
-                    protocol.sendFileReject(getConnection(), transferId, "too many pending offers")
+                sendBestEffort("capacity FILE_REJECT for $transferId", eventEpoch) { connection ->
+                    protocol.sendFileReject(connection, transferId, "too many pending offers")
                 }
                 return
             }
@@ -823,9 +836,9 @@ internal class FileTransferDispatcher(
             removeIncoming(finish.transferId, entry)?.cancelJobs()
             val offer = checkNotNull(entry.secureOffer)
             try {
-                sendMutex.withLock {
+                withEpochWrite(entry.writeEpoch) { connection ->
                     protocol.sendFileCommit(
-                        getConnection(),
+                        connection,
                         SecureFileCommit(
                             finish.transferId,
                             finish.sizeBytes,
@@ -954,7 +967,14 @@ internal class FileTransferDispatcher(
         logger.debug("Session $sessionId: FILE_CANCEL for unknown transfer $transferId; ignoring")
     }
 
+    /**
+     * Admit a fresh connection epoch after [beginCloseAll] and
+     * [awaitCloseAll] have settled the previous one. The owning session holds
+     * [sendMutex] across its raw-connection swap and this transition.
+     */
     fun reopen() {
+        check(closed) { "File-transfer dispatcher can reopen only after closeAll" }
+        writeEpoch = FileTransferWriteEpoch()
         closed = false
     }
 
@@ -963,7 +983,26 @@ internal class FileTransferDispatcher(
         failureKind: FileTransferFailureKind = FileTransferFailureKind.REMOTE_DISCONNECTED,
         retryability: Retryability = Retryability.RETRY_NEW_SESSION
     ) {
+        awaitCloseAll(beginCloseAll(reason, failureKind, retryability))
+    }
+
+    /**
+     * Atomically seals transfer admission, removes every owned entry, requests
+     * cancellation, and terminalizes public handles. The returned jobs remain
+     * owned by the caller until [awaitCloseAll] settles them.
+     *
+     * The session lifecycle intentionally invokes this phase before closing
+     * the raw stream, then closes the stream to unblock stalled writers, and
+     * only then awaits the returned jobs. Direct callers use [closeAll], which
+     * composes both phases without a raw-stream step.
+     */
+    suspend fun beginCloseAll(
+        reason: String,
+        failureKind: FileTransferFailureKind = FileTransferFailureKind.REMOTE_DISCONNECTED,
+        retryability: Retryability = Retryability.RETRY_NEW_SESSION
+    ): List<Job> {
         closed = true
+        val jobsToJoin = mutableSetOf<Job>()
         val (outgoingEntries, incomingEntries) = lock.withLock {
             val outs = outgoing.values.toList().also { outgoing.clear() }
             val ins = incoming.values.toList().also { incoming.clear() }
@@ -971,6 +1010,7 @@ internal class FileTransferDispatcher(
             outs to ins
         }
         for (entry in outgoingEntries) {
+            jobsToJoin += entry.cancelJobs()
             entry.handle.markFailed(
                 fileFailure(
                     kind = failureKind,
@@ -984,9 +1024,9 @@ internal class FileTransferDispatcher(
                     reason = reason
                 )
             )
-            entry.cancelJobs()
         }
         for (entry in incomingEntries) {
+            jobsToJoin += entry.cancelJobs()
             entry.acceptanceCommitted.complete(false)
             if (entry.phase == IncomingPhase.OFFERED) {
                 entry.session.setState(FileTransferState.Cancelled(reason))
@@ -1005,7 +1045,22 @@ internal class FileTransferDispatcher(
                     )
                 )
             }
-            entry.cancelJobs()
+        }
+
+        return jobsToJoin.toList()
+    }
+
+    /** Settle the ownership returned by [beginCloseAll] before any reopen. */
+    suspend fun awaitCloseAll(jobsToJoin: List<Job>) {
+        // A reconnect may reopen this dispatcher against a different raw
+        // stream immediately after settlement. Cancellation alone is
+        // insufficient: a source read or protocol implementation can delay
+        // observing cancellation. The write-generation check prevents such a
+        // job from reaching the replacement stream; joining additionally
+        // proves that every job owned by the previous epoch has terminated.
+        val callerJob = currentCoroutineContext()[Job]
+        for (job in jobsToJoin) {
+            if (job !== callerJob) job.join()
         }
     }
 
@@ -1028,8 +1083,8 @@ internal class FileTransferDispatcher(
             ).collect { frame ->
                 hasher?.update(frame.payload)
                 try {
-                    sendMutex.withLock {
-                        protocol.sendFileDataFrame(getConnection(), frame)
+                    withEpochWrite(entry.writeEpoch) { connection ->
+                        protocol.sendFileDataFrame(connection, frame)
                     }
                 } catch (e: CancellationException) {
                     throw e
@@ -1054,9 +1109,12 @@ internal class FileTransferDispatcher(
                     )
                     val removed = removeOutgoing(handle.transferId, entry)
                     handle.markFailed(error)
-                    sendBestEffort("SOURCE_CHANGED FILE_RESULT for ${handle.transferId}") {
+                    sendBestEffort(
+                        "SOURCE_CHANGED FILE_RESULT for ${handle.transferId}",
+                        entry.writeEpoch
+                    ) { connection ->
                         protocol.sendFileResult(
-                            getConnection(),
+                            connection,
                             SecureFileResult(
                                 handle.transferId,
                                 FileResultCode.SOURCE_CHANGED,
@@ -1076,9 +1134,9 @@ internal class FileTransferDispatcher(
                 }
                 if (!transitioned) return
                 try {
-                    sendMutex.withLock {
+                    withEpochWrite(entry.writeEpoch) { connection ->
                         protocol.sendFileFinish(
-                            getConnection(),
+                            connection,
                             SecureFileFinish(
                                 handle.transferId,
                                 handle.sizeBytes,
@@ -1098,8 +1156,8 @@ internal class FileTransferDispatcher(
                 return
             }
             try {
-                sendMutex.withLock {
-                    protocol.sendFileDone(getConnection(), handle.transferId)
+                withEpochWrite(entry.writeEpoch) { connection ->
+                    protocol.sendFileDone(connection, handle.transferId)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -1137,9 +1195,12 @@ internal class FileTransferDispatcher(
             removeOutgoing(handle.transferId, entry)
             logger.warn("Session $sessionId: outgoing transfer ${handle.transferId} failed", e)
             if (!connectionWriteFailure && !alreadyTerminal) {
-                sendBestEffort("FILE_CANCEL for ${handle.transferId}") {
+                sendBestEffort(
+                    "FILE_CANCEL for ${handle.transferId}",
+                    entry.writeEpoch
+                ) { connection ->
                     protocol.sendFileCancel(
-                        getConnection(),
+                        connection,
                         handle.transferId,
                         "sender source failure: ${err.message}"
                     )
@@ -1217,9 +1278,12 @@ internal class FileTransferDispatcher(
                 )
             )
         )
-        sendBestEffort("offer-watchdog FILE_CANCEL for ${entry.handle.transferId}") {
+        sendBestEffort(
+            "offer-watchdog FILE_CANCEL for ${entry.handle.transferId}",
+            entry.writeEpoch
+        ) { connection ->
             protocol.sendFileCancel(
-                getConnection(),
+                connection,
                 entry.handle.transferId,
                 "offer response timeout"
             )
@@ -1254,8 +1318,11 @@ internal class FileTransferDispatcher(
         withContext(NonCancellable) {
             removed.session.setState(FileTransferState.Rejected("timeout"))
             removed.cancelJobs()
-            sendCleanupBestEffort("timeout FILE_REJECT for ${entry.session.transferId}") {
-                protocol.sendFileReject(getConnection(), entry.session.transferId, "timeout")
+            sendCleanupBestEffort(
+                "timeout FILE_REJECT for ${entry.session.transferId}",
+                entry.writeEpoch
+            ) { connection ->
+                protocol.sendFileReject(connection, entry.session.transferId, "timeout")
             }
         }
     }
@@ -1352,10 +1419,13 @@ internal class FileTransferDispatcher(
                 )
             )
             removed.cancelJobs()
-            sendCleanupBestEffort("$kind-timeout terminal for ${entry.session.transferId}") {
+            sendCleanupBestEffort(
+                "$kind-timeout terminal for ${entry.session.transferId}",
+                entry.writeEpoch
+            ) { connection ->
                 if (entry.secureOffer != null) {
                     protocol.sendFileResult(
-                        getConnection(),
+                        connection,
                         SecureFileResult(
                             entry.session.transferId,
                             FileResultCode.TIMEOUT,
@@ -1364,7 +1434,7 @@ internal class FileTransferDispatcher(
                         )
                     )
                 } else {
-                    protocol.sendFileCancel(getConnection(), entry.session.transferId, "$kind transfer timeout")
+                    protocol.sendFileCancel(connection, entry.session.transferId, "$kind transfer timeout")
                 }
             }
         }
@@ -1380,9 +1450,9 @@ internal class FileTransferDispatcher(
             entry.session.setState(terminalState)
             try {
                 withTimeout(config.offerTimeoutMillis) {
-                    sendMutex.withLock {
+                    withEpochWrite(entry.writeEpoch) { connection ->
                         protocol.sendFileCancel(
-                            getConnection(),
+                            connection,
                             entry.session.transferId,
                             "accept did not commit"
                         )
@@ -1430,9 +1500,9 @@ internal class FileTransferDispatcher(
         )
         removeIncoming(entry.session.transferId, entry)?.cancelJobs()
         entry.session.markFailed(err)
-        sendBestEffort("FILE_CANCEL for ${entry.session.transferId}") {
+        sendBestEffort("FILE_CANCEL for ${entry.session.transferId}", entry.writeEpoch) { connection ->
             protocol.sendFileCancel(
-                getConnection(),
+                connection,
                 entry.session.transferId,
                 "receive error: ${err.message}"
             )
@@ -1468,17 +1538,38 @@ internal class FileTransferDispatcher(
         )
         removeIncoming(entry.session.transferId, entry)?.cancelJobs()
         entry.session.markFailed(error)
-        sendBestEffort("FILE_RESULT for ${entry.session.transferId}") {
+        sendBestEffort("FILE_RESULT for ${entry.session.transferId}", entry.writeEpoch) { connection ->
             protocol.sendFileResult(
-                getConnection(),
+                connection,
                 SecureFileResult(entry.session.transferId, code, phase, error.message)
             )
         }
     }
 
-    private suspend fun sendBestEffort(label: String, block: suspend () -> Unit) {
+    private suspend fun <T> withEpochWrite(
+        expectedEpoch: FileTransferWriteEpoch,
+        block: suspend (RawConnection) -> T
+    ): T {
+        sendMutex.lock()
         try {
-            sendMutex.withLock { block() }
+            if (closed || writeEpoch !== expectedEpoch) {
+                throw StaleFileTransferEpochException(
+                    "Transfer operation belongs to a closed or replaced connection epoch"
+                )
+            }
+            return block(getConnection())
+        } finally {
+            sendMutex.unlock()
+        }
+    }
+
+    private suspend fun sendBestEffort(
+        label: String,
+        expectedEpoch: FileTransferWriteEpoch,
+        block: suspend (RawConnection) -> Unit
+    ) {
+        try {
+            withEpochWrite(expectedEpoch, block)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1487,10 +1578,14 @@ internal class FileTransferDispatcher(
     }
 
     /** Bounded cleanup notification used only after ownership is already terminal. */
-    private suspend fun sendCleanupBestEffort(label: String, block: suspend () -> Unit) {
+    private suspend fun sendCleanupBestEffort(
+        label: String,
+        expectedEpoch: FileTransferWriteEpoch,
+        block: suspend (RawConnection) -> Unit
+    ) {
         try {
             withTimeout(config.offerTimeoutMillis) {
-                sendMutex.withLock { block() }
+                withEpochWrite(expectedEpoch, block)
             }
         } catch (e: TimeoutCancellationException) {
             logger.debug("Session $sessionId: bounded cleanup $label timed out")
@@ -1597,20 +1692,24 @@ internal class FileTransferDispatcher(
         return count <= Int.MAX_VALUE.toLong()
     }
 
-    private fun OutgoingEntry.cancelJobs() {
+    private fun OutgoingEntry.cancelJobs(): List<Job> {
+        val jobs = listOfNotNull(timer, sender).distinct()
         timer?.cancel()
         sender?.cancel()
         timer = null
         sender = null
+        return jobs
     }
 
-    private fun IncomingEntry.cancelJobs() {
+    private fun IncomingEntry.cancelJobs(): List<Job> {
+        val jobs = listOfNotNull(offerTimer, idleTimer, overallTimer).distinct()
         offerTimer?.cancel()
         idleTimer?.cancel()
         overallTimer?.cancel()
         offerTimer = null
         idleTimer = null
         overallTimer = null
+        return jobs
     }
 
     private sealed interface OfferInsertion {
@@ -1640,3 +1739,8 @@ internal class FileTransferDispatcher(
 private const val MAX_PENDING_INCOMING_OFFERS: Int = 64
 private const val MAX_TRANSFER_ID_ATTEMPTS: Int = 128
 private const val MAX_TRANSFER_FAILURE_REASON_CHARS: Int = 512
+
+/** Referential generation marker for dispatcher writes. */
+private class FileTransferWriteEpoch
+
+private class StaleFileTransferEpochException(message: String) : IllegalStateException(message)

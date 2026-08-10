@@ -7,6 +7,7 @@ import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.PeerIdentity
+import dev.p2pkit.core.internal.captureCleanupIssue
 import dev.p2pkit.core.internal.security.noise.NoiseKeyPair
 import dev.p2pkit.core.internal.security.noise.NoiseRole
 import dev.p2pkit.core.internal.security.noise.SecureV2HandshakeDriver
@@ -42,7 +43,12 @@ import kotlinx.coroutines.withTimeout
 @OptIn(ExplicitSecurityRisk::class)
 internal class AuthenticatedV2SecurityEngine(
     private val cryptography: PlatformSecurityCryptography = platformSecurityCryptography(),
+    private val cleanupTimeoutMillis: Long = SECURE_ENGINE_CLEANUP_TIMEOUT_MILLIS,
 ) {
+    init {
+        require(cleanupTimeoutMillis > 0L) { "cleanupTimeoutMillis must be positive" }
+    }
+
     private val driver = SecureV2HandshakeDriver(cryptography)
 
     /**
@@ -273,20 +279,22 @@ internal class AuthenticatedV2SecurityEngine(
         outcome: SecureV2HandshakeOutcome?,
     ): Throwable? = withContext(NonCancellable) {
         var cleanupFailure: Throwable? = null
-        try {
+        captureCleanupIssue(
+            resource = "authenticated v2 failed connection",
+            timeoutMillis = cleanupTimeoutMillis,
+            preserveCancellation = false,
+        ) {
             when {
                 outcome != null -> outcome.connection.close()
                 pump != null -> pump.close()
                 else -> rawConnection.close()
             }
-        } catch (cleanup: Throwable) {
-            cleanupFailure = cleanup
-        }
+        }?.let { cleanupFailure = it.cause }
         handshakeTask?.cancel(CancellationException("Authenticated v2 setup aborted"))
         if (handshakeTask != null) {
             try {
                 withContext(Dispatchers.Default) {
-                    withTimeout(SECURE_ENGINE_TASK_CLEANUP_TIMEOUT_MILLIS) {
+                    withTimeout(cleanupTimeoutMillis) {
                         handshakeTask.cancelAndJoin()
                     }
                 }
@@ -305,7 +313,7 @@ internal class AuthenticatedV2SecurityEngine(
     }
 }
 
-private const val SECURE_ENGINE_TASK_CLEANUP_TIMEOUT_MILLIS: Long = 2_000
+private const val SECURE_ENGINE_CLEANUP_TIMEOUT_MILLIS: Long = 2_000
 
 /** Immutable authenticated identity paired with the already-secured stream. */
 private class AuthenticatedSecureConnection(
