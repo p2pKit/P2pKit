@@ -88,8 +88,10 @@ public interface P2pSession {
      * Offers are ordered by admission and are present before their response
      * timer starts. An offer is removed when acceptance commits, it is
      * rejected, expires, is remotely cancelled, or this session closes. At
-     * most 64 offers are pending. Snapshot lists are immutable and safe to
-     * retain across Kotlin, Java, and Swift calls.
+     * most 64 incoming transfers (pending and accepted combined) are active;
+     * an excess offer is rejected without admission. Consequently at most 64
+     * offers can be pending. Snapshot lists are immutable and safe to retain
+     * across Kotlin, Java, and Swift calls.
      *
      * The default empty state preserves source compatibility for third-party
      * session test doubles; SDK-created sessions always override it.
@@ -99,7 +101,9 @@ public interface P2pSession {
 
     /**
      * Migration-only event stream of newly admitted offers. It has no replay
-     * and is not authoritative; observe [pendingFileOffers] instead.
+     * and uses a bounded best-effort buffer, so an absent or backpressured
+     * collector can miss events. It is not authoritative; observe
+     * [pendingFileOffers] instead.
      */
     @Deprecated("Observe pendingFileOffers")
     public val incomingFiles: SharedFlow<P2pFileOffer>
@@ -127,7 +131,12 @@ public interface P2pSession {
      * - Once validation succeeds and the dispatcher begins its registration
      *   transaction, the kit treats [source] as transferred. A FILE_OFFER
      *   write failure, cancellation during that write, allocation failure, or
-     *   concurrent close/reconnect then closes it before rethrowing.
+     *   concurrent close/reconnect then detaches it and starts independently
+     *   bounded close before rethrowing. A non-cooperative `close()` can finish
+     *   later, but the handle no longer retains it. Admission is capped at 64
+     *   active outgoing transfers per session; an excess registration fails
+     *   as `TRANSPORT` / `OFFER` / `RETRY_SAME_SESSION` and receives the same
+     *   transferred-source cleanup.
      *
      * Concurrent-close refusals surface as
      * [P2pError.FileTransferFailed] with `REMOTE_DISCONNECTED`. A caller still
@@ -172,7 +181,9 @@ public interface P2pSession {
      *
      * [PreparedFileSource.open] is not called until the offer is accepted. A
      * peer that lacks the feature fails with `UNSUPPORTED_FEATURE`. No
-     * plaintext or flush-only downgrade is attempted.
+     * plaintext or flush-only downgrade is attempted. Admission is capped at
+     * 64 active outgoing transfers per session; excess registration fails as
+     * `TRANSPORT` / `OFFER` / `RETRY_SAME_SESSION` without opening [source].
      */
     @Throws(Exception::class)
     public suspend fun sendFile(

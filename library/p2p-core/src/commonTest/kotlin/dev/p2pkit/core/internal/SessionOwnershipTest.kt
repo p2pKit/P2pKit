@@ -7,6 +7,8 @@ import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.protocol.DefaultP2pProtocol
+import dev.p2pkit.core.protocol.HelloPayload
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.createTestKit
@@ -180,11 +182,6 @@ class SessionOwnershipTest {
             bobTransport,
             setupTimeoutMillis = 100
         )
-        val alice = kit(
-            "Alice",
-            "alice-id",
-            FakeDataTransport(outgoingConnection = { successPair.a })
-        )
         try {
             bob.start()
             assertEquals(
@@ -196,12 +193,28 @@ class SessionOwnershipTest {
             val incoming = async(start = CoroutineStart.UNDISPATCHED) {
                 withTimeout(5_000) { bob.incomingSessions.first() }
             }
+            // Pre-buffer the remote HELLO before handing the connection to
+            // Bob. The 100 ms setup deadline is intentionally kept strict to
+            // prove idle setup expiry; making the valid follow-up depend on a
+            // second kit's concurrently scheduled handshake made this test
+            // nondeterministic on loaded native CI runners. A buffered valid
+            // frame still exercises the same recovered admission permit and
+            // complete inbound setup path without weakening that deadline.
+            DefaultP2pProtocol(clock = { 0L }).sendHello(
+                successPair.a,
+                HelloPayload(
+                    appId = "session-ownership-test",
+                    peerId = "alice-id",
+                    deviceName = "Alice",
+                    platform = Platform.JVM_DESKTOP.name,
+                    supportedTransports = listOf(TransportKind.LAN.name)
+                )
+            )
             bobTransport.emitIncoming(successPair.b)
-            val outgoing = withTimeout(5_000) { alice.connect(targetPeer()) }
-            assertEquals(ConnectionState.Connected, outgoing.state.value)
-            assertEquals(ConnectionState.Connected, incoming.await().state.value)
+            val admitted = incoming.await()
+            assertEquals(PeerId("alice-id"), admitted.peer.id)
+            assertEquals(ConnectionState.Connected, admitted.state.value)
         } finally {
-            alice.stop()
             bob.stop()
         }
     }

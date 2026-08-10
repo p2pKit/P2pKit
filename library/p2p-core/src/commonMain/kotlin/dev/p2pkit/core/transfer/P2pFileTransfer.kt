@@ -14,8 +14,11 @@ import kotlinx.coroutines.flow.StateFlow
  * The handle's identity is stable for the lifetime of the transfer. After
  * the transfer reaches a terminal state ([FileTransferState.Completed],
  * [FileTransferState.Rejected], [FileTransferState.Cancelled],
- * [FileTransferState.Failed]) the underlying resources are released and
- * further [cancel] calls are no-ops.
+ * [FileTransferState.Failed]) resource ownership is detached from the handle,
+ * bounded cleanup is attempted, and further [cancel] calls are no-ops. A
+ * non-cooperative application source/destination callback can finish cleanup
+ * after the state becomes terminal; it cannot keep the handle or session
+ * lifecycle non-terminal indefinitely.
  */
 public interface P2pFileTransfer {
 
