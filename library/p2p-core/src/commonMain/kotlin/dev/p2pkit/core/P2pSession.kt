@@ -99,7 +99,9 @@ public interface P2pSession {
 
     /**
      * Migration-only event stream of newly admitted offers. It has no replay
-     * and is not authoritative; observe [pendingFileOffers] instead.
+     * and uses a bounded best-effort buffer, so an absent or backpressured
+     * collector can miss events. It is not authoritative; observe
+     * [pendingFileOffers] instead.
      */
     @Deprecated("Observe pendingFileOffers")
     public val incomingFiles: SharedFlow<P2pFileOffer>

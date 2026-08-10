@@ -685,7 +685,20 @@ internal class FileTransferDispatcher(
             }
             is OfferInsertion.Inserted -> {
                 armIncomingOfferTimer(insertion.entry)
-                scope.launch { incomingOffers.emit(insertion.entry.session) }
+                // This deprecated migration stream is deliberately
+                // non-authoritative. Never create a suspending emission job:
+                // a slow collector could otherwise retain an unowned child
+                // after the offer was rejected or the session closed. Keep
+                // admission/close ordering under the ownership lock and drop
+                // the event if the bounded migration buffer is full.
+                lock.withLock {
+                    val entry = insertion.entry
+                    if (!closed && incoming[transferId] === entry &&
+                        entry.phase == IncomingPhase.OFFERED
+                    ) {
+                        incomingOffers.tryEmit(entry.session)
+                    }
+                }
             }
         }
     }
@@ -1594,13 +1607,12 @@ internal class FileTransferDispatcher(
         expectedEpoch: FileTransferWriteEpoch,
         block: suspend (RawConnection) -> Unit
     ) {
-        try {
-            withEpochWrite(expectedEpoch, block)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger.debug("Session $sessionId: best-effort $label failed: ${e.message}")
-        }
+        sendBestEffortWithinDeadline(
+            label = label,
+            expectedEpoch = expectedEpoch,
+            preserveCancellation = true,
+            block = block
+        )
     }
 
     /** Bounded cleanup notification used only after ownership is already terminal. */
@@ -1609,16 +1621,32 @@ internal class FileTransferDispatcher(
         expectedEpoch: FileTransferWriteEpoch,
         block: suspend (RawConnection) -> Unit
     ) {
-        try {
-            withTimeout(config.offerTimeoutMillis) {
-                withEpochWrite(expectedEpoch, block)
-            }
-        } catch (e: TimeoutCancellationException) {
-            logger.debug("Session $sessionId: bounded cleanup $label timed out")
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger.debug("Session $sessionId: bounded cleanup $label failed: ${e.message}")
+        sendBestEffortWithinDeadline(
+            label = label,
+            expectedEpoch = expectedEpoch,
+            preserveCancellation = false,
+            block = block
+        )
+    }
+
+    private suspend fun sendBestEffortWithinDeadline(
+        label: String,
+        expectedEpoch: FileTransferWriteEpoch,
+        preserveCancellation: Boolean,
+        block: suspend (RawConnection) -> Unit
+    ) {
+        val issue = captureCleanupIssue(
+            resource = "file-transfer $label",
+            timeoutMillis = config.offerTimeoutMillis,
+            preserveCancellation = preserveCancellation
+        ) {
+            withEpochWrite(expectedEpoch, block)
+        }
+        if (issue != null) {
+            logger.debug(
+                "Session $sessionId: bounded best-effort $label failed: " +
+                    (issue.cause.message ?: issue.cause::class.simpleName)
+            )
         }
     }
 

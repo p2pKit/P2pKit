@@ -8,7 +8,8 @@ import kotlinx.io.RawSink
  * Inbound file offer from a peer. Retained in
  * [dev.p2pkit.core.P2pSession.pendingFileOffers] after the sender calls
  * [dev.p2pkit.core.P2pSession.sendFile]. The deprecated `incomingFiles` flow
- * also emits newly admitted offers, but can miss offers before subscription.
+ * also emits newly admitted offers, but can miss offers before subscription
+ * or while its bounded migration buffer is backpressured.
  *
  * The receiver must respond by calling either [accept] with a transactional
  * [FileTransferDestination], the deprecated legacy [RawSink] overload, or

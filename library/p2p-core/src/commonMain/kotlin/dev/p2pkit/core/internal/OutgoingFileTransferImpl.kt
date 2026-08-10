@@ -21,8 +21,10 @@ import kotlinx.io.RawSource
  * transitions happen. The public surface is the [P2pFileTransfer] interface.
  *
  * State/progress transitions use a per-transfer mutex. Source ownership is an
- * atomic nullable reference so terminal cleanup never needs the dispatcher's
- * global ownership lock and the terminal handle cannot retain the source.
+ * atomic three-state latch so terminal cleanup never needs the dispatcher's
+ * global ownership lock. In particular, terminalization can win while a
+ * caller-controlled [PreparedFileSource.open] is still running: the late
+ * source is then closed instead of being installed into a terminal handle.
  */
 internal class OutgoingFileTransferImpl(
     override val peer: Peer,
@@ -46,33 +48,53 @@ internal class OutgoingFileTransferImpl(
     override val bytesTransferred: StateFlow<Long> = _bytes.asStateFlow()
 
     private val lifecycleLock = Mutex()
-    private val sourceRef = MutableStateFlow<RawSource?>(source)
+    private val sourceOwnership = MutableStateFlow<SourceOwnership>(
+        source?.let(SourceOwnership::Owned) ?: SourceOwnership.Deferred
+    )
 
     internal fun closeSourceOnce() {
         while (true) {
-            val owned = sourceRef.value ?: return
-            if (sourceRef.compareAndSet(owned, null)) {
-                runCatching { owned.close() }
-                return
+            when (val current = sourceOwnership.value) {
+                SourceOwnership.Deferred -> {
+                    if (sourceOwnership.compareAndSet(current, SourceOwnership.Released)) return
+                }
+                is SourceOwnership.Owned -> {
+                    if (sourceOwnership.compareAndSet(current, SourceOwnership.Released)) {
+                        runCatching { current.source.close() }
+                        return
+                    }
+                }
+                SourceOwnership.Released -> return
             }
         }
     }
 
     internal fun sourceOrThrow(): RawSource =
-        sourceRef.value ?: throw IllegalStateException("Transfer $id no longer owns its source")
+        (sourceOwnership.value as? SourceOwnership.Owned)?.source
+            ?: throw IllegalStateException("Transfer $id no longer owns its source")
 
     internal fun openPreparedSource(): RawSource {
         val prepared = checkNotNull(preparedSource) { "Transfer $id has no prepared source" }
-        check(sourceRef.value == null) { "Transfer $id source is already open" }
+        check(sourceOwnership.value === SourceOwnership.Deferred) {
+            "Transfer $id source is already open or released"
+        }
         val opened = prepared.open()
-        if (!sourceRef.compareAndSet(null, opened)) {
-            runCatching { opened.close() }
-            throw IllegalStateException("Transfer $id source was opened concurrently")
+        val owned = SourceOwnership.Owned(opened)
+        if (!sourceOwnership.compareAndSet(SourceOwnership.Deferred, owned)) {
+            val failure = IllegalStateException(
+                "Transfer $id became terminal or opened concurrently while its prepared source was opening"
+            )
+            try {
+                opened.close()
+            } catch (cleanupFailure: Throwable) {
+                failure.addSuppressed(cleanupFailure)
+            }
+            throw failure
         }
         return opened
     }
 
-    internal fun retainsSource(): Boolean = sourceRef.value != null
+    internal fun retainsSource(): Boolean = sourceOwnership.value is SourceOwnership.Owned
 
     override suspend fun cancel(reason: String?) {
         dispatcher.cancelOutgoing(this, reason)
@@ -101,4 +123,10 @@ internal class OutgoingFileTransferImpl(
 
     internal suspend fun markFailed(error: P2pError): Boolean =
         setState(FileTransferState.Failed(error))
+
+    private sealed interface SourceOwnership {
+        data object Deferred : SourceOwnership
+        class Owned(val source: RawSource) : SourceOwnership
+        data object Released : SourceOwnership
+    }
 }

@@ -49,6 +49,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
@@ -65,6 +66,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlinx.io.Buffer
@@ -680,6 +682,7 @@ class FileTransferFlowTest {
             (initial.single() as IncomingFileSession).state.value
         )
         assertEquals("timeout", rejected.reason)
+        withTimeout(5_000) { while (protocol.fileRejects.isEmpty()) yield() }
         assertEquals(id, protocol.fileRejects.single())
         assertFailsWith<IllegalStateException> { initial.single().accept(Buffer()) }
         assertFailsWith<IllegalStateException> { initial.single().reject("late") }
@@ -838,6 +841,54 @@ class FileTransferFlowTest {
     }
 
     @Test
+    fun deprecatedOfferStreamDropsBackpressuredEventInsteadOfDeferringItPastClose() = runTest {
+        val protocol = RecordingFileProtocol()
+        val dispatcher = directDispatcher(
+            backgroundScope,
+            protocol,
+            FileTransferConfig(maxFileSizeBytes = 1L, offerTimeoutMillis = 60_000L, chunkSizeBytes = 1)
+        )
+        val delivered = mutableListOf<String>()
+        val firstDelivered = CompletableDeferred<Unit>()
+        val releaseCollector = CompletableDeferred<Unit>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            dispatcher.incomingFiles.collect { offer ->
+                delivered += offer.name
+                if (offer.name == "migration-0.bin") {
+                    firstDelivered.complete(Unit)
+                    releaseCollector.await()
+                }
+            }
+        }
+
+        suspend fun admitAndReject(index: Int) {
+            dispatcher.onFileOffer(
+                MessageId.random(Random(5_300 + index)),
+                FileOfferPayload("migration-$index.bin", 1L)
+            )
+            if (index == 0) {
+                runCurrent()
+                firstDelivered.await()
+            }
+            dispatcher.pendingFileOffers.value.single().reject("test cleanup")
+            runCurrent()
+        }
+
+        // One event is held by the collector and 64 fit in the bounded
+        // migration buffer. The 66th event must be dropped synchronously;
+        // it must not live in an unowned emit coroutine until after close.
+        repeat(66) { index -> admitAndReject(index) }
+        assertEquals(listOf("migration-0.bin"), delivered)
+
+        dispatcher.closeAll("test close")
+        releaseCollector.complete(Unit)
+        runCurrent()
+
+        assertEquals((0..64).map { "migration-$it.bin" }, delivered)
+        assertFalse(delivered.contains("migration-65.bin"))
+    }
+
+    @Test
     fun offerProcessedWhileDispatcherClosedIsDroppedAndLeaksNoEntry() = runBlocking {
         // Single-threaded (runBlocking's event loop) so coroutine interleaving
         // is deterministic.
@@ -961,6 +1012,39 @@ class FileTransferFlowTest {
     }
 
     @Test
+    fun rejectReturnsAfterDeadlineWhenControlWriteIgnoresCancellation() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol().apply { gateReject = true }
+        val dispatcher = directDispatcher(
+            scope,
+            protocol,
+            FileTransferConfig(maxFileSizeBytes = 1L, offerTimeoutMillis = 50L, chunkSizeBytes = 1)
+        )
+        try {
+            val id = MessageId.random(Random(8_010))
+            dispatcher.onFileOffer(id, FileOfferPayload("wedged-reject.bin", 1L))
+            val offer = assertIs<IncomingFileSession>(dispatcher.pendingFileOffers.value.single())
+            val rejecting = async { offer.reject("not now") }
+
+            protocol.rejectStarted.await()
+            withTimeout(5_000) { rejecting.await() }
+
+            assertIs<FileTransferState.Rejected>(offer.state.value)
+            assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+            assertEquals(listOf(id), protocol.fileRejects)
+
+            // The independently owned best-effort task was cancelled at its
+            // deadline. Release the deliberately non-cooperative fake and
+            // prove it leaves no live test work behind.
+            protocol.rejectRelease.complete(Unit)
+            withTimeout(5_000) { protocol.rejectExited.await() }
+        } finally {
+            protocol.rejectRelease.complete(Unit)
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun sourceClosedExactlyOnceOnCancelBeforeAccept() = runBlocking {
         val scope = CoroutineScope(coroutineContext + Job())
         val protocol = RecordingFileProtocol()
@@ -997,6 +1081,37 @@ class FileTransferFlowTest {
         } finally {
             scope.cancel()
         }
+    }
+
+    @Test
+    fun preparedSourceReturningAfterTerminalReleaseIsClosedAndCannotBeRetained() = runTest {
+        val dispatcher = directDispatcher(backgroundScope, RecordingFileProtocol())
+        val opened = CloseTrackingSource(Buffer().apply { write(byteArrayOf(1, 2, 3)) })
+        lateinit var handle: OutgoingFileTransferImpl
+        val prepared = HookedPreparedSource(
+            content = byteArrayOf(1, 2, 3),
+            opened = opened,
+            beforeOpenReturns = { handle.closeSourceOnce() }
+        )
+        handle = OutgoingFileTransferImpl(
+            peer = syntheticPeer("peer-id", "Peer"),
+            name = "late-open.bin",
+            sizeBytes = prepared.sizeBytes,
+            mimeType = null,
+            transferId = MessageId.random(Random(8_000)),
+            source = null,
+            preparedSource = prepared,
+            expectedDigest = prepared.sha256,
+            offerHash = null,
+            dispatcher = dispatcher
+        )
+
+        assertFailsWith<IllegalStateException> { handle.openPreparedSource() }
+
+        assertEquals(1, prepared.openCount)
+        assertEquals(1, opened.closeCount)
+        assertFalse(handle.retainsSource())
+        assertFailsWith<IllegalStateException> { handle.sourceOrThrow() }
     }
 
     @Test
@@ -1842,6 +1957,7 @@ class FileTransferFlowTest {
         )
         dispatcher.onFileAccept(protocol.secureOffers.single().transferId)
         runCurrent()
+        withTimeout(5_000) { while (protocol.fileResults.isEmpty()) yield() }
 
         val failed = assertIs<FileTransferState.Failed>(transfer.state.value)
         val error = assertIs<P2pError.FileTransferFailed>(failed.error)
@@ -1879,6 +1995,7 @@ class FileTransferFlowTest {
 
             dispatcher.onFileAccept(protocol.secureOffers.single().transferId)
             runCurrent()
+            withTimeout(5_000) { while (protocol.fileResults.isEmpty()) yield() }
 
             val failed = assertIs<FileTransferState.Failed>(transfer.state.value)
             val error = assertIs<P2pError.FileTransferFailed>(failed.error)
@@ -2205,6 +2322,23 @@ private class ByteArrayPreparedSource(
     }
 }
 
+private class HookedPreparedSource(
+    content: ByteArray,
+    private val opened: RawSource,
+    private val beforeOpenReturns: () -> Unit
+) : PreparedFileSource {
+    override val sizeBytes: Long = content.size.toLong()
+    override val sha256: Sha256Digest = sha256(content)
+    var openCount: Int = 0
+        private set
+
+    override fun open(): RawSource {
+        openCount++
+        beforeOpenReturns()
+        return opened
+    }
+}
+
 private class RecordingDestination(
     private val commitFailure: Throwable? = null,
     private val flushFailure: Throwable? = null,
@@ -2310,6 +2444,10 @@ private class RecordingFileProtocol : P2pProtocol {
     var gateAccept: Boolean = false
     val acceptStarted = CompletableDeferred<Unit>()
     val acceptReleases = Channel<Unit>(Channel.UNLIMITED)
+    var gateReject: Boolean = false
+    val rejectStarted = CompletableDeferred<Unit>()
+    val rejectRelease = CompletableDeferred<Unit>()
+    val rejectExited = CompletableDeferred<Unit>()
 
     /**
      * When true, each [sendFileDataFrame] records its frame and then parks
@@ -2360,6 +2498,14 @@ private class RecordingFileProtocol : P2pProtocol {
 
     override suspend fun sendFileReject(connection: RawConnection, transferId: MessageId, reason: String?) {
         fileRejects.add(transferId)
+        if (gateReject) {
+            rejectStarted.complete(Unit)
+            try {
+                withContext(NonCancellable) { rejectRelease.await() }
+            } finally {
+                rejectExited.complete(Unit)
+            }
+        }
     }
 
     override suspend fun sendFileDataFrame(connection: RawConnection, frame: Frame) {
