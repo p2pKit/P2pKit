@@ -10,6 +10,7 @@ import dev.p2pkit.core.protocol.FileOfferPayload
 import dev.p2pkit.core.protocol.Frame
 import dev.p2pkit.core.protocol.MessageId
 import dev.p2pkit.core.protocol.P2pProtocol
+import dev.p2pkit.core.protocol.PreparedSourceLengthChangedException
 import dev.p2pkit.core.protocol.ProtocolSessionState
 import dev.p2pkit.core.protocol.ProtocolFeatures
 import dev.p2pkit.core.protocol.SecureFileCommit
@@ -1079,7 +1080,8 @@ internal class FileTransferDispatcher(
                 transferId = handle.transferId,
                 rawSource = handle.sourceOrThrow(),
                 sizeBytes = handle.sizeBytes,
-                chunkSizeBytes = config.chunkSizeBytes
+                chunkSizeBytes = config.chunkSizeBytes,
+                requireExactSize = expectedDigest != null
             ).collect { frame ->
                 hasher?.update(frame.payload)
                 try {
@@ -1100,30 +1102,10 @@ internal class FileTransferDispatcher(
             if (expectedDigest != null) {
                 val actualDigest = checkNotNull(hasher).finish()
                 if (actualDigest != expectedDigest) {
-                    val error = fileFailure(
-                        FileTransferFailureKind.SOURCE_CHANGED,
-                        FileTransferPhase.SOURCE_READ,
-                        Retryability.RETRY_AFTER_USER_ACTION,
-                        handle.transferId,
-                        "Prepared source SHA-256 changed before or during streaming"
+                    failPreparedSourceChanged(
+                        entry = entry,
+                        reason = "Prepared source SHA-256 changed before or during streaming"
                     )
-                    val removed = removeOutgoing(handle.transferId, entry)
-                    handle.markFailed(error)
-                    sendBestEffort(
-                        "SOURCE_CHANGED FILE_RESULT for ${handle.transferId}",
-                        entry.writeEpoch
-                    ) { connection ->
-                        protocol.sendFileResult(
-                            connection,
-                            SecureFileResult(
-                                handle.transferId,
-                                FileResultCode.SOURCE_CHANGED,
-                                FileTransferPhase.SOURCE_READ,
-                                error.message
-                            )
-                        )
-                    }
-                    removed?.cancelJobs()
                     return
                 }
                 val transitioned = lock.withLock {
@@ -1169,6 +1151,12 @@ internal class FileTransferDispatcher(
             removeOutgoing(handle.transferId, entry)
         } catch (e: CancellationException) {
             throw e
+        } catch (e: PreparedSourceLengthChangedException) {
+            failPreparedSourceChanged(
+                entry = entry,
+                reason = e.message ?: "Prepared source length changed before or during streaming",
+                cause = e
+            )
         } catch (e: Throwable) {
             val alreadyTerminal = handle.state.value.isTerminal()
             val err = failureFromCause(
@@ -1206,6 +1194,44 @@ internal class FileTransferDispatcher(
                     )
                 }
             }
+        }
+    }
+
+    private suspend fun failPreparedSourceChanged(
+        entry: OutgoingEntry,
+        reason: String,
+        cause: Throwable? = null
+    ) {
+        val handle = entry.handle
+        val removed = removeOutgoing(handle.transferId, entry) ?: return
+        val error = fileFailure(
+            FileTransferFailureKind.SOURCE_CHANGED,
+            FileTransferPhase.SOURCE_READ,
+            Retryability.RETRY_AFTER_USER_ACTION,
+            handle.transferId,
+            reason,
+            cause
+        )
+        val changed = handle.markFailed(error)
+        try {
+            if (changed) {
+                sendBestEffort(
+                    "SOURCE_CHANGED FILE_RESULT for ${handle.transferId}",
+                    entry.writeEpoch
+                ) { connection ->
+                    protocol.sendFileResult(
+                        connection,
+                        SecureFileResult(
+                            handle.transferId,
+                            FileResultCode.SOURCE_CHANGED,
+                            FileTransferPhase.SOURCE_READ,
+                            error.message
+                        )
+                    )
+                }
+            }
+        } finally {
+            removed.cancelJobs()
         }
     }
 

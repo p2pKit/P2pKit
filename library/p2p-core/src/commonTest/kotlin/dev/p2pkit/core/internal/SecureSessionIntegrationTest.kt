@@ -345,6 +345,66 @@ class SecureSessionIntegrationTest {
     }
 
     @Test
+    fun securePreparedSourceGrowthFailsBothPeersBeforeCommit() = runBlocking {
+        val appId = AppId("secure.session.file-source-growth")
+        val pair = FakeConnectionPair()
+        val alice = secureKit(
+            appId,
+            "Alice",
+            MemorySecureIdentityStorage(),
+            FakeDataTransport(outgoingConnection = { CopyingRawConnection(pair.a) }),
+            PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+        )
+        val bob = secureKit(
+            appId,
+            "Bob",
+            MemorySecureIdentityStorage(),
+            FakeDataTransport(preStagedIncoming = listOf(CopyingRawConnection(pair.b))),
+            PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+        )
+        try {
+            val incomingDeferred = async { withTimeout(5_000) { bob.incomingSessions.first() } }
+            bob.start()
+            val outgoing = withTimeout(5_000) { alice.connect(peerFor(bob)) }
+            val incoming = incomingDeferred.await()
+            val snapshot = ByteArray(4_096) { (it * 17).toByte() }
+            val grown = snapshot + byteArrayOf(99)
+            val sender = outgoing.sendFile(
+                "grown.bin",
+                "application/octet-stream",
+                TestPreparedSource(content = grown, snapshot = snapshot)
+            )
+            val offer = withTimeout(5_000) {
+                incoming.pendingFileOffers.first { it.isNotEmpty() }.single()
+            }
+            val destination = TestCommitDestination()
+            val receiver = offer.accept(destination)
+
+            val senderFailure = withTimeout(5_000) {
+                assertIs<FileTransferState.Failed>(
+                    sender.state.first { it is FileTransferState.Failed }
+                )
+            }
+            val receiverFailure = withTimeout(5_000) {
+                assertIs<FileTransferState.Failed>(
+                    receiver.state.first { it is FileTransferState.Failed }
+                )
+            }
+            val senderError = assertIs<P2pError.FileTransferFailed>(senderFailure.error)
+            val receiverError = assertIs<P2pError.FileTransferFailed>(receiverFailure.error)
+            assertEquals(FileTransferFailureKind.SOURCE_CHANGED, senderError.kind)
+            assertEquals(FileTransferPhase.SOURCE_READ, senderError.phase)
+            assertEquals(FileTransferFailureKind.SOURCE_CHANGED, receiverError.kind)
+            assertEquals(FileTransferPhase.SOURCE_READ, receiverError.phase)
+            assertFalse(destination.committed)
+            assertEquals(0L, destination.buffer.size)
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
     fun secureReceiverCommitFailureReachesSenderAsTypedTerminalResult() = runBlocking {
         val appId = AppId("secure.session.file-commit-failure")
         val pair = FakeConnectionPair()
@@ -767,9 +827,12 @@ private class CopyingRawConnection(
     override suspend fun close() = delegate.close()
 }
 
-private class TestPreparedSource(private val content: ByteArray) : PreparedFileSource {
-    override val sizeBytes: Long = content.size.toLong()
-    override val sha256: Sha256Digest = sha256(content)
+private class TestPreparedSource(
+    private val content: ByteArray,
+    snapshot: ByteArray = content
+) : PreparedFileSource {
+    override val sizeBytes: Long = snapshot.size.toLong()
+    override val sha256: Sha256Digest = sha256(snapshot)
     override fun open(): RawSource = Buffer().apply { write(content) }
 }
 

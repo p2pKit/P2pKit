@@ -8,9 +8,11 @@ import kotlinx.io.RawSource
  * Repeatable, pre-hashed source for authenticated file transfer.
  *
  * [open] must return a new source positioned at byte zero on every call. The
- * SDK owns and closes the returned source. It reads exactly [sizeBytes] bytes
- * and verifies their SHA-256 against [sha256] while streaming, so mutation
- * after preparation fails with `SOURCE_CHANGED` instead of being committed.
+ * SDK owns and closes the returned source. It requires the source to end
+ * immediately after exactly [sizeBytes] bytes and verifies their SHA-256
+ * against [sha256] while streaming. Early EOF, trailing bytes, or a digest
+ * change after preparation therefore fails with `SOURCE_CHANGED` instead of
+ * being committed.
  * The SDK snapshots [sizeBytes] and [sha256] while registering the offer and
  * does not call [open] unless the remote peer accepts.
  */
