@@ -217,6 +217,55 @@ class SendErrorContractTest {
         }
     }
 
+    @Test
+    fun sendQueuedOnOldEpochCannotRedirectOntoReplacementConnection() = runTest {
+        val h = harness()
+        try {
+            h.pair.a.suspendWrites()
+            var firstFailure: Throwable? = null
+            var queuedFailure: Throwable? = null
+            val first = h.scope.launch {
+                try {
+                    h.session.send(P2pMessage.Text("owns old writer"))
+                } catch (failure: Throwable) {
+                    firstFailure = failure
+                }
+            }
+            runCurrent()
+            assertEquals(1, h.pair.a.writeAttempts)
+
+            val queued = h.scope.launch {
+                try {
+                    h.session.send(P2pMessage.Text("must not cross epoch"))
+                } catch (failure: Throwable) {
+                    queuedFailure = failure
+                }
+            }
+            runCurrent()
+
+            val replacement = FakeConnectionPair()
+            assertTrue(
+                h.session.rearmWith(
+                    replacement.a,
+                    Channel(Channel.UNLIMITED)
+                )
+            )
+            runCurrent()
+            first.join()
+            queued.join()
+
+            assertIs<P2pError.ConnectionFailed>(firstFailure)
+            assertIs<P2pError.ConnectionFailed>(queuedFailure)
+            assertTrue(
+                replacement.a.writtenChunks.isEmpty(),
+                "a send admitted against the old epoch must never write on the replacement"
+            )
+            assertEquals(ConnectionState.Connected, h.session.state.value)
+        } finally {
+            h.scope.cancel()
+        }
+    }
+
     // ---- send(): pass-through semantics ----
 
     @Test
