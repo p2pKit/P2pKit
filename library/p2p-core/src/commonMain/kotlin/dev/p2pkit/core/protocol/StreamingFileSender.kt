@@ -2,6 +2,7 @@ package dev.p2pkit.core.protocol
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.io.EOFException
 import kotlinx.io.RawSource
 import kotlinx.io.buffered
 import kotlinx.io.readByteArray
@@ -12,8 +13,11 @@ import kotlinx.io.readByteArray
  *
  * The caller (typically the session writer) collects this flow and writes each
  * frame to the connection serially through the session's send mutex. Stops
- * after exactly [sizeBytes] bytes have been read; if the source has fewer
- * bytes the kotlinx-io `readByteArray` call throws.
+ * after exactly [sizeBytes] bytes have been read. Legacy callers intentionally
+ * treat that length as a prefix boundary. Authenticated prepared-source callers
+ * set [requireExactSize], which additionally proves that the source ends at the
+ * declared boundary and classifies both early EOF and trailing bytes as a
+ * prepared-snapshot change.
  *
  * Zero-byte files emit zero frames — the caller sends the protocol-appropriate
  * legacy `FILE_DONE` or authenticated `FILE_FINISH` completion signal.
@@ -25,13 +29,22 @@ internal fun streamFileData(
     transferId: MessageId,
     rawSource: RawSource,
     sizeBytes: Long,
-    chunkSizeBytes: Int
+    chunkSizeBytes: Int,
+    requireExactSize: Boolean = false
 ): Flow<Frame> = flow {
     require(sizeBytes >= 0) { "sizeBytes must be non-negative, got $sizeBytes" }
     require(chunkSizeBytes > 0) { "chunkSizeBytes must be positive, got $chunkSizeBytes" }
-    if (sizeBytes == 0L) return@flow
+    if (sizeBytes == 0L && !requireExactSize) return@flow
 
     val source = rawSource.buffered()
+    if (sizeBytes == 0L) {
+        if (!source.exhausted()) {
+            throw PreparedSourceLengthChangedException(
+                "Prepared source contains bytes beyond its declared empty snapshot"
+            )
+        }
+        return@flow
+    }
     val totalLong = 1L + (sizeBytes - 1L) / chunkSizeBytes.toLong()
     require(totalLong <= Int.MAX_VALUE.toLong()) {
         "Transfer requires $totalLong chunks; the wire format supports at most ${Int.MAX_VALUE}"
@@ -41,7 +54,17 @@ internal fun streamFileData(
     var index = 0
     while (sent < sizeBytes) {
         val want = minOf(chunkSizeBytes.toLong(), sizeBytes - sent).toInt()
-        val payload = source.readByteArray(want)
+        val payload = try {
+            source.readByteArray(want)
+        } catch (failure: EOFException) {
+            if (requireExactSize) {
+                throw PreparedSourceLengthChangedException(
+                    "Prepared source ended before its declared $sizeBytes-byte snapshot",
+                    failure
+                )
+            }
+            throw failure
+        }
         val isLast = index == total - 1
         emit(
             Frame(
@@ -56,4 +79,15 @@ internal fun streamFileData(
         sent += want
         index++
     }
+    if (requireExactSize && !source.exhausted()) {
+        throw PreparedSourceLengthChangedException(
+            "Prepared source contains bytes beyond its declared $sizeBytes-byte snapshot"
+        )
+    }
 }
+
+/** Internal marker used to map a prepared-source length change to `SOURCE_CHANGED`. */
+internal class PreparedSourceLengthChangedException(
+    message: String,
+    cause: Throwable? = null
+) : Exception(message, cause)

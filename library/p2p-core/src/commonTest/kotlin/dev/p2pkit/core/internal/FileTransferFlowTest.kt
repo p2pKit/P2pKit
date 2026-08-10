@@ -1852,6 +1852,46 @@ class FileTransferFlowTest {
     }
 
     @Test
+    fun preparedSourceLengthChangesFailWithoutFinishOrCommit() = runTest {
+        val cases = listOf(
+            byteArrayOf(1, 2, 3) to byteArrayOf(1, 2, 3, 4),
+            byteArrayOf(1, 2, 3) to byteArrayOf(1, 2),
+            byteArrayOf() to byteArrayOf(1)
+        )
+
+        cases.forEachIndexed { index, (snapshot, openedBytes) ->
+            val protocol = RecordingFileProtocol()
+            val dispatcher = directDispatcher(
+                backgroundScope,
+                protocol,
+                FileTransferConfig(chunkSizeBytes = 2, offerTimeoutMillis = 1_000),
+                protocolState = secureProtocolState()
+            )
+            val transfer = dispatcher.sendPreparedFile(
+                "length-changed-$index.bin",
+                null,
+                ByteArrayPreparedSource(
+                    content = openedBytes,
+                    sha256 = sha256(snapshot),
+                    sizeBytes = snapshot.size.toLong()
+                )
+            )
+
+            dispatcher.onFileAccept(protocol.secureOffers.single().transferId)
+            runCurrent()
+
+            val failed = assertIs<FileTransferState.Failed>(transfer.state.value)
+            val error = assertIs<P2pError.FileTransferFailed>(failed.error)
+            assertEquals(FileTransferFailureKind.SOURCE_CHANGED, error.kind, "case $index")
+            assertEquals(FileTransferPhase.SOURCE_READ, error.phase, "case $index")
+            assertTrue(protocol.fileFinishes.isEmpty(), "case $index must not send FILE_FINISH")
+            assertTrue(protocol.fileCommits.isEmpty(), "case $index must not send FILE_COMMIT")
+            assertTrue(protocol.fileCancels.isEmpty(), "case $index must use authenticated FILE_RESULT")
+            assertEquals(FileResultCode.SOURCE_CHANGED, protocol.fileResults.single().code, "case $index")
+        }
+    }
+
+    @Test
     fun receiverCommitFailureAbortsAndReturnsTypedResultToSender() = runTest {
         val protocol = RecordingFileProtocol()
         val dispatcher = directDispatcher(
@@ -2153,12 +2193,12 @@ private class GatedSink : RawSink {
 
 private class ByteArrayPreparedSource(
     private val content: ByteArray,
-    override val sha256: Sha256Digest = sha256(content)
+    override val sha256: Sha256Digest = sha256(content),
+    override val sizeBytes: Long = content.size.toLong()
 ) : PreparedFileSource {
     var openCount: Int = 0
         private set
 
-    override val sizeBytes: Long = content.size.toLong()
     override fun open(): RawSource {
         openCount++
         return Buffer().apply { write(content) }

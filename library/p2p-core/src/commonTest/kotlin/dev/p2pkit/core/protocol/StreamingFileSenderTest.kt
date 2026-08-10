@@ -33,6 +33,72 @@ class StreamingFileSenderTest {
     }
 
     @Test
+    fun exactEmptySourceEmitsNoFrames() = runTest {
+        val frames = streamFileData(
+            transferId = id(),
+            rawSource = bufferOf(ByteArray(0)),
+            sizeBytes = 0L,
+            chunkSizeBytes = 64,
+            requireExactSize = true
+        ).toList()
+
+        assertTrue(frames.isEmpty())
+    }
+
+    @Test
+    fun exactSizeRejectsBytesBeyondDeclaredSnapshot() = runTest {
+        assertFailsWith<PreparedSourceLengthChangedException> {
+            streamFileData(
+                transferId = id(),
+                rawSource = bufferOf(byteArrayOf(1, 2, 3, 4)),
+                sizeBytes = 3L,
+                chunkSizeBytes = 2,
+                requireExactSize = true
+            ).toList()
+        }
+    }
+
+    @Test
+    fun exactSizeRejectsEarlyEofAsSnapshotChange() = runTest {
+        assertFailsWith<PreparedSourceLengthChangedException> {
+            streamFileData(
+                transferId = id(),
+                rawSource = bufferOf(byteArrayOf(1, 2)),
+                sizeBytes = 3L,
+                chunkSizeBytes = 2,
+                requireExactSize = true
+            ).toList()
+        }
+    }
+
+    @Test
+    fun exactEmptySnapshotRejectsNonEmptySource() = runTest {
+        assertFailsWith<PreparedSourceLengthChangedException> {
+            streamFileData(
+                transferId = id(),
+                rawSource = bufferOf(byteArrayOf(1)),
+                sizeBytes = 0L,
+                chunkSizeBytes = 64,
+                requireExactSize = true
+            ).toList()
+        }
+    }
+
+    @Test
+    fun legacyLengthBoundaryStillStreamsOnlyDeclaredPrefix() = runTest {
+        val frames = streamFileData(
+            transferId = id(),
+            rawSource = bufferOf(byteArrayOf(1, 2, 3, 4)),
+            sizeBytes = 3L,
+            chunkSizeBytes = 2
+        ).toList()
+
+        assertEquals(2, frames.size)
+        assertContentEquals(byteArrayOf(1, 2), frames[0].payload)
+        assertContentEquals(byteArrayOf(3), frames[1].payload)
+    }
+
+    @Test
     fun chunkCountOverflowIsRejectedBeforeReadingSource() = runTest {
         assertFailsWith<IllegalArgumentException> {
             streamFileData(
