@@ -1200,9 +1200,17 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
         System.err.println("[file ← $peerName] destination failed: ${error.message}".sanitizedForTerminal())
         return
     }
-    val transfer = runCatching { offer.accept(destination) }.getOrElse { error ->
-        runCatching { saveFile.delete() }
-        runCatching { offer.reject("accept failed: ${error.message}") }
+    val transfer = try {
+        offer.accept(destination)
+    } catch (cancelled: CancellationException) {
+        withContext(NonCancellable) { runCatching { destination.abort(null) } }
+        throw cancelled
+    } catch (error: Throwable) {
+        withContext(NonCancellable) {
+            runCatching { destination.abort(null) }
+            runCatching { saveFile.delete() }
+            runCatching { offer.reject("accept failed: ${error.message}") }
+        }
         System.err.println("[file ← $peerName] accept failed: ${error.message}".sanitizedForTerminal())
         return
     }

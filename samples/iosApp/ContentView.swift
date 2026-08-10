@@ -1278,6 +1278,17 @@ struct ContentView: View {
                 return nil
             }
         } catch {
+            // The SDK owns the destination only after it wins the retained
+            // offer's acceptance transition. Abort defensively on every
+            // thrown accept so a pre-transition refusal cannot leave the
+            // sample's reservation or temporary file behind.
+            if let cleanupError = await abortDestination(destination) {
+                diag(
+                    "file",
+                    "destination cleanup after failed accept also failed: " +
+                        cleanupError.localizedDescription
+                )
+            }
             diagnostics.transfer(
                 TestDiagnosticEventName.transferFailed,
                 peerId: "\(offer.peer.id)",
@@ -2233,6 +2244,14 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
         }
         stateLock.unlock()
         completionHandler(cleanupError)
+    }
+}
+
+private func abortDestination(_ destination: AtomicFileTransferDestination) async -> Error? {
+    await withCheckedContinuation { continuation in
+        destination.abort(cause: nil) { error in
+            continuation.resume(returning: error)
+        }
     }
 }
 

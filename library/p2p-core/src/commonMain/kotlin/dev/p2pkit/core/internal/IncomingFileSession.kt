@@ -8,16 +8,20 @@ import dev.p2pkit.core.protocol.SecureFileOffer
 import dev.p2pkit.core.protocol.StreamingFileReceiver
 import dev.p2pkit.core.transfer.FileTransferDestination
 import dev.p2pkit.core.transfer.FileTransferState
-import dev.p2pkit.core.transfer.isTerminal
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
+import dev.p2pkit.core.transfer.isTerminal
 import kotlin.concurrent.Volatile
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.io.RawSink
 
 /**
@@ -75,12 +79,12 @@ internal class IncomingFileSession(
         sink: RawSink,
         destination: FileTransferDestination? = null
     ): Boolean = operationLock.withLock {
-        if (_state.value.isTerminal()) return@withLock false
+        val current = _state.value
+        if (current.isTerminal()) return@withLock false
         check(receiver == null) { "Offer $id already owns a receiver" }
         receiver = StreamingFileReceiver(transferId, sizeBytes, sink)
         this.destination = destination
-        _state.value = FileTransferState.Accepted
-        true
+        _state.compareAndSet(current, FileTransferState.Accepted)
     }
 
     /** Returns null when a terminal transition already won the race. */
@@ -89,10 +93,18 @@ internal class IncomingFileSession(
         val ownedReceiver = receiver
             ?: throw P2pError.ProtocolError("FILE_DATA for $transferId arrived before acceptance committed")
         val total = ownedReceiver.acceptDataChunk(frame)
+        if (_state.value.isTerminal()) return@withLock null
+        val previousTotal = _bytes.value
         _bytes.value = total
         if (sizeBytes > 0L) {
             val progress = (total.toDouble() / sizeBytes.toDouble()).coerceIn(0.0, 1.0).toFloat()
-            _state.value = FileTransferState.Sending(progress)
+            val current = _state.value
+            if (current.isTerminal() ||
+                !_state.compareAndSet(current, FileTransferState.Sending(progress))
+            ) {
+                _bytes.compareAndSet(total, previousTotal)
+                return@withLock null
+            }
         }
         total
     }
@@ -103,8 +115,11 @@ internal class IncomingFileSession(
         val ownedReceiver = receiver
             ?: throw P2pError.ProtocolError("FILE_DONE for $transferId arrived before acceptance committed")
         ownedReceiver.finish()
+        val current = _state.value
+        if (current.isTerminal() || !_state.compareAndSet(current, FileTransferState.Completed)) {
+            return@withLock false
+        }
         receiver = null
-        _state.value = FileTransferState.Completed
         true
     }
 
@@ -137,7 +152,14 @@ internal class IncomingFileSession(
             try {
                 ownedReceiver.flushPrepared()
             } catch (e: CancellationException) {
-                throw e
+                currentCoroutineContext().ensureActive()
+                throw P2pError.FileTransferFailed(
+                    kind = dev.p2pkit.core.FileTransferFailureKind.STORAGE,
+                    phase = dev.p2pkit.core.FileTransferPhase.FLUSH,
+                    retryability = dev.p2pkit.core.Retryability.RETRY_AFTER_USER_ACTION,
+                    transferId = id,
+                    reason = "Receiver flush failed: ${e.message ?: e::class.simpleName}"
+                ).also { it.underlying = e }
             } catch (e: Throwable) {
                 throw P2pError.FileTransferFailed(
                     kind = dev.p2pkit.core.FileTransferFailureKind.STORAGE,
@@ -152,7 +174,14 @@ internal class IncomingFileSession(
             try {
                 ownedDestination.commit()
             } catch (e: CancellationException) {
-                throw e
+                currentCoroutineContext().ensureActive()
+                throw P2pError.FileTransferFailed(
+                    kind = dev.p2pkit.core.FileTransferFailureKind.STORAGE,
+                    phase = dev.p2pkit.core.FileTransferPhase.DURABLE_COMMIT,
+                    retryability = dev.p2pkit.core.Retryability.RETRY_AFTER_USER_ACTION,
+                    transferId = id,
+                    reason = "Receiver durable commit failed: ${e.message ?: e::class.simpleName}"
+                ).also { it.underlying = e }
             } catch (e: Throwable) {
                 throw P2pError.FileTransferFailed(
                     kind = dev.p2pkit.core.FileTransferFailureKind.STORAGE,
@@ -162,9 +191,18 @@ internal class IncomingFileSession(
                     reason = "Receiver durable commit failed: ${e.message ?: e::class.simpleName}"
                 ).also { it.underlying = e }
             }
+            // Commit the public terminal state while still holding the same
+            // operation lock as durable publication. A timeout or remote
+            // terminal event can still win the lock-free state CAS while the
+            // callback is running; a late commit must never overwrite it.
+            val current = _state.value
+            if (current.isTerminal() ||
+                !_state.compareAndSet(current, FileTransferState.Completed)
+            ) {
+                return false
+            }
             receiver = null
             destination = null
-            _state.value = FileTransferState.Completed
             return true
         } finally {
             operationLock.unlock()
@@ -172,32 +210,46 @@ internal class IncomingFileSession(
     }
 
     internal suspend fun setState(newState: FileTransferState): Boolean {
-        var destinationToAbort: FileTransferDestination? = null
-        val changed = operationLock.withLock {
-            if (_state.value.isTerminal()) return@withLock false
-            _state.value = newState
-            if (newState.isTerminal()) {
-                receiver?.abort()
-                receiver = null
-                destinationToAbort = destination
-                destination = null
+        if (!newState.isTerminal()) {
+            return operationLock.withLock {
+                val current = _state.value
+                !current.isTerminal() && _state.compareAndSet(current, newState)
             }
-            true
         }
+
+        val changed = transitionTerminalWithoutCleanup(newState)
         if (changed) {
-            try {
-                destinationToAbort?.abort(
-                    (newState as? FileTransferState.Failed)?.error as? P2pError.FileTransferFailed
+            // Declare the public terminal state before waiting for an
+            // application sink/commit lock. Cleanup is independently bounded,
+            // so a non-cooperative destination cannot hold the state machine,
+            // terminal control response, or session shutdown forever.
+            withContext(NonCancellable) {
+                dispatcher.cleanupIncomingTerminalResources(
+                    this@IncomingFileSession,
+                    (newState as? FileTransferState.Failed)?.error as?
+                        P2pError.FileTransferFailed
                 )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Throwable) {
-                // The transfer is already terminal and ownership was cleared.
-                // Cleanup failure must not suppress the authenticated result.
             }
         }
         return changed
     }
+
+    internal fun transitionTerminalWithoutCleanup(newState: FileTransferState): Boolean {
+        check(newState.isTerminal()) { "transitionTerminalWithoutCleanup requires a terminal state" }
+        while (true) {
+            val current = _state.value
+            if (current.isTerminal()) return false
+            if (_state.compareAndSet(current, newState)) return true
+        }
+    }
+
+    /** Called only by the dispatcher's independently owned cleanup worker. */
+    internal suspend fun detachTerminalResources(): FileTransferDestination? =
+        operationLock.withLock {
+            receiver?.abort()
+            receiver = null
+            destination.also { destination = null }
+        }
 
     internal suspend fun markFailed(error: P2pError): Boolean =
         setState(FileTransferState.Failed(error))

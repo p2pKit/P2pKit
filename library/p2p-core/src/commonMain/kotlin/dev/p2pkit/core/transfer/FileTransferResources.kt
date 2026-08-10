@@ -14,7 +14,9 @@ import kotlinx.io.RawSource
  * change after preparation therefore fails with `SOURCE_CHANGED` instead of
  * being committed.
  * The SDK snapshots [sizeBytes] and [sha256] while registering the offer and
- * does not call [open] unless the remote peer accepts.
+ * does not call [open] unless the remote peer accepts. Both snapshot getters
+ * must be immutable and return promptly; the SDK reads them together on an
+ * independently owned worker bounded by `offerTimeoutMillis`.
  */
 public interface PreparedFileSource {
     /** Exact number of bytes returned by every successful [open] call. */
@@ -29,6 +31,13 @@ public interface PreparedFileSource {
      * The SDK calls this at most once for a transfer attempt and closes the
      * returned source. Implementations retain ownership of any backing file
      * or provider and must remain reopenable while the offer is pending.
+     * This non-suspending callback should return promptly. The SDK invokes it
+     * on an independently owned worker and enforces `offerTimeoutMillis`; a
+     * source returned after that deadline is closed and is never streamed.
+     * The returned source's `close()` should also return promptly. Terminal
+     * close is independently bounded; a broken close that ignores interruption
+     * can finish after the public transfer is already terminal, but the SDK
+     * detaches the source from the handle and closes it at most once.
      */
     public fun open(): RawSource
 }
@@ -45,10 +54,22 @@ public interface PreparedFileSource {
  * [commit] and [abort] are suspending and must not return until their resource
  * work is complete. [abort] is called when an accepted transfer fails or is
  * cancelled before commit. Implementations should close and remove partial
- * state. Both terminal methods must be idempotent because process/platform
- * cleanup can race a remote terminal event. Once publication begins,
- * cancellation must not leave an ambiguous half-published result: finish the
- * atomic publish and directory durability work or throw a storage failure.
+ * state. Both terminal methods must be idempotent and safe when they race,
+ * because a deadline, remote terminal event, and an already-running commit
+ * can overlap. Once publication begins, cancellation must not leave an
+ * ambiguous half-published result: finish the atomic publish and directory
+ * durability work or throw a storage failure.
+ *
+ * The SDK bounds open/commit/abort waits on independently owned workers. A
+ * callback that ignores cancellation therefore cannot freeze the protocol or
+ * session lifecycle, but its platform work can finish after the transfer is
+ * already `Failed`. `abort` can begin while a non-cooperative `openSink` or
+ * `commit` invocation is still unwinding, so implementations must serialize
+ * all three methods around one coherent ownership state. In particular, an
+ * atomic publish that crossed its point of no return can leave a fully durable
+ * target after a reported commit timeout; it must never leave a partially
+ * published target. Applications should use transfer-unique destinations and
+ * retain timeout diagnostics when reconciling such a late durable result.
  */
 public interface FileTransferDestination {
     /**
@@ -56,7 +77,9 @@ public interface FileTransferDestination {
      *
      * The SDK writes through the returned sink but never exposes it elsewhere.
      * The destination must close it during [commit] or [abort]. Repeated calls
-     * must fail.
+     * must fail. This non-suspending callback should return promptly. If it
+     * returns after the acceptance deadline, the SDK aborts the destination
+     * and never installs the sink.
      */
     public fun openSink(): RawSink
 
@@ -65,6 +88,8 @@ public interface FileTransferDestination {
      *
      * Returning means the destination survived the implementation's promised
      * durability boundary. Repeated calls after success must be harmless.
+     * Cooperate with cancellation before publication starts; after the atomic
+     * publish point, complete durability or report a storage failure.
      */
     public suspend fun commit()
 

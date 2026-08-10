@@ -919,13 +919,25 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
                 appendSystemMessage("rejected '${pending.name}': ${e.message ?: "cannot open destination"}")
                 return
             }
-        val incoming = runCatchingCancellable { pending.offer.accept(destination) }
-            .getOrElse { e ->
-                runCatching { saveFile.delete() }
-                runCatchingCancellable { pending.offer.reject("accept failed on receiver") }
-                appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
-                return
+        val incoming = try {
+            pending.offer.accept(destination)
+        } catch (cancelled: CancellationException) {
+            withContext(NonCancellable) {
+                // Cleanup is best effort and must not replace the caller's
+                // original cancellation if a broken callback throws its own
+                // CancellationException.
+                runCatching { destination.abort(null) }
             }
+            throw cancelled
+        } catch (e: Throwable) {
+            withContext(NonCancellable) {
+                runCatching { destination.abort(null) }
+                runCatching { saveFile.delete() }
+                runCatching { pending.offer.reject("accept failed on receiver") }
+            }
+            appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
+            return
+        }
         registerIncomingTransfer(incoming, pending.peerName, saveFile.absolutePath, scope)
     }
 

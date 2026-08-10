@@ -22,10 +22,10 @@ public data class FileTransferConfig(
     /**
      * Time the receiver has to call [P2pFileOffer.accept] or [P2pFileOffer.reject]
      * before the offer auto-rejects with reason `"timeout"`. It is also the
-     * maximum idle interval for an accepted transfer; the overall accepted
-     * transfer deadline is twenty times this value. Secure-v2 receiver commit
-     * and sender FILE_COMMIT acknowledgement each use the same bound. Default
-     * 30 s.
+     * maximum idle interval for both sending and receiving after acceptance;
+     * the overall accepted-transfer deadline in either direction is twenty
+     * times this value. Secure-v2 receiver commit and sender FILE_COMMIT
+     * acknowledgement each use the same bound. Default 30 s.
      */
     val offerTimeoutMillis: Long = 30_000
 ) {

@@ -32,9 +32,12 @@ public sealed class FileTransferState {
     public data class Sending(val progress: Float) : FileTransferState()
 
     /**
-     * All bytes completed under the negotiated protocol: the legacy sink was
-     * flushed, or the secure-v2 destination was digest-verified, durably
-     * committed, and acknowledged.
+     * All bytes completed under the negotiated protocol. For legacy receive,
+     * the sink was flushed. For secure-v2 receive, the destination was
+     * digest-verified and durably committed before the SDK attempted
+     * `FILE_COMMIT`; an acknowledgement write failure does not undo that
+     * durable local result. A secure-v2 sender reaches this state only after
+     * receiving the matching authenticated commit acknowledgement.
      */
     public data object Completed : FileTransferState()
 

@@ -39,8 +39,9 @@ public interface P2pFileOffer {
     /**
      * Accept a legacy protocol-v1 offer and stream incoming bytes into [sink]. The returned
      * [P2pFileTransfer] tracks progress; on [FileTransferState.Completed] the
-     * sink has been flushed but not closed — the caller is responsible for
-     * closing it.
+     * sink has been flushed but not closed. The sink remains caller-owned on
+     * every terminal outcome, including failure and cancellation; the caller
+     * is responsible for closing it after observing the terminal state.
      *
      * Throws [IllegalStateException] if the offer was already accepted,
      * rejected, cancelled, or timed out. Once the FILE_ACCEPT write commits,
@@ -55,7 +56,12 @@ public interface P2pFileOffer {
      * negotiated authenticated `file-commit-sha256-v1`; there is no
      * flush-only fallback. The sender completes only after [destination]
      * commits and the acknowledgement is written. The SDK owns the
-     * destination after acceptance starts and invokes its terminal cleanup.
+     * destination after it successfully transitions this retained offer into
+     * acceptance and invokes its terminal cleanup on every later failure.
+     * If the call is refused before that transition (for example, another
+     * response already won), ownership never transfers; callers should
+     * defensively invoke the idempotent [FileTransferDestination.abort] when
+     * handling any thrown acceptance error.
      */
     @Throws(Exception::class)
     public suspend fun accept(destination: FileTransferDestination): P2pFileTransfer =

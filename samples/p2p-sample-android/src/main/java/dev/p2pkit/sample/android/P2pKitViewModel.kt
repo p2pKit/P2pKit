@@ -1045,15 +1045,27 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
                 return
             }
-        val incoming = runCatchingNonCancel { pending.offer.accept(destination) }
-            .getOrElse { e ->
-                runCatchingNonCancel { pending.offer.reject("accept failed on receiver") }
-                withContext(Dispatchers.IO) {
-                    runCatchingNonCancel { saveFile.delete() }
-                }
-                appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
-                return
+        val incoming = try {
+            pending.offer.accept(destination)
+        } catch (cancelled: CancellationException) {
+            withContext(NonCancellable) {
+                // Cleanup is best effort and must not replace the caller's
+                // original cancellation if a broken callback throws its own
+                // CancellationException.
+                runCatching { destination.abort(null) }
             }
+            throw cancelled
+        } catch (e: Throwable) {
+            withContext(NonCancellable) {
+                runCatching { destination.abort(null) }
+                runCatching { pending.offer.reject("accept failed on receiver") }
+                withContext(Dispatchers.IO) {
+                    runCatching { saveFile.delete() }
+                }
+            }
+            appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
+            return
+        }
         registerIncomingTransfer(incoming, pending.peerName, saveFile.absolutePath, scope)
     }
 

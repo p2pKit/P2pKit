@@ -35,11 +35,13 @@ import dev.p2pkit.core.transfer.outgoingOfferWatchdogMillis
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -53,12 +55,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.io.RawSink
 import kotlinx.io.RawSource
 import kotlin.concurrent.Volatile
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.random.Random
 
 /**
@@ -76,12 +79,18 @@ internal class FileTransferDispatcher(
     private val config: FileTransferConfig,
     private val scope: CoroutineScope,
     private val random: Random,
-    private val logger: P2pLogger
+    private val logger: P2pLogger,
+    private val independentOperationDispatcher: CoroutineDispatcher = blockingIoDispatcher(),
+    private val independentCleanupDispatcher: CoroutineDispatcher =
+        blockingApplicationCleanupDispatcher(),
+    private val outgoingReadDispatcher: CoroutineDispatcher? = blockingFileReadDispatcher(),
+    private val protocolOperationDispatcher: CoroutineDispatcher = blockingProtocolDispatcher(),
+    private val operationDeadlineDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) {
 
     private val incomingOffers = MutableSharedFlow<P2pFileOffer>(
         replay = 0,
-        extraBufferCapacity = MAX_PENDING_INCOMING_OFFERS,
+        extraBufferCapacity = MAX_INCOMING_OFFER_EVENT_BUFFER,
         onBufferOverflow = BufferOverflow.SUSPEND
     )
     val incomingFiles: SharedFlow<P2pFileOffer> = incomingOffers.asSharedFlow()
@@ -91,7 +100,22 @@ internal class FileTransferDispatcher(
 
     private val outgoing: MutableMap<MessageId, OutgoingEntry> = mutableMapOf()
     private val incoming: MutableMap<MessageId, IncomingEntry> = mutableMapOf()
+    private val ambiguousIncomingTransferIds: MutableSet<MessageId> = mutableSetOf()
+    private var ambiguousIncomingCapacityExhausted: Boolean = false
     private val lock = Mutex()
+
+    /**
+     * Non-cooperative application callbacks and protocol writers run on
+     * independent jobs so their callers retain a real deadline. Keep separate
+     * admission gates: a wedged destination must not consume the capacity
+     * needed to report its terminal result to the peer. A timed-out worker
+     * retains its permit until it actually exits, bounding detached work even
+     * when application/native code ignores cancellation indefinitely.
+     */
+    private val applicationOperationGate = Semaphore(MAX_CONCURRENT_FILE_OPERATIONS)
+    private val cleanupOperationGate = Semaphore(MAX_CONCURRENT_FILE_OPERATIONS)
+    private val protocolOperationGate = Semaphore(MAX_CONCURRENT_FILE_OPERATIONS)
+    private val outgoingStreamGate = Semaphore(MAX_CONCURRENT_OUTGOING_STREAMS)
 
     @Volatile
     private var closed: Boolean = false
@@ -114,10 +138,12 @@ internal class FileTransferDispatcher(
         @Volatile
         var phase: OutgoingPhase = OutgoingPhase.OFFERED,
         var timer: Job? = null,
-        var sender: Job? = null
+        var sender: Job? = null,
+        var overallTimer: Job? = null,
+        var idleGeneration: Long = 0L
     )
 
-    private enum class IncomingPhase { OFFERED, ACCEPTING, ACCEPTED }
+    private enum class IncomingPhase { OFFERED, ACCEPTING, ACCEPTED, FINALIZING }
 
     private class IncomingEntry(
         val session: IncomingFileSession,
@@ -191,6 +217,7 @@ internal class FileTransferDispatcher(
                         reason = "Session $sessionId is closed; cannot start file transfer"
                     )
                 }
+                requireOutgoingCapacityLocked()
                 val transferId = allocateTransferIdLocked()
                 val handle = OutgoingFileTransferImpl(
                     peer = remotePeer,
@@ -204,22 +231,43 @@ internal class FileTransferDispatcher(
                 OutgoingEntry(handle, writeEpoch).also { outgoing[transferId] = it }
             }
         } catch (e: Throwable) {
-            runCatching { source.close() }
+            withContext(NonCancellable) {
+                cleanupOutgoingSource(source, "failed outgoing registration")
+            }
             throw e
         }
 
         val transferId = entry.handle.transferId
+        var offerWritten = false
         try {
-            withEpochWrite(entry.writeEpoch) { connection ->
+            sendInitialOfferWithinDeadline(entry) { connection ->
                 protocol.sendFileOffer(connection, transferId, payload)
             }
+            offerWritten = true
+            withContext(NonCancellable) { armOutgoingOfferWatchdog(entry) }
+            currentCoroutineContext().ensureActive()
         } catch (e: CancellationException) {
             val removed = removeOutgoing(transferId, entry)
             removed?.cancelJobs()
             withContext(NonCancellable) {
                 entry.handle.setState(
-                    FileTransferState.Cancelled("sendFile cancelled before FILE_OFFER was written")
+                    FileTransferState.Cancelled(
+                        if (offerWritten) {
+                            "sendFile cancelled after FILE_OFFER was written"
+                        } else {
+                            "sendFile cancelled before FILE_OFFER was written"
+                        }
+                    )
                 )
+                // A writer can put the complete offer on the wire and then
+                // throw. An unknown FILE_CANCEL is harmless, whereas omitting
+                // compensation can leave a remote retained offer alive.
+                sendCleanupBestEffort(
+                    "cancelled registration FILE_CANCEL for $transferId",
+                    entry.writeEpoch
+                ) { connection ->
+                    protocol.sendFileCancel(connection, transferId, "sendFile was cancelled")
+                }
             }
             throw e
         } catch (e: Throwable) {
@@ -233,10 +281,14 @@ internal class FileTransferDispatcher(
             )
             removeOutgoing(transferId, entry)?.cancelJobs()
             entry.handle.markFailed(err)
+            sendCleanupBestEffort(
+                "failed registration FILE_CANCEL for $transferId",
+                entry.writeEpoch
+            ) { connection ->
+                protocol.sendFileCancel(connection, transferId, "offer registration failed")
+            }
             throw err
         }
-
-        armOutgoingOfferWatchdog(entry)
         return entry.handle
     }
 
@@ -255,11 +307,36 @@ internal class FileTransferDispatcher(
                 reason = "Peer did not negotiate ${ProtocolFeatures.FILE_COMMIT_SHA256_V1}"
             )
         }
-        val sizeBytes: Long
-        val expectedDigest: Sha256Digest
-        try {
-            sizeBytes = source.sizeBytes
-            expectedDigest = source.sha256
+        val sourceSnapshot = try {
+            when (
+                val result = runBoundedIndependentOperation(
+                    timeoutMillis = config.offerTimeoutMillis,
+                    preserveCancellation = false,
+                    operationDispatcher = independentOperationDispatcher,
+                    deadlineDispatcher = operationDeadlineDispatcher,
+                    operationGate = applicationOperationGate
+                ) {
+                    PreparedSourceSnapshot(source.sizeBytes, source.sha256)
+                }
+            ) {
+                is BoundedOperationResult.Success -> result.value
+                is BoundedOperationResult.Failure -> throw classifyCallbackCancellation(
+                    result.cause,
+                    FileTransferFailureKind.SOURCE_IO,
+                    FileTransferPhase.SOURCE_READ,
+                    Retryability.RETRY_AFTER_USER_ACTION,
+                    null,
+                    "prepared source snapshot failed"
+                )
+                is BoundedOperationResult.TimedOut -> throw fileFailure(
+                    kind = FileTransferFailureKind.TIMEOUT,
+                    phase = FileTransferPhase.SOURCE_READ,
+                    retryability = Retryability.RETRY_AFTER_USER_ACTION,
+                    transferId = null,
+                    reason = "prepared source snapshot did not finish within ${result.timeoutMillis}ms",
+                    cause = result.cause
+                )
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -272,6 +349,8 @@ internal class FileTransferDispatcher(
                 cause = e
             )
         }
+        val sizeBytes = sourceSnapshot.sizeBytes
+        val expectedDigest = sourceSnapshot.sha256
         if (sizeBytes < 0L) {
             throw fileFailure(
                 kind = FileTransferFailureKind.INVALID_METADATA,
@@ -309,6 +388,7 @@ internal class FileTransferDispatcher(
                     reason = "Session $sessionId is closed; cannot start file transfer"
                 )
             }
+            requireOutgoingCapacityLocked()
             val transferId = allocateTransferIdLocked()
             val secureOffer = SecureFileOffer.create(
                 transferId, name, sizeBytes, mimeType, expectedDigest
@@ -329,14 +409,36 @@ internal class FileTransferDispatcher(
         }
         val entry = pair.first
         val secureOffer = pair.second
+        var offerWritten = false
         try {
-            withEpochWrite(entry.writeEpoch) { connection ->
+            sendInitialOfferWithinDeadline(entry) { connection ->
                 protocol.sendSecureFileOffer(connection, secureOffer)
             }
+            offerWritten = true
+            withContext(NonCancellable) { armOutgoingOfferWatchdog(entry) }
+            currentCoroutineContext().ensureActive()
         } catch (e: CancellationException) {
             removeOutgoing(entry.handle.transferId, entry)?.cancelJobs()
             withContext(NonCancellable) {
-                entry.handle.setState(FileTransferState.Cancelled("sendFile cancelled before FILE_OFFER was written"))
+                entry.handle.setState(
+                    FileTransferState.Cancelled(
+                        if (offerWritten) {
+                            "sendFile cancelled after FILE_OFFER was written"
+                        } else {
+                            "sendFile cancelled before FILE_OFFER was written"
+                        }
+                    )
+                )
+                sendCleanupBestEffort(
+                    "cancelled registration FILE_CANCEL for ${entry.handle.transferId}",
+                    entry.writeEpoch
+                ) { connection ->
+                    protocol.sendFileCancel(
+                        connection,
+                        entry.handle.transferId,
+                        "sendFile was cancelled"
+                    )
+                }
             }
             throw e
         } catch (e: Throwable) {
@@ -350,18 +452,35 @@ internal class FileTransferDispatcher(
             )
             removeOutgoing(entry.handle.transferId, entry)?.cancelJobs()
             entry.handle.markFailed(error)
+            sendCleanupBestEffort(
+                "failed registration FILE_CANCEL for ${entry.handle.transferId}",
+                entry.writeEpoch
+            ) { connection ->
+                protocol.sendFileCancel(
+                    connection,
+                    entry.handle.transferId,
+                    "offer registration failed"
+                )
+            }
             throw error
         }
-        armOutgoingOfferWatchdog(entry)
         return entry.handle
     }
 
     suspend fun cancelOutgoing(handle: OutgoingFileTransferImpl, reason: String?) {
-        val entry = removeOutgoing(handle.transferId) ?: return
+        val entry = lock.withLock {
+            val current = outgoing[handle.transferId] ?: return
+            if (current.handle !== handle) return
+            outgoing.remove(handle.transferId)
+            current
+        }
         val changed = withContext(NonCancellable) {
-            val changed = handle.setState(FileTransferState.Cancelled(reason))
             entry.cancelJobs()
-            changed
+            terminalizeOutgoing(
+                entry,
+                FileTransferState.Cancelled(reason),
+                "cancelled outgoing transfer ${handle.transferId}"
+            )
         }
         if (!changed) return
         sendBestEffort("FILE_CANCEL for ${handle.transferId}", entry.writeEpoch) { connection ->
@@ -384,6 +503,9 @@ internal class FileTransferDispatcher(
         val entry = lock.withLock {
             val current = incoming[session.transferId]
                 ?: throw IllegalStateException("Offer ${session.id} is no longer pending")
+            if (current.session !== session) {
+                throw IllegalStateException("Offer ${session.id} is no longer the current offer")
+            }
             if (current.phase != IncomingPhase.OFFERED || session.state.value.isTerminal()) {
                 throw IllegalStateException("Offer ${session.id} was already accepted or rejected")
             }
@@ -398,55 +520,22 @@ internal class FileTransferDispatcher(
             throw IllegalStateException("Offer ${session.id} became terminal during acceptance")
         }
 
-        try {
-            withTimeout(config.offerTimeoutMillis) {
-                withEpochWrite(entry.writeEpoch) { connection ->
-                    protocol.sendFileAccept(connection, session.transferId)
+        sendFileAcceptWithinDeadline(entry, secure = false)
+
+        withContext(NonCancellable) {
+            val committed = lock.withLock {
+                val current = incoming[session.transferId]
+                if (current === entry && current.phase == IncomingPhase.ACCEPTING) {
+                    current.phase = IncomingPhase.ACCEPTED
+                    removePendingOfferLocked(current.session)
+                    true
+                } else {
+                    false
                 }
             }
-            currentCoroutineContext().ensureActive()
-        } catch (e: TimeoutCancellationException) {
-            val err = fileFailure(
-                kind = FileTransferFailureKind.TIMEOUT,
-                phase = FileTransferPhase.ACCEPT,
-                retryability = Retryability.RETRY_NEW_SESSION,
-                transferId = session.transferId,
-                reason = "FILE_ACCEPT write did not finish within ${config.offerTimeoutMillis}ms",
-                cause = e
-            )
-            compensateAmbiguousAccept(entry, FileTransferState.Failed(err))
-            throw err
-        } catch (e: CancellationException) {
-            compensateAmbiguousAccept(
-                entry,
-                FileTransferState.Cancelled("accept cancelled while FILE_ACCEPT was in flight")
-            )
-            throw e
-        } catch (e: Throwable) {
-            val err = failureFromCause(
-                kind = FileTransferFailureKind.TRANSPORT,
-                phase = FileTransferPhase.ACCEPT,
-                retryability = Retryability.RETRY_NEW_SESSION,
-                transferId = session.transferId,
-                prefix = "FILE_ACCEPT write failed",
-                cause = e
-            )
-            compensateAmbiguousAccept(entry, FileTransferState.Failed(err))
-            throw err
+            entry.acceptanceCommitted.complete(committed)
+            if (committed) armAcceptedDeadlines(entry)
         }
-
-        val committed = lock.withLock {
-            val current = incoming[session.transferId]
-            if (current === entry && current.phase == IncomingPhase.ACCEPTING) {
-                current.phase = IncomingPhase.ACCEPTED
-                removePendingOfferLocked(current.session)
-                true
-            } else {
-                false
-            }
-        }
-        entry.acceptanceCommitted.complete(committed)
-        if (committed) armAcceptedDeadlines(entry)
         return session
     }
 
@@ -466,6 +555,9 @@ internal class FileTransferDispatcher(
         val entry = lock.withLock {
             val current = incoming[session.transferId]
                 ?: throw IllegalStateException("Offer ${session.id} is no longer pending")
+            if (current.session !== session) {
+                throw IllegalStateException("Offer ${session.id} is no longer the current offer")
+            }
             if (current.phase != IncomingPhase.OFFERED || session.state.value.isTerminal()) {
                 throw IllegalStateException("Offer ${session.id} was already accepted or rejected")
             }
@@ -475,11 +567,50 @@ internal class FileTransferDispatcher(
             current
         }
         val sink = try {
-            destination.openSink()
+            when (
+                val result = runBoundedIndependentOperation(
+                    timeoutMillis = config.offerTimeoutMillis,
+                    preserveCancellation = false,
+                    operationDispatcher = independentOperationDispatcher,
+                    deadlineDispatcher = operationDeadlineDispatcher,
+                    operationGate = applicationOperationGate,
+                    onLateSuccess = {
+                        abortUnownedDestination(
+                            destination,
+                            cause = null,
+                            label = "late destination open for ${session.transferId}"
+                        )
+                    }
+                ) {
+                    destination.openSink()
+                }
+            ) {
+                is BoundedOperationResult.Success -> result.value
+                is BoundedOperationResult.Failure -> throw classifyCallbackCancellation(
+                    result.cause,
+                    FileTransferFailureKind.STORAGE,
+                    FileTransferPhase.ACCEPT,
+                    Retryability.RETRY_AFTER_USER_ACTION,
+                    session.transferId,
+                    "destination open failed"
+                )
+                is BoundedOperationResult.TimedOut -> throw fileFailure(
+                    FileTransferFailureKind.TIMEOUT,
+                    FileTransferPhase.ACCEPT,
+                    Retryability.RETRY_AFTER_USER_ACTION,
+                    session.transferId,
+                    "destination open did not finish within ${result.timeoutMillis}ms",
+                    result.cause
+                )
+            }
         } catch (e: CancellationException) {
             removeIncoming(session.transferId, entry)?.cancelJobs()
             withContext(NonCancellable) {
-                runCatching { destination.abort(null) }
+                abortUnownedDestination(
+                    destination,
+                    cause = null,
+                    label = "cancelled destination open for ${session.transferId}"
+                )
                 session.setState(FileTransferState.Cancelled("accept cancelled while opening destination"))
             }
             throw e
@@ -493,7 +624,11 @@ internal class FileTransferDispatcher(
                 e
             ) as P2pError.FileTransferFailed
             removeIncoming(session.transferId, entry)?.cancelJobs()
-            runCatching { destination.abort(error) }
+            abortUnownedDestination(
+                destination,
+                cause = error,
+                label = "failed destination open for ${session.transferId}"
+            )
             session.markFailed(error)
             throw error
         }
@@ -502,7 +637,11 @@ internal class FileTransferDispatcher(
         } catch (e: CancellationException) {
             removeIncoming(session.transferId, entry)?.cancelJobs()
             withContext(NonCancellable) {
-                runCatching { destination.abort(null) }
+                abortUnownedDestination(
+                    destination,
+                    cause = null,
+                    label = "cancelled destination install for ${session.transferId}"
+                )
                 session.setState(FileTransferState.Cancelled("accept cancelled while installing destination"))
             }
             throw e
@@ -516,59 +655,36 @@ internal class FileTransferDispatcher(
                 e
             ) as P2pError.FileTransferFailed
             removeIncoming(session.transferId, entry)?.cancelJobs()
-            runCatching { destination.abort(error) }
+            abortUnownedDestination(
+                destination,
+                cause = error,
+                label = "failed destination install for ${session.transferId}"
+            )
             session.markFailed(error)
             throw error
         }
         if (!installed) {
             removeIncoming(session.transferId, entry)?.cancelJobs()
-            runCatching { destination.abort(null) }
+            abortUnownedDestination(
+                destination,
+                cause = null,
+                label = "terminal destination install for ${session.transferId}"
+            )
             throw IllegalStateException("Offer ${session.id} became terminal during acceptance")
         }
-        try {
-            withTimeout(config.offerTimeoutMillis) {
-                withEpochWrite(entry.writeEpoch) { connection ->
-                    protocol.sendSecureFileAccept(connection, session.transferId)
-                }
+        sendFileAcceptWithinDeadline(entry, secure = true)
+        withContext(NonCancellable) {
+            val committed = lock.withLock {
+                val current = incoming[session.transferId]
+                if (current === entry && current.phase == IncomingPhase.ACCEPTING) {
+                    current.phase = IncomingPhase.ACCEPTED
+                    removePendingOfferLocked(current.session)
+                    true
+                } else false
             }
-            currentCoroutineContext().ensureActive()
-        } catch (e: TimeoutCancellationException) {
-            val error = fileFailure(
-                FileTransferFailureKind.TIMEOUT,
-                FileTransferPhase.ACCEPT,
-                Retryability.RETRY_NEW_SESSION,
-                session.transferId,
-                "FILE_ACCEPT write did not finish within ${config.offerTimeoutMillis}ms",
-                e
-            )
-            compensateAmbiguousAccept(entry, FileTransferState.Failed(error))
-            throw error
-        } catch (e: CancellationException) {
-            compensateAmbiguousAccept(entry,
-                FileTransferState.Cancelled("accept cancelled while FILE_ACCEPT was in flight"))
-            throw e
-        } catch (e: Throwable) {
-            val error = failureFromCause(
-                FileTransferFailureKind.TRANSPORT,
-                FileTransferPhase.ACCEPT,
-                Retryability.RETRY_NEW_SESSION,
-                session.transferId,
-                "FILE_ACCEPT write failed",
-                e
-            )
-            compensateAmbiguousAccept(entry, FileTransferState.Failed(error))
-            throw error
+            entry.acceptanceCommitted.complete(committed)
+            if (committed) armAcceptedDeadlines(entry)
         }
-        val committed = lock.withLock {
-            val current = incoming[session.transferId]
-            if (current === entry && current.phase == IncomingPhase.ACCEPTING) {
-                current.phase = IncomingPhase.ACCEPTED
-                removePendingOfferLocked(current.session)
-                true
-            } else false
-        }
-        entry.acceptanceCommitted.complete(committed)
-        if (committed) armAcceptedDeadlines(entry)
         return session
     }
 
@@ -576,6 +692,9 @@ internal class FileTransferDispatcher(
         val entry = lock.withLock {
             val current = incoming[session.transferId]
                 ?: throw IllegalStateException("Offer ${session.id} is no longer pending")
+            if (current.session !== session) {
+                throw IllegalStateException("Offer ${session.id} is no longer the current offer")
+            }
             if (current.phase != IncomingPhase.OFFERED || session.state.value.isTerminal()) {
                 throw IllegalStateException("Offer ${session.id} was already accepted or rejected")
             }
@@ -593,16 +712,17 @@ internal class FileTransferDispatcher(
 
     suspend fun cancelIncoming(session: IncomingFileSession, reason: String?) {
         val entry = lock.withLock {
-            val current = incoming.remove(session.transferId) ?: return
+            val current = incoming[session.transferId] ?: return
+            if (current.session !== session) return
+            incoming.remove(session.transferId)
             removePendingOfferLocked(current.session)
             current
         }
         entry.acceptanceCommitted.complete(false)
         val accepted = entry.phase != IncomingPhase.OFFERED
         val changed = withContext(NonCancellable) {
-            val changed = session.setState(FileTransferState.Cancelled(reason))
             entry.cancelJobs()
-            changed
+            terminalizeIncoming(entry, FileTransferState.Cancelled(reason))
         }
         if (!changed) return
         sendBestEffort("cancel for ${session.transferId}", entry.writeEpoch) { connection ->
@@ -648,12 +768,14 @@ internal class FileTransferDispatcher(
             val existingIncoming = incoming[transferId]
             when {
                 closed -> OfferInsertion.CLOSED
+                ambiguousIncomingCapacityExhausted -> OfferInsertion.CAPACITY
+                transferId in ambiguousIncomingTransferIds -> OfferInsertion.RETIRED
                 existingIncoming != null && existingIncoming.payload == payload &&
                     existingIncoming.secureOffer == secureOffer ->
                     OfferInsertion.EXACT_DUPLICATE
                 existingIncoming != null -> OfferInsertion.CONFLICT
                 outgoing.containsKey(transferId) -> OfferInsertion.CONFLICT
-                incoming.size >= MAX_PENDING_INCOMING_OFFERS -> OfferInsertion.CAPACITY
+                incoming.size >= MAX_ACTIVE_INCOMING_TRANSFERS -> OfferInsertion.CAPACITY
                 else -> {
                     val entry = IncomingEntry(session, payload, secureOffer, eventEpoch)
                     incoming[transferId] = entry
@@ -670,6 +792,12 @@ internal class FileTransferDispatcher(
                 logger.debug("Session $sessionId: repeated FILE_OFFER transferId $transferId; ignoring")
                 return
             }
+            OfferInsertion.RETIRED -> {
+                sendBestEffort("retired-id FILE_CANCEL for $transferId", eventEpoch) { connection ->
+                    protocol.sendFileCancel(connection, transferId, "transfer id is retired in this session")
+                }
+                return
+            }
             OfferInsertion.CONFLICT -> throw fileFailure(
                 kind = FileTransferFailureKind.TRANSFER_PROTOCOL,
                 phase = FileTransferPhase.OFFER,
@@ -679,7 +807,7 @@ internal class FileTransferDispatcher(
             )
             OfferInsertion.CAPACITY -> {
                 sendBestEffort("capacity FILE_REJECT for $transferId", eventEpoch) { connection ->
-                    protocol.sendFileReject(connection, transferId, "too many pending offers")
+                    protocol.sendFileReject(connection, transferId, "too many active incoming transfers")
                 }
                 return
             }
@@ -714,8 +842,19 @@ internal class FileTransferDispatcher(
         }
         if (!entry.handle.setState(FileTransferState.Accepted)) return
 
-        val sender = scope.launch(start = CoroutineStart.LAZY) {
-            streamOutgoingPayload(entry)
+        val sender = scope.launch(
+            context = outgoingReadDispatcher ?: EmptyCoroutineContext,
+            start = CoroutineStart.LAZY
+        ) {
+            var permitAcquired = false
+            try {
+                outgoingStreamGate.acquire()
+                permitAcquired = true
+                currentCoroutineContext().ensureActive()
+                streamOutgoingPayload(entry)
+            } finally {
+                if (permitAcquired) outgoingStreamGate.release()
+            }
         }
         val registered = lock.withLock {
             if (outgoing[transferId] === entry && entry.phase == OutgoingPhase.STREAMING) {
@@ -725,7 +864,11 @@ internal class FileTransferDispatcher(
                 false
             }
         }
-        if (registered) sender.start() else sender.cancel()
+        if (registered && armOutgoingOverallDeadline(entry)) {
+            sender.start()
+        } else {
+            sender.cancel()
+        }
     }
 
     suspend fun onFileReject(transferId: MessageId, reason: String?) {
@@ -745,7 +888,11 @@ internal class FileTransferDispatcher(
             )
             is RejectResult.Removed -> {
                 result.entry.cancelJobs()
-                result.entry.handle.setState(FileTransferState.Rejected(reason))
+                terminalizeOutgoing(
+                    result.entry,
+                    FileTransferState.Rejected(reason),
+                    "rejected outgoing transfer $transferId"
+                )
             }
         }
     }
@@ -756,12 +903,49 @@ internal class FileTransferDispatcher(
             logger.debug("Session $sessionId: FILE_DATA for unknown transfer ${frame.messageId}; ignoring")
             return
         }
-        if (entry.phase == IncomingPhase.OFFERED) {
-            logger.warn("Session $sessionId: FILE_DATA for ${frame.messageId} arrived before accept; dropping")
-            return
+        when (entry.phase) {
+            IncomingPhase.OFFERED -> {
+                logger.warn(
+                    "Session $sessionId: FILE_DATA for ${frame.messageId} arrived before accept; dropping"
+                )
+                return
+            }
+            IncomingPhase.FINALIZING -> {
+                logger.warn(
+                    "Session $sessionId: FILE_DATA for ${frame.messageId} arrived after finalization began; " +
+                        "dropping"
+                )
+                return
+            }
+            IncomingPhase.ACCEPTING,
+            IncomingPhase.ACCEPTED -> Unit
         }
         try {
-            val total = entry.session.acceptData(frame) ?: return
+            val total = when (
+                val result = runBoundedIndependentOperation(
+                    timeoutMillis = config.acceptedIdleTimeoutMillis,
+                    preserveCancellation = false,
+                    operationDispatcher = independentOperationDispatcher,
+                    deadlineDispatcher = operationDeadlineDispatcher,
+                    operationGate = applicationOperationGate
+                ) {
+                    entry.session.acceptData(frame)
+                }
+            ) {
+                is BoundedOperationResult.Success -> result.value
+                is BoundedOperationResult.Failure -> throw classifyCallbackCancellation(
+                    result.cause,
+                    FileTransferFailureKind.STORAGE,
+                    FileTransferPhase.RECEIVE,
+                    Retryability.RETRY_AFTER_USER_ACTION,
+                    frame.messageId,
+                    "file receive write failed"
+                )
+                is BoundedOperationResult.TimedOut -> {
+                    timeoutAcceptedIncoming(entry, requiredIdleGeneration = null, kind = "idle")
+                    return
+                }
+            } ?: return
             if (total > 0L) rearmIncomingIdleDeadline(entry)
         } catch (e: CancellationException) {
             throw e
@@ -785,14 +969,23 @@ internal class FileTransferDispatcher(
     }
 
     suspend fun onFileDone(transferId: MessageId) {
-        val entry = lock.withLock { incoming[transferId] }
-        if (entry == null) {
-            logger.debug("Session $sessionId: FILE_DONE for unknown transfer $transferId; ignoring")
-            return
-        }
-        if (entry.phase == IncomingPhase.OFFERED) {
-            logger.warn("Session $sessionId: FILE_DONE for $transferId without prior accept")
-            return
+        val entry = when (val decision = beginIncomingFinalization(transferId)) {
+            IncomingFinalization.Missing -> {
+                logger.debug("Session $sessionId: FILE_DONE for unknown transfer $transferId; ignoring")
+                return
+            }
+            is IncomingFinalization.NotAccepted -> {
+                logger.warn(
+                    "Session $sessionId: FILE_DONE for $transferId while receiver was " +
+                        "${decision.phase}; ignoring"
+                )
+                return
+            }
+            IncomingFinalization.AlreadyStarted -> {
+                logger.debug("Session $sessionId: duplicate FILE_DONE for $transferId; ignoring")
+                return
+            }
+            is IncomingFinalization.Started -> decision.entry
         }
         if (entry.secureOffer != null) {
             failIncomingSecureTransfer(
@@ -805,7 +998,35 @@ internal class FileTransferDispatcher(
             return
         }
         try {
-            val completed = entry.session.finishLegacyReceiver()
+            val completed = when (
+                val result = runBoundedIndependentOperation(
+                    timeoutMillis = config.acceptedIdleTimeoutMillis,
+                    preserveCancellation = false,
+                    operationDispatcher = independentOperationDispatcher,
+                    deadlineDispatcher = operationDeadlineDispatcher,
+                    operationGate = applicationOperationGate
+                ) {
+                    entry.session.finishLegacyReceiver()
+                }
+            ) {
+                is BoundedOperationResult.Success -> result.value
+                is BoundedOperationResult.Failure -> throw classifyCallbackCancellation(
+                    result.cause,
+                    FileTransferFailureKind.STORAGE,
+                    FileTransferPhase.FLUSH,
+                    Retryability.RETRY_AFTER_USER_ACTION,
+                    transferId,
+                    "legacy receiver flush failed"
+                )
+                is BoundedOperationResult.TimedOut -> throw fileFailure(
+                    kind = FileTransferFailureKind.TIMEOUT,
+                    phase = FileTransferPhase.FLUSH,
+                    retryability = Retryability.RETRY_NEW_SESSION,
+                    transferId = transferId,
+                    reason = "legacy receiver flush timed out after ${result.timeoutMillis}ms",
+                    cause = result.cause
+                )
+            }
             if (completed) removeIncoming(transferId, entry)?.cancelJobs()
         } catch (e: CancellationException) {
             throw e
@@ -815,42 +1036,85 @@ internal class FileTransferDispatcher(
     }
 
     suspend fun onFileFinish(finish: SecureFileFinish) {
-        val entry = lock.withLock { incoming[finish.transferId] }
-        if (entry == null) {
-            logger.debug("Session $sessionId: FILE_FINISH for unknown transfer ${finish.transferId}; ignoring")
-            return
-        }
-        if (entry.phase == IncomingPhase.ACCEPTING && !entry.acceptanceCommitted.await()) {
-            return
-        }
-        if (entry.phase != IncomingPhase.ACCEPTED || entry.secureOffer == null) {
-            val failure = P2pError.ProtocolError(
-                "FILE_FINISH arrived before authenticated acceptance"
-            )
-            if (entry.secureOffer != null) {
-                failIncomingSecureTransfer(
-                    entry,
-                    FileResultCode.PROTOCOL_FAILURE,
-                    FileTransferPhase.VERIFY,
-                    "invalid FILE_FINISH transition",
-                    failure
+        val entry = when (val decision = beginIncomingFinalization(finish.transferId)) {
+            IncomingFinalization.Missing -> {
+                logger.debug(
+                    "Session $sessionId: FILE_FINISH for unknown transfer ${finish.transferId}; ignoring"
                 )
-            } else {
-                failIncomingTransfer(entry, "invalid FILE_FINISH transition", failure)
+                return
             }
+            is IncomingFinalization.NotAccepted -> {
+                val failure = P2pError.ProtocolError(
+                    "FILE_FINISH arrived while receiver was ${decision.phase}"
+                )
+                if (decision.entry.secureOffer != null) {
+                    failIncomingSecureTransfer(
+                        decision.entry,
+                        FileResultCode.PROTOCOL_FAILURE,
+                        FileTransferPhase.VERIFY,
+                        "invalid FILE_FINISH transition",
+                        failure
+                    )
+                } else {
+                    failIncomingTransfer(decision.entry, "invalid FILE_FINISH transition", failure)
+                }
+                return
+            }
+            IncomingFinalization.AlreadyStarted -> {
+                logger.debug(
+                    "Session $sessionId: duplicate FILE_FINISH for ${finish.transferId}; ignoring"
+                )
+                return
+            }
+            is IncomingFinalization.Started -> decision.entry
+        }
+        if (entry.secureOffer == null) {
+            val failure = P2pError.ProtocolError(
+                "FILE_FINISH arrived for a legacy transfer"
+            )
+            failIncomingTransfer(entry, "invalid FILE_FINISH transition", failure)
             return
         }
-        entry.idleTimer?.cancel()
-        entry.overallTimer?.cancel()
         try {
-            val committed = withTimeout(config.commitTimeoutMillis) {
-                entry.session.verifyAndCommit(finish)
+            val committed = when (
+                val result = runBoundedIndependentOperation(
+                    timeoutMillis = config.commitTimeoutMillis,
+                    preserveCancellation = false,
+                    operationDispatcher = independentOperationDispatcher,
+                    deadlineDispatcher = operationDeadlineDispatcher,
+                    operationGate = applicationOperationGate
+                ) {
+                    entry.session.verifyAndCommit(finish)
+                }
+            ) {
+                is BoundedOperationResult.Success -> result.value
+                is BoundedOperationResult.Failure -> throw classifyCallbackCancellation(
+                    result.cause,
+                    FileTransferFailureKind.STORAGE,
+                    FileTransferPhase.DURABLE_COMMIT,
+                    Retryability.RETRY_AFTER_USER_ACTION,
+                    finish.transferId,
+                    "receiver durable commit failed"
+                )
+                is BoundedOperationResult.TimedOut -> {
+                    failIncomingSecureTransfer(
+                        entry,
+                        FileResultCode.TIMEOUT,
+                        FileTransferPhase.DURABLE_COMMIT,
+                        "receiver durable commit timed out after ${result.timeoutMillis}ms",
+                        result.cause
+                    )
+                    return
+                }
             }
             if (!committed) return
-            removeIncoming(finish.transferId, entry)?.cancelJobs()
+            val removed = removeIncoming(finish.transferId, entry) ?: return
+            removed.cancelJobs()
             val offer = checkNotNull(entry.secureOffer)
-            try {
-                withEpochWrite(entry.writeEpoch) { connection ->
+            sendCleanupBestEffort(
+                "FILE_COMMIT for ${finish.transferId}",
+                entry.writeEpoch
+            ) { connection ->
                     protocol.sendFileCommit(
                         connection,
                         SecureFileCommit(
@@ -860,24 +1124,7 @@ internal class FileTransferDispatcher(
                             offer.offerHash
                         )
                     )
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                logger.warn(
-                    "Session $sessionId: durable transfer ${finish.transferId} committed but " +
-                        "FILE_COMMIT write failed",
-                    e
-                )
             }
-        } catch (e: TimeoutCancellationException) {
-            failIncomingSecureTransfer(
-                entry,
-                FileResultCode.TIMEOUT,
-                FileTransferPhase.DURABLE_COMMIT,
-                "receiver durable commit timed out after ${config.commitTimeoutMillis}ms",
-                e
-            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -927,24 +1174,36 @@ internal class FileTransferDispatcher(
         }
         result.entry.cancelJobs()
         when (result) {
-            is CommitResult.Committed -> result.entry.handle.setState(FileTransferState.Completed)
-            is CommitResult.Mismatch -> result.entry.handle.markFailed(
-                fileFailure(
-                    FileTransferFailureKind.INTEGRITY,
-                    FileTransferPhase.DURABLE_COMMIT,
-                    Retryability.NOT_RETRYABLE,
-                    commit.transferId,
-                    "FILE_COMMIT does not match the authenticated offer"
-                )
+            is CommitResult.Committed -> terminalizeOutgoing(
+                result.entry,
+                FileTransferState.Completed,
+                "committed outgoing transfer ${commit.transferId}"
             )
-            is CommitResult.InvalidTransition -> result.entry.handle.markFailed(
-                fileFailure(
-                    FileTransferFailureKind.TRANSFER_PROTOCOL,
-                    FileTransferPhase.DURABLE_COMMIT,
-                    Retryability.NOT_RETRYABLE,
-                    commit.transferId,
-                    "FILE_COMMIT arrived while sender was ${result.phase}"
-                )
+            is CommitResult.Mismatch -> terminalizeOutgoing(
+                result.entry,
+                FileTransferState.Failed(
+                    fileFailure(
+                        FileTransferFailureKind.INTEGRITY,
+                        FileTransferPhase.DURABLE_COMMIT,
+                        Retryability.NOT_RETRYABLE,
+                        commit.transferId,
+                        "FILE_COMMIT does not match the authenticated offer"
+                    )
+                ),
+                "mismatched outgoing commit ${commit.transferId}"
+            )
+            is CommitResult.InvalidTransition -> terminalizeOutgoing(
+                result.entry,
+                FileTransferState.Failed(
+                    fileFailure(
+                        FileTransferFailureKind.TRANSFER_PROTOCOL,
+                        FileTransferPhase.DURABLE_COMMIT,
+                        Retryability.NOT_RETRYABLE,
+                        commit.transferId,
+                        "FILE_COMMIT arrived while sender was ${result.phase}"
+                    )
+                ),
+                "invalid outgoing commit ${commit.transferId}"
             )
         }
     }
@@ -953,13 +1212,20 @@ internal class FileTransferDispatcher(
         val outgoingEntry = removeOutgoing(result.transferId)
         if (outgoingEntry != null) {
             outgoingEntry.cancelJobs()
-            outgoingEntry.handle.markFailed(result.toPublicFailure())
+            terminalizeOutgoing(
+                outgoingEntry,
+                FileTransferState.Failed(result.toPublicFailure()),
+                "failed outgoing transfer ${result.transferId}"
+            )
             return
         }
         val incomingEntry = removeIncoming(result.transferId)
         if (incomingEntry != null) {
             incomingEntry.cancelJobs()
-            incomingEntry.session.markFailed(result.toPublicFailure())
+            terminalizeIncoming(
+                incomingEntry,
+                FileTransferState.Failed(result.toPublicFailure())
+            )
             return
         }
         logger.debug("Session $sessionId: FILE_RESULT for unknown transfer ${result.transferId}; ignoring")
@@ -969,13 +1235,17 @@ internal class FileTransferDispatcher(
         val outgoingEntry = removeOutgoing(transferId)
         if (outgoingEntry != null) {
             outgoingEntry.cancelJobs()
-            outgoingEntry.handle.setState(FileTransferState.Cancelled(reason))
+            terminalizeOutgoing(
+                outgoingEntry,
+                FileTransferState.Cancelled(reason),
+                "remote-cancelled outgoing transfer $transferId"
+            )
             return
         }
         val incomingEntry = removeIncoming(transferId)
         if (incomingEntry != null) {
             incomingEntry.cancelJobs()
-            incomingEntry.session.setState(FileTransferState.Cancelled(reason))
+            terminalizeIncoming(incomingEntry, FileTransferState.Cancelled(reason))
             return
         }
         logger.debug("Session $sessionId: FILE_CANCEL for unknown transfer $transferId; ignoring")
@@ -986,10 +1256,14 @@ internal class FileTransferDispatcher(
      * [awaitCloseAll] have settled the previous one. The owning session holds
      * [sendMutex] across its raw-connection swap and this transition.
      */
-    fun reopen() {
-        check(closed) { "File-transfer dispatcher can reopen only after closeAll" }
-        writeEpoch = FileTransferWriteEpoch()
-        closed = false
+    suspend fun reopen() {
+        lock.withLock {
+            check(closed) { "File-transfer dispatcher can reopen only after closeAll" }
+            ambiguousIncomingTransferIds.clear()
+            ambiguousIncomingCapacityExhausted = false
+            writeEpoch = FileTransferWriteEpoch()
+            closed = false
+        }
     }
 
     suspend fun closeAll(
@@ -1025,38 +1299,60 @@ internal class FileTransferDispatcher(
         }
         for (entry in outgoingEntries) {
             jobsToJoin += entry.cancelJobs()
-            entry.handle.markFailed(
-                fileFailure(
-                    kind = failureKind,
-                    phase = when (entry.phase) {
-                        OutgoingPhase.OFFERED -> FileTransferPhase.OFFER
-                        OutgoingPhase.STREAMING -> FileTransferPhase.SEND
-                        OutgoingPhase.COMMIT_WAIT -> FileTransferPhase.DURABLE_COMMIT
-                    },
-                    retryability = retryability,
-                    transferId = entry.handle.transferId,
-                    reason = reason
+            val terminalResources = entry.handle.transitionTerminalWithoutCleanup(
+                FileTransferState.Failed(
+                    fileFailure(
+                        kind = failureKind,
+                        phase = when (entry.phase) {
+                            OutgoingPhase.OFFERED -> FileTransferPhase.OFFER
+                            OutgoingPhase.STREAMING -> FileTransferPhase.SEND
+                            OutgoingPhase.COMMIT_WAIT -> FileTransferPhase.DURABLE_COMMIT
+                        },
+                        retryability = retryability,
+                        transferId = entry.handle.transferId,
+                        reason = reason
+                    )
                 )
             )
+            terminalResources?.source?.let { source ->
+                jobsToJoin += launchIndependentCleanup {
+                    cleanupOutgoingSource(
+                        source,
+                        "terminal outgoing transfer ${entry.handle.transferId}"
+                    )
+                }
+            }
         }
         for (entry in incomingEntries) {
             jobsToJoin += entry.cancelJobs()
             entry.acceptanceCommitted.complete(false)
-            if (entry.phase == IncomingPhase.OFFERED) {
-                entry.session.setState(FileTransferState.Cancelled(reason))
+            val terminalState = if (entry.phase == IncomingPhase.OFFERED) {
+                FileTransferState.Cancelled(reason)
             } else {
-                entry.session.markFailed(
+                FileTransferState.Failed(
                     fileFailure(
                         kind = failureKind,
-                        phase = if (entry.phase == IncomingPhase.ACCEPTING) {
-                            FileTransferPhase.ACCEPT
-                        } else {
-                            FileTransferPhase.RECEIVE
+                        phase = when (entry.phase) {
+                            IncomingPhase.ACCEPTING -> FileTransferPhase.ACCEPT
+                            IncomingPhase.FINALIZING -> if (entry.secureOffer == null) {
+                                FileTransferPhase.FLUSH
+                            } else {
+                                FileTransferPhase.DURABLE_COMMIT
+                            }
+                            IncomingPhase.OFFERED,
+                            IncomingPhase.ACCEPTED -> FileTransferPhase.RECEIVE
                         },
                         retryability = retryability,
                         transferId = entry.session.transferId,
                         reason = reason
                     )
+                )
+            }
+            if (entry.session.transitionTerminalWithoutCleanup(terminalState)) {
+                jobsToJoin += launchIncomingTerminalCleanup(
+                    entry.session,
+                    (terminalState as? FileTransferState.Failed)?.error as?
+                        P2pError.FileTransferFailed
                 )
             }
         }
@@ -1087,7 +1383,8 @@ internal class FileTransferDispatcher(
         val expectedDigest = handle.expectedDigest
         val hasher = expectedDigest?.let { Sha256Hasher() }
         try {
-            if (handle.preparedSource != null) handle.openPreparedSource()
+            if (expectedDigest != null) openPreparedSourceWithinDeadline(handle)
+            if (!armOutgoingIdleDeadline(entry)) return
             if (handle.sizeBytes > 0L) handle.setState(FileTransferState.Sending(0f))
             streamFileData(
                 transferId = handle.transferId,
@@ -1102,6 +1399,12 @@ internal class FileTransferDispatcher(
                         protocol.sendFileDataFrame(connection, frame)
                     }
                 } catch (e: CancellationException) {
+                    // A protocol callback can throw CancellationException
+                    // while this sender job is still active. Remember that
+                    // the failing operation was a wire write; the outer
+                    // cancellation check still propagates genuine job
+                    // cancellation without terminal reclassification.
+                    connectionWriteFailure = true
                     throw e
                 } catch (e: Throwable) {
                     connectionWriteFailure = true
@@ -1110,6 +1413,7 @@ internal class FileTransferDispatcher(
                 if (!handle.recordBytesSent(frame.payload.size)) {
                     throw CancellationException("Transfer ${handle.transferId} terminalized while writing")
                 }
+                rearmOutgoingIdleDeadline(entry)
             }
             if (handle.state.value.isTerminal()) return
             if (expectedDigest != null) {
@@ -1124,28 +1428,40 @@ internal class FileTransferDispatcher(
                 val transitioned = lock.withLock {
                     if (outgoing[handle.transferId] === entry && entry.phase == OutgoingPhase.STREAMING) {
                         entry.phase = OutgoingPhase.COMMIT_WAIT
+                        entry.timer?.cancel()
+                        entry.timer = null
+                        entry.overallTimer?.cancel()
+                        entry.overallTimer = null
+                        entry.idleGeneration++
                         true
                     } else false
                 }
                 if (!transitioned) return
                 try {
-                    withEpochWrite(entry.writeEpoch) { connection ->
-                        protocol.sendFileFinish(
-                            connection,
-                            SecureFileFinish(
-                                handle.transferId,
-                                handle.sizeBytes,
-                                chunkCount(handle.sizeBytes),
-                                actualDigest,
-                                checkNotNull(handle.offerHash)
-                            )
+                    sendSecureFinishWithinDeadline(
+                        entry,
+                        SecureFileFinish(
+                            handle.transferId,
+                            handle.sizeBytes,
+                            chunkCount(handle.sizeBytes),
+                            actualDigest,
+                            checkNotNull(handle.offerHash)
                         )
-                    }
+                    )
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
-                    connectionWriteFailure = true
+                    connectionWriteFailure = (e as? P2pError.FileTransferFailed)?.kind !=
+                        FileTransferFailureKind.TIMEOUT
                     throw e
+                }
+                handle.detachSourceAfterStreaming()?.let { source ->
+                    launchIndependentCleanup {
+                        cleanupOutgoingSource(
+                            source,
+                            "streamed prepared source ${handle.transferId}"
+                        )
+                    }
                 }
                 armOutgoingCommitWatchdog(entry)
                 return
@@ -1155,15 +1471,22 @@ internal class FileTransferDispatcher(
                     protocol.sendFileDone(connection, handle.transferId)
                 }
             } catch (e: CancellationException) {
+                connectionWriteFailure = true
                 throw e
             } catch (e: Throwable) {
                 connectionWriteFailure = true
                 throw e
             }
-            handle.setState(FileTransferState.Completed)
-            removeOutgoing(handle.transferId, entry)
+            val removed = removeOutgoing(handle.transferId, entry) ?: return
+            removed.cancelTimers()
+            terminalizeOutgoing(
+                removed,
+                FileTransferState.Completed,
+                "completed outgoing transfer ${handle.transferId}"
+            )
         } catch (e: CancellationException) {
-            throw e
+            currentCoroutineContext().ensureActive()
+            failOutgoingPayload(entry, e, connectionWriteFailure)
         } catch (e: PreparedSourceLengthChangedException) {
             failPreparedSourceChanged(
                 entry = entry,
@@ -1171,42 +1494,111 @@ internal class FileTransferDispatcher(
                 cause = e
             )
         } catch (e: Throwable) {
-            val alreadyTerminal = handle.state.value.isTerminal()
-            val err = failureFromCause(
-                kind = if (connectionWriteFailure) {
-                    FileTransferFailureKind.TRANSPORT
-                } else {
-                    FileTransferFailureKind.SOURCE_IO
-                },
-                phase = if (connectionWriteFailure) {
-                    FileTransferPhase.SEND
-                } else {
-                    FileTransferPhase.SOURCE_READ
-                },
-                retryability = if (connectionWriteFailure) {
-                    Retryability.RETRY_NEW_SESSION
-                } else {
-                    Retryability.RETRY_AFTER_USER_ACTION
-                },
-                transferId = handle.transferId,
-                prefix = if (connectionWriteFailure) "FILE_DATA write failed" else "file source read failed",
-                cause = e
-            )
-            handle.markFailed(err)
-            removeOutgoing(handle.transferId, entry)
-            logger.warn("Session $sessionId: outgoing transfer ${handle.transferId} failed", e)
-            if (!connectionWriteFailure && !alreadyTerminal) {
-                sendBestEffort(
-                    "FILE_CANCEL for ${handle.transferId}",
-                    entry.writeEpoch
-                ) { connection ->
-                    protocol.sendFileCancel(
-                        connection,
+            failOutgoingPayload(entry, e, connectionWriteFailure)
+        }
+    }
+
+    private suspend fun failOutgoingPayload(
+        entry: OutgoingEntry,
+        cause: Throwable,
+        connectionWriteFailure: Boolean
+    ) {
+        val handle = entry.handle
+        val err = failureFromCause(
+            kind = if (connectionWriteFailure) {
+                FileTransferFailureKind.TRANSPORT
+            } else {
+                FileTransferFailureKind.SOURCE_IO
+            },
+            phase = if (connectionWriteFailure) {
+                FileTransferPhase.SEND
+            } else {
+                FileTransferPhase.SOURCE_READ
+            },
+            retryability = if (connectionWriteFailure) {
+                Retryability.RETRY_NEW_SESSION
+            } else {
+                Retryability.RETRY_AFTER_USER_ACTION
+            },
+            transferId = handle.transferId,
+            prefix = if (connectionWriteFailure) "FILE_DATA write failed" else "file source read failed",
+            cause = cause
+        )
+        val removed = removeOutgoing(handle.transferId, entry) ?: return
+        removed.cancelTimers()
+        val changed = terminalizeOutgoing(
+            removed,
+            FileTransferState.Failed(err),
+            "failed outgoing transfer ${handle.transferId}"
+        )
+        logger.warn("Session $sessionId: outgoing transfer ${handle.transferId} failed", cause)
+        if (connectionWriteFailure || !changed) return
+        if (handle.expectedDigest != null &&
+            err is P2pError.FileTransferFailed &&
+            err.kind == FileTransferFailureKind.TIMEOUT
+        ) {
+            sendBestEffort(
+                "source-timeout FILE_RESULT for ${handle.transferId}",
+                entry.writeEpoch
+            ) { connection ->
+                protocol.sendFileResult(
+                    connection,
+                    SecureFileResult(
                         handle.transferId,
-                        "sender source failure: ${err.message}"
+                        FileResultCode.TIMEOUT,
+                        err.phase,
+                        "sender source timeout"
                     )
-                }
+                )
             }
+        } else {
+            sendBestEffort(
+                "FILE_CANCEL for ${handle.transferId}",
+                entry.writeEpoch
+            ) { connection ->
+                protocol.sendFileCancel(
+                    connection,
+                    handle.transferId,
+                    "sender source failure"
+                )
+            }
+        }
+    }
+
+    private suspend fun openPreparedSourceWithinDeadline(handle: OutgoingFileTransferImpl) {
+        when (
+            val result = runBoundedIndependentOperation(
+                timeoutMillis = config.offerTimeoutMillis,
+                preserveCancellation = false,
+                operationDispatcher = independentOperationDispatcher,
+                deadlineDispatcher = operationDeadlineDispatcher,
+                operationGate = applicationOperationGate,
+                onLateSuccess = { source ->
+                    cleanupOutgoingSource(
+                        source,
+                        "late prepared source for ${handle.transferId}"
+                    )
+                },
+                operation = handle::createPreparedSource
+            )
+        ) {
+            is BoundedOperationResult.Success -> handle.installPreparedSource(result.value)
+            is BoundedOperationResult.Failure -> throw classifyCallbackCancellation(
+                result.cause,
+                FileTransferFailureKind.SOURCE_IO,
+                FileTransferPhase.SOURCE_READ,
+                Retryability.RETRY_AFTER_USER_ACTION,
+                handle.transferId,
+                "prepared source open failed"
+            )
+            is BoundedOperationResult.TimedOut -> throw fileFailure(
+                kind = FileTransferFailureKind.TIMEOUT,
+                phase = FileTransferPhase.SOURCE_READ,
+                retryability = Retryability.RETRY_AFTER_USER_ACTION,
+                transferId = handle.transferId,
+                reason = "Prepared source open did not finish within ${result.timeoutMillis}ms",
+                cause = result.cause
+            )
         }
     }
 
@@ -1225,7 +1617,11 @@ internal class FileTransferDispatcher(
             reason,
             cause
         )
-        val changed = handle.markFailed(error)
+        val changed = terminalizeOutgoing(
+            removed,
+            FileTransferState.Failed(error),
+            "changed prepared source ${handle.transferId}"
+        )
         try {
             if (changed) {
                 sendBestEffort(
@@ -1238,7 +1634,7 @@ internal class FileTransferDispatcher(
                             handle.transferId,
                             FileResultCode.SOURCE_CHANGED,
                             FileTransferPhase.SOURCE_READ,
-                            error.message
+                            "prepared source changed"
                         )
                     )
                 }
@@ -1254,6 +1650,133 @@ internal class FileTransferDispatcher(
         (1L + (sizeBytes - 1L) / config.chunkSizeBytes.toLong()).toInt()
     }
 
+    private suspend fun armOutgoingOverallDeadline(entry: OutgoingEntry): Boolean {
+        val timer = scope.launch(start = CoroutineStart.LAZY) {
+            delay(config.acceptedOverallTimeoutMillis)
+            timeoutOutgoingStreaming(entry, requiredIdleGeneration = null, kind = "overall")
+        }
+        val installed = lock.withLock {
+            if (outgoing[entry.handle.transferId] === entry &&
+                entry.phase == OutgoingPhase.STREAMING
+            ) {
+                entry.overallTimer = timer
+                true
+            } else {
+                false
+            }
+        }
+        if (installed) timer.start() else timer.cancel()
+        return installed
+    }
+
+    private suspend fun armOutgoingIdleDeadline(entry: OutgoingEntry): Boolean {
+        var timer: Job? = null
+        val installed = lock.withLock {
+            if (outgoing[entry.handle.transferId] !== entry ||
+                entry.phase != OutgoingPhase.STREAMING
+            ) {
+                false
+            } else {
+                val generation = ++entry.idleGeneration
+                timer = scope.launch(start = CoroutineStart.LAZY) {
+                    delay(config.acceptedIdleTimeoutMillis)
+                    timeoutOutgoingStreaming(entry, generation, "idle")
+                }
+                entry.timer = timer
+                true
+            }
+        }
+        if (installed) checkNotNull(timer).start() else timer?.cancel()
+        return installed
+    }
+
+    private suspend fun rearmOutgoingIdleDeadline(entry: OutgoingEntry) {
+        var replacement: Job? = null
+        val old = lock.withLock {
+            if (outgoing[entry.handle.transferId] !== entry ||
+                entry.phase != OutgoingPhase.STREAMING
+            ) {
+                null
+            } else {
+                val generation = ++entry.idleGeneration
+                replacement = scope.launch(start = CoroutineStart.LAZY) {
+                    delay(config.acceptedIdleTimeoutMillis)
+                    timeoutOutgoingStreaming(entry, generation, "idle")
+                }
+                entry.timer.also { entry.timer = replacement }
+            }
+        }
+        if (replacement == null) return
+        old?.cancel()
+        checkNotNull(replacement).start()
+    }
+
+    private suspend fun timeoutOutgoingStreaming(
+        entry: OutgoingEntry,
+        requiredIdleGeneration: Long?,
+        kind: String
+    ) {
+        val removed = lock.withLock {
+            val current = outgoing[entry.handle.transferId]
+            if (current !== entry || current.phase != OutgoingPhase.STREAMING) return
+            if (requiredIdleGeneration != null &&
+                current.idleGeneration != requiredIdleGeneration
+            ) {
+                return
+            }
+            outgoing.remove(entry.handle.transferId)
+            current
+        }
+        withContext(NonCancellable) {
+            removed.cancelJobs()
+            val error = fileFailure(
+                kind = FileTransferFailureKind.TIMEOUT,
+                phase = FileTransferPhase.SEND,
+                retryability = Retryability.RETRY_NEW_SESSION,
+                transferId = removed.handle.transferId,
+                reason = "$kind outgoing transfer timeout after " +
+                    (if (kind == "idle") {
+                        config.acceptedIdleTimeoutMillis
+                    } else {
+                        config.acceptedOverallTimeoutMillis
+                    }) + "ms"
+            )
+            val resources = removed.handle.transitionTerminalWithoutCleanup(
+                FileTransferState.Failed(error)
+            )
+            resources?.source?.let { source ->
+                launchIndependentCleanup {
+                    cleanupOutgoingSource(
+                        source,
+                        "$kind-timeout outgoing transfer ${removed.handle.transferId}"
+                    )
+                }
+            }
+            sendCleanupBestEffort(
+                "$kind-timeout terminal for ${removed.handle.transferId}",
+                removed.writeEpoch
+            ) { connection ->
+                if (removed.handle.expectedDigest != null) {
+                    protocol.sendFileResult(
+                        connection,
+                        SecureFileResult(
+                            removed.handle.transferId,
+                            FileResultCode.TIMEOUT,
+                            FileTransferPhase.SEND,
+                            "$kind outgoing transfer timeout"
+                        )
+                    )
+                } else {
+                    protocol.sendFileCancel(
+                        connection,
+                        removed.handle.transferId,
+                        "$kind outgoing transfer timeout"
+                    )
+                }
+            }
+        }
+    }
+
     private suspend fun armOutgoingCommitWatchdog(entry: OutgoingEntry) {
         val job = scope.launch(start = CoroutineStart.LAZY) {
             delay(config.commitTimeoutMillis)
@@ -1263,16 +1786,22 @@ internal class FileTransferDispatcher(
                 outgoing.remove(entry.handle.transferId)
                 current
             }
-            removed.handle.markFailed(
-                fileFailure(
-                    FileTransferFailureKind.TIMEOUT,
-                    FileTransferPhase.DURABLE_COMMIT,
-                    Retryability.RETRY_NEW_SESSION,
-                    removed.handle.transferId,
-                    "FILE_COMMIT not received within ${config.commitTimeoutMillis}ms"
+            withContext(NonCancellable) {
+                removed.cancelJobs()
+                terminalizeOutgoing(
+                    removed,
+                    FileTransferState.Failed(
+                        fileFailure(
+                            FileTransferFailureKind.TIMEOUT,
+                            FileTransferPhase.DURABLE_COMMIT,
+                            Retryability.RETRY_NEW_SESSION,
+                            removed.handle.transferId,
+                            "FILE_COMMIT not received within ${config.commitTimeoutMillis}ms"
+                        )
+                    ),
+                    "commit-timeout outgoing transfer ${removed.handle.transferId}"
                 )
-            )
-            removed.cancelJobs()
+            }
         }
         val installed = lock.withLock {
             if (outgoing[entry.handle.transferId] === entry && entry.phase == OutgoingPhase.COMMIT_WAIT) {
@@ -1306,7 +1835,8 @@ internal class FileTransferDispatcher(
             outgoing.remove(entry.handle.transferId)
             current
         }
-        removed.handle.setState(
+        terminalizeOutgoing(
+            removed,
             FileTransferState.Failed(
                 fileFailure(
                     kind = FileTransferFailureKind.TIMEOUT,
@@ -1315,7 +1845,8 @@ internal class FileTransferDispatcher(
                     transferId = entry.handle.transferId,
                     reason = "offer response not received within ${config.outgoingOfferWatchdogMillis}ms"
                 )
-            )
+            ),
+            "offer-timeout outgoing transfer ${entry.handle.transferId}"
         )
         sendBestEffort(
             "offer-watchdog FILE_CANCEL for ${entry.handle.transferId}",
@@ -1355,8 +1886,8 @@ internal class FileTransferDispatcher(
         }
         removed.acceptanceCommitted.complete(false)
         withContext(NonCancellable) {
-            removed.session.setState(FileTransferState.Rejected("timeout"))
             removed.cancelJobs()
+            terminalizeIncoming(removed, FileTransferState.Rejected("timeout"))
             sendCleanupBestEffort(
                 "timeout FILE_REJECT for ${entry.session.transferId}",
                 entry.writeEpoch
@@ -1367,59 +1898,80 @@ internal class FileTransferDispatcher(
     }
 
     private suspend fun armAcceptedDeadlines(entry: IncomingEntry) {
-        val idleGeneration = lock.withLock {
-            if (incoming[entry.session.transferId] !== entry || entry.phase != IncomingPhase.ACCEPTED) {
-                return
-            }
-            ++entry.idleGeneration
-        }
-        val idle = newIdleTimer(entry, idleGeneration)
-        val overall = scope.launch(start = CoroutineStart.LAZY) {
-            delay(config.acceptedOverallTimeoutMillis)
-            timeoutAcceptedIncoming(entry, null, "overall")
-        }
+        var idle: Job? = null
+        var overall: Job? = null
         val installed = lock.withLock {
-            if (incoming[entry.session.transferId] === entry && entry.phase == IncomingPhase.ACCEPTED) {
+            if (incoming[entry.session.transferId] !== entry || entry.phase != IncomingPhase.ACCEPTED) {
+                false
+            } else {
+                val idleGeneration = ++entry.idleGeneration
+                idle = newIdleTimer(entry, idleGeneration)
+                overall = scope.launch(start = CoroutineStart.LAZY) {
+                    delay(config.acceptedOverallTimeoutMillis)
+                    timeoutAcceptedIncoming(entry, null, "overall")
+                }
                 entry.idleTimer = idle
                 entry.overallTimer = overall
                 true
-            } else {
-                false
             }
         }
         if (installed) {
-            idle.start()
-            overall.start()
+            checkNotNull(idle).start()
+            checkNotNull(overall).start()
         } else {
-            idle.cancel()
-            overall.cancel()
+            idle?.cancel()
+            overall?.cancel()
+        }
+    }
+
+    private suspend fun beginIncomingFinalization(
+        transferId: MessageId
+    ): IncomingFinalization {
+        val observed = lock.withLock { incoming[transferId] }
+            ?: return IncomingFinalization.Missing
+        if (observed.phase == IncomingPhase.ACCEPTING &&
+            !observed.acceptanceCommitted.await()
+        ) {
+            return IncomingFinalization.Missing
+        }
+        return lock.withLock {
+            val current = incoming[transferId]
+                ?: return@withLock IncomingFinalization.Missing
+            when (current.phase) {
+                IncomingPhase.ACCEPTED -> {
+                    current.phase = IncomingPhase.FINALIZING
+                    current.idleTimer?.cancel()
+                    current.overallTimer?.cancel()
+                    current.idleTimer = null
+                    current.overallTimer = null
+                    IncomingFinalization.Started(current)
+                }
+                IncomingPhase.FINALIZING -> IncomingFinalization.AlreadyStarted
+                IncomingPhase.OFFERED,
+                IncomingPhase.ACCEPTING -> IncomingFinalization.NotAccepted(
+                    current,
+                    current.phase
+                )
+            }
         }
     }
 
     private suspend fun rearmIncomingIdleDeadline(entry: IncomingEntry) {
-        val generation = lock.withLock {
-            if (incoming[entry.session.transferId] !== entry || entry.phase != IncomingPhase.ACCEPTED) {
-                return
-            }
-            ++entry.idleGeneration
-        }
-        val replacement = newIdleTimer(entry, generation)
+        var replacement: Job? = null
         val old = lock.withLock {
             if (incoming[entry.session.transferId] !== entry ||
-                entry.phase != IncomingPhase.ACCEPTED ||
-                entry.idleGeneration != generation
+                entry.phase != IncomingPhase.ACCEPTED
             ) {
                 null
             } else {
+                val generation = ++entry.idleGeneration
+                replacement = newIdleTimer(entry, generation)
                 entry.idleTimer.also { entry.idleTimer = replacement }
             }
         }
-        if (old != null) {
-            old.cancel()
-            replacement.start()
-        } else {
-            replacement.cancel()
-        }
+        if (replacement == null) return
+        old?.cancel()
+        checkNotNull(replacement).start()
     }
 
     private fun newIdleTimer(entry: IncomingEntry, generation: Long): Job =
@@ -1441,7 +1993,9 @@ internal class FileTransferDispatcher(
             current
         }
         withContext(NonCancellable) {
-            removed.session.setState(
+            removed.cancelJobs()
+            terminalizeIncoming(
+                removed,
                 FileTransferState.Failed(
                     fileFailure(
                         kind = FileTransferFailureKind.TIMEOUT,
@@ -1457,7 +2011,6 @@ internal class FileTransferDispatcher(
                     )
                 )
             )
-            removed.cancelJobs()
             sendCleanupBestEffort(
                 "$kind-timeout terminal for ${entry.session.transferId}",
                 entry.writeEpoch
@@ -1479,29 +2032,226 @@ internal class FileTransferDispatcher(
         }
     }
 
+    private suspend fun sendFileAcceptWithinDeadline(
+        entry: IncomingEntry,
+        secure: Boolean
+    ) {
+        try {
+            when (
+                val result = runBoundedIndependentOperation(
+                    timeoutMillis = config.offerTimeoutMillis,
+                    preserveCancellation = false,
+                    operationDispatcher = protocolOperationDispatcher,
+                    deadlineDispatcher = operationDeadlineDispatcher,
+                    operationGate = protocolOperationGate,
+                    onLateSuccess = {
+                        // FILE_ACCEPT may have crossed the wire after the
+                        // caller already timed out/cancelled. Send a second
+                        // bounded compensation after that late write releases
+                        // the epoch mutex; the immediate compensation can have
+                        // timed out behind the still-wedged accept writer.
+                        sendRetiredAcceptCompensation(entry, "late-accept")
+                    }
+                ) {
+                    withEpochWrite(entry.writeEpoch) { connection ->
+                        if (secure) {
+                            protocol.sendSecureFileAccept(connection, entry.session.transferId)
+                        } else {
+                            protocol.sendFileAccept(connection, entry.session.transferId)
+                        }
+                    }
+                }
+            ) {
+                is BoundedOperationResult.Success -> Unit
+                is BoundedOperationResult.Failure -> throw classifyCallbackCancellation(
+                    result.cause,
+                    FileTransferFailureKind.TRANSPORT,
+                    FileTransferPhase.ACCEPT,
+                    Retryability.RETRY_NEW_SESSION,
+                    entry.session.transferId,
+                    "FILE_ACCEPT write failed"
+                )
+                is BoundedOperationResult.TimedOut -> throw fileFailure(
+                    kind = FileTransferFailureKind.TIMEOUT,
+                    phase = FileTransferPhase.ACCEPT,
+                    retryability = Retryability.RETRY_NEW_SESSION,
+                    transferId = entry.session.transferId,
+                    reason = "FILE_ACCEPT write did not finish within ${result.timeoutMillis}ms",
+                    cause = result.cause
+                )
+            }
+            currentCoroutineContext().ensureActive()
+        } catch (cancelled: CancellationException) {
+            compensateAmbiguousAccept(
+                entry,
+                FileTransferState.Cancelled("accept cancelled while FILE_ACCEPT was in flight")
+            )
+            throw cancelled
+        } catch (failure: Throwable) {
+            val error = failureFromCause(
+                kind = FileTransferFailureKind.TRANSPORT,
+                phase = FileTransferPhase.ACCEPT,
+                retryability = Retryability.RETRY_NEW_SESSION,
+                transferId = entry.session.transferId,
+                prefix = "FILE_ACCEPT write failed",
+                cause = failure
+            )
+            compensateAmbiguousAccept(entry, FileTransferState.Failed(error))
+            throw error
+        }
+    }
+
+    private suspend fun sendInitialOfferWithinDeadline(
+        entry: OutgoingEntry,
+        send: suspend (RawConnection) -> Unit
+    ) {
+        when (
+            val result = runBoundedIndependentOperation(
+                timeoutMillis = config.offerTimeoutMillis,
+                preserveCancellation = false,
+                operationDispatcher = protocolOperationDispatcher,
+                deadlineDispatcher = operationDeadlineDispatcher,
+                operationGate = protocolOperationGate,
+                onLateSuccess = {
+                    // A non-cooperative writer can complete FILE_OFFER after
+                    // sendFile already timed out or was cancelled. Compensate
+                    // only after that writer releases the epoch mutex.
+                    sendCleanupBestEffort(
+                        "late-offer FILE_CANCEL for ${entry.handle.transferId}",
+                        entry.writeEpoch
+                    ) { connection ->
+                        protocol.sendFileCancel(
+                            connection,
+                            entry.handle.transferId,
+                            "offer did not commit locally"
+                        )
+                    }
+                }
+            ) {
+                withEpochWrite(entry.writeEpoch, send)
+            }
+        ) {
+            is BoundedOperationResult.Success -> Unit
+            is BoundedOperationResult.Failure -> throw classifyCallbackCancellation(
+                result.cause,
+                FileTransferFailureKind.TRANSPORT,
+                FileTransferPhase.OFFER,
+                Retryability.RETRY_NEW_SESSION,
+                entry.handle.transferId,
+                "FILE_OFFER write failed"
+            )
+            is BoundedOperationResult.TimedOut -> throw fileFailure(
+                kind = FileTransferFailureKind.TIMEOUT,
+                phase = FileTransferPhase.OFFER,
+                retryability = Retryability.RETRY_NEW_SESSION,
+                transferId = entry.handle.transferId,
+                reason = "FILE_OFFER write did not finish within ${result.timeoutMillis}ms",
+                cause = result.cause
+            )
+        }
+    }
+
+    private suspend fun sendSecureFinishWithinDeadline(
+        entry: OutgoingEntry,
+        finish: SecureFileFinish
+    ) {
+        when (
+            val result = runBoundedIndependentOperation(
+                timeoutMillis = config.acceptedIdleTimeoutMillis,
+                preserveCancellation = false,
+                operationDispatcher = protocolOperationDispatcher,
+                deadlineDispatcher = operationDeadlineDispatcher,
+                operationGate = protocolOperationGate,
+                onLateSuccess = {
+                    // FILE_FINISH may cross the wire after the local timeout
+                    // has terminalized and detached its source. Reconcile the
+                    // peer only after the wedged writer releases sendMutex.
+                    sendCleanupBestEffort(
+                        "late-finish FILE_CANCEL for ${entry.handle.transferId}",
+                        entry.writeEpoch
+                    ) { connection ->
+                        protocol.sendFileCancel(
+                            connection,
+                            entry.handle.transferId,
+                            "FILE_FINISH did not commit locally"
+                        )
+                    }
+                }
+            ) {
+                withEpochWrite(entry.writeEpoch) { connection ->
+                    protocol.sendFileFinish(connection, finish)
+                }
+            }
+        ) {
+            is BoundedOperationResult.Success -> Unit
+            is BoundedOperationResult.Failure -> throw classifyCallbackCancellation(
+                result.cause,
+                FileTransferFailureKind.TRANSPORT,
+                FileTransferPhase.SEND,
+                Retryability.RETRY_NEW_SESSION,
+                entry.handle.transferId,
+                "FILE_FINISH write failed"
+            )
+            is BoundedOperationResult.TimedOut -> throw fileFailure(
+                kind = FileTransferFailureKind.TIMEOUT,
+                phase = FileTransferPhase.SEND,
+                retryability = Retryability.RETRY_NEW_SESSION,
+                transferId = entry.handle.transferId,
+                reason = "FILE_FINISH write did not finish within ${result.timeoutMillis}ms",
+                cause = result.cause
+            )
+        }
+    }
+
     private suspend fun compensateAmbiguousAccept(
         entry: IncomingEntry,
         terminalState: FileTransferState
     ) {
         withContext(NonCancellable) {
-            removeIncoming(entry.session.transferId, entry)
-            entry.cancelJobs()
-            entry.session.setState(terminalState)
+            val removed = lock.withLock {
+                val current = incoming[entry.session.transferId]
+                if (current !== entry) return@withLock null
+                incoming.remove(entry.session.transferId)
+                removePendingOfferLocked(current.session)
+                current.acceptanceCommitted.complete(false)
+                if (ambiguousIncomingTransferIds.size < MAX_AMBIGUOUS_INCOMING_TRANSFER_IDS) {
+                    ambiguousIncomingTransferIds += entry.session.transferId
+                } else {
+                    // Fail closed for the remainder of this epoch instead of
+                    // evicting an id that a late FILE_ACCEPT could still use.
+                    ambiguousIncomingCapacityExhausted = true
+                }
+                current
+            } ?: return@withContext
+            removed.cancelJobs()
+            terminalizeIncoming(removed, terminalState)
             // This is already terminal cleanup. A protocol implementation or
             // socket write can ignore cancellation, so a structured
             // withTimeout inside NonCancellable would still wait forever for
             // its child. Use the independent bounded owner shared by every
             // other terminal control notification.
-            sendCleanupBestEffort(
-                "compensating FILE_CANCEL for ${entry.session.transferId}",
-                entry.writeEpoch
-            ) { connection ->
-                protocol.sendFileCancel(
-                    connection,
-                    entry.session.transferId,
-                    "accept did not commit"
-                )
-            }
+            sendRetiredAcceptCompensation(entry, "compensating")
+        }
+    }
+
+    private suspend fun sendRetiredAcceptCompensation(
+        entry: IncomingEntry,
+        label: String
+    ) {
+        val isRetired = lock.withLock {
+            entry.session.transferId in ambiguousIncomingTransferIds ||
+                ambiguousIncomingCapacityExhausted
+        }
+        if (!isRetired) return
+        sendCleanupBestEffort(
+            "$label FILE_CANCEL for ${entry.session.transferId}",
+            entry.writeEpoch
+        ) { connection ->
+            protocol.sendFileCancel(
+                connection,
+                entry.session.transferId,
+                "accept did not commit"
+            )
         }
     }
 
@@ -1529,13 +2279,18 @@ internal class FileTransferDispatcher(
             prefix = prefix,
             cause = cause
         )
-        removeIncoming(entry.session.transferId, entry)?.cancelJobs()
-        entry.session.markFailed(err)
+        val removed = removeIncoming(entry.session.transferId, entry) ?: return
+        removed.cancelJobs()
+        if (!terminalizeIncoming(removed, FileTransferState.Failed(err))) return
         sendBestEffort("FILE_CANCEL for ${entry.session.transferId}", entry.writeEpoch) { connection ->
             protocol.sendFileCancel(
                 connection,
                 entry.session.transferId,
-                "receive error: ${err.message}"
+                if (protocolViolation) {
+                    "receiver protocol failure"
+                } else {
+                    "receiver storage failure"
+                }
             )
         }
     }
@@ -1559,22 +2314,53 @@ internal class FileTransferDispatcher(
             FileResultCode.TIMEOUT -> Retryability.RETRY_NEW_SESSION
             else -> Retryability.NOT_RETRYABLE
         }
-        val error = fileFailure(
-            kind,
-            phase,
-            retryability,
-            entry.session.transferId,
-            reason,
-            cause
-        )
-        removeIncoming(entry.session.transferId, entry)?.cancelJobs()
-        entry.session.markFailed(error)
+        // Preserve an already-classified failure so callers retain the
+        // original platform callback as `cause`. Wrapping it again would make
+        // the public cause another FileTransferFailed and hide the storage or
+        // integrity exception that actually failed the operation. Only reuse
+        // a classification that agrees with the wire result we are sending;
+        // mismatched failures are wrapped defensively below.
+        val classified = cause as? P2pError.FileTransferFailed
+        val error = if (
+            classified != null &&
+            classified.kind == kind &&
+            classified.phase == phase &&
+            classified.retryability == retryability &&
+            classified.transferId == entry.session.transferId.toString()
+        ) {
+            classified
+        } else {
+            fileFailure(
+                kind,
+                phase,
+                retryability,
+                entry.session.transferId,
+                reason,
+                cause
+            )
+        }
+        val removed = removeIncoming(entry.session.transferId, entry) ?: return
+        removed.cancelJobs()
+        if (!terminalizeIncoming(removed, FileTransferState.Failed(error))) return
         sendBestEffort("FILE_RESULT for ${entry.session.transferId}", entry.writeEpoch) { connection ->
             protocol.sendFileResult(
                 connection,
-                SecureFileResult(entry.session.transferId, code, phase, error.message)
+                SecureFileResult(
+                    entry.session.transferId,
+                    code,
+                    phase,
+                    safeWireFailureReason(code)
+                )
             )
         }
+    }
+
+    private fun safeWireFailureReason(code: FileResultCode): String = when (code) {
+        FileResultCode.DIGEST_MISMATCH -> "content digest mismatch"
+        FileResultCode.STORAGE_FAILURE -> "receiver storage failure"
+        FileResultCode.PROTOCOL_FAILURE -> "file-transfer protocol failure"
+        FileResultCode.SOURCE_CHANGED -> "prepared source changed"
+        FileResultCode.TIMEOUT -> "file-transfer timeout"
     }
 
     private suspend fun <T> withEpochWrite(
@@ -1602,7 +2388,11 @@ internal class FileTransferDispatcher(
         sendBestEffortWithinDeadline(
             label = label,
             expectedEpoch = expectedEpoch,
-            preserveCancellation = true,
+            // True caller cancellation is still propagated because the
+            // invoking context is inactive. A callback-generated
+            // CancellationException is only a failed best-effort write and
+            // must not cancel the otherwise healthy event/session coroutine.
+            preserveCancellation = false,
             block = block
         )
     }
@@ -1630,7 +2420,10 @@ internal class FileTransferDispatcher(
         val issue = captureCleanupIssue(
             resource = "file-transfer $label",
             timeoutMillis = config.offerTimeoutMillis,
-            preserveCancellation = preserveCancellation
+            preserveCancellation = preserveCancellation,
+            operationDispatcher = protocolOperationDispatcher,
+            deadlineDispatcher = operationDeadlineDispatcher,
+            operationGate = protocolOperationGate
         ) {
             withEpochWrite(expectedEpoch, block)
         }
@@ -1640,6 +2433,97 @@ internal class FileTransferDispatcher(
                     (issue.cause.message ?: issue.cause::class.simpleName)
             )
         }
+    }
+
+    /**
+     * Release an incoming session's receiver/destination after its public
+     * terminal state has already committed. The worker enters NonCancellable
+     * so it eventually acquires an operation lock held by a late write or
+     * commit, while [captureCleanupIssue] bounds how long that worker can hold
+     * the caller.
+     */
+    internal suspend fun cleanupIncomingTerminalResources(
+        session: IncomingFileSession,
+        cause: P2pError.FileTransferFailed?
+    ) {
+        val issue = captureCleanupIssue(
+            resource = "incoming transfer ${session.transferId}",
+            timeoutMillis = config.offerTimeoutMillis,
+            preserveCancellation = false,
+            operationDispatcher = independentCleanupDispatcher,
+            deadlineDispatcher = operationDeadlineDispatcher,
+            operationGate = cleanupOperationGate
+        ) {
+            withContext(NonCancellable) {
+                session.detachTerminalResources()?.abort(cause)
+            }
+        }
+        if (issue != null) {
+            logCleanupIssues(logger, "incoming file terminal cleanup", listOf(issue))
+        }
+    }
+
+    internal suspend fun cleanupOutgoingSource(source: RawSource, label: String) {
+        val issue = captureCleanupIssue(
+            resource = label,
+            timeoutMillis = config.offerTimeoutMillis,
+            preserveCancellation = false,
+            operationDispatcher = independentCleanupDispatcher,
+            deadlineDispatcher = operationDeadlineDispatcher,
+            operationGate = cleanupOperationGate
+        ) {
+            source.close()
+        }
+        if (issue != null) {
+            logCleanupIssues(logger, "outgoing file source cleanup", listOf(issue))
+        }
+    }
+
+    /** Destination ownership has not been installed in [IncomingFileSession]. */
+    private suspend fun abortUnownedDestination(
+        destination: FileTransferDestination,
+        cause: P2pError.FileTransferFailed?,
+        label: String
+    ) {
+        val issue = captureCleanupIssue(
+            resource = label,
+            timeoutMillis = config.offerTimeoutMillis,
+            preserveCancellation = false,
+            operationDispatcher = independentCleanupDispatcher,
+            deadlineDispatcher = operationDeadlineDispatcher,
+            operationGate = cleanupOperationGate
+        ) {
+            destination.abort(cause)
+        }
+        if (issue != null) {
+            logCleanupIssues(logger, "file destination abort", listOf(issue))
+        }
+    }
+
+    /**
+     * A callback may throw [CancellationException] without the invoking
+     * coroutine having been cancelled. Treat that as the callback's typed
+     * operational failure; true caller cancellation is propagated directly
+     * by [runBoundedIndependentOperation] before a result reaches this helper.
+     */
+    private fun classifyCallbackCancellation(
+        cause: Throwable,
+        kind: FileTransferFailureKind,
+        phase: FileTransferPhase,
+        retryability: Retryability,
+        transferId: MessageId?,
+        prefix: String
+    ): Throwable = if (cause is CancellationException) {
+        fileFailure(
+            kind = kind,
+            phase = phase,
+            retryability = retryability,
+            transferId = transferId,
+            reason = "$prefix: ${cause.message ?: "callback threw CancellationException"}",
+            cause = cause
+        )
+    } else {
+        cause
     }
 
     private fun failureFromCause(
@@ -1706,9 +2590,22 @@ internal class FileTransferDispatcher(
     }
 
     private fun allocateTransferIdLocked(): MessageId {
+        if (ambiguousIncomingCapacityExhausted) {
+            throw fileFailure(
+                kind = FileTransferFailureKind.TRANSFER_PROTOCOL,
+                phase = FileTransferPhase.OFFER,
+                retryability = Retryability.RETRY_NEW_SESSION,
+                transferId = null,
+                reason = "Ambiguous incoming transfer-id capacity is exhausted; reconnect required"
+            )
+        }
         repeat(MAX_TRANSFER_ID_ATTEMPTS) {
             val candidate = MessageId.random(random)
-            if (candidate !in outgoing && candidate !in incoming) return candidate
+            if (candidate !in outgoing && candidate !in incoming &&
+                candidate !in ambiguousIncomingTransferIds
+            ) {
+                return candidate
+            }
         }
         throw fileFailure(
             kind = FileTransferFailureKind.TRANSFER_PROTOCOL,
@@ -1717,6 +2614,71 @@ internal class FileTransferDispatcher(
             transferId = null,
             reason = "Unable to allocate a unique transfer id after $MAX_TRANSFER_ID_ATTEMPTS attempts"
         )
+    }
+
+    private fun requireOutgoingCapacityLocked() {
+        if (outgoing.size < MAX_ACTIVE_OUTGOING_TRANSFERS) return
+        throw fileFailure(
+            kind = FileTransferFailureKind.TRANSPORT,
+            phase = FileTransferPhase.OFFER,
+            retryability = Retryability.RETRY_SAME_SESSION,
+            transferId = null,
+            reason = "Concurrent outgoing transfer capacity " +
+                "($MAX_ACTIVE_OUTGOING_TRANSFERS) is exhausted"
+        )
+    }
+
+    /** Commit public terminal state and detach cleanup from protocol progress. */
+    private suspend fun terminalizeOutgoing(
+        entry: OutgoingEntry,
+        state: FileTransferState,
+        cleanupLabel: String
+    ): Boolean {
+        val resources = entry.handle.transitionTerminalWithoutCleanup(state) ?: return false
+        resources.source?.let { source ->
+            launchIndependentCleanup {
+                cleanupOutgoingSource(source, cleanupLabel)
+            }
+        }
+        return true
+    }
+
+    /** Commit public terminal state and detach destination cleanup from callers. */
+    private fun terminalizeIncoming(
+        entry: IncomingEntry,
+        state: FileTransferState
+    ): Boolean {
+        if (!entry.session.transitionTerminalWithoutCleanup(state)) return false
+        launchIncomingTerminalCleanup(
+            entry.session,
+            (state as? FileTransferState.Failed)?.error as? P2pError.FileTransferFailed
+        )
+        return true
+    }
+
+    /**
+     * Start terminal resource cleanup outside the session coroutine tree.
+     * [beginCloseAll] starts every source/destination cleanup before it returns,
+     * and hands these jobs to [awaitCloseAll], so teardown is concurrent,
+     * owned, and bounded by one configured deadline rather than N sequential
+     * deadlines.
+     */
+    private fun launchIncomingTerminalCleanup(
+        session: IncomingFileSession,
+        cause: P2pError.FileTransferFailed?
+    ): Job = launchIndependentCleanup {
+        cleanupIncomingTerminalResources(session, cause)
+    }
+
+    private fun launchIndependentCleanup(block: suspend () -> Unit): Job {
+        val owner = SupervisorJob()
+        val job = CoroutineScope(owner + independentCleanupDispatcher).launch(
+            start = CoroutineStart.UNDISPATCHED
+        ) {
+            block()
+        }
+        job.invokeOnCompletion { owner.cancel() }
+        return job
     }
 
     private fun requireSupportedChunkCount(sizeBytes: Long) {
@@ -1739,12 +2701,19 @@ internal class FileTransferDispatcher(
     }
 
     private fun OutgoingEntry.cancelJobs(): List<Job> {
-        val jobs = listOfNotNull(timer, sender).distinct()
-        timer?.cancel()
+        val jobs = listOfNotNull(timer, sender, overallTimer).distinct()
+        cancelTimers()
         sender?.cancel()
-        timer = null
         sender = null
         return jobs
+    }
+
+    private fun OutgoingEntry.cancelTimers() {
+        timer?.cancel()
+        overallTimer?.cancel()
+        timer = null
+        overallTimer = null
+        idleGeneration++
     }
 
     private fun IncomingEntry.cancelJobs(): List<Job> {
@@ -1761,9 +2730,20 @@ internal class FileTransferDispatcher(
     private sealed interface OfferInsertion {
         data object CLOSED : OfferInsertion
         data object EXACT_DUPLICATE : OfferInsertion
+        data object RETIRED : OfferInsertion
         data object CONFLICT : OfferInsertion
         data object CAPACITY : OfferInsertion
         data class Inserted(val entry: IncomingEntry) : OfferInsertion
+    }
+
+    private sealed interface IncomingFinalization {
+        data object Missing : IncomingFinalization
+        data object AlreadyStarted : IncomingFinalization
+        data class NotAccepted(
+            val entry: IncomingEntry,
+            val phase: IncomingPhase
+        ) : IncomingFinalization
+        data class Started(val entry: IncomingEntry) : IncomingFinalization
     }
 
     private sealed interface RejectResult {
@@ -1780,9 +2760,19 @@ internal class FileTransferDispatcher(
             val phase: OutgoingPhase
         ) : CommitResult
     }
+
+    private data class PreparedSourceSnapshot(
+        val sizeBytes: Long,
+        val sha256: Sha256Digest
+    )
 }
 
-private const val MAX_PENDING_INCOMING_OFFERS: Int = 64
+private const val MAX_ACTIVE_INCOMING_TRANSFERS: Int = 64
+private const val MAX_INCOMING_OFFER_EVENT_BUFFER: Int = 64
+private const val MAX_ACTIVE_OUTGOING_TRANSFERS: Int = 64
+private const val MAX_AMBIGUOUS_INCOMING_TRANSFER_IDS: Int = 256
+private const val MAX_CONCURRENT_FILE_OPERATIONS: Int = 8
+private const val MAX_CONCURRENT_OUTGOING_STREAMS: Int = 8
 private const val MAX_TRANSFER_ID_ATTEMPTS: Int = 128
 private const val MAX_TRANSFER_FAILURE_REASON_CHARS: Int = 512
 
