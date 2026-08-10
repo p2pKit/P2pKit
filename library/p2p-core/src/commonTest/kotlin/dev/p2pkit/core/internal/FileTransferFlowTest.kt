@@ -1045,6 +1045,47 @@ class FileTransferFlowTest {
     }
 
     @Test
+    fun cancelledAcceptReturnsAfterDeadlineWhenCompensationIgnoresCancellation() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol().apply {
+            gateAccept = true
+            gateCancel = true
+        }
+        val dispatcher = directDispatcher(
+            scope,
+            protocol,
+            FileTransferConfig(maxFileSizeBytes = 1L, offerTimeoutMillis = 50L, chunkSizeBytes = 1)
+        )
+        try {
+            val id = MessageId.random(Random(8_011))
+            dispatcher.onFileOffer(id, FileOfferPayload("wedged-accept.bin", 1L))
+            val offer = assertIs<IncomingFileSession>(dispatcher.pendingFileOffers.value.single())
+            val accepting = async { offer.accept(Buffer()) }
+
+            protocol.acceptStarted.await()
+            accepting.cancel(CancellationException("cancel wedged accept"))
+            protocol.cancelStarted.await()
+            withTimeout(5_000) { accepting.join() }
+
+            assertIs<FileTransferState.Cancelled>(offer.state.value)
+            assertFalse(offer.retainsReceiver())
+            assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+            assertEquals(
+                listOf<Pair<MessageId, String?>>(id to "accept did not commit"),
+                protocol.fileCancels
+            )
+
+            // Release the deliberately cancellation-ignoring fake only after
+            // the caller has returned, then prove its independent task exits.
+            protocol.cancelRelease.complete(Unit)
+            withTimeout(5_000) { protocol.cancelExited.await() }
+        } finally {
+            protocol.cancelRelease.complete(Unit)
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun sourceClosedExactlyOnceOnCancelBeforeAccept() = runBlocking {
         val scope = CoroutineScope(coroutineContext + Job())
         val protocol = RecordingFileProtocol()
@@ -2448,6 +2489,10 @@ private class RecordingFileProtocol : P2pProtocol {
     val rejectStarted = CompletableDeferred<Unit>()
     val rejectRelease = CompletableDeferred<Unit>()
     val rejectExited = CompletableDeferred<Unit>()
+    var gateCancel: Boolean = false
+    val cancelStarted = CompletableDeferred<Unit>()
+    val cancelRelease = CompletableDeferred<Unit>()
+    val cancelExited = CompletableDeferred<Unit>()
 
     /**
      * When true, each [sendFileDataFrame] records its frame and then parks
@@ -2538,6 +2583,14 @@ private class RecordingFileProtocol : P2pProtocol {
 
     override suspend fun sendFileCancel(connection: RawConnection, transferId: MessageId, reason: String?) {
         fileCancels.add(transferId to reason)
+        if (gateCancel) {
+            cancelStarted.complete(Unit)
+            try {
+                withContext(NonCancellable) { cancelRelease.await() }
+            } finally {
+                cancelExited.complete(Unit)
+            }
+        }
     }
 
     override fun events(

@@ -1487,27 +1487,19 @@ internal class FileTransferDispatcher(
             removeIncoming(entry.session.transferId, entry)
             entry.cancelJobs()
             entry.session.setState(terminalState)
-            try {
-                withTimeout(config.offerTimeoutMillis) {
-                    withEpochWrite(entry.writeEpoch) { connection ->
-                        protocol.sendFileCancel(
-                            connection,
-                            entry.session.transferId,
-                            "accept did not commit"
-                        )
-                    }
-                }
-            } catch (e: TimeoutCancellationException) {
-                logger.debug(
-                    "Session $sessionId: compensating FILE_CANCEL for " +
-                        "${entry.session.transferId} failed: ${e.message}"
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                logger.debug(
-                    "Session $sessionId: compensating FILE_CANCEL for " +
-                        "${entry.session.transferId} failed: ${e.message}"
+            // This is already terminal cleanup. A protocol implementation or
+            // socket write can ignore cancellation, so a structured
+            // withTimeout inside NonCancellable would still wait forever for
+            // its child. Use the independent bounded owner shared by every
+            // other terminal control notification.
+            sendCleanupBestEffort(
+                "compensating FILE_CANCEL for ${entry.session.transferId}",
+                entry.writeEpoch
+            ) { connection ->
+                protocol.sendFileCancel(
+                    connection,
+                    entry.session.transferId,
+                    "accept did not commit"
                 )
             }
         }
