@@ -104,6 +104,39 @@ class HelloPayloadTest {
     }
 
     @Test
+    fun duplicateTopLevelFieldsAreRejectedWithoutExposingTheirValues() {
+        val secret = "HELLO_DUPLICATE_SECRET_DO_NOT_LOG"
+        val json = """{
+            "appId":"com.example",
+            "appId":"$secret",
+            "peerId":"p1",
+            "deviceName":"Dev",
+            "platform":"JVM_DESKTOP",
+            "supportedTransports":["LAN"]
+        }""".trimIndent().encodeToByteArray()
+
+        val failure = assertFailsWith<IllegalArgumentException> { HelloPayload.decode(json) }
+
+        assertTrue(failure.message.orEmpty().contains("duplicate top-level field"))
+        assertFalse(failure.message.orEmpty().contains(secret), failure.message)
+    }
+
+    @Test
+    fun escapedAndLiteralSpellingsOfTheSameTopLevelFieldAreRejected() {
+        val escapedAppIdKey = "app\\u0049d"
+        val json = """{
+            "appId":"com.example",
+            "$escapedAppIdKey":"com.other",
+            "peerId":"p1",
+            "deviceName":"Dev",
+            "platform":"JVM_DESKTOP",
+            "supportedTransports":["LAN"]
+        }""".trimIndent().encodeToByteArray()
+
+        assertFailsWith<IllegalArgumentException> { HelloPayload.decode(json) }
+    }
+
+    @Test
     fun encodedJsonIsUtf8() {
         val payload = HelloPayload(
             appId = "com.example",

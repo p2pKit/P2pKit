@@ -56,7 +56,9 @@ internal data class FileOfferPayload(
                 "FILE_OFFER payload ${bytes.size} exceeds " +
                     "${ProtocolConstants.MAX_FILE_OFFER_PAYLOAD_BYTES} bytes"
             }
-            val payload = json.decodeFromString(serializer(), bytes.decodeStrictUtf8("FILE_OFFER payload"))
+            val jsonText = bytes.decodeStrictUtf8("FILE_OFFER payload")
+            rejectDuplicateTopLevelJsonFields(jsonText, "FILE_OFFER payload")
+            val payload = json.decodeFromString(serializer(), jsonText)
             validate(payload)
             return payload
         }
