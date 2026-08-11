@@ -13,6 +13,7 @@ import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.PeerAuthenticationHint
 import dev.p2pkit.core.transport.TransportHint
 import dev.p2pkit.core.transport.TransportSecurityProfile
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * Identity advertised over mDNS plus the bound TCP port, shared between each
@@ -25,11 +26,12 @@ import dev.p2pkit.core.transport.TransportSecurityProfile
  * advertising. A zero value means "not bound yet" — discovery transports
  * should not call this with [tcpPort] == 0.
  *
- * The platform `@Volatile` annotations differ between JVM and Kotlin/Native,
- * so we just rely on the SPI call ordering guaranteed by core's start path
- * (it holds a mutex and runs `DataTransport.start()` strictly before
- * `DiscoveryTransport.startAdvertising()`). No cross-thread reads of
- * [tcpPort] happen outside that ordering.
+ * Reads and writes can cross platform callback threads during listener
+ * recovery, so the mutable value is backed by [MutableStateFlow]. This keeps
+ * publication visible on JVM, Android, and Kotlin/Native without relying on
+ * platform-specific volatile annotations. The data transport still publishes
+ * the port before discovery starts advertising, and resets it to zero only
+ * while atomically detaching that exact listener generation.
  */
 internal class LanServiceRegistration(
     val appId: AppId,
@@ -38,8 +40,16 @@ internal class LanServiceRegistration(
     val platform: Platform,
     val securityProfile: TransportSecurityProfile = TransportSecurityProfile.LegacyPlaintextV1,
     val fingerprint: PeerFingerprint? = null,
-    var tcpPort: Int = 0
+    tcpPort: Int = 0
 ) {
+    private val tcpPortState = MutableStateFlow(tcpPort)
+
+    var tcpPort: Int
+        get() = tcpPortState.value
+        set(value) {
+            tcpPortState.value = value
+        }
+
     init {
         require(
             (securityProfile == TransportSecurityProfile.AuthenticatedV2) == (fingerprint != null)

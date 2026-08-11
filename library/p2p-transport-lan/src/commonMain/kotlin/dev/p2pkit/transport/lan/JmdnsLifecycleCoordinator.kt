@@ -215,30 +215,33 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         // cleanup. Do not register a second service on the repaired handle.
         if (advertisingIntent && advertisedToken != null && bindingHealthy) return@withLock
 
-        ops.acquireMulticastLock()
-        val h = try {
-            ensureHandle()
-        } catch (e: Throwable) {
-            failedStartCleanup()
-            throw e
-        }
-        val token = ops.createServiceToken(localPeer)
-        advertisedToken = token
-        bindingHealthy = false
         try {
+            // Acquisition, token construction, blocking registration, and
+            // watcher attachment are one ownership transaction. Token
+            // construction used to sit outside this rollback boundary, so a
+            // thrown ServiceInfo/listener builder could strand the freshly
+            // created handle and Android multicast lock with no active intent.
+            ops.acquireMulticastLock()
+            val h = ensureHandle()
+            val token = ops.createServiceToken(localPeer)
+            advertisedToken = token
+            bindingHealthy = false
             withContext(ioContext) { ops.registerServiceBlocking(h, token) }
+            advertisingIntent = true
+            cachedLocalPeer = localPeer
+            bindingHealthy = bindingMatchesIntents()
+            ops.logDebug(
+                "startAdvertising: registered, " +
+                    "boundNetwork=$boundNetwork boundDefaultNetwork=$boundDefaultNetwork"
+            )
+            ops.startNetworkWatcher()
         } catch (e: Throwable) {
+            advertisingIntent = false
+            cachedLocalPeer = null
+            bindingHealthy = false
             failedStartCleanup()
             throw e
         }
-        advertisingIntent = true
-        cachedLocalPeer = localPeer
-        bindingHealthy = bindingMatchesIntents()
-        ops.logDebug(
-            "startAdvertising: registered, " +
-                "boundNetwork=$boundNetwork boundDefaultNetwork=$boundDefaultNetwork"
-        )
-        ops.startNetworkWatcher()
     }
 
     suspend fun stopAdvertising(): Unit = lock.withLock {
@@ -270,29 +273,26 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         // As above, repair can satisfy the requested intent itself.
         if (discoveryIntent && listenerToken != null && bindingHealthy) return@withLock
 
-        ops.acquireMulticastLock()
-        val h = try {
-            ensureHandle()
-        } catch (e: Throwable) {
-            failedStartCleanup()
-            throw e
-        }
-        val token = ops.createListenerToken(h)
-        listenerToken = token
-        bindingHealthy = false
         try {
+            ops.acquireMulticastLock()
+            val h = ensureHandle()
+            val token = ops.createListenerToken(h)
+            listenerToken = token
+            bindingHealthy = false
             withContext(ioContext) { ops.addListenerBlocking(h, token) }
+            discoveryIntent = true
+            bindingHealthy = bindingMatchesIntents()
+            ops.logDebug(
+                "startDiscovery: listener added, " +
+                    "boundNetwork=$boundNetwork boundDefaultNetwork=$boundDefaultNetwork"
+            )
+            ops.startNetworkWatcher()
         } catch (e: Throwable) {
+            discoveryIntent = false
+            bindingHealthy = false
             failedStartCleanup()
             throw e
         }
-        discoveryIntent = true
-        bindingHealthy = bindingMatchesIntents()
-        ops.logDebug(
-            "startDiscovery: listener added, " +
-                "boundNetwork=$boundNetwork boundDefaultNetwork=$boundDefaultNetwork"
-        )
-        ops.startNetworkWatcher()
     }
 
     suspend fun stopDiscovery(): Unit = lock.withLock {
@@ -737,6 +737,10 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
                         forRebind = true
                     )
                 }
+                if (handle == null) {
+                    stopNetworkWatcherIfIdle()
+                    releaseMulticastLockIfIdle()
+                }
             } catch (cleanupError: Throwable) {
                 if (cleanupError !is Exception) throw cleanupError
                 ops.logWarn(
@@ -744,7 +748,6 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
                     cleanupError
                 )
             }
-            if (handle == null) releaseMulticastLockIfIdle()
         }
     }
 

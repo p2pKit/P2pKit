@@ -122,7 +122,13 @@ class JmdnsLifecycleCoordinatorTest {
         var failNextRegister = false
 
         @Volatile
+        var failNextServiceTokenCreation = false
+
+        @Volatile
         var failNextAddListener = false
+
+        @Volatile
+        var failNextListenerTokenCreation = false
 
         @Volatile
         var failNextUnregister = false
@@ -135,6 +141,12 @@ class JmdnsLifecycleCoordinatorTest {
 
         @Volatile
         var failNextLockRelease = false
+
+        @Volatile
+        var failNextLockAcquire = false
+
+        @Volatile
+        var failNextWatcherStart = false
 
         val closeFailuresRemaining = AtomicInteger(0)
 
@@ -177,8 +189,13 @@ class JmdnsLifecycleCoordinatorTest {
             closed += handle
         }
 
-        override fun createServiceToken(localPeer: LocalPeerInfo): Any =
-            FakeServiceToken(localPeer)
+        override fun createServiceToken(localPeer: LocalPeerInfo): Any {
+            if (failNextServiceTokenCreation) {
+                failNextServiceTokenCreation = false
+                throw IOException("injected service-token creation failure")
+            }
+            return FakeServiceToken(localPeer)
+        }
 
         override fun registerServiceBlocking(handle: FakeHandle, token: Any) {
             registerEntered.put(Unit)
@@ -200,8 +217,13 @@ class JmdnsLifecycleCoordinatorTest {
             unregistrations += token
         }
 
-        override fun createListenerToken(handle: FakeHandle): Any =
-            FakeListenerToken(handle)
+        override fun createListenerToken(handle: FakeHandle): Any {
+            if (failNextListenerTokenCreation) {
+                failNextListenerTokenCreation = false
+                throw IOException("injected listener-token creation failure")
+            }
+            return FakeListenerToken(handle)
+        }
 
         override fun addListenerBlocking(handle: FakeHandle, token: Any) {
             listenerEntered.put(Unit)
@@ -239,6 +261,10 @@ class JmdnsLifecycleCoordinatorTest {
         // release helpers, which key on their own held-lock field.
         override fun acquireMulticastLock() {
             lockHeld = true
+            if (failNextLockAcquire) {
+                failNextLockAcquire = false
+                throw IOException("injected multicast acquire failure")
+            }
         }
 
         override fun releaseMulticastLock() {
@@ -251,6 +277,10 @@ class JmdnsLifecycleCoordinatorTest {
 
         override fun startNetworkWatcher() {
             watcherActive = true
+            if (failNextWatcherStart) {
+                failNextWatcherStart = false
+                throw IOException("injected watcher start failure")
+            }
         }
 
         override fun stopNetworkWatcher() {
@@ -539,6 +569,76 @@ class JmdnsLifecycleCoordinatorTest {
             assertEquals(2, ops.created.size, "advertising must be restored on a fresh handle")
             assertEquals(2, ops.registrations.size)
             assertSame(ops.created.last(), ops.registrations.last().first)
+        }
+    }
+
+    @Test
+    fun serviceTokenCreationFailureClosesHandleAndReleasesLock() {
+        val ops = FakeOps().apply {
+            current = FakeNet("wifi0")
+            failNextServiceTokenCreation = true
+        }
+        coordinatorTest(ops) { coordinator, _ ->
+            assertFailsWith<IOException> { coordinator.startAdvertising(localPeer) }
+
+            assertEquals(1, ops.created.size)
+            assertTrue(ops.created.single().closed)
+            assertFalse(ops.lockHeld)
+            assertFalse(ops.watcherActive)
+
+            coordinator.startAdvertising(localPeer)
+            assertEquals(2, ops.created.size)
+            assertEquals(1, ops.registrations.size)
+        }
+    }
+
+    @Test
+    fun listenerTokenCreationFailureRestoresExistingAdvertising() {
+        val ops = FakeOps().apply { current = FakeNet("wifi0") }
+        coordinatorTest(ops) { coordinator, _ ->
+            coordinator.startAdvertising(localPeer)
+            val original = ops.created.single()
+            ops.failNextListenerTokenCreation = true
+
+            assertFailsWith<IOException> { coordinator.startDiscovery() }
+
+            assertTrue(original.closed)
+            assertEquals(2, ops.created.size)
+            assertEquals(2, ops.registrations.size, "advertising must be restored")
+            assertTrue(ops.listenersAdded.isEmpty())
+            assertTrue(ops.lockHeld)
+            assertTrue(ops.watcherActive)
+        }
+    }
+
+    @Test
+    fun partialMulticastAcquireFailureIsRolledBack() {
+        val ops = FakeOps().apply {
+            current = FakeNet("wifi0")
+            failNextLockAcquire = true
+        }
+        coordinatorTest(ops) { coordinator, _ ->
+            assertFailsWith<IOException> { coordinator.startDiscovery() }
+
+            assertFalse(ops.lockHeld)
+            assertTrue(ops.created.isEmpty())
+            assertFalse(ops.watcherActive)
+        }
+    }
+
+    @Test
+    fun partialWatcherStartFailureRollsBackRegisteredSide() {
+        val ops = FakeOps().apply {
+            current = FakeNet("wifi0")
+            failNextWatcherStart = true
+        }
+        coordinatorTest(ops) { coordinator, _ ->
+            assertFailsWith<IOException> { coordinator.startAdvertising(localPeer) }
+
+            assertEquals(1, ops.registrations.size)
+            assertTrue(ops.created.single().closed)
+            assertFalse(ops.watcherActive)
+            assertFalse(ops.lockHeld)
         }
     }
 

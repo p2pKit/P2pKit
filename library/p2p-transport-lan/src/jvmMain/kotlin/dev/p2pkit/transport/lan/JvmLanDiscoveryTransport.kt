@@ -250,18 +250,21 @@ internal class JvmLanDiscoveryTransport(
 
     override suspend fun stopDiscovery() {
         val backend = testDiscoveryBackend
-        if (backend == null) {
-            coordinator.stopDiscovery()
-        } else {
-            val lease = synchronized(testLifecycleLock) {
-                testListenerLease.also { testListenerLease = null }
+        try {
+            if (backend == null) {
+                coordinator.stopDiscovery()
+            } else {
+                val lease = synchronized(testLifecycleLock) {
+                    testListenerLease.also { testListenerLease = null }
+                }
+                if (lease != null) {
+                    lease.deactivate()
+                    backend.unsubscribe(registration.localPeerId)
+                }
             }
-            if (lease != null) {
-                lease.deactivate()
-                backend.unsubscribe(registration.localPeerId)
-            }
+        } finally {
+            serviceAdmissions.drain().forEach { _events.tryEmit(PeerEvent.Lost(it)) }
         }
-        serviceAdmissions.drain().forEach { _events.tryEmit(PeerEvent.Lost(it)) }
     }
 
     private fun buildServiceInfo(localPeer: LocalPeerInfo): ServiceInfo {
