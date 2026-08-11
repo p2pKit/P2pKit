@@ -2,6 +2,7 @@ package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.KeepAliveConfig
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
@@ -11,10 +12,15 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.protocol.DefaultP2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
+import dev.p2pkit.core.transfer.PreparedFileSource
+import dev.p2pkit.core.transfer.Sha256Digest
+import kotlinx.io.Buffer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -24,8 +30,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -152,6 +161,382 @@ class KeepAliveTest {
         } finally {
             releaseSubscriber.complete(Unit)
             subscriber.cancel()
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun inFlightApplicationMessageRemainsInsideBacklogLimit() = runTest {
+        val pair = FakeConnectionPair()
+        val protocol = DefaultP2pProtocol(clock = { testScheduler.currentTime })
+        val supervisor = SupervisorJob()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + supervisor)
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
+        val deliveryClaimed = CompletableDeferred<Unit>()
+        val releaseDelivery = CompletableDeferred<Unit>()
+        var deliveryCalls = 0
+        val session = P2pSessionImpl(
+            id = "in-flight-backlog",
+            peer = Peer(PeerId("in-flight-peer"), "Peer", Platform.JVM_DESKTOP, setOf(TransportKind.LAN)),
+            initialConnection = pair.a,
+            initialEvents = events,
+            protocol = protocol,
+            parentScope = scope,
+            keepAlive = KeepAliveConfig(60_000, 120_000),
+            clock = { testScheduler.currentTime },
+            logger = P2pLogger.NoOp,
+            beforeApplicationMessageEmitForTest = {
+                if (deliveryCalls++ == 0) {
+                    deliveryClaimed.complete(Unit)
+                    releaseDelivery.await()
+                }
+            }
+        )
+        session.start()
+
+        try {
+            val maximumMessage = P2pMessage.Binary(ByteArray(4 * 1024 * 1024))
+            events.send(ProtocolEvent.Message(maximumMessage))
+            deliveryClaimed.await()
+            events.send(ProtocolEvent.Message(maximumMessage))
+            events.send(ProtocolEvent.Message(P2pMessage.Binary(byteArrayOf(1))))
+
+            testScheduler.runCurrent()
+            assertEquals(ConnectionState.Failed, session.state.value)
+        } finally {
+            releaseDelivery.complete(Unit)
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun applicationBacklogIncludesRetainedMetadataBytes() = runTest {
+        val pair = FakeConnectionPair()
+        val protocol = DefaultP2pProtocol(clock = { testScheduler.currentTime })
+        val supervisor = SupervisorJob()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + supervisor)
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
+        val deliveryClaimed = CompletableDeferred<Unit>()
+        val releaseDelivery = CompletableDeferred<Unit>()
+        var deliveryCalls = 0
+        val session = P2pSessionImpl(
+            id = "metadata-backlog",
+            peer = Peer(PeerId("metadata-peer"), "Peer", Platform.JVM_DESKTOP, setOf(TransportKind.LAN)),
+            initialConnection = pair.a,
+            initialEvents = events,
+            protocol = protocol,
+            parentScope = scope,
+            keepAlive = KeepAliveConfig(60_000, 120_000),
+            clock = { testScheduler.currentTime },
+            logger = P2pLogger.NoOp,
+            beforeApplicationMessageEmitForTest = {
+                if (deliveryCalls++ == 0) {
+                    deliveryClaimed.complete(Unit)
+                    releaseDelivery.await()
+                }
+            }
+        )
+        session.start()
+
+        val metadata = ('a'..'h').associate { key ->
+            key.toString() to "v".repeat(4_095)
+        }
+        try {
+            val maximumWithMetadata = P2pMessage.Binary(
+                ByteArray(4 * 1024 * 1024),
+                metadata
+            )
+            events.send(ProtocolEvent.Message(maximumWithMetadata))
+            deliveryClaimed.await()
+            events.send(ProtocolEvent.Message(maximumWithMetadata))
+
+            testScheduler.runCurrent()
+            assertEquals(ConnectionState.Failed, session.state.value)
+        } finally {
+            releaseDelivery.complete(Unit)
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun terminalStateCannotOvertakeApplicationDeliveryCancellation() = runTest {
+        val pair = FakeConnectionPair()
+        val protocol = DefaultP2pProtocol(clock = { testScheduler.currentTime })
+        val supervisor = SupervisorJob()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + supervisor)
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
+        val deliveryEntered = CompletableDeferred<Unit>()
+        val releaseDelivery = CompletableDeferred<Unit>()
+        val terminalPublished = CompletableDeferred<Unit>()
+        val releaseTerminal = CompletableDeferred<Unit>()
+        val received = Channel<P2pMessage>(Channel.UNLIMITED)
+        val session = P2pSessionImpl(
+            id = "terminal-delivery-order",
+            peer = Peer(PeerId("terminal-peer"), "Peer", Platform.JVM_DESKTOP, setOf(TransportKind.LAN)),
+            initialConnection = pair.a,
+            initialEvents = events,
+            protocol = protocol,
+            parentScope = scope,
+            keepAlive = KeepAliveConfig(60_000, 120_000),
+            clock = { testScheduler.currentTime },
+            logger = P2pLogger.NoOp,
+            beforeApplicationMessageEmitForTest = {
+                deliveryEntered.complete(Unit)
+                releaseDelivery.await()
+            },
+            afterTerminalStatePublishedForTest = {
+                terminalPublished.complete(Unit)
+                releaseTerminal.await()
+            }
+        )
+        val subscriber = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            session.incoming.collect(received::send)
+        }
+        session.start()
+
+        try {
+            events.send(ProtocolEvent.Message(P2pMessage.Text("must be cancelled")))
+            deliveryEntered.await()
+            events.send(ProtocolEvent.Close)
+            terminalPublished.await()
+            assertEquals(ConnectionState.Closed, session.state.value)
+
+            releaseDelivery.complete(Unit)
+            testScheduler.runCurrent()
+            assertTrue(received.tryReceive().isFailure, "no message may appear after terminal publication")
+        } finally {
+            releaseTerminal.complete(Unit)
+            releaseDelivery.complete(Unit)
+            subscriber.cancel()
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun parentCancellationAfterTerminalPublicationCannotSkipResourceCleanup() = runTest {
+        val pair = FakeConnectionPair()
+        val supervisor = SupervisorJob()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + supervisor)
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
+        val terminalPublished = CompletableDeferred<Unit>()
+        val releaseTerminal = CompletableDeferred<Unit>()
+        val session = P2pSessionImpl(
+            id = "terminal-cleanup-cancellation-boundary",
+            peer = Peer(
+                PeerId("terminal-cleanup-peer"),
+                "Peer",
+                Platform.JVM_DESKTOP,
+                setOf(TransportKind.LAN)
+            ),
+            initialConnection = pair.a,
+            initialEvents = events,
+            protocol = DefaultP2pProtocol(clock = { testScheduler.currentTime }),
+            parentScope = scope,
+            keepAlive = KeepAliveConfig(60_000, 120_000),
+            clock = { testScheduler.currentTime },
+            logger = P2pLogger.NoOp,
+            afterTerminalStatePublishedForTest = {
+                terminalPublished.complete(Unit)
+                releaseTerminal.await()
+            }
+        )
+        session.start()
+
+        try {
+            events.send(ProtocolEvent.Close)
+            terminalPublished.await()
+            assertEquals(ConnectionState.Closed, session.state.value)
+
+            // Cancel the exact parent that owns routeEvents while the
+            // terminal state is visible but cleanup is deliberately paused.
+            // Cleanup must remain one non-cancellable transaction.
+            supervisor.cancel()
+            releaseTerminal.complete(Unit)
+            testScheduler.runCurrent()
+
+            assertEquals(
+                ConnectionState.Closed,
+                withContext(Dispatchers.Default) {
+                    withTimeout(5_000) {
+                        pair.a.state.first { it == ConnectionState.Closed }
+                    }
+                }
+            )
+            assertFalse(session.runtimeJobIsActiveForTest)
+            session.awaitRuntimeTermination()
+        } finally {
+            releaseTerminal.complete(Unit)
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun terminalClaimRejectsWritesFileTransfersAndRearmBeforeStatePublication() = runTest {
+        val pair = FakeConnectionPair()
+        val replacement = FakeConnectionPair()
+        val supervisor = SupervisorJob()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + supervisor)
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
+        val claimEntered = CompletableDeferred<Unit>()
+        val releaseClaim = CompletableDeferred<Unit>()
+        val session = P2pSessionImpl(
+            id = "terminal-claim-admission",
+            peer = Peer(
+                PeerId("terminal-claim-peer"),
+                "Peer",
+                Platform.JVM_DESKTOP,
+                setOf(TransportKind.LAN)
+            ),
+            initialConnection = pair.a,
+            initialEvents = events,
+            protocol = DefaultP2pProtocol(clock = { testScheduler.currentTime }),
+            parentScope = scope,
+            keepAlive = KeepAliveConfig(60_000, 120_000),
+            clock = { testScheduler.currentTime },
+            logger = P2pLogger.NoOp,
+            afterTerminalClaimForTest = {
+                claimEntered.complete(Unit)
+                releaseClaim.await()
+            }
+        )
+        session.start()
+
+        try {
+            events.send(ProtocolEvent.Close)
+            claimEntered.await()
+            assertEquals(
+                ConnectionState.Connected,
+                session.state.value,
+                "terminal state publication is deliberately held after the ownership claim"
+            )
+
+            assertFailsWith<P2pError.ConnectionFailed> {
+                session.send(P2pMessage.Text("must not cross terminal claim"))
+            }
+            val prepared = object : PreparedFileSource {
+                override val sizeBytes: Long = 0
+                override val sha256: Sha256Digest = Sha256Digest(ByteArray(32))
+                override fun open(): Buffer = Buffer()
+            }
+            val fileFailure = assertFailsWith<P2pError.FileTransferFailed> {
+                session.sendFile("must-not-start.bin", null, prepared)
+            }
+            assertEquals(
+                dev.p2pkit.core.FileTransferFailureKind.REMOTE_DISCONNECTED,
+                fileFailure.kind
+            )
+            assertFalse(
+                session.rearmWith(
+                    replacement.a,
+                    Channel(Channel.UNLIMITED)
+                ),
+                "a replacement epoch must not cross the terminal claim"
+            )
+            assertEquals(ConnectionState.Closed, replacement.a.state.value)
+
+            releaseClaim.complete(Unit)
+            assertEquals(
+                ConnectionState.Closed,
+                session.state.first { it == ConnectionState.Closed }
+            )
+        } finally {
+            releaseClaim.complete(Unit)
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun registrationCheckActivatesOnlyAfterCommitAndThenDropsDetachedMessages() = runTest {
+        val pair = FakeConnectionPair()
+        val protocol = DefaultP2pProtocol(clock = { testScheduler.currentTime })
+        val supervisor = SupervisorJob()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + supervisor)
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
+        val received = Channel<P2pMessage>(Channel.UNLIMITED)
+        val session = P2pSessionImpl(
+            id = "detached-message-drop",
+            peer = Peer(PeerId("detached-peer"), "Peer", Platform.JVM_DESKTOP, setOf(TransportKind.LAN)),
+            initialConnection = pair.a,
+            initialEvents = events,
+            protocol = protocol,
+            parentScope = scope,
+            keepAlive = KeepAliveConfig(60_000, 120_000),
+            clock = { testScheduler.currentTime },
+            logger = P2pLogger.NoOp,
+            lookupRegistration = { SessionRegistration(activeSessionId = null, isInPublicList = false) }
+        )
+        val subscriber = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            session.incoming.collect(received::send)
+        }
+        session.start()
+
+        try {
+            events.send(ProtocolEvent.Message(P2pMessage.Text("pre-registration")))
+            testScheduler.runCurrent()
+            assertEquals(P2pMessage.Text("pre-registration"), received.receive())
+
+            session.markRegistrationCommitted()
+            events.send(ProtocolEvent.Message(P2pMessage.Text("zombie")))
+            testScheduler.runCurrent()
+            assertTrue(received.tryReceive().isFailure)
+            assertEquals(ConnectionState.Connected, session.state.value)
+        } finally {
+            subscriber.cancel()
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun timedOutNonCooperativeDeliveryCannotUnderflowBacklogAfterLateExit() = runTest {
+        val pair = FakeConnectionPair()
+        val supervisor = SupervisorJob()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + supervisor)
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
+        val deliveryEntered = CompletableDeferred<Unit>()
+        val releaseDelivery = CompletableDeferred<Unit>()
+        val deliveryDrainCompleted = CompletableDeferred<Unit>()
+        val session = P2pSessionImpl(
+            id = "late-delivery-exit",
+            peer = Peer(PeerId("late-delivery-peer"), "Peer", Platform.JVM_DESKTOP, setOf(TransportKind.LAN)),
+            initialConnection = pair.a,
+            initialEvents = events,
+            protocol = DefaultP2pProtocol(clock = { testScheduler.currentTime }),
+            parentScope = scope,
+            keepAlive = KeepAliveConfig(60_000, 120_000),
+            clock = { testScheduler.currentTime },
+            logger = P2pLogger.NoOp,
+            beforeApplicationMessageEmitForTest = {
+                deliveryEntered.complete(Unit)
+                withContext(NonCancellable) { releaseDelivery.await() }
+            },
+            applicationDeliveryCloseTimeoutMillis = 50,
+            afterApplicationDeliveryDrainForTest = { deliveryDrainCompleted.complete(Unit) }
+        )
+        session.start()
+
+        try {
+            events.send(ProtocolEvent.Message(P2pMessage.Text("retained")))
+            deliveryEntered.await()
+            events.send(ProtocolEvent.Message(P2pMessage.Text("queued behind retained")))
+            testScheduler.runCurrent()
+            events.send(ProtocolEvent.Close)
+            assertEquals(
+                ConnectionState.Closed,
+                session.state.first { it == ConnectionState.Closed }
+            )
+
+            deliveryDrainCompleted.await()
+            assertEquals(
+                1 to "retained".encodeToByteArray().size.toLong(),
+                session.applicationBacklogForTest(),
+                "only the cancellation-ignoring in-flight message remains owned"
+            )
+            releaseDelivery.complete(Unit)
+            testScheduler.runCurrent()
+
+            assertEquals(0 to 0L, session.applicationBacklogForTest())
+        } finally {
+            releaseDelivery.complete(Unit)
             supervisor.cancel()
         }
     }

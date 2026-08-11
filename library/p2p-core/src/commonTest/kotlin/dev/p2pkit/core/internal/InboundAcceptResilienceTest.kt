@@ -19,6 +19,7 @@ import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -218,6 +219,41 @@ class InboundAcceptResilienceTest {
     }
 
     @Test
+    fun transportThrownCancellationIsRecollectedWhileCollectorRemainsActive() = runBlocking {
+        val pair = FakeConnectionPair()
+        val logger = RecordingLogger()
+        val transport = RecoveringDataTransport(
+            firstFailure = CancellationException("transport-owned cancellation")
+        )
+        val bob = createTestKit {
+            appId = AppId("com.example.test")
+            deviceName = "Bob"
+            this.logger = logger
+            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
+            keepAlive {
+                pingIntervalMillis = 60_000
+                timeoutMillis = 120_000
+            }
+            transports { register(RecoveringTransportFactory(transport)) }
+        }
+        val alice = outgoingKit("Alice", pair.a)
+        try {
+            withTimeout(5_000) { transport.recollected.await() }
+            transport.emitIncoming(pair.b)
+
+            val outgoing = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+            val incoming = withTimeout(5_000) { bob.incomingSessions.first() }
+            withTimeout(5_000) { outgoing.await() }
+
+            assertEquals("Alice", incoming.peer.name)
+            awaitLogged(logger) { it.contains(acceptLoopEndedFragment) }
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
     fun cleanStopProducesNoInboundAcceptanceDiagnostics() = runBlocking {
         val bobLogger = RecordingLogger()
         val bobTransport = FakeDataTransport()
@@ -293,7 +329,10 @@ private class RecoveringTransportFactory(
         TransportPair(data = transport, discovery = null)
 }
 
-private class RecoveringDataTransport : DataTransport {
+private class RecoveringDataTransport(
+    private val firstFailure: Throwable =
+        IllegalStateException("emulated transient accept failure")
+) : DataTransport {
     override val type: TransportKind = TransportKind.LAN
     override val priority: Int = 100
     private val incoming = Channel<RawConnection>(Channel.UNLIMITED)
@@ -308,7 +347,7 @@ private class RecoveringDataTransport : DataTransport {
     override fun incomingConnections(): Flow<RawConnection> = flow {
         collections += 1
         if (collections == 1) {
-            throw IllegalStateException("emulated transient accept failure")
+            throw firstFailure
         }
         recollected.complete(Unit)
         incoming.receiveAsFlow().collect { emit(it) }

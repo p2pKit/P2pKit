@@ -106,6 +106,10 @@ internal class P2pKitImpl(
     private val sessionSetupTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
     private val beforeSessionCommitForTest: (suspend () -> Unit)? = null,
     private val afterOutgoingConnectForTest: (suspend () -> Unit)? = null,
+    private val afterSessionSetupResultForTest: (suspend () -> Unit)? = null,
+    private val discoveryRefreshTimeoutMillis: Long = DEFAULT_DISCOVERY_REFRESH_TIMEOUT_MS,
+    private val featureOperationSettleTimeoutMillis: Long =
+        DEFAULT_FEATURE_OPERATION_SETTLE_TIMEOUT_MS,
     private val beforeTerminalWatcherRemovalForTest: (suspend () -> Unit)? = null
 ) : P2pKit {
 
@@ -204,6 +208,9 @@ internal class P2pKitImpl(
     private val stopCompletion = CompletableDeferred<Result<Unit>>()
 
     init {
+        require(featureOperationSettleTimeoutMillis > 0L) {
+            "featureOperationSettleTimeoutMillis must be > 0"
+        }
         // V0.4-PROVENANCE (L2): emit framework identity to BOTH the
         // user-supplied P2pLogger (visible to samples that wire it) AND
         // the platform's native log channel (visible regardless of host
@@ -253,6 +260,7 @@ internal class P2pKitImpl(
             scope = scope,
             clock = clock,
             monotonicClock = monotonicClock,
+            logger = logger,
             securityProfile = securityProfile,
             peerIdFromFingerprint = secureIdentityService?.let { service ->
                 { fingerprint -> service.peerId(appId, fingerprint) }
@@ -279,7 +287,9 @@ internal class P2pKitImpl(
             setupTimeoutMillis = sessionSetupTimeoutMillis,
             beforeSessionCommitForTest = beforeSessionCommitForTest,
             afterOutgoingConnectForTest = afterOutgoingConnectForTest,
+            afterSessionSetupResultForTest = afterSessionSetupResultForTest,
             beforeTerminalWatcherRemovalForTest = beforeTerminalWatcherRemovalForTest,
+            discoveryRefreshTimeoutMillis = discoveryRefreshTimeoutMillis,
             lifecycleGate = object : SessionLifecycleGate {
                 override suspend fun isActive(expectedGeneration: Long?): Boolean =
                     lifecycleMutex.withLock {
@@ -801,7 +811,7 @@ internal class P2pKitImpl(
         featureName: String,
         stopTransport: suspend (DiscoveryTransport) -> Unit
     ) {
-        val lifecycleGeneration = lifecycleMutex.withLock {
+        val request = lifecycleMutex.withLock {
             if (stopped) throw lifecycleStoppedFailure()
             when (control.mutableState.value) {
                 FeatureState.Idle -> return
@@ -812,41 +822,108 @@ internal class P2pKitImpl(
                     return
                 }
                 else -> {
+                    control.stopCompletion?.let { existing ->
+                        return@withLock FeatureStopRequest.Join(existing)
+                    }
+                    val completion = CompletableDeferred<Result<Unit>>()
+                    control.stopCompletion = completion
                     control.stopRequestedToken = control.activeStartToken
                     control.mutableState.value = FeatureState.Stopping
-                    this@P2pKitImpl.lifecycleGeneration
+                    FeatureStopRequest.Own(
+                        lifecycleGeneration = this@P2pKitImpl.lifecycleGeneration,
+                        completion = completion
+                    )
                 }
             }
         }
+        if (request is FeatureStopRequest.Join) {
+            request.completion.await().getOrThrow()
+            return
+        }
+        request as FeatureStopRequest.Own
+        val lifecycleGeneration = request.lifecycleGeneration
+        var terminalFailure: Throwable? = null
 
-        withContext(NonCancellable) {
-            control.operationMutex.withLock {
-                val needsCleanup = lifecycleMutex.withLock {
-                    if (!lifecycleIsActiveLocked(lifecycleGeneration)) throw lifecycleStoppedFailure()
-                    control.mutableState.value != FeatureState.Idle
-                }
-                if (!needsCleanup) return@withLock
-
-                val issues = stopDiscoveryResources(
-                    "stop $featureName",
-                    preserveCancellation = false,
-                    cleanup = stopTransport
+        try {
+            withContext(NonCancellable) {
+                val operationSettled = control.operationMutex.acquireWithin(
+                    featureOperationSettleTimeoutMillis
                 )
-                val failure = issues.takeIf { it.isNotEmpty() }
-                    ?.let { cleanupError("stop $featureName", it) }
-                lifecycleMutex.withLock {
-                    if (lifecycleIsActiveLocked(lifecycleGeneration)) {
-                        control.activeStartToken = null
-                        control.stopRequestedToken = null
-                        control.cleanupRequired = failure != null
-                        control.mutableState.value = if (failure == null) {
-                            FeatureState.Idle
-                        } else {
-                            FeatureState.Failed(failure)
+                if (!operationSettled) {
+                    val cleanupIssues = stopDiscoveryResources(
+                        "stop $featureName after startup-settle timeout",
+                        preserveCancellation = false,
+                        cleanup = stopTransport
+                    )
+                    val timeoutIssue = CleanupIssue(
+                        resource = "$featureName startup operation",
+                        cause = IllegalStateException(
+                            "$featureName startup did not settle within " +
+                                "${featureOperationSettleTimeoutMillis}ms"
+                        ),
+                        deadlineExceeded = true
+                    )
+                    val failure = cleanupError(
+                        "stop $featureName",
+                        listOf(timeoutIssue) + cleanupIssues
+                    )
+                    lifecycleMutex.withLock {
+                        if (lifecycleIsActiveLocked(lifecycleGeneration)) {
+                            // Invalidate the late start token. If the original
+                            // startup eventually returns, its stale completion
+                            // path performs a second idempotent rollback.
+                            control.activeStartToken = null
+                            control.stopRequestedToken = null
+                            control.cleanupRequired = true
+                            control.mutableState.value = FeatureState.Failed(failure)
                         }
                     }
+                    throw failure
                 }
-                if (failure != null) throw failure
+                try {
+                    val needsCleanup = lifecycleMutex.withLock {
+                        if (!lifecycleIsActiveLocked(lifecycleGeneration)) throw lifecycleStoppedFailure()
+                        control.mutableState.value != FeatureState.Idle
+                    }
+                    if (needsCleanup) {
+                        val issues = stopDiscoveryResources(
+                            "stop $featureName",
+                            preserveCancellation = false,
+                            cleanup = stopTransport
+                        )
+                        val failure = issues.takeIf { it.isNotEmpty() }
+                            ?.let { cleanupError("stop $featureName", it) }
+                        lifecycleMutex.withLock {
+                            if (lifecycleIsActiveLocked(lifecycleGeneration)) {
+                                control.activeStartToken = null
+                                control.stopRequestedToken = null
+                                control.cleanupRequired = failure != null
+                                control.mutableState.value = if (failure == null) {
+                                    FeatureState.Idle
+                                } else {
+                                    FeatureState.Failed(failure)
+                                }
+                            }
+                        }
+                        if (failure != null) throw failure
+                    }
+                } finally {
+                    control.operationMutex.unlock()
+                }
+            }
+        } catch (failure: Throwable) {
+            terminalFailure = failure
+            throw failure
+        } finally {
+            withContext(NonCancellable) {
+                lifecycleMutex.withLock {
+                    if (control.stopCompletion === request.completion) {
+                        control.stopCompletion = null
+                    }
+                }
+                request.completion.complete(
+                    terminalFailure?.let { Result.failure(it) } ?: Result.success(Unit)
+                )
             }
         }
     }
@@ -858,12 +935,34 @@ internal class P2pKitImpl(
         attempted: List<DiscoveryTransport>,
         stopTransport: suspend (DiscoveryTransport) -> Unit
     ): Boolean {
-        val (requested, terminallyStopped) = lifecycleMutex.withLock {
-            (control.activeStartToken == token && control.stopRequestedToken == token) to stopped
+        val checkpoint = lifecycleMutex.withLock {
+            when {
+                stopped -> FeatureStartCheckpoint.LifecycleStopped
+                control.activeStartToken != token -> FeatureStartCheckpoint.Stale
+                control.stopRequestedToken == token -> FeatureStartCheckpoint.StopRequested
+                else -> FeatureStartCheckpoint.Continue
+            }
         }
-        if (!requested) return false
+        if (checkpoint == FeatureStartCheckpoint.Continue) return false
 
         val issues = rollbackDiscoveryOperation(featureName, attempted, stopTransport)
+        if (checkpoint == FeatureStartCheckpoint.Stale) {
+            // A bounded explicit stop invalidated this start token while one
+            // transport callback was still running. Never proceed to the next
+            // transport; the public Failed state and cleanupRequired marker
+            // belong to the stop owner and remain authoritative.
+            if (issues.isNotEmpty()) {
+                logCleanupIssues(logger, "stale $featureName startup rollback", issues)
+            }
+            throw staleFeatureOperation(featureName)
+        }
+        if (checkpoint == FeatureStartCheckpoint.LifecycleStopped) {
+            if (issues.isNotEmpty()) {
+                logCleanupIssues(logger, "terminal $featureName startup rollback", issues)
+            }
+            throw lifecycleStoppedFailure()
+        }
+
         val failure = issues.takeIf { it.isNotEmpty() }
             ?.let { cleanupError("stop $featureName during startup", it) }
         finishFeatureStart(
@@ -873,7 +972,6 @@ internal class P2pKitImpl(
             cleanupRequired = failure != null
         )
         if (failure != null) throw failure
-        if (terminallyStopped) throw lifecycleStoppedFailure()
         return true
     }
 
@@ -1097,10 +1195,7 @@ internal class P2pKitImpl(
                 // startMutex: a concurrent ensureStarted mid-bind must not
                 // interleave with teardown. Bound acquisition so a broken
                 // transport start cannot park terminal stop forever.
-                val acquiredStartMutex = withTimeoutOrNull(STOP_START_MUTEX_TIMEOUT_MS) {
-                    startMutex.lock()
-                    true
-                } ?: false
+                val acquiredStartMutex = startMutex.acquireWithin(STOP_START_MUTEX_TIMEOUT_MS)
                 if (!acquiredStartMutex) {
                     logger.warn(
                         "stop(): startMutex not released within ${STOP_START_MUTEX_TIMEOUT_MS}ms " +
@@ -1466,6 +1561,9 @@ private class FeatureControl {
 
     /** Guarded by P2pKitImpl.lifecycleMutex, except after terminal stop owns teardown. */
     var cleanupRequired: Boolean = false
+
+    /** Exact result shared by concurrent explicit feature-stop callers. */
+    var stopCompletion: CompletableDeferred<Result<Unit>>? = null
 }
 
 private data class FeatureStart(
@@ -1473,8 +1571,29 @@ private data class FeatureStart(
     val cleanupRequired: Boolean
 )
 
+private sealed interface FeatureStopRequest {
+    class Own(
+        val lifecycleGeneration: Long,
+        val completion: CompletableDeferred<Result<Unit>>
+    ) : FeatureStopRequest
+
+    class Join(
+        val completion: CompletableDeferred<Result<Unit>>
+    ) : FeatureStopRequest
+}
+
+/** Bounds how long explicit feature stop waits for a concurrent start owner. */
+internal const val DEFAULT_FEATURE_OPERATION_SETTLE_TIMEOUT_MS: Long = 6_000
+
 private enum class FeatureCompletion {
     Applied,
+    StopRequested,
+    LifecycleStopped,
+    Stale
+}
+
+private enum class FeatureStartCheckpoint {
+    Continue,
     StopRequested,
     LifecycleStopped,
     Stale
@@ -1506,8 +1625,14 @@ internal fun newP2pKit(
     sessionSetupTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
     beforeSessionCommitForTest: (suspend () -> Unit)? = null,
     afterOutgoingConnectForTest: (suspend () -> Unit)? = null,
+    afterSessionSetupResultForTest: (suspend () -> Unit)? = null,
+    discoveryRefreshTimeoutMillis: Long = DEFAULT_DISCOVERY_REFRESH_TIMEOUT_MS,
+    featureOperationSettleTimeoutMillis: Long = DEFAULT_FEATURE_OPERATION_SETTLE_TIMEOUT_MS,
     beforeTerminalWatcherRemovalForTest: (suspend () -> Unit)? = null
 ): P2pKit {
+    // Establish the failure-isolating boundary before identity storage,
+    // platform factories, transport construction, or any coroutine can log.
+    val safeLogger = logger.failureIsolated()
     // Authorization is a whole-kit security decision. Snapshot caller-owned
     // collections before any identity or transport becomes observable so a
     // later mutation cannot silently change which remote keys are admitted.
@@ -1529,7 +1654,7 @@ internal fun newP2pKit(
             }
             cryptography = platformSecurityCryptography()
             val secureIdentityStorage = secureIdentityStorageOverride
-                ?: defaultSecureIdentityStorage(appId, logger)
+                ?: defaultSecureIdentityStorage(appId, safeLogger)
             secureIdentityService = SecureIdentityService(cryptography, secureIdentityStorage)
             val usage = secureIdentityService.acquireUsage(appId)
             val identity = try {
@@ -1547,13 +1672,13 @@ internal fun newP2pKit(
             secureIdentityService = null
             secureIdentityUsage = null
             secureIdentity = null
-            val peerIdStorage = peerIdStorageOverride ?: defaultPeerIdStorage(appId, logger)
+            val peerIdStorage = peerIdStorageOverride ?: defaultPeerIdStorage(appId, safeLogger)
             localPeerId = peerIdStorage.loadOrGenerate()
         }
     }
     return try {
-        val pathObserver = networkPathObserverOverride ?: defaultNetworkPathObserver(logger)
-        val permissionManager = permissionManagerOverride ?: defaultPlatformPermissionManager(logger)
+        val pathObserver = networkPathObserverOverride ?: defaultNetworkPathObserver(safeLogger)
+        val permissionManager = permissionManagerOverride ?: defaultPlatformPermissionManager(safeLogger)
         P2pKitImpl(
             appId = appId,
             deviceName = deviceName,
@@ -1573,7 +1698,7 @@ internal fun newP2pKit(
             provisioningFactory = provisioningFactory,
             fileTransferConfig = fileTransferConfig,
             permissions = permissionManager,
-            logger = logger,
+            logger = safeLogger,
             clock = ::systemTimeMillis,
             monotonicClock = ::monotonicTimeMillis,
             parentJob = null,
@@ -1582,6 +1707,9 @@ internal fun newP2pKit(
             sessionSetupTimeoutMillis = sessionSetupTimeoutMillis,
             beforeSessionCommitForTest = beforeSessionCommitForTest,
             afterOutgoingConnectForTest = afterOutgoingConnectForTest,
+            afterSessionSetupResultForTest = afterSessionSetupResultForTest,
+            discoveryRefreshTimeoutMillis = discoveryRefreshTimeoutMillis,
+            featureOperationSettleTimeoutMillis = featureOperationSettleTimeoutMillis,
             beforeTerminalWatcherRemovalForTest = beforeTerminalWatcherRemovalForTest
         )
     } catch (cause: Throwable) {

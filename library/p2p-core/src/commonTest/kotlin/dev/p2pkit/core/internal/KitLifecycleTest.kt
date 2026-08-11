@@ -28,6 +28,7 @@ import kotlin.concurrent.Volatile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -45,6 +46,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import kotlin.test.Test
@@ -418,6 +420,86 @@ class KitLifecycleTest {
             assertEquals(1, transport.startAdvertisingCalls)
             assertEquals(1, transport.stopAdvertisingCalls)
         } finally {
+            kit.stop()
+        }
+    }
+
+    @Test
+    fun explicitFeatureStopFailsBoundedlyWhenStartupOwnerDoesNotSettle() = runBlocking {
+        val transport = GatedDiscoveryTransport()
+        val laterTransport = RollbackDiscoveryTransport(TransportKind.BLE)
+        val kit = createTestKit {
+            appId = AppId("bounded-feature-stop-test")
+            deviceName = "Test"
+            featureOperationSettleTimeoutMillisForTest = 50
+            transports {
+                register(GatedDiscoveryFactory(transport))
+                register(RollbackDiscoveryFactory(laterTransport))
+            }
+        }
+        val start = async { runCatching { kit.startAdvertising() } }
+        try {
+            transport.advertisingEntered.await()
+
+            val failure = assertFailsWith<P2pError.ConnectionFailed> {
+                withTimeout(2_000) { kit.stopAdvertising() }
+            }
+            val aggregate = assertIs<CleanupAggregateException>(failure.cause)
+            assertTrue(
+                aggregate.issues.any {
+                    it.deadlineExceeded && it.resource.contains("advertising startup")
+                }
+            )
+            assertEquals(1, transport.stopAdvertisingCalls)
+            assertIs<FeatureState.Failed>(kit.advertisingState.value)
+
+            transport.releaseAdvertising.complete(Unit)
+            assertTrue(start.await().isFailure, "late startup must lose its invalidated token")
+            assertEquals(2, transport.stopAdvertisingCalls, "late completion must roll itself back")
+            assertEquals(
+                0,
+                laterTransport.startAdvertisingCalls,
+                "a stale startup owner must not enter a later transport"
+            )
+        } finally {
+            transport.releaseAdvertising.complete(Unit)
+            start.await()
+            kit.stop()
+        }
+    }
+
+    @Test
+    fun concurrentFeatureStopCallersJoinOneTeardown() = runBlocking {
+        val transport = GatedDiscoveryTransport(blockAdvertisingStop = true)
+        val kit = createTestKit {
+            appId = AppId("concurrent-feature-stop-test")
+            deviceName = "Test"
+            featureOperationSettleTimeoutMillisForTest = 50
+            transports { register(GatedDiscoveryFactory(transport)) }
+        }
+        transport.releaseAdvertising.complete(Unit)
+        kit.startAdvertising()
+
+        val first = async { runCatching { kit.stopAdvertising() } }
+        try {
+            transport.stopAdvertisingEntered.await()
+            val second = async { runCatching { kit.stopAdvertising() } }
+
+            assertEquals(
+                null,
+                withTimeoutOrNull(100) { second.await() },
+                "a follower feature stop must join rather than start a timed duplicate cleanup"
+            )
+            assertEquals(1, transport.stopAdvertisingCalls)
+
+            transport.releaseStopAdvertising.complete(Unit)
+            assertTrue(first.await().isSuccess)
+            assertTrue(second.await().isSuccess)
+            assertEquals(1, transport.stopAdvertisingCalls)
+            assertEquals(FeatureState.Idle, kit.advertisingState.value)
+        } finally {
+            transport.releaseStopAdvertising.complete(Unit)
+            first.await()
             kit.stop()
         }
     }
@@ -1165,6 +1247,7 @@ private class RollbackDiscoveryTransport(
     @Volatile var stopAdvertisingFailure: Throwable? = null
     @Volatile var advertisingActive: Boolean = false
     @Volatile var discoveryActive: Boolean = false
+    @Volatile var startAdvertisingCalls: Int = 0
     @Volatile var stopAdvertisingCalls: Int = 0
     @Volatile var stopDiscoveryCalls: Int = 0
 
@@ -1176,6 +1259,7 @@ private class RollbackDiscoveryTransport(
     override val events: Flow<PeerEvent> = peerEvents.asSharedFlow()
 
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) {
+        startAdvertisingCalls += 1
         advertisingActive = true
         advertisingFailure?.let { throw it }
     }
@@ -1338,7 +1422,9 @@ private class DataOnlyFactory(private val transport: DataTransport) : TransportF
         TransportPair(data = transport, discovery = null)
 }
 
-private class GatedDiscoveryTransport : DataTransport, DiscoveryTransport {
+private class GatedDiscoveryTransport(
+    blockAdvertisingStop: Boolean = false
+) : DataTransport, DiscoveryTransport {
     override val type: TransportKind = TransportKind.LAN
     override val priority: Int = 100
 
@@ -1346,6 +1432,10 @@ private class GatedDiscoveryTransport : DataTransport, DiscoveryTransport {
     val releaseAdvertising = CompletableDeferred<Unit>()
     val discoveryEntered = CompletableDeferred<Unit>()
     val releaseDiscovery = CompletableDeferred<Unit>()
+    val stopAdvertisingEntered = CompletableDeferred<Unit>()
+    val releaseStopAdvertising = CompletableDeferred<Unit>().also {
+        if (!blockAdvertisingStop) it.complete(Unit)
+    }
 
     @Volatile var startAdvertisingCalls: Int = 0
     @Volatile var stopAdvertisingCalls: Int = 0
@@ -1374,6 +1464,8 @@ private class GatedDiscoveryTransport : DataTransport, DiscoveryTransport {
 
     override suspend fun stopAdvertising() {
         stopAdvertisingCalls += 1
+        stopAdvertisingEntered.complete(Unit)
+        releaseStopAdvertising.await()
     }
 
     override suspend fun startDiscovery() {

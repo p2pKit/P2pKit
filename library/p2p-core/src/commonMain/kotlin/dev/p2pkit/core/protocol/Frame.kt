@@ -99,15 +99,22 @@ internal object FrameFlags {
  * Stable identifier for a logical message. All frames belonging to one
  * message share the same id. 16 bytes; equality compares by content.
  */
-internal class MessageId(val bytes: ByteArray) {
+internal class MessageId(bytes: ByteArray) {
+
+    private val content: ByteArray = bytes.copyOf()
+
+    /** Defensive copy; a message id remains stable when used as a map key. */
+    val bytes: ByteArray get() = content.copyOf()
 
     init {
-        require(bytes.size == SIZE) { "MessageId must be $SIZE bytes, got ${bytes.size}" }
+        require(content.size == SIZE) { "MessageId must be $SIZE bytes, got ${content.size}" }
     }
 
-    override fun equals(other: Any?): Boolean = other is MessageId && bytes.contentEquals(other.bytes)
-    override fun hashCode(): Int = bytes.contentHashCode()
-    override fun toString(): String = bytes.toHexString()
+    override fun equals(other: Any?): Boolean =
+        other is MessageId && content.contentEquals(other.content)
+
+    override fun hashCode(): Int = content.contentHashCode()
+    override fun toString(): String = content.toHexString()
 
     companion object {
         const val SIZE: Int = 16

@@ -172,6 +172,96 @@ class SessionOwnershipTest {
     }
 
     @Test
+    fun cancellationAfterCommittedSetupResultRollsBackSessionAndAllowsRetry() = runBlocking {
+        val firstPair = FakeConnectionPair()
+        val retryPair = FakeConnectionPair()
+        val outgoing = ArrayDeque<RawConnection>().apply {
+            add(firstPair.a)
+            add(retryPair.a)
+        }
+        val resultProduced = CompletableDeferred<Unit>()
+        var hookCalls = 0
+        val alice = kit(
+            "Alice",
+            "alice-id",
+            FakeDataTransport(outgoingConnection = { outgoing.removeFirst() }),
+            afterResult = {
+                if (hookCalls++ == 0) {
+                    resultProduced.complete(Unit)
+                    CompletableDeferred<Unit>().await()
+                }
+            }
+        )
+        val bob = kit(
+            "Bob",
+            "bob-id",
+            FakeDataTransport(preStagedIncoming = listOf(firstPair.b, retryPair.b))
+        )
+        try {
+            alice.start()
+            bob.start()
+            val first = async { alice.connect(targetPeer()) }
+            resultProduced.await()
+            val committed = alice.sessions.value.single()
+
+            first.cancel(CancellationException("cancel committed result handoff"))
+            val failure = assertFailsWith<CancellationException> { first.await() }
+            assertEquals("cancel committed result handoff", failure.message)
+            assertEquals(ConnectionState.Closed, committed.state.value)
+            assertEquals(ConnectionState.Closed, firstPair.a.state.value)
+            assertTrue(alice.sessions.value.isEmpty())
+
+            val retried = withTimeout(5_000) { alice.connect(targetPeer()) }
+            assertEquals(ConnectionState.Connected, retried.state.value)
+            assertEquals(1, alice.sessions.value.size)
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
+    fun stopAfterCommittedSetupResultNeverReturnsTheClosedSession() = runBlocking {
+        val pair = FakeConnectionPair()
+        val resultProduced = CompletableDeferred<Unit>()
+        val releaseDelivery = CompletableDeferred<Unit>()
+        val alice = kit(
+            "Alice",
+            "alice-id",
+            FakeDataTransport(outgoingConnection = { pair.a }),
+            afterResult = {
+                resultProduced.complete(Unit)
+                releaseDelivery.await()
+            }
+        )
+        val bob = kit(
+            "Bob",
+            "bob-id",
+            FakeDataTransport(preStagedIncoming = listOf(pair.b))
+        )
+        try {
+            alice.start()
+            bob.start()
+            val connector = async { runCatching { alice.connect(targetPeer()) } }
+            resultProduced.await()
+            val committed = alice.sessions.value.single()
+
+            alice.stop()
+            assertEquals(ConnectionState.Closed, committed.state.value)
+            assertTrue(alice.sessions.value.isEmpty())
+
+            releaseDelivery.complete(Unit)
+            val failure = connector.await().exceptionOrNull()
+            assertTrue(failure is IllegalStateException)
+            assertTrue(failure.message.orEmpty().contains("stopped"))
+        } finally {
+            releaseDelivery.complete(Unit)
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
     fun inboundSetupDeadlineClosesIdleRawReleasesAdmissionAndAcceptsNextPeer() = runBlocking {
         val idlePair = FakeConnectionPair()
         val successPair = FakeConnectionPair()
@@ -225,6 +315,7 @@ class SessionOwnershipTest {
         transport: DataTransport,
         beforeCommit: (suspend () -> Unit)? = null,
         afterDial: (suspend () -> Unit)? = null,
+        afterResult: (suspend () -> Unit)? = null,
         setupTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS
     ): P2pKit = createTestKit {
         appId = AppId("session-ownership-test")
@@ -232,6 +323,7 @@ class SessionOwnershipTest {
         peerIdStorage = InMemoryPeerIdStorage(PeerId(id))
         beforeSessionCommitForTest = beforeCommit
         afterOutgoingConnectForTest = afterDial
+        afterSessionSetupResultForTest = afterResult
         sessionSetupTimeoutMillis = setupTimeoutMillis
         keepAlive {
             pingIntervalMillis = 60_000

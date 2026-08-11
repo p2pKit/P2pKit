@@ -20,7 +20,14 @@ import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportHint
 import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -367,6 +374,139 @@ class SessionReconnectRotationTest {
         }
     }
 
+    @Test
+    fun nonCooperativeDiscoveryRefreshCannotStrandReconnectLifecycle() = runBlocking<Unit> {
+        val pair = FakeConnectionPair()
+        var dialCalls = 0
+        val aliceData = FakeDataTransport(
+            outgoingConnection = {
+                if (dialCalls++ == 0) pair.a else error("retry target unavailable")
+            }
+        )
+        val aliceDiscovery = HangingRefreshDiscovery()
+        val bobInternal = InternalPeer(
+            publicPeer = bobPeer,
+            transportHints = listOf(TransportHint(TransportKind.LAN, "10.0.0.5", 4_000))
+        )
+        val alice = createTestKit {
+            appId = AppId("bounded-refresh-test")
+            deviceName = "Alice"
+            peerIdStorage = InMemoryPeerIdStorage(PeerId("alice-id"))
+            discoveryRefreshTimeoutMillisForTest = 50
+            lifecycle {
+                reconnectPolicy = ReconnectPolicy.Enabled(maxAttempts = 1, retryDelayMillis = 1)
+            }
+            keepAlive {
+                pingIntervalMillis = 60_000
+                timeoutMillis = 120_000
+            }
+            transports { register(RotationTestFactory(aliceData, aliceDiscovery)) }
+        }
+        val bob = createTestKit {
+            appId = AppId("bounded-refresh-test")
+            deviceName = "Bob"
+            peerIdStorage = InMemoryPeerIdStorage(PeerId("bob-id"))
+            keepAlive {
+                pingIntervalMillis = 60_000
+                timeoutMillis = 120_000
+            }
+            transports {
+                register(
+                    RotationTestFactory(
+                        FakeDataTransport(preStagedIncoming = listOf(pair.b)),
+                        null
+                    )
+                )
+            }
+        }
+        try {
+            withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
+            aliceDiscovery.emit(PeerEvent.Found(bobInternal))
+            withTimeout(peerPropagationTimeoutMs) {
+                alice.peers.first { peers -> peers.any { it.id == bobPeer.id } }
+            }
+            val session = withTimeout(5_000) { alice.connect(bobPeer) }
+
+            pair.a.breakWithException(IllegalStateException("wire lost"))
+            withTimeout(5_000) { aliceDiscovery.refreshEntered.await() }
+            withTimeout(5_000) {
+                session.state.first { it == ConnectionState.Failed }
+            }
+
+            assertEquals(1, aliceDiscovery.refreshCalls)
+            assertEquals(2, dialCalls, "one initial dial and one post-timeout retry")
+        } finally {
+            aliceDiscovery.releaseRefresh.complete(Unit)
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
+    fun callbackCancellationFromDiscoveryRefreshIsFailureNotStructuralCancellation() = runBlocking<Unit> {
+        val pair = FakeConnectionPair()
+        var dialCalls = 0
+        val aliceData = FakeDataTransport(
+            outgoingConnection = {
+                if (dialCalls++ == 0) pair.a else error("retry target unavailable")
+            }
+        )
+        val aliceDiscovery = CallbackCancellingRefreshDiscovery()
+        val bobInternal = InternalPeer(
+            publicPeer = bobPeer,
+            transportHints = listOf(TransportHint(TransportKind.LAN, "10.0.0.5", 4_000))
+        )
+        val alice = createTestKit {
+            appId = AppId("callback-cancellation-refresh-test")
+            deviceName = "Alice"
+            peerIdStorage = InMemoryPeerIdStorage(PeerId("alice-id"))
+            lifecycle {
+                reconnectPolicy = ReconnectPolicy.Enabled(maxAttempts = 1, retryDelayMillis = 1)
+            }
+            keepAlive {
+                pingIntervalMillis = 60_000
+                timeoutMillis = 120_000
+            }
+            transports { register(RotationTestFactory(aliceData, aliceDiscovery)) }
+        }
+        val bob = createTestKit {
+            appId = AppId("callback-cancellation-refresh-test")
+            deviceName = "Bob"
+            peerIdStorage = InMemoryPeerIdStorage(PeerId("bob-id"))
+            keepAlive {
+                pingIntervalMillis = 60_000
+                timeoutMillis = 120_000
+            }
+            transports {
+                register(
+                    RotationTestFactory(
+                        FakeDataTransport(preStagedIncoming = listOf(pair.b)),
+                        null
+                    )
+                )
+            }
+        }
+        try {
+            withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
+            aliceDiscovery.emit(PeerEvent.Found(bobInternal))
+            withTimeout(peerPropagationTimeoutMs) {
+                alice.peers.first { peers -> peers.any { it.id == bobPeer.id } }
+            }
+            val session = withTimeout(5_000) { alice.connect(bobPeer) }
+
+            pair.a.breakWithException(IllegalStateException("wire lost"))
+            withTimeout(5_000) {
+                session.state.first { it == ConnectionState.Failed }
+            }
+
+            assertEquals(1, aliceDiscovery.refreshCalls)
+            assertEquals(2, dialCalls, "refresh callback cancellation must not suppress retry")
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
     private class RotationTestFactory(
         private val data: FakeDataTransport,
         private val discovery: DiscoveryTransport?
@@ -378,5 +518,62 @@ class SessionReconnectRotationTest {
         }
         override fun build(context: TransportContext): TransportPair =
             TransportPair(data = data, discovery = discovery)
+    }
+
+    private class HangingRefreshDiscovery : DiscoveryTransport {
+        override val type: TransportKind = TransportKind.LAN
+        private val eventFlow = MutableSharedFlow<PeerEvent>(extraBufferCapacity = 8)
+        override val events: Flow<PeerEvent> = eventFlow.asSharedFlow()
+
+        val refreshEntered = CompletableDeferred<Unit>()
+        val releaseRefresh = CompletableDeferred<Unit>()
+        var refreshCalls: Int = 0
+            private set
+
+        suspend fun awaitSubscriber() {
+            eventFlow.subscriptionCount.first { it > 0 }
+        }
+
+        suspend fun emit(event: PeerEvent) {
+            eventFlow.emit(event)
+        }
+
+        override suspend fun startAdvertising(localPeer: dev.p2pkit.core.transport.LocalPeerInfo) = Unit
+        override suspend fun stopAdvertising() = Unit
+        override suspend fun startDiscovery() = Unit
+        override suspend fun stopDiscovery() = Unit
+
+        override suspend fun refresh() {
+            refreshCalls += 1
+            refreshEntered.complete(Unit)
+            withContext(NonCancellable) { releaseRefresh.await() }
+        }
+    }
+
+    private class CallbackCancellingRefreshDiscovery : DiscoveryTransport {
+        override val type: TransportKind = TransportKind.LAN
+        private val eventFlow = MutableSharedFlow<PeerEvent>(extraBufferCapacity = 8)
+        override val events: Flow<PeerEvent> = eventFlow.asSharedFlow()
+
+        var refreshCalls: Int = 0
+            private set
+
+        suspend fun awaitSubscriber() {
+            eventFlow.subscriptionCount.first { it > 0 }
+        }
+
+        suspend fun emit(event: PeerEvent) {
+            eventFlow.emit(event)
+        }
+
+        override suspend fun startAdvertising(localPeer: dev.p2pkit.core.transport.LocalPeerInfo) = Unit
+        override suspend fun stopAdvertising() = Unit
+        override suspend fun startDiscovery() = Unit
+        override suspend fun stopDiscovery() = Unit
+
+        override suspend fun refresh() {
+            refreshCalls += 1
+            throw CancellationException("refresh callback cancelled itself")
+        }
     }
 }

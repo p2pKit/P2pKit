@@ -15,9 +15,11 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 internal data class CleanupIssue(
     val resource: String,
@@ -32,6 +34,32 @@ internal sealed interface BoundedOperationResult<out T> {
         val timeoutMillis: Long,
         val cause: TimeoutCancellationException
     ) : BoundedOperationResult<Nothing>
+}
+
+/**
+ * Acquire this mutex within [timeoutMillis], retaining ownership only when
+ * `true` is returned.
+ *
+ * Timeout delivery is asynchronous and may win after [Mutex.lock] returned
+ * but before the timeout block's value reaches its caller. The explicit
+ * ownership flag closes that boundary: every timeout/cancellation path that
+ * observed acquisition unlocks before returning or rethrowing.
+ */
+internal suspend fun Mutex.acquireWithin(timeoutMillis: Long): Boolean {
+    require(timeoutMillis > 0L) { "timeoutMillis must be positive" }
+    var acquired = false
+    var retainOwnership = false
+    try {
+        val completed = withTimeoutOrNull(timeoutMillis) {
+            lock()
+            acquired = true
+            true
+        } ?: false
+        retainOwnership = completed
+        return completed
+    } finally {
+        if (acquired && !retainOwnership) unlock()
+    }
 }
 
 internal class CleanupAggregateException(

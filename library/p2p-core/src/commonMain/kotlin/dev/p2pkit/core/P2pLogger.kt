@@ -5,6 +5,9 @@ package dev.p2pkit.core
  *
  * Apps may supply their own implementation via [dev.p2pkit.core.dsl.P2pKitBuilder.logger]
  * (e.g., bridging to Timber, Logback, or `println`). The default is [NoOp].
+ * Logger callbacks are diagnostic-only: an exception thrown by an
+ * application logger is isolated and never changes protocol, lifecycle, or
+ * cleanup behavior.
  */
 public interface P2pLogger {
     public fun debug(message: String)

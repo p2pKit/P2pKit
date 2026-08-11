@@ -2,6 +2,7 @@ package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
@@ -23,13 +24,15 @@ import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlin.jvm.JvmInline
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -57,6 +60,7 @@ internal class PeerRegistry(
     private val monotonicClock: () -> Long = clock,
     private val staleTimeoutMillis: Long = DEFAULT_STALE_TIMEOUT_MS,
     private val evictionPollMillis: Long = DEFAULT_EVICTION_POLL_MS,
+    private val logger: P2pLogger = P2pLogger.NoOp,
     private val securityProfile: TransportSecurityProfile = TransportSecurityProfile.LegacyPlaintextV1,
     private val peerIdFromFingerprint: ((PeerFingerprint) -> PeerId)? = null,
     private val beforeManualPeerCompareAndSetForTest: (() -> Unit)? = null
@@ -92,11 +96,63 @@ internal class PeerRegistry(
 
     fun start() {
         discoveryTransports.forEachIndexed { sourceIndex, transport ->
-            transport.events
-                .onEach { event -> processEvent(DiscoverySource(sourceIndex), event) }
-                .launchIn(scope)
+            scope.launch {
+                collectEventsWithRecovery(DiscoverySource(sourceIndex), transport)
+            }
         }
         scope.launch { evictLoop() }
+    }
+
+    /**
+     * A third-party discovery flow is an SPI boundary, not a lifetime fuse.
+     * Recollect after ordinary failure or unexpected completion with bounded
+     * backoff; cancellation remains structural and terminates the collector.
+     */
+    private suspend fun collectEventsWithRecovery(
+        source: DiscoverySource,
+        transport: DiscoveryTransport
+    ) {
+        var consecutiveEmptyFailures = 0
+        while (currentCoroutineContext().isActive) {
+            var observedEvent = false
+            var collectionFailure: Throwable? = null
+            try {
+                transport.events.collect { event ->
+                    observedEvent = true
+                    consecutiveEmptyFailures = 0
+                    processEvent(source, event)
+                }
+                currentCoroutineContext().ensureActive()
+            } catch (cancelled: CancellationException) {
+                // A third-party flow can throw a CancellationException while
+                // this collector's Job remains active. That is an SPI failure,
+                // not structural cancellation. Genuine scope cancellation is
+                // rethrown by ensureActive().
+                currentCoroutineContext().ensureActive()
+                collectionFailure = cancelled
+            } catch (failure: Throwable) {
+                collectionFailure = failure
+            }
+            if (!observedEvent) consecutiveEmptyFailures += 1
+            val exponent = minOf(
+                (consecutiveEmptyFailures - 1).coerceAtLeast(0),
+                MAX_EVENT_RECOLLECT_EXPONENT
+            )
+            val retryDelayMillis = minOf(
+                EVENT_RECOLLECT_INITIAL_DELAY_MS shl exponent,
+                EVENT_RECOLLECT_MAX_DELAY_MS
+            )
+            logger.warn(
+                "Discovery event stream ${transport.type} " +
+                    if (collectionFailure == null) {
+                        "completed unexpectedly; retrying in ${retryDelayMillis}ms"
+                    } else {
+                        "failed; retrying in ${retryDelayMillis}ms"
+                    },
+                collectionFailure
+            )
+            delay(retryDelayMillis)
+        }
     }
 
     internal fun processEvent(event: PeerEvent) = processEvent(DIRECT_SOURCE, event)
@@ -368,7 +424,7 @@ internal class PeerRegistry(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                // No logger here by design; swallow and keep the loop alive.
+                logger.warn("Peer eviction iteration failed; retrying on the next poll", e)
             }
         }
     }
@@ -376,6 +432,9 @@ internal class PeerRegistry(
     companion object {
         const val DEFAULT_STALE_TIMEOUT_MS: Long = 15_000
         const val DEFAULT_EVICTION_POLL_MS: Long = 1_000
+        private const val EVENT_RECOLLECT_INITIAL_DELAY_MS: Long = 100
+        private const val EVENT_RECOLLECT_MAX_DELAY_MS: Long = 5_000
+        private const val MAX_EVENT_RECOLLECT_EXPONENT: Int = 6
         private const val MAX_MANUAL_HOST_CHARS: Int = 253
         private val DIRECT_SOURCE = DiscoverySource(-1)
     }
