@@ -243,7 +243,9 @@ internal class P2pKitImpl(
         transports = transportFactories.map { registration ->
             val descriptor = registration.descriptor
             val pair = try {
-                registration.factory.build(ctx)
+                registration.factory.build(ctx).also { built ->
+                    validateTransportPair(descriptor, built)
+                }
             } catch (error: P2pError.TransportInitializationFailed) {
                 throw error
             } catch (error: Throwable) {
@@ -253,7 +255,6 @@ internal class P2pKitImpl(
                     error
                 )
             }
-            validateTransportPair(descriptor, pair)
             pair
         }
         dataTransports = transports.mapNotNull { it.data }

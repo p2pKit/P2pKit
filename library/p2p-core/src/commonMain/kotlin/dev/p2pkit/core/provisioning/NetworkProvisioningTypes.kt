@@ -39,6 +39,10 @@ public interface NetworkProvisioningManager {
     @Throws(Exception::class)
     public suspend fun getManualConnectionInfo(): ManualConnectionInfo?
 
+    /**
+     * @throws IllegalArgumentException if [host] is unsafe/blank or [port] is
+     *   outside `1..65535`.
+     */
     @ExperimentalP2pApi
     @Throws(Exception::class)
     @Deprecated(
@@ -47,7 +51,12 @@ public interface NetworkProvisioningManager {
     )
     public suspend fun createManualPeer(host: String, port: Int): Peer
 
-    /** Register a manual endpoint pinned to an out-of-band v2 identity. */
+    /**
+     * Register a manual endpoint pinned to an out-of-band v2 identity.
+     *
+     * @throws IllegalArgumentException if [host] is unsafe/blank or [port] is
+     *   outside `1..65535`.
+     */
     @ExperimentalP2pApi
     @Throws(Exception::class)
     public suspend fun createManualPeer(

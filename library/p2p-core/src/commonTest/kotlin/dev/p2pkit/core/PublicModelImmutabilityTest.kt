@@ -3,10 +3,19 @@ package dev.p2pkit.core
 import dev.p2pkit.core.permission.P2pPermission
 import dev.p2pkit.core.provisioning.ManualConnectionInfo
 import dev.p2pkit.core.provisioning.NetworkState
+import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.LocalPeerInfo
+import dev.p2pkit.core.transport.TransportContext
+import dev.p2pkit.core.transport.TransportDescriptor
+import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportHint
+import dev.p2pkit.core.transport.TransportPair
 import dev.p2pkit.core.transport.TransportSecurityProfile
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -130,6 +139,34 @@ class PublicModelImmutabilityTest {
         assertTrue(text.toString().startsWith("Text(value=hello, metadata="))
     }
 
+    @Test
+    fun defaultFeatureStatesAreRuntimeReadOnly() = runBlocking {
+        val delegate = createTestKit {
+            appId = AppId("default-feature-state-test")
+            deviceName = "Default state"
+            transports { register(DefaultStateTransportFactory) }
+        }
+        try {
+            val compatibilityImplementation = DefaultFeatureStateKit(delegate)
+            val advertising = compatibilityImplementation.advertisingState
+            val discovery = compatibilityImplementation.discoveryState
+
+            assertSame(advertising, discovery)
+            assertEquals(FeatureState.Idle, advertising.value)
+            assertFalse(advertising is MutableStateFlow<*>)
+            assertTrue(
+                runCatching {
+                    @Suppress("UNCHECKED_CAST")
+                    (advertising as MutableStateFlow<FeatureState>).value = FeatureState.Active
+                }.isFailure,
+                "the source-compatible default must not expose its mutable backing flow"
+            )
+            assertEquals(FeatureState.Idle, advertising.value)
+        } finally {
+            delegate.stop()
+        }
+    }
+
     @Suppress("UNCHECKED_CAST")
     private fun <E> assertCannotAdd(collection: Collection<E>, value: E) {
         val outcome = runCatching {
@@ -146,4 +183,20 @@ class PublicModelImmutabilityTest {
         val outcome = runCatching { (map as MutableMap<K, V>)[key] = value }
         assertTrue(outcome.isFailure, "map accepted mutation: $map")
     }
+}
+
+private class DefaultFeatureStateKit(delegate: P2pKit) : P2pKit by delegate {
+    override val advertisingState: StateFlow<FeatureState>
+        get() = super<P2pKit>.advertisingState
+
+    override val discoveryState: StateFlow<FeatureState>
+        get() = super<P2pKit>.discoveryState
+}
+
+private object DefaultStateTransportFactory : TransportFactory {
+    override val descriptor: TransportDescriptor =
+        TransportDescriptor.dataOnly(TransportKind.LAN)
+
+    override fun build(context: TransportContext): TransportPair =
+        TransportPair(data = FakeDataTransport())
 }

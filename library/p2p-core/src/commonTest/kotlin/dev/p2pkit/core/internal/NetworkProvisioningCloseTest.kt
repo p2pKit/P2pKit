@@ -41,6 +41,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 
 @OptIn(ExperimentalP2pApi::class)
 class NetworkProvisioningCloseTest {
@@ -99,6 +100,54 @@ class NetworkProvisioningCloseTest {
 
         assertEquals(listOf("provisioning.close", "transport.close"), events)
         assertEquals(NetworkProvisioningState.Closed, manager.state.value)
+    }
+
+    @Test
+    fun repeatedProvisioningBlocksPreserveRegisteredFactory() = runBlocking<Unit> {
+        val manager = RecordingProvisioningManager(mutableListOf())
+        val data = RecordingDataTransport(mutableListOf())
+        val kit = createTestKit {
+            appId = AppId("provisioning-repeated-block")
+            deviceName = "repeated-block"
+            transports { register(RecordingTransportFactory(data)) }
+            networkProvisioning {
+                register(RecordingProvisioningFactory(manager))
+                enableManualIpFallback = false
+            }
+            networkProvisioning {
+                enableWifiJoin = true
+            }
+        }
+
+        try {
+            assertSame(
+                manager,
+                kit.networkProvisioning,
+                "a later configuration-only block must not erase the registered factory"
+            )
+        } finally {
+            kit.stop()
+        }
+    }
+
+    @Test
+    fun laterExplicitProvisioningRegistrationReplacesEarlierFactory() = runBlocking<Unit> {
+        val first = RecordingProvisioningManager(mutableListOf())
+        val replacement = RecordingProvisioningManager(mutableListOf())
+        val data = RecordingDataTransport(mutableListOf())
+        val kit = createTestKit {
+            appId = AppId("provisioning-explicit-replacement")
+            deviceName = "explicit-replacement"
+            transports { register(RecordingTransportFactory(data)) }
+            networkProvisioning { register(RecordingProvisioningFactory(first)) }
+            networkProvisioning { register(RecordingProvisioningFactory(replacement)) }
+        }
+
+        try {
+            assertSame(replacement, kit.networkProvisioning)
+        } finally {
+            kit.stop()
+        }
     }
 
     @Test

@@ -8,7 +8,8 @@ import dev.p2pkit.core.internal.immutableSetSnapshot
  * Each side sends a `PING` every [pingIntervalMillis]. If no `PONG` is observed
  * within [timeoutMillis], the session transitions to [ConnectionState.Failed],
  * or to [ConnectionState.Reconnecting] for outgoing sessions configured with
- * [ReconnectPolicy.Enabled].
+ * [ReconnectPolicy.Enabled]. Both values must be positive and
+ * [timeoutMillis] must be greater than [pingIntervalMillis].
  */
 public data class KeepAliveConfig(
     val pingIntervalMillis: Long = 10_000,
@@ -51,6 +52,9 @@ public sealed class ReconnectPolicy {
      *
      * Clean closes — both [P2pSession.close] and a `CLOSE` frame from the
      * peer — never trigger retry.
+     *
+     * [maxAttempts] must be positive. [retryDelayMillis] may be zero but not
+     * negative.
      */
     public data class Enabled(val maxAttempts: Int, val retryDelayMillis: Long) : ReconnectPolicy() {
         init {

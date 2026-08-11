@@ -11,9 +11,13 @@ import kotlinx.coroutines.flow.Flow
  * transport that reports [canConnect] for the target peer. Internal contract.
  */
 public interface DataTransport {
+    /** Stable kind for this instance. The getter must be side-effect free. */
     public val type: TransportKind
 
-    /** Higher = preferred. Used for transport selection when multiple match. */
+    /**
+     * Higher = preferred. Used for transport selection when multiple match.
+     * The getter must be stable and side-effect free for this instance.
+     */
     public val priority: Int
 
     /**
@@ -54,8 +58,20 @@ public interface DataTransport {
      */
     public suspend fun stop()
 
+    /**
+     * Return whether this instance can reach [peer] using its current hints.
+     * This check must be fast and resource-inert. A thrown provider exception
+     * is surfaced to the application as [dev.p2pkit.core.P2pError.ConnectionFailed]
+     * rather than causing an untyped platform-specific failure or an implicit
+     * fallback to a lower-priority transport.
+     */
     public fun canConnect(peer: InternalPeer): Boolean
 
+    /**
+     * Open a raw connection to [peer]. Cancellation must propagate unchanged;
+     * any other unexpected provider exception is wrapped by the kit as
+     * [dev.p2pkit.core.P2pError.ConnectionFailed].
+     */
     public suspend fun connect(peer: InternalPeer): RawConnection
 
     /**

@@ -10,11 +10,16 @@ import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.FakeDiscoveryTransport
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.transport.DataTransport
+import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportCapability
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportDescriptor
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -201,6 +206,30 @@ class TransportCapabilityTest {
         assertEquals(TransportKind.BLE, failure.transportKind)
         assertTrue(failure.reason.contains("does not match data kind LAN"))
     }
+
+    @Test
+    fun providerGetterFailureDuringPairValidationIsTyped() {
+        val cause = IllegalStateException("provider type getter failed")
+        val failure = assertFailsWith<P2pError.TransportInitializationFailed> {
+            createTestKit {
+                appId = AppId("factory-getter-failure-test")
+                deviceName = "Getter failure"
+                transports {
+                    register(
+                        StaticFactory(
+                            TransportDescriptor.dataOnly(TransportKind.LAN)
+                        ) {
+                            TransportPair(data = ThrowingTypeDataTransport(cause))
+                        }
+                    )
+                }
+            }
+        }
+
+        assertEquals(TransportKind.LAN, failure.transportKind)
+        assertSame(cause, failure.underlying)
+        assertTrue(failure.reason.contains("provider type getter failed"))
+    }
 }
 
 private class StaticFactory(
@@ -219,6 +248,18 @@ private class CountingFactory(kind: TransportKind) : TransportFactory {
         buildCalls += 1
         return TransportPair(data = FakeDataTransport(descriptor.kind))
     }
+}
+
+private class ThrowingTypeDataTransport(
+    private val failure: Throwable
+) : DataTransport {
+    override val type: TransportKind get() = throw failure
+    override val priority: Int = 0
+    override fun canConnect(peer: InternalPeer): Boolean = false
+    override suspend fun connect(peer: InternalPeer): RawConnection = error("not used")
+    override fun incomingConnections(): Flow<RawConnection> = emptyFlow()
+    override suspend fun stop() = Unit
+    override suspend fun close() = Unit
 }
 
 private class CountingMissingPermissionManager : P2pPermissionManager {

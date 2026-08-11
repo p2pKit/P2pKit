@@ -25,5 +25,11 @@ public interface RawConnection {
      */
     public fun read(): Flow<ByteArray>
 
+    /**
+     * Permanently close the stream and release every owned native resource.
+     * Must be idempotent and safe when cleanup races a failed read/write or a
+     * second close attempt. No later callback may make the connection usable
+     * again.
+     */
     public suspend fun close()
 }
