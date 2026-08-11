@@ -372,12 +372,17 @@ Focused final-tree evidence before the protected boundary:
 - `git diff --check` and the committed-diff whitespace review — **PASS**.
 
 There is no public ABI, Maven coordinate, wire-format, secure-v2,
-platform-floor, or published-artifact change. Hosted `complete-gate`, protected
-merge, and exact-tree identity remain pending for this workstream. Physical
-`PROV-A12`, `PS-T01`, and `PS-T02` evidence remains mandatory for real Android
-framework/OEM callbacks and process binding. Apple manual-provisioning
-lifecycle behavior still requires the device lifecycle legs in `LAN-T07` and
-`ENV-01`; simulator tests do not prove suspension, process death, or AWDL.
+platform-floor, or published-artifact change. Complete gate
+[31514113705](https://github.com/p2pKit/P2pKit/actions/runs/31514113705)
+passed exact PR head `dadfc66307353c95d865f2835eca0d2d89d3eb84`.
+PR [#84](https://github.com/p2pKit/P2pKit/pull/84) then merged normally as
+`fc1f6f92e6eb52573ef6f9034102d9d288d7a2bf`; the head and merge both have
+tree `61cc2e6684ea0fce804bf7bedf2b02006fec0b73`, so the exact-tree reuse policy
+avoided a redundant gate. Physical `PROV-A12`, `PS-T01`, and `PS-T02`
+evidence remains mandatory for real Android framework/OEM callbacks and
+process binding. Apple manual-provisioning lifecycle behavior still requires
+the device lifecycle legs in `LAN-T07` and `ENV-01`; simulator tests do not
+prove suspension, process death, or AWDL.
 
 ## Core secure protocol ownership workstream evidence
 
@@ -432,11 +437,72 @@ Final source-tree verification before the protected boundary:
   AppIntents dependency.
 
 The approved secure-v2 and explicit legacy-v1 wire contracts, public ABI,
-Maven coordinates, and platform floors are unchanged. These deterministic
-checks do not satisfy independent secure-v2 interoperability or professional
-cryptographic review; both external campaigns remain pending. Hosted
-`complete-gate`, protected merge, and exact-tree identity remain pending for
-this workstream.
+Maven coordinates, and platform floors are unchanged. Complete gate
+[31524495713](https://github.com/p2pKit/P2pKit/actions/runs/31524495713)
+passed exact PR head `701612ef2daa222376fc953e6a739da0f4e9ed04`.
+PR [#85](https://github.com/p2pKit/P2pKit/pull/85) then merged normally as
+`0b267fa97dc09a573d3a7fb1e00416a5d5d16c12`; the head and merge both have
+tree `c944e628ac95f703a80277d2038f0daa56981013`, so the exact-tree reuse policy
+avoided a redundant gate. These deterministic checks do not satisfy
+independent secure-v2 interoperability or professional cryptographic review;
+both external campaigns remain pending.
+
+## Core discovery admission and publication workstream evidence
+
+Implementation commit `bef0407647ac3444ffad965a59a7483610df9192`
+(tree `5cb0bf265a3c892b6dd059012a4f7b68055e9857`) closes the
+repository-executable discovery-boundary gaps found by the continuation audit:
+
+- every public discovery-SPI event is validated before retention, with bounded
+  peer identifiers, names, transport hints, hosts, ports, and metadata;
+- event-supplied manual provenance and application-trusted pins are normalized
+  to discovered provenance and untrusted discovery claims, while an actual
+  application-supplied manual pin remains authoritative for a mixed entry;
+- discovery retention is capped at 1,024 distinct peer identifiers without
+  charging manual-only entries, blocking updates at capacity, or preventing
+  capacity reclamation after source loss or staleness;
+- invalid and capacity-rejected events cannot reset empty-stream recollection
+  backoff, and rejection diagnostics are stable, value-free, and once-only;
+  and
+- registry mutations carry monotonically increasing generations through
+  publication, so a delayed older writer cannot overwrite a newer `Lost`,
+  eviction, manual-registration, or terminal-close snapshot. The established
+  public peer `StateFlow` still suppresses heartbeat-only list emissions while
+  `lastSeen` advances.
+
+Exact implementation and regression files:
+
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/transport/DiscoveryTransport.kt`
+- `library/p2p-core/src/commonTest/kotlin/dev/p2pkit/core/internal/PeerRegistryTest.kt`
+
+Final implementation-tree evidence before the protected boundary:
+
+- `PeerRegistryTest` — **PASS**, 33 JVM and 33 arm64 iOS Simulator tests,
+  zero failures, errors, or skips. New deterministic coverage includes stale
+  publication ordering, heartbeat de-noising, provenance normalization,
+  manual-pin precedence, hostile-field rejection, value-safe diagnostics,
+  capacity reclamation and multi-source accounting, 128 concurrent writers,
+  and virtual-time invalid-stream backoff;
+- complete `p2p-core` check — **PASS**, 607 JVM and 577 arm64 iOS Simulator
+  tests, zero failures, errors, or skips, with all 25 requested tasks executed
+  under `--rerun-tasks`;
+- Android main compilation and every declared iOS production/test compile and
+  link — **PASS**. `iosX64Test` is host-skipped on Apple Silicon after its test
+  binary links; runtime execution still requires an Intel macOS runner and is
+  not inferred from linkage;
+- core ABI and warning-failing Dokka — **PASS**; and
+- `scripts/run-release-gate.sh` — **PASS** on the identical implementation
+  tree, including repository policy/link checks, root checks, SBOM, all 15
+  publication shapes, isolated JVM/Java/Android/KMP/iOS 14 consumers, release
+  XCFramework provenance and minimum-iOS inspection, and the Swift sample build
+  with warnings as errors. `git diff --check` also passed.
+
+There is no public API/ABI, Maven coordinate, wire-format, platform-floor, or
+published-artifact change. These automated checks do not prove physical
+Android/Apple discovery behavior, real-network callback ordering, or hostile
+multi-machine conditions; the corresponding validation campaigns remain
+pending and are not upgraded by this workstream.
 
 ## Pull request audit
 
@@ -463,6 +529,8 @@ this workstream.
 | [#81 — harden core session lifecycle and diagnostics](https://github.com/p2pKit/P2pKit/pull/81) | Failure-isolated logging, deterministic setup/incoming/terminal/reconnect/feature ownership, bounded refresh/start settlement, post-terminal delivery prevention, collector recovery, peer-error reconnect handling, and deep `MessageId` immutability. | **Merged** normally as `a7d8ebfbdc945b5d1ab3db1c51daed1d4f30cc1f`. Complete gate [31472464571](https://github.com/p2pKit/P2pKit/actions/runs/31472464571) passed on head `145fa607be33c665de88b057f240ca89742922e7`; both share tree `b1cacff7cc4884e5d1c8a0e2f1b2dec2a97ceff8`. |
 | [#82 — harden LAN resource ownership](https://github.com/p2pKit/P2pKit/pull/82) | Completed JVM/Android native-handle ownership, bounded JmDNS construction, cancellation/orphan cleanup, selected-network routing, and deterministic callback/resource regressions. | **Merged** normally as `e64c833fd9759f529df212122583ec3bd4edba1f`. Replacement complete gate [31486056226](https://github.com/p2pKit/P2pKit/actions/runs/31486056226) passed on head `a88d033801c03b430c5067776d941e099471a541`; merge and head share tree `25f6a53342759ec3b9bb134fb759e733f2301b35`. |
 | [#83 — make LAN discovery delivery convergent](https://github.com/p2pKit/P2pKit/pull/83) | Replaced lossy discovery event buffers with a state-backed relay, made source failure/completion withdrawal deterministic, and retired Apple endpoint/relay generations atomically on stop. | **Merged** normally as `ba418189b7fc3033ac4f3e51932b83f7407bf323`. Replacement complete gate [31497583675](https://github.com/p2pKit/P2pKit/actions/runs/31497583675) passed on head `78b0e4249f031fd24af4d98be87a1894b0512c2e`; merge and head share tree `3fc254c5aa6f69e243a81df375cfde1048e56345`. |
+| [#84 — harden provisioning lifecycle and native ownership](https://github.com/p2pKit/P2pKit/pull/84) | Made operations manager-owned across Android, JVM, and Apple; serialized Android binding/rebinding and cleanup ownership; hardened validation, permissions, cancellation, and typed failure handling. | **Merged** normally as `fc1f6f92e6eb52573ef6f9034102d9d288d7a2bf`. Complete gate [31514113705](https://github.com/p2pKit/P2pKit/actions/runs/31514113705) passed on head `dadfc66307353c95d865f2835eca0d2d89d3eb84`; merge and head share tree `61cc2e6684ea0fce804bf7bedf2b02006fec0b73`. |
+| [#85 — harden secure protocol ownership and parsing](https://github.com/p2pKit/P2pKit/pull/85) | Closed post-handshake lease ownership, duplicate JSON-field acceptance, cancellation misclassification, and wall-clock reassembly-expiry gaps without changing approved wire bytes. | **Merged** normally as `0b267fa97dc09a573d3a7fb1e00416a5d5d16c12`. Complete gate [31524495713](https://github.com/p2pKit/P2pKit/actions/runs/31524495713) passed on head `701612ef2daa222376fc953e6a739da0f4e9ed04`; merge and head share tree `c944e628ac95f703a80277d2038f0daa56981013`. |
 
 The recently closed, unmerged PRs were #46, whose stronger replacement is
 documented above, and #50, #51, #57, and #58, whose exact updates and authorship
