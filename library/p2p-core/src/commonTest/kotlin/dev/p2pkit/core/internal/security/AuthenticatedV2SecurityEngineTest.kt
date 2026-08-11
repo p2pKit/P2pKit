@@ -9,6 +9,7 @@ import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.internal.security.noise.NoiseProtocolException
 import dev.p2pkit.core.internal.security.noise.NoiseRole
 import dev.p2pkit.core.internal.security.noise.SECURE_V2_PREFACE_SIZE_BYTES
+import dev.p2pkit.core.internal.security.noise.SecureV2HandshakeOutcome
 import dev.p2pkit.core.internal.security.noise.wipe
 import dev.p2pkit.core.security.IdentityDerivation
 import dev.p2pkit.core.security.LocalSecureIdentity
@@ -19,6 +20,7 @@ import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeRawConnection
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
@@ -332,6 +334,70 @@ class AuthenticatedV2SecurityEngineTest {
             assertEquals(ConnectionState.Closed, pair.a.state.value)
         } finally {
             identity.clearPrivate()
+            pair.b.close()
+        }
+    }
+
+    @Test
+    fun cancellationAfterHandshakeSettlementDisposesTheUnclaimedSecureOutcome() = runTest {
+        val appId = AppId("engine.cancellation-after-settlement")
+        val initiatorIdentity = generateIdentity(appId)
+        val responderIdentity = generateIdentity(appId)
+        val pair = FakeConnectionPair()
+        val beforeClaim = CompletableDeferred<Unit>()
+        val disposed = CompletableDeferred<SecureV2HandshakeOutcome>()
+        val raceEngine = AuthenticatedV2SecurityEngine(
+            cryptography = cryptography,
+            beforeHandshakeOutcomeClaimForTest = {
+                beforeClaim.complete(Unit)
+                awaitCancellation()
+            },
+            onAbandonedHandshakeOutcomeDisposedForTest = { outcome ->
+                disposed.complete(outcome)
+            },
+        )
+        val connectionOwner = this
+        var responder: SecureConnection? = null
+        try {
+            val initiatorCall = async {
+                raceEngine.establish(
+                    rawConnection = CopyingRawConnection(pair.a),
+                    parentScope = connectionOwner,
+                    role = NoiseRole.Initiator,
+                    appId = appId,
+                    localIdentity = initiatorIdentity,
+                    authorization = PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp,
+                )
+            }
+            val responderCall = async {
+                engine.establish(
+                    rawConnection = CopyingRawConnection(pair.b),
+                    parentScope = connectionOwner,
+                    role = NoiseRole.Responder,
+                    appId = appId,
+                    localIdentity = responderIdentity,
+                    authorization = PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp,
+                )
+            }
+
+            beforeClaim.await()
+            responder = responderCall.await()
+            initiatorCall.cancel(CancellationException("owner cancelled after handshake"))
+
+            val cancellation = assertFailsWith<CancellationException> { initiatorCall.await() }
+            assertEquals("owner cancelled after handshake", cancellation.message)
+            val abandoned = withTimeout(2_000) { disposed.await() }
+            assertEquals(ConnectionState.Closed, pair.a.state.value)
+            assertTrue(abandoned.copyRemoteStaticPublicKey().all { it == 0.toByte() })
+            assertTrue(abandoned.copyHandshakeHash().all { it == 0.toByte() })
+            assertFailsWith<IllegalStateException> {
+                abandoned.connection.write("must-not-send".encodeToByteArray())
+            }
+        } finally {
+            responder?.close()
+            initiatorIdentity.clearPrivate()
+            responderIdentity.clearPrivate()
+            pair.a.close()
             pair.b.close()
         }
     }

@@ -63,7 +63,9 @@ internal data class HelloPayload(
             require(bytes.size <= ProtocolConstants.MAX_HELLO_PAYLOAD_BYTES) {
                 "HELLO payload ${bytes.size} exceeds ${ProtocolConstants.MAX_HELLO_PAYLOAD_BYTES} bytes"
             }
-            val payload = json.decodeFromString(serializer(), bytes.decodeStrictUtf8("HELLO payload"))
+            val jsonText = bytes.decodeStrictUtf8("HELLO payload")
+            rejectDuplicateTopLevelJsonFields(jsonText, "HELLO payload")
+            val payload = json.decodeFromString(serializer(), jsonText)
             validate(payload)
             return payload
         }

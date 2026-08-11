@@ -30,6 +30,10 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
@@ -44,6 +48,9 @@ import kotlinx.coroutines.withTimeout
 internal class AuthenticatedV2SecurityEngine(
     private val cryptography: PlatformSecurityCryptography = platformSecurityCryptography(),
     private val cleanupTimeoutMillis: Long = SECURE_ENGINE_CLEANUP_TIMEOUT_MILLIS,
+    private val beforeHandshakeOutcomeClaimForTest: (suspend () -> Unit)? = null,
+    private val onAbandonedHandshakeOutcomeDisposedForTest:
+        (suspend (SecureV2HandshakeOutcome) -> Unit)? = null,
 ) {
     init {
         require(cleanupTimeoutMillis > 0L) { "cleanupTimeoutMillis must be positive" }
@@ -72,6 +79,7 @@ internal class AuthenticatedV2SecurityEngine(
         var localStatic: NoiseKeyPair? = null
         var pump: SingleCollectorRawPump? = null
         var handshakeTask: Deferred<Result<SecureV2HandshakeOutcome>>? = null
+        val outcomeLease = HandshakeOutcomeLease()
         var outcome: SecureV2HandshakeOutcome? = null
         var remoteIdentity: PeerIdentity? = null
         var returned = false
@@ -95,24 +103,36 @@ internal class AuthenticatedV2SecurityEngine(
             // unblocking that I/O before waiting for the task to terminate.
             handshakeTask = parentScope.async {
                 try {
-                    Result.success(
-                        driver.establish(
-                            pump = pump,
-                            role = role,
-                            appId = appId.value,
-                            localStatic = localStatic,
-                            authorizeRemoteStatic = { remoteStatic ->
-                                deriveAndAuthorizeRemote(
-                                    namespace = namespace,
-                                    remoteStatic = remoteStatic,
-                                    authorization = authorization,
-                                    expectedPeerId = expectedPeerId,
-                                    expectedFingerprint = expectedFingerprint,
-                                ).also { remoteIdentity = it }
-                                true
-                            },
-                        ),
+                    val established = driver.establish(
+                        pump = pump,
+                        role = role,
+                        appId = appId.value,
+                        localStatic = localStatic,
+                        authorizeRemoteStatic = { remoteStatic ->
+                            deriveAndAuthorizeRemote(
+                                namespace = namespace,
+                                remoteStatic = remoteStatic,
+                                authorization = authorization,
+                                expectedPeerId = expectedPeerId,
+                                expectedFingerprint = expectedFingerprint,
+                            ).also { remoteIdentity = it }
+                            true
+                        },
                     )
+                    val accepted = withContext(NonCancellable) {
+                        outcomeLease.publish(established)
+                    }
+                    if (accepted) {
+                        Result.success(established)
+                    } else {
+                        withContext(NonCancellable) {
+                            val cleanupFailure = disposeAbandonedHandshakeOutcome(established)
+                            outcomeLease.recordLateCleanupFailure(cleanupFailure)
+                        }
+                        Result.failure(
+                            CancellationException("Authenticated v2 setup was abandoned"),
+                        )
+                    }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (cause: Throwable) {
@@ -123,7 +143,11 @@ internal class AuthenticatedV2SecurityEngine(
                     Result.failure(cause)
                 }
             }
-            outcome = handshakeTask.await().getOrThrow()
+            val completedOutcome = handshakeTask.await().getOrThrow()
+            beforeHandshakeOutcomeClaimForTest?.invoke()
+            currentCoroutineContext().ensureActive()
+            outcomeLease.claim(completedOutcome)
+            outcome = completedOutcome
 
             val identity = remoteIdentity
                 ?: throw P2pError.AuthenticationFailed(
@@ -141,6 +165,7 @@ internal class AuthenticatedV2SecurityEngine(
                 pump = pump,
                 handshakeTask = handshakeTask,
                 outcome = outcome,
+                outcomeLease = outcomeLease,
             )
             cleanupFailure?.let(cause::addSuppressed)
             when (cause) {
@@ -277,19 +302,27 @@ internal class AuthenticatedV2SecurityEngine(
         pump: SingleCollectorRawPump?,
         handshakeTask: Deferred<Result<SecureV2HandshakeOutcome>>?,
         outcome: SecureV2HandshakeOutcome?,
+        outcomeLease: HandshakeOutcomeLease,
     ): Throwable? = withContext(NonCancellable) {
         var cleanupFailure: Throwable? = null
-        captureCleanupIssue(
-            resource = "authenticated v2 failed connection",
-            timeoutMillis = cleanupTimeoutMillis,
-            preserveCancellation = false,
-        ) {
-            when {
-                outcome != null -> outcome.connection.close()
-                pump != null -> pump.close()
-                else -> rawConnection.close()
-            }
-        }?.let { cleanupFailure = it.cause }
+        val abandonedOutcome = outcomeLease.abandon()
+        if (abandonedOutcome != null) {
+            cleanupFailure = cleanupFailure.combineWith(
+                disposeAbandonedHandshakeOutcome(abandonedOutcome),
+            )
+        } else {
+            captureCleanupIssue(
+                resource = "authenticated v2 failed connection",
+                timeoutMillis = cleanupTimeoutMillis,
+                preserveCancellation = false,
+            ) {
+                when {
+                    outcome != null -> outcome.connection.close()
+                    pump != null -> pump.close()
+                    else -> rawConnection.close()
+                }
+            }?.let { cleanupFailure = cleanupFailure.combineWith(it.cause) }
+        }
         handshakeTask?.cancel(CancellationException("Authenticated v2 setup aborted"))
         if (handshakeTask != null) {
             try {
@@ -302,15 +335,93 @@ internal class AuthenticatedV2SecurityEngine(
                 val timeout = IllegalStateException(
                     "Authenticated v2 handshake task did not stop within its cleanup deadline"
                 )
-                if (cleanupFailure == null) cleanupFailure = timeout
-                else cleanupFailure.addSuppressed(timeout)
+                cleanupFailure = cleanupFailure.combineWith(timeout)
             } catch (cleanup: Throwable) {
-                if (cleanupFailure == null) cleanupFailure = cleanup
-                else cleanupFailure.addSuppressed(cleanup)
+                cleanupFailure = cleanupFailure.combineWith(cleanup)
             }
         }
+        cleanupFailure = cleanupFailure.combineWith(outcomeLease.lateCleanupFailure())
         cleanupFailure
     }
+
+    private suspend fun disposeAbandonedHandshakeOutcome(
+        outcome: SecureV2HandshakeOutcome,
+    ): Throwable? {
+        var cleanupFailure: Throwable? = try {
+            captureCleanupIssue(
+                resource = "abandoned authenticated v2 handshake outcome",
+                timeoutMillis = cleanupTimeoutMillis,
+                preserveCancellation = false,
+            ) {
+                outcome.connection.close()
+            }?.cause
+        } finally {
+            outcome.clearMetadata()
+        }
+        try {
+            onAbandonedHandshakeOutcomeDisposedForTest?.invoke(outcome)
+        } catch (callbackFailure: Throwable) {
+            cleanupFailure = cleanupFailure.combineWith(callbackFailure)
+        }
+        return cleanupFailure
+    }
+}
+
+/**
+ * Owns a successful handshake outcome from creation until the connect caller
+ * claims it. Cancellation can race both deferred completion and resumption;
+ * abandoning this lease before publication makes the producer dispose a late
+ * result, while abandoning it after publication returns the result to cleanup.
+ */
+private class HandshakeOutcomeLease {
+    private val mutex = Mutex()
+    private var state: State = State.Pending
+    private var outcome: SecureV2HandshakeOutcome? = null
+    private var lateCleanupFailure: Throwable? = null
+
+    suspend fun publish(value: SecureV2HandshakeOutcome): Boolean = mutex.withLock {
+        check(outcome == null) { "Authenticated v2 handshake outcome was published twice" }
+        when (state) {
+            State.Pending -> {
+                outcome = value
+                true
+            }
+            State.Abandoned -> false
+            State.Claimed -> error("Authenticated v2 handshake outcome was claimed before publication")
+        }
+    }
+
+    suspend fun claim(value: SecureV2HandshakeOutcome) {
+        mutex.withLock {
+            check(state == State.Pending && outcome === value) {
+                "Authenticated v2 handshake outcome ownership was unavailable"
+            }
+            outcome = null
+            state = State.Claimed
+        }
+    }
+
+    suspend fun abandon(): SecureV2HandshakeOutcome? = mutex.withLock {
+        if (state != State.Pending) return@withLock null
+        state = State.Abandoned
+        outcome.also { outcome = null }
+    }
+
+    suspend fun recordLateCleanupFailure(failure: Throwable?) {
+        if (failure == null) return
+        mutex.withLock {
+            lateCleanupFailure = lateCleanupFailure.combineWith(failure)
+        }
+    }
+
+    suspend fun lateCleanupFailure(): Throwable? = mutex.withLock { lateCleanupFailure }
+
+    private enum class State { Pending, Claimed, Abandoned }
+}
+
+private fun Throwable?.combineWith(additional: Throwable?): Throwable? {
+    if (additional == null) return this
+    return this?.also { it.addSuppressed(additional) } ?: additional
 }
 
 private const val SECURE_ENGINE_CLEANUP_TIMEOUT_MILLIS: Long = 2_000

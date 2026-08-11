@@ -104,6 +104,33 @@ class FileOfferPayloadTest {
     }
 
     @Test
+    fun duplicateTopLevelFieldsAreRejectedWithoutExposingTheirValues() {
+        val secret = "FILE_OFFER_DUPLICATE_SECRET_DO_NOT_LOG"
+        val json = """{
+            "name":"safe.bin",
+            "name":"$secret",
+            "sizeBytes":1
+        }""".trimIndent().encodeToByteArray()
+
+        val failure = assertFailsWith<IllegalArgumentException> { FileOfferPayload.decode(json) }
+
+        assertTrue(failure.message.orEmpty().contains("duplicate top-level field"))
+        assertFalse(failure.message.orEmpty().contains(secret), failure.message)
+    }
+
+    @Test
+    fun escapedAndLiteralSpellingsOfTheSameTopLevelFieldAreRejected() {
+        val escapedSizeKey = "size\\u0042ytes"
+        val json = """{
+            "name":"safe.bin",
+            "sizeBytes":1,
+            "$escapedSizeKey":2
+        }""".trimIndent().encodeToByteArray()
+
+        assertFailsWith<IllegalArgumentException> { FileOfferPayload.decode(json) }
+    }
+
+    @Test
     fun maximumFieldBoundariesAreExact() {
         val name = "a".repeat(FileOfferPayload.MAX_NAME_LEN)
         val mime = "m".repeat(FileOfferPayload.MAX_MIME_LEN)

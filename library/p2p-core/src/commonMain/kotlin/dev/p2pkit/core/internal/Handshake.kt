@@ -11,6 +11,7 @@ import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolConstants
 import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.transport.RawConnection
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -52,25 +53,25 @@ internal suspend fun performHandshake(
     val firstEvent = withTimeoutOrNull(handshakeTimeoutMillis) {
         events.receive()
     } ?: run {
-        runCatching { protocol.sendError(connection, "handshake timeout") }
+        sendErrorBestEffort(protocol, connection, "handshake timeout")
         throw P2pError.HandshakeRejected("Handshake timed out after $handshakeTimeoutMillis ms")
     }
 
     if (firstEvent !is ProtocolEvent.Hello) {
-        runCatching { protocol.sendError(connection, "expected HELLO") }
+        sendErrorBestEffort(protocol, connection, "expected HELLO")
         throw P2pError.HandshakeRejected("Expected HELLO, got $firstEvent")
     }
 
     val peerHello = firstEvent.payload
 
     if (peerHello.appId != localAppId.value) {
-        runCatching { protocol.sendError(connection, "appId mismatch") }
+        sendErrorBestEffort(protocol, connection, "appId mismatch")
         throw P2pError.HandshakeRejected(
             "appId mismatch: local=${localAppId.value} remote=${peerHello.appId}"
         )
     }
     if (peerHello.protocolVersion != protocolVersion.toUByte().toInt()) {
-        runCatching { protocol.sendError(connection, "protocol version mismatch") }
+        sendErrorBestEffort(protocol, connection, "protocol version mismatch")
         throw P2pError.VersionMismatch(
             localVersion = protocolVersion.toUByte().toInt(),
             remoteVersion = peerHello.protocolVersion
@@ -78,6 +79,22 @@ internal suspend fun performHandshake(
     }
     protocolState?.completeHello(peerHello.peerId, peerHello.features)
     return peerHello
+}
+
+/** A rejection diagnostic must never turn owner cancellation into a handshake failure. */
+private suspend fun sendErrorBestEffort(
+    protocol: P2pProtocol,
+    connection: RawConnection,
+    reason: String,
+) {
+    try {
+        protocol.sendError(connection, reason)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        // The peer is already being rejected; an ordinary best-effort write
+        // failure must not replace the stable local validation error.
+    }
 }
 
 internal fun HelloPayload.toPeer(): Peer = Peer(

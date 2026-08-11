@@ -379,6 +379,65 @@ framework/OEM callbacks and process binding. Apple manual-provisioning
 lifecycle behavior still requires the device lifecycle legs in `LAN-T07` and
 `ENV-01`; simulator tests do not prove suspension, process death, or AWDL.
 
+## Core secure protocol ownership workstream evidence
+
+Implementation commit `c867c90c82a1a7b675fb2d19a055911ee6f8e4cd`
+(tree `95b24544a59d15b548aeed5520704fdd773b5a34`) closes four
+repository-executable protocol and ownership gaps found by the continuation
+audit:
+
+- a successful Noise XX outcome now remains in an explicit lease until the
+  connect caller claims it; cancellation after worker settlement closes the
+  secure stream and clears handshake metadata instead of stranding cipher
+  state;
+- HELLO and legacy FILE_OFFER JSON reject duplicate top-level fields,
+  including escaped/literal spellings of the same key, before typed decoding;
+- application-handshake rejection writes preserve owner cancellation while
+  retaining stable local errors for ordinary best-effort write failures; and
+- partial-message reassembly expiry is wired to the monotonic clock rather
+  than wall time, so clock corrections cannot retain hostile fragments or
+  evict a live reassembly prematurely.
+
+Exact implementation and regression files:
+
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/Handshake.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/security/AuthenticatedV2SecurityEngine.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/JsonWireValidation.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/HelloPayload.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/FileOfferPayload.kt`
+- the corresponding four common test classes under
+  `library/p2p-core/src/commonTest/kotlin/dev/p2pkit/core/`.
+
+Final source-tree verification before the protected boundary:
+
+- complete `p2p-core` JVM suite — **PASS**, 598 tests, zero failures,
+  errors, or skips;
+- complete iOS Simulator Arm64 suite — **PASS**, 568 tests, zero failures,
+  errors, or skips;
+- Android main compilation/lint checks and iosArm64, iosSimulatorArm64, and
+  iosX64 production/test compilation and linkage — **PASS**. `iosX64Test` is
+  host-skipped after linkage on Apple Silicon; its production and test code
+  compiled and linked, but runtime execution requires an Intel host and is not
+  inferred from this run;
+- core ABI and warning-failing Dokka — **PASS**;
+- all 15 publication shapes and isolated JVM, Java, Android, KMP, and iOS 14
+  consumers — **PASS**;
+- release XCFramework device/simulator reconstruction and provenance, iOS 14
+  minimum-slice inspection, and the generated Swift sample build with
+  `SWIFT_TREAT_WARNINGS_AS_ERRORS=YES` — **PASS**; and
+- `git diff --check`, staged whitespace review, ignored-test search, and XML
+  result inspection — **PASS**. No core test is ignored. Xcode emitted only
+  its non-source AppIntents metadata notice because the sample has no
+  AppIntents dependency.
+
+The approved secure-v2 and explicit legacy-v1 wire contracts, public ABI,
+Maven coordinates, and platform floors are unchanged. These deterministic
+checks do not satisfy independent secure-v2 interoperability or professional
+cryptographic review; both external campaigns remain pending. Hosted
+`complete-gate`, protected merge, and exact-tree identity remain pending for
+this workstream.
+
 ## Pull request audit
 
 | PR | Classification | Decision |

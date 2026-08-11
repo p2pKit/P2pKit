@@ -28,6 +28,14 @@ commit `fc73837cfa154caa82a6f96172603108b8577842`; the exact automated boundary
 is recorded in the [GitHub audit](../maintenance/github-audit-2026-08.md).
 That evidence does not change either physical campaign's status.
 
+Repository-side secure-handshake result ownership, duplicate HELLO/legacy
+FILE_OFFER field rejection, cancellation-preserving rejection diagnostics, and
+monotonic reassembly expiry were strengthened in implementation commit
+`c867c90c82a1a7b675fb2d19a055911ee6f8e4cd`; exact automated evidence is
+recorded in the [GitHub audit](../maintenance/github-audit-2026-08.md). This
+does not change the `NOT STARTED` independent-interoperability status or the
+`EXTERNAL AUDIT REQUIRED` professional-review status.
+
 ## Shared execution contract
 
 The [test catalog](test-catalog.md) is the canonical source for test IDs,

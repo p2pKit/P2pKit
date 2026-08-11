@@ -163,7 +163,10 @@ internal class P2pKitImpl(
         SecurityMode.NoneForMvp -> TransportSecurityProfile.LegacyPlaintextV1
     }
     private val protocol = DefaultP2pProtocol(
-        clock = clock,
+        // Reassembly expiry is elapsed-time state, not a user-visible
+        // timestamp. Wall-clock corrections must not retain hostile partial
+        // messages indefinitely or evict a live message prematurely.
+        clock = monotonicClock,
         logger = logger,
         version = when (securityProfile) {
             TransportSecurityProfile.AuthenticatedV2 -> ProtocolConstants.SECURE_VERSION

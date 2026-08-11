@@ -71,7 +71,8 @@ Freeze a byte-level secure-v2 specification for the audited commit, including:
 5. ChaCha20-Poly1305 record length, associated data, nonce construction,
    increment/exhaustion, fragmentation/coalescing, and terminal authentication
    failure.
-6. HELLO/version/features and authorization timing.
+6. HELLO/version/features, duplicate-field ambiguity rejection, and
+   authorization timing.
 7. Application frame header, packet types/flags, maximum sizes, unknown-type
    policy, message envelope canonicalization, sequence/message-ID replay state,
    identities, metadata bounds, length, digest, and content.
