@@ -9,7 +9,7 @@ import dev.p2pkit.core.permission.P2pPermission
 import dev.p2pkit.core.permission.P2pPermissionManager
 
 /**
- * Android [P2pPermissionManager] tuned for the v0.2.1 provisioning surface.
+ * Android [P2pPermissionManager] for the optional provisioning sidecar.
  *
  * Reports which runtime permissions are required for hotspot hosting and
  * Wi-Fi discovery on the local device, branching by SDK level:
@@ -52,26 +52,24 @@ public class AndroidP2pPermissionManager(
     }
 
     override suspend fun requiredPermissions(): List<P2pPermission> =
-        listOf(requiredWifiAwarePermission())
+        listOf(requiredProvisioningPermission())
 
     override suspend fun missingPermissions(): List<P2pPermission> {
-        val androidPerm = androidPermissionStringFor(requiredWifiAwarePermission())
+        val required = requiredProvisioningPermission()
+        val androidPerm = androidPermissionStringFor(required)
         val granted = androidPerm == null ||
             appContext.checkSelfPermission(androidPerm) == PackageManager.PERMISSION_GRANTED
-        return if (granted) emptyList() else listOf(requiredWifiAwarePermission())
+        return if (granted) emptyList() else listOf(required)
     }
 
     override suspend fun hasRequiredPermissions(): Boolean = missingPermissions().isEmpty()
 
-    private fun requiredWifiAwarePermission(): P2pPermission {
+    private fun requiredProvisioningPermission(): P2pPermission {
         val targetSdk = appContext.applicationInfo.targetSdkVersion
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            targetSdk >= Build.VERSION_CODES.TIRAMISU
-        ) {
-            P2pPermission.NearbyWifiDevices
-        } else {
-            P2pPermission.Location
-        }
+        return requiredProvisioningRuntimePermission(
+            deviceSdk = Build.VERSION.SDK_INT,
+            targetSdk = targetSdk
+        )
     }
 
     private fun androidPermissionStringFor(p: P2pPermission): String? = when (p) {

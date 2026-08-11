@@ -27,12 +27,15 @@ import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -51,6 +54,15 @@ class NetworkProvisioningCloseTest {
     @Test
     fun unsupportedManagerCloseIsTerminalAndIdempotent() = runBlocking<Unit> {
         val manager = UnsupportedNetworkProvisioningManager()
+
+        val unsupported = assertIs<LocalNetworkResult.Unsupported>(
+            manager.startLocalNetwork(LocalNetworkConfig())
+        )
+        assertEquals(
+            "No network provisioning implementation is registered. Add the platform module and configure " +
+                "android(...), jvm(), or iosManualIp().",
+            unsupported.reason
+        )
 
         manager.close()
         manager.close()
@@ -86,6 +98,26 @@ class NetworkProvisioningCloseTest {
         kit.stop()
 
         assertEquals(listOf("provisioning.close", "transport.close"), events)
+        assertEquals(NetworkProvisioningState.Closed, manager.state.value)
+    }
+
+    @Test
+    fun unsupportedCloseCompletesFromCancelledCallerFinallyBlock() = runBlocking<Unit> {
+        val manager = UnsupportedNetworkProvisioningManager()
+        val entered = CompletableDeferred<Unit>()
+        val caller = launch {
+            try {
+                entered.complete(Unit)
+                awaitCancellation()
+            } finally {
+                manager.close()
+            }
+        }
+        entered.await()
+
+        caller.cancel()
+        caller.join()
+
         assertEquals(NetworkProvisioningState.Closed, manager.state.value)
     }
 }

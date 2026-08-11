@@ -60,12 +60,23 @@ internal interface WifiManagerWrapper {
      * propagated to the caller.
      */
     suspend fun joinWifiNetwork(credentials: WifiCredentials): JoinResult
+
+    /**
+     * Retry native cleanup that failed before a handle could be transferred
+     * to the manager (for example, a reservation delivered after coroutine
+     * cancellation). Implementations retain ownership until cleanup succeeds.
+     *
+     * The default keeps host-test fakes source-compatible.
+     */
+    fun closePendingResources(): List<Throwable> = emptyList()
 }
 
 internal sealed class HotspotStartResult {
     data class Started(val handle: HotspotHandle) : HotspotStartResult()
     /** AOSP [android.net.wifi.WifiManager.LocalOnlyHotspotCallback] error code. */
     data class Failed(val reasonCode: Int) : HotspotStartResult()
+    /** A prior platform request still owns a callback or failed cleanup. */
+    data class CleanupPending(val reason: String) : HotspotStartResult()
 }
 
 /**
@@ -98,6 +109,7 @@ internal interface HotspotHandle {
      */
     val stopped: SharedFlow<HotspotStopReason>
 
+    /** Idempotent and retryable: failures are propagated to the owner. */
     fun close()
 }
 
@@ -125,5 +137,6 @@ internal interface JoinHandle {
      */
     val released: SharedFlow<String>
 
+    /** Idempotent and retryable: failures are propagated to the owner. */
     fun close()
 }
