@@ -134,6 +134,29 @@ class IosLanLifecycleTest {
     }
 
     @Test
+    fun stopDiscoveryWithdrawsOwnedPeersAndRestartReplaysCurrentState() {
+        runBlocking {
+            val alice = startAndAdvertise("Alice")
+            val bob = startAndAdvertise("Bob")
+
+            alice.awaitPeer(bob)
+
+            // LAN peers use a transport-managed lifetime. Stopping the
+            // browser must therefore publish an explicit withdrawal; core's
+            // stale timer intentionally cannot clean this entry for us.
+            alice.stopDiscovery()
+            withTimeout(LOCAL_OWNERSHIP_TIMEOUT_MS) {
+                alice.peers.first { peers -> peers.none { it.id == bob.localPeerId } }
+            }
+
+            // A fresh browser generation must repopulate both the endpoint
+            // registry and the state-backed event relay.
+            alice.startDiscovery()
+            alice.awaitPeer(bob)
+        }
+    }
+
+    @Test
     fun repeatedKitLifecycleDoesNotLeakPorts() {
         runBlocking {
             repeat(LIFECYCLE_CYCLE_COUNT) { i ->
@@ -420,6 +443,7 @@ class IosLanLifecycleTest {
         const val HANDSHAKE_TIMEOUT_MS: Long = 30_000
         const val TERMINAL_TIMEOUT_MS: Long = 5_000
         const val CLEAN_CLOSE_TIMEOUT_MS: Long = 30_000
+        const val LOCAL_OWNERSHIP_TIMEOUT_MS: Long = 5_000
         const val LIFECYCLE_CYCLE_COUNT: Int = 20
         const val CONNECT_STORM_COUNT: Int = 10
     }

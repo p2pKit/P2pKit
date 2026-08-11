@@ -17,7 +17,7 @@ acceptance criterion or required real-world measurement remains unproved.
 
 | Issue | Current implementation | Exact missing work | Priority / blocker / next action |
 | --- | --- | --- | --- |
-| [#21 — idle discovered peer disappears on Android](https://github.com/p2pKit/P2pKit/issues/21) | Transport-managed discovery lifetime, heartbeat/reconciliation, rebind coordination, and structured discovery diagnostics prevent the old core-only 15-second eviction path. | The current bounded `MutableSharedFlow` uses `DROP_OLDEST`, so a saturated discovery relay can discard a `Lost` transition. Complete the reliable lifecycle-event relay and deterministic saturation tests before the physical long-idle campaign. | **High while code-side work remains.** Fix the relay first; then execute `LAN-T01` on representative Android hardware and retain long-idle/removal logs. |
+| [#21 — idle discovered peer disappears on Android](https://github.com/p2pKit/P2pKit/issues/21) | Transport-managed discovery lifetime and native TTL ownership prevent the old core-only 15-second eviction path. Commit `699bfd1` replaces every lossy LAN `DROP_OLDEST` event buffer with a state-backed lifecycle relay, replays current peers after collection recovery, clears a failed source before recollection, and tests 1,024-transition saturation plus stop/restart on JVM, Android host, and Apple Simulator. | Execute the long-idle/no-connect and real graceful/abrupt removal cases on representative Android devices. CI cannot prove OEM multicast/JmDNS TTL behavior or the actual UI observation that initiated the issue. | **High, external evidence only.** Execute `LAN-T01` A3 on physical Android hardware and retain both-peer long-idle, Lost/Found, JmDNS, UI, and packet evidence. |
 | [#23 — iOS stale Bonjour endpoint after peer restart](https://github.com/p2pKit/P2pKit/issues/23) | Commit `d6efe08` gives cached endpoints immutable browser-generation leases, replaces them on each accepted update, clears them before browser/path ownership changes, and conditionally removes only the failed lease so a concurrent fresh result survives. | Prove peer-restart timing on devices. The first stale attempt can still consume the evidence-dependent 10-second Apple connect ceiling; the fix prevents that failed lease from remaining dialable or deleting a newer endpoint. | **High.** Apple devices/AWDL. Execute `LAN-T07` restart/path cases and retain both-peer endpoint-generation/timing evidence. |
 | [#25 — JVM/macOS no-address JmDNS.create trap](https://github.com/p2pKit/P2pKit/issues/25) | Commit `d21d065` removes the no-argument path, selects one deterministic explicit multicast-capable LAN address, excludes loopback/tunnel/virtual/container interfaces, watches the complete eligible topology, and rebinds through the serialized coordinator. | Prove Mac↔Android and Linux↔mobile discovery plus interface rotation on two physical machines; the implementation now fails visibly rather than binding an unsafe platform default when no eligible LAN exists. | **High.** External macOS/Linux/network evidence. Execute `ENV-02` and retain interface/PCAP evidence. |
 | [#26 — Android hotspot host may bind cellular](https://github.com/p2pKit/P2pKit/issues/26) | Commit `d21d065` uses an explicit Wi-Fi/Ethernet `Network` when available and otherwise selects a private IPv4 only from known AP/tether Java interfaces. The system-default callback is change detection only and can never become the bind fallback. | Prove AP/tether names, multicast readiness, and route behavior across representative OEM kernels; AP-client isolation remains outside application control. | **High.** OEM/hotspot hardware. Run the Android provisioning/LAN matrix with `dumpsys`, `ip addr`, both-peer logs, and PCAP evidence. |
@@ -36,7 +36,7 @@ acceptance criterion or required real-world measurement remains unproved.
 | [#39 — JmDNS cache growth during long idle](https://github.com/p2pKit/P2pKit/issues/39) | Rebind closes old instances and diagnostics expose generation/resource behavior. | A 6–12 hour multi-peer idle/appearance churn run with heap/cache/resource measurements has not been performed. | **Medium.** Long-running physical lab. Execute a bounded soak and retain heap/descriptor evidence. |
 | [#40 — asymmetric TCP connect timeouts](https://github.com/p2pKit/P2pKit/issues/40) | Platform timeouts are bounded and reconnect budgets are explicit. | JVM/Android remain 5 s and Apple 10 s; no hostile-network measurement justifies convergence or documents intentional asymmetry. | **Medium.** Two-machine/Apple timing. Measure first; change API/values only from evidence. |
 | [#41 — iOS write-ready 10 s wedge](https://github.com/p2pKit/P2pKit/issues/41) | Commit `d6efe08` makes write-ready expiry terminal: it latches Closed, cancels the native connection exactly once, and makes the next write fail immediately. A deterministic 25 ms seam proves the terminal transition without changing the production 10-second ceiling. | Device evidence must measure cancellation/path-change wakeup and determine whether the 10-second ceiling is appropriate for AWDL. | **Medium.** Apple path fault injection. Run B3/B4 and the #40 timing campaign before changing the value. |
-| [#43 — Android serviceRemoved has null ServiceInfo](https://github.com/p2pKit/P2pKit/issues/43) | Commit `d21d065` owns admitted instance-name→peer mappings by listener generation and adds deterministic Android-host tests for metadata-free removal, stale/current generation ownership, and terminal drain. | Make `Found`/`Updated`/`Lost` delivery reliable under relay saturation (shared with #21), then prove the real null/stub-info callback shape and eviction timing under graceful stop, force-stop, and packet loss. | **Medium.** Complete the repository-side relay first, then run `LAN-T01` add/remove churn and retain both-peer logs. |
+| [#43 — Android serviceRemoved has null ServiceInfo](https://github.com/p2pKit/P2pKit/issues/43) | Commit `d21d065` owns admitted instance-name→peer mappings by listener generation and tests metadata-free removal, stale/current ownership, and terminal drain. Commit `699bfd1` makes removal delivery convergent under saturation, late collection, stream recovery, stop, and remove/re-add conflation. | Prove the real OEM/JmDNS null-or-stub callback shape and measure eviction timing for graceful stop, force-stop, packet loss, and callback churn. | **Medium, external evidence only.** Execute `LAN-T01` add/remove cases on physical devices and retain callback payload, instance name, peer ID, UI timing, both-peer logs, and PCAP. |
 | [#44 — link-local asymmetry](https://github.com/p2pKit/P2pKit/issues/44) | Shared routable-host validation and platform selectors now retain valid IPv4 link-local/scoped IPv6 candidates where appropriate. | Cross-platform link-local-only discovery/connectivity has not been exercised on physical interfaces; zone/scope handling needs evidence. | **Medium.** Two-machine/device link-local topology. Execute `PS-T08` plus PCAP/path logs. |
 
 No partially completed issue was closed. Related external evidence is organized
@@ -118,8 +118,7 @@ declared Apple compilation/linkage, 79 arm64-simulator LAN tests (one explicit
 external diagnostic ignored), ABI, Dokka, SBOM, all 15 publication shapes,
 isolated JVM/Android/KMP/iOS 14 consumers, release-XCFramework provenance,
 iOS 14 slice inspection, and the Swift warnings-as-errors build passed on the
-same source tree. The final protected PR/gate/merge evidence will be appended
-after that exact tree crosses the protected boundary.
+same source tree.
 
 The first protected-boundary run for PR
 [#82](https://github.com/p2pKit/P2pKit/pull/82),
@@ -135,13 +134,93 @@ retry delay before separately requiring a successful rearm, and preloads each
 of the four child processes in turn before releasing all four into the same
 file-lock contention point. Focused concurrent reruns and the complete
 589-test JVM plus 559-test iOS Simulator core suites pass with zero failures,
-errors, or skips. A replacement complete gate is required on the final commit;
-the failed run is not treated as verification evidence.
+errors, or skips.
+
+The correction was committed as `a88d033801c03b430c5067776d941e099471a541`
+(tree `25f6a53342759ec3b9bb134fb759e733f2301b35`). The replacement
+[complete gate](https://github.com/p2pKit/P2pKit/actions/runs/31486056226)
+passed on that exact head together with OSV, dependency review, and Ubuntu and
+Windows Desktop checks. PR #82 merged normally through branch protection as
+`e64c833fd9759f529df212122583ec3bd4edba1f`; the merge tree is the identical
+`25f6a53342759ec3b9bb134fb759e733f2301b35`, so no duplicate gate was run.
 
 This follow-up changes no public ABI, Maven coordinate, secure-v2 or LAN wire
 format, platform floor, or immutable release artifact. Issue #29 still needs
-the physical 50-toggle callback storm; #21/#43 still need the separately
-identified reliable discovery-event relay before their hardware campaign.
+the physical 50-toggle callback storm. The subsequent discovery-relay batch
+below completes the repository prerequisite for #21/#43; their physical
+campaigns remain pending.
+
+## Reliable LAN discovery relay workstream evidence
+
+Source commit `699bfd1654708dde3d3dfe1f06b55ae013fddfc7` replaces the
+platform-specific replay-zero, 256-entry `DROP_OLDEST` buffers with one common
+state-backed lifecycle relay. Native and JmDNS callbacks remain non-blocking,
+but an already observed peer cannot remain stuck merely because unrelated
+churn saturated an event queue. Each collector receives a complete current
+snapshot; lifecycle tokens preserve `Lost` then `Found` across a conflated
+remove/re-add; in-place changes coalesce only to the latest `Updated` value.
+
+The audit also closes two adjacent ownership gaps required for that guarantee:
+
+- ordinary discovery-flow failure or unexpected completion removes only that
+  transport's registry contributions before bounded recollection, after which
+  the state-backed transport replays its current peers;
+- Apple stop retires browser generation, announce cache, opaque endpoint
+  leases, and relay state in one native-lock transaction. A queued result
+  either commits before the withdrawal or fails the host-intent/generation
+  check, so it cannot resurrect a peer after stop.
+
+The focused regression set covers late subscription, two independent
+collectors, 1,024 add/remove transitions while a collector is blocked, latest
+update coalescing, remove/re-add lifecycle identity, stable multi-peer clear,
+32 concurrent callback writers, JVM callback/stop/restart integration, Apple
+stop/restart, and core failure/completion recollection with an unaffected
+second transport. No assertion or production timeout was weakened.
+
+The first protected complete-gate run for PR
+[#83](https://github.com/p2pKit/P2pKit/pull/83),
+[CI run 31492177821](https://github.com/p2pKit/P2pKit/actions/runs/31492177821),
+failed only in the pre-existing JVM
+`FilePeerIdStorageTest.concurrentChildProcessesCommitOneDurableWinner` harness.
+The earlier sequential-preload correction still gave each already-ready child
+an unrelated 15-second deadline while the parent loaded the remaining JVMs;
+the first child could therefore exit before barrier release on the three-core
+hosted runner. The follow-up removes that false deadline: a ready child waits
+for the explicit parent release while checking that the owning parent process
+is alive, and the parent retains bounded readiness/completion waits plus
+unconditional child cleanup. Storage assertions and production behavior are
+unchanged. The failed run is not verification evidence; a replacement gate is
+required on the corrected final tree.
+
+Exact changed files:
+
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt`
+- `library/p2p-core/src/commonTest/kotlin/dev/p2pkit/core/internal/PeerRegistryTest.kt`
+- `library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/ReliablePeerEventRelay.kt`
+- `library/p2p-transport-lan/src/commonTest/kotlin/dev/p2pkit/transport/lan/ReliablePeerEventRelayTest.kt`
+- `library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmLanDiscoveryTransport.kt`
+- `library/p2p-transport-lan/src/jvmTest/kotlin/dev/p2pkit/transport/lan/JvmDiscoveryRelayIntegrationTest.kt`
+- `library/p2p-transport-lan/src/jvmTest/kotlin/dev/p2pkit/transport/lan/ReliablePeerEventRelayConcurrencyTest.kt`
+- `library/p2p-transport-lan/src/androidMain/kotlin/dev/p2pkit/transport/lan/AndroidLanDiscoveryTransport.kt`
+- `library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosLanDiscoveryTransport.kt`
+- `library/p2p-transport-lan/src/appleTest/kotlin/dev/p2pkit/transport/lan/IosLanLifecycleTest.kt`
+
+Focused and complete affected-module verification passed with 591 core JVM,
+561 core arm64 iOS Simulator, 121 LAN JVM, 52 LAN Android-host, and 86 LAN
+arm64 iOS Simulator tests: zero failures or errors and no skips except the one
+explicitly external `IosLanDiagnosticTest`. The root `check --rerun-tasks`
+also passed with all 184 actionable tasks executed. The arm64 host cannot run
+the x64 iOS binaries, but their test sources compiled and linked; ABI, strict
+Dokka, Android compilation, and all declared iOS target compilation/linkage
+passed. Release/consumer checks, protected PR gate, and merge-tree identity
+will be recorded at the workstream boundary; until then this section does not
+claim hosted verification.
+
+There is no public API/ABI, Maven coordinate, secure-v2 or LAN wire change,
+platform-floor change, or change to any immutable release artifact. Issues
+#21 and #43 now have no known repository-side relay/removal prerequisite, but
+remain open until `LAN-T01` supplies real Android long-idle, null/stub callback,
+graceful/abrupt departure, UI-timing, and packet evidence.
 
 ## Apple LAN remediation workstream evidence
 

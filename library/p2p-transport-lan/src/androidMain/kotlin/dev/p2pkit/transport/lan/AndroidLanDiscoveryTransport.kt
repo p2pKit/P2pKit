@@ -27,11 +27,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -149,12 +146,8 @@ internal class AndroidLanDiscoveryTransport(
 
     override val type: TransportKind = TransportKind.LAN
 
-    private val _events = MutableSharedFlow<PeerEvent>(
-        replay = 0,
-        extraBufferCapacity = 256,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
-    )
-    override val events: Flow<PeerEvent> = _events.asSharedFlow()
+    private val peerEventRelay = ReliablePeerEventRelay()
+    override val events: Flow<PeerEvent> = peerEventRelay.events
 
     private val wifi: WifiManager? =
         context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
@@ -261,7 +254,8 @@ internal class AndroidLanDiscoveryTransport(
             // native detach can fail. Drain transport-managed peer ownership
             // even on that retained-for-retry failure, or stale peers would
             // survive without any active callback able to remove them.
-            admittedServices.drain().forEach { _events.tryEmit(PeerEvent.Lost(it)) }
+            admittedServices.drain()
+            peerEventRelay.clear()
         }
     }
 
@@ -606,9 +600,9 @@ internal class AndroidLanDiscoveryTransport(
                 Log.d(
                     TAG,
                     "serviceRemoved: instance=${sanitizeLanDiagnostic(event.name)} " +
-                        "pid=${peerId.value.take(8)} — emitting Lost"
+                        "pid=${peerId.value.take(8)} — withdrawing peer state"
                 )
-                _events.tryEmit(PeerEvent.Lost(peerId))
+                peerEventRelay.remove(peerId)
             }
         }
 
@@ -644,9 +638,9 @@ internal class AndroidLanDiscoveryTransport(
                     TAG,
                     "serviceResolved: pid=${record.peerId.value.take(8)} " +
                         "candidates=[${candidates.joinToString(",") { it.hostAddress ?: it.toString() }}] " +
-                        "ordered=${hosts.joinToString(",") { "$it:$port" }} — emitting PeerEvent.Found"
+                        "ordered=${hosts.joinToString(",") { "$it:$port" }} — publishing peer state"
                 )
-                _events.tryEmit(PeerEvent.Found(internalPeer))
+                peerEventRelay.upsert(internalPeer)
             }
         }
     }

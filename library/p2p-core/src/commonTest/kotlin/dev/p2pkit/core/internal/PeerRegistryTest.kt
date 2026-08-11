@@ -12,6 +12,7 @@ import dev.p2pkit.core.transport.PeerEvent
 import dev.p2pkit.core.transport.TransportHint
 import dev.p2pkit.core.testfixtures.RecordingLogger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -176,6 +177,96 @@ class PeerRegistryTest {
                     "retrying" in it.message
             },
             "callback-thrown CancellationException must be diagnosed and recollected"
+        )
+    }
+
+    @Test
+    fun failedDiscoveryStreamWithdrawsOnlyItsSourceBeforeSnapshotReplay() = runTest {
+        val interrupted = BoundaryTerminatingDiscovery(
+            initialEvent = PeerEvent.Found(peer("old-source-peer")),
+            recoveredEvent = PeerEvent.Found(peer("replayed-current-peer")),
+            firstFailure = IllegalStateException("injected discovery stream failure")
+        )
+        val unaffected = FakeDiscovery(TransportKind.BLE)
+        val registry = PeerRegistry(
+            discoveryTransports = listOf(interrupted, unaffected),
+            scope = backgroundScope,
+            clock = { testScheduler.currentTime },
+            monotonicClock = { testScheduler.currentTime },
+            staleTimeoutMillis = 60_000,
+            evictionPollMillis = 60_000
+        )
+
+        registry.start()
+        runCurrent()
+        unaffected.emit(
+            PeerEvent.Found(
+                peer("unaffected-peer").copy(
+                    publicPeer = peer("unaffected-peer").publicPeer.copy(
+                        supportedTransports = setOf(TransportKind.BLE)
+                    )
+                )
+            )
+        )
+        runCurrent()
+        assertEquals(
+            setOf(PeerId("old-source-peer"), PeerId("unaffected-peer")),
+            registry.peers.value.map { it.id }.toSet()
+        )
+
+        interrupted.finishCurrentCollection.complete(Unit)
+        runCurrent()
+
+        // Failure is not evidence that the old transport-managed peer is
+        // still live. Only the failed source is withdrawn; the independent
+        // BLE contribution remains throughout the retry backoff.
+        assertEquals(
+            listOf(PeerId("unaffected-peer")),
+            registry.peers.value.map { it.id }
+        )
+
+        advanceTimeBy(100)
+        runCurrent()
+        assertEquals(2, interrupted.collections)
+        assertEquals(
+            setOf(PeerId("replayed-current-peer"), PeerId("unaffected-peer")),
+            registry.peers.value.map { it.id }.toSet()
+        )
+    }
+
+    @Test
+    fun completedDiscoveryStreamWithdrawsItsOldSourceBeforeSnapshotReplay() = runTest {
+        val completed = BoundaryTerminatingDiscovery(
+            initialEvent = PeerEvent.Found(peer("old-source-peer")),
+            recoveredEvent = PeerEvent.Found(peer("replayed-current-peer")),
+            firstFailure = null
+        )
+        val registry = PeerRegistry(
+            discoveryTransports = listOf(completed),
+            scope = backgroundScope,
+            clock = { testScheduler.currentTime },
+            monotonicClock = { testScheduler.currentTime },
+            staleTimeoutMillis = 60_000,
+            evictionPollMillis = 60_000
+        )
+
+        registry.start()
+        runCurrent()
+        assertEquals(
+            listOf(PeerId("old-source-peer")),
+            registry.peers.value.map { it.id }
+        )
+
+        completed.finishCurrentCollection.complete(Unit)
+        runCurrent()
+        assertTrue(registry.peers.value.isEmpty())
+
+        advanceTimeBy(100)
+        runCurrent()
+        assertEquals(2, completed.collections)
+        assertEquals(
+            listOf(PeerId("replayed-current-peer")),
+            registry.peers.value.map { it.id }
         )
     }
 
@@ -800,6 +891,35 @@ class PeerRegistryTest {
             get() = flow {
                 collections += 1
                 if (collections == 1) {
+                    firstFailure?.let { throw it }
+                    return@flow
+                }
+                emit(recoveredEvent)
+                awaitCancellation()
+            }
+
+        override suspend fun startAdvertising(localPeer: LocalPeerInfo) = Unit
+        override suspend fun stopAdvertising() = Unit
+        override suspend fun startDiscovery() = Unit
+        override suspend fun stopDiscovery() = Unit
+    }
+
+    private class BoundaryTerminatingDiscovery(
+        private val initialEvent: PeerEvent,
+        private val recoveredEvent: PeerEvent,
+        private val firstFailure: Throwable?
+    ) : DiscoveryTransport {
+        override val type: TransportKind = TransportKind.LAN
+        val finishCurrentCollection = CompletableDeferred<Unit>()
+        var collections: Int = 0
+            private set
+
+        override val events: Flow<PeerEvent>
+            get() = flow {
+                collections += 1
+                if (collections == 1) {
+                    emit(initialEvent)
+                    finishCurrentCollection.await()
                     firstFailure?.let { throw it }
                     return@flow
                 }
