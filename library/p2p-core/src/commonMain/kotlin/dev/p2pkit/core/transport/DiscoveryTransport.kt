@@ -8,7 +8,10 @@ import kotlinx.coroutines.flow.Flow
  *
  * Discovery and data transport are separate concerns: a transport may
  * implement either, both, or neither. Internal contract — apps only see
- * the aggregated [dev.p2pkit.core.P2pKit.peers] flow.
+ * the aggregated [dev.p2pkit.core.P2pKit.peers] flow. Events cross an
+ * untrusted SPI boundary: the core validates and bounds retained fields,
+ * treats every advertised fingerprint as an untrusted discovery claim, and
+ * does not honor event-supplied manual/application-trust provenance.
  */
 public interface DiscoveryTransport {
     public val type: TransportKind

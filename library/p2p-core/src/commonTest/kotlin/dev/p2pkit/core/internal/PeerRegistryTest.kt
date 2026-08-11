@@ -2,14 +2,19 @@ package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.protocol.HelloPayload
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.LocalPeerInfo
+import dev.p2pkit.core.transport.PeerAuthenticationHint
 import dev.p2pkit.core.transport.PeerEvent
+import dev.p2pkit.core.transport.PeerOrigin
 import dev.p2pkit.core.transport.TransportHint
+import dev.p2pkit.core.transport.TransportSecurityProfile
 import dev.p2pkit.core.testfixtures.RecordingLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -18,9 +23,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -28,6 +36,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -89,6 +98,345 @@ class PeerRegistryTest {
                 runCatching { (published as MutableList<Peer>).clear() }.isFailure
             )
             assertEquals(listOf(PeerId("published")), registry.peers.value.map { it.id })
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun delayedOlderPublicationCannotOverwriteNewerRegistryState() {
+        val supervisor = SupervisorJob()
+        try {
+            lateinit var registry: PeerRegistry
+            var removalInjected = false
+            registry = PeerRegistry(
+                discoveryTransports = emptyList(),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2,
+                beforePeerPublicationForTest = { generation ->
+                    if (generation == 1L && !removalInjected) {
+                        removalInjected = true
+                        registry.processEvent(PeerEvent.Lost(PeerId("publication-race")))
+                    }
+                }
+            )
+
+            registry.processEvent(PeerEvent.Found(peer("publication-race")))
+
+            assertTrue(removalInjected)
+            assertNull(registry.internalPeer(PeerId("publication-race")))
+            assertTrue(
+                registry.peers.value.isEmpty(),
+                "a delayed generation must not republish a peer removed by a newer generation"
+            )
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun unchangedDiscoveryHeartbeatDoesNotReemitPublicPeerList() = runTest {
+        var now = 1_000L
+        val registry = PeerRegistry(
+            discoveryTransports = emptyList(),
+            scope = backgroundScope,
+            clock = { now },
+            monotonicClock = { now },
+            staleTimeoutMillis = 60_000,
+            evictionPollMillis = Long.MAX_VALUE / 2
+        )
+        val emissions = mutableListOf<List<Peer>>()
+        val collector = backgroundScope.launch {
+            registry.peers.collect { peers -> emissions += peers }
+        }
+        runCurrent()
+
+        registry.processEvent(PeerEvent.Found(peer("heartbeat")))
+        runCurrent()
+        now += 1_000L
+        registry.processEvent(PeerEvent.Updated(peer("heartbeat")))
+        runCurrent()
+
+        assertEquals(listOf(0, 1), emissions.map(List<Peer>::size))
+        assertEquals(2_000L, registry.lastSeen(PeerId("heartbeat")))
+        collector.cancel()
+    }
+
+    @Test
+    fun discoveryCannotMintManualOriginOrTrustedApplicationPin() {
+        val supervisor = SupervisorJob()
+        try {
+            val fingerprint = PeerFingerprint.parse("p2f1-${"a".repeat(52)}")
+            val registry = PeerRegistry(
+                discoveryTransports = emptyList(),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2
+            )
+            registry.processEvent(
+                PeerEvent.Found(
+                    peer("untrusted-provenance").copy(
+                        origin = PeerOrigin.Manual,
+                        authenticationHint = PeerAuthenticationHint.TrustedApplicationPin(fingerprint)
+                    )
+                )
+            )
+
+            val retained = assertNotNull(registry.internalPeer(PeerId("untrusted-provenance")))
+            assertEquals(PeerOrigin.Discovered, retained.origin)
+            assertEquals(
+                fingerprint,
+                assertIs<PeerAuthenticationHint.UntrustedDiscoveryClaim>(
+                    retained.authenticationHint
+                ).fingerprint
+            )
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun trustedManualPinSurvivesAnUntrustedDiscoveryContributionForTheSamePeer() {
+        val supervisor = SupervisorJob()
+        try {
+            val applicationPin = PeerFingerprint.parse("p2f1-${"a".repeat(52)}")
+            val discoveryClaim = PeerFingerprint.parse("p2f1-${"a".repeat(51)}q")
+            val peerId = PeerId("pinned-peer")
+            val registry = PeerRegistry(
+                discoveryTransports = emptyList(),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2,
+                securityProfile = TransportSecurityProfile.AuthenticatedV2,
+                peerIdFromFingerprint = { peerId }
+            )
+            registry.registerManualPeer(
+                host = "192.0.2.101",
+                port = 9_101,
+                expectedFingerprint = applicationPin
+            )
+            registry.processEvent(
+                PeerEvent.Found(
+                    peer(peerId.value).copy(
+                        authenticationHint = PeerAuthenticationHint.TrustedApplicationPin(discoveryClaim)
+                    )
+                )
+            )
+
+            val retained = assertNotNull(registry.internalPeer(peerId))
+            assertEquals(PeerOrigin.Manual, retained.origin)
+            assertEquals(
+                applicationPin,
+                assertIs<PeerAuthenticationHint.TrustedApplicationPin>(
+                    retained.authenticationHint
+                ).fingerprint
+            )
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun malformedDiscoveryEventsAreRejectedWithBoundedValueSafeDiagnostics() {
+        val supervisor = SupervisorJob()
+        try {
+            val logger = RecordingLogger()
+            val sensitiveMarker = "must-not-appear-in-log"
+            val registry = PeerRegistry(
+                discoveryTransports = emptyList(),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2,
+                logger = logger
+            )
+            val malformed = peer("malformed").copy(
+                transportHints = listOf(
+                    TransportHint(
+                        type = TransportKind.LAN,
+                        host = "$sensitiveMarker example",
+                        port = 9_000
+                    )
+                )
+            )
+            val invalidPeers = listOf(
+                malformed,
+                peer("x".repeat(HelloPayload.MAX_FIELD_LEN + 1)),
+                peer("invalid-name").copy(
+                    publicPeer = peer("invalid-name").publicPeer.copy(name = "bad\u0000name")
+                ),
+                peer("too-many-hints").copy(
+                    transportHints = List(33) { TransportHint(TransportKind.LAN) }
+                ),
+                peer("invalid-port").copy(
+                    transportHints = listOf(TransportHint(TransportKind.LAN, port = 0))
+                ),
+                peer("too-much-metadata").copy(
+                    transportHints = listOf(
+                        TransportHint(
+                            TransportKind.LAN,
+                            metadata = (0..16).associate { "key-$it" to "value" }
+                        )
+                    )
+                ),
+                peer("blank-metadata-key").copy(
+                    transportHints = listOf(
+                        TransportHint(TransportKind.LAN, metadata = mapOf("" to "value"))
+                    )
+                ),
+                peer("invalid-metadata-value").copy(
+                    transportHints = listOf(
+                        TransportHint(TransportKind.LAN, metadata = mapOf("key" to "bad\u0000value"))
+                    )
+                )
+            )
+
+            invalidPeers.forEach { registry.processEvent(PeerEvent.Found(it)) }
+            registry.processEvent(PeerEvent.Found(malformed))
+            registry.processEvent(PeerEvent.Lost(PeerId("$sensitiveMarker\u0000")))
+
+            assertTrue(registry.peers.value.isEmpty())
+            assertEquals(listOf("Rejected an invalid discovery event"), logger.warnings)
+            assertTrue(logger.entries.none { sensitiveMarker in it.message })
+            assertTrue(logger.entries.none { it.throwable != null })
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun discoveryCapacityBoundsDistinctPeersWhileAllowingUpdatesAndReclamation() {
+        val supervisor = SupervisorJob()
+        try {
+            var now = 1_000L
+            val logger = RecordingLogger()
+            val registry = PeerRegistry(
+                discoveryTransports = emptyList(),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { now },
+                monotonicClock = { now },
+                staleTimeoutMillis = 10L,
+                evictionPollMillis = Long.MAX_VALUE / 2,
+                logger = logger,
+                maxDiscoveredPeers = 2
+            )
+            val manual = registry.registerManualPeer("192.0.2.100", 9_100)
+            registry.processEvent(PeerEvent.Found(peer("capacity-one")))
+            registry.processEvent(PeerEvent.Found(peer("capacity-two")))
+            registry.processEvent(PeerEvent.Found(peer("capacity-three")))
+
+            assertEquals(
+                setOf(manual.id, PeerId("capacity-one"), PeerId("capacity-two")),
+                registry.peers.value.map(Peer::id).toSet()
+            )
+            now += 1L
+            registry.processEvent(PeerEvent.Updated(peer("capacity-one", "updated-at-capacity")))
+            assertEquals(
+                "updated-at-capacity",
+                registry.peers.value.single { it.id == PeerId("capacity-one") }.name
+            )
+
+            registry.processEvent(PeerEvent.Lost(PeerId("capacity-two")))
+            registry.processEvent(PeerEvent.Found(peer("capacity-three")))
+            assertTrue(registry.peers.value.any { it.id == PeerId("capacity-three") })
+
+            registry.processEvent(PeerEvent.Found(peer("capacity-four")))
+            now += 11L
+            registry.evictStalePeers()
+            registry.processEvent(PeerEvent.Found(peer("capacity-four")))
+            assertEquals(
+                setOf(manual.id, PeerId("capacity-four")),
+                registry.peers.value.map(Peer::id).toSet()
+            )
+            assertEquals(
+                listOf("Rejected a discovery event because peer capacity is exhausted"),
+                logger.warnings
+            )
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun discoveryCapacityCountsOnePeerAcrossSourcesUntilItsFinalContributionIsLost() = runBlocking {
+        val supervisor = SupervisorJob()
+        try {
+            val lan = FakeDiscovery(TransportKind.LAN)
+            val ble = FakeDiscovery(TransportKind.BLE)
+            val registry = PeerRegistry(
+                discoveryTransports = listOf(lan, ble),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2,
+                maxDiscoveredPeers = 1
+            )
+            registry.start()
+            lan.emit(PeerEvent.Found(peer("shared-capacity")))
+            ble.emit(
+                PeerEvent.Found(
+                    peer("shared-capacity").copy(
+                        publicPeer = peer("shared-capacity").publicPeer.copy(
+                            supportedTransports = setOf(TransportKind.BLE)
+                        )
+                    )
+                )
+            )
+
+            lan.emit(PeerEvent.Lost(PeerId("shared-capacity")))
+            lan.emit(PeerEvent.Found(peer("still-blocked")))
+            assertEquals(
+                listOf(PeerId("shared-capacity")),
+                registry.peers.value.map(Peer::id)
+            )
+
+            ble.emit(PeerEvent.Lost(PeerId("shared-capacity")))
+            lan.emit(PeerEvent.Found(peer("now-admitted")))
+            assertEquals(
+                listOf(PeerId("now-admitted")),
+                registry.peers.value.map(Peer::id)
+            )
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun concurrentDiscoveryFloodCannotOversubscribeCapacity() = runBlocking {
+        val supervisor = SupervisorJob()
+        try {
+            val logger = RecordingLogger()
+            val registry = PeerRegistry(
+                discoveryTransports = emptyList(),
+                scope = CoroutineScope(Dispatchers.Default + supervisor),
+                clock = { 1_000L },
+                staleTimeoutMillis = 60_000,
+                evictionPollMillis = Long.MAX_VALUE / 2,
+                logger = logger,
+                maxDiscoveredPeers = 8
+            )
+            val release = CompletableDeferred<Unit>()
+            val writers = List(128) { index ->
+                async(Dispatchers.Default) {
+                    release.await()
+                    registry.processEvent(PeerEvent.Found(peer("concurrent-$index")))
+                }
+            }
+            release.complete(Unit)
+            writers.awaitAll()
+
+            assertEquals(8, registry.peers.value.size)
+            assertEquals(8, registry.peers.value.map(Peer::id).toSet().size)
+            assertEquals(
+                listOf("Rejected a discovery event because peer capacity is exhausted"),
+                logger.warnings
+            )
         } finally {
             supervisor.cancel()
         }
@@ -177,6 +525,49 @@ class PeerRegistryTest {
                     "retrying" in it.message
             },
             "callback-thrown CancellationException must be diagnosed and recollected"
+        )
+    }
+
+    @Test
+    fun malformedEventsCannotResetDiscoveryRecollectionBackoff() = runTest {
+        val transport = InvalidCompletingDiscovery(
+            invalidEvent = PeerEvent.Found(
+                peer("invalid-backoff").copy(
+                    publicPeer = peer("invalid-backoff").publicPeer.copy(name = "bad\u0000name")
+                )
+            ),
+            recoveredEvent = PeerEvent.Found(peer("valid-after-backoff"))
+        )
+        val registry = PeerRegistry(
+            discoveryTransports = listOf(transport),
+            scope = backgroundScope,
+            clock = { testScheduler.currentTime },
+            monotonicClock = { testScheduler.currentTime },
+            staleTimeoutMillis = 60_000,
+            evictionPollMillis = 60_000
+        )
+
+        registry.start()
+        runCurrent()
+        assertEquals(1, transport.collections)
+
+        advanceTimeBy(100L)
+        runCurrent()
+        assertEquals(2, transport.collections)
+        advanceTimeBy(199L)
+        runCurrent()
+        assertEquals(
+            2,
+            transport.collections,
+            "a second invalid-only collection must use the 200 ms backoff"
+        )
+
+        advanceTimeBy(1L)
+        runCurrent()
+        assertEquals(3, transport.collections)
+        assertEquals(
+            listOf(PeerId("valid-after-backoff")),
+            registry.peers.value.map(Peer::id)
         )
     }
 
@@ -921,6 +1312,31 @@ class PeerRegistryTest {
                     emit(initialEvent)
                     finishCurrentCollection.await()
                     firstFailure?.let { throw it }
+                    return@flow
+                }
+                emit(recoveredEvent)
+                awaitCancellation()
+            }
+
+        override suspend fun startAdvertising(localPeer: LocalPeerInfo) = Unit
+        override suspend fun stopAdvertising() = Unit
+        override suspend fun startDiscovery() = Unit
+        override suspend fun stopDiscovery() = Unit
+    }
+
+    private class InvalidCompletingDiscovery(
+        private val invalidEvent: PeerEvent,
+        private val recoveredEvent: PeerEvent
+    ) : DiscoveryTransport {
+        override val type: TransportKind = TransportKind.LAN
+        var collections: Int = 0
+            private set
+
+        override val events: Flow<PeerEvent>
+            get() = flow {
+                collections += 1
+                if (collections <= 2) {
+                    emit(invalidEvent)
                     return@flow
                 }
                 emit(recoveredEvent)

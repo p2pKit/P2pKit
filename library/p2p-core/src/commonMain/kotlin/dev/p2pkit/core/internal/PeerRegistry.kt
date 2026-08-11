@@ -25,13 +25,14 @@ import kotlin.uuid.Uuid
 import kotlin.jvm.JvmInline
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -51,6 +52,10 @@ import kotlinx.coroutines.launch
  * @param monotonicClock Monotonic elapsed-time source used for staleness. It
  *   must not jump when the wall clock is corrected. P2pKitImpl wires both
  *   platform clocks; tests inject fakes.
+ * @param maxDiscoveredPeers Maximum number of distinct peer identifiers that
+ *   discovery sources may retain at once. Manual registrations do not consume
+ *   this budget, and updates for an already retained identifier remain valid
+ *   while the budget is full.
  */
 @OptIn(ExperimentalP2pApi::class)
 internal class PeerRegistry(
@@ -63,8 +68,14 @@ internal class PeerRegistry(
     private val logger: P2pLogger = P2pLogger.NoOp,
     private val securityProfile: TransportSecurityProfile = TransportSecurityProfile.LegacyPlaintextV1,
     private val peerIdFromFingerprint: ((PeerFingerprint) -> PeerId)? = null,
-    private val beforeManualPeerCompareAndSetForTest: (() -> Unit)? = null
+    private val maxDiscoveredPeers: Int = MAX_DISCOVERED_PEERS,
+    private val beforeManualPeerCompareAndSetForTest: (() -> Unit)? = null,
+    private val beforePeerPublicationForTest: ((Long) -> Unit)? = null
 ) : ManualPeerRegistrar {
+
+    init {
+        require(maxDiscoveredPeers > 0) { "maxDiscoveredPeers must be positive" }
+    }
 
     /**
      * The terminal seal and tracked entries share one compare-and-set record.
@@ -73,15 +84,17 @@ internal class PeerRegistry(
      */
     private val registryState: MutableStateFlow<PeerRegistryState> =
         MutableStateFlow(PeerRegistryState())
-    private val _peers: MutableStateFlow<List<Peer>> =
-        MutableStateFlow(immutableListSnapshot(emptyList()))
+    private val peerPublication: MutableStateFlow<PeerPublication> =
+        MutableStateFlow(PeerPublication(0L, immutableListSnapshot(emptyList())))
+    private val loggedDiscoveryRejections: MutableStateFlow<Set<DiscoveryRejection>> =
+        MutableStateFlow(emptySet())
 
     /**
      * Public-facing peer list. Updated synchronously after every accepted
      * [PeerEvent]; emits a new value only when the visible peer set actually
      * changes (heartbeat-only updates to `lastSeen` do not churn this flow).
      */
-    val peers: StateFlow<List<Peer>> = _peers.asStateFlow()
+    val peers: StateFlow<List<Peer>> = PeerListStateFlow(peerPublication)
 
     fun lastSeen(peerId: PeerId): Long? =
         registryState.value.tracked[peerId]?.lastSeenAtMillis
@@ -122,9 +135,10 @@ internal class PeerRegistry(
             var collectionFailure: Throwable? = null
             try {
                 transport.events.collect { event ->
-                    observedEvent = true
-                    consecutiveEmptyFailures = 0
-                    processEvent(source, event)
+                    if (processEvent(source, event)) {
+                        observedEvent = true
+                        consecutiveEmptyFailures = 0
+                    }
                 }
                 currentCoroutineContext().ensureActive()
             } catch (cancelled: CancellationException) {
@@ -160,48 +174,195 @@ internal class PeerRegistry(
         }
     }
 
-    internal fun processEvent(event: PeerEvent) = processEvent(DIRECT_SOURCE, event)
-
-    private fun processEvent(source: DiscoverySource, event: PeerEvent) {
-        registryState.update { current ->
-            if (current.closed) {
-                current
-            } else {
-                current.copy(
-                    tracked = when (event) {
-                        is PeerEvent.Found ->
-                            current.tracked.upsertDiscoveredPeer(source, event.peer)
-                        is PeerEvent.Updated ->
-                            current.tracked.upsertDiscoveredPeer(source, event.peer)
-                        is PeerEvent.Lost ->
-                            current.tracked.removeDiscoveryContribution(source, event.peerId)
-                    }
-                )
-            }
-        }
-        publishPeers()
+    internal fun processEvent(event: PeerEvent) {
+        processEvent(DIRECT_SOURCE, event)
     }
 
-    private fun publishPeers() {
-        val snapshot = registryState.value
+    /** Return true only when a valid event reached the registry boundary. */
+    private fun processEvent(source: DiscoverySource, event: PeerEvent): Boolean {
+        if (registryState.value.closed) return false
+        val admitted = admitDiscoveryEvent(event) ?: run {
+            warnDiscoveryRejectionOnce(DiscoveryRejection.InvalidEvent)
+            return false
+        }
+        val observation = if (admitted is AdmittedDiscoveryEvent.Upsert) {
+            DiscoveryObservation(clock(), monotonicClock())
+        } else {
+            null
+        }
+        while (true) {
+            val current = registryState.value
+            if (current.closed) return false
+            val next = when (admitted) {
+                is AdmittedDiscoveryEvent.Upsert -> {
+                    val previous = current.tracked[admitted.peer.publicPeer.id]
+                    val addsDistinctPeer = previous?.discoveredBy.isNullOrEmpty()
+                    if (addsDistinctPeer && current.discoveredPeerCount >= maxDiscoveredPeers) {
+                        // Verify the capacity decision against the exact state
+                        // snapshot. The generation prevents an ABA-equivalent
+                        // map from making this check accidentally succeed.
+                        if (registryState.compareAndSet(current, current)) {
+                            warnDiscoveryRejectionOnce(DiscoveryRejection.CapacityExhausted)
+                            return false
+                        }
+                        continue
+                    }
+                    current.withTracked(
+                        tracked = current.tracked.upsertDiscoveredPeer(
+                            source = source,
+                            discovered = admitted.peer,
+                            lastSeenAtMillis = checkNotNull(observation).epochMillis,
+                            observedAtMonotonicMillis = observation.monotonicMillis
+                        ),
+                        discoveredPeerCount = current.discoveredPeerCount +
+                            if (addsDistinctPeer) 1 else 0
+                    )
+                }
+                is AdmittedDiscoveryEvent.Lost -> {
+                    val previous = current.tracked[admitted.peerId]
+                    val removesDistinctPeer = previous?.discoveredBy?.let { discoveredBy ->
+                        source in discoveredBy && discoveredBy.size == 1
+                    } == true
+                    current.withTracked(
+                        tracked = current.tracked.removeDiscoveryContribution(source, admitted.peerId),
+                        discoveredPeerCount = current.discoveredPeerCount -
+                            if (removesDistinctPeer) 1 else 0
+                    )
+                }
+            }
+            if (next === current) return true
+            if (registryState.compareAndSet(current, next)) {
+                publishPeers(next)
+                return true
+            }
+        }
+    }
+
+    /** Publish only if [snapshot] is newer than every state already exposed. */
+    private fun publishPeers(snapshot: PeerRegistryState) {
+        if (peerPublication.value.generation >= snapshot.generation) return
         val newList = if (snapshot.closed) {
             emptyList()
         } else {
             snapshot.tracked.values.map { it.internalPeer.publicPeer }
         }
-        if (_peers.value != newList) _peers.value = immutableListSnapshot(newList)
-        // `_peers` is intentionally de-noised separately from lastSeen. If a
-        // close races the calculation above, make the terminal empty snapshot
-        // authoritative regardless of which writer reached `_peers` first.
-        if (registryState.value.closed && _peers.value.isNotEmpty()) {
-            _peers.value = immutableListSnapshot(emptyList())
+        val candidate = PeerPublication(snapshot.generation, immutableListSnapshot(newList))
+        beforePeerPublicationForTest?.invoke(snapshot.generation)
+        while (true) {
+            val published = peerPublication.value
+            if (published.generation >= candidate.generation) return
+            if (peerPublication.compareAndSet(published, candidate)) return
+        }
+    }
+
+    /**
+     * Validate the public discovery SPI before retaining any caller-controlled
+     * data. Every fingerprint arriving here remains a discovery claim even if
+     * a custom transport incorrectly labels it as an application pin.
+     */
+    private fun admitDiscoveryEvent(event: PeerEvent): AdmittedDiscoveryEvent? = try {
+        when (event) {
+            is PeerEvent.Found -> AdmittedDiscoveryEvent.Upsert(event.peer.validatedDiscoverySnapshot())
+            is PeerEvent.Updated -> AdmittedDiscoveryEvent.Upsert(event.peer.validatedDiscoverySnapshot())
+            is PeerEvent.Lost -> {
+                validateDiscoveryPeerId(event.peerId)
+                AdmittedDiscoveryEvent.Lost(event.peerId)
+            }
+        }
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+
+    private fun InternalPeer.validatedDiscoverySnapshot(): InternalPeer {
+        validateDiscoveryPeerId(publicPeer.id)
+        validateWireText(
+            publicPeer.name,
+            "discovery peer name",
+            HelloPayload.MAX_FIELD_LEN,
+            HelloPayload.MAX_FIELD_UTF8_BYTES,
+            requireNonBlank = true
+        )
+        require(publicPeer.supportedTransports.size <= HelloPayload.MAX_TRANSPORTS) {
+            "discovery peer advertised too many transports"
+        }
+        require(transportHints.size <= MAX_DISCOVERY_HINTS) {
+            "discovery peer supplied too many transport hints"
+        }
+        transportHints.forEach { hint ->
+            hint.host?.let(::validateDiscoveryHost)
+            hint.port?.let { port ->
+                require(port in 1..65_535) { "discovery transport port is out of range" }
+            }
+            require(hint.metadata.size <= MAX_DISCOVERY_METADATA_ENTRIES) {
+                "discovery transport hint supplied too much metadata"
+            }
+            hint.metadata.forEach { (key, value) ->
+                validateWireText(
+                    key,
+                    "discovery metadata key",
+                    MAX_DISCOVERY_METADATA_KEY_CHARS,
+                    MAX_DISCOVERY_METADATA_KEY_UTF8_BYTES,
+                    requireNonBlank = true
+                )
+                validateWireText(
+                    value,
+                    "discovery metadata value",
+                    MAX_DISCOVERY_METADATA_VALUE_CHARS,
+                    MAX_DISCOVERY_METADATA_VALUE_UTF8_BYTES
+                )
+            }
+        }
+        val untrustedAuthenticationHint = authenticationHint?.let { hint ->
+            PeerAuthenticationHint.UntrustedDiscoveryClaim(hint.fingerprint)
+        }
+        return copy(
+            publicPeer = publicPeer.copy(supportedTransports = publicPeer.supportedTransports.toSet()),
+            transportHints = transportHints.map { hint -> hint.copy(metadata = hint.metadata.toMap()) },
+            origin = PeerOrigin.Discovered,
+            authenticationHint = untrustedAuthenticationHint
+        )
+    }
+
+    private fun validateDiscoveryPeerId(peerId: PeerId) {
+        validateWireText(
+            peerId.value,
+            "discovery peer id",
+            HelloPayload.MAX_FIELD_LEN,
+            HelloPayload.MAX_FIELD_UTF8_BYTES,
+            requireNonBlank = true
+        )
+    }
+
+    private fun validateDiscoveryHost(host: String) {
+        validateWireText(
+            host,
+            "discovery transport host",
+            MAX_DISCOVERY_HOST_CHARS,
+            MAX_DISCOVERY_HOST_UTF8_BYTES,
+            requireNonBlank = true
+        )
+        require(host.none(Char::isWhitespace)) {
+            "discovery transport host must not contain whitespace"
+        }
+    }
+
+    private fun warnDiscoveryRejectionOnce(rejection: DiscoveryRejection) {
+        while (true) {
+            val logged = loggedDiscoveryRejections.value
+            if (rejection in logged) return
+            if (loggedDiscoveryRejections.compareAndSet(logged, logged + rejection)) {
+                logger.warn(rejection.message)
+                return
+            }
         }
     }
 
     /** A discovery claim can refresh routing, but it can never erase an application-supplied manual pin. */
     private fun Map<PeerId, TrackedPeer>.upsertDiscoveredPeer(
         source: DiscoverySource,
-        discovered: InternalPeer
+        discovered: InternalPeer,
+        lastSeenAtMillis: Long,
+        observedAtMonotonicMillis: Long
     ): Map<PeerId, TrackedPeer> {
         val peerId = discovered.publicPeer.id
         val previous = this[peerId] ?: TrackedPeer()
@@ -209,21 +370,14 @@ internal class PeerRegistry(
             peerId to previous.copy(
                 discoveredBy = previous.discoveredBy + (
                     source to DiscoveryContribution(
-                        internalPeer = discovered.snapshotForRegistry(),
-                        lastSeenAtMillis = clock(),
-                        observedAtMonotonicMillis = monotonicClock()
+                        internalPeer = discovered,
+                        lastSeenAtMillis = lastSeenAtMillis,
+                        observedAtMonotonicMillis = observedAtMonotonicMillis
                     )
                 )
             )
         )
     }
-
-    private fun InternalPeer.snapshotForRegistry(): InternalPeer = copy(
-        publicPeer = publicPeer.copy(supportedTransports = publicPeer.supportedTransports.toSet()),
-        transportHints = transportHints.map { hint ->
-            hint.copy(metadata = hint.metadata.toMap())
-        }
-    )
 
     private fun Map<PeerId, TrackedPeer>.removeDiscoveryContribution(
         source: DiscoverySource,
@@ -236,38 +390,42 @@ internal class PeerRegistry(
 
     /** Withdraw every contribution owned by one failed/completed stream. */
     private fun removeDiscoverySource(source: DiscoverySource) {
-        registryState.update { current ->
-            if (current.closed) return@update current
-            current.copy(
-                tracked = current.tracked.mapValues { (_, trackedPeer) ->
-                    trackedPeer.copy(discoveredBy = trackedPeer.discoveredBy - source)
-                }.filterValues { trackedPeer ->
-                    !trackedPeer.isEmpty
-                }
+        val committed = registryState.updateAndGet { current ->
+            if (current.closed) return@updateAndGet current
+            val tracked = current.tracked.mapValues { (_, trackedPeer) ->
+                trackedPeer.copy(discoveredBy = trackedPeer.discoveredBy - source)
+            }.filterValues { trackedPeer ->
+                !trackedPeer.isEmpty
+            }
+            current.withTracked(
+                tracked = tracked,
+                discoveredPeerCount = tracked.values.count { it.discoveredBy.isNotEmpty() }
             )
         }
-        publishPeers()
+        publishPeers(committed)
     }
 
     internal fun evictStalePeers() {
         val now = monotonicClock()
-        registryState.update { current ->
-            if (current.closed) return@update current
-            current.copy(
-                tracked = current.tracked.mapValues { (_, trackedPeer) ->
-                    trackedPeer.copy(
-                        discoveredBy = trackedPeer.discoveredBy.filterValues { contribution ->
-                            contribution.internalPeer.discoveryLifetime() ==
-                                DiscoveryLifetime.TransportManaged ||
-                                now - contribution.observedAtMonotonicMillis <= staleTimeoutMillis
-                        }
-                    )
-                }.filterValues { trackedPeer ->
-                    !trackedPeer.isEmpty
-                }
+        val committed = registryState.updateAndGet { current ->
+            if (current.closed) return@updateAndGet current
+            val tracked = current.tracked.mapValues { (_, trackedPeer) ->
+                trackedPeer.copy(
+                    discoveredBy = trackedPeer.discoveredBy.filterValues { contribution ->
+                        contribution.internalPeer.discoveryLifetime() ==
+                            DiscoveryLifetime.TransportManaged ||
+                            now - contribution.observedAtMonotonicMillis <= staleTimeoutMillis
+                    }
+                )
+            }.filterValues { trackedPeer ->
+                !trackedPeer.isEmpty
+            }
+            current.withTracked(
+                tracked = tracked,
+                discoveredPeerCount = tracked.values.count { it.discoveredBy.isNotEmpty() }
             )
         }
-        publishPeers()
+        publishPeers(committed)
     }
 
     private fun currentOpenRegistryState(): PeerRegistryState {
@@ -354,8 +512,12 @@ internal class PeerRegistry(
                 )
                 val updated = current + (existingId to existing.copy(manual = refreshedManual))
                 beforeManualPeerCompareAndSetForTest?.invoke()
-                if (registryState.compareAndSet(currentState, currentState.copy(tracked = updated))) {
-                    publishPeers()
+                val updatedState = currentState.withTracked(
+                    tracked = updated,
+                    discoveredPeerCount = currentState.discoveredPeerCount
+                )
+                if (registryState.compareAndSet(currentState, updatedState)) {
+                    publishPeers(updatedState)
                     return checkNotNull(updated[existingId]).internalPeer.publicPeer
                 }
                 continue
@@ -397,8 +559,12 @@ internal class PeerRegistry(
                 peerId to previous.copy(manual = ManualContribution(internal, clock()))
             )
             beforeManualPeerCompareAndSetForTest?.invoke()
-            if (registryState.compareAndSet(currentState, currentState.copy(tracked = updated))) {
-                publishPeers()
+            val updatedState = currentState.withTracked(
+                tracked = updated,
+                discoveredPeerCount = currentState.discoveredPeerCount
+            )
+            if (registryState.compareAndSet(currentState, updatedState)) {
+                publishPeers(updatedState)
                 return publicPeer
             }
         }
@@ -406,14 +572,19 @@ internal class PeerRegistry(
 
     /** Seal the process-local registry and publish an empty terminal snapshot. */
     fun close() {
-        registryState.update { current ->
+        val committed = registryState.updateAndGet { current ->
             if (current.closed && current.tracked.isEmpty()) {
                 current
             } else {
-                PeerRegistryState(closed = true)
+                current.copy(
+                    closed = true,
+                    tracked = emptyMap(),
+                    discoveredPeerCount = 0,
+                    generation = current.generation + 1
+                )
             }
         }
-        _peers.value = immutableListSnapshot(emptyList())
+        publishPeers(committed)
     }
 
     private fun normalizeManualHost(host: String): String {
@@ -452,10 +623,21 @@ internal class PeerRegistry(
     companion object {
         const val DEFAULT_STALE_TIMEOUT_MS: Long = 15_000
         const val DEFAULT_EVICTION_POLL_MS: Long = 1_000
+        internal const val MAX_DISCOVERED_PEERS: Int = 1_024
         private const val EVENT_RECOLLECT_INITIAL_DELAY_MS: Long = 100
         private const val EVENT_RECOLLECT_MAX_DELAY_MS: Long = 5_000
         private const val MAX_EVENT_RECOLLECT_EXPONENT: Int = 6
         private const val MAX_MANUAL_HOST_CHARS: Int = 253
+        private const val MAX_DISCOVERY_HOST_CHARS: Int = 253
+        private const val MAX_DISCOVERY_HOST_UTF8_BYTES: Int = MAX_DISCOVERY_HOST_CHARS * 4
+        private const val MAX_DISCOVERY_HINTS: Int = 32
+        private const val MAX_DISCOVERY_METADATA_ENTRIES: Int = 16
+        private const val MAX_DISCOVERY_METADATA_KEY_CHARS: Int = 64
+        private const val MAX_DISCOVERY_METADATA_KEY_UTF8_BYTES: Int =
+            MAX_DISCOVERY_METADATA_KEY_CHARS * 4
+        private const val MAX_DISCOVERY_METADATA_VALUE_CHARS: Int = 256
+        private const val MAX_DISCOVERY_METADATA_VALUE_UTF8_BYTES: Int =
+            MAX_DISCOVERY_METADATA_VALUE_CHARS * 4
         private val DIRECT_SOURCE = DiscoverySource(-1)
     }
 }
@@ -465,8 +647,69 @@ private value class DiscoverySource(val index: Int)
 
 private data class PeerRegistryState(
     val closed: Boolean = false,
-    val tracked: Map<PeerId, TrackedPeer> = emptyMap()
+    val tracked: Map<PeerId, TrackedPeer> = emptyMap(),
+    val discoveredPeerCount: Int = 0,
+    val generation: Long = 0L
+) {
+    fun withTracked(
+        tracked: Map<PeerId, TrackedPeer>,
+        discoveredPeerCount: Int
+    ): PeerRegistryState {
+        if (this.tracked == tracked && this.discoveredPeerCount == discoveredPeerCount) return this
+        check(discoveredPeerCount >= 0) { "discovered peer count underflow" }
+        return copy(
+            tracked = tracked,
+            discoveredPeerCount = discoveredPeerCount,
+            generation = generation + 1
+        )
+    }
+}
+
+private sealed interface AdmittedDiscoveryEvent {
+    data class Upsert(val peer: InternalPeer) : AdmittedDiscoveryEvent
+    data class Lost(val peerId: PeerId) : AdmittedDiscoveryEvent
+}
+
+private data class DiscoveryObservation(
+    val epochMillis: Long,
+    val monotonicMillis: Long
 )
+
+private enum class DiscoveryRejection(val message: String) {
+    InvalidEvent("Rejected an invalid discovery event"),
+    CapacityExhausted("Rejected a discovery event because peer capacity is exhausted")
+}
+
+private data class PeerPublication(
+    val generation: Long,
+    val peers: List<Peer>
+)
+
+/**
+ * Projects generation-bearing publications onto the established public state
+ * type while retaining StateFlow's equality de-noising for heartbeat updates.
+ */
+@OptIn(ExperimentalForInheritanceCoroutinesApi::class)
+private class PeerListStateFlow(
+    private val source: StateFlow<PeerPublication>
+) : StateFlow<List<Peer>> {
+    override val value: List<Peer> get() = source.value.peers
+
+    override val replayCache: List<List<Peer>> get() = listOf(value)
+
+    override suspend fun collect(collector: FlowCollector<List<Peer>>): Nothing {
+        var initialized = false
+        var previous: List<Peer> = emptyList()
+        source.collect { publication ->
+            val next = publication.peers
+            if (!initialized || previous != next) {
+                initialized = true
+                previous = next
+                collector.emit(next)
+            }
+        }
+    }
+}
 
 private data class DiscoveryContribution(
     val internalPeer: InternalPeer,
