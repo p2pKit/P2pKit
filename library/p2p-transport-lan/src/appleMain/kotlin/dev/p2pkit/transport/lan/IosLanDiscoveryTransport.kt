@@ -19,11 +19,8 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -109,12 +106,8 @@ internal class IosLanDiscoveryTransport(
 
     override val type: TransportKind = TransportKind.LAN
 
-    private val _events = MutableSharedFlow<PeerEvent>(
-        replay = 0,
-        extraBufferCapacity = 256,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
-    )
-    override val events: Flow<PeerEvent> = _events.asSharedFlow()
+    private val peerEventRelay = ReliablePeerEventRelay()
+    override val events: Flow<PeerEvent> = peerEventRelay.events
 
     private val lock = Mutex()
 
@@ -365,16 +358,21 @@ internal class IosLanDiscoveryTransport(
         cancelPendingBrowserRecoveryLocked()
         announceJob?.cancel()
         announceJob = null
-        withAnnounceCacheLock { announceCache = emptyMap() }
-        endpointRegistry.clear()
-        val lease = browser ?: return@withLock
+        // Retire the native generation, opaque endpoint leases, announce
+        // cache, and core-visible peer state as one ownership transaction.
+        // A queued result callback either commits before this block and is
+        // then withdrawn, or observes the retired generation/host intent and
+        // cannot resurrect a peer after stop.
+        val lease = withAnnounceCacheLock {
+            val current = browser
+            browser = null
+            browserReady = false
+            announceCache = emptyMap()
+            endpointRegistry.clear()
+            peerEventRelay.clear()
+            current
+        } ?: return@withLock
         IosLanDebug.log("browse", "stopDiscovery: cancelling browser")
-        withAnnounceCacheLock {
-            if (browser === lease) {
-                browser = null
-                browserReady = false
-            }
-        }
         nw_browser_cancel(lease.handle)
     }
 
@@ -857,13 +855,13 @@ internal class IosLanDiscoveryTransport(
                 // A generation can become stale between native callback entry
                 // and parsing. Never let that queued result replace current
                 // ownership.
-                generation == browserGeneration && browser?.generation == generation
+                discoveryStartedByHost &&
+                    generation == browserGeneration &&
+                    browser?.generation == generation
             },
             onConfirmed = {
                 endpointRegistry.put(peerId, endpoint, browserGeneration = generation)
-                val event =
-                    if (isUpdate) PeerEvent.Updated(internalPeer) else PeerEvent.Found(internalPeer)
-                _events.tryEmit(event)
+                peerEventRelay.upsert(internalPeer)
             }
         )
         if (!committed) return
@@ -977,7 +975,7 @@ internal class IosLanDiscoveryTransport(
         val peerId = PeerId(pid)
         if (removeCacheEntry) announceCache = announceCache - pid
         endpointRegistry.remove(peerId)
-        _events.tryEmit(PeerEvent.Lost(peerId))
+        peerEventRelay.remove(peerId)
         IosLanDebug.log("browse", "emitLost: $pid")
     }
 

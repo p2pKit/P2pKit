@@ -19,10 +19,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -128,12 +125,8 @@ internal class JvmLanDiscoveryTransport(
 
     override val type: TransportKind = TransportKind.LAN
 
-    private val _events = MutableSharedFlow<PeerEvent>(
-        replay = 0,
-        extraBufferCapacity = 256,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
-    )
-    override val events: Flow<PeerEvent> = _events.asSharedFlow()
+    private val peerEventRelay = ReliablePeerEventRelay()
+    override val events: Flow<PeerEvent> = peerEventRelay.events
 
     /** Shared lifecycle scope used by the platform-neutral coordinator. */
     private val lifecycleScope: CoroutineScope =
@@ -263,7 +256,8 @@ internal class JvmLanDiscoveryTransport(
                 }
             }
         } finally {
-            serviceAdmissions.drain().forEach { _events.tryEmit(PeerEvent.Lost(it)) }
+            serviceAdmissions.drain()
+            peerEventRelay.clear()
         }
     }
 
@@ -331,9 +325,9 @@ internal class JvmLanDiscoveryTransport(
             JvmLanDiag.log(
                 "browse",
                 "serviceRemoved instance=$instanceName " +
-                    "pid=${peerId.value.take(8)} — emitting Lost"
+                    "pid=${peerId.value.take(8)} — withdrawing peer state"
             )
-            _events.tryEmit(PeerEvent.Lost(peerId))
+            peerEventRelay.remove(peerId)
         }
     }
 
@@ -376,9 +370,9 @@ internal class JvmLanDiscoveryTransport(
                 "serviceResolved pid=${record.peerId.value.take(8)} " +
                     "name=${record.deviceName} plat=${record.platform} " +
                     "candidates=[${candidates.joinToString(",") { it.hostAddress }}] " +
-                    "ordered=${hosts.joinToString(",") { "$it:$port" }} — emitting PeerEvent.Found"
+                    "ordered=${hosts.joinToString(",") { "$it:$port" }} — publishing peer state"
             )
-            _events.tryEmit(PeerEvent.Found(internalPeer))
+            peerEventRelay.upsert(internalPeer)
         }
     }
 

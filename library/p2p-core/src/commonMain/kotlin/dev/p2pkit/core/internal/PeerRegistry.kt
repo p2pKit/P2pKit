@@ -105,8 +105,12 @@ internal class PeerRegistry(
 
     /**
      * A third-party discovery flow is an SPI boundary, not a lifetime fuse.
-     * Recollect after ordinary failure or unexpected completion with bounded
-     * backoff; cancellation remains structural and terminates the collector.
+     * An ordinary failure or unexpected completion invalidates that source's
+     * liveness ownership before bounded-backoff recollection. A state-backed
+     * transport replays its complete current set into the fresh collector;
+     * clearing first also prevents a peer removed while the stream was down
+     * from remaining forever under [DiscoveryLifetime.TransportManaged].
+     * Structural cancellation still terminates the collector.
      */
     private suspend fun collectEventsWithRecovery(
         source: DiscoverySource,
@@ -133,6 +137,7 @@ internal class PeerRegistry(
             } catch (failure: Throwable) {
                 collectionFailure = failure
             }
+            removeDiscoverySource(source)
             if (!observedEvent) consecutiveEmptyFailures += 1
             val exponent = minOf(
                 (consecutiveEmptyFailures - 1).coerceAtLeast(0),
@@ -227,6 +232,21 @@ internal class PeerRegistry(
         val previous = this[peerId] ?: return this
         val remaining = previous.copy(discoveredBy = previous.discoveredBy - source)
         return if (remaining.isEmpty) this - peerId else this + (peerId to remaining)
+    }
+
+    /** Withdraw every contribution owned by one failed/completed stream. */
+    private fun removeDiscoverySource(source: DiscoverySource) {
+        registryState.update { current ->
+            if (current.closed) return@update current
+            current.copy(
+                tracked = current.tracked.mapValues { (_, trackedPeer) ->
+                    trackedPeer.copy(discoveredBy = trackedPeer.discoveredBy - source)
+                }.filterValues { trackedPeer ->
+                    !trackedPeer.isEmpty
+                }
+            )
+        }
+        publishPeers()
     }
 
     internal fun evictStalePeers() {
