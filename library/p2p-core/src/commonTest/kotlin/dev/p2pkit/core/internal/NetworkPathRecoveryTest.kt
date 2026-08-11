@@ -198,10 +198,11 @@ class NetworkPathRecoveryTest {
     @Test
     fun pathSatisfiedWakesParkedReconnectHandlerBeforeDelayExpires() = runBlocking<Unit> {
         // Two pairs: the first breaks, the second is what the retry will reach.
-        // The retry delay is set to a value (5 s) that's deliberately longer
-        // than the test would tolerate. If the path-satisfied signal does NOT
-        // wake the handler early, the test would block for 5 s before the
-        // retry fires and reach the withTimeout(2_000) wait below.
+        // The retry delay is deliberately much longer than the test's bounded
+        // observation window. If the path-satisfied signal does NOT wake the
+        // handler early, the retry dial cannot begin before the assertion
+        // fails. Observing the dial separately from the completed handshake
+        // avoids coupling the wake-up invariant to runner scheduling load.
         val pair1 = FakeConnectionPair()
         val pair2 = FakeConnectionPair()
         val queue = ArrayDeque<RawConnection>().apply {
@@ -211,7 +212,7 @@ class NetworkPathRecoveryTest {
         val fake = FakeNetworkPathObserver(initial = NetworkPathStatus.Satisfied)
         val alice = outgoingKit(
             "Alice",
-            ReconnectPolicy.Enabled(maxAttempts = 3, retryDelayMillis = 5_000),
+            ReconnectPolicy.Enabled(maxAttempts = 3, retryDelayMillis = 30_000),
             fake
         ) {
             attempts.update { it + 1 }
@@ -238,13 +239,22 @@ class NetworkPathRecoveryTest {
             // emit is now race-free.
             fake.emit(NetworkPathStatus.Satisfied)
 
-            // Bounded well under retryDelayMillis (5_000) to prove the signal
-            // woke the handler early rather than the delay expiring. 3_500ms
-            // (not a tighter 2_000) keeps the assertion robust when the full
-            // test suite runs in parallel and saturates the CPU — the rearm
-            // handshake still completes far inside the 5 s delay
-            // (AUDIT-2026-06).
-            val rearmed = withTimeout(3_500) {
+            // The second transport dial is the direct evidence that Satisfied
+            // woke the retry waiter. The 10 s safety bound is one third of the
+            // configured delay, so an ordinary timer expiry cannot satisfy the
+            // assertion even on a heavily loaded hosted runner.
+            val wokenAttempt = withTimeout(10_000) {
+                attempts.first { it >= 2 }
+            }
+            assertEquals(
+                2,
+                wokenAttempt,
+                "Satisfied must trigger exactly the first retry before the scheduled delay"
+            )
+
+            // Keep the end-to-end rearm assertion, but do not use handshake
+            // completion itself as the timing probe for the wake-up invariant.
+            val rearmed = withTimeout(10_000) {
                 session.state.first { it == ConnectionState.Connected }
             }
             assertEquals(ConnectionState.Connected, rearmed)

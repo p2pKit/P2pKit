@@ -112,7 +112,7 @@ gaps found by the continuation audit:
 Deterministic proof comprises 36 coordinator tests, five JVM and four Android
 bounded-construction tests, five JVM and six Android socket-ownership tests,
 and two JVM candidate-fallback tests: 58 focused executions, zero failures,
-errors, or skips. Complete LAN JVM/Android suites passed with 113 JVM and 45
+errors, or skips. Complete LAN JVM/Android suites passed with 113 JVM and 46
 Android-host tests. `check`, Android compilation/lint/sample checks, all
 declared Apple compilation/linkage, 79 arm64-simulator LAN tests (one explicit
 external diagnostic ignored), ABI, Dokka, SBOM, all 15 publication shapes,
@@ -120,6 +120,23 @@ isolated JVM/Android/KMP/iOS 14 consumers, release-XCFramework provenance,
 iOS 14 slice inspection, and the Swift warnings-as-errors build passed on the
 same source tree. The final protected PR/gate/merge evidence will be appended
 after that exact tree crosses the protected boundary.
+
+The first protected-boundary run for PR
+[#82](https://github.com/p2pKit/P2pKit/pull/82),
+[CI run 31480335701](https://github.com/p2pKit/P2pKit/actions/runs/31480335701),
+correctly failed rather than producing a nondeterministic terminal result. Two
+pre-existing core test harnesses failed under the three-core hosted workload,
+before any LAN assertion failed: the iOS path-recovery test coupled its wake-up
+assertion to completion of a second handshake within 3.5 seconds, and the JVM
+PeerId test launched four child JVMs simultaneously but gave all four one
+shared 15-second startup window. The follow-up keeps the behavioral assertions
+intact: it observes the retry dial itself within one third of the configured
+retry delay before separately requiring a successful rearm, and preloads each
+of the four child processes in turn before releasing all four into the same
+file-lock contention point. Focused concurrent reruns and the complete
+589-test JVM plus 559-test iOS Simulator core suites pass with zero failures,
+errors, or skips. A replacement complete gate is required on the final commit;
+the failed run is not treated as verification evidence.
 
 This follow-up changes no public ABI, Maven coordinate, secure-v2 or LAN wire
 format, platform floor, or immutable release artifact. Issue #29 still needs
