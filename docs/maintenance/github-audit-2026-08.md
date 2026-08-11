@@ -177,6 +177,21 @@ update coalescing, remove/re-add lifecycle identity, stable multi-peer clear,
 stop/restart, and core failure/completion recollection with an unaffected
 second transport. No assertion or production timeout was weakened.
 
+The first protected complete-gate run for PR
+[#83](https://github.com/p2pKit/P2pKit/pull/83),
+[CI run 31492177821](https://github.com/p2pKit/P2pKit/actions/runs/31492177821),
+failed only in the pre-existing JVM
+`FilePeerIdStorageTest.concurrentChildProcessesCommitOneDurableWinner` harness.
+The earlier sequential-preload correction still gave each already-ready child
+an unrelated 15-second deadline while the parent loaded the remaining JVMs;
+the first child could therefore exit before barrier release on the three-core
+hosted runner. The follow-up removes that false deadline: a ready child waits
+for the explicit parent release while checking that the owning parent process
+is alive, and the parent retains bounded readiness/completion waits plus
+unconditional child cleanup. Storage assertions and production behavior are
+unchanged. The failed run is not verification evidence; a replacement gate is
+required on the corrected final tree.
+
 Exact changed files:
 
 - `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt`
