@@ -153,24 +153,12 @@ internal class BoundedBlockingHandleCreator<H : Any>(
         }
         attempt.completed.countDown()
         if (!orphaned) return
-
-        try {
-            closeOrphan(produced)
-            synchronized(gate) {
-                attempt.state = State.Cleaned
-                if (activeAttempt === attempt) activeAttempt = null
-            }
-        } catch (cleanupError: Throwable) {
-            synchronized(gate) {
-                attempt.failure = cleanupError
-                attempt.state = State.Poisoned
-            }
-            runCatching { onCleanupFailure(cleanupError) }
-        }
+        cleanOrphan(attempt, produced)
     }
 
     private fun abandon(attempt: Attempt<H>) {
         var completedOrphan: H? = null
+        val constructionWorker = attempt.worker
         synchronized(gate) {
             when (attempt.state) {
                 State.Running -> attempt.state = State.Abandoned
@@ -188,22 +176,46 @@ internal class BoundedBlockingHandleCreator<H : Any>(
                 else -> Unit
             }
         }
-        completedOrphan?.let { orphan ->
-            try {
-                closeOrphan(orphan)
-                synchronized(gate) {
-                    attempt.state = State.Cleaned
-                    if (activeAttempt === attempt) activeAttempt = null
-                }
-            } catch (cleanupError: Throwable) {
-                synchronized(gate) {
-                    attempt.failure = cleanupError
-                    attempt.state = State.Poisoned
-                }
-                runCatching { onCleanupFailure(cleanupError) }
+        // If construction won just before the waiting caller was interrupted,
+        // closing the completed handle inline would put an unbounded third-
+        // party close on the already-cancelled caller. Transfer that sole
+        // ownership to one daemon cleanup worker. activeAttempt remains
+        // Cleaning, so no parallel construction (or unbounded cleanup-thread
+        // succession) is possible until the orphan is closed.
+        completedOrphan?.let { orphan -> startCompletedOrphanCleanup(attempt, orphan) }
+        constructionWorker?.interrupt()
+    }
+
+    private fun startCompletedOrphanCleanup(attempt: Attempt<H>, orphan: H) {
+        val cleanupWorker = Thread(
+            { cleanOrphan(attempt, orphan) },
+            "$threadName-orphan-cleanup"
+        ).apply { isDaemon = true }
+        try {
+            cleanupWorker.start()
+        } catch (error: Throwable) {
+            synchronized(gate) {
+                attempt.failure = error
+                attempt.state = State.Poisoned
             }
+            runCatching { onCleanupFailure(error) }
         }
-        attempt.worker?.interrupt()
+    }
+
+    private fun cleanOrphan(attempt: Attempt<H>, orphan: H) {
+        try {
+            closeOrphan(orphan)
+            synchronized(gate) {
+                attempt.state = State.Cleaned
+                if (activeAttempt === attempt) activeAttempt = null
+            }
+        } catch (cleanupError: Throwable) {
+            synchronized(gate) {
+                attempt.failure = cleanupError
+                attempt.state = State.Poisoned
+            }
+            runCatching { onCleanupFailure(cleanupError) }
+        }
     }
 
     private fun consumeSuccess(attempt: Attempt<H>): H {

@@ -1,13 +1,16 @@
 package dev.p2pkit.transport.lan
 
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -85,6 +88,54 @@ class BoundedBlockingHandleCreatorTest {
 
         val poisoned = assertFailsWith<IOException> { creator.create { FakeHandle() } }
         assertTrue("Poisoned" in poisoned.message.orEmpty())
+    }
+
+    @Test
+    fun interruptedWaiterReturnsBeforeCompletedOrphanCleanupFinishes() {
+        val cleanupEntered = CountDownLatch(1)
+        val releaseCleanup = CountDownLatch(1)
+        val cleanupFinished = CountDownLatch(1)
+        val callerReturned = CountDownLatch(1)
+        val callerFailure = AtomicReference<Throwable?>()
+        val awaitCalls = AtomicInteger()
+        val creator = creator(
+            closeOrphan = {
+                cleanupEntered.countDown()
+                awaitIgnoringInterrupt(releaseCleanup)
+                cleanupFinished.countDown()
+            },
+            awaitCompletion = { completion, timeout ->
+                if (awaitCalls.getAndIncrement() == 0) {
+                    assertTrue(completion.await(1, TimeUnit.SECONDS))
+                    throw InterruptedException("injected waiter interruption")
+                }
+                completion.await(timeout, TimeUnit.MILLISECONDS)
+            }
+        )
+
+        val caller = Thread {
+            callerFailure.set(runCatching { creator.create { FakeHandle() } }.exceptionOrNull())
+            callerReturned.countDown()
+        }
+        caller.start()
+
+        assertTrue(cleanupEntered.await(1, TimeUnit.SECONDS), "orphan cleanup did not start")
+        assertTrue(
+            callerReturned.await(1, TimeUnit.SECONDS),
+            "an interrupted caller must not synchronously own a blocking orphan close"
+        )
+        assertIs<InterruptedIOException>(callerFailure.get())
+        assertTrue(
+            "Cleaning" in assertFailsWith<IOException> {
+                creator.create { FakeHandle() }
+            }.message.orEmpty(),
+            "parallel construction must remain blocked while detached cleanup owns the orphan"
+        )
+
+        releaseCleanup.countDown()
+        assertTrue(cleanupFinished.await(1, TimeUnit.SECONDS))
+        caller.join(1_000)
+        creator.create { FakeHandle() }
     }
 
     private fun creator(

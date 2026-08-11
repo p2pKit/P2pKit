@@ -137,27 +137,33 @@ class FilePeerIdStorageTest {
         val outputFiles = (0 until processCount).map { File(tempDir, "output-$it.log") }
         val java = File(System.getProperty("java.home"), "bin/java").absolutePath
         val classpath = currentTestClasspath()
-        val processes = readyFiles.zip(outputFiles).map { (ready, output) ->
-            ProcessBuilder(
-                java,
-                "-Xms16m",
-                "-Xmx64m",
-                "-XX:+UseSerialGC",
-                "-XX:ActiveProcessorCount=1",
-                "-cp",
-                classpath,
-                FilePeerIdStorageProcessProbe::class.java.name,
-                tempDir.absolutePath,
-                "cross-process-app",
-                go.absolutePath,
-                ready.absolutePath
-            )
-                .redirectErrorStream(true)
-                .redirectOutput(output)
-                .start()
-        }
+        val processes = mutableListOf<Process>()
         try {
-            awaitFiles(readyFiles)
+            // Start and preload each probe separately. All four still contend
+            // for the same file lock after `go` is created, but concurrent JVM
+            // startup/class loading no longer consumes the shared readiness
+            // budget while the Gradle worker is compiling other targets.
+            readyFiles.zip(outputFiles).forEach { (ready, output) ->
+                val process = ProcessBuilder(
+                    java,
+                    "-Xms16m",
+                    "-Xmx64m",
+                    "-XX:+UseSerialGC",
+                    "-XX:ActiveProcessorCount=1",
+                    "-cp",
+                    classpath,
+                    FilePeerIdStorageProcessProbe::class.java.name,
+                    tempDir.absolutePath,
+                    "cross-process-app",
+                    go.absolutePath,
+                    ready.absolutePath
+                )
+                    .redirectErrorStream(true)
+                    .redirectOutput(output)
+                    .start()
+                processes += process
+                awaitReady(process, ready, output)
+            }
             assertTrue(go.createNewFile(), "parent must release the child-process barrier once")
             val outputs = processes.zip(outputFiles).map { (process, outputFile) ->
                 assertTrue(
@@ -342,10 +348,17 @@ class FilePeerIdStorageTest {
         return entries.joinToString(File.pathSeparator)
     }
 
-    private fun awaitFiles(files: List<File>) {
+    private fun awaitReady(process: Process, ready: File, output: File) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
-        while (files.any { !it.exists() }) {
-            check(System.nanoTime() < deadline) { "Child processes did not reach the start barrier" }
+        while (!ready.exists()) {
+            check(process.isAlive) {
+                "PeerId child process exited before the start barrier; " +
+                    "exit=${process.exitValue()} output=${output.readText().trim()}"
+            }
+            check(System.nanoTime() < deadline) {
+                "PeerId child process did not reach the start barrier; " +
+                    "output=${output.readText().trim()}"
+            }
             Thread.sleep(5)
         }
     }

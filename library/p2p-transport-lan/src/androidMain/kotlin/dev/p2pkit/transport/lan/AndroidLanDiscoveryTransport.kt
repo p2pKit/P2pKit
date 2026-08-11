@@ -254,8 +254,15 @@ internal class AndroidLanDiscoveryTransport(
     override suspend fun startDiscovery() = coordinator.startDiscovery()
 
     override suspend fun stopDiscovery() {
-        coordinator.stopDiscovery()
-        admittedServices.drain().forEach { _events.tryEmit(PeerEvent.Lost(it)) }
+        try {
+            coordinator.stopDiscovery()
+        } finally {
+            // The coordinator deactivates the callback generation before a
+            // native detach can fail. Drain transport-managed peer ownership
+            // even on that retained-for-retry failure, or stale peers would
+            // survive without any active callback able to remove them.
+            admittedServices.drain().forEach { _events.tryEmit(PeerEvent.Lost(it)) }
+        }
     }
 
     /**
@@ -659,11 +666,13 @@ internal class AndroidLanDiscoveryTransport(
     private fun acquireMulticastLockIfNeeded() {
         if (multicastLock != null) return
         val wm = wifi ?: return
-        val lock = wm.createMulticastLock("p2pkit-mdns").apply {
-            setReferenceCounted(false)
-            acquire()
-        }
+        val lock = wm.createMulticastLock("p2pkit-mdns")
+        lock.setReferenceCounted(false)
+        // Publish ownership before acquire: if the platform throws after a
+        // partial side effect, failed-start rollback and a later stop still
+        // retain the only handle capable of releasing it.
         multicastLock = lock
+        lock.acquire()
     }
 
     // ──────────────────────────────────────────────────────────────────
