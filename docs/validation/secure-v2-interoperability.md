@@ -30,7 +30,8 @@ the harness:
   ChaCha20-Poly1305 nonce progression, and terminal failure.
 - `Frame.kt`, `FrameCodec.kt`, `ProtocolConstants.kt`, and
   `FrameValidation.kt`: application frame header and packet rules.
-- `Handshake.kt`/`HelloPayload.kt`: encrypted HELLO identity and version rules.
+- `Handshake.kt`, `HelloPayload.kt`, and `JsonWireValidation.kt`: encrypted
+  HELLO identity/version rules and unambiguous top-level JSON fields.
 - `AppMessageEnvelope.kt`: canonical authenticated metadata, identities,
   sequence/message ID, length, SHA-256, and content.
 - `FileTransferWire.kt` and transfer state machines: prepared digest, durable
@@ -118,6 +119,8 @@ The harness must independently prove:
 - no secure-v2 failure falls back to plaintext v1 or `_p2pkit._tcp`;
 - tampered Noise flight, ciphertext, tag, frame header, envelope identity,
   metadata, content length/digest, or file digest fails closed;
+- duplicate HELLO or legacy FILE_OFFER top-level JSON fields fail closed even
+  when one field name uses a JSON escape and the other uses its literal form;
 - record nonce reuse, counter exhaustion boundary, replayed record, replayed
   message sequence/ID, duplicate transfer packet, and out-of-order state
   transition are rejected or handled exactly as specified;
