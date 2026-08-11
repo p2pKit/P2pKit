@@ -137,6 +137,17 @@ dual-stack network, and an IPv6 link-local-capable topology where available.
 Enable **Advertise** and **Discover** on both peers, first with **Auto-mesh** off
 and then on. Connect manually once and automatically once.
 
+Before connecting, keep both screens/log captures active for 30 minutes, then
+repeat once with the observer backgrounded for the handbook's supported
+interval. The continuously advertising peer must remain visible without a
+synthetic refresh or user toggle. Next stop advertising cleanly, restart it,
+and finally force-stop the advertiser. Record the exact native
+`serviceRemoved` callback shape (including absent/stub TXT), peer-state/UI
+transition time, and JmDNS TTL/packet timing. This is the physical closure leg
+for Issues #21 and #43: no peer may disappear while it is still advertising,
+and no departed transport-managed peer may survive merely because a relay
+collector was busy or restarted.
+
 The discovered identity, chosen interface/network, address family, and data
 socket must describe the same LAN. Cellular or VPN must not silently carry the
 session. In each evidence ZIP locate `ensureJmdns: active` (initial bind) and

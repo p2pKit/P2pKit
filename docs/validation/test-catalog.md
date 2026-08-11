@@ -268,19 +268,25 @@ Actions:
 1. On both devices start the sample, enable Advertise, Discover, and Auto-mesh,
    and record peer IDs, app IDs, protocol/security state, network-path chip,
    and local port.
-2. Toggle Wi-Fi off/on on one device; then move it between the AP's 2.4 GHz
+2. Before connecting, leave both devices online and advertising for 30 minutes
+   with Auto-mesh off. The peer must remain visible. Then perform clean
+   Stop-advertising, restart, force-stop, and abrupt AP-loss cases. For each,
+   correlate the observer UI with the exact `serviceRemoved` instance/TXT
+   shape, relay Lost/Found events, JmDNS TTL, and packet time. Repeat three
+   times; this is the Issue #21/#43 evidence leg.
+3. Toggle Wi-Fi off/on on one device; then move it between the AP's 2.4 GHz
    and 5 GHz radios without changing SSID. Record Lost/Found, Reconnecting,
    port/address changes, and final Connected state.
-3. Disable multicast or change AP client isolation; verify the UI reports no
+4. Disable multicast or change AP client isolation; verify the UI reports no
    peer rather than a false connection.
-4. Send each fixture through the Android system picker and accept it on the
+5. Send each fixture through the Android system picker and accept it on the
    receiver. Compare sender and receiver SHA-256 lines and the saved file.
-5. Use a content-provider URI, revoke its read grant before the send starts,
+6. Use a content-provider URI, revoke its read grant before the send starts,
    and verify a typed failure without a crash.
-6. Send a filename containing control characters and path separators from an
+7. Send a filename containing control characters and path separators from an
    owner-controlled Desktop peer. Verify the Android path remains inside the
    sample inbox and logcat strips controls.
-7. Kill the peer process with `adb shell am force-stop` and repeat with an
+8. Kill the peer process with `adb shell am force-stop` and repeat with an
    abrupt AP disconnect.
 
 Commands:
