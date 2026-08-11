@@ -1,4 +1,4 @@
-# GitHub issues and pull requests audit — 2026-08-08
+# GitHub issues and pull requests audit — 2026-08-11
 
 This audit compares every open issue and pull request, plus recently closed
 unmerged pull requests, with post-`0.7.0-rc3` `main`. GitHub remains the live
@@ -83,7 +83,7 @@ the tested PR tree, so the exact-tree reuse policy correctly avoids a redundant
 complete-gate run.
 
 The workstream does not change public ABI, Maven coordinates, secure-v2 or LAN
-wire formats, the iOS deployment floor, or published `0.7.0-rc2` artifacts.
+wire formats, the iOS deployment floor, or any immutable published artifact.
 Android OEM multicast/callback behavior, Mac/Linux interface rotation, and
 hostile-network timing remain external evidence requirements and are not
 claimed as verified here.
@@ -189,8 +189,13 @@ hosted runner. The follow-up removes that false deadline: a ready child waits
 for the explicit parent release while checking that the owning parent process
 is alive, and the parent retains bounded readiness/completion waits plus
 unconditional child cleanup. Storage assertions and production behavior are
-unchanged. The failed run is not verification evidence; a replacement gate is
-required on the corrected final tree.
+unchanged. The failed run is not verification evidence. Replacement
+[run 31497583675](https://github.com/p2pKit/P2pKit/actions/runs/31497583675)
+passed on corrected head `78b0e4249f031fd24af4d98be87a1894b0512c2e`
+and tree `3fc254c5aa6f69e243a81df375cfde1048e56345`. PR #83 then merged
+normally through branch protection as
+`ba418189b7fc3033ac4f3e51932b83f7407bf323`; the merge has the identical
+tree, so exact-tree reuse avoided an unnecessary duplicate complete gate.
 
 Exact changed files:
 
@@ -212,9 +217,10 @@ explicitly external `IosLanDiagnosticTest`. The root `check --rerun-tasks`
 also passed with all 184 actionable tasks executed. The arm64 host cannot run
 the x64 iOS binaries, but their test sources compiled and linked; ABI, strict
 Dokka, Android compilation, and all declared iOS target compilation/linkage
-passed. Release/consumer checks, protected PR gate, and merge-tree identity
-will be recorded at the workstream boundary; until then this section does not
-claim hosted verification.
+passed. Release/consumer checks, the protected PR gate, and merge-tree identity
+are proven by the replacement run and merge above. Physical peer
+lifetime/removal and real-network callback ordering remain external; none is
+claimed as verified by simulator or host checks.
 
 There is no public API/ABI, Maven coordinate, secure-v2 or LAN wire change,
 platform-floor change, or change to any immutable release artifact. Issues
@@ -295,10 +301,83 @@ blocking SBOM presence/content gate and an earlier failure no longer creates
 a misleading second missing-artifact failure.
 
 No public ABI, Maven coordinate, secure-v2/LAN wire format, iOS library floor,
-or published `0.7.0-rc2` artifact changes. Real AWDL, Personal Hotspot,
+or immutable published-artifact changes. Real AWDL, Personal Hotspot,
 Control Center/system interruption, device lock/background, peer restart,
 path rotation, and timeout histograms remain required external evidence; none
 is claimed as verified by simulator or host checks.
+
+## Provisioning lifecycle and native ownership workstream evidence
+
+Implementation commit `fc73837cfa154caa82a6f96172603108b8577842`
+(tree `99f3ca08faef2980ad0b44611ee4dc1de487c779`) makes each public
+provisioning operation manager-owned rather than caller-owned on Android, JVM,
+and Apple. Caller cancellation now cancels and joins the owned operation;
+manager-parent cancellation closes the JVM and Apple implementations
+terminally. Android serializes initial binding and rebinding, arbitrates the
+process-wide bind token across manager instances, retains every native cleanup
+resource until cleanup actually succeeds, shares one close attempt and result
+among concurrent callers, and permits a later close to retry a failed cleanup.
+Generation ownership prevents a stale hotspot callback or old-network
+`onLost` callback from releasing a newer acquisition. `onUnavailable` and
+network delivery have one terminal winner.
+
+Android request validation now rejects a missing, empty, or non-ASCII WPA2 or
+WPA3 passphrase before invoking `WifiNetworkSpecifier`; OPEN requests reject
+any password value, including an empty wrapper. Permission requirements use
+both the device SDK and the consumer target SDK. Manual provisioning results
+include the local identity fingerprint and pairing QR without logging a
+credential. JVM address-scanner failures represented by ordinary exceptions
+become a retryable `Unknown` state while cancellation and fatal errors retain
+their semantics. The unsupported manager's stale version text and affected
+KDoc were corrected without renaming its private compatibility constant.
+
+Exact implementation and regression files:
+
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/provisioning/UnsupportedNetworkProvisioningManager.kt`
+- `library/p2p-core/src/commonTest/kotlin/dev/p2pkit/core/internal/NetworkProvisioningCloseTest.kt`
+- `library/p2p-network-provisioning-android/src/androidHostTest/kotlin/dev/p2pkit/provisioning/android/AndroidNetworkProvisioningManagerTest.kt`
+- `library/p2p-network-provisioning-android/src/androidHostTest/kotlin/dev/p2pkit/provisioning/android/RetryableProvisioningCleanupTest.kt`
+- `library/p2p-network-provisioning-android/src/androidMain/AndroidManifest.xml`
+- `library/p2p-network-provisioning-android/src/androidMain/kotlin/dev/p2pkit/provisioning/android/AndroidDsl.kt`
+- `library/p2p-network-provisioning-android/src/androidMain/kotlin/dev/p2pkit/provisioning/android/AndroidNetworkProvisioningManager.kt`
+- `library/p2p-network-provisioning-android/src/androidMain/kotlin/dev/p2pkit/provisioning/android/AndroidP2pPermissionManager.kt`
+- `library/p2p-network-provisioning-android/src/androidMain/kotlin/dev/p2pkit/provisioning/android/ProvisioningAndroidValidation.kt`
+- `library/p2p-network-provisioning-android/src/androidMain/kotlin/dev/p2pkit/provisioning/android/RetryableProvisioningCleanup.kt`
+- `library/p2p-network-provisioning-android/src/androidMain/kotlin/dev/p2pkit/provisioning/android/WifiManagerWrapper.kt`
+- `library/p2p-network-provisioning-android/src/androidMain/kotlin/dev/p2pkit/provisioning/android/WifiManagerWrapperImpl.kt`
+- `library/p2p-network-provisioning-desktop/src/main/kotlin/dev/p2pkit/provisioning/desktop/JvmDsl.kt`
+- `library/p2p-network-provisioning-desktop/src/main/kotlin/dev/p2pkit/provisioning/desktop/JvmNetworkProvisioningManager.kt`
+- `library/p2p-network-provisioning-desktop/src/test/kotlin/dev/p2pkit/provisioning/desktop/JvmNetworkProvisioningManagerTest.kt`
+- `library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosManualNetworkProvisioningManager.kt`
+- `library/p2p-transport-lan/src/appleTest/kotlin/dev/p2pkit/transport/lan/IosManualProvisioningLifecycleTest.kt`
+
+Focused final-tree evidence before the protected boundary:
+
+- Android provisioning host tests — **PASS**, 51 tests, zero failures,
+  errors, or skips. This includes concurrent close, failed-cleanup retry,
+  stale callback generation, process-binding arbitration, permission policy,
+  request validation, and typed error mapping.
+- Desktop provisioning tests — **PASS**, 15 tests, zero failures, errors, or
+  skips, including caller/parent cancellation and transient scanner recovery.
+- Apple lifecycle tests — **PASS** within the full 89-test arm64 simulator
+  suite. The suite has zero failures/errors and one intentionally skipped
+  external-only `IosLanDiagnosticTest`; the provisioning lifecycle class has
+  four executed tests.
+- The affected-module boundary passed `p2p-core` JVM tests, Android
+  provisioning `check` and host-test lint, Desktop `check`, Apple simulator
+  tests, iosArm64/iosX64 compilation, and all four affected ABI checks: 79
+  actionable tasks executed in 1m29s. The Android KMP module exposes
+  `lintAnalyzeAndroidHostTest` through `lint` but no separate Android-main
+  lint task; Android-main production compilation did execute.
+- `git diff --check` and the committed-diff whitespace review — **PASS**.
+
+There is no public ABI, Maven coordinate, wire-format, secure-v2,
+platform-floor, or published-artifact change. Hosted `complete-gate`, protected
+merge, and exact-tree identity remain pending for this workstream. Physical
+`PROV-A12`, `PS-T01`, and `PS-T02` evidence remains mandatory for real Android
+framework/OEM callbacks and process binding. Apple manual-provisioning
+lifecycle behavior still requires the device lifecycle legs in `LAN-T07` and
+`ENV-01`; simulator tests do not prove suspension, process death, or AWDL.
 
 ## Pull request audit
 
@@ -323,6 +402,8 @@ is claimed as verified by simulator or host checks.
 | [#79 — harden file transfer terminal ownership](https://github.com/p2pKit/P2pKit/pull/79) | The initial focused ownership corrections were retained with authorship in the larger #80 branch. Its first hosted boundary exposed additional cancellation/error-classification work rather than being accepted as the end of the workstream. | GitHub records it merged because #80 integrated its commits; #80 is the authoritative complete implementation and verification boundary. |
 | [#80 — complete file transfer lifecycle hardening](https://github.com/p2pKit/P2pKit/pull/80) | Completed source/destination ownership, bounded callback/control/source/cleanup behavior, durable receiver finalization, cancellation/error classification, sample cleanup, and deterministic cross-platform regressions without changing public ABI or wire bytes. | **Merged** normally as `dcb537f0088653c4c3652aad6b3fbb8c2ed40698`. Complete gate [31429345786](https://github.com/p2pKit/P2pKit/actions/runs/31429345786) passed on head `5c5961538e673026b4dae22b4e4666325d43ca50`; merge and head share tree `9c36cc3b7a41ae6b9aa34a2f213f814a28ec53c8`. |
 | [#81 — harden core session lifecycle and diagnostics](https://github.com/p2pKit/P2pKit/pull/81) | Failure-isolated logging, deterministic setup/incoming/terminal/reconnect/feature ownership, bounded refresh/start settlement, post-terminal delivery prevention, collector recovery, peer-error reconnect handling, and deep `MessageId` immutability. | **Merged** normally as `a7d8ebfbdc945b5d1ab3db1c51daed1d4f30cc1f`. Complete gate [31472464571](https://github.com/p2pKit/P2pKit/actions/runs/31472464571) passed on head `145fa607be33c665de88b057f240ca89742922e7`; both share tree `b1cacff7cc4884e5d1c8a0e2f1b2dec2a97ceff8`. |
+| [#82 — harden LAN resource ownership](https://github.com/p2pKit/P2pKit/pull/82) | Completed JVM/Android native-handle ownership, bounded JmDNS construction, cancellation/orphan cleanup, selected-network routing, and deterministic callback/resource regressions. | **Merged** normally as `e64c833fd9759f529df212122583ec3bd4edba1f`. Replacement complete gate [31486056226](https://github.com/p2pKit/P2pKit/actions/runs/31486056226) passed on head `a88d033801c03b430c5067776d941e099471a541`; merge and head share tree `25f6a53342759ec3b9bb134fb759e733f2301b35`. |
+| [#83 — make LAN discovery delivery convergent](https://github.com/p2pKit/P2pKit/pull/83) | Replaced lossy discovery event buffers with a state-backed relay, made source failure/completion withdrawal deterministic, and retired Apple endpoint/relay generations atomically on stop. | **Merged** normally as `ba418189b7fc3033ac4f3e51932b83f7407bf323`. Replacement complete gate [31497583675](https://github.com/p2pKit/P2pKit/actions/runs/31497583675) passed on head `78b0e4249f031fd24af4d98be87a1894b0512c2e`; merge and head share tree `3fc254c5aa6f69e243a81df375cfde1048e56345`. |
 
 The recently closed, unmerged PRs were #46, whose stronger replacement is
 documented above, and #50, #51, #57, and #58, whose exact updates and authorship

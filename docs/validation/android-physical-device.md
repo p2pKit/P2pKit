@@ -103,6 +103,16 @@ and bounded JmDNS-construction cleanup. It does **not** prove that an OEM
 exposes the expected interface, forwards multicast, or orders callbacks the
 same way as the host fakes; those remain mandatory evidence below.
 
+For the provisioning prerequisite, implementation commit
+`fc73837cfa154caa82a6f96172603108b8577842` passes 51 Android host tests. They
+prove manager-owned cancellation, one terminal callback winner, generation
+safe late callbacks, process-wide binding arbitration, concurrent-close
+settlement, retained failed cleanup and retry, device-plus-target SDK
+permission selection, passphrase validation, and manual-info identity fields
+against controlled fakes. These results do **not** prove real
+`LocalOnlyHotspotReservation`, `NetworkCallback`, process binding, permission
+UI, or OEM callback order; this handbook therefore remains **NOT STARTED**.
+
 ## Test cases
 
 ### A1 — permission and provisioning terminal-callback matrix
@@ -112,11 +122,33 @@ nearby/location permissions denied. Tap **Host hotspot** and then **Join
 hotspot** with synthetic credentials. Exercise deny, deny-and-do-not-ask-again,
 grant, system cancellation, user cancellation, and a successful operation.
 
+Record the installed app's target SDK as well as the device SDK. For a current
+target on API 33+, verify `NEARBY_WIFI_DEVICES`; for a target-32 test consumer,
+verify the legacy Location branch even when it runs on a newer device. Through
+the instrumentation result (the sample UI intentionally shows only safe
+host/port fields), verify that both credential-bearing and OS-redacted hotspot
+results include app ID, peer ID, device name, local fingerprint, and pairing
+QR. The fingerprint and QR may be exported only as explicitly safe synthetic
+test identity values; a hotspot passphrase must remain masked.
+
+Before a real join, have the instrumentation harness submit WPA2 and WPA3
+requests with a null password, an empty password, and a non-ASCII passphrase,
+then an OPEN request carrying an empty password wrapper. Each invalid request
+must fail before a platform consent prompt or callback registration and must
+not log the supplied value. Follow with valid ASCII WPA2/WPA3 and passwordless
+OPEN requests so rejection cannot be explained by a poisoned manager state.
+
 For every request, verify exactly one terminal UI result and one correlated
 terminal diagnostic event. A permission-required result must not claim that a
 network started. After success, **Stop hotspot** must release the reservation;
 after cancellation or timeout, no late callback may change the completed
-result. Capture permission dialogs and the final provisioning card.
+result. While a native hotspot request is pending, a second acquisition must
+remain blocked until the first request receives a genuine terminal platform
+callback; a stale callback from the first generation must not clear a newer
+request's gate. Force callback-unregistration and unbind failures through the
+approved instrumentation seam: the operation must surface a typed cleanup
+failure, retain ownership, and allow a later Stop/close to retry. Capture
+permission dialogs and the final provisioning card.
 
 ### A2 — two-manager ownership
 
@@ -128,7 +160,14 @@ then A; repeat in reverse order.
 
 Pass requires explicit ownership behavior, no release of A's network by B, no
 process-wide bind leak, and successful reacquisition after both managers close.
-Capture network handles and `dumpsys connectivity` before and after each close.
+Make two callers invoke close concurrently while one cleanup attempt is
+instrumented to fail. Both callers must observe the same failure and only one
+native cleanup attempt; a later close must retry and complete it. Rebind from
+network N1 to N2, then deliver N1's delayed `onLost`: N2 must remain owned and
+bound. Race `onAvailable` delivery with `onUnavailable`; exactly one terminal
+result may win, and an unavailable request must never be reported as Joined.
+Capture network handles, callback generations, and `dumpsys connectivity`
+before and after each close.
 
 ### A3 — LAN discovery, selected route, IPv4/IPv6, and secure transfer
 

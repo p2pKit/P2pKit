@@ -13,6 +13,14 @@ iPhone/iPad hardware. This covers `LAN-T07`, `ENV-01`, `ENV-04`, `PS-T07`,
 `PS-T08`, and `PS-T09`; use the matching diagnostic sequences in
 [`test-catalog.md`](test-catalog.md).
 
+Implementation commit `fc73837cfa154caa82a6f96172603108b8577842`
+passes four Apple manual-provisioning lifecycle tests inside the 89-test
+arm64-simulator suite. They prove manager-owned caller cancellation, terminal
+parent-job shutdown, post-close rejection, and fingerprint/pairing-QR
+projection in a controlled runtime. Simulator evidence cannot prove actual
+iOS suspension, termination, signing, radio paths, or AWDL, so this handbook's
+status remains **NOT STARTED**.
+
 ## Required equipment and coverage
 
 - Two physical Apple devices signed by a development team; one iPhone and one
@@ -175,6 +183,19 @@ listener/browser state, temporary-file cleanup, and whether a transfer was
 durably committed before termination. A pre-commit transfer must not be shown
 as successful after restart. The app must not retain stale collectors or
 duplicate sessions.
+
+On one device run the manual-provisioning lifecycle probe from the signed test
+harness while **Stop** races `getManualConnectionInfo()`. Cancellation of the
+UI caller alone must not leave manager work detached; stopping the owning kit
+must close the manager terminally and every later provisioning method must
+return the typed ManagerClosed failure. Repeated close/Stop calls must remain
+safe. Before Stop, inspect the returned object through the harness: app ID,
+peer ID, device name, fingerprint, pairing QR, and listener port must match the
+running kit. `hostAddresses` is intentionally empty on Apple because this API
+does not synchronously invent a non-loopback path address; the UI currently
+shows only the port. Empty addresses are expected, while a fabricated address,
+missing secure identity, detached callback after Stop, or successful post-close
+operation is a FAIL.
 
 For each inactive episode, retain the ordered lifecycle and rebind events.
 `WillEnterForeground` followed by `DidBecomeActive` may produce only one actual

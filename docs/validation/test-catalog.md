@@ -190,7 +190,10 @@ export LOGCAT_PID=$!
 UI/actions:
 
 1. Launch the app, record the title-bar SDK build identity, and grant only the
-   requested Nearby Wi-Fi/Location permissions.
+   requested Nearby Wi-Fi/Location permissions. Record both device SDK and
+   installed target SDK. On API 33+ validate the current-target
+   `NEARBY_WIFI_DEVICES` path and separately run the target-32 consumer to
+   validate the legacy Location path.
 2. Turn the system Location switch off, tap Start/Host hotspot, and verify the
    app reports the actionable permission/location state without claiming a
    started hotspot.
@@ -204,15 +207,30 @@ UI/actions:
    taps.
 6. On API-33+, revoke `NEARBY_WIFI_DEVICES` in Settings and repeat. On
    API-32 and below repeat with Location permission and system switch changes.
-7. Capture `dumpsys connectivity`, `dumpsys wifi`, and package permission state
+7. Through instrumentation, submit WPA2/WPA3 requests with null, empty, and
+   non-ASCII passphrases, plus an OPEN request carrying an empty password
+   wrapper. Each must fail before the consent UI/callback registration and
+   redact the value. Then submit valid ASCII secured and passwordless OPEN
+   requests to prove recovery.
+8. Inspect successful/redacted `ManualConnectionInfo` values through the
+   harness. App ID, peer ID, device name, fingerprint, pairing QR, host list,
+   and port must match the running kit; the graphical sample intentionally
+   displays only safe host/port fields and masks credentials.
+9. Hold a hotspot request pending and attempt a second acquisition. Deliver a
+   stale callback from the first generation after the second begins; it must
+   neither clear nor complete the new request. Inject callback-unregistration
+   and unbind failure, require a typed cleanup failure, then retry Stop/close
+   and prove that retained cleanup completes.
+10. Capture `dumpsys connectivity`, `dumpsys wifi`, and package permission state
    after every terminal outcome.
 
 Pass criteria: every callback sequence has one terminal result; late callbacks
 close their reservation; `bindProcessToNetwork(false)`/unbind is visible where
 the platform exposes it; no stale hotspot remains after Stop; merged manifest
 contains the declared permissions; error text identifies the missing
-permission or Location switch; no crash, duplicate owner, or leaked process
-binding is observed.
+permission or Location switch; concurrent callers observe the same close
+attempt/result; invalid credentials never reach platform UI; no crash,
+duplicate owner, detached operation, or leaked process binding is observed.
 
 Fail criteria: a failed start leaves a live reservation, a cancelled join
 rebinds, two managers both own process binding, callbacks arrive after close
@@ -242,6 +260,13 @@ Actions:
 3. Start manager B and request a second join while A is active.
 4. Close A, verify B does not inherit A's token, then close B.
 5. Repeat in reverse order and during a queued `onAvailable` callback.
+6. Invoke close concurrently from two callers while one native cleanup is
+   forced to fail. Verify one cleanup attempt, the same result for both
+   callers, retained ownership, and a successful later retry.
+7. Bind N1, rebind to N2, and then deliver N1's delayed `onLost`; N2 must
+   remain current. Race `onAvailable` against `onUnavailable`; only one
+   terminal result may be delivered and an unavailable request must not be
+   reported Joined.
 
 Pass: only the current token owner can bind; closing one manager never unbinds
 the other; all callbacks after close are ignored/closed; the ordinary network
@@ -381,6 +406,13 @@ Actions:
    cleanup and exact old-port release with `nc`/`lsof`.
 6. Send each iOS preset and an Android/JVM fixture; accept/reject/cancel and
    compare SHA-256 output.
+7. Through the signed test harness, race Stop with
+   `getManualConnectionInfo()`, cancel only the invoking task, then stop the
+   owning kit. The caller cancellation must not detach work; owner stop must
+   close the manager terminally; later methods must return ManagerClosed and
+   repeated close must be safe. Before Stop, verify the returned port/app ID/
+   peer ID/device name/fingerprint/pairing QR. Empty Apple `hostAddresses` is
+   intentional; a fabricated synchronous address is a failure.
 
 Commands:
 
@@ -864,11 +896,11 @@ the row's expected failure sequence.
 
 | Test ID | Required structured events and exported fields | UI indicators to record | Expected success / failure sequence | Evidence from each peer and external capture |
 | --- | --- | --- | --- | --- |
-| PROV-A12 / PS-T01 | `application.started`, `test.session.*`, `peer.local.initialized`, `discovery.started/stopped`, `network.path.changed`, `timeout.expired`, `diagnostics.failure`; OS/build/permission configuration and exact terminal outcome | Start/Stop/Host/Join result, permission/location text, provisioning state, manual port, build identity | Success: one callback terminal result and cleanup. Failure: `permission-required`/`unsupported`/timeout with no “started” claim; late callback is recorded as recovery/cleanup | Android ZIP plus logcat, `dumpsys wifi/connectivity/package`, permission screenshots, device fingerprint; no PCAP required |
-| PROV-A12 / PS-T02 | Above plus connection/state transitions and process-binding details (`bind`, `unbind`, manager/session correlation) | Two-manager owner, busy/closing/idle states and callback result | Success: one owner, other manager deterministically rejected or waits, close releases binding. Failure: duplicate owner, late callback, stale binding | ZIP from both managers/process runs, logcat, `dumpsys connectivity`, callback timestamps |
+| PROV-A12 / PS-T01 | `application.started`, `test.session.*`, `peer.local.initialized`, `discovery.started/stopped`, `network.path.changed`, `timeout.expired`, `diagnostics.failure`; device/target SDK, permission branch, callback generation, cleanup attempt/result, redacted validation outcome, safe manual identity fields, and exact terminal outcome | Start/Stop/Host/Join result, permission/location text, provisioning state, manual port/hosts, masked credential indicator, build identity | Success: one callback terminal result, secure manual identity, and cleanup; invalid credentials fail before platform consent and a valid retry works. Failure: `permission-required`/`unsupported`/timeout with no “started” claim, secret output, detached operation, or stale generation changing the new result | Android ZIP plus logcat, instrumentation result, `dumpsys wifi/connectivity/package`, permission screenshots, safely redacted device fingerprint; no PCAP required |
+| PROV-A12 / PS-T02 | Above plus connection/state transitions and process-binding details (`bind`, `unbind`, manager/session correlation), native network/generation token, close-attempt correlation, and cleanup retry | Two-manager owner, busy/closing/idle states and callback result | Success: one owner, concurrent closes share one attempt/result, failed cleanup remains Closing until a later retry, old N1 loss cannot remove N2, and `onAvailable`/`onUnavailable` has one winner. Failure: duplicate owner, false Joined, late callback, stale binding, or cross-manager release | ZIP from both managers/process runs, instrumentation result, logcat, `dumpsys connectivity`, callback/generation timestamps |
 | LAN-T01 / PT-T20 | Discovery peer found/lost, connection attempt/state/auth, `protocol.secure_v2.negotiated`, packet sent/received/rejected, path changes, file offer/transfer/hash/commit/outcome | Advertise/discover switches, peer ID, connection ID/state, selected network/path chip, transfer ID/progress/hashes | Success: correct interface/address family and authenticated transfer. Failure: unsupported/oversized/malformed packet or path loss is explicit and terminal state agrees | Android ZIP(s), logcat, `dumpsys wifi/connectivity`, router/AP logs and PCAP when selected-network/IPv6/multicast is under test |
 | PS-T04 | Offer received/accepted/rejected, storage temporary created/cleaned, sender/receiver hash, durable committed, cancellation/failure, restart recovery | Pending offer remains until Accept/Reject; quota/free-space message; bytes/progress; final file/hash | Success: explicit consent, bounded destination, durable commit and matching peer hashes. Failure: quota/storage/permission/cancel deletes partial file and emits typed failure | Android ZIP(s), screenshots/video, filesystem listing/hash, `adb bugreport` or relevant dumpsys |
-| LAN-T07 | Apple `discovery.*`, `connection.*`, protocol negotiation, `network.path.changed`, background/foreground, recovery, packet reject/timeout | Browser/listener readiness, peer/session state, path/port changes, reconnect result, AWDL/Wi-Fi indicators when exposed | Success: path rotation/rebind recovers without ghost peers. Failure: permission/AWDL/path loss is accurately surfaced and no false Connected remains | iOS ZIP(s), Console/Xcode unified log, `dns-sd`, `log show`, path/AWDL screenshots, PCAP where lawful |
+| LAN-T07 | Apple `discovery.*`, `connection.*`, protocol negotiation, `network.path.changed`, background/foreground, recovery, packet reject/timeout; manual-manager operation/owner-stop/post-close outcomes and safe identity fields | Browser/listener readiness, peer/session state, path/port changes, reconnect result, manual port, AWDL/Wi-Fi indicators when exposed | Success: path rotation/rebind recovers without ghost peers; caller cancellation leaves no detached work; owner stop closes provisioning terminally; post-close methods fail typed. Failure: permission/AWDL/path loss is hidden, false Connected remains, secure identity is absent, a host address is fabricated, or work completes after owner stop | iOS ZIP(s), signed-harness result, Console/Xcode unified log, `dns-sd`, `log show`, path/AWDL screenshots, PCAP where lawful |
 | ENV-01 | Same complete connection/discovery/transfer sequence with platform/build fields on every run | BuildInfo, OS/device, role, IDs, final result | Success: every supported device pair has identical protocol and UI semantics. Failure: platform-specific divergence is tied to an event/error | ZIP from every Android/iOS device, screenshots/video, device matrix, AP logs |
 | ENV-04 | Application/build/OS/architecture fields, startup/shutdown, protocol/transfer events, recovery | x86_64 host launch, build identity, state/result | Success: app starts and executes the applicable test on the required host. Failure: architecture/link/runtime limitation is recorded, not hidden | iOS host ZIP, Xcode build log, architecture/device metadata |
 | PS-T07 | `diagnostics.failure`, sink/export failures, temporary-file cleanup, collision, cancellation/interruption/recovery, final result | Collision suffix, partial-file cleanup, export error/success, cancellation state | Success: forced diagnostic/storage failure does not break transfer. Failure: protocol/UI diverges, leaked temp file, or unbounded log | iOS ZIP if export works, otherwise copied live JSONL/Console log, screen recording, filesystem listing; requires approved fault injection |
