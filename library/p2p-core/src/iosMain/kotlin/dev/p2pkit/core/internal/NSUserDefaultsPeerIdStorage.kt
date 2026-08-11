@@ -81,14 +81,22 @@ internal class NSUserDefaultsPeerIdStorage(
 
     private fun readBucketEntryOrNull(): PeerId? {
         val raw = defaults.dictionaryForKey(bucketKey)?.get(entryKey) as? String ?: return null
-        val trimmed = raw.trim()
-        return if (trimmed.isEmpty()) null else PeerId(trimmed)
+        return try {
+            parsePersistedPeerId(raw)
+        } catch (error: IllegalArgumentException) {
+            logger.warn("Persisted PeerId bucket entry is invalid; will regenerate", error)
+            null
+        }
     }
 
     private fun readLegacyOrNull(): PeerId? {
         val raw = defaults.stringForKey(legacyKey) ?: return null
-        val trimmed = raw.trim()
-        return if (trimmed.isEmpty()) null else PeerId(trimmed)
+        return try {
+            parsePersistedPeerId(raw)
+        } catch (error: IllegalArgumentException) {
+            logger.warn("Legacy persisted PeerId entry is invalid; will regenerate", error)
+            null
+        }
     }
 
     private fun migrateLegacyOrNull(): PeerId? {
@@ -171,9 +179,10 @@ internal class NSUserDefaultsPeerIdStorage(
 /**
  * Reduce a raw appId to a safe `NSUserDefaults` key suffix.
  *
- * Keeps `[A-Za-z0-9._-]`, replaces anything else with `_`, collapses any
- * `..` to `._` (parallels `sanitizeAppIdForFilesystem` on JVM/Android), and
- * caps the result at 64 characters.
+ * Keeps Unicode letters/digits plus `[._-]`, replaces anything else with
+ * `_`, collapses any `..` to `._` (parallels
+ * `sanitizeAppIdForFilesystem` on JVM/Android), and caps the result at 64
+ * characters.
  */
 internal fun sanitizeAppIdForKey(raw: String): String {
     if (raw.isBlank()) return "_"

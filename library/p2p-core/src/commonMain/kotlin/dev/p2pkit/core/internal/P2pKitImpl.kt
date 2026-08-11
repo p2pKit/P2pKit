@@ -49,19 +49,22 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -188,6 +191,9 @@ internal class P2pKitImpl(
     // re-checks under the lock. Worst case is one extra `withLock` round-trip.
     private val startMutex = Mutex()
     private var startResult: Result<Unit>? = null
+
+    /** Prevent overlapping cleanup calls when a broken observer ignores cancellation. */
+    private val pathObserverCleanupGate = Semaphore(1)
 
     /**
      * A failed/timed-out startup rollback means an old listener may still be
@@ -398,6 +404,7 @@ internal class P2pKitImpl(
      * failed without inspecting the cause's class.
      */
     private suspend fun ensureStarted(generation: Long) {
+        currentCoroutineContext().ensureActive()
         requireLifecycleActive(generation)
         startResult?.let { prior ->
             if (prior.isSuccess) return
@@ -420,171 +427,165 @@ internal class P2pKitImpl(
                 throw lifecycleStoppedFailure()
             }
             val attempted = mutableListOf<DataTransport>()
-            for (transport in dataTransports) {
-                // AUDIT-2026-07 (ARCH-1): rethrow cancellation before any
-                // wrapping or latching. The previous `runCatching` captured
-                // CancellationException too, so a caller cancelled mid-bind
-                // (a routine host-lifecycle event, e.g. an Android scope
-                // cancelling `kit.start()`) had its CE converted into
-                // TransportStartFailed, `startResult` latched as failure, and
-                // the public state corrupted to Failed. On cancellation we
-                // roll back every transport entered by this attempt. A clean
-                // rollback restores Idle; an incomplete rollback latches a
-                // fail-closed error so this instance can never double-bind.
-                // Include the currently-entered transport because a platform
-                // start may acquire a listener before returning failure or
-                // observing caller cancellation.
-                attempted += transport
-                val r = try {
-                    transport.start()
-                } catch (e: CancellationException) {
-                    if (isLifecycleActive(generation)) {
-                        val rollbackIssues = rollbackDataStartup(attempted)
-                        val blocker = rollbackIssues.takeIf { it.isNotEmpty() }?.let { issues ->
-                            startupRollbackFailure(transport.type, "cancelled data startup", issues)
-                        }
-                        if (blocker != null) {
-                            startupCleanupBlocker = blocker
-                            e.addSuppressed(blocker)
-                        }
-                        commitLifecycle(generation) {
-                            startResult = blocker?.let { Result.failure(it) }
-                            _state.value = blocker?.let(P2pState::Failed) ?: P2pState.Idle
-                        }
-                    } else {
-                        cleanupLateStart(
-                            observerMayHaveStarted = false,
-                            dataMayHaveStartedLate = true
-                        )
+            var observerMayHaveStarted = false
+            try {
+                for (transport in dataTransports) {
+                    // AUDIT-2026-07 (ARCH-1): rethrow cancellation before any
+                    // wrapping or latching. The whole startup transaction's
+                    // outer handler rolls back every resource entered by the
+                    // attempt, including this transport when a platform bind
+                    // acquired a listener before observing cancellation.
+                    attempted += transport
+                    val r = try {
+                        transport.start()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        Result.failure(e)
                     }
-                    throw e
-                } catch (e: Throwable) {
-                    Result.failure(e)
-                }
-                if (!isLifecycleActive(generation)) {
-                    cleanupLateStart(
-                        observerMayHaveStarted = false,
-                        dataMayHaveStartedLate = true
-                    )
-                    throw lifecycleStoppedFailure()
-                }
-                if (r.isFailure) {
-                    val cause = r.exceptionOrNull()
-                    val startFailure = P2pError.TransportStartFailed(
-                        transportKind = transport.type,
-                        reason = cause?.message ?: "transport.start() returned failure",
-                        underlying = cause
-                    )
-                    val rollbackIssues = rollbackDataStartup(attempted)
-                    val failureToReport = if (rollbackIssues.isEmpty()) {
-                        startFailure
-                    } else {
-                        startupRollbackFailure(
-                            transport.type,
-                            "failed data startup",
-                            rollbackIssues
-                        ).also { blocker ->
-                            blocker.addSuppressed(startFailure)
-                            startupCleanupBlocker = blocker
-                        }
-                    }
-                    val committed = commitLifecycle(generation) {
-                        startResult = Result.failure(failureToReport)
-                        _state.value = P2pState.Failed(failureToReport)
-                    }
-                    if (!committed) {
+                    // Platform code can acquire a listener, cancel its caller,
+                    // and return without another suspension. Observe that
+                    // cancellation before treating the returned resource as a
+                    // successful lifecycle commit.
+                    currentCoroutineContext().ensureActive()
+                    if (!isLifecycleActive(generation)) {
                         cleanupLateStart(
                             observerMayHaveStarted = false,
                             dataMayHaveStartedLate = true
                         )
                         throw lifecycleStoppedFailure()
                     }
-                    throw failureToReport
-                }
-            }
-            // AUDIT-2026-06 (stop-hang fix): stop() bounds its wait for this
-            // mutex; if one of the transport.start() calls above hung past
-            // that bound, stop() has already torn the kit down WITHOUT the
-            // lock. Re-check before latching success — a Stopped kit must
-            // never latch startResult=success or flip (back) to Running.
-            // Close whatever this bind loop just (re)opened; transport
-            // close() is idempotent for the ones stop() already closed.
-            if (!isLifecycleActive(generation)) {
-                cleanupLateStart(
-                    observerMayHaveStarted = false,
-                    dataMayHaveStartedLate = true
-                )
-                throw IllegalStateException("P2pKit has been stopped; create a new instance")
-            }
-            // Best-effort path observer startup. A failure here is logged
-            // but never propagates — `networkPathStatus` simply stays at
-            // [NetworkPathStatus.Unknown] and the SDK behaves as if no
-            // observer is wired up. Cancellation of the calling coroutine is
-            // NOT a failure, though: rethrow it instead of logging it away
-            // (AUDIT-2026-07 (ARCH-1), same shape as the bind loop above).
-            try {
-                pathObserver.start()
-            } catch (e: CancellationException) {
-                if (isLifecycleActive(generation)) {
-                    // Observer attachment is part of the same startup
-                    // transaction as the data transports. A caller cancelled
-                    // while an observer is acquiring its platform callback
-                    // must not leave a publicly permanent `Starting` state or
-                    // bound listeners behind. Both bundled observers are
-                    // restartable after close, so roll the whole attempt back
-                    // exactly like cancellation during a data-transport start.
-                    withContext(NonCancellable) {
-                        val observerIssue = cleanupStaleResource("network path observer startup") {
-                            pathObserver.close()
+                    if (r.isFailure) {
+                        val cause = r.exceptionOrNull()
+                        val startFailure = P2pError.TransportStartFailed(
+                            transportKind = transport.type,
+                            reason = cause?.message ?: "transport.start() returned failure",
+                            underlying = cause
+                        )
+                        val rollbackIssues = rollbackDataStartup(attempted)
+                        val failureToReport = if (rollbackIssues.isEmpty()) {
+                            startFailure
+                        } else {
+                            startupRollbackFailure(
+                                transport.type,
+                                "failed data startup",
+                                rollbackIssues
+                            ).also { blocker ->
+                                blocker.addSuppressed(startFailure)
+                                startupCleanupBlocker = blocker
+                            }
                         }
+                        val committed = commitLifecycle(generation) {
+                            startResult = Result.failure(failureToReport)
+                            _state.value = P2pState.Failed(failureToReport)
+                        }
+                        if (!committed) {
+                            cleanupLateStart(
+                                observerMayHaveStarted = false,
+                                dataMayHaveStartedLate = true
+                            )
+                            throw lifecycleStoppedFailure()
+                        }
+                        throw failureToReport
+                    }
+                }
+                // AUDIT-2026-06 (stop-hang fix): stop() bounds its wait for this
+                // mutex; if one of the transport.start() calls above hung past
+                // that bound, stop() has already torn the kit down WITHOUT the
+                // lock. Re-check before latching success — a Stopped kit must
+                // never latch startResult=success or flip (back) to Running.
+                // Close whatever this bind loop just (re)opened; transport
+                // close() is idempotent for the ones stop() already closed.
+                if (!isLifecycleActive(generation)) {
+                    cleanupLateStart(
+                        observerMayHaveStarted = false,
+                        dataMayHaveStartedLate = true
+                    )
+                    throw IllegalStateException("P2pKit has been stopped; create a new instance")
+                }
+                // Best-effort path observer startup. A cleanly detached ordinary
+                // failure degrades to no observer for this kit session. An
+                // observer that cannot prove cleanup may still own a native
+                // callback, so roll back data startup and latch fail-closed rather
+                // than attaching a second monitor on retry. Cancellation of the
+                // calling coroutine remains structural and propagates unchanged.
+                observerMayHaveStarted = true
+                val observedPathStatus: StateFlow<NetworkPathStatus>? = try {
+                    pathObserver.start()
+                    // Capture the successfully attached stream before publishing
+                    // Running. A custom observer whose accessor itself fails is
+                    // handled as the same partial-acquisition transaction.
+                    pathObserver.status.also {
+                        currentCoroutineContext().ensureActive()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    logger.warn(
+                        "NetworkPathObserver.start() failed; path-change recovery disabled for this session",
+                        e
+                    )
+                    val observerIssue = cleanupStalePathObserver("network path observer startup")
+                    if (observerIssue == null) {
+                        observerMayHaveStarted = false
+                        null
+                    } else {
                         val rollbackIssues = buildList {
-                            observerIssue?.let(::add)
+                            add(observerIssue)
                             addAll(rollbackDataStartup(attempted))
                         }
-                        val blocker = rollbackIssues.takeIf { it.isNotEmpty() }?.let { issues ->
-                            startupRollbackFailure(
-                                transportFactories.first().descriptor.kind,
-                                "cancelled network-path observer startup",
-                                issues
+                        val blocker = startupRollbackFailure(
+                            transportFactories.first().descriptor.kind,
+                            "failed network-path observer startup",
+                            rollbackIssues
+                        ).also { failure ->
+                            failure.addSuppressed(e)
+                            startupCleanupBlocker = failure
+                        }
+                        val failureCommitted = commitLifecycle(generation) {
+                            startResult = Result.failure(blocker)
+                            _state.value = P2pState.Failed(blocker)
+                        }
+                        if (!failureCommitted) {
+                            cleanupLateStart(
+                                observerMayHaveStarted = true,
+                                dataMayHaveStartedLate = true
                             )
+                            throw lifecycleStoppedFailure()
                         }
-                        if (blocker != null) {
-                            startupCleanupBlocker = blocker
-                            e.addSuppressed(blocker)
-                        }
-                        commitLifecycle(generation) {
-                            startResult = blocker?.let { Result.failure(it) }
-                            _state.value = blocker?.let(P2pState::Failed) ?: P2pState.Idle
+                        throw blocker
+                    }
+                }
+                currentCoroutineContext().ensureActive()
+                val committed = commitLifecycle(generation) {
+                    // Subscribe SessionManager to path changes only while the
+                    // generation is still active. stop() cannot latch terminal
+                    // between this check and the final Running publication.
+                    if (observedPathStatus != null) {
+                        scope.launch {
+                            observedPathStatus.collect { status ->
+                                sessionManager.applyPathChange(status)
+                            }
                         }
                     }
-                } else {
+                    startResult = Result.success(Unit)
+                    _state.value = P2pState.Running
+                }
+                if (!committed) {
                     cleanupLateStart(
-                        observerMayHaveStarted = true,
+                        observerMayHaveStarted = observedPathStatus != null,
                         dataMayHaveStartedLate = false
                     )
+                    throw lifecycleStoppedFailure()
                 }
-                throw e
-            } catch (e: Throwable) {
-                logger.warn("NetworkPathObserver.start() failed; path-change recovery disabled for this session", e)
-            }
-            val committed = commitLifecycle(generation) {
-                // Subscribe SessionManager to path changes only while the
-                // generation is still active. stop() cannot latch terminal
-                // between this check and the final Running publication.
-                scope.launch {
-                    pathObserver.status.collect { status ->
-                        sessionManager.applyPathChange(status)
-                    }
-                }
-                startResult = Result.success(Unit)
-                _state.value = P2pState.Running
-            }
-            if (!committed) {
-                cleanupLateStart(
-                    observerMayHaveStarted = true,
-                    dataMayHaveStartedLate = false
+            } catch (cancelled: CancellationException) {
+                settleCancelledStartup(
+                    generation = generation,
+                    attempted = attempted,
+                    observerMayHaveStarted = observerMayHaveStarted,
+                    cancellation = cancelled
                 )
-                throw lifecycleStoppedFailure()
+                throw cancelled
             }
         }
     }
@@ -634,6 +635,7 @@ internal class P2pKitImpl(
         stopTransport: suspend (DiscoveryTransport) -> Unit
     ) {
         control.operationMutex.withLock {
+            currentCoroutineContext().ensureActive()
             val lifecycleGeneration = beginLifecycleOperation()
             val start = lifecycleMutex.withLock {
                 if (!lifecycleIsActiveLocked(lifecycleGeneration)) throw lifecycleStoppedFailure()
@@ -645,166 +647,245 @@ internal class P2pKitImpl(
                 FeatureStart(token, control.cleanupRequired)
             } ?: return
 
-            if (start.cleanupRequired) {
-                val cleanupIssues = stopDiscoveryResources(
-                    "prepare $featureName retry",
-                    preserveCancellation = false,
-                    cleanup = stopTransport
-                )
-                if (cleanupIssues.isNotEmpty()) {
-                    val cleanupFailure = cleanupError("prepare $featureName retry", cleanupIssues)
-                    finishFeatureStart(
-                        control,
-                        start.token,
-                        FeatureState.Failed(cleanupFailure),
-                        cleanupRequired = true
-                    )
-                    throw cleanupFailure
-                }
-                lifecycleMutex.withLock {
-                    if (control.activeStartToken == start.token) control.cleanupRequired = false
-                }
-            }
-
-            if (handleRequestedFeatureStop(control, start.token, featureName, emptyList(), stopTransport)) {
-                return
-            }
-
-            // Static support is authoritative and does not depend on a
-            // momentary permission/radio state. Report it before querying
-            // runtime availability so an absent provider cannot be mistaken
-            // for a recoverable permission failure.
-            if (discoveryTransports.isEmpty()) {
-                when (
-                    completeFeatureStart(
-                        control,
-                        start.token,
-                        FeatureState.Unsupported(unsupportedReason)
-                    )
-                ) {
-                    FeatureCompletion.Applied -> return
-                    FeatureCompletion.StopRequested -> {
-                        handleRequestedFeatureStop(
-                            control,
-                            start.token,
-                            featureName,
-                            emptyList(),
-                            stopTransport
-                        )
-                        return
-                    }
-                    FeatureCompletion.LifecycleStopped -> throw lifecycleStoppedFailure()
-                    FeatureCompletion.Stale -> throw staleFeatureOperation(featureName)
-                }
-            }
-
-            // Only genuinely runtime-requestable permissions participate.
-            // Install-time manifest declarations remain construction-time
-            // diagnostics and cannot be repaired by a runtime prompt.
-            val missing = try {
-                permissions.missingPermissions()
-            } catch (error: Throwable) {
-                failFeatureStart(
-                    control,
-                    start.token,
-                    lifecycleGeneration,
-                    featureName,
-                    emptyList(),
-                    stopTransport,
-                    error
-                )
-            }
-            if (handleRequestedFeatureStop(control, start.token, featureName, emptyList(), stopTransport)) {
-                return
-            }
-            if (missing.isNotEmpty()) {
-                when (
-                    completeFeatureStart(
-                        control,
-                        start.token,
-                        FeatureState.PermissionRequired(missing)
-                    )
-                ) {
-                    FeatureCompletion.Applied -> throw P2pError.PermissionMissing(missing)
-                    FeatureCompletion.StopRequested -> {
-                        handleRequestedFeatureStop(
-                            control,
-                            start.token,
-                            featureName,
-                            emptyList(),
-                            stopTransport
-                        )
-                        return
-                    }
-                    FeatureCompletion.LifecycleStopped -> throw lifecycleStoppedFailure()
-                    FeatureCompletion.Stale -> throw staleFeatureOperation(featureName)
-                }
-            }
-
-            try {
-                ensureStarted(lifecycleGeneration)
-            } catch (error: Throwable) {
-                failFeatureStart(
-                    control,
-                    start.token,
-                    lifecycleGeneration,
-                    featureName,
-                    emptyList(),
-                    stopTransport,
-                    error
-                )
-            }
-            if (handleRequestedFeatureStop(control, start.token, featureName, emptyList(), stopTransport)) {
-                return
-            }
-
             val attempted = mutableListOf<DiscoveryTransport>()
-            for (transport in discoveryTransports) {
-                if (!isLifecycleActive(lifecycleGeneration)) {
-                    rollbackDiscoveryOperation(featureName, attempted, stopTransport)
-                    throw lifecycleStoppedFailure()
+            var cancellationSettledByFailureHandler = false
+            try {
+                if (start.cleanupRequired) {
+                    // If cancellation interrupts preparation, the outer
+                    // transaction handler retries every possibly retained
+                    // discovery resource before settling the public state.
+                    attempted += discoveryTransports
+                    val cleanupIssues = stopDiscoveryResources(
+                        "prepare $featureName retry",
+                        preserveCancellation = false,
+                        cleanup = stopTransport
+                    )
+                    if (cleanupIssues.isNotEmpty()) {
+                        val cleanupFailure = cleanupError("prepare $featureName retry", cleanupIssues)
+                        finishFeatureStart(
+                            control,
+                            start.token,
+                            FeatureState.Failed(cleanupFailure),
+                            cleanupRequired = true
+                        )
+                        throw cleanupFailure
+                    }
+                    lifecycleMutex.withLock {
+                        if (control.activeStartToken == start.token) control.cleanupRequired = false
+                    }
+                    attempted.clear()
                 }
-                if (handleRequestedFeatureStop(control, start.token, featureName, attempted, stopTransport)) {
+
+                if (
+                    handleRequestedFeatureStop(
+                        control,
+                        start.token,
+                        featureName,
+                        emptyList(),
+                        stopTransport
+                    )
+                ) {
                     return
                 }
-                attempted += transport
-                try {
-                    startTransport(transport)
+
+                // Static support is authoritative and does not depend on a
+                // momentary permission/radio state. Report it before querying
+                // runtime availability so an absent provider cannot be mistaken
+                // for a recoverable permission failure.
+                if (discoveryTransports.isEmpty()) {
+                    when (
+                        completeFeatureStart(
+                            control,
+                            start.token,
+                            FeatureState.Unsupported(unsupportedReason)
+                        )
+                    ) {
+                        FeatureCompletion.Applied -> return
+                        FeatureCompletion.StopRequested -> {
+                            handleRequestedFeatureStop(
+                                control,
+                                start.token,
+                                featureName,
+                                emptyList(),
+                                stopTransport
+                            )
+                            return
+                        }
+                        FeatureCompletion.LifecycleStopped -> throw lifecycleStoppedFailure()
+                        FeatureCompletion.Stale -> throw staleFeatureOperation(featureName)
+                    }
+                }
+
+                // Only genuinely runtime-requestable permissions participate.
+                // Install-time manifest declarations remain construction-time
+                // diagnostics and cannot be repaired by a runtime prompt.
+                val missing = try {
+                    permissions.missingPermissions().also {
+                        currentCoroutineContext().ensureActive()
+                    }
                 } catch (error: Throwable) {
+                    cancellationSettledByFailureHandler = error is CancellationException
                     failFeatureStart(
                         control,
                         start.token,
                         lifecycleGeneration,
                         featureName,
-                        attempted,
+                        emptyList(),
                         stopTransport,
                         error
                     )
                 }
-                if (handleRequestedFeatureStop(control, start.token, featureName, attempted, stopTransport)) {
-                    return
-                }
-            }
-
-            when (completeFeatureStart(control, start.token, FeatureState.Active)) {
-                FeatureCompletion.Applied -> Unit
-                FeatureCompletion.StopRequested -> {
+                if (
                     handleRequestedFeatureStop(
                         control,
                         start.token,
                         featureName,
-                        attempted,
+                        emptyList(),
                         stopTransport
                     )
+                ) {
+                    return
                 }
-                FeatureCompletion.LifecycleStopped -> {
-                    rollbackDiscoveryOperation(featureName, attempted, stopTransport)
-                    throw lifecycleStoppedFailure()
+                if (missing.isNotEmpty()) {
+                    when (
+                        completeFeatureStart(
+                            control,
+                            start.token,
+                            FeatureState.PermissionRequired(missing)
+                        )
+                    ) {
+                        FeatureCompletion.Applied -> throw P2pError.PermissionMissing(missing)
+                        FeatureCompletion.StopRequested -> {
+                            handleRequestedFeatureStop(
+                                control,
+                                start.token,
+                                featureName,
+                                emptyList(),
+                                stopTransport
+                            )
+                            return
+                        }
+                        FeatureCompletion.LifecycleStopped -> throw lifecycleStoppedFailure()
+                        FeatureCompletion.Stale -> throw staleFeatureOperation(featureName)
+                    }
                 }
-                FeatureCompletion.Stale -> {
-                    rollbackDiscoveryOperation(featureName, attempted, stopTransport)
-                    throw staleFeatureOperation(featureName)
+
+                try {
+                    ensureStarted(lifecycleGeneration)
+                    currentCoroutineContext().ensureActive()
+                } catch (error: Throwable) {
+                    cancellationSettledByFailureHandler = error is CancellationException
+                    failFeatureStart(
+                        control,
+                        start.token,
+                        lifecycleGeneration,
+                        featureName,
+                        emptyList(),
+                        stopTransport,
+                        error
+                    )
                 }
+                if (
+                    handleRequestedFeatureStop(
+                        control,
+                        start.token,
+                        featureName,
+                        emptyList(),
+                        stopTransport
+                    )
+                ) {
+                    return
+                }
+
+                for (transport in discoveryTransports) {
+                    if (!isLifecycleActive(lifecycleGeneration)) {
+                        rollbackDiscoveryOperation(featureName, attempted, stopTransport)
+                        throw lifecycleStoppedFailure()
+                    }
+                    if (
+                        handleRequestedFeatureStop(
+                            control,
+                            start.token,
+                            featureName,
+                            attempted,
+                            stopTransport
+                        )
+                    ) {
+                        return
+                    }
+                    attempted += transport
+                    try {
+                        startTransport(transport)
+                        currentCoroutineContext().ensureActive()
+                    } catch (error: Throwable) {
+                        cancellationSettledByFailureHandler = error is CancellationException
+                        failFeatureStart(
+                            control,
+                            start.token,
+                            lifecycleGeneration,
+                            featureName,
+                            attempted,
+                            stopTransport,
+                            error
+                        )
+                    }
+                    if (
+                        handleRequestedFeatureStop(
+                            control,
+                            start.token,
+                            featureName,
+                            attempted,
+                            stopTransport
+                        )
+                    ) {
+                        return
+                    }
+                }
+
+                currentCoroutineContext().ensureActive()
+                when (completeFeatureStart(control, start.token, FeatureState.Active)) {
+                    FeatureCompletion.Applied -> Unit
+                    FeatureCompletion.StopRequested -> {
+                        handleRequestedFeatureStop(
+                            control,
+                            start.token,
+                            featureName,
+                            attempted,
+                            stopTransport
+                        )
+                    }
+                    FeatureCompletion.LifecycleStopped -> {
+                        rollbackDiscoveryOperation(featureName, attempted, stopTransport)
+                        throw lifecycleStoppedFailure()
+                    }
+                    FeatureCompletion.Stale -> {
+                        rollbackDiscoveryOperation(featureName, attempted, stopTransport)
+                        throw staleFeatureOperation(featureName)
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                if (cancellationSettledByFailureHandler) throw cancelled
+                val startStillOwned = withContext(NonCancellable) {
+                    lifecycleMutex.withLock {
+                        !stopped && control.activeStartToken == start.token
+                    }
+                }
+                if (startStillOwned) {
+                    failFeatureStart(
+                        control = control,
+                        token = start.token,
+                        lifecycleGeneration = lifecycleGeneration,
+                        featureName = featureName,
+                        attempted = attempted,
+                        stopTransport = stopTransport,
+                        error = cancelled
+                    )
+                }
+                val issues = rollbackDiscoveryOperation(featureName, attempted, stopTransport)
+                if (issues.isNotEmpty()) {
+                    cancelled.addSuppressed(cleanupError("cancel stale $featureName startup", issues))
+                }
+                throw cancelled
             }
         }
     }
@@ -1219,13 +1300,10 @@ internal class P2pKitImpl(
                     }
                 }
 
-                captureCleanupIssue(
+                capturePathObserverCleanupIssue(
                     resource = "network path observer",
-                    timeoutMillis = OBSERVER_CLOSE_TIMEOUT_MS,
-                    preserveCancellation = false
-                ) {
-                    pathObserver.close()
-                }?.let(issues::add)
+                    timeoutMillis = OBSERVER_CLOSE_TIMEOUT_MS
+                )?.let(issues::add)
             } catch (failure: Throwable) {
                 issues += CleanupIssue("terminal teardown", failure)
             } finally {
@@ -1279,7 +1357,7 @@ internal class P2pKitImpl(
     ) {
         withContext(NonCancellable) {
             if (observerMayHaveStarted) {
-                cleanupStaleResource("network path observer") { pathObserver.close() }
+                cleanupStalePathObserver("network path observer")
             }
             if (dataMayHaveStartedLate) {
                 for (transport in dataTransports.asReversed()) {
@@ -1323,6 +1401,63 @@ internal class P2pKitImpl(
         return issues
     }
 
+    /**
+     * Settle cancellation at any point after startup entered its resource
+     * transaction, including lifecycle-gate suspension after a platform
+     * `start()` already returned. Keeping this compensation outside the
+     * individual transport/observer calls closes the otherwise uncovered
+     * return-to-final-commit cancellation window.
+     */
+    private suspend fun settleCancelledStartup(
+        generation: Long,
+        attempted: List<DataTransport>,
+        observerMayHaveStarted: Boolean,
+        cancellation: CancellationException
+    ) {
+        withContext(NonCancellable) {
+            if (!isLifecycleActive(generation)) {
+                cleanupLateStart(
+                    observerMayHaveStarted = observerMayHaveStarted,
+                    dataMayHaveStartedLate = attempted.isNotEmpty()
+                )
+                return@withContext
+            }
+
+            val rollbackIssues = buildList {
+                if (observerMayHaveStarted) {
+                    cleanupStalePathObserver("network path observer startup")?.let(::add)
+                }
+                addAll(rollbackDataStartup(attempted))
+            }
+            val operation = if (observerMayHaveStarted) {
+                "cancelled network-path observer startup"
+            } else {
+                "cancelled data startup"
+            }
+            val blocker = rollbackIssues.takeIf { it.isNotEmpty() }?.let { issues ->
+                startupRollbackFailure(
+                    attempted.lastOrNull()?.type ?: transportFactories.first().descriptor.kind,
+                    operation,
+                    issues
+                )
+            }
+            if (blocker != null) {
+                startupCleanupBlocker = blocker
+                cancellation.addSuppressed(blocker)
+            }
+            val committed = commitLifecycle(generation) {
+                startResult = blocker?.let { Result.failure(it) }
+                _state.value = blocker?.let(P2pState::Failed) ?: P2pState.Idle
+            }
+            if (!committed) {
+                cleanupLateStart(
+                    observerMayHaveStarted = observerMayHaveStarted,
+                    dataMayHaveStartedLate = attempted.isNotEmpty()
+                )
+            }
+        }
+    }
+
     private fun startupRollbackFailure(
         transportKind: TransportKind,
         operation: String,
@@ -1355,6 +1490,29 @@ internal class P2pKitImpl(
             logger.warn("Late lifecycle cleanup failed for $label", issue.cause)
         }
         return issue
+    }
+
+    private suspend fun cleanupStalePathObserver(label: String): CleanupIssue? {
+        val issue = capturePathObserverCleanupIssue(
+            resource = label,
+            timeoutMillis = STALE_OPERATION_CLEANUP_TIMEOUT_MS
+        )
+        if (issue != null) {
+            logger.warn("Late lifecycle cleanup failed for $label", issue.cause)
+        }
+        return issue
+    }
+
+    private suspend fun capturePathObserverCleanupIssue(
+        resource: String,
+        timeoutMillis: Long
+    ): CleanupIssue? = captureCleanupIssue(
+        resource = resource,
+        timeoutMillis = timeoutMillis,
+        preserveCancellation = false,
+        operationGate = pathObserverCleanupGate
+    ) {
+        pathObserver.close()
     }
 
     /**
@@ -1680,13 +1838,14 @@ internal fun newP2pKit(
         }
     }
     return try {
+        val validatedLocalPeerId = validateLocalPeerId(localPeerId)
         val pathObserver = networkPathObserverOverride ?: defaultNetworkPathObserver(safeLogger)
         val permissionManager = permissionManagerOverride ?: defaultPlatformPermissionManager(safeLogger)
         P2pKitImpl(
             appId = appId,
             deviceName = deviceName,
             localPlatform = currentPlatform(),
-            localPeerId = localPeerId,
+            localPeerId = validatedLocalPeerId,
             localSecureIdentity = secureIdentity,
             secureIdentityService = secureIdentityService,
             secureIdentityUsage = secureIdentityUsage,

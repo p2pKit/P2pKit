@@ -1,13 +1,15 @@
 package dev.p2pkit.core.permission
 
 /**
- * Default permission manager used when the host app does not supply one.
+ * Permission manager for platforms/configurations with no preflight runtime
+ * permission requirement.
  *
  * Reports no required permissions and treats every check as "granted". Apps
- * that need stricter behavior (e.g., Android with `NEARBY_WIFI_DEVICES`)
- * should plug their own implementation in via the builder once that knob
- * exists; for v0.1 this no-op is sufficient because the LAN transport
- * doesn't require runtime permissions on the platforms we ship.
+ * can provide another implementation through
+ * [dev.p2pkit.core.dsl.P2pKitBuilder.permissionManager]. Core LAN uses only
+ * install-time Android permissions; provisioning sidecars expose their own
+ * runtime-permission managers and should be queried immediately around those
+ * provisioning operations rather than used to over-gate core LAN features.
  */
 public class NoOpP2pPermissionManager : P2pPermissionManager {
     override suspend fun requiredPermissions(): List<P2pPermission> = emptyList()

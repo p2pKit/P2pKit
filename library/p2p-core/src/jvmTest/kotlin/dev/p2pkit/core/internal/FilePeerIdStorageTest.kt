@@ -60,6 +60,24 @@ class FilePeerIdStorageTest {
     }
 
     @Test
+    fun oversizedAndMalformedUtf8FilesRegenerateFromBoundedReads() {
+        val corruptRecords = listOf(
+            ByteArray(MAX_PERSISTED_PEER_ID_BYTES + 1) { 'x'.code.toByte() },
+            byteArrayOf(0xC3.toByte(), 0x28)
+        )
+        corruptRecords.forEachIndexed { index, corrupt ->
+            val storage = FilePeerIdStorage(tempDir, "bounded-read-$index", P2pLogger.NoOp)
+            val file = File(storage.storagePath).also { it.parentFile.mkdirs() }
+            Files.write(file.toPath(), corrupt)
+
+            val regenerated = storage.loadOrGenerate()
+
+            assertEquals(regenerated.value, file.readText())
+            assertTrue(file.length() <= MAX_PERSISTED_PEER_ID_BYTES)
+        }
+    }
+
+    @Test
     fun differentAppIdsGetIndependentIds() {
         val app1 = FilePeerIdStorage(tempDir, "app-one", P2pLogger.NoOp).loadOrGenerate()
         val app2 = FilePeerIdStorage(tempDir, "app-two", P2pLogger.NoOp).loadOrGenerate()
@@ -101,6 +119,7 @@ class FilePeerIdStorageTest {
 
     @Test
     fun concurrentInstancesCommitOneProcessWinner() {
+        val initialLockEntries = peerIdProcessLockEntryCountForTest()
         val workers = 16
         val start = CountDownLatch(1)
         val executor = Executors.newFixedThreadPool(workers)
@@ -124,9 +143,25 @@ class FilePeerIdStorageTest {
                     .none { it.name.startsWith("peer-id-") && it.name.endsWith(".tmp") },
                 "successful atomic creation must not retain temporary files"
             )
+            assertEquals(initialLockEntries, peerIdProcessLockEntryCountForTest())
         } finally {
             executor.shutdownNow()
         }
+    }
+
+    @Test
+    fun processLockRegistryDoesNotRetainCompletedAppIdEntries() {
+        val initialEntries = peerIdProcessLockEntryCountForTest()
+
+        repeat(128) { index ->
+            FilePeerIdStorage(tempDir, "ephemeral-lock-$index", P2pLogger.NoOp).loadOrGenerate()
+        }
+
+        assertEquals(
+            initialEntries,
+            peerIdProcessLockEntryCountForTest(),
+            "completed storage operations must release their per-path process locks"
+        )
     }
 
     @Test
