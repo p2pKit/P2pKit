@@ -17,13 +17,23 @@ import dev.p2pkit.core.provisioning.LocalNetworkResult
 import dev.p2pkit.core.provisioning.ManualPeerRegistrar
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
 import dev.p2pkit.core.provisioning.NetworkProvisioningState
+import dev.p2pkit.core.provisioning.NetworkState
 import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.WifiCredentials
 import dev.p2pkit.core.provisioning.WifiPassword
 import dev.p2pkit.core.provisioning.WifiSecurityType
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlin.test.Test
@@ -39,7 +49,9 @@ class JvmNetworkProvisioningManagerTest {
     private fun ctx(
         lanTcpPort: Int? = 12345,
         registrar: ManualPeerRegistrar = RecordingRegistrar(),
-        parentJob: Job? = null
+        parentJob: Job? = null,
+        localFingerprint: PeerFingerprint? = null,
+        localPairingQr: String? = null
     ): ProvisioningContext = ProvisioningContext(
         appId = AppId("jvmnp-test"),
         localPeerId = PeerId("local-id"),
@@ -48,6 +60,8 @@ class JvmNetworkProvisioningManagerTest {
         logger = P2pLogger.NoOp,
         lanTcpPort = { lanTcpPort },
         manualPeerRegistrar = registrar,
+        localFingerprint = localFingerprint,
+        localPairingQr = localPairingQr,
         parentJob = parentJob
     )
 
@@ -97,8 +111,13 @@ class JvmNetworkProvisioningManagerTest {
 
     @Test
     fun manualConnectionInfoCarriesIdentityAndPortWhenPresent() = runBlocking<Unit> {
+        val fingerprint = PeerFingerprint("p2f1-${"a".repeat(52)}")
         val mgr = JvmNetworkProvisioningManager(
-            ctx(lanTcpPort = 54_321),
+            ctx(
+                lanTcpPort = 54_321,
+                localFingerprint = fingerprint,
+                localPairingQr = "p2pkit-v2:test-pairing-qr"
+            ),
             1_000,
             { listOf("192.168.1.42", "10.0.0.42") }
         )
@@ -110,6 +129,8 @@ class JvmNetworkProvisioningManagerTest {
             assertEquals(PeerId("local-id"), info.peerId)
             assertEquals("Tester", info.deviceName)
             assertEquals(listOf("192.168.1.42", "10.0.0.42"), info.hostAddresses)
+            assertEquals(fingerprint, info.fingerprint)
+            assertEquals("p2pkit-v2:test-pairing-qr", info.pairingQr)
         } finally {
             mgr.close()
         }
@@ -148,6 +169,54 @@ class JvmNetworkProvisioningManagerTest {
     }
 
     @Test
+    fun pollingRecoversAfterRecoverableScannerFailure() = runBlocking<Unit> {
+        val calls = AtomicInteger()
+        val mgr = JvmNetworkProvisioningManager(
+            ctx(),
+            1,
+            {
+                if (calls.incrementAndGet() == 1) {
+                    throw IllegalStateException("transient interface enumeration failure")
+                }
+                listOf("192.168.1.42")
+            }
+        )
+        try {
+            val recovered = withTimeout(2_000) {
+                mgr.networkState.first { it is NetworkState.ConnectedToWifi }
+            }
+            assertEquals(
+                listOf("192.168.1.42"),
+                assertIs<NetworkState.ConnectedToWifi>(recovered).localIpAddresses
+            )
+            assertTrue(calls.get() >= 2)
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun parentCancellationTerminallyClosesManager() = runBlocking<Unit> {
+        val parent = Job()
+        val mgr = JvmNetworkProvisioningManager(
+            ctx(parentJob = parent),
+            1_000,
+            { emptyList() }
+        )
+
+        parent.cancel()
+        parent.join()
+
+        assertEquals(NetworkProvisioningState.Closed, mgr.state.value)
+        assertIs<NetworkProvisioningError.ManagerClosed>(
+            assertIs<LocalNetworkResult.Failed>(
+                mgr.startLocalNetwork(LocalNetworkConfig())
+            ).error
+        )
+        mgr.close()
+    }
+
+    @Test
     fun closeIsTerminalIdempotentAndFutureOperationsAreDeterministic() = runBlocking<Unit> {
         val mgr = JvmNetworkProvisioningManager(ctx(), 1_000, { emptyList() })
 
@@ -176,6 +245,71 @@ class JvmNetworkProvisioningManagerTest {
         }
         mgr.stopLocalNetwork()
         assertEquals(NetworkProvisioningState.Closed, mgr.state.value)
+    }
+
+    @Test
+    fun closeFromCancelledCallerFinallyBlockStillCompletes() = runBlocking<Unit> {
+        val mgr = JvmNetworkProvisioningManager(ctx(), 1_000, { emptyList() })
+        val entered = CompletableDeferred<Unit>()
+        val caller = launch {
+            try {
+                entered.complete(Unit)
+                awaitCancellation()
+            } finally {
+                mgr.close()
+            }
+        }
+        entered.await()
+
+        caller.cancel()
+        caller.join()
+
+        assertEquals(NetworkProvisioningState.Closed, mgr.state.value)
+    }
+
+    @Test
+    fun closeWaitsForActiveManualInfoScanAndSuppressesItsLateResult() = runBlocking<Unit> {
+        val calls = AtomicInteger()
+        val scanEntered = CountDownLatch(1)
+        val scanRelease = CountDownLatch(1)
+        val mgr = JvmNetworkProvisioningManager(
+            ctx(),
+            60_000,
+            {
+                if (calls.incrementAndGet() == 1) {
+                    emptyList()
+                } else {
+                    scanEntered.countDown()
+                    check(scanRelease.await(2, TimeUnit.SECONDS)) {
+                        "test did not release the active address scan"
+                    }
+                    listOf("192.168.1.42")
+                }
+            }
+        )
+        withTimeout(2_000) {
+            while (calls.get() == 0) yield()
+        }
+
+        supervisorScope {
+            val info = async(Dispatchers.Default) { mgr.getManualConnectionInfo() }
+            try {
+                assertTrue(scanEntered.await(2, TimeUnit.SECONDS), "manual-info scan did not start")
+                val closing = async(Dispatchers.Default) { mgr.close() }
+                withTimeout(2_000) {
+                    mgr.state.first { it == NetworkProvisioningState.Closing }
+                }
+                assertTrue(closing.isActive, "close must join the active manager-owned operation")
+
+                scanRelease.countDown()
+                assertFailsWith<NetworkProvisioningError.ManagerClosed> { info.await() }
+                withTimeout(2_000) { closing.await() }
+                assertEquals(NetworkProvisioningState.Closed, mgr.state.value)
+            } finally {
+                scanRelease.countDown()
+                mgr.close()
+            }
+        }
     }
 
     @Test

@@ -16,6 +16,13 @@ import dev.p2pkit.core.provisioning.NetworkProvisioningState
 import dev.p2pkit.core.provisioning.NetworkState
 import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.WifiCredentials
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -25,6 +32,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * Minimum-viable iOS implementation of [NetworkProvisioningManager].
@@ -36,9 +44,10 @@ import kotlinx.coroutines.sync.withLock
  * limitations — they will never be implementable in this module.
  *
  * The single feature this manager DOES expose is **manual-IP fallback**:
- * - [getManualConnectionInfo] returns the local kit's `host:port` for
- *   exchanging out-of-band (e.g., to a JVM/Android peer over a chat or
- *   QR code).
+ * - [getManualConnectionInfo] returns the local kit's port and authenticated
+ *   identity for exchanging out-of-band. The Swift host supplies an address
+ *   from its path monitor because this manager intentionally returns no
+ *   synchronous address snapshot.
  * - [createManualPeer] registers a synthetic peer keyed by
  *   `TransportHint(host, port)` so the iOS LAN data transport can dial
  *   it via `nw_endpoint_create_host` — see
@@ -52,9 +61,13 @@ import kotlinx.coroutines.sync.withLock
  * [events] remain static; [state] changes only for terminal [close].
  */
 public class IosManualNetworkProvisioningManager internal constructor(
-    private val ctx: ProvisioningContext
+    private val ctx: ProvisioningContext,
+    private val lifecycleHooks: IosManualProvisioningLifecycleHooks =
+        IosManualProvisioningLifecycleHooks()
 ) : NetworkProvisioningManager {
 
+    private val scopeJob = SupervisorJob(parent = ctx.parentJob)
+    private val scope = CoroutineScope(Dispatchers.Default + scopeJob)
     private val closeLock = Mutex()
     @kotlin.concurrent.Volatile
     private var closed: Boolean = false
@@ -72,86 +85,131 @@ public class IosManualNetworkProvisioningManager internal constructor(
     )
     override val events: Flow<NetworkProvisioningEvent> = _events.asSharedFlow()
 
-    override suspend fun startLocalNetwork(config: LocalNetworkConfig): LocalNetworkResult =
-        if (closed) LocalNetworkResult.Failed(NetworkProvisioningError.ManagerClosed())
-        else LocalNetworkResult.Unsupported(
-            "iOS cannot host Wi-Fi hotspots — Apple does not expose this to third-party apps."
-        )
-
-    override suspend fun stopLocalNetwork() {
-        // No-op — nothing to stop.
-    }
-
-    override suspend fun joinLocalNetwork(credentials: WifiCredentials): JoinNetworkResult =
-        if (closed) JoinNetworkResult.Failed(NetworkProvisioningError.ManagerClosed())
-        else JoinNetworkResult.Unsupported(
-            "iOS cannot programmatically join arbitrary Wi-Fi networks — the user must use the system Settings."
-        )
-
-    override suspend fun getManualConnectionInfo(): ManualConnectionInfo? {
-        ensureOpen()
-        // Read lazily — the LAN data transport's port isn't bound until
-        // `kit.start()` (or the first lifecycle call) succeeds.
-        val port = ctx.lanTcpPort() ?: return null
-        // Apple does not give us a non-loopback IP list synchronously without
-        // a path monitor subscription; populating hostAddresses requires the
-        // Swift consumer to read it themselves (e.g., via
-        // CNCopySupportedInterfaces or NWPathMonitor on the iOS side and pass
-        // it in). Returning an empty list still surfaces the port and ids,
-        // which is all the dialer needs.
-        return ManualConnectionInfo(
-            hostAddresses = emptyList(),
-            port = port,
-            appId = ctx.appId,
-            peerId = ctx.localPeerId,
-            deviceName = ctx.localDeviceName,
-            fingerprint = ctx.localFingerprint,
-            pairingQr = ctx.localPairingQr
-        )
-    }
-
-    @OptIn(ExperimentalP2pApi::class)
-    @Deprecated(
-        message = "Secure manual-IP connections require an expected fingerprint. Use the fingerprint overload.",
-        replaceWith = ReplaceWith("createManualPeer(host, port, expectedFingerprint)")
-    )
-    override suspend fun createManualPeer(host: String, port: Int): Peer {
-        ensureOpen()
-        ctx.logger.info("provisioning: createManualPeer host=$host port=$port")
-        IosLanDebug.log("provision", "createManualPeer host=$host port=$port")
-        return ctx.manualPeerRegistrar.registerManualPeer(host = host, port = port)
-    }
-
-    @ExperimentalP2pApi
-    override suspend fun createManualPeer(
-        host: String,
-        port: Int,
-        expectedFingerprint: PeerFingerprint
-    ): Peer {
-        ensureOpen()
-        ctx.logger.info("provisioning: createManualPeer host=$host port=$port with authenticated pin")
-        IosLanDebug.log("provision", "createManualPeer host=$host port=$port with authenticated pin")
-        return ctx.manualPeerRegistrar.registerManualPeer(
-            host = host,
-            port = port,
-            expectedFingerprint = expectedFingerprint
-        )
-    }
-
-    override suspend fun close() {
-        closeLock.withLock {
-            if (closed) return
-            _state.value = NetworkProvisioningState.Closing
+    init {
+        scopeJob.invokeOnCompletion {
             closed = true
             _networkState.value = NetworkState.Unknown
             _state.value = NetworkProvisioningState.Closed
         }
     }
 
+    override suspend fun startLocalNetwork(config: LocalNetworkConfig): LocalNetworkResult =
+        runManagerOperation(::closedLocalNetworkResult) {
+            if (isClosingOrClosed()) closedLocalNetworkResult()
+            else LocalNetworkResult.Unsupported(
+                "iOS cannot host Wi-Fi hotspots — Apple does not expose this to third-party apps."
+            )
+        }
+
+    override suspend fun stopLocalNetwork(): Unit = runManagerOperation({}) {
+        // No-op — nothing to stop.
+    }
+
+    override suspend fun joinLocalNetwork(credentials: WifiCredentials): JoinNetworkResult =
+        runManagerOperation(::closedJoinNetworkResult) {
+            if (isClosingOrClosed()) closedJoinNetworkResult()
+            else JoinNetworkResult.Unsupported(
+                "iOS cannot programmatically join arbitrary Wi-Fi networks — the user must use the system Settings."
+            )
+        }
+
+    override suspend fun getManualConnectionInfo(): ManualConnectionInfo? =
+        runManagerOperation({ throw NetworkProvisioningError.ManagerClosed() }) {
+            ensureOpen()
+            // Read lazily — the LAN data transport's port isn't bound until
+            // `kit.start()` (or the first lifecycle call) succeeds.
+            val port = ctx.lanTcpPort() ?: return@runManagerOperation null
+            lifecycleHooks.beforeManualInfoResult()
+            // Apple does not give us a non-loopback IP list synchronously without
+            // a path monitor subscription; populating hostAddresses requires the
+            // Swift consumer to read it themselves (e.g., via
+            // CNCopySupportedInterfaces or NWPathMonitor on the iOS side and pass
+            // it in). Returning an empty list still surfaces the port and ids,
+            // which is all the dialer needs.
+            ManualConnectionInfo(
+                hostAddresses = emptyList(),
+                port = port,
+                appId = ctx.appId,
+                peerId = ctx.localPeerId,
+                deviceName = ctx.localDeviceName,
+                fingerprint = ctx.localFingerprint,
+                pairingQr = ctx.localPairingQr
+            )
+        }
+
+    @OptIn(ExperimentalP2pApi::class)
+    @Deprecated(
+        message = "Secure manual-IP connections require an expected fingerprint. Use the fingerprint overload.",
+        replaceWith = ReplaceWith("createManualPeer(host, port, expectedFingerprint)")
+    )
+    override suspend fun createManualPeer(host: String, port: Int): Peer =
+        runManagerOperation({ throw NetworkProvisioningError.ManagerClosed() }) {
+            ensureOpen()
+            ctx.logger.info("provisioning: createManualPeer host=$host port=$port")
+            IosLanDebug.log("provision", "createManualPeer host=$host port=$port")
+            ctx.manualPeerRegistrar.registerManualPeer(host = host, port = port)
+        }
+
+    @ExperimentalP2pApi
+    override suspend fun createManualPeer(
+        host: String,
+        port: Int,
+        expectedFingerprint: PeerFingerprint
+    ): Peer = runManagerOperation({ throw NetworkProvisioningError.ManagerClosed() }) {
+        ensureOpen()
+        ctx.logger.info("provisioning: createManualPeer host=$host port=$port with authenticated pin")
+        IosLanDebug.log("provision", "createManualPeer host=$host port=$port with authenticated pin")
+        ctx.manualPeerRegistrar.registerManualPeer(
+            host = host,
+            port = port,
+            expectedFingerprint = expectedFingerprint
+        )
+    }
+
+    override suspend fun close(): Unit = withContext(NonCancellable) {
+        closeLock.withLock {
+            if (!closed) {
+                closed = true
+                _state.value = NetworkProvisioningState.Closing
+            }
+            scopeJob.cancelAndJoin()
+            _networkState.value = NetworkState.Unknown
+            _state.value = NetworkProvisioningState.Closed
+        }
+    }
+
     private fun ensureOpen() {
-        if (closed) throw NetworkProvisioningError.ManagerClosed()
+        if (isClosingOrClosed()) throw NetworkProvisioningError.ManagerClosed()
+    }
+
+    private fun isClosingOrClosed(): Boolean = closed || !scopeJob.isActive
+
+    private fun closedLocalNetworkResult(): LocalNetworkResult = LocalNetworkResult.Failed(
+        NetworkProvisioningError.ManagerClosed()
+    )
+
+    private fun closedJoinNetworkResult(): JoinNetworkResult = JoinNetworkResult.Failed(
+        NetworkProvisioningError.ManagerClosed()
+    )
+
+    private suspend fun <T> runManagerOperation(
+        closedResult: () -> T,
+        block: suspend () -> T
+    ): T {
+        val operation = scope.async { block() }
+        return try {
+            operation.await()
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) { operation.cancelAndJoin() }
+            if (isClosingOrClosed()) closedResult() else throw e
+        }
     }
 }
+
+/** Deterministic suspension seam used only by Apple lifecycle tests. */
+internal class IosManualProvisioningLifecycleHooks(
+    val beforeManualInfoResult: suspend () -> Unit = {}
+)
 
 /**
  * Factory used by the DSL extension below.
@@ -176,11 +234,11 @@ public object IosManualProvisioningFactory : NetworkProvisioningFactory {
  * ```
  *
  * After this is registered, Swift consumers can call
- * `kit.networkProvisioning.createManualPeer(host:port:completionHandler:)`
- * to dial a peer directly by IP — useful when NWBrowser-based discovery
- * isn't yielding results (corporate Wi-Fi blocking multicast, iOS
- * Simulator network sandbox, etc.). Hotspot host / Wi-Fi join APIs
- * remain `Unsupported`.
+ * `kit.networkProvisioning.createManualPeer(host:port:expectedFingerprint:completionHandler:)`
+ * to dial a peer directly by IP with its secure-v2 identity pinned — useful
+ * when NWBrowser-based discovery isn't yielding results (corporate Wi-Fi
+ * blocking multicast, iOS Simulator network sandbox, etc.). Hotspot host /
+ * Wi-Fi join APIs remain `Unsupported`.
  */
 public fun NetworkProvisioningConfigBuilder.iosManualIp() {
     register(IosManualProvisioningFactory)

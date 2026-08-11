@@ -4,6 +4,7 @@ import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.NetworkProvisioningError
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerFingerprint
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * Fallback used when no provisioning factory is registered via the
@@ -67,11 +69,11 @@ public class UnsupportedNetworkProvisioningManager : NetworkProvisioningManager 
     ): Peer = if (closed) throw NetworkProvisioningError.ManagerClosed()
     else throw UnsupportedOperationException(NOT_IN_V01)
 
-    override suspend fun close() {
+    override suspend fun close(): Unit = withContext(NonCancellable) {
         closeLock.withLock {
-            if (closed) return
-            _state.value = NetworkProvisioningState.Closing
+            if (closed) return@withLock
             closed = true
+            _state.value = NetworkProvisioningState.Closing
             _networkState.value = NetworkState.Unknown
             _state.value = NetworkProvisioningState.Closed
         }
@@ -82,6 +84,10 @@ public class UnsupportedNetworkProvisioningManager : NetworkProvisioningManager 
     }
 
     private companion object {
-        const val NOT_IN_V01 = "Network provisioning is planned for v0.2 and not implemented in v0.1."
+        // The compiler-generated field name is retained for RC2 JVM binary
+        // compatibility even though its original v0.1-era wording is obsolete.
+        const val NOT_IN_V01 =
+            "No network provisioning implementation is registered. Add the platform module and configure " +
+                "android(...), jvm(), or iosManualIp()."
     }
 }

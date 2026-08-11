@@ -18,7 +18,13 @@ import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.WifiCredentials
 import dev.p2pkit.core.provisioning.WifiPassword
 import dev.p2pkit.core.provisioning.WifiSecurityType
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -63,6 +69,101 @@ class IosManualProvisioningLifecycleTest {
         }
         manager.stopLocalNetwork()
         assertEquals(NetworkProvisioningState.Closed, manager.state.value)
+    }
+
+    @Test
+    fun closeCompletesFromCancelledCallerFinallyBlock() = runBlocking<Unit> {
+        val manager = IosManualNetworkProvisioningManager(
+            ProvisioningContext(
+                appId = AppId("ios-provisioning-cancelled-close"),
+                localPeerId = PeerId("local"),
+                localDeviceName = "iPhone",
+                config = NetworkProvisioningConfig(),
+                logger = P2pLogger.NoOp,
+                lanTcpPort = { 42_000 },
+                manualPeerRegistrar = RejectingRegistrar
+            )
+        )
+        val entered = CompletableDeferred<Unit>()
+        val caller = launch {
+            try {
+                entered.complete(Unit)
+                awaitCancellation()
+            } finally {
+                manager.close()
+            }
+        }
+        entered.await()
+
+        caller.cancel()
+        caller.join()
+
+        assertEquals(NetworkProvisioningState.Closed, manager.state.value)
+    }
+
+    @Test
+    fun parentCancellationTerminallyClosesManager() = runBlocking<Unit> {
+        val parent = Job()
+        val manager = IosManualNetworkProvisioningManager(
+            ProvisioningContext(
+                appId = AppId("ios-provisioning-parent-close"),
+                localPeerId = PeerId("local"),
+                localDeviceName = "iPhone",
+                config = NetworkProvisioningConfig(),
+                logger = P2pLogger.NoOp,
+                lanTcpPort = { 42_000 },
+                manualPeerRegistrar = RejectingRegistrar,
+                parentJob = parent
+            )
+        )
+
+        parent.cancel()
+        parent.join()
+
+        assertEquals(NetworkProvisioningState.Closed, manager.state.value)
+        assertIs<NetworkProvisioningError.ManagerClosed>(
+            assertIs<LocalNetworkResult.Failed>(
+                manager.startLocalNetwork(LocalNetworkConfig())
+            ).error
+        )
+        manager.close()
+    }
+
+    @Test
+    fun closeCancelsAndJoinsAnActiveManualInfoOperation() = runBlocking<Unit> {
+        val operationEntered = CompletableDeferred<Unit>()
+        val operationRelease = CompletableDeferred<Unit>()
+        val manager = IosManualNetworkProvisioningManager(
+            ProvisioningContext(
+                appId = AppId("ios-provisioning-active-close"),
+                localPeerId = PeerId("local"),
+                localDeviceName = "iPhone",
+                config = NetworkProvisioningConfig(),
+                logger = P2pLogger.NoOp,
+                lanTcpPort = { 42_000 },
+                manualPeerRegistrar = RejectingRegistrar
+            ),
+            IosManualProvisioningLifecycleHooks(
+                beforeManualInfoResult = {
+                    operationEntered.complete(Unit)
+                    operationRelease.await()
+                }
+            )
+        )
+        supervisorScope {
+            val info = async { manager.getManualConnectionInfo() }
+            try {
+                operationEntered.await()
+
+                manager.close()
+
+                assertFailsWith<NetworkProvisioningError.ManagerClosed> { info.await() }
+                assertEquals(NetworkProvisioningState.Closed, manager.state.value)
+            } finally {
+                operationRelease.complete(Unit)
+                manager.close()
+            }
+        }
     }
 }
 

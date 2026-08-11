@@ -6,7 +6,8 @@
   it surfaces. The host app is responsible for declaring all of these in its
   own AndroidManifest.xml — P2pKit never requests permissions itself, only
   reports which runtime ones are missing via P2pPermissionManager:
-    - NEARBY_WIFI_DEVICES (API 33+) / ACCESS_FINE_LOCATION (API <=32) — runtime
+    - NEARBY_WIFI_DEVICES when device + targetSdk are 33+, otherwise
+      ACCESS_FINE_LOCATION — runtime
     - ACCESS_WIFI_STATE, CHANGE_WIFI_STATE, CHANGE_NETWORK_STATE — install-time;
       CHANGE_NETWORK_STATE is required by the WifiNetworkSpecifier join path
       (ConnectivityManager.requestNetwork) and was previously undocumented here.

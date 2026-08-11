@@ -22,6 +22,12 @@ exist. It does not mean the fault-injection and headful observation procedures
 have been executed. P2pKit has **not** received an independent professional
 cryptographic audit.
 
+Repository-side lifecycle/resource prerequisites for Android and Apple manual
+provisioning were strengthened and host/simulator-tested in implementation
+commit `fc73837cfa154caa82a6f96172603108b8577842`; the exact automated boundary
+is recorded in the [GitHub audit](../maintenance/github-audit-2026-08.md).
+That evidence does not change either physical campaign's status.
+
 ## Shared execution contract
 
 The [test catalog](test-catalog.md) is the canonical source for test IDs,

@@ -31,8 +31,9 @@ import dev.p2pkit.core.dsl.NetworkProvisioningConfigBuilder
  *  - `getManualConnectionInfo()` + `createManualPeer()` → identical shape to JVM.
  *
  * **Permissions:** the host app must declare and request:
- *  - `NEARBY_WIFI_DEVICES` (targetSdk ≥ 33, with `usesPermissionFlags="neverForLocation"`)
- *  - or `ACCESS_FINE_LOCATION` (targetSdk < 33)
+ *  - `NEARBY_WIFI_DEVICES` when both the device API and targetSdk are 33+
+ *    (with `usesPermissionFlags="neverForLocation"`)
+ *  - otherwise `ACCESS_FINE_LOCATION`
  *  - and the install-time `ACCESS_WIFI_STATE`, `CHANGE_WIFI_STATE`, and
  *    `CHANGE_NETWORK_STATE` entries. The latter three cannot be requested at
  *    runtime; the Android permission manager logs a diagnostic when they are

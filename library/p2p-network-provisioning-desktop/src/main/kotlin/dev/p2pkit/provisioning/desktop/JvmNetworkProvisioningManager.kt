@@ -21,10 +21,12 @@ import java.net.Inet6Address
 import java.net.NetworkInterface
 import java.net.SocketException
 import java.util.Collections
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
@@ -117,57 +119,63 @@ public class JvmNetworkProvisioningManager private constructor(
     }
 
     override suspend fun startLocalNetwork(config: LocalNetworkConfig): LocalNetworkResult =
-        if (closed) LocalNetworkResult.Failed(NetworkProvisioningError.ManagerClosed())
-        else LocalNetworkResult.Unsupported(
-            "JVM desktop cannot host Wi-Fi hotspots; use Android for hosting."
-        )
+        runManagerOperation(::closedLocalNetworkResult) {
+            if (isClosingOrClosed()) closedLocalNetworkResult()
+            else LocalNetworkResult.Unsupported(
+                "JVM desktop cannot host Wi-Fi hotspots; use Android for hosting."
+            )
+        }
 
-    override suspend fun stopLocalNetwork() {
+    override suspend fun stopLocalNetwork(): Unit = runManagerOperation({}) {
         // No-op: nothing to stop on JVM.
     }
 
     override suspend fun joinLocalNetwork(credentials: WifiCredentials): JoinNetworkResult =
-        if (closed) JoinNetworkResult.Failed(NetworkProvisioningError.ManagerClosed())
-        else JoinNetworkResult.Unsupported(
-            "JVM desktop cannot programmatically join Wi-Fi networks; the user must use the OS network UI."
-        )
+        runManagerOperation(::closedJoinNetworkResult) {
+            if (isClosingOrClosed()) closedJoinNetworkResult()
+            else JoinNetworkResult.Unsupported(
+                "JVM desktop cannot programmatically join Wi-Fi networks; the user must use the OS network UI."
+            )
+        }
 
-    override suspend fun getManualConnectionInfo(): ManualConnectionInfo? {
-        ensureOpen()
-        val port = ctx.lanTcpPort() ?: return null
-        val ips = withContext(Dispatchers.IO) { addressScanner.scan() }
-        if (ips.isEmpty()) return null
-        return ManualConnectionInfo(
-            hostAddresses = ips,
-            port = port,
-            appId = ctx.appId,
-            peerId = ctx.localPeerId,
-            deviceName = ctx.localDeviceName,
-            fingerprint = ctx.localFingerprint,
-            pairingQr = ctx.localPairingQr
-        )
-    }
+    override suspend fun getManualConnectionInfo(): ManualConnectionInfo? =
+        runManagerOperation({ throw NetworkProvisioningError.ManagerClosed() }) {
+            ensureOpen()
+            val port = ctx.lanTcpPort() ?: return@runManagerOperation null
+            val ips = withContext(Dispatchers.IO) { addressScanner.scan() }
+            if (ips.isEmpty()) return@runManagerOperation null
+            ManualConnectionInfo(
+                hostAddresses = ips,
+                port = port,
+                appId = ctx.appId,
+                peerId = ctx.localPeerId,
+                deviceName = ctx.localDeviceName,
+                fingerprint = ctx.localFingerprint,
+                pairingQr = ctx.localPairingQr
+            )
+        }
 
     @ExperimentalP2pApi
     @Deprecated(
         message = "Secure manual-IP connections require an expected fingerprint. Use the fingerprint overload.",
         replaceWith = ReplaceWith("createManualPeer(host, port, expectedFingerprint)")
     )
-    override suspend fun createManualPeer(host: String, port: Int): Peer {
-        ensureOpen()
-        ctx.logger.info("provisioning: createManualPeer host=$host port=$port")
-        return ctx.manualPeerRegistrar.registerManualPeer(host = host, port = port)
-    }
+    override suspend fun createManualPeer(host: String, port: Int): Peer =
+        runManagerOperation({ throw NetworkProvisioningError.ManagerClosed() }) {
+            ensureOpen()
+            ctx.logger.info("provisioning: createManualPeer host=$host port=$port")
+            ctx.manualPeerRegistrar.registerManualPeer(host = host, port = port)
+        }
 
     @ExperimentalP2pApi
     override suspend fun createManualPeer(
         host: String,
         port: Int,
         expectedFingerprint: PeerFingerprint
-    ): Peer {
+    ): Peer = runManagerOperation({ throw NetworkProvisioningError.ManagerClosed() }) {
         ensureOpen()
         ctx.logger.info("provisioning: createManualPeer host=$host port=$port with authenticated pin")
-        return ctx.manualPeerRegistrar.registerManualPeer(
+        ctx.manualPeerRegistrar.registerManualPeer(
             host = host,
             port = port,
             expectedFingerprint = expectedFingerprint
@@ -188,7 +196,31 @@ public class JvmNetworkProvisioningManager private constructor(
     }
 
     private fun ensureOpen() {
-        if (closed) throw NetworkProvisioningError.ManagerClosed()
+        if (isClosingOrClosed()) throw NetworkProvisioningError.ManagerClosed()
+    }
+
+    private fun isClosingOrClosed(): Boolean = closed || !scopeJob.isActive
+
+    private fun closedLocalNetworkResult(): LocalNetworkResult = LocalNetworkResult.Failed(
+        NetworkProvisioningError.ManagerClosed()
+    )
+
+    private fun closedJoinNetworkResult(): JoinNetworkResult = JoinNetworkResult.Failed(
+        NetworkProvisioningError.ManagerClosed()
+    )
+
+    /** Tracks the complete API call as manager-owned work until result delivery. */
+    private suspend fun <T> runManagerOperation(
+        closedResult: () -> T,
+        block: suspend () -> T
+    ): T {
+        val operation = scope.async { block() }
+        return try {
+            operation.await()
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) { operation.cancelAndJoin() }
+            if (isClosingOrClosed()) closedResult() else throw e
+        }
     }
 
     // --- internals --------------------------------------------------------
@@ -202,11 +234,14 @@ public class JvmNetworkProvisioningManager private constructor(
                 } else {
                     NetworkState.ConnectedToWifi(ssid = null, localIpAddresses = ips)
                 }
-            } catch (e: SocketException) {
-                ctx.logger.debug("provisioning: NetworkInterface poll failed: ${e.message}")
-                _networkState.value = NetworkState.Unknown
-            } catch (e: kotlinx.coroutines.CancellationException) {
+            } catch (e: CancellationException) {
                 throw e
+            } catch (e: Exception) {
+                ctx.logger.debug(
+                    "provisioning: NetworkInterface poll failed with " +
+                        "${e::class.simpleName}: ${e.message ?: "(no message)"}"
+                )
+                _networkState.value = NetworkState.Unknown
             }
             delay(pollIntervalMillis)
         }
