@@ -13,11 +13,13 @@ import dev.p2pkit.core.protocol.DefaultP2pProtocol
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -55,8 +57,14 @@ class IncomingSetupLaunchOwnershipTest {
         manager.startAcceptingIncoming(listOf(transport))
         testScheduler.runCurrent()
 
-        withTimeout(5_000) {
-            pair.a.state.first { it == ConnectionState.Closed }
+        // The fallback close is intentionally owned by a real detached
+        // cleanup worker. Observe it under a real deadline rather than racing
+        // runTest's virtual clock (which can jump five seconds before that
+        // worker receives a CPU slice on Native).
+        withContext(Dispatchers.Default) {
+            withTimeout(5_000) {
+                pair.a.state.first { it == ConnectionState.Closed }
+            }
         }
         assertTrue(manager.sessions.value.isEmpty())
     }

@@ -34,8 +34,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.async
@@ -496,6 +500,7 @@ internal class SessionManager(
         }
     }
 
+    @OptIn(DelicateCoroutinesApi::class, ExperimentalCoroutinesApi::class)
     private fun handleIncoming(connection: RawConnection) {
         // AUDIT-2026-07 (SEC-1, decision #9a): inbound admission control,
         // stage 1 — pre-handshake concurrency. Non-suspending tryAcquire so
@@ -511,17 +516,21 @@ internal class SessionManager(
                 "Inbound connection refused: pre-handshake setups at capacity " +
                     "($MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS)"
             )
-            // Start cleanup inline through its first suspension. The bounded
-            // independent cleanup owner then survives a kit-scope cancellation,
-            // so terminal shutdown cannot strand a just-refused socket before
-            // a queued fire-and-forget close job ever starts.
-            scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                closeUncommittedConnection(connection)
-            }
+            // This cleanup must not inherit the kit Job: shutdown can
+            // linearize between the capacity decision and launch. Use the
+            // bounded independent owner so a just-refused socket always gets
+            // a close attempt even when the kit scope is already cancelled.
+            launchIndependentUncommittedConnectionCleanup(connection)
             return
         }
         beforeIncomingSetupLaunchForTest?.invoke()
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        // ATOMIC guarantees this ownership body starts even when terminal
+        // cancellation linearizes after admission but immediately before
+        // launch. The first suspension may then deliver cancellation, and
+        // runTrackedSessionSetup's unowned-raw fallback closes the socket.
+        val launchBodyStarted = CompletableDeferred<Unit>()
+        val setupLaunch = scope.launch(start = CoroutineStart.ATOMIC) {
+            launchBodyStarted.complete(Unit)
             // Exactly-once permit release: [setupSession] invokes
             // onHandshakeSettled from a `finally` around the handshake, so
             // BOTH outcomes — success and every failure path (setup timeout,
@@ -559,6 +568,28 @@ internal class SessionManager(
                 releaseOnce()
             }
         }
+        setupLaunch.invokeOnCompletion {
+            // A parent cancelled before this ATOMIC child reached its body
+            // never entered runTrackedSessionSetup and therefore never
+            // transferred raw ownership to the setup registry. Completion
+            // callbacks are non-suspending, so hand that sole remaining
+            // cleanup obligation to a detached, bounded worker.
+            if (!launchBodyStarted.isCompleted) {
+                preHandshakeGate.release()
+                launchIndependentUncommittedConnectionCleanup(connection)
+            }
+        }
+    }
+
+    @OptIn(DelicateCoroutinesApi::class, ExperimentalCoroutinesApi::class)
+    private fun launchIndependentUncommittedConnectionCleanup(connection: RawConnection) {
+        val owner = SupervisorJob()
+        val cleanupJob = CoroutineScope(owner + Dispatchers.Default).launch(
+            start = CoroutineStart.ATOMIC
+        ) {
+            closeUncommittedConnection(connection)
+        }
+        cleanupJob.invokeOnCompletion { owner.cancel() }
     }
 
     /**
@@ -573,6 +604,14 @@ internal class SessionManager(
         block: suspend () -> SessionSetupResult
     ): P2pSession {
         val delivery = MutableStateFlow<SessionSetupDelivery>(SessionSetupDelivery.Pending)
+        // The caller owns the raw connection until the setup registry has
+        // accepted an ActiveSessionSetup (or the rejected-registration path
+        // has closed it itself). In particular, a cancelled parent can reach
+        // the first coroutineScope boundary before its block creates the lazy
+        // setup child. That boundary used to leave no registry entry, no
+        // setup child, and therefore no cleanup owner for the accepted socket
+        // on Kotlin/Native.
+        var setupOwnsRawConnection = false
         return try {
             val result = coroutineScope {
                 val bodyStarted = CompletableDeferred<Unit>()
@@ -591,8 +630,14 @@ internal class SessionManager(
                 if (!registerSessionSetup(setup)) {
                     setupJob.cancel(CancellationException("P2pKit stopped before session setup started"))
                     withContext(NonCancellable) { closeUncommittedConnection(rawConnection) }
+                    setupOwnsRawConnection = true
                     throw lifecycleStoppedFailure()
                 }
+                // There is no suspension between successful registration and
+                // this hand-off. From here, either the setup body owns cleanup
+                // or the await failure path below closes a child that never
+                // started.
+                setupOwnsRawConnection = true
 
                 setupJob.start()
                 try {
@@ -626,6 +671,9 @@ internal class SessionManager(
             result.session
         } catch (failure: Throwable) {
             withContext(NonCancellable) {
+                if (!setupOwnsRawConnection) {
+                    closeUncommittedConnection(rawConnection)
+                }
                 val produced = delivery.value as? SessionSetupDelivery.Produced
                 if (produced != null && delivery.compareAndSet(
                         produced,
