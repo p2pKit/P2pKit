@@ -10,12 +10,20 @@ import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerEvent
 import dev.p2pkit.core.transport.TransportHint
+import dev.p2pkit.core.testfixtures.RecordingLogger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -24,6 +32,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class PeerRegistryTest {
 
     private fun peer(id: String, name: String = id): InternalPeer = InternalPeer(
@@ -104,6 +113,70 @@ class PeerRegistryTest {
         } finally {
             supervisor.cancel()
         }
+    }
+
+    @Test
+    fun discoveryCollectorsRecoverAfterFailureAndUnexpectedCompletion() = runTest {
+        val logger = RecordingLogger()
+        val failed = RecoveringDiscovery(
+            type = TransportKind.LAN,
+            recoveredEvent = PeerEvent.Found(peer("after-failure")),
+            firstFailure = IllegalStateException("transient discovery failure")
+        )
+        val completed = RecoveringDiscovery(
+            type = TransportKind.BLE,
+            recoveredEvent = PeerEvent.Found(
+                peer("after-completion").copy(
+                    publicPeer = peer("after-completion").publicPeer.copy(
+                        supportedTransports = setOf(TransportKind.BLE)
+                    )
+                )
+            ),
+            firstFailure = null
+        )
+        val callbackCancelled = RecoveringDiscovery(
+            type = TransportKind.LAN,
+            recoveredEvent = PeerEvent.Found(peer("after-callback-cancellation")),
+            firstFailure = CancellationException("transport callback cancellation")
+        )
+        val registry = PeerRegistry(
+            discoveryTransports = listOf(failed, completed, callbackCancelled),
+            scope = backgroundScope,
+            clock = { testScheduler.currentTime },
+            monotonicClock = { testScheduler.currentTime },
+            staleTimeoutMillis = 60_000,
+            evictionPollMillis = 60_000,
+            logger = logger
+        )
+
+        registry.start()
+        runCurrent()
+        assertTrue(registry.peers.value.isEmpty())
+
+        advanceTimeBy(100)
+        runCurrent()
+
+        assertEquals(2, failed.collections)
+        assertEquals(2, completed.collections)
+        assertEquals(2, callbackCancelled.collections)
+        assertEquals(
+            setOf(
+                PeerId("after-failure"),
+                PeerId("after-completion"),
+                PeerId("after-callback-cancellation")
+            ),
+            registry.peers.value.map { it.id }.toSet()
+        )
+        assertTrue(logger.warnings.any { "LAN failed" in it && "retrying" in it })
+        assertTrue(logger.warnings.any { "BLE completed unexpectedly" in it && "retrying" in it })
+        assertTrue(
+            logger.entries.any {
+                it.level == RecordingLogger.Level.WARN &&
+                    it.throwable is CancellationException &&
+                    "retrying" in it.message
+            },
+            "callback-thrown CancellationException must be diagnosed and recollected"
+        )
     }
 
     @Test
@@ -708,6 +781,31 @@ class PeerRegistryTest {
         suspend fun emit(event: PeerEvent) {
             flow.emit(event)
         }
+
+        override suspend fun startAdvertising(localPeer: LocalPeerInfo) = Unit
+        override suspend fun stopAdvertising() = Unit
+        override suspend fun startDiscovery() = Unit
+        override suspend fun stopDiscovery() = Unit
+    }
+
+    private class RecoveringDiscovery(
+        override val type: TransportKind,
+        private val recoveredEvent: PeerEvent,
+        private val firstFailure: Throwable?
+    ) : DiscoveryTransport {
+        var collections: Int = 0
+            private set
+
+        override val events: Flow<PeerEvent>
+            get() = flow {
+                collections += 1
+                if (collections == 1) {
+                    firstFailure?.let { throw it }
+                    return@flow
+                }
+                emit(recoveredEvent)
+                awaitCancellation()
+            }
 
         override suspend fun startAdvertising(localPeer: LocalPeerInfo) = Unit
         override suspend fun stopAdvertising() = Unit

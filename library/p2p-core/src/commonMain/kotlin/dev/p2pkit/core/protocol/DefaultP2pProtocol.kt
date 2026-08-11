@@ -396,8 +396,7 @@ private class PeerWarningLimiter(private val logger: P2pLogger) {
         }
         try {
             logger.warn(emitted)
-        } catch (failure: Exception) {
-            if (failure is CancellationException) throw failure
+        } catch (_: Throwable) {
             // A diagnostic sink does not own protocol or connection failure.
         }
     }

@@ -1,7 +1,9 @@
 package dev.p2pkit.core.protocol
 
 import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.testfixtures.RecordingLogger
+import kotlinx.coroutines.CancellationException
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -184,6 +186,26 @@ class FrameReaderTest {
         assertEquals(1, reader.skippedUnknownFrames)
         // Buffer fully consumed.
         assertEquals(0, reader.bufferedBytes())
+    }
+
+    @Test
+    fun diagnosticCancellationFromUnknownPacketLoggerCannotAbortParsing() {
+        val logger = object : P2pLogger {
+            override fun debug(message: String) = Unit
+            override fun info(message: String) = Unit
+            override fun warn(message: String, throwable: Throwable?) {
+                throw CancellationException("logger callback")
+            }
+            override fun error(message: String, throwable: Throwable?) = Unit
+        }
+        val reader = FrameReader(logger)
+        val valid = FrameCodec.encode(frame(8))
+        val unknown = FrameCodec.encode(frame(4)).also { it[5] = 0x7F }
+
+        val decoded = reader.feed(unknown + valid)
+
+        assertEquals(1, reader.skippedUnknownFrames)
+        assertEquals(1, decoded.size)
     }
 
     @Test

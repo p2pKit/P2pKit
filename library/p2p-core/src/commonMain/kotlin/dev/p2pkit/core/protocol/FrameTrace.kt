@@ -1,6 +1,5 @@
 package dev.p2pkit.core.protocol
 
-import kotlinx.coroutines.CancellationException
 import kotlin.concurrent.Volatile
 
 /**
@@ -37,8 +36,7 @@ public object FrameTrace {
         if (!enabled) return
         try {
             sink(line())
-        } catch (failure: Exception) {
-            if (failure is CancellationException) throw failure
+        } catch (_: Throwable) {
             // Trace is diagnostic-only. Disable the failed sink so it cannot
             // fail a send, receive loop, or repeatedly consume exception work.
             enabled = false

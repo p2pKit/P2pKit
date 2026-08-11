@@ -34,8 +34,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.async
@@ -115,6 +119,8 @@ internal class SessionManager(
     private val setupTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
     private val beforeSessionCommitForTest: (suspend () -> Unit)? = null,
     private val afterOutgoingConnectForTest: (suspend () -> Unit)? = null,
+    private val afterSessionSetupResultForTest: (suspend () -> Unit)? = null,
+    private val beforeIncomingSetupLaunchForTest: (() -> Unit)? = null,
     private val beforeTerminalWatcherRemovalForTest: (suspend () -> Unit)? = null,
     /**
      * Lock-free best-effort lookup of the latest [InternalPeer] known to
@@ -140,6 +146,7 @@ internal class SessionManager(
      * working without a refresh path.
      */
     private val refreshDiscovery: suspend () -> Unit = {},
+    private val discoveryRefreshTimeoutMillis: Long = DEFAULT_DISCOVERY_REFRESH_TIMEOUT_MS,
     /**
      * Test-only (#19 / 2026-07 TST-9, decision #15a): when `true`,
      * [SessionStore.checkInvariants] throws on a detected bookkeeping
@@ -159,6 +166,9 @@ internal class SessionManager(
 
     init {
         require(setupTimeoutMillis > 0L) { "setupTimeoutMillis must be > 0" }
+        require(discoveryRefreshTimeoutMillis > 0L) {
+            "discoveryRefreshTimeoutMillis must be > 0"
+        }
     }
 
     /**
@@ -194,6 +204,9 @@ internal class SessionManager(
      * gated. See [MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS].
      */
     private val preHandshakeGate = Semaphore(MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS)
+
+    /** A timed-out refresh retains this permit until its actual worker exits. */
+    private val discoveryRefreshGate = Semaphore(1)
 
     /**
      * Initial incoming and outgoing setups are registered before their
@@ -254,7 +267,12 @@ internal class SessionManager(
                 currentCoroutineContext().ensureActive()
                 logger.warn("inbound acceptance completed unexpectedly for ${transport.type}")
             } catch (cancelled: CancellationException) {
-                throw cancelled
+                // A transport flow can throw CancellationException while this
+                // collector's Job is still active. That is an SPI failure,
+                // not structural cancellation; genuine scope cancellation is
+                // rethrown by ensureActive().
+                currentCoroutineContext().ensureActive()
+                logger.warn("inbound acceptance ended for ${transport.type}", cancelled)
             } catch (failure: Throwable) {
                 logger.warn("inbound acceptance ended for ${transport.type}", failure)
             }
@@ -420,16 +438,34 @@ internal class SessionManager(
             // setupSession owns rawConnection from this point and closes it
             // on every pre-registration failure/cancellation path.
             uncommittedConnection = null
-            val session = runTrackedSessionSetup(rawConnection) {
-                setupSession(
-                    rawConnection = rawConnection,
-                    expectedPeer = peer,
-                    expectedFingerprint = expectedFingerprint,
-                    isIncoming = false,
-                    internalPeerForReconnect = internalPeer,
-                    isManualPeer = internalPeer.origin == PeerOrigin.Manual,
-                    lifecycleGeneration = lifecycleGeneration
-                )
+            val session = try {
+                runTrackedSessionSetup(rawConnection) {
+                    setupSession(
+                        rawConnection = rawConnection,
+                        expectedPeer = peer,
+                        expectedFingerprint = expectedFingerprint,
+                        isIncoming = false,
+                        internalPeerForReconnect = internalPeer,
+                        isManualPeer = internalPeer.origin == PeerOrigin.Manual,
+                        lifecycleGeneration = lifecycleGeneration
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                // Cancellation of the setup child by terminal kit shutdown is
+                // a lifecycle failure for an otherwise-active application
+                // caller. Preserve genuine caller cancellation unchanged.
+                currentCoroutineContext().ensureActive()
+                if (!lifecycleGate.isActive(lifecycleGeneration)) {
+                    throw lifecycleStoppedFailure()
+                }
+                throw cancelled
+            }
+            if (!lifecycleGate.isActive(lifecycleGeneration)) {
+                // The setup committed before stop() linearized, but delivery
+                // lost the race. Never return a session terminal teardown has
+                // already removed or closed.
+                rollbackCommittedOutgoingSession(session.peer.id, session)
+                throw lifecycleStoppedFailure()
             }
             completedSession = session
             return session
@@ -464,6 +500,7 @@ internal class SessionManager(
         }
     }
 
+    @OptIn(DelicateCoroutinesApi::class, ExperimentalCoroutinesApi::class)
     private fun handleIncoming(connection: RawConnection) {
         // AUDIT-2026-07 (SEC-1, decision #9a): inbound admission control,
         // stage 1 — pre-handshake concurrency. Non-suspending tryAcquire so
@@ -479,16 +516,21 @@ internal class SessionManager(
                 "Inbound connection refused: pre-handshake setups at capacity " +
                     "($MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS)"
             )
-            // Start cleanup inline through its first suspension. The bounded
-            // independent cleanup owner then survives a kit-scope cancellation,
-            // so terminal shutdown cannot strand a just-refused socket before
-            // a queued fire-and-forget close job ever starts.
-            scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                closeUncommittedConnection(connection)
-            }
+            // This cleanup must not inherit the kit Job: shutdown can
+            // linearize between the capacity decision and launch. Use the
+            // bounded independent owner so a just-refused socket always gets
+            // a close attempt even when the kit scope is already cancelled.
+            launchIndependentUncommittedConnectionCleanup(connection)
             return
         }
-        scope.launch {
+        beforeIncomingSetupLaunchForTest?.invoke()
+        // ATOMIC guarantees this ownership body starts even when terminal
+        // cancellation linearizes after admission but immediately before
+        // launch. The first suspension may then deliver cancellation, and
+        // runTrackedSessionSetup's unowned-raw fallback closes the socket.
+        val launchBodyStarted = CompletableDeferred<Unit>()
+        val setupLaunch = scope.launch(start = CoroutineStart.ATOMIC) {
+            launchBodyStarted.complete(Unit)
             // Exactly-once permit release: [setupSession] invokes
             // onHandshakeSettled from a `finally` around the handshake, so
             // BOTH outcomes — success and every failure path (setup timeout,
@@ -526,6 +568,28 @@ internal class SessionManager(
                 releaseOnce()
             }
         }
+        setupLaunch.invokeOnCompletion {
+            // A parent cancelled before this ATOMIC child reached its body
+            // never entered runTrackedSessionSetup and therefore never
+            // transferred raw ownership to the setup registry. Completion
+            // callbacks are non-suspending, so hand that sole remaining
+            // cleanup obligation to a detached, bounded worker.
+            if (!launchBodyStarted.isCompleted) {
+                preHandshakeGate.release()
+                launchIndependentUncommittedConnectionCleanup(connection)
+            }
+        }
+    }
+
+    @OptIn(DelicateCoroutinesApi::class, ExperimentalCoroutinesApi::class)
+    private fun launchIndependentUncommittedConnectionCleanup(connection: RawConnection) {
+        val owner = SupervisorJob()
+        val cleanupJob = CoroutineScope(owner + Dispatchers.Default).launch(
+            start = CoroutineStart.ATOMIC
+        ) {
+            closeUncommittedConnection(connection)
+        }
+        cleanupJob.invokeOnCompletion { owner.cancel() }
     }
 
     /**
@@ -537,24 +601,90 @@ internal class SessionManager(
      */
     private suspend fun runTrackedSessionSetup(
         rawConnection: RawConnection,
-        block: suspend () -> P2pSession
-    ): P2pSession = coroutineScope {
-        val bodyStarted = CompletableDeferred<Unit>()
-        val setupJob = async(start = CoroutineStart.LAZY) {
-            bodyStarted.complete(Unit)
-            block()
-        }
-        val setup = ActiveSessionSetup(setupJob, rawConnection, bodyStarted)
-        setupJob.invokeOnCompletion { unregisterSessionSetup(setup) }
+        block: suspend () -> SessionSetupResult
+    ): P2pSession {
+        val delivery = MutableStateFlow<SessionSetupDelivery>(SessionSetupDelivery.Pending)
+        // The caller owns the raw connection until the setup registry has
+        // accepted an ActiveSessionSetup (or the rejected-registration path
+        // has closed it itself). In particular, a cancelled parent can reach
+        // the first coroutineScope boundary before its block creates the lazy
+        // setup child. That boundary used to leave no registry entry, no
+        // setup child, and therefore no cleanup owner for the accepted socket
+        // on Kotlin/Native.
+        var setupOwnsRawConnection = false
+        return try {
+            val result = coroutineScope {
+                val bodyStarted = CompletableDeferred<Unit>()
+                val setupJob = async(start = CoroutineStart.LAZY) {
+                    bodyStarted.complete(Unit)
+                    val producedResult = block()
+                    val produced = SessionSetupDelivery.Produced(producedResult)
+                    check(delivery.compareAndSet(SessionSetupDelivery.Pending, produced)) {
+                        "session setup result ownership was already settled"
+                    }
+                    producedResult
+                }
+                val setup = ActiveSessionSetup(setupJob, rawConnection, bodyStarted)
+                setupJob.invokeOnCompletion { unregisterSessionSetup(setup) }
 
-        if (!registerSessionSetup(setup)) {
-            setupJob.cancel(CancellationException("P2pKit stopped before session setup started"))
-            withContext(NonCancellable) { closeUncommittedConnection(rawConnection) }
-            throw lifecycleStoppedFailure()
-        }
+                if (!registerSessionSetup(setup)) {
+                    setupJob.cancel(CancellationException("P2pKit stopped before session setup started"))
+                    withContext(NonCancellable) { closeUncommittedConnection(rawConnection) }
+                    setupOwnsRawConnection = true
+                    throw lifecycleStoppedFailure()
+                }
+                // There is no suspension between successful registration and
+                // this hand-off. From here, either the setup body owns cleanup
+                // or the await failure path below closes a child that never
+                // started.
+                setupOwnsRawConnection = true
 
-        setupJob.start()
-        setupJob.await()
+                setupJob.start()
+                try {
+                    setupJob.await()
+                } catch (failure: Throwable) {
+                    setupJob.cancel()
+                    withContext(NonCancellable) {
+                        setupJob.join()
+                        if (!bodyStarted.isCompleted) {
+                            closeUncommittedConnection(rawConnection)
+                        }
+                    }
+                    throw failure
+                }
+            }
+
+            // Claim only after coroutineScope has completed its own
+            // cancellation/child-settlement boundary. From the successful CAS
+            // to the function return there is no suspension point, so a caller
+            // either receives the session or the catch below rolls it back.
+            afterSessionSetupResultForTest?.invoke()
+            currentCoroutineContext().ensureActive()
+            val produced = delivery.value as? SessionSetupDelivery.Produced
+                ?: error("session setup completed without a produced result")
+            check(
+                produced.result === result &&
+                    delivery.compareAndSet(produced, SessionSetupDelivery.Claimed)
+            ) {
+                "session setup result was not available for delivery"
+            }
+            result.session
+        } catch (failure: Throwable) {
+            withContext(NonCancellable) {
+                if (!setupOwnsRawConnection) {
+                    closeUncommittedConnection(rawConnection)
+                }
+                val produced = delivery.value as? SessionSetupDelivery.Produced
+                if (produced != null && delivery.compareAndSet(
+                        produced,
+                        SessionSetupDelivery.Abandoned
+                    )
+                ) {
+                    produced.result.rollbackIfUndelivered?.invoke()
+                }
+            }
+            throw failure
+        }
     }
 
     private fun registerSessionSetup(setup: ActiveSessionSetup): Boolean {
@@ -609,7 +739,7 @@ internal class SessionManager(
          * being held through registration and the incoming-sessions emit.
          */
         onHandshakeSettled: (() -> Unit)? = null
-    ): P2pSession {
+    ): SessionSetupResult {
         val handshake = try {
             runHandshake(
                 rawConnection = rawConnection,
@@ -657,6 +787,7 @@ internal class SessionManager(
         }
 
         var sessionOwnershipTransferred = false
+        var committedOutgoingSession: P2pSession? = null
         try {
             session.start()
             currentCoroutineContext().ensureActive()
@@ -668,6 +799,9 @@ internal class SessionManager(
                     session,
                     isIncoming = isIncoming
                 )
+                if (outcome is RegisterOutcome.Accepted || outcome is RegisterOutcome.Replaced) {
+                    session.markRegistrationCommitted()
+                }
 
                 // Outgoing callers receive the winner via performConnect's deferred
                 // so a rejected new session never leaks back to app code as a
@@ -696,6 +830,9 @@ internal class SessionManager(
                 is RegisterOutcome.Rejected,
                 is RegisterOutcome.RefusedAtCapacity -> false
             }
+            if (!isIncoming && sessionOwnershipTransferred) {
+                committedOutgoingSession = committed.resultSession
+            }
 
             // A replaced session is no longer reachable through SessionStore,
             // so close it here under the setup transaction's non-cancellable,
@@ -716,9 +853,33 @@ internal class SessionManager(
             if (outcome !is RegisterOutcome.RefusedAtCapacity) {
                 applyAuthoritativePathAfterRegistration(committed.resultSession)
             }
-            return committed.resultSession
+            val rollback = committedOutgoingSession?.let { committedSession ->
+                suspend {
+                    rollbackCommittedOutgoingSession(
+                        handshake.resolvedPeer.id,
+                        committedSession
+                    )
+                }
+            }
+            return SessionSetupResult(committed.resultSession, rollback)
+        } catch (failure: Throwable) {
+            committedOutgoingSession?.let { committedSession ->
+                committedOutgoingSession = null
+                rollbackCommittedOutgoingSession(handshake.resolvedPeer.id, committedSession)
+            }
+            throw failure
         } finally {
             if (!sessionOwnershipTransferred) closeDetachedSession(session)
+        }
+    }
+
+    private suspend fun rollbackCommittedOutgoingSession(
+        peerId: PeerId,
+        session: P2pSession
+    ) {
+        withContext(NonCancellable) {
+            store.removeIfMatches(peerId, session)
+            closeDetachedSession(session)
         }
     }
 
@@ -1092,19 +1253,7 @@ internal class SessionManager(
             logger.info(
                 "reconnect: refresh requested peer=$peerShort name=${expectedPeer.name}"
             )
-            try {
-                refreshDiscovery()
-                logger.info(
-                    "reconnect: refresh complete peer=$peerShort name=${expectedPeer.name}"
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                logger.warn(
-                    "reconnect: refresh failed peer=$peerShort name=${expectedPeer.name} " +
-                        "reason=${e::class.simpleName}: ${e.message ?: ""}"
-                )
-            }
+            runDiscoveryRefresh(peerShort, "initial")
 
             // V0.5-PERIODIC-REFRESH (Phase 2.5): the one-shot refresh above
             // fires the moment we enter `Reconnecting`, but if the remote
@@ -1291,17 +1440,7 @@ internal class SessionManager(
                             "reconnect: periodic refresh tick=$tick peer=$peerShort " +
                                 "name=${expectedPeer.name} delayMs=$nextDelay"
                         )
-                        try {
-                            refreshDiscovery()
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Throwable) {
-                            logger.warn(
-                                "reconnect: periodic refresh tick=$tick peer=$peerShort " +
-                                    "name=${expectedPeer.name} FAILED " +
-                                    "reason=${e::class.simpleName}: ${e.message ?: ""}"
-                            )
-                        }
+                        runDiscoveryRefresh(peerShort, "periodic tick=$tick")
                     }
                 } finally {
                     logger.info(
@@ -1309,6 +1448,41 @@ internal class SessionManager(
                             "name=${expectedPeer.name} ticks=$tick reason=$stopReason"
                     )
                 }
+            }
+        }
+
+        /**
+         * Executes an application/transport-controlled refresh behind an
+         * independent deadline. A callback that ignores cancellation may
+         * retain one worker, but [discoveryRefreshGate] prevents repeated
+         * reconnect ticks from accumulating detached refresh operations.
+         */
+        private suspend fun runDiscoveryRefresh(peerShort: String, phase: String) {
+            when (
+                val result = runBoundedIndependentOperation(
+                    timeoutMillis = discoveryRefreshTimeoutMillis,
+                    // A transport callback can throw CancellationException
+                    // without cancelling this reconnect job. Treat that as a
+                    // refresh failure; genuine caller cancellation is still
+                    // detected from the awaiting coroutine's inactive Job.
+                    preserveCancellation = false,
+                    operationGate = discoveryRefreshGate,
+                    operation = refreshDiscovery
+                )
+            ) {
+                is BoundedOperationResult.Success -> logger.info(
+                    "reconnect: refresh complete phase=$phase peer=$peerShort " +
+                        "name=${expectedPeer.name}"
+                )
+                is BoundedOperationResult.Failure -> logger.warn(
+                    "reconnect: refresh failed phase=$phase peer=$peerShort " +
+                        "name=${expectedPeer.name} reason=${result.cause::class.simpleName}: " +
+                        (result.cause.message ?: "")
+                )
+                is BoundedOperationResult.TimedOut -> logger.warn(
+                    "reconnect: refresh timed out phase=$phase peer=$peerShort " +
+                        "name=${expectedPeer.name} timeoutMs=${result.timeoutMillis}"
+                )
             }
         }
 
@@ -1610,6 +1784,9 @@ internal const val HANDSHAKE_CLEANUP_TIMEOUT_MS: Long = 2_000
 /** Per-raw-connection bound used while rolling back an incomplete session commit. */
 internal const val SESSION_COMMIT_CLEANUP_TIMEOUT_MS: Long = 2_000
 
+/** Bounds a discovery refresh callback without constraining reconnect itself. */
+internal const val DEFAULT_DISCOVERY_REFRESH_TIMEOUT_MS: Long = 6_000
+
 /** Per-session close bound used by background and terminal cleanup. */
 internal const val SESSION_CLOSE_TIMEOUT_MS: Long = 10_000
 
@@ -1623,6 +1800,18 @@ private data class ActiveSessionSetup(
     val rawConnection: RawConnection,
     val bodyStarted: CompletableDeferred<Unit>
 )
+
+private class SessionSetupResult(
+    val session: P2pSession,
+    val rollbackIfUndelivered: (suspend () -> Unit)?
+)
+
+private sealed interface SessionSetupDelivery {
+    data object Pending : SessionSetupDelivery
+    class Produced(val result: SessionSetupResult) : SessionSetupDelivery
+    data object Claimed : SessionSetupDelivery
+    data object Abandoned : SessionSetupDelivery
+}
 
 private data class SessionSetupRegistry(
     val accepting: Boolean = true,

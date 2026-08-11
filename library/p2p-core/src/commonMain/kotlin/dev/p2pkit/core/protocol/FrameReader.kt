@@ -2,7 +2,6 @@ package dev.p2pkit.core.protocol
 
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
-import kotlinx.coroutines.CancellationException
 
 /**
  * Streaming parser for one connection. Input is copied once into a reusable
@@ -175,8 +174,7 @@ internal class FrameReader(
         }
         try {
             logger.warn(message)
-        } catch (failure: Exception) {
-            if (failure is CancellationException) throw failure
+        } catch (_: Throwable) {
             // Diagnostics are never allowed to change parsing or connection ownership.
         }
     }

@@ -14,6 +14,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
@@ -24,6 +25,20 @@ import kotlinx.coroutines.yield
 
 @OptIn(ExperimentalAtomicApi::class, ExperimentalCoroutinesApi::class)
 class LifecycleCleanupTest {
+
+    @Test
+    fun timedMutexAcquisitionRetainsOwnershipOnlyOnSuccess() = runBlocking {
+        val mutex = Mutex(locked = true)
+
+        assertFalse(mutex.acquireWithin(50))
+        assertTrue(mutex.isLocked)
+
+        mutex.unlock()
+        assertTrue(mutex.acquireWithin(5_000))
+        assertTrue(mutex.isLocked)
+        mutex.unlock()
+        assertFalse(mutex.isLocked)
+    }
 
     @Test
     fun timeoutRestoresCallerProgressAndDisposesLateValueExactlyOnce() = runBlocking {

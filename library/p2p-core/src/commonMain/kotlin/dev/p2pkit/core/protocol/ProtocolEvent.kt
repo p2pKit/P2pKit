@@ -9,7 +9,9 @@ import dev.p2pkit.core.P2pMessage
  *   - [Message] → application's [dev.p2pkit.core.P2pSession.incoming] flow
  *   - [Ping] → respond with a [Pong]
  *   - [Pong] → update the keep-alive deadline
- *   - [Close], [PeerError] → terminate the session
+ *   - [Close] → clean terminal close
+ *   - [PeerError] → connection loss (reconnect-eligible when the session
+ *     has an enabled reconnect policy)
  *   - [Hello] → only meaningful during the initial handshake; ignored after
  *   - [Ack] → reserved for v0.2 reliability work
  *   - [FileOffer], [FileAccept], [FileReject], [FileData], [FileDone],

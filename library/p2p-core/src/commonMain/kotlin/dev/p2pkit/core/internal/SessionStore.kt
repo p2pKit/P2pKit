@@ -264,14 +264,17 @@ internal class SessionStore(
     }
 
     /**
-     * Lock-free best-effort lookup of a session's registration. Read by
+     * Lock-free lookup of a session's most recently published registration. Read by
      * [P2pSessionImpl.routeEvents] before each `Message` emit to detect
      * zombie emissions — sessions still pumping messages into the public
      * incoming flow after they've been evicted/replaced in the store.
      *
-     * Diagnostics-only — does NOT take [mutex]. It reads an immutable map
+     * It does NOT take [mutex]. It reads an immutable map
      * published under the same mutex as every [byPeer] mutation, so the
      * snapshot may be briefly stale but can never race a mutable-map write.
+     * [P2pSessionImpl] does not enforce the result until registration has
+     * committed, eliminating the false detached classification window for a
+     * newly constructed session.
      */
     fun registrationOf(session: P2pSession): SessionRegistration {
         val current = registrationSnapshot.value[session.peer.id]

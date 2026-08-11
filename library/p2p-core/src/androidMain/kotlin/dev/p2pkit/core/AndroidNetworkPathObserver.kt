@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import dev.p2pkit.core.internal.NetworkPathCallbackState
+import dev.p2pkit.core.internal.failureIsolated
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -57,8 +58,10 @@ import kotlinx.coroutines.sync.withLock
  */
 public class AndroidNetworkPathObserver internal constructor(
     private val monitor: AndroidNetworkPathMonitor,
-    private val logger: P2pLogger = P2pLogger.NoOp
+    logger: P2pLogger = P2pLogger.NoOp
 ) : NetworkPathObserver {
+
+    private val logger: P2pLogger = logger.failureIsolated()
 
     public constructor(
         context: Context,

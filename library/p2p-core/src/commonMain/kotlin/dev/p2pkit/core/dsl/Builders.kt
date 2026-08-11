@@ -11,6 +11,8 @@ import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.internal.PeerIdStorage
 import dev.p2pkit.core.internal.SecureIdentityStorage
+import dev.p2pkit.core.internal.DEFAULT_DISCOVERY_REFRESH_TIMEOUT_MS
+import dev.p2pkit.core.internal.DEFAULT_FEATURE_OPERATION_SETTLE_TIMEOUT_MS
 import dev.p2pkit.core.internal.DEFAULT_HANDSHAKE_TIMEOUT_MS
 import dev.p2pkit.core.internal.newP2pKit
 import dev.p2pkit.core.permission.P2pPermissionManager
@@ -117,6 +119,16 @@ public class P2pKitBuilder internal constructor() {
     /** Internal deterministic cancellation seam after dial ownership transfers. */
     internal var afterOutgoingConnectForTest: (suspend () -> Unit)? = null
 
+    /** Internal deterministic cancellation seam after setup produced a committed result. */
+    internal var afterSessionSetupResultForTest: (suspend () -> Unit)? = null
+
+    /** Internal deadline override for deterministic reconnect-refresh tests. */
+    internal var discoveryRefreshTimeoutMillisForTest: Long = DEFAULT_DISCOVERY_REFRESH_TIMEOUT_MS
+
+    /** Internal deadline override for a startup operation that prevents explicit feature stop. */
+    internal var featureOperationSettleTimeoutMillisForTest: Long =
+        DEFAULT_FEATURE_OPERATION_SETTLE_TIMEOUT_MS
+
     /** Internal seam used to prove shutdown does not depend on watcher scheduling. */
     internal var beforeTerminalWatcherRemovalForTest: (suspend () -> Unit)? = null
 
@@ -196,6 +208,9 @@ public class P2pKitBuilder internal constructor() {
             sessionSetupTimeoutMillis = sessionSetupTimeoutMillis,
             beforeSessionCommitForTest = beforeSessionCommitForTest,
             afterOutgoingConnectForTest = afterOutgoingConnectForTest,
+            afterSessionSetupResultForTest = afterSessionSetupResultForTest,
+            discoveryRefreshTimeoutMillis = discoveryRefreshTimeoutMillisForTest,
+            featureOperationSettleTimeoutMillis = featureOperationSettleTimeoutMillisForTest,
             beforeTerminalWatcherRemovalForTest = beforeTerminalWatcherRemovalForTest
         )
     }

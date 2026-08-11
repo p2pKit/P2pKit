@@ -12,6 +12,21 @@ class FrameCodecTest {
     private val rng = Random(42)
     private fun id() = MessageId.random(rng)
 
+    @Test
+    fun messageIdDefensivelyOwnsConstructorAndAccessorBytes() {
+        val source = ByteArray(MessageId.SIZE) { it.toByte() }
+        val id = MessageId(source)
+        val originalHash = id.hashCode()
+        val keyed = mapOf(id to "retained")
+
+        source.fill(0x55.toByte())
+        id.bytes.fill(0x33.toByte())
+
+        assertEquals(originalHash, id.hashCode())
+        assertEquals("retained", keyed[id])
+        assertEquals(ByteArray(MessageId.SIZE) { it.toByte() }.toList(), id.bytes.toList())
+    }
+
     private fun validFrame(type: PacketType): Frame {
         val payload = when (type) {
             PacketType.HELLO, PacketType.FILE_OFFER -> byteArrayOf(1)
