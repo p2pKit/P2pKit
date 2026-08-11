@@ -504,6 +504,91 @@ Android/Apple discovery behavior, real-network callback ordering, or hostile
 multi-machine conditions; the corresponding validation campaigns remain
 pending and are not upgraded by this workstream.
 
+## Core lifecycle and persistent identity workstream evidence
+
+Implementation commit `04df9a0f98d233107f9a27d67e6d889135c7f7be`
+(tree `572696ff0b37098cc03f3193968b71f2981e72ca`) closes the
+repository-executable lifecycle and local-identity gaps found by the
+continuation audit:
+
+- whole-kit and feature startup now treat cancellation as an outer resource
+  transaction, including cancellation recorded after a platform callback has
+  acquired a resource and returned; successful cleanup restores a retryable
+  idle state, while incomplete cleanup latches fail-closed ownership;
+- partially attached network-path observers are detached before startup
+  degrades, observer cleanup attempts cannot overlap when a broken callback
+  ignores cancellation, and ordinary observer failure cannot leave data
+  transports bound behind a public `Starting` state;
+- AppId and local PeerId values are validated against the HELLO text contract
+  before transport construction, persisted UTF-8 records are read with a
+  4,096-byte hard bound and strict decoding, and corrupt records regenerate
+  rather than reaching wire or diagnostic surfaces; and
+- JVM and Android process-lock registries retain an entry only while an
+  operation is using or waiting for it, avoiding unbounded process memory
+  growth across transient AppIds without weakening same-path serialization.
+
+Exact implementation and regression files:
+
+- `library/p2p-core/src/androidMain/kotlin/dev/p2pkit/core/internal/FilePeerIdStorage.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/NetworkPath.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/dsl/Builders.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerIdStorage.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/permission/NoOpP2pPermissionManager.kt`
+- `library/p2p-core/src/commonTest/kotlin/dev/p2pkit/core/internal/InMemoryPeerIdStorageTest.kt`
+- `library/p2p-core/src/commonTest/kotlin/dev/p2pkit/core/internal/KitLifecycleTest.kt`
+- `library/p2p-core/src/commonTest/kotlin/dev/p2pkit/core/internal/LocalIdentityTest.kt`
+- `library/p2p-core/src/iosMain/kotlin/dev/p2pkit/core/internal/NSUserDefaultsPeerIdStorage.kt`
+- `library/p2p-core/src/iosTest/kotlin/dev/p2pkit/core/internal/NSUserDefaultsPeerIdStorageTest.kt`
+- `library/p2p-core/src/jvmMain/kotlin/dev/p2pkit/core/internal/FilePeerIdStorage.kt`
+- `library/p2p-core/src/jvmTest/kotlin/dev/p2pkit/core/internal/FilePeerIdStorageTest.kt`
+
+Final committed-tree verification before the protected boundary:
+
+- complete `p2p-core` JVM suite — **PASS**, 620 tests, zero failures,
+  errors, or skips;
+- complete iOS Simulator Arm64 suite — **PASS**, 590 tests, zero failures,
+  errors, or skips. Deterministic regressions exercise cancellation during
+  bind, feature retry cleanup, observer attach/cleanup, and callbacks that
+  cancel then return a resource;
+- Android main compilation and iosArm64, iosSimulatorArm64, and iosX64
+  production/test compilation and linkage — **PASS**. `iosX64Test` is
+  host-skipped on Apple Silicon after its test binary links; Intel runtime
+  execution is not inferred from linkage;
+- Android sample, CLI sample, and Desktop UI checks — **PASS**, respectively
+  4, 7, and 14 executed tests with zero failures/errors/skips; Android lint,
+  core ABI, and warning-failing Dokka also passed;
+- all 15 publication shapes and isolated JVM, Java, Android, KMP, and iOS 14
+  consumers — **PASS** under strict dependency verification;
+- release XCFramework device/simulator reconstruction and provenance —
+  **PASS**, with commit `04df9a0f98d233107f9a27d67e6d889135c7f7be`,
+  source state `clean`, and iOS 14.0 minimum slices. The Swift sample build
+  passed with `SWIFT_TREAT_WARNINGS_AS_ERRORS=YES`; Xcode emitted only its
+  non-source AppIntents notice because the sample has no AppIntents
+  dependency; and
+- CycloneDX JSON/XML validation — **PASS**, 38 release components and no
+  sample/build contamination. Release metadata, repository layout, 91 active
+  Markdown links, OSV lock coverage for all 11 lockfiles, CI scope policy,
+  release-workflow policy, `git diff --check`, and clean-worktree checks also
+  passed.
+
+`NO-SOURCE` resource/Java tasks and Kotlin/Gradle synthetic SwiftPM or plugin
+configuration skips correspond to undeclared source kinds or absent external
+SwiftPM inputs, not omitted tests. Sample CycloneDX subtasks are intentionally
+excluded from the release SBOM and the aggregate SBOM content gate confirms
+that exclusion. No test in the executed JVM, arm64 iOS Simulator, or sample
+suites was skipped.
+
+There is no public API/ABI, Maven coordinate, secure-v2 or legacy wire-byte,
+platform-floor, or publication-layout change. Construction now rejects local
+identity text that the existing wire decoder would reject, and legacy corrupt
+persistence records regenerate; valid existing identities remain compatible.
+The protected PR and its single hosted complete-gate result are pending and
+must be appended only after they actually complete. Physical Android/Apple
+lifecycle behavior, real-network callback ordering, independent secure-v2
+interoperability, and professional cryptographic review remain external
+campaigns and are not upgraded by this evidence.
+
 ## Pull request audit
 
 | PR | Classification | Decision |
