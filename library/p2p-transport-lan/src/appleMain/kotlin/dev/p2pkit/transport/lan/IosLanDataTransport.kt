@@ -21,7 +21,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -34,13 +33,14 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
 import dev.p2pkit.transport.lan.interop.p2pkit_lan_interface_fingerprint
 import platform.Foundation.NSNotification
 import platform.Foundation.NSNotificationCenter
+import platform.Foundation.NSLock
 import platform.Network.nw_connection_create
+import platform.Network.nw_connection_cancel
 import platform.Network.nw_connection_t
 import platform.Network.nw_endpoint_create_host
 import platform.Network.nw_error_get_error_code
@@ -107,6 +107,14 @@ internal class IosLanDataTransport(
     private val endpointRegistry: IosEndpointRegistry,
     /** Test-only suspension point after native readiness but before ownership is committed. */
     private val listenerReadyBarrierForTest: suspend () -> Unit = {},
+    /** Test seam for proving rejected, unstarted native connections are cancelled. */
+    private val connectionRejector: (nw_connection_t) -> Unit = ::nw_connection_cancel,
+    /** Test-only synchronization point inside the inbound admission transaction. */
+    private val beforeInboundOfferForTest: (() -> Unit)? = null,
+    /** Test-only signal immediately before stop/rebind acquires inbound ownership. */
+    private val beforeInboundRetireForTest: (() -> Unit)? = null,
+    /** Test-only synchronization point before a connected dial transfers ownership. */
+    private val beforeDialOwnershipHandoffForTest: (() -> Unit)? = null,
     private val connectionFactory: (nw_connection_t, dispatch_queue_t) -> IosConnectionHandle =
         { connection, connectionQueue -> IosRawConnection.wrap(connection, connectionQueue) }
 ) : DataTransport, HasLocalTcpEndpoint {
@@ -213,6 +221,8 @@ internal class IosLanDataTransport(
         capacity = MAX_BUFFERED_INBOUND_CONNECTIONS,
         onDrop = { it.cancelNow("inbound admission rejected") }
     )
+    private val inboundOwnershipLock = NSLock()
+    private var inboundListenerOwner: nw_listener_t = null
     private val startMutex = Mutex()
     private val dialMutex = Mutex()
     private val pendingDials = mutableSetOf<IosConnectionHandle>()
@@ -331,8 +341,9 @@ internal class IosLanDataTransport(
 
     /**
      * Hook fired by [rebindNow] BEFORE the old listener is cancelled.
-     * The discovery transport uses this to cancel its NWBrowser and
-     * capture state (was-browsing flag) that the after-hook needs.
+     * The discovery transport uses this to cancel resources owned by the
+     * retiring listener/path generation. Current host intent remains the
+     * source of truth for the after-hook.
      * Wired by [IosLanDiscoveryTransport]'s `init` block.
      */
     internal var beforeListenerRebind: (suspend () -> Unit)? = null
@@ -383,6 +394,7 @@ internal class IosLanDataTransport(
         )
         listenerLease = l
         startedByHost = true
+        publishInboundListener(l.handle)
         lifecycleRecoveryCoordinator.onSuccessfulRebind()
         IosLanDebug.log("data", "start: SUCCESS port=${_tcpPort.value}")
         startPathMonitor()
@@ -419,21 +431,7 @@ internal class IosLanDataTransport(
         IosLanDebug.log("data", "buildListener: queue attached, wiring handlers")
 
         nw_listener_set_new_connection_handler(l) connectionHandler@ { conn ->
-            if (conn != null && !closed && startedByHost) {
-                IosLanDebug.log("data", "listener: accepted inbound nw_connection")
-                val raw = connectionFactory(conn, queue)
-                val sent = incomingQueue.offer(raw)
-                IosLanDebug.log(
-                    "data",
-                    "listener: handed connection to incoming channel (queued=$sent)"
-                )
-            } else {
-                IosLanDebug.log(
-                    "data",
-                    "listener: ignored inbound nw_connection " +
-                        "(conn=${conn != null} closed=$closed started=$startedByHost)"
-                )
-            }
+            handleInboundConnection(owner = l, connection = conn)
             return@connectionHandler
         }
 
@@ -515,6 +513,101 @@ internal class IosLanDataTransport(
     }
 
     /**
+     * Admit or reject one callback under the same lock used by stop/rebind
+     * queue draining. Apple requires cancelling an inbound connection that is
+     * not accepted. Native owner identity prevents a queued callback from a
+     * retired listener entering the replacement generation.
+     */
+    private fun handleInboundConnection(
+        owner: nw_listener_t,
+        connection: nw_connection_t
+    ): Boolean {
+        if (connection == null) {
+            IosLanDebug.log("data", "listener: ignored null inbound nw_connection")
+            return false
+        }
+        return withInboundOwnershipLock {
+            if (inboundListenerOwner !== owner) {
+                IosLanDebug.log(
+                    "data",
+                    "listener: rejected inbound nw_connection from stale/inactive listener"
+                )
+                rejectNativeConnection(connection, "stale/inactive listener")
+                return@withInboundOwnershipLock false
+            }
+            val raw = try {
+                connectionFactory(connection, queue)
+            } catch (error: Throwable) {
+                // Do not throw across the native callback boundary. The
+                // connection was not accepted and remains ours to cancel.
+                rejectNativeConnection(connection, "connection wrapper failure")
+                IosLanDebug.log(
+                    "data",
+                    "listener: connection wrapper failed (${error::class.simpleName})"
+                )
+                return@withInboundOwnershipLock false
+            }
+            try {
+                beforeInboundOfferForTest?.invoke()
+                val sent = incomingQueue.offer(raw)
+                IosLanDebug.log(
+                    "data",
+                    "listener: handed connection to incoming channel (queued=$sent)"
+                )
+                sent
+            } catch (error: Throwable) {
+                raw.cancelNow("inbound admission failed")
+                IosLanDebug.log(
+                    "data",
+                    "listener: inbound admission failed (${error::class.simpleName})"
+                )
+                false
+            }
+        }
+    }
+
+    private inline fun <T> withInboundOwnershipLock(block: () -> T): T {
+        inboundOwnershipLock.lock()
+        return try {
+            block()
+        } finally {
+            inboundOwnershipLock.unlock()
+        }
+    }
+
+    private fun publishInboundListener(owner: nw_listener_t) = withInboundOwnershipLock {
+        inboundListenerOwner = owner
+    }
+
+    private fun rejectNativeConnection(connection: nw_connection_t, reason: String) {
+        try {
+            connectionRejector(connection)
+        } catch (error: Throwable) {
+            // A test seam or future wrapper must never throw through an Apple
+            // native callback. There is no safer fallback after cancellation
+            // itself fails, so retain a sanitized diagnostic and return.
+            IosLanDebug.log(
+                "data",
+                "native connection cancellation failed for $reason (${error::class.simpleName})"
+            )
+        }
+    }
+
+    private fun retireInboundListener(closeQueue: Boolean) {
+        beforeInboundRetireForTest?.invoke()
+        withInboundOwnershipLock {
+            inboundListenerOwner = null
+            if (closeQueue) incomingQueue.closeAndDrain() else incomingQueue.drain()
+        }
+    }
+
+    /** Deterministic native callback seam used by Apple ownership tests. */
+    internal fun handleInboundConnectionForTest(
+        owner: nw_listener_t,
+        connection: nw_connection_t
+    ): Boolean = handleInboundConnection(owner, connection)
+
+    /**
      * A listener can fail long after its initial ready callback. Serialize
      * that terminal callback with start/rebind/close, depublish the stale
      * port, stop Bonjour resources through the pre-hook, and start a fresh
@@ -531,9 +624,17 @@ internal class IosLanDataTransport(
                     "data",
                     "listener terminal state=$state for current owner — port depublished"
                 )
-                endpointRegistry.clear()
+                retireInboundListener(closeQueue = false)
+                // Fence and cancel old-path dials before the suspendable
+                // discovery hook so none can hand off while browser cleanup
+                // is waiting on native/coroutine work.
                 stopPendingDials("listener terminal state=$state")
                 invokeBeforeRebindHook("listener terminal state=$state")
+                // The discovery pre-hook retires the browser callback owner.
+                // Clear once more afterwards so a callback that committed
+                // immediately before retirement cannot republish a stale
+                // endpoint after the earlier listener-terminal transition.
+                endpointRegistry.clear()
                 true
             }
             if (recover) scheduleRebind("listener terminal state=$state")
@@ -641,7 +742,13 @@ internal class IosLanDataTransport(
             throw P2pError.ConnectionFailed("nw_connection_create returned null")
         }
         IosLanDebug.log("connect", "peer=$pid8 nw_connection_create OK, wrapping + awaiting Connected (<=${CONNECT_TIMEOUT_MILLIS}ms)")
-        val raw = connectionFactory(conn, queue)
+        val raw = try {
+            connectionFactory(conn, queue)
+        } catch (error: Throwable) {
+            // Ownership has not transferred to a wrapper or session yet.
+            rejectNativeConnection(conn, "outbound connection wrapper failure")
+            throw error
+        }
         val registered = dialMutex.withLock {
             if (closed || dialGeneration != expectedGeneration) false else pendingDials.add(raw)
         }
@@ -651,15 +758,19 @@ internal class IosLanDataTransport(
         }
         try {
             val terminal = try {
-                withTimeout(CONNECT_TIMEOUT_MILLIS) {
+                withTimeoutOrNull(CONNECT_TIMEOUT_MILLIS) {
                     raw.state.first { it != ConnectionState.Connecting }
+                } ?: run {
+                    IosLanDebug.log("connect", "TIMEOUT peer=$pid8 after ${CONNECT_TIMEOUT_MILLIS}ms — closing wrapper")
+                    raw.cancelNow("outbound connect timeout")
+                    invalidateFailedEndpoint(peer, cachedLease, "connect timeout")
+                    throw P2pError.ConnectionFailed(
+                        "iOS LAN connect timed out after ${CONNECT_TIMEOUT_MILLIS}ms"
+                    )
                 }
-            } catch (e: TimeoutCancellationException) {
-                IosLanDebug.log("connect", "TIMEOUT peer=$pid8 after ${CONNECT_TIMEOUT_MILLIS}ms — closing wrapper")
-                raw.cancelNow("outbound connect timeout")
-                invalidateFailedEndpoint(peer, cachedLease, "connect timeout")
-                throw P2pError.ConnectionFailed("iOS LAN connect timed out after ${CONNECT_TIMEOUT_MILLIS}ms")
             } catch (cancelled: CancellationException) {
+                // withTimeoutOrNull consumes only its own deadline. An outer
+                // caller deadline/cancellation reaches this branch unchanged.
                 IosLanDebug.log("connect", "CANCELLED peer=$pid8 — closing wrapper")
                 raw.cancelNow("outbound connect cancelled")
                 throw cancelled
@@ -676,6 +787,18 @@ internal class IosLanDataTransport(
                 invalidateFailedEndpoint(peer, cachedLease, "terminal state=$terminal")
                 IosLanDebug.log("connect", "FAILED peer=$pid8 terminal=$terminal (expected Connected)")
                 throw P2pError.ConnectionFailed("iOS LAN connect failed (state=$terminal)")
+            }
+            beforeDialOwnershipHandoffForTest?.invoke()
+            val handedOff = dialMutex.withLock {
+                if (!closed && dialGeneration == expectedGeneration) {
+                    pendingDials.remove(raw)
+                } else {
+                    false
+                }
+            }
+            if (!handedOff) {
+                raw.cancelNow("transport stopped before outbound ownership handoff")
+                throw stoppedDialFailure()
             }
             IosLanDebug.log("connect", "SUCCESS peer=$pid8 raw connection in Connected state")
             return raw
@@ -734,6 +857,7 @@ internal class IosLanDataTransport(
     /** Caller holds [startMutex]. */
     private suspend fun stopStartedResources(closeQueue: Boolean, clearEndpoints: Boolean) {
         startedByHost = false
+        retireInboundListener(closeQueue = closeQueue)
         stopPendingDials("transport lifecycle stopped")
         stopPathMonitor()
         stopForegroundObserver()
@@ -742,7 +866,6 @@ internal class IosLanDataTransport(
         listenerLease?.let(::retainListenerForCleanup)
         listenerLease = null
         _tcpPort.value = null
-        if (closeQueue) incomingQueue.closeAndDrain() else incomingQueue.drain()
         if (clearEndpoints) endpointRegistry.clear()
     }
 
@@ -1018,17 +1141,20 @@ internal class IosLanDataTransport(
             IosLanDebug.log("data", "rebindNow: host no longer started; skipping ($reason)")
             return@withLock
         }
-        // A browser-produced endpoint is scoped to the path/browser generation
-        // that created it. Invalidate before any native listener/browser
-        // teardown so a concurrent connect cannot acquire an old endpoint in
-        // the rebind window, and cancel dials already using the old path.
-        endpointRegistry.clear()
+        // Fence inbound and outbound handoffs immediately, then retire the
+        // browser callback owner before the final endpoint clear. This avoids
+        // both late dial success and stale endpoint republication.
+        retireInboundListener(closeQueue = false)
         stopPendingDials("listener/path rebind")
+        invokeBeforeRebindHook(reason)
+        // Retire the browser owner before the final clear. Otherwise a queued
+        // old-generation result can refill the registry after the clear and
+        // after the dial generation has already advanced.
+        endpointRegistry.clear()
         val old = listenerLease
         val oldPort = _tcpPort.value
         IosLanDebug.log("data", "rebindNow: starting ($reason) oldPort=$oldPort")
 
-        invokeBeforeRebindHook(reason)
         listenerLease = null
         _tcpPort.value = null
         val oldReleased = old?.let {
@@ -1066,6 +1192,7 @@ internal class IosLanDataTransport(
             return@withLock
         }
         listenerLease = fresh
+        publishInboundListener(fresh.handle)
         val newPort = _tcpPort.value
         IosLanDebug.log("data", "rebindNow: new listener ready newPort=$newPort")
 

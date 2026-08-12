@@ -13,6 +13,7 @@ import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportHint
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
@@ -21,9 +22,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertIs
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -55,6 +58,10 @@ class IosLanConnectCancellationTest {
         fun fail() {
             mutableState.value = ConnectionState.Closed
         }
+
+        fun succeed() {
+            mutableState.value = ConnectionState.Connected
+        }
     }
 
     @Test
@@ -66,9 +73,13 @@ class IosLanConnectCancellationTest {
             deviceName = "local",
             platform = Platform.IOS
         )
-        val transport = IosLanDataTransport(context, IosEndpointRegistry()) { connection, _ ->
-            ControlledConnection(connection).also { created.complete(it) }
-        }
+        val transport = IosLanDataTransport(
+            transportContext = context,
+            endpointRegistry = IosEndpointRegistry(),
+            connectionFactory = { connection, _ ->
+                ControlledConnection(connection).also { created.complete(it) }
+            }
+        )
         val peer = InternalPeer(
             publicPeer = Peer(
                 id = PeerId("ios-remote-connect-cancel"),
@@ -91,19 +102,51 @@ class IosLanConnectCancellationTest {
     }
 
     @Test
+    fun callerTimeoutIsNotReclassifiedAsTransportConnectTimeout() = runBlocking<Unit> {
+        val created = CompletableDeferred<ControlledConnection>()
+        val transport = IosLanDataTransport(
+            transportContext = TransportContext(
+                appId = AppId("ios-connect-caller-timeout"),
+                localPeerId = PeerId("ios-local-connect-caller-timeout"),
+                deviceName = "local",
+                platform = Platform.IOS
+            ),
+            endpointRegistry = IosEndpointRegistry(),
+            connectionFactory = { connection, _ ->
+                ControlledConnection(connection).also { created.complete(it) }
+            }
+        )
+        try {
+            val result = async {
+                assertFailsWith<TimeoutCancellationException> {
+                    withTimeout(CALLER_TIMEOUT_MILLIS) {
+                        transport.connect(testPeer("ios-remote-connect-caller-timeout"))
+                    }
+                }
+            }
+            val connection = withTimeout(TEST_TIMEOUT_MILLIS) { created.await() }
+            withTimeout(TEST_TIMEOUT_MILLIS) { result.await() }
+            assertTrue(connection.cancelled, "caller timeout must still release native ownership")
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Test
     fun transportStopCancelsPendingDialAndPreventsLateSuccess() = runBlocking<Unit> {
         val created = CompletableDeferred<ControlledConnection>()
         val transport = IosLanDataTransport(
-            TransportContext(
+            transportContext = TransportContext(
                 appId = AppId("ios-connect-stop"),
                 localPeerId = PeerId("ios-local-connect-stop"),
                 deviceName = "local",
                 platform = Platform.IOS
             ),
-            IosEndpointRegistry()
-        ) { connection, _ ->
-            ControlledConnection(connection).also { created.complete(it) }
-        }
+            endpointRegistry = IosEndpointRegistry(),
+            connectionFactory = { connection, _ ->
+                ControlledConnection(connection).also { created.complete(it) }
+            }
+        )
         val result = async { runCatching { transport.connect(testPeer("ios-remote-connect-stop")) } }
 
         val connection = withTimeout(TEST_TIMEOUT_MILLIS) { created.await() }
@@ -117,6 +160,78 @@ class IosLanConnectCancellationTest {
     }
 
     @Test
+    fun stopWinsFinalConnectedDialOwnershipHandoffRace() = runBlocking<Unit> {
+        val handoffEntered = CompletableDeferred<Unit>()
+        val releaseHandoff = kotlin.concurrent.AtomicInt(0)
+        lateinit var connection: ControlledConnection
+        val transport = IosLanDataTransport(
+            transportContext = TransportContext(
+                appId = AppId("ios-connect-handoff-stop"),
+                localPeerId = PeerId("ios-local-connect-handoff-stop"),
+                deviceName = "local",
+                platform = Platform.IOS
+            ),
+            endpointRegistry = IosEndpointRegistry(),
+            beforeDialOwnershipHandoffForTest = {
+                handoffEntered.complete(Unit)
+                while (releaseHandoff.value == 0) platform.posix.sched_yield()
+            },
+            connectionFactory = { native, _ ->
+                ControlledConnection(native).also {
+                    connection = it
+                    it.succeed()
+                }
+            }
+        )
+        try {
+            val result = async(Dispatchers.Default) {
+                runCatching { transport.connect(testPeer("ios-remote-connect-handoff-stop")) }
+            }
+            handoffEntered.await()
+
+            transport.stop()
+            releaseHandoff.value = 1
+
+            assertTrue(connection.cancelled)
+            assertIs<P2pError.ConnectionFailed>(
+                withTimeout(TEST_TIMEOUT_MILLIS) { result.await() }.exceptionOrNull()
+            )
+        } finally {
+            releaseHandoff.value = 1
+            transport.close()
+        }
+    }
+
+    @Test
+    fun outboundWrapperFailureCancelsUnownedNativeConnection() = runBlocking<Unit> {
+        val cancelled = kotlin.concurrent.AtomicInt(0)
+        val transport = IosLanDataTransport(
+            transportContext = TransportContext(
+                appId = AppId("ios-connect-wrapper-failure"),
+                localPeerId = PeerId("ios-local-connect-wrapper-failure"),
+                deviceName = "local",
+                platform = Platform.IOS
+            ),
+            endpointRegistry = IosEndpointRegistry(),
+            connectionRejector = { native ->
+                cancelled.incrementAndGet()
+                nw_connection_cancel(native)
+            },
+            connectionFactory = { _, _ -> error("synthetic outbound wrapper failure") }
+        )
+        try {
+            assertIs<IllegalStateException>(
+                runCatching {
+                    transport.connect(testPeer("ios-remote-connect-wrapper-failure"))
+                }.exceptionOrNull()
+            )
+            assertTrue(cancelled.value == 1)
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Test
     fun failedOldDialCannotRemoveConcurrentFreshBrowseEndpoint() = runBlocking {
         val registry = IosEndpointRegistry()
         val peer = testPeer("ios-remote-fresh-endpoint")
@@ -127,21 +242,22 @@ class IosLanConnectCancellationTest {
         )
         var freshLease: IosEndpointRegistry.Lease? = null
         val transport = IosLanDataTransport(
-            TransportContext(
+            transportContext = TransportContext(
                 appId = AppId("ios-connect-fresh-endpoint"),
                 localPeerId = PeerId("ios-local-fresh-endpoint"),
                 deviceName = "local",
                 platform = Platform.IOS
             ),
-            registry
-        ) { connection, _ ->
-            freshLease = registry.put(
-                peer.publicPeer.id,
-                assertNotNull(nw_endpoint_create_host("127.0.0.1", "44002")),
-                browserGeneration = oldLease.browserGeneration + 1
-            )
-            ControlledConnection(connection).also(ControlledConnection::fail)
-        }
+            endpointRegistry = registry,
+            connectionFactory = { connection, _ ->
+                freshLease = registry.put(
+                    peer.publicPeer.id,
+                    assertNotNull(nw_endpoint_create_host("127.0.0.1", "44002")),
+                    browserGeneration = oldLease.browserGeneration + 1
+                )
+                ControlledConnection(connection).also(ControlledConnection::fail)
+            }
+        )
 
         try {
             assertIs<P2pError.ConnectionFailed>(
@@ -167,5 +283,6 @@ class IosLanConnectCancellationTest {
 
     private companion object {
         const val TEST_TIMEOUT_MILLIS: Long = 5_000
+        const val CALLER_TIMEOUT_MILLIS: Long = 100
     }
 }
