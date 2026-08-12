@@ -83,7 +83,11 @@ public interface NetworkPathObserver {
      * Implementations should not throw — failures to attach the underlying
      * OS monitor should be logged and left as a permanent [NetworkPathStatus.Unknown]
      * stream, so the kit degrades to "no path observer" rather than
-     * propagating an error through the kit lifecycle.
+     * propagating an error through the kit lifecycle. If a host implementation
+     * nevertheless throws, P2pKit calls [close] to settle any partial
+     * acquisition. A successful cleanup degrades to no observer for that kit
+     * session; an unsuccessful cleanup fails startup closed so a retry cannot
+     * attach a second monitor over uncertain ownership.
      */
     public suspend fun start()
 

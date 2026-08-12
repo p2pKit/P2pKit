@@ -5,12 +5,12 @@ import dev.p2pkit.core.PeerId
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.RandomAccessFile
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -47,7 +47,6 @@ internal class FilePeerIdStorage(
         File(File(File(rootDir, ".p2pkit"), "peer-id-v2"), peerIdStorageKey(rawAppId))
     private val storageFile: File = File(storageDir, "peer-id")
     private val lockFile: File = File(storageDir, "peer-id.lock")
-    private val processLock: Any = processLockFor(storageFile.absolutePath)
 
     @Volatile
     private var cached: PeerId? = null
@@ -65,8 +64,8 @@ internal class FilePeerIdStorage(
 
     override fun loadOrGenerate(): PeerId {
         cached?.let { return it }
-        return synchronized(processLock) {
-            cached?.let { return@synchronized it }
+        return PeerIdProcessLockRegistry.withLock(storageFile.absolutePath) {
+            cached?.let { return@withLock it }
             val resolved = try {
                 withStorageLock {
                     readIdFrom(storageFile)
@@ -109,8 +108,9 @@ internal class FilePeerIdStorage(
     private fun readIdFrom(file: File): PeerId? {
         if (!file.exists()) return null
         return try {
-            val content = file.readText().trim()
-            if (content.isBlank()) null else PeerId(content)
+            file.inputStream().use { input ->
+                decodePersistedPeerId(input.readBoundedPeerIdBytes())
+            }
         } catch (e: Exception) {
             logger.warn("Failed to read persistent PeerId from ${file.absolutePath}; will regenerate", e)
             null
@@ -209,17 +209,68 @@ internal class FilePeerIdStorage(
         }
     }
 
-    private companion object {
-        private val processLocks = ConcurrentHashMap<String, Any>()
+}
 
-        fun processLockFor(path: String): Any = processLocks.computeIfAbsent(path) { Any() }
+/**
+ * Coordinate overlapping JVM file-lock attempts without retaining one map
+ * entry for every AppId ever constructed in this process. Waiting callers
+ * count as users, so the entry is removed only after the last operation has
+ * left its monitor.
+ */
+private object PeerIdProcessLockRegistry {
+    private val guard = Any()
+    private val entries = mutableMapOf<String, ProcessLockEntry>()
+
+    fun <T> withLock(path: String, block: () -> T): T {
+        val entry = synchronized(guard) {
+            entries.getOrPut(path, ::ProcessLockEntry).also { it.users += 1 }
+        }
+        return try {
+            synchronized(entry.monitor) { block() }
+        } finally {
+            synchronized(guard) {
+                check(entry.users > 0) { "PeerId process-lock reference underflow" }
+                entry.users -= 1
+                if (entry.users == 0 && entries[path] === entry) entries.remove(path)
+            }
+        }
     }
+
+    fun entryCount(): Int = synchronized(guard) { entries.size }
+}
+
+private class ProcessLockEntry {
+    val monitor: Any = Any()
+    var users: Int = 0
+}
+
+internal fun peerIdProcessLockEntryCountForTest(): Int =
+    PeerIdProcessLockRegistry.entryCount()
+
+private fun InputStream.readBoundedPeerIdBytes(): ByteArray {
+    val buffer = ByteArray(MAX_PERSISTED_PEER_ID_BYTES + 1)
+    var total = 0
+    while (total < buffer.size) {
+        val read = read(buffer, total, buffer.size - total)
+        if (read < 0) break
+        if (read == 0) {
+            val next = read()
+            if (next < 0) break
+            buffer[total++] = next.toByte()
+        } else {
+            total += read
+        }
+    }
+    require(total <= MAX_PERSISTED_PEER_ID_BYTES) {
+        "persistent PeerId exceeds $MAX_PERSISTED_PEER_ID_BYTES bytes"
+    }
+    return buffer.copyOf(total)
 }
 
 /**
  * Reduce a raw appId to a path-safe directory-name segment.
  *
- * - Keeps `[A-Za-z0-9._-]`; replaces anything else with `_`.
+ * - Keeps Unicode letters/digits plus `[._-]`; replaces anything else with `_`.
  * - Collapses any `..` sequence to `._` so the result cannot navigate up.
  * - Trims leading dots so we don't create hidden directories.
  * - Caps the result at 64 chars.

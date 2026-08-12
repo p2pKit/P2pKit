@@ -3,6 +3,7 @@ package dev.p2pkit.core.internal
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.PeerId
+import dev.p2pkit.core.protocol.HelloPayload
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.TransportContext
@@ -82,6 +83,56 @@ class LocalIdentityTest {
     }
 
     @Test
+    fun invalidAppIdsAreRejectedBeforeIdentityStorageOrTransportConstruction() {
+        val invalidAppIds = listOf(
+            "a".repeat(HelloPayload.MAX_FIELD_LEN + 1),
+            "unsafe\u202Eapp-id",
+            "malformed-\uD800"
+        )
+        invalidAppIds.forEach { invalidAppId ->
+            val storage = TrackingPeerIdStorage(PeerId("valid-local-id"))
+            val factory = IdentityTestFactory(FakeDataTransport())
+
+            assertFailsWith<IllegalArgumentException> {
+                createTestKit {
+                    appId = AppId(invalidAppId)
+                    deviceName = "Test"
+                    peerIdStorage = storage
+                    transports { register(factory) }
+                }
+            }
+
+            assertEquals(0, storage.loadCalls, "invalid AppId must fail before identity I/O")
+            assertEquals(0, factory.buildCalls, "invalid AppId must fail before transport construction")
+        }
+    }
+
+    @Test
+    fun invalidStoredLocalPeerIdsAreRejectedBeforeTransportConstruction() {
+        val invalidPeerIds = listOf(
+            PeerId("x".repeat(HelloPayload.MAX_FIELD_LEN + 1)),
+            PeerId("unsafe\u202Epeer-id"),
+            PeerId("malformed-\uD800")
+        )
+        invalidPeerIds.forEach { invalidPeerId ->
+            val storage = TrackingPeerIdStorage(invalidPeerId)
+            val factory = IdentityTestFactory(FakeDataTransport())
+
+            assertFailsWith<IllegalArgumentException> {
+                createTestKit {
+                    appId = AppId("com.example.invalid-persisted-peer")
+                    deviceName = "Test"
+                    peerIdStorage = storage
+                    transports { register(factory) }
+                }
+            }
+
+            assertEquals(1, storage.loadCalls)
+            assertEquals(0, factory.buildCalls, "invalid local identity must not reach a transport")
+        }
+    }
+
+    @Test
     fun duplicateFactoryInstanceIsRejectedBeforeConstruction() {
         val factory = IdentityTestFactory(FakeDataTransport())
         assertFailsWith<IllegalArgumentException> {
@@ -98,8 +149,23 @@ class LocalIdentityTest {
 }
 
 private class IdentityTestFactory(private val transport: FakeDataTransport) : TransportFactory {
+    var buildCalls: Int = 0
+        private set
+
     override val descriptor =
         dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
-    override fun build(context: TransportContext): TransportPair =
-        TransportPair(data = transport, discovery = null)
+    override fun build(context: TransportContext): TransportPair {
+        buildCalls += 1
+        return TransportPair(data = transport, discovery = null)
+    }
+}
+
+private class TrackingPeerIdStorage(private val peerId: PeerId) : PeerIdStorage {
+    var loadCalls: Int = 0
+        private set
+
+    override fun loadOrGenerate(): PeerId {
+        loadCalls += 1
+        return peerId
+    }
 }

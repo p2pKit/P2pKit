@@ -61,10 +61,10 @@ public class P2pKitBuilder internal constructor() {
     internal var fileTransfer: FileTransferConfig = FileTransferConfig()
     /**
      * Optional host-provided network path observer. When `null`, the kit
-     * uses the platform default (iOS: real `nw_path_monitor`; JVM and
-     * Android: no-op). Host apps that want path-change recovery on
-     * Android construct `AndroidNetworkPathObserver(applicationContext)`
-     * inside `lifecycle { … }`.
+     * uses the platform default (iOS: real `nw_path_monitor`; Android: a
+     * real connectivity observer after `P2pKitAndroid.initialize(context)`,
+     * otherwise no-op; JVM: no-op). Host apps can still supply an explicit
+     * observer inside `lifecycle { … }`.
      */
     internal var networkPathObserver: NetworkPathObserver? = null
 
@@ -178,6 +178,13 @@ public class P2pKitBuilder internal constructor() {
         val resolvedAppId = appId ?: error("appId must be set on the P2pKit builder")
         val resolvedName = deviceName ?: error("deviceName must be set on the P2pKit builder")
         validateWireText(
+            resolvedAppId.value,
+            "appId",
+            HelloPayload.MAX_FIELD_LEN,
+            HelloPayload.MAX_FIELD_UTF8_BYTES,
+            requireNonBlank = true
+        )
+        validateWireText(
             resolvedName,
             "deviceName",
             HelloPayload.MAX_FIELD_LEN,
@@ -253,7 +260,9 @@ public class LifecycleConfigBuilder internal constructor(
     /**
      * Host-provided override for the network path observer. When `null`,
      * the kit uses the platform default — iOS gets a real `nw_path_monitor`
-     * observer; JVM and Android default to no-op.
+     * observer, Android gets a real connectivity observer after
+     * `P2pKitAndroid.initialize(context)` (and no-op before initialization),
+     * while JVM defaults to no-op.
      *
      * On Android, host apps that want network-recovery behavior construct
      * `AndroidNetworkPathObserver(applicationContext)` here:
