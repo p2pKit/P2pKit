@@ -26,7 +26,7 @@ internal data class JvmLanBindTarget(
 }
 
 /**
- * Select one deterministic multicast-capable LAN IPv4 address.
+ * Select one deterministic multicast-capable LAN address.
  *
  * Site-local IPv4 is preferred, then other non-link-local IPv4, IPv4
  * link-local, global IPv6, and finally scoped IPv6 link-local for

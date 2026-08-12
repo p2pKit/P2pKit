@@ -58,7 +58,10 @@ Current evidence must instead correlate these stable structured events and
 states:
 
 - `discovery.peer.discovered` and `discovery.peer.lost`;
-- `transport.log` for JmDNS callback, admission, generation, and removal data;
+- `transport.log` for the sanitized `serviceAdded callback`,
+  `serviceResolved callback`, and `serviceRemoved callback` shape
+  (`leaseActive`, `hasInfo`, and `hasPeerId` booleans), followed separately by
+  admitted instance-to-peer removal, generation, and route data;
 - `network.path.changed` and the discovery feature state;
 - the UI peer snapshot and active test/session identifiers.
 
@@ -66,6 +69,12 @@ Current deterministic coverage includes transport-managed peer survival,
 JmDNS heartbeat/reconciliation, generation/lease handling, and admitted-service
 removal. These tests do not replace the outstanding long-idle physical-device
 matrix required by Issue #21 and `LAN-T01`.
+
+The 2026-08 cache/link-local follow-up selectively recovered this observation
+intent into the current bounded, opt-in diagnostic path. It did not restore
+the old source layout, nullable registry logger, or either obsolete
+`dev.p2pkit:0.6.0` publication hunk. The original stash remains retained until
+the physical Issue #21 evidence satisfies the deletion gate below.
 
 ## Final disposition and deletion gate
 

@@ -302,16 +302,42 @@ internal class JvmLanDiscoveryTransport(
         lease: JvmListenerLease
     ): ServiceListener = object : ServiceListener {
             override fun serviceAdded(event: ServiceEvent) {
+                if (JvmLanDiag.enabled) {
+                    JvmLanDiag.log(
+                        "browse",
+                        "serviceAdded callback: instance=${sanitizeLanDiagnostic(event.name)} " +
+                            "leaseActive=${lease.isActive()}"
+                    )
+                }
                 if (!lease.isActive()) return
                 // Trigger asynchronous resolution; we react in serviceResolved.
                 runCatching { handle.requestServiceInfo(event.type, event.name, true) }
             }
 
             override fun serviceRemoved(event: ServiceEvent) {
+                if (JvmLanDiag.enabled) {
+                    val eventInfo = runCatching { event.info }.getOrNull()
+                    val hasPeerId = runCatching {
+                        !eventInfo?.getPropertyString(LanConstants.TXT_PEER_ID).isNullOrBlank()
+                    }.getOrDefault(false)
+                    JvmLanDiag.log(
+                        "browse",
+                        "serviceRemoved callback: instance=${sanitizeLanDiagnostic(event.name)} " +
+                            "leaseActive=${lease.isActive()} hasInfo=${eventInfo != null} " +
+                            "hasPeerId=$hasPeerId"
+                    )
+                }
                 processRemovedService(event.name, lease)
             }
 
             override fun serviceResolved(event: ServiceEvent) {
+                if (JvmLanDiag.enabled) {
+                    JvmLanDiag.log(
+                        "browse",
+                        "serviceResolved callback: instance=${sanitizeLanDiagnostic(event.name)} " +
+                            "leaseActive=${lease.isActive()} hasInfo=${event.info != null}"
+                    )
+                }
                 if (!lease.isActive()) return
                 val info = event.info ?: return
                 processResolvedService(event.name, info, info.inetAddresses.toList(), lease)

@@ -1,5 +1,6 @@
 package dev.p2pkit.transport.lan
 
+import java.net.Inet6Address
 import java.net.InetAddress
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -95,6 +96,20 @@ class AndroidLanBindSelectorTest {
                 )
             )
         )
+    }
+
+    @Test
+    fun selectedNetworkAcceptsScopedIpv6LinkLocalAndPreservesScope() {
+        val scoped = Inet6Address.getByAddress(
+            null,
+            InetAddress.getByName("fe80::2").address,
+            7
+        )
+
+        val selected = selectAndroidNetworkBindAddress(listOf(scoped))
+
+        assertEquals(scoped, selected)
+        assertEquals(scoped.hostAddress, selected?.hostAddress)
     }
 
     @Test

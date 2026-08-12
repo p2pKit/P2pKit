@@ -151,6 +151,27 @@ records must produce bounded lost-state cleanup, and excess connections must be
 refused without starving an authorized connection. Stop immediately if memory,
 file descriptors, or CPU exceed the safe host limits set in the result record.
 
+### C7 — link-local-only direct segment
+
+Connect two physical macOS/Linux machines by a dedicated Ethernet cable with
+no DHCP server. Disable Wi-Fi, VPN, cellular tethering, and every alternate
+route. Wait for both interfaces to self-assign IPv4 `169.254/16` addresses;
+record interface indexes, prefixes, routes, multicast membership, and
+`ping`/`arp` or `ip neigh` results. Run the JVM CLI/Desktop sample at both ends,
+enable diagnostics, advertise and discover in both directions, establish
+secure-v2 sessions from each end, and exchange the 200 KiB and 5 MiB fixtures.
+Repeat with an Android USB-Ethernet or approved mobile peer only when its OS
+exposes the physical link as Ethernet. Repeat with scoped IPv6 link-local when
+both endpoints provide stable scope IDs.
+
+The selected JmDNS bind target, discovery candidate, and TCP route must all
+name the same physical interface. IPv6 literals must retain their scope; no
+unscoped `fe80::` candidate may be dialed. PASS requires three repeatable
+bidirectional discovery/connect/transfer cycles with matching hashes and PCAP
+on the direct interface. Asymmetric discovery, binding an alternate interface,
+scope loss, false Connected state, or recovery that requires enabling a routed
+network is FAIL. Restore DHCP and ordinary interfaces during cleanup.
+
 ## What must never happen
 
 - Plaintext fallback after secure-v2 failure or an authorization bypass.
@@ -192,5 +213,7 @@ an entire host firewall remotely unless the lab procedure guarantees recovery.
 - [ ] Every latency/loss/jitter/bandwidth profile repeated three times.
 - [ ] Disconnect, restart, interface, firewall, isolation, and router cases completed.
 - [ ] Hostile discovery/admission limits exercised safely.
+- [ ] Link-local-only IPv4 and available scoped-IPv6 cases completed on a
+      direct physical segment.
 - [ ] Both-peer logs, PCAP, configuration, metrics, and hashes retained.
 - [ ] Independent reviewer reproduced each pass/fail decision.
