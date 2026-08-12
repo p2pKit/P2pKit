@@ -10,12 +10,13 @@ package dev.p2pkit.core.transfer
  * messages) more frequent slots on the write mutex.
  */
 public data class FileTransferConfig(
-    /** Hard cap on a single file's byte size. Defaults to 2 GiB. */
+    /** Hard positive cap on a single file's byte size. Defaults to 2 GiB. */
     val maxFileSizeBytes: Long = 2L * 1024 * 1024 * 1024,
 
     /**
-     * Bytes per `FILE_DATA` frame. Matches the default message chunk size; each
-     * chunk is one write through the session's send mutex.
+     * Bytes per `FILE_DATA` frame. Must be in `1..4 MiB`. Matches the default
+     * message chunk size; each chunk is one write through the session's send
+     * mutex.
      */
     val chunkSizeBytes: Int = 64 * 1024,
 
@@ -25,7 +26,7 @@ public data class FileTransferConfig(
      * maximum idle interval for both sending and receiving after acceptance;
      * the overall accepted-transfer deadline in either direction is twenty
      * times this value. Secure-v2 receiver commit and sender FILE_COMMIT
-     * acknowledgement each use the same bound. Default 30 s.
+     * acknowledgement each use the same bound. Must be positive. Default 30 s.
      */
     val offerTimeoutMillis: Long = 30_000
 ) {

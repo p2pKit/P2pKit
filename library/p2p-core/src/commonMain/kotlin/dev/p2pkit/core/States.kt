@@ -17,8 +17,10 @@ import dev.p2pkit.core.permission.P2pPermission
  * fail-closed: call [P2pKit.stop] and create a replacement instance.
  *
  * [Stopped] is **terminal**: [P2pKit.stop] cancels the kit's internal scope and
- * the instance cannot be restarted — any later lifecycle call throws
- * `IllegalStateException`. Create a new instance to start again.
+ * the instance cannot be restarted. Later start/connect or per-feature
+ * start/stop calls throw `IllegalStateException`; repeated [P2pKit.stop]
+ * calls join or return the same terminal teardown result. Create a new
+ * instance to start again.
  */
 public sealed class P2pState {
     public data object Idle : P2pState()
@@ -73,10 +75,15 @@ public sealed class FeatureState {
 /**
  * Lifecycle state of a single [P2pSession].
  *
- * `Connecting → Handshaking → Connected` is the happy path. A local `close()`
- * commits [Closing] before bounded wire/resource cleanup and then reaches
- * [Closed]; concurrent close callers join that transaction. Connection loss
- * enters [Failed], or [Reconnecting] if [ReconnectPolicy.Enabled] is configured.
+ * SDK-created sessions become application-visible only after the transport
+ * setup and handshake have succeeded, so their first observable state is
+ * [Connected]. A local `close()` commits [Closing] before bounded
+ * wire/resource cleanup and then reaches [Closed]; concurrent close callers
+ * join that transaction. Connection loss enters [Failed], or [Reconnecting]
+ * if [ReconnectPolicy.Enabled] is configured. [Idle], [Connecting], and
+ * [Handshaking] remain available to transport-level state machines and future
+ * API evolution but are not currently emitted by an SDK-created
+ * [P2pSession].
  */
 public enum class ConnectionState {
     Idle,

@@ -1120,12 +1120,17 @@ class PeerRegistryTest {
                 registry.internalPeer(ipv6.id)!!.transportHints.single().host
             )
 
-            listOf("https://host", "user@host", "host/path", "host name", "host\u0000name")
+            listOf("", "   ", "https://host", "user@host", "host/path", "host name", "host\u0000name")
                 .forEach { unsafe ->
                     assertFailsWith<IllegalArgumentException> {
                         registry.registerManualPeer(unsafe, 9_002)
                     }
                 }
+            listOf(-1, 0, 65_536).forEach { invalidPort ->
+                assertFailsWith<IllegalArgumentException> {
+                    registry.registerManualPeer("example.com", invalidPort)
+                }
+            }
         } finally {
             supervisor.cancel()
         }

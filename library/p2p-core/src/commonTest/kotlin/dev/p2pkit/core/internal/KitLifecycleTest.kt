@@ -282,6 +282,62 @@ class KitLifecycleTest {
     }
 
     @Test
+    fun lazyConnectSurfacesTransportStartFailureBeforeDialing() = runBlocking<Unit> {
+        val transport = FakeDataTransport().also {
+            it.startFailure = IllegalStateException("lazy bind failed")
+        }
+        val kit = createTestKit {
+            appId = AppId("lazy-connect-start-failure")
+            deviceName = "Test"
+            transports { register(DataOnlyFactory(transport)) }
+        }
+        val peer = Peer(
+            id = PeerId("remote-peer"),
+            name = "Remote",
+            platform = Platform.JVM_DESKTOP,
+            supportedTransports = setOf(TransportKind.LAN)
+        )
+
+        try {
+            val failure = assertFailsWith<P2pError.TransportStartFailed> {
+                kit.connect(peer)
+            }
+            assertEquals(TransportKind.LAN, failure.transportKind)
+            assertTrue(transport.connectCalls.isEmpty())
+            assertIs<P2pState.Failed>(kit.state.value)
+        } finally {
+            kit.stop()
+        }
+    }
+
+    @Test
+    fun terminalKitRejectsFeatureWorkWhileKitStopRemainsIdempotent() = runBlocking<Unit> {
+        val transport = TrackingTransport()
+        val kit = createTestKit {
+            appId = AppId("terminal-public-contract")
+            deviceName = "Test"
+            transports { register(TrackingFactory(transport)) }
+        }
+        val peer = Peer(
+            id = PeerId("remote-peer"),
+            name = "Remote",
+            platform = Platform.JVM_DESKTOP,
+            supportedTransports = setOf(TransportKind.LAN)
+        )
+
+        kit.stop()
+
+        kit.stop()
+        assertEquals(P2pState.Stopped, kit.state.value)
+        assertFailsWith<IllegalStateException> { kit.start() }
+        assertFailsWith<IllegalStateException> { kit.startAdvertising() }
+        assertFailsWith<IllegalStateException> { kit.startDiscovery() }
+        assertFailsWith<IllegalStateException> { kit.stopAdvertising() }
+        assertFailsWith<IllegalStateException> { kit.stopDiscovery() }
+        assertFailsWith<IllegalStateException> { kit.connect(peer) }
+    }
+
+    @Test
     fun partialDataStartupRollsBackInReverseAndSameInstancesRetry() = runBlocking {
         val calls = mutableListOf<String>()
         val first = StartupProbeTransport(TransportKind.LAN, "first", calls)

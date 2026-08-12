@@ -46,6 +46,8 @@ public interface ManualPeerRegistrar {
      * @param kind  Transport kind that should accept this hint. Defaults to LAN.
      * @param deviceName  Optional display name. If null, a placeholder
      *                    derived from `host:port` is used.
+     * @throws IllegalArgumentException if [host] is blank, contains an unsafe
+     *   URI/control form, or [port] is outside `1..65535`.
      */
     public fun registerManualPeer(
         host: String,

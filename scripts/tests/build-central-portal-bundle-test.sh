@@ -52,6 +52,9 @@ if [[ "$VERSION" == *-SNAPSHOT ]]; then
     if [[ -f "$ROOT/local.properties" ]]; then
         cp "$ROOT/local.properties" "$RELEASE_WORKTREE/local.properties"
     fi
+    # Exercise the script under test, including uncommitted development edits,
+    # against an otherwise clean non-SNAPSHOT release fixture.
+    cp "$ORIGINAL_SCRIPT" "$RELEASE_WORKTREE/scripts/build-central-portal-bundle.sh"
     SCRIPT="$RELEASE_WORKTREE/scripts/build-central-portal-bundle.sh"
 else
     SCRIPT="$ORIGINAL_SCRIPT"
@@ -76,6 +79,30 @@ secret_appears_in_log() {
 bash -n "$SCRIPT"
 "$SCRIPT" --help >/dev/null
 
+PHASE="signature-status parser regression"
+PARSER_FINGERPRINT="0123456789ABCDEF0123456789ABCDEF01234567"
+parser_body="$(
+    awk '
+        /^valid_signature_fingerprint\(\) \{/ { capture = 1 }
+        capture { print }
+        capture && /^\}/ { exit }
+    ' "$SCRIPT"
+)"
+[[ -n "$parser_body" ]] || {
+    echo "FATAL: bundle builder signature-status parser is missing" >&2
+    exit 1
+}
+parser_output="$(
+    bash -c "$parser_body
+status=\$(printf '[GNUPG:] VALIDSIG %s 20260812 0 4 0 1 10 00\n' '$PARSER_FINGERPRINT';
+         awk 'BEGIN { for (i = 0; i < 20000; i++) print \"[GNUPG:] NOTATION_DATA trailing-status\" }')
+valid_signature_fingerprint \"\$status\""
+)"
+[[ "$parser_output" == "$PARSER_FINGERPRINT" ]] || {
+    echo "FATAL: signature-status parser rejected a valid signature with trailing status" >&2
+    exit 1
+}
+
 PHASE="missing-key rejection"
 if env -u ORG_GRADLE_PROJECT_signingInMemoryKey \
     -u ORG_GRADLE_PROJECT_signingInMemoryKeyBase64 \
@@ -98,7 +125,8 @@ gpg --batch --homedir "$GNUPGHOME" \
     }
 FINGERPRINT="$(
     gpg --batch --homedir "$GNUPGHOME" --with-colons --list-secret-keys 2>/dev/null |
-        awk -F: '$1 == "fpr" { print toupper($10); exit }'
+        awk -F: '$1 == "fpr" && fingerprint == "" { fingerprint = toupper($10) }
+                 END { if (fingerprint != "") print fingerprint }'
 )"
 [[ "$FINGERPRINT" =~ ^[A-F0-9]{40}$ ]] || {
     echo "FATAL: disposable signing-key fingerprint is invalid" >&2

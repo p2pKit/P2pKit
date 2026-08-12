@@ -160,7 +160,10 @@ public class P2pKitBuilder internal constructor() {
     }
 
     public fun networkProvisioning(block: NetworkProvisioningConfigBuilder.() -> Unit) {
-        val b = NetworkProvisioningConfigBuilder(networkProvisioning).apply(block)
+        val b = NetworkProvisioningConfigBuilder(
+            initial = networkProvisioning,
+            initialFactory = networkProvisioningFactory
+        ).apply(block)
         networkProvisioning = b.toConfig()
         networkProvisioningFactory = b.factory
     }
@@ -291,7 +294,10 @@ public class FileTransferConfigBuilder internal constructor(initial: FileTransfe
 }
 
 @P2pKitDsl
-public class NetworkProvisioningConfigBuilder internal constructor(initial: NetworkProvisioningConfig) {
+public class NetworkProvisioningConfigBuilder internal constructor(
+    initial: NetworkProvisioningConfig,
+    initialFactory: NetworkProvisioningFactory?
+) {
     public var enableLocalHotspot: Boolean = initial.enableLocalHotspot
     public var enableWifiJoin: Boolean = initial.enableWifiJoin
     public var enableManualIpFallback: Boolean = initial.enableManualIpFallback
@@ -301,12 +307,14 @@ public class NetworkProvisioningConfigBuilder internal constructor(initial: Netw
      * (e.g. `jvm()`, `android(context)`) that call this. When no factory is
      * registered, the kit uses
      * [dev.p2pkit.core.provisioning.UnsupportedNetworkProvisioningManager].
+     * Re-entering `networkProvisioning { }` preserves the previously
+     * registered factory; calling [register] again replaces it explicitly.
      */
     public fun register(factory: NetworkProvisioningFactory) {
         this.factory = factory
     }
 
-    internal var factory: NetworkProvisioningFactory? = null
+    internal var factory: NetworkProvisioningFactory? = initialFactory
 
     internal fun toConfig(): NetworkProvisioningConfig =
         NetworkProvisioningConfig(enableLocalHotspot, enableWifiJoin, enableManualIpFallback)

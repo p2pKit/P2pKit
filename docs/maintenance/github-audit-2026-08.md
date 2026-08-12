@@ -504,6 +504,14 @@ Android/Apple discovery behavior, real-network callback ordering, or hostile
 multi-machine conditions; the corresponding validation campaigns remain
 pending and are not upgraded by this workstream.
 
+Complete gate
+[31531533715](https://github.com/p2pKit/P2pKit/actions/runs/31531533715)
+passed exact PR head `90d50e83ad16419061fd5964f438b1baa09173ec`.
+PR [#86](https://github.com/p2pKit/P2pKit/pull/86) then merged normally as
+`f8cf629d7209fdb6dc321c180123d26028ae63d7`; head and merge share tree
+`d93b3d5598bc13037dd802aeeac7dfdad57231ab`, so exact-tree reuse avoided a
+redundant complete gate.
+
 ## Core lifecycle and persistent identity workstream evidence
 
 Implementation commit `04df9a0f98d233107f9a27d67e6d889135c7f7be`
@@ -583,11 +591,102 @@ There is no public API/ABI, Maven coordinate, secure-v2 or legacy wire-byte,
 platform-floor, or publication-layout change. Construction now rejects local
 identity text that the existing wire decoder would reject, and legacy corrupt
 persistence records regenerate; valid existing identities remain compatible.
-The protected PR and its single hosted complete-gate result are pending and
-must be appended only after they actually complete. Physical Android/Apple
-lifecycle behavior, real-network callback ordering, independent secure-v2
-interoperability, and professional cryptographic review remain external
-campaigns and are not upgraded by this evidence.
+Complete gate
+[31542848494](https://github.com/p2pKit/P2pKit/actions/runs/31542848494)
+passed exact PR head `f699c232075b923faa69b3f5a4f8fb2e95842db1`.
+PR [#87](https://github.com/p2pKit/P2pKit/pull/87) then merged normally as
+`a99a890c2208e33fe413869a424b60dacadca71f`; head and merge share tree
+`0c42da2bbfe80727705a4d69977021df689f28d8`, so exact-tree reuse avoided a
+redundant complete gate. Physical Android/Apple lifecycle behavior,
+real-network callback ordering, independent secure-v2 interoperability, and
+professional cryptographic review remain external campaigns and are not
+upgraded by this evidence.
+
+## Public configuration and transport SPI workstream evidence
+
+Implementation commit `c7ff7cdce20e1f71505dd7d2087fa38c63437f0b`
+(tree `7142124e8081b60b36dcbebd389643b66afc5828`) closes the
+repository-executable public configuration and third-party transport boundary
+gaps found by the fresh API audit:
+
+- repeated `networkProvisioning {}` blocks now preserve an existing provider
+  registration unless a later block explicitly replaces it, matching the
+  accumulation behavior of the other configuration blocks;
+- default public advertising and discovery state flows are read-only at
+  runtime rather than castable shared `MutableStateFlow` instances;
+- third-party transport capability, priority, and type getter failures are
+  fail-closed as typed connection or initialization failures, retain their
+  cause, and never swallow coroutine cancellation; and
+- public lifecycle, session-state, configuration-bound, manual-endpoint,
+  transport-SPI, and connection-ownership KDoc now states the behavior enforced
+  by production code.
+
+Exact implementation and regression files:
+
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/Config.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/P2pKit.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/States.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/dsl/Builders.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/TransportManager.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/provisioning/ManualPeerRegistrar.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/provisioning/NetworkProvisioningTypes.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/transfer/FileTransferConfig.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/transport/DataTransport.kt`
+- `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/transport/RawConnection.kt`
+- `library/p2p-core/src/commonTest/kotlin/dev/p2pkit/core/PublicConfigurationValidationTest.kt`
+- `library/p2p-core/src/commonTest/kotlin/dev/p2pkit/core/PublicModelImmutabilityTest.kt`
+- `library/p2p-core/src/commonTest/kotlin/dev/p2pkit/core/internal/KitLifecycleTest.kt`
+- `library/p2p-core/src/commonTest/kotlin/dev/p2pkit/core/internal/NetworkProvisioningCloseTest.kt`
+- `library/p2p-core/src/commonTest/kotlin/dev/p2pkit/core/internal/PeerRegistryTest.kt`
+- `library/p2p-core/src/commonTest/kotlin/dev/p2pkit/core/internal/TransportCapabilityTest.kt`
+- `library/p2p-core/src/commonTest/kotlin/dev/p2pkit/core/internal/TransportManagerTest.kt`
+
+Final committed-tree verification before the protected boundary:
+
+- complete `p2p-core` check under strict dependency verification and
+  `--rerun-tasks` — **PASS**: 636 JVM and 606 arm64 iOS Simulator tests, zero
+  failures, errors, or skips, with all 25 requested tasks executed;
+- focused configuration, immutability, lifecycle, provisioning-close,
+  transport-capability, and selection suites — **PASS**, including invalid
+  bounds, repeated configuration blocks, runtime state-flow immutability,
+  provider getter failure/cancellation, stable priority ties, lazy startup
+  failure, and terminal lifecycle behavior;
+- Android main, iosArm64, iosSimulatorArm64, and iosX64 production/test
+  compilation and linkage, Android sample, CLI, Desktop UI, Android lint, ABI,
+  and warning-failing Dokka — **PASS**. `iosX64Test` is host-skipped on Apple
+  Silicon after its test binary links; runtime execution remains an Intel-host
+  requirement and is not inferred from linkage;
+- `scripts/run-release-gate.sh` — **PASS** on the clean implementation commit,
+  including repository/link/policy validation, root checks, strict dependency
+  verification, 38-component release SBOM, all 15 publication shapes,
+  isolated JVM/Java/Android/KMP/iOS 14 consumers, release XCFramework
+  reconstruction and provenance, iOS 14 slice inspection, and Swift warnings
+  as errors; and
+- XCFramework provenance records exact commit
+  `c7ff7cdce20e1f71505dd7d2087fa38c63437f0b`, source state `clean`, and input
+  digest `4924688d4af7da6bbbe7f11a87acbef55f5ed81d56086768b1d16af5bb69b4ba`.
+  `git diff --check` and the clean-worktree check also passed.
+
+The observed `NO-SOURCE` tasks are undeclared Java/resource source kinds, while
+synthetic SwiftPM and unsupported non-iOS XCFramework family tasks are expected
+plugin branches rather than omitted declared tests. No executed JVM, arm64 iOS
+Simulator, or sample test was skipped. There is no public API/ABI, Maven
+coordinate, wire-byte, platform-floor, or publication-layout change. Physical
+platform behavior and all six external validation campaigns remain pending.
+
+The first protected `complete-gate` attempt for PR
+[#88](https://github.com/p2pKit/P2pKit/pull/88), run
+[`31600157407`](https://github.com/p2pKit/P2pKit/actions/runs/31600157407),
+failed in the signed Central bundle entry-point test after its Gradle
+publication and all 15 artifact-shape checks had passed. Under `pipefail`, the
+signature-status parser stopped reading as soon as it found `VALIDSIG`, which
+could give the upstream `printf` a broken pipe when GPG returned a sufficiently
+large trailing status stream. The release-script correction consumes the full
+stream while retaining the first fingerprint; its regression supplies 20,000
+trailing status records, and the disposable-key integration test passes the
+real signed bundle, signatures, checksums, manifest, and secret-safety checks.
+The replacement hosted result will be recorded only after it completes.
 
 ## Pull request audit
 
@@ -616,6 +715,8 @@ campaigns and are not upgraded by this evidence.
 | [#83 — make LAN discovery delivery convergent](https://github.com/p2pKit/P2pKit/pull/83) | Replaced lossy discovery event buffers with a state-backed relay, made source failure/completion withdrawal deterministic, and retired Apple endpoint/relay generations atomically on stop. | **Merged** normally as `ba418189b7fc3033ac4f3e51932b83f7407bf323`. Replacement complete gate [31497583675](https://github.com/p2pKit/P2pKit/actions/runs/31497583675) passed on head `78b0e4249f031fd24af4d98be87a1894b0512c2e`; merge and head share tree `3fc254c5aa6f69e243a81df375cfde1048e56345`. |
 | [#84 — harden provisioning lifecycle and native ownership](https://github.com/p2pKit/P2pKit/pull/84) | Made operations manager-owned across Android, JVM, and Apple; serialized Android binding/rebinding and cleanup ownership; hardened validation, permissions, cancellation, and typed failure handling. | **Merged** normally as `fc1f6f92e6eb52573ef6f9034102d9d288d7a2bf`. Complete gate [31514113705](https://github.com/p2pKit/P2pKit/actions/runs/31514113705) passed on head `dadfc66307353c95d865f2835eca0d2d89d3eb84`; merge and head share tree `61cc2e6684ea0fce804bf7bedf2b02006fec0b73`. |
 | [#85 — harden secure protocol ownership and parsing](https://github.com/p2pKit/P2pKit/pull/85) | Closed post-handshake lease ownership, duplicate JSON-field acceptance, cancellation misclassification, and wall-clock reassembly-expiry gaps without changing approved wire bytes. | **Merged** normally as `0b267fa97dc09a573d3a7fb1e00416a5d5d16c12`. Complete gate [31524495713](https://github.com/p2pKit/P2pKit/actions/runs/31524495713) passed on head `701612ef2daa222376fc953e6a739da0f4e9ed04`; merge and head share tree `c944e628ac95f703a80277d2038f0daa56981013`. |
+| [#86 — harden core discovery admission and publication](https://github.com/p2pKit/P2pKit/pull/86) | Validated and bounded third-party discovery events, normalized provenance, capped retention, and generation-ordered peer publication with deterministic hostile-input and concurrency coverage. | **Merged** normally as `f8cf629d7209fdb6dc321c180123d26028ae63d7`. Complete gate [31531533715](https://github.com/p2pKit/P2pKit/actions/runs/31531533715) passed on head `90d50e83ad16419061fd5964f438b1baa09173ec`; merge and head share tree `d93b3d5598bc13037dd802aeeac7dfdad57231ab`. |
+| [#87 — harden core lifecycle and persistent identity](https://github.com/p2pKit/P2pKit/pull/87) | Made startup and observer acquisition cancellation-safe, bounded and strictly decoded persisted identities, validated wire-bound local identity, and bounded transient process-lock registries. | **Merged** normally as `a99a890c2208e33fe413869a424b60dacadca71f`. Complete gate [31542848494](https://github.com/p2pKit/P2pKit/actions/runs/31542848494) passed on head `f699c232075b923faa69b3f5a4f8fb2e95842db1`; merge and head share tree `0c42da2bbfe80727705a4d69977021df689f28d8`. |
 
 The recently closed, unmerged PRs were #46, whose stronger replacement is
 documented above, and #50, #51, #57, and #58, whose exact updates and authorship

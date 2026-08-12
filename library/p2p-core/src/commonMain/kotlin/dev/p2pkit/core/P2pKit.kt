@@ -6,6 +6,7 @@ import dev.p2pkit.core.provisioning.NetworkProvisioningManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * P2pKit's entry point. Created via [create].
@@ -91,7 +92,9 @@ public interface P2pKit {
     /**
      * Retained advertising state, independent from [state] and
      * [discoveryState]. The default keeps third-party mocks source-compatible
-     * for one migration release; production implementations override it.
+     * for one migration release; production implementations override it. The
+     * returned flow is read-only even at runtime and cannot be cast back to a
+     * [MutableStateFlow].
      */
     public val advertisingState: StateFlow<FeatureState>
         get() = idleFeatureState
@@ -100,7 +103,7 @@ public interface P2pKit {
      * Retained discovery state, independent from [state] and
      * [advertisingState]. The default keeps third-party mocks
      * source-compatible for one migration release; production implementations
-     * override it.
+     * override it. The returned flow is read-only even at runtime.
      */
     public val discoveryState: StateFlow<FeatureState>
         get() = idleFeatureState
@@ -219,12 +222,26 @@ public interface P2pKit {
      * which surface [P2pError.PermissionMissing].
      *
      * @throws P2pError.NoTransportAvailable if no registered transport can reach [peer]
+     * @throws P2pError.TransportStartFailed if lazy transport startup fails.
      * @throws P2pError.ConnectionFailed if the underlying connection fails
+     *   or a transport provider fails while evaluating reachability.
+     * @throws P2pError.SecurityConfigurationInvalid if the requested peer/pin
+     *   cannot be authenticated under the configured security mode.
+     * @throws P2pError.HandshakeRejected if the peer rejects the HELLO exchange.
+     * @throws P2pError.AuthenticationFailed if secure-v2 authentication fails.
+     * @throws P2pError.AuthorizationRejected if the authenticated key is not admitted.
+     * @throws P2pError.AuthenticatedIdentityMismatch if the proved identity
+     *   conflicts with the selected peer or expected fingerprint.
+     * @throws P2pError.VersionMismatch if the peer uses an incompatible protocol major.
+     * @throws IllegalStateException if [stop] has begun.
      */
     @Throws(Exception::class)
     public suspend fun connect(peer: Peer): P2pSession
 
-    /** Connect while requiring this exact out-of-band authenticated fingerprint. */
+    /**
+     * Connect while requiring this exact out-of-band authenticated fingerprint.
+     * Uses the same lifecycle and error contract as [connect].
+     */
     @Throws(Exception::class)
     public suspend fun connect(
         peer: Peer,
@@ -262,6 +279,17 @@ public interface P2pKit {
          * a first-launch stall.
          *
          * The implementation is provided by `dev.p2pkit.core.internal.P2pKitImpl`.
+         *
+         * @throws IllegalStateException when a required builder field or
+         *   transport registration is missing.
+         * @throws IllegalArgumentException when configuration or advertised
+         *   identity text violates its documented bounds.
+         * @throws P2pError.LocalIdentityUnavailable when secure identity
+         *   storage cannot safely load or create the local identity.
+         * @throws P2pError.SecurityConfigurationInvalid when secure-v2
+         *   configuration cannot be represented safely.
+         * @throws P2pError.TransportInitializationFailed when a transport
+         *   factory throws or contradicts its declared descriptor.
          */
         @Throws(Exception::class)
         public fun create(block: P2pKitBuilder.() -> Unit): P2pKit {
@@ -271,4 +299,5 @@ public interface P2pKit {
     }
 }
 
-private val idleFeatureState: StateFlow<FeatureState> = MutableStateFlow(FeatureState.Idle)
+private val idleFeatureState: StateFlow<FeatureState> =
+    MutableStateFlow(FeatureState.Idle).asStateFlow()

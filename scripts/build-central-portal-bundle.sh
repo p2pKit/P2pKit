@@ -48,6 +48,12 @@ file_size() {
     fi
 }
 
+valid_signature_fingerprint() {
+    local status="$1"
+    awk '$2 == "VALIDSIG" && fingerprint == "" { fingerprint = toupper($3) }
+         END { if (fingerprint != "") print fingerprint }' <<<"$status"
+}
+
 [[ -n "$VERSION" && -n "$GROUP" ]] || fail "GROUP/VERSION_NAME is missing from gradle.properties"
 [[ "$VERSION" != *-SNAPSHOT ]] || fail "Central release bundle cannot use a SNAPSHOT version"
 
@@ -92,7 +98,8 @@ chmod 600 "$KEY_FILE"
 
 actual_fingerprint="$(
     gpg --batch --show-keys --with-colons "$KEY_FILE" 2>/dev/null |
-        awk -F: '$1 == "fpr" { print toupper($10); exit }'
+        awk -F: '$1 == "fpr" && fingerprint == "" { fingerprint = toupper($10) }
+                 END { if (fingerprint != "") print fingerprint }'
 )"
 [[ -n "$actual_fingerprint" ]] || fail "could not read a fingerprint from the signing key"
 [[ "$actual_fingerprint" == "$expected_fingerprint" ]] ||
@@ -148,10 +155,7 @@ while IFS= read -r -d '' artifact; do
         gpg --batch --homedir "$GNUPGHOME" --status-fd 1 \
             --verify "$signature" "$artifact" 2>/dev/null
     } || true)"
-    signature_fingerprint="$(
-        printf '%s\n' "$status" |
-            awk '$2 == "VALIDSIG" { print toupper($3); exit }'
-    )"
+    signature_fingerprint="$(valid_signature_fingerprint "$status")"
     if [[ "$signature_fingerprint" != "$expected_fingerprint" ]]; then
         echo "FAIL invalid or unexpected signature: ${artifact#"$REPOSITORY/"}" >&2
         invalid_signature=$((invalid_signature + 1))
