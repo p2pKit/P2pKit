@@ -43,6 +43,16 @@ class JvmLanBindSelectorTest {
     }
 
     @Test
+    fun ipv4LinkLocalOnlyDirectCableInterfaceIsSelected() {
+        val selected = selectJvmLanBindTarget(
+            listOf(snapshot("en7", "169.254.20.2"))
+        )
+
+        assertEquals("en7", selected?.interfaceName)
+        assertEquals("169.254.20.2", selected?.address?.hostAddress)
+    }
+
+    @Test
     fun completeEligibleTopologyParticipatesInFingerprint() {
         val first = selectJvmLanBindTarget(
             listOf(
@@ -79,6 +89,21 @@ class JvmLanBindSelectorTest {
                 )
             )?.address
         )
+    }
+
+    @Test
+    fun scopedIpv6LinkLocalOnlyInterfaceIsSelectedWithScopeIntact() {
+        val scoped = Inet6Address.getByAddress(
+            null,
+            InetAddress.getByName("fe80::2").address,
+            7
+        )
+
+        val selected = selectJvmLanBindTarget(listOf(snapshot("en7", scoped)))
+
+        assertEquals("en7", selected?.interfaceName)
+        assertEquals(scoped, selected?.address)
+        assertEquals(scoped.hostAddress, selected?.address?.hostAddress)
     }
 
     @Test

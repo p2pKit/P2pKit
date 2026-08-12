@@ -529,11 +529,30 @@ internal class AndroidLanDiscoveryTransport(
         lease: AndroidListenerLease
     ): ServiceListener = object : ServiceListener {
         override fun serviceAdded(event: ServiceEvent) {
+            if (Log.enabled) {
+                Log.d(
+                    TAG,
+                    "serviceAdded callback: instance=${sanitizeLanDiagnostic(event.name)} " +
+                        "leaseActive=${lease.isActive()}"
+                )
+            }
             if (!lease.isActive()) return
             runCatching { handle.requestServiceInfo(event.type, event.name, true) }
         }
 
         override fun serviceRemoved(event: ServiceEvent) {
+            if (Log.enabled) {
+                val eventInfo = runCatching { event.info }.getOrNull()
+                val hasPeerId = runCatching {
+                    !eventInfo?.getPropertyString(LanConstants.TXT_PEER_ID).isNullOrBlank()
+                }.getOrDefault(false)
+                Log.d(
+                    TAG,
+                    "serviceRemoved callback: instance=${sanitizeLanDiagnostic(event.name)} " +
+                        "leaseActive=${lease.isActive()} hasInfo=${eventInfo != null} " +
+                        "hasPeerId=$hasPeerId"
+                )
+            }
             lease.publishIfActive {
                 val peerId = admittedServices.remove(event.name, lease)
                     ?: return@publishIfActive
@@ -547,6 +566,13 @@ internal class AndroidLanDiscoveryTransport(
         }
 
         override fun serviceResolved(event: ServiceEvent) {
+            if (Log.enabled) {
+                Log.d(
+                    TAG,
+                    "serviceResolved callback: instance=${sanitizeLanDiagnostic(event.name)} " +
+                        "leaseActive=${lease.isActive()} hasInfo=${event.info != null}"
+                )
+            }
             if (!lease.isActive()) return
             val info = event.info ?: return
             val record = validatedRecord(info) ?: return
