@@ -1,7 +1,11 @@
 package dev.p2pkit.transport.lan
 
+import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
+import android.net.NetworkCapabilities
 import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.NetworkInterface
 
@@ -93,6 +97,103 @@ internal fun currentAndroidFallbackBindTarget(): AndroidLanBindTarget? =
 
 internal fun androidLanInterfaceFingerprint(): String =
     currentAndroidFallbackBindTarget()?.fingerprint.orEmpty()
+
+/** Resolve one explicit Android [Network] into the immutable LAN bind target used by both planes. */
+internal fun androidLanBindTargetForNetwork(
+    connectivity: ConnectivityManager,
+    network: Network
+): AndroidLanBindTarget? {
+    if (!isSafeAndroidLanNetwork(connectivity, network)) return null
+    val properties = runCatching { connectivity.getLinkProperties(network) }.getOrNull()
+        ?: return null
+    val address = selectAndroidNetworkBindAddress(properties.linkAddresses.map { it.address })
+        ?: return null
+    val localAddresses = properties.toAndroidLanInterfaceAddresses()
+    val fingerprint = localAddresses
+        .map { "${properties.interfaceName}:${it.address.hostAddress}/${it.prefixLength}" }
+        .sorted()
+        .joinToString("|")
+    return AndroidLanBindTarget(
+        network = network,
+        interfaceName = properties.interfaceName ?: "network-$network",
+        address = address,
+        localAddresses = localAddresses,
+        fingerprint = "network=$network|$fingerprint"
+    )
+}
+
+/**
+ * Resolve a current route even when discovery is not running (for example a
+ * manually registered peer). No cellular/VPN network is ever used as a
+ * fallback; hotspot/AP Java interfaces are considered last.
+ */
+@Suppress("DEPRECATION")
+internal fun currentAndroidLanBindTarget(
+    connectivity: ConnectivityManager
+): AndroidLanBindTarget? {
+    val active = runCatching { connectivity.activeNetwork }.getOrNull()
+    val candidates = buildList {
+        active?.let(::add)
+        runCatching { connectivity.allNetworks.toList() }
+            .getOrDefault(emptyList())
+            .filterNot { it == active }
+            .sortedBy(Network::toString)
+            .forEach(::add)
+    }
+    candidates.firstNotNullOfOrNull { network ->
+        androidLanBindTargetForNetwork(connectivity, network)
+    }?.let { return it }
+    return currentAndroidFallbackBindTarget()
+}
+
+internal fun isSafeAndroidLanNetwork(
+    connectivity: ConnectivityManager,
+    network: Network
+): Boolean {
+    val capabilities = runCatching { connectivity.getNetworkCapabilities(network) }.getOrNull()
+        ?: return false
+    return isSafeAndroidLanTransport(
+        hasWifi = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+        hasEthernet = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
+        hasCellular = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
+        hasVpn = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+    )
+}
+
+/**
+ * Select a deterministic JmDNS bind address from one Android [Network]'s
+ * `LinkProperties`. The list is already scoped to that network; ordering is
+ * only used within explicit address classes, never as a process-wide route
+ * choice.
+ */
+internal fun selectAndroidNetworkBindAddress(addresses: List<InetAddress>): InetAddress? =
+    addresses.firstOrNull { address ->
+        address is Inet4Address &&
+            !address.isLoopbackAddress &&
+            !address.isAnyLocalAddress &&
+            !address.isLinkLocalAddress
+    } ?: addresses.firstOrNull { address ->
+        address is Inet4Address &&
+            !address.isLoopbackAddress &&
+            !address.isAnyLocalAddress
+    } ?: addresses.firstOrNull { address ->
+        address is Inet6Address &&
+            !address.isLoopbackAddress &&
+            !address.isAnyLocalAddress &&
+            (!address.isLinkLocalAddress || address.scopeId != 0)
+    }
+
+/** Reject VPN/cellular overlays even if Android also reports an underlying LAN transport. */
+internal fun isSafeAndroidLanTransport(
+    hasWifi: Boolean,
+    hasEthernet: Boolean,
+    hasCellular: Boolean,
+    hasVpn: Boolean
+): Boolean =
+    (hasWifi || hasEthernet) && !hasCellular && !hasVpn
+
+private fun LinkProperties.toAndroidLanInterfaceAddresses(): List<LanInterfaceAddress> =
+    linkAddresses.map { LanInterfaceAddress(it.address, it.prefixLength) }
 
 private fun isEligibleAndroidFallbackInterface(
     snapshot: AndroidLanInterfaceSnapshot

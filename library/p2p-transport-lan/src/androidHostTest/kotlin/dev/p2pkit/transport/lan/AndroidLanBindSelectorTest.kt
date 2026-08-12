@@ -60,6 +60,83 @@ class AndroidLanBindSelectorTest {
         assertNotEquals(first?.fingerprint, rotated?.fingerprint)
     }
 
+    @Test
+    fun selectedNetworkAddressPriorityDoesNotDependOnLinkAddressOrder() {
+        val selected = selectAndroidNetworkBindAddress(
+            listOf(
+                InetAddress.getByName("fe80::1"),
+                InetAddress.getByName("169.254.10.20"),
+                InetAddress.getByName("127.0.0.1"),
+                InetAddress.getByName("192.168.50.12")
+            )
+        )
+
+        assertEquals("192.168.50.12", selected?.hostAddress)
+    }
+
+    @Test
+    fun selectedNetworkFallsBackToIpv4LinkLocalButRejectsUnsafeAddresses() {
+        assertEquals(
+            "169.254.10.20",
+            selectAndroidNetworkBindAddress(
+                listOf(
+                    InetAddress.getByName("0.0.0.0"),
+                    InetAddress.getByName("127.0.0.1"),
+                    InetAddress.getByName("169.254.10.20")
+                )
+            )?.hostAddress
+        )
+        assertNull(
+            selectAndroidNetworkBindAddress(
+                listOf(
+                    InetAddress.getByName("0.0.0.0"),
+                    InetAddress.getByName("127.0.0.1"),
+                    InetAddress.getByName("fe80::1")
+                )
+            )
+        )
+    }
+
+    @Test
+    fun lanTransportClassificationRejectsVpnAndCellularOverlays() {
+        assertEquals(
+            true,
+            isSafeAndroidLanTransport(
+                hasWifi = true,
+                hasEthernet = false,
+                hasCellular = false,
+                hasVpn = false
+            )
+        )
+        assertEquals(
+            true,
+            isSafeAndroidLanTransport(
+                hasWifi = false,
+                hasEthernet = true,
+                hasCellular = false,
+                hasVpn = false
+            )
+        )
+        assertEquals(
+            false,
+            isSafeAndroidLanTransport(
+                hasWifi = true,
+                hasEthernet = false,
+                hasCellular = false,
+                hasVpn = true
+            )
+        )
+        assertEquals(
+            false,
+            isSafeAndroidLanTransport(
+                hasWifi = true,
+                hasEthernet = false,
+                hasCellular = true,
+                hasVpn = false
+            )
+        )
+    }
+
     private fun snapshot(
         name: String,
         address: String,

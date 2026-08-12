@@ -11,6 +11,8 @@ import dev.p2pkit.core.transport.TransportHint
 import java.io.IOException
 import java.net.BindException
 import java.net.ConnectException
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketAddress
@@ -89,6 +91,33 @@ class AndroidLanDataTransportOwnershipTest {
 
     private class ImmediateConnectSocket : Socket() {
         override fun connect(endpoint: SocketAddress?, timeout: Int) = Unit
+    }
+
+    private class RecordingRouteSocket : Socket() {
+        var boundEndpoint: SocketAddress? = null
+
+        override fun bind(bindpoint: SocketAddress?) {
+            boundEndpoint = bindpoint
+        }
+
+        override fun connect(endpoint: SocketAddress?, timeout: Int) = Unit
+    }
+
+    private open class FailingRouteBindSocket : Socket() {
+        override fun bind(bindpoint: SocketAddress?) {
+            throw BindException("injected route bind failure")
+        }
+    }
+
+    private class FailRouteBindAndFirstCloseSocket : FailingRouteBindSocket() {
+        private val closeAttempts = AtomicInteger()
+
+        override fun close() {
+            if (closeAttempts.getAndIncrement() == 0) {
+                throw IOException("injected route socket cleanup failure")
+            }
+            super.close()
+        }
     }
 
     private class FailOnceCloseConnectSocket : Socket() {
@@ -267,6 +296,146 @@ class AndroidLanDataTransportOwnershipTest {
         assertTrue(first.isClosed)
         transport.close()
     }
+
+    @Test
+    fun productionRouteStateFailsClosedBeforeCreatingAnUnboundSocket() = runBlocking {
+        val creations = AtomicInteger()
+        val transport = AndroidLanDataTransport(
+            registration = registration("missing-route"),
+            networkState = AndroidLanNetworkState(),
+            socketFactory = {
+                creations.incrementAndGet()
+                ImmediateConnectSocket()
+            }
+        )
+
+        val failure = assertFailsWith<P2pError.ConnectionFailed> {
+            transport.connect(peer("android-missing-route-peer"))
+        }
+
+        assertTrue("No Android LAN route" in failure.reason)
+        assertEquals(0, creations.get(), "an unrestricted socket must never be created")
+        transport.close()
+    }
+
+    @Test
+    fun hotspotFallbackBindsTheSelectedLocalAddressBeforeConnect() = runBlocking {
+        val resolverCalls = AtomicInteger()
+        val routeState = AndroidLanNetworkState {
+            resolverCalls.incrementAndGet()
+            null
+        }.apply {
+            select(
+                hotspotTarget()
+            )
+        }
+        val socket = RecordingRouteSocket()
+        val transport = AndroidLanDataTransport(
+            registration = registration("hotspot-route"),
+            networkState = routeState,
+            socketFactory = { selectedNetwork ->
+                assertNull(selectedNetwork, "AP fallback has no ConnectivityManager Network")
+                socket
+            }
+        )
+
+        val raw = transport.connect(peer("android-hotspot-peer"))
+
+        val bound = assertIs<InetSocketAddress>(socket.boundEndpoint)
+        assertEquals("192.168.43.1", bound.address.hostAddress)
+        assertEquals(0, bound.port)
+        assertEquals(0, resolverCalls.get(), "the discovery-owned route must take precedence")
+        raw.close()
+        transport.close()
+    }
+
+    @Test
+    fun manualPeerDialResolvesAndBindsARouteWithoutDiscovery() = runBlocking {
+        val resolverCalls = AtomicInteger()
+        val routeState = AndroidLanNetworkState {
+            resolverCalls.incrementAndGet()
+            hotspotTarget()
+        }
+        val socket = RecordingRouteSocket()
+        val transport = AndroidLanDataTransport(
+            registration = registration("manual-route"),
+            networkState = routeState,
+            socketFactory = { socket }
+        )
+
+        val raw = transport.connect(peer("android-manual-peer"))
+
+        val bound = assertIs<InetSocketAddress>(socket.boundEndpoint)
+        assertEquals("192.168.43.1", bound.address.hostAddress)
+        assertEquals(1, resolverCalls.get())
+        raw.close()
+        transport.close()
+    }
+
+    @Test
+    fun routeBindFailuresCloseEveryCandidateAndRemainTyped() = runBlocking {
+        val sockets = mutableListOf<FailingRouteBindSocket>()
+        val transport = AndroidLanDataTransport(
+            registration = registration("route-bind-failure"),
+            networkState = AndroidLanNetworkState { hotspotTarget() },
+            socketFactory = {
+                FailingRouteBindSocket().also(sockets::add)
+            }
+        )
+
+        val failure = assertFailsWith<P2pError.ConnectionFailed> {
+            transport.connect(
+                peerWithHosts(
+                    "android-route-bind-failure-peer",
+                    "192.168.43.2",
+                    "192.168.43.3"
+                )
+            )
+        }
+
+        assertTrue("route setup failed" in failure.reason)
+        assertEquals(2, sockets.size)
+        assertTrue(sockets.all(Socket::isClosed))
+        transport.close()
+    }
+
+    @Test
+    fun routeBindCleanupFailureBlocksFurtherCandidatesUntilStopRetry() = runBlocking {
+        val first = FailRouteBindAndFirstCloseSocket()
+        val creations = AtomicInteger()
+        val transport = AndroidLanDataTransport(
+            registration = registration("route-cleanup-failure"),
+            networkState = AndroidLanNetworkState { hotspotTarget() },
+            socketFactory = {
+                creations.incrementAndGet()
+                first
+            }
+        )
+
+        val failure = assertFailsWith<P2pError.ConnectionFailed> {
+            transport.connect(
+                peerWithHosts(
+                    "android-route-cleanup-failure-peer",
+                    "192.168.43.2",
+                    "192.168.43.3"
+                )
+            )
+        }
+
+        assertTrue("route setup cleanup failed" in failure.reason)
+        assertEquals(1, creations.get(), "uncertain route ownership must fail closed")
+        transport.stop()
+        assertTrue(first.isClosed)
+        transport.close()
+    }
+
+    private fun hotspotTarget() = AndroidLanBindTarget(
+        network = null,
+        interfaceName = "softap0",
+        address = InetAddress.getByName("192.168.43.1"),
+        localAddresses = emptyList(),
+        fingerprint = "softap0:192.168.43.1/24"
+    )
 
     private fun registration(id: String) = LanServiceRegistration(
         appId = AppId("android-ownership-$id"),

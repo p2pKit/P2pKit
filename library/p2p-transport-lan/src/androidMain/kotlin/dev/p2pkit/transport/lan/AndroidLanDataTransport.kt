@@ -170,7 +170,22 @@ internal class AndroidLanDataTransport(
         val endpoints = peer.lanEndpoints()
         if (endpoints.isEmpty()) throw P2pError.NoTransportAvailable(peer.publicPeer)
         val pid8 = peer.publicPeer.id.value.take(8)
-        val selectedNetwork = networkState?.selectedNetwork()
+        val selectedRoute = try {
+            withContext(Dispatchers.IO) { networkState?.selectedRoute() }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            if (error !is Exception) throw error
+            throw P2pError.ConnectionFailed(
+                "Android LAN route selection failed (${error::class.simpleName}: " +
+                    error.message.orEmpty() + ")"
+            ).also { failure -> failure.addSuppressed(error) }
+        }
+        if (networkState != null && selectedRoute == null) {
+            throw P2pError.ConnectionFailed(
+                "No Android LAN route is available; start LAN discovery/advertising and retry"
+            )
+        }
         val failures = mutableListOf<String>()
         val deadlineNanos = System.nanoTime() +
             LanConstants.TCP_CONNECT_TIMEOUT_MS * NANOS_PER_MILLISECOND
@@ -182,8 +197,46 @@ internal class AndroidLanDataTransport(
                 remainingCandidateTimeoutMillis(deadlineNanos)
             }
             if (timeout <= 0) return@forEach
-            Log.d(TAG, "connect peer=$pid8 -> ${endpoint.host}:${endpoint.port} network=$selectedNetwork (timeout=${timeout}ms)")
-            val socket = socketFactory(selectedNetwork)
+            Log.d(
+                TAG,
+                "connect peer=$pid8 -> ${endpoint.host}:${endpoint.port} " +
+                    "network=${selectedRoute?.network} local=${selectedRoute?.localAddress?.hostAddress} " +
+                    "route=${selectedRoute?.fingerprint} " +
+                    "(timeout=${timeout}ms)"
+            )
+            var createdSocket: Socket? = null
+            val socket = try {
+                socketFactory(selectedRoute?.network).also { candidate ->
+                    createdSocket = candidate
+                    // Hotspot/AP host mode is often absent from
+                    // ConnectivityManager, so the discovery selector exposes
+                    // an explicit Java-interface address with network=null.
+                    // Binding that local address before connect is the only
+                    // safe way to prevent the kernel from choosing cellular.
+                    if (selectedRoute != null && selectedRoute.network == null) {
+                        candidate.bind(InetSocketAddress(selectedRoute.localAddress, 0))
+                    }
+                }
+            } catch (error: Throwable) {
+                val cleanupFailure = createdSocket?.let(::closeDialSocket)
+                if (error !is Exception) {
+                    cleanupFailure?.let(error::addSuppressed)
+                    throw error
+                }
+                val routeReason =
+                    "route setup failed (${error::class.simpleName}: ${error.message.orEmpty()})"
+                if (cleanupFailure != null) {
+                    throw P2pError.ConnectionFailed(
+                        "TCP route setup cleanup failed: ${endpoint.host}:${endpoint.port} $routeReason"
+                    ).also { failure ->
+                        failure.addSuppressed(error)
+                        failure.addSuppressed(cleanupFailure)
+                    }
+                }
+                failures += "${endpoint.host}:${endpoint.port} $routeReason"
+                Log.d(TAG, "connect FAILED peer=$pid8 ${endpoint.host}:${endpoint.port} $routeReason")
+                return@forEach
+            }
             val admitted = synchronized(dialStateLock) {
                 if (isDialGenerationActive(dialGeneration)) {
                     pendingDialSockets += socket
@@ -316,6 +369,7 @@ internal class AndroidLanDataTransport(
     override suspend fun close(): Unit = startMutex.withLock {
         if (!closed) closed = true
         stopLocked(preserveRestartPort = false)
+        networkState?.clear()
     }
 
     private fun stopLocked(preserveRestartPort: Boolean) {

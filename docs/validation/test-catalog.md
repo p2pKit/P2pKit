@@ -313,6 +313,17 @@ Actions:
    sample inbox and logcat strips controls.
 8. Kill the peer process with `adb shell am force-stop` and repeat with an
    abrupt AP disconnect.
+9. Repeat with cellular enabled and an active VPN. Correlate
+   `ensureJmdns: active`, `rebindNow: rebinding onto`, and every
+   `connect peer=` route fingerprint with `dumpsys connectivity`, `ip addr`,
+   and packet capture. An ordinary LAN must use its selected Android
+   `Network`; a hotspot-host `network=none` socket must bind the logged private
+   AP/tether address before its SYN. Remove all safe LAN routes once and prove
+   connect fails before any unrestricted SYN.
+10. During the 50-toggle stress, trigger a superseding network callback and a
+    Stop while close/recreate is in progress. Logs must show serialized owned
+    generations: the active transaction completes, the newer generation runs
+    afterward, and terminal Stop releases the final replacement.
 
 Commands:
 
@@ -327,11 +338,13 @@ adb -s "$ANDROID_B" shell run-as dev.p2pkit.sample.android \
 
 Pass: real callbacks show registration/unregistration and multicast lifecycle;
 selected-network addresses match `LinkProperties`; valid alternate candidates
-recover; no stale peer survives loss; every completed file has equal hashes and
-no partial file remains after cancellation; logs include timestamps, peer IDs,
-frame/transfer IDs, and sanitized reasons. Fail: false Connected/Found,
-stale listener, wrong interface, leaked multicast, mismatched digest, or
-provider metadata crash.
+recover; discovery and TCP use the same safe route; AP-host sockets bind the
+logged local address; no stale peer survives loss; every completed file has
+equal hashes and no partial file remains after cancellation; logs include
+timestamps, peer IDs, frame/transfer IDs, and sanitized reasons. Fail: false
+Connected/Found, unrestricted cellular/VPN SYN, overlapping/zombie JmDNS
+generation, stale listener, wrong interface, leaked multicast, mismatched
+digest, or provider metadata crash.
 
 Cleanup: Stop both kits, remove app data only after copying evidence, restore
 AP isolation/multicast settings, and release packet captures.

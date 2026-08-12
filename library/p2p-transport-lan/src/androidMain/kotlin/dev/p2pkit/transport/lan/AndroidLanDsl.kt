@@ -1,6 +1,7 @@
 package dev.p2pkit.transport.lan
 
 import android.content.Context
+import android.net.ConnectivityManager
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.dsl.TransportsBuilder
 import dev.p2pkit.core.transport.TransportContext
@@ -51,7 +52,11 @@ internal class AndroidLanTransportFactory(
         TransportDescriptor.dataAndDiscovery(TransportKind.LAN)
 
     override fun build(context: TransportContext): TransportPair {
-        val networkState = AndroidLanNetworkState()
+        val connectivity = androidContext.getSystemService(Context.CONNECTIVITY_SERVICE)
+            as ConnectivityManager
+        val networkState = AndroidLanNetworkState {
+            currentAndroidLanBindTarget(connectivity)
+        }
         val registration = LanServiceRegistration(
             appId = context.appId,
             localPeerId = context.localPeerId,
