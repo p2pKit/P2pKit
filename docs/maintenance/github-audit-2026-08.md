@@ -742,8 +742,27 @@ commit passed under strict dependency verification:
 - iosX64 production and test code compiled and the test binary linked. Runtime
   execution is host-skipped on Apple Silicon and is not inferred from linkage.
 
-The final release/platform checks and protected boundary are recorded after
-they execute on the clean final workstream commit.
+`scripts/run-release-gate.sh` then passed on clean workstream commit
+`5d69f6e9921c1bee844affbb734692f43fc283c6`:
+
+- root, JVM, Android-host, and arm64 iOS Simulator suites, Android lint, ABI,
+  and warning-failing Dokka — **PASS**. The result XML records 643 core JVM,
+  612 core iOS Simulator, 18 core Android-host, 121 LAN JVM, 89 LAN iOS
+  Simulator, 52 LAN Android-host, 66 provisioning, and 38 sample tests, with
+  zero failures/errors. The sole skip is the deliberately manual
+  `IosLanDiagnosticTest` 60-second interoperability capture fixture; active
+  Apple lifecycle/churn regressions remain enabled.
+- all 15 publication shapes, release metadata, isolated JVM/Java/Android/KMP/
+  iOS 14 consumers, 38-component release SBOM, repository/link/policy checks,
+  strict dependency verification, and `git diff --check` — **PASS**;
+- release XCFramework construction/provenance and Swift warnings as errors —
+  **PASS**. Provenance records commit `5d69f6e9921c1bee844affbb734692f43fc283c6`,
+  source state `clean`, input digest
+  `7865a8c3649bf43e00a3f1c802de91f1b47a501c56a867e0587f00a86ed5f170`,
+  and iOS 14.0 device/simulator slices.
+
+The protected PR boundary and exact-tree merge evidence are recorded after
+the hosted checks complete.
 
 Physical Android Keystore behavior, signed-device Apple Keychain behavior,
 independent secure-v2 interoperability, and professional cryptographic review
