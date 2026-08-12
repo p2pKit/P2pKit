@@ -95,7 +95,20 @@ internal class SecureIdentityService(
 
     fun reset(appId: AppId) {
         val namespace = IdentityDerivation.namespace(appId, cryptography)
-        storage.reset(namespace)
+        try {
+            storage.reset(namespace)
+        } catch (e: P2pError.LocalIdentityUnavailable) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw localIdentityError(
+                kind = LocalIdentityFailureKind.PERSISTENCE_FAILED,
+                recovery = LocalIdentityRecovery.RETRY,
+                reason = "secure identity reset failed",
+                cause = e
+            )
+        }
     }
 
     private fun generateValidatedKeyPair(): EncodedIdentityKeyPair {

@@ -14,7 +14,12 @@ import dev.p2pkit.core.internal.defaultSecureIdentityStorage
  * the same AppId while reset runs.
  *
  * An interrupted reset remains fail-closed and can be completed only by
- * calling this function again.
+ * calling this function again. This function is synchronous and performs
+ * filesystem and Android Keystore work; invoke it off the main/UI thread.
+ *
+ * @throws dev.p2pkit.core.P2pError.LocalIdentityUnavailable when reset cannot
+ *   safely complete. Follow the error's `recovery` value; never silently
+ *   create a replacement identity after an ordinary construction failure.
  */
 @Throws(Exception::class)
 public fun resetAndroidSecureIdentity(appId: AppId) {

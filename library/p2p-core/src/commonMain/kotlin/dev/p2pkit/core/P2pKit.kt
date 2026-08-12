@@ -273,10 +273,10 @@ public interface P2pKit {
          * Build a P2pKit instance from a DSL block. See [P2pKitBuilder] for
          * the available configuration knobs.
          *
-         * Construction performs a one-time, small-file identity read/write on
-         * the calling thread (loading or generating the persistent
-         * [localPeerId]) — construct off the main thread on Android to avoid
-         * a first-launch stall.
+         * Construction synchronously performs persistent identity storage and
+         * cryptographic-provider work on the calling thread (including
+         * Android Keystore or Apple Keychain access in secure mode). Construct
+         * off the main/UI thread to avoid a first-launch or locked-store stall.
          *
          * The implementation is provided by `dev.p2pkit.core.internal.P2pKitImpl`.
          *
