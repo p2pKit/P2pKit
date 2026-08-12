@@ -187,6 +187,15 @@ for Issues #21 and #43: no peer may disappear while it is still advertising,
 and no departed transport-managed peer may survive merely because a relay
 collector was busy or restarted.
 
+In the exported `transport.log` events, correlate the sanitized
+`serviceAdded callback`, `serviceResolved callback`, and
+`serviceRemoved callback` records by instance and timestamp. Record the
+`leaseActive`, `hasInfo`, and `hasPeerId` booleans. For a current admitted
+instance, the callback-shape record must be followed by an admitted
+`serviceRemoved` peer withdrawal before the structured
+`discovery.peer.lost` event. An unknown instance or stale lease need not emit a
+withdrawal and must not remove newer ownership.
+
 The discovered identity, chosen interface/network, address family, and data
 socket must describe the same LAN. Cellular or VPN must not silently carry the
 session. In each evidence ZIP locate `ensureJmdns: active` (initial bind) and
@@ -212,6 +221,46 @@ Independently hash source and committed destination where the sample/Android
 picker permits. Completion requires equal length and SHA-256, durable commit,
 and a final acknowledgment. No partial destination may be presented as
 completed.
+
+#### A3.1 — six-to-twelve-hour JmDNS idle/cache soak
+
+This is the physical closure leg for Issue #39 and the extended Issue #21
+idle case. Use two physical Android devices and one JVM/Desktop peer on the
+same isolated AP. Twelve hours is preferred; six continuous hours is the
+minimum interpretable run. Keep alternate cellular/VPN routes disabled unless
+the selected-route subcase is being measured. Do not connect peers during the
+first two hours.
+
+1. Start one shared `LAN-T01` session on all three peers, enable Advertise and
+   Discover, capture continuous `P2pKitLAN`/application logs, and save initial
+   `dumpsys connectivity`, `dumpsys meminfo`, process/thread count, interface,
+   route, socket/descriptor count where the OS permits it, and packet capture.
+2. At 30 minutes and then hourly, record the visible peer set, current
+   instance/endpoint, last accepted `serviceResolved` callback, process
+   memory, threads, descriptors/sockets, and capture timestamp without
+   toggling discovery.
+3. At hours two and four, cleanly restart the JVM peer so its listener port
+   changes. At hours three and five, force-stop and restart one Android peer.
+   Repeat 20 bounded advertise/discover stop-start cycles on that peer, then
+   leave all peers idle again. Every reappearance must replace the old
+   endpoint; a removed old instance must not remain dialable.
+4. In the final hour, perform an authenticated bidirectional message and a
+   5 MiB durable transfer between every platform pair, then stop advertising
+   cleanly and verify exact Lost transitions.
+5. After ten quiet minutes, take the final resource snapshot and export all
+   three evidence packages before stopping capture.
+
+PASS requires every continuously advertising peer to remain visible, every
+stopped peer to disappear through a correlated callback/admission/public-state
+sequence, every port rotation to replace the stale endpoint, and final
+authenticated transfers to use only current endpoints. Resource samples must
+not show monotonic growth proportional to churn; after final quiescence,
+descriptor/socket count must be within 16 of the post-warm-up baseline and PSS
+must be within the larger of 20 MiB or 50% above that baseline. Any stale-port
+dial, unexplained disappearance, unbounded trend, missing terminal removal, or
+process restart required to recover is FAIL. Preserve raw measurements even
+when an OS prevents one metric; a missing required metric makes that run
+INCONCLUSIVE, not PASS.
 
 ### A4 — lifecycle, interruption, and process recovery
 

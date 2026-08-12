@@ -324,6 +324,12 @@ Actions:
     Stop while close/recreate is in progress. Logs must show serialized owned
     generations: the active transaction completes, the newer generation runs
     afterward, and terminal Stop releases the final replacement.
+11. Run the six-to-twelve-hour A3.1 cache soak from
+    [the Android handbook](android-physical-device.md). Use two Android devices
+    plus one JVM/Desktop peer, rotate ports and churn bounded appearances at
+    the prescribed hours, and retain the hourly endpoint/resource time series.
+    This is mandatory evidence for Issue #39; the 30-minute case alone cannot
+    close it.
 
 Commands:
 
@@ -535,9 +541,16 @@ marks, and long names.
 Actions: set safe/hostile names, use the iOS Manual connect fields with
 `[fe80::1%en0]:<port>` and unbracketed scoped forms where supported, connect
 using the full `p2f1` fingerprint, send a fixture, and inspect the receiver
-inbox and logs. PASS requires the connection uses the intended interface,
+inbox and logs. Then repeat on a router-less physical Ethernet link with DHCP
+disabled so both hosts self-assign `169.254/16`; disable Wi-Fi/VPN/cellular,
+record the selected JmDNS interface/address, discover in both directions, and
+transfer the fixture. Repeat with scoped IPv6 link-local when both OSes expose
+it. PASS requires the connection uses the intended interface,
 the file remains inside the fixed inbox, and terminal/log output contains no
-control escape. FAIL includes path escape, wrong peer, or parser truncation.
+control escape. The link-local case also requires symmetric discovery and
+bidirectional authenticated transfer with the scope/zone preserved in logs
+and PCAP. FAIL includes path escape, wrong peer, parser truncation, unscoped
+IPv6 dialing, or asymmetric link-local discovery.
 
 ### PS-T09 — physical KMP Android and iOS consumer runtime
 
