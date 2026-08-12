@@ -111,12 +111,16 @@ class JmdnsLifecycleCoordinatorTest {
         @Volatile
         var removeListenerGate: CountDownLatch? = null
 
+        @Volatile
+        var closeGate: CountDownLatch? = null
+
         /** One element offered per [createHandleBlocking] entry — a rendezvous for tests. */
         val createEntered = LinkedBlockingQueue<Unit>()
         val registerEntered = LinkedBlockingQueue<Unit>()
         val listenerEntered = LinkedBlockingQueue<Unit>()
         val unregisterEntered = LinkedBlockingQueue<Unit>()
         val removeListenerEntered = LinkedBlockingQueue<Unit>()
+        val closeEntered = LinkedBlockingQueue<Unit>()
 
         @Volatile
         var failNextRegister = false
@@ -181,6 +185,8 @@ class JmdnsLifecycleCoordinatorTest {
         }
 
         override fun closeHandleBlocking(handle: FakeHandle) {
+            closeEntered.put(Unit)
+            closeGate?.let { awaitNonCancellableGate(it, "closeGate") }
             if (closeFailuresRemaining.get() > 0) {
                 closeFailuresRemaining.decrementAndGet()
                 throw IOException("injected close failure")
@@ -665,7 +671,7 @@ class JmdnsLifecycleCoordinatorTest {
     }
 
     @Test
-    fun cancelledRebindCreateClosesProducedHandle() {
+    fun cancelledRebindJobCompletesItsOwnershipTransaction() {
         val ops = FakeOps().apply {
             current = FakeNet("wifi0")
             observed = FakeNet("wifi0")
@@ -680,16 +686,22 @@ class JmdnsLifecycleCoordinatorTest {
             coordinator.scheduleRebind("rotation under cancellation")
             awaitCreateEntered(ops) // rebind create is parked on the gate
 
-            // Cancel the pending rebind job mid-create (the shape of the
-            // watcher stopping / a superseding schedule racing the create).
+            // Cancel the pending rebind job mid-create (the shape of a
+            // superseding schedule racing the active transaction). Once the
+            // old handle has been closed, ownership restoration is
+            // deliberately non-cancellable.
             rebindScope.coroutineContext.cancelChildren()
             gate.countDown()
 
-            awaitCondition("rebind orphan closed (DSC-3)") {
-                ops.created.size == 2 && ops.created[1].closed
+            awaitCondition("cancelled rebind finishes replacement ownership") {
+                ops.created.size == 2 && ops.listenersAdded.size == 2
             }
-            // Old handle torn down by the rebind + the orphaned fresh one.
-            assertEquals(2, ops.closed.size)
+            assertTrue(ops.created[0].closed, "the replaced handle must close")
+            assertFalse(ops.created[1].closed, "the installed replacement must remain live")
+            assertSame(ops.created[1], ops.listenersAdded.last().handle)
+            assertEquals(1, ops.closed.size)
+            assertTrue(ops.lockHeld)
+            assertTrue(ops.watcherActive)
         }
     }
 
@@ -890,6 +902,70 @@ class JmdnsLifecycleCoordinatorTest {
 
             assertEquals(2, ops.createCalls.get(), "all concurrent callbacks must share one rebind")
             assertEquals(2, ops.registrations.size)
+        }
+    }
+
+    @Test
+    fun supersedingScheduleCannotCancelAnActiveRebindTransaction() {
+        val wifi0 = FakeNet("wifi0")
+        val wifi1 = FakeNet("wifi1")
+        val wifi2 = FakeNet("wifi2")
+        val ops = FakeOps().apply {
+            current = wifi0
+            observed = wifi0
+        }
+        coordinatorTest(ops, debounceMillis = 5) { coordinator, _ ->
+            coordinator.startAdvertising(localPeer)
+            val closeGate = CountDownLatch(1)
+            ops.closeGate = closeGate
+
+            ops.observed = wifi1
+            coordinator.scheduleRebind("first rotation")
+            awaitBlockingCall(ops.closeEntered, "first rebind closeHandleBlocking")
+
+            // This cancels the first pending job after it has crossed the
+            // debounce boundary. Its close+recreate transaction must still
+            // complete before the second target is installed.
+            ops.observed = wifi2
+            coordinator.scheduleRebind("superseding rotation")
+            closeGate.countDown()
+            ops.closeGate = null
+
+            awaitCondition("both serialized rebinds complete") {
+                ops.createdTargets == listOf<FakeNet?>(wifi0, wifi1, wifi2) &&
+                    ops.registrations.size == 3
+            }
+            assertEquals(2, ops.closed.size)
+            assertSame(ops.created.last(), ops.registrations.last().first)
+            assertTrue(ops.lockHeld)
+            assertTrue(ops.watcherActive)
+        }
+    }
+
+    @Test
+    fun stopDuringAnActiveRebindWaitsForRestorationThenReleasesEverything() {
+        val ops = FakeOps().apply {
+            current = FakeNet("wifi0")
+            observed = FakeNet("wifi0")
+        }
+        coordinatorTest(ops, debounceMillis = 5) { coordinator, scope ->
+            coordinator.startDiscovery()
+            val closeGate = CountDownLatch(1)
+            ops.closeGate = closeGate
+            ops.observed = FakeNet("wifi1")
+            coordinator.scheduleRebind("rotation before stop")
+            awaitBlockingCall(ops.closeEntered, "active rebind closeHandleBlocking")
+
+            val stopper = scope.launch { coordinator.stopDiscovery() }
+            closeGate.countDown()
+            ops.closeGate = null
+            stopper.join()
+
+            assertEquals(2, ops.created.size)
+            assertEquals(2, ops.closed.size)
+            assertTrue(ops.created.all(FakeHandle::closed))
+            assertFalse(ops.lockHeld)
+            assertFalse(ops.watcherActive)
         }
     }
 

@@ -201,7 +201,11 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
      */
     private var rebindRetryJob: Job? = null
 
-    /** The most recent debounced rebind job; cancelled when superseded. */
+    /**
+     * The most recent debounced rebind job. A superseding callback may cancel
+     * its debounce, but [rebindNow] makes an already-started ownership
+     * transaction non-cancellable before releasing [lock].
+     */
     private var pendingRebindJob: Job? = null
 
     /** Preserve a same-network address-change request while callbacks coalesce. */
@@ -426,9 +430,20 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
      *     explicit AP/tether bind target after the debounce window.
      */
     private suspend fun rebindNow(reason: String, force: Boolean = false): Unit = lock.withLock {
+        // A superseding callback cancels the older pending job to reset the
+        // debounce window. Once that job has entered the ownership
+        // transaction, cancellation must not strand a closed handle, an
+        // ambiguously installed token, or a missing replacement. The shared
+        // lifecycle lock still serializes the superseding transaction.
+        withContext(NonCancellable) {
+            rebindNowLocked(reason, force)
+        }
+    }
+
+    private suspend fun rebindNowLocked(reason: String, force: Boolean) {
         if (!ops.isWatcherActive()) {
             ops.logDebug("rebindNow: watcher already stopped; skipping ($reason)")
-            return@withLock
+            return
         }
         // Platform observations must resolve to a usable LAN bind target,
         // never the raw system-default signal. If the primary observer has no
@@ -462,7 +477,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
                 "rebindNow: no changes since last bind; skipping ($reason) " +
                     "transport=$boundNetwork default=$boundDefaultNetwork"
             )
-            return@withLock
+            return
         }
 
         // AUDIT-2026-06 (#5): computed from host INTENT, not from the live
@@ -473,7 +488,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         val hadDiscovery = discoveryIntent
         if (!hadAdvertising && !hadDiscovery) {
             ops.logDebug("rebindNow: neither advertising nor discovery active; skipping ($reason)")
-            return@withLock
+            return
         }
 
         ops.logDebug(
@@ -498,7 +513,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         } catch (error: Throwable) {
             if (error !is Exception) throw error
             scheduleRebindRetry(error)
-            return@withLock
+            return
         }
 
         rebindRetryJob?.cancel()

@@ -365,7 +365,7 @@ internal class AndroidLanDiscoveryTransport(
                     JmDNS.create(selected.address, selected.address.hostAddress)
                 }
                 boundTarget = selected
-                networkState.select(selected.network)
+                networkState.select(selected)
                 Log.d(
                     TAG,
                     (if (forRebind) "rebindNow: JmDNS recreated" else "ensureJmdns: created handle") +
@@ -377,7 +377,12 @@ internal class AndroidLanDiscoveryTransport(
             override fun closeHandleBlocking(handle: JmDNS) {
                 handle.close()
                 boundTarget = null
-                networkState.select(null)
+                // Keep the last immutable route snapshot while the shared
+                // handle is being recreated or discovery is temporarily
+                // idle. TCP dials therefore remain interface-bound (or fail
+                // on the stale route) instead of silently falling back to the
+                // process-default cellular path. The data transport clears
+                // the snapshot only on its permanent close.
             }
 
             override fun createServiceToken(localPeer: LocalPeerInfo): Any =
@@ -416,8 +421,7 @@ internal class AndroidLanDiscoveryTransport(
 
             override fun observedNetwork(): AndroidLanBindTarget? =
                 synchronized(networkLock) { this@AndroidLanDiscoveryTransport.observedNetwork }
-                    ?.takeIf(::isLanNetwork)
-                    ?.let(::bindTargetForNetwork)
+                    ?.let { androidLanBindTargetForNetwork(connectivity, it) }
 
             override fun observedDefaultNetwork(): String? =
                 synchronized(networkLock) {
@@ -452,74 +456,13 @@ internal class AndroidLanDiscoveryTransport(
             }
         }
 
-    /**
-     * Pick the [InetAddress] to bind JmDNS's `MulticastSocket` to from the
-     * given [Network]'s [android.net.LinkProperties]. Returns the first
-     * non-loopback non-link-local IPv4 address; falls back to any
-     * non-loopback IPv4 (covering 169.254/16 link-local on direct-cable
-     * segments), then a scoped/routable IPv6 address. A missing address is
-     * rejected; AP/tether fallback is selected explicitly by
-     * [currentBindTarget].
-     */
-    private fun resolveBindAddress(properties: LinkProperties): InetAddress? {
-        properties.linkAddresses
-            .map { it.address }
-            .firstOrNull { addr ->
-                addr is Inet4Address &&
-                    !addr.isLoopbackAddress &&
-                    !addr.isLinkLocalAddress
-            }?.let { return it }
-        properties.linkAddresses
-            .map { it.address }
-            .firstOrNull { addr -> addr is Inet4Address && !addr.isLoopbackAddress }
-            ?.let { return it }
-        return properties.linkAddresses
-            .map { it.address }
-            .firstOrNull { addr ->
-                addr is Inet6Address &&
-                    !addr.isLoopbackAddress &&
-                    !addr.isAnyLocalAddress &&
-                    (!addr.isLinkLocalAddress || addr.scopeId != 0)
-            }
-    }
-
-    private fun bestLanNetwork(): Network? {
-        synchronized(networkLock) {
-            observedNetwork?.takeIf(::isLanNetwork)?.let { return it }
-        }
-        connectivity.activeNetwork?.takeIf(::isLanNetwork)?.let { return it }
-        return null
-    }
-
-    private fun isLanNetwork(network: Network): Boolean {
-        val capabilities = runCatching { connectivity.getNetworkCapabilities(network) }.getOrNull()
-            ?: return false
-        return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-    }
-
     private fun currentBindTarget(): AndroidLanBindTarget? {
-        bestLanNetwork()?.let(::bindTargetForNetwork)?.let { return it }
-        return currentAndroidFallbackBindTarget()
-    }
-
-    private fun bindTargetForNetwork(network: Network): AndroidLanBindTarget? {
-        if (!isLanNetwork(network)) return null
-        val properties = runCatching { connectivity.getLinkProperties(network) }.getOrNull()
-            ?: return null
-        val address = resolveBindAddress(properties) ?: return null
-        val localAddresses = properties.toLanInterfaceAddresses()
-        val fingerprint = localAddresses
-            .map { "${properties.interfaceName}:${it.address.hostAddress}/${it.prefixLength}" }
-            .sorted()
-            .joinToString("|")
-        return AndroidLanBindTarget(
-            network = network,
-            interfaceName = properties.interfaceName ?: "network-$network",
-            address = address,
-            localAddresses = localAddresses,
-            fingerprint = "network=$network|$fingerprint"
-        )
+        synchronized(networkLock) {
+            observedNetwork?.let { network ->
+                androidLanBindTargetForNetwork(connectivity, network)?.let { return it }
+            }
+        }
+        return currentAndroidLanBindTarget(connectivity)
     }
 
     private fun localLanInterfaceAddresses(): List<LanInterfaceAddress> {
@@ -527,9 +470,6 @@ internal class AndroidLanDiscoveryTransport(
             ?: currentBindTarget()?.localAddresses
             ?: emptyList()
     }
-
-    private fun LinkProperties.toLanInterfaceAddresses(): List<LanInterfaceAddress> =
-        linkAddresses.map { LanInterfaceAddress(it.address, it.prefixLength) }
 
     // ──────────────────────────────────────────────────────────────────
     // Service info / listener builders
@@ -761,7 +701,7 @@ internal class AndroidLanDiscoveryTransport(
 
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
                 val current = synchronized(networkLock) { observedNetwork }
-                if (current == network) {
+                if (current == network && isSafeAndroidLanNetwork(connectivity, network)) {
                     Log.d(TAG, "NetworkCallback.onLinkPropertiesChanged: $network")
                     coordinator.scheduleRebind("LAN addresses changed on $network", force = true)
                 }
