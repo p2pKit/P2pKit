@@ -163,6 +163,29 @@ class IosSecureIdentityStorageTest {
     }
 
     @Test
+    fun malformedResetMarkerBlocksLoadButExplicitResetReplacesAndCompletesIt() {
+        val namespace = namespace(72)
+        val pair = keyPair(72)
+        val keychain = FakeKeychain(record = IdentityKeyRecordCodec.encode(namespace, pair))
+        val markers = FakeMarkerStore().apply {
+            committed = IdentityStateMarkerCodec.encodeCommitted(namespace, testFingerprint(pair))
+            resetPending = ByteArray(IdentityStateMarkerCodec.RESET_MARKER_SIZE)
+        }
+        pair.clearPrivate()
+        val storage = IosSecureIdentityStorage(keychain, markers)
+
+        val blocked = assertFailsWith<P2pError.LocalIdentityUnavailable> {
+            storage.loadOrCreate(namespace, ::testFingerprint) { error("must not rotate") }
+        }
+        assertEquals(LocalIdentityFailureKind.CORRUPT_RECORD, blocked.kind)
+
+        storage.reset(namespace)
+        assertNull(keychain.record)
+        assertNull(markers.committed)
+        assertNull(markers.resetPending)
+    }
+
+    @Test
     fun failedResetKeepsDurablePendingMarkerAndCanBeRetried() {
         val namespace = namespace(8)
         val pair = keyPair(101)

@@ -194,6 +194,54 @@ class JvmSecureIdentityStoreAdapterTest {
     }
 
     @Test
+    fun malformedResetMarkerBlocksLoadAndExplicitResetCompletesWithoutRemovingTheBarrierEarly() {
+        val store = RecordingJvmStore()
+        val adapter = JvmSecureIdentityStoreAdapter(store)
+        val original = adapter.loadOrCreate(namespace, { ByteArray(32) }, { pair(81) })
+        val identityKey = store.keys().single { !it.endsWith(".reset.pending") }
+        store.force("$identityKey.reset.pending", ByteArray(40))
+
+        val blocked = assertFailsWith<P2pError.LocalIdentityUnavailable> {
+            adapter.loadOrCreate(namespace, { ByteArray(32) }, { error("must not rotate") })
+        }
+        assertEquals(LocalIdentityFailureKind.CORRUPT_RECORD, blocked.kind)
+        assertEquals(LocalIdentityRecovery.EXPLICIT_RESET_REQUIRED, blocked.recovery)
+
+        adapter.reset(namespace)
+        assertTrue(store.keys().isEmpty())
+        val replacement = adapter.loadOrCreate(namespace, { ByteArray(32) }, { pair(82) })
+        assertNotEquals(original.privateKeyBytes().toList(), replacement.privateKeyBytes().toList())
+    }
+
+    @Test
+    fun failedResetRetainsMalformedBarrierUntilExplicitRetryCompletes() {
+        val store = RecordingJvmStore()
+        val adapter = JvmSecureIdentityStoreAdapter(store)
+        adapter.loadOrCreate(namespace, { ByteArray(32) }, { pair(83) })
+        val identityKey = store.keys().single { !it.endsWith(".reset.pending") }
+        val resetKey = "$identityKey.reset.pending"
+        val malformedBarrier = ByteArray(40) { 0x5a }
+        store.force(resetKey, malformedBarrier)
+        store.failIdentityDelete = true
+
+        val failure = assertFailsWith<P2pError.LocalIdentityUnavailable> {
+            adapter.reset(namespace)
+        }
+        assertEquals(LocalIdentityFailureKind.TEMPORARILY_UNAVAILABLE, failure.kind)
+        assertContentEquals(malformedBarrier, assertNotNull(store.value(resetKey)))
+
+        val blocked = assertFailsWith<P2pError.LocalIdentityUnavailable> {
+            adapter.loadOrCreate(namespace, { ByteArray(32) }, { error("must remain blocked") })
+        }
+        assertEquals(LocalIdentityFailureKind.CORRUPT_RECORD, blocked.kind)
+        assertEquals(LocalIdentityRecovery.EXPLICIT_RESET_REQUIRED, blocked.recovery)
+
+        store.failIdentityDelete = false
+        adapter.reset(namespace)
+        assertTrue(store.keys().isEmpty())
+    }
+
+    @Test
     fun untypedStoreExceptionIsRetryableAndRetainsCause() {
         val cause = IllegalStateException("vault locked")
         val store = object : JvmSecureIdentityStore {
@@ -441,6 +489,9 @@ class JvmSecureIdentityStoreAdapterTest {
 
         @Synchronized
         fun keys(): Set<String> = entries.keys.toSet()
+
+        @Synchronized
+        fun value(namespace: String): ByteArray? = entries[namespace]?.copyOf()
 
         @Synchronized
         fun entryCount(predicate: (String) -> Boolean): Int = entries.keys.count(predicate)

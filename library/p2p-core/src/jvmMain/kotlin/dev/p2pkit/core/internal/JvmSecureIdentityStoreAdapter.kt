@@ -74,38 +74,46 @@ internal class JvmSecureIdentityStoreAdapter(
 
     private fun resetWhileExclusive(namespace: IdentityNamespace) {
         val resetKey = resetKey(namespace)
+        ensureResetBarrier(namespace, resetKey)
+        delete(identityKey(namespace), "delete secure identity during explicit reset")
+        assertAbsent(identityKey(namespace), "secure identity remained after durable reset deletion")
+        delete(resetKey, "delete completed secure-identity reset marker")
+        assertAbsent(resetKey, "reset marker remained after completed explicit reset")
+    }
+
+    /**
+     * Establish a durable fail-closed barrier before deleting identity state.
+     * Any existing value already blocks ordinary load, even when malformed;
+     * explicit reset therefore retains it until identity deletion succeeds
+     * instead of creating a delete/reinsert crash window.
+     */
+    private fun ensureResetBarrier(namespace: IdentityNamespace, resetKey: String) {
+        val existing = read(resetKey)
+        if (existing != null) {
+            existing.fill(0)
+            return
+        }
+
         val marker = IdentityStateMarkerCodec.encodeResetPending(namespace)
         val storeInput = marker.copyOf()
         var winner: ByteArray? = null
+        var durableMarker: ByteArray? = null
         try {
             val durableWinner = callStore("persist secure-identity reset marker") {
                 store.putIfAbsent(resetKey, storeInput)
             }
             winner = durableWinner
-            try {
-                IdentityStateMarkerCodec.decodeResetPending(namespace, durableWinner)
-            } catch (e: IdentityRecordCorruptException) {
-                throw corrupt("JVM reset marker is corrupt", e)
-            }
-            val durableMarker = read(resetKey)
+            val reread = read(resetKey)
                 ?: contractViolation("reset marker was absent on immediate reread")
-            try {
-                IdentityStateMarkerCodec.decodeResetPending(namespace, durableMarker)
-                if (!constantTimeEquals(durableWinner, durableMarker)) {
-                    contractViolation("reset marker winner differed from immediate reread")
-                }
-            } finally {
-                durableMarker.fill(0)
+            durableMarker = reread
+            if (!constantTimeEquals(durableWinner, reread)) {
+                contractViolation("reset marker winner differed from immediate reread")
             }
-
-            delete(identityKey(namespace), "delete secure identity during explicit reset")
-            assertAbsent(identityKey(namespace), "secure identity remained after durable reset deletion")
-            delete(resetKey, "delete completed secure-identity reset marker")
-            assertAbsent(resetKey, "reset marker remained after completed explicit reset")
         } finally {
             marker.fill(0)
             storeInput.fill(0)
             winner?.fill(0)
+            durableMarker?.fill(0)
         }
     }
 

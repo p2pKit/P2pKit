@@ -1822,7 +1822,7 @@ internal fun newP2pKit(
             val identity = try {
                 secureIdentityService.loadOrCreate(appId)
             } catch (cause: Throwable) {
-                usage.release()
+                releaseIdentityAfterConstructionFailure(cause, identity = null, usage = usage)
                 throw cause
             }
             secureIdentityUsage = usage
@@ -1876,10 +1876,32 @@ internal fun newP2pKit(
             beforeTerminalWatcherRemovalForTest = beforeTerminalWatcherRemovalForTest
         )
     } catch (cause: Throwable) {
-        secureIdentity?.clearPrivate()
-        secureIdentityUsage?.release()
+        releaseIdentityAfterConstructionFailure(cause, secureIdentity, secureIdentityUsage)
         throw cause
     }
+}
+
+/** Preserve the construction failure while attempting every identity cleanup. */
+private fun releaseIdentityAfterConstructionFailure(
+    primaryFailure: Throwable,
+    identity: LocalSecureIdentity?,
+    usage: SecureIdentityUsage?
+) {
+    try {
+        identity?.clearPrivate()
+    } catch (cleanupFailure: Throwable) {
+        primaryFailure.addDistinctSuppressed(cleanupFailure)
+    }
+    try {
+        usage?.release()
+    } catch (cleanupFailure: Throwable) {
+        primaryFailure.addDistinctSuppressed(cleanupFailure)
+    }
+}
+
+/** Avoid invalid self-suppression and duplicating an already-retained cause. */
+private fun Throwable.addDistinctSuppressed(additional: Throwable) {
+    if (additional !== this && additional !== cause) addSuppressed(additional)
 }
 
 @Suppress("DEPRECATION")

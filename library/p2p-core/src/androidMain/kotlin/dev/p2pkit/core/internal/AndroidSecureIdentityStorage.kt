@@ -63,12 +63,12 @@ internal class AndroidSecureIdentityStorage(
     ): EncodedIdentityKeyPair = withNamespaceLock(namespace) { paths ->
         ensureNoResetPending(namespace, paths)
         val storedBlob = readIdentityBlobOrNull(paths)
-        val keyStore = openAndroidKeyStore()
-        val alias = wrappingKeyAlias(namespace)
-        val aliasExists = containsAlias(keyStore, alias)
+        withClearedAndroidIdentityBlob(storedBlob) {
+            val keyStore = openAndroidKeyStore()
+            val alias = wrappingKeyAlias(namespace)
+            val aliasExists = containsAlias(keyStore, alias)
 
-        val winner = try {
-            when {
+            val winner = when {
                 storedBlob != null && aliasExists -> decryptAndDecode(
                     namespace = namespace,
                     blob = storedBlob,
@@ -89,10 +89,8 @@ internal class AndroidSecureIdentityStorage(
 
                 else -> createAndCommit(namespace, paths, keyStore, alias, generate)
             }
-        } finally {
-            storedBlob?.fill(0)
+            validateFingerprintCallback(winner, fingerprintDigest)
         }
-        validateFingerprintCallback(winner, fingerprintDigest)
     }
 
     override fun reset(namespace: IdentityNamespace): Unit =
@@ -102,23 +100,11 @@ internal class AndroidSecureIdentityStorage(
 
     private fun resetWhileExclusive(namespace: IdentityNamespace) {
         withNamespaceLock(namespace) { paths ->
-            val existingReset = readResetMarkerOrNull(paths)
-            if (existingReset == null) {
-                val marker = IdentityStateMarkerCodec.encodeResetPending(namespace)
-                try {
-                    writeAtomic(paths.resetPending, marker)
-                } finally {
-                    marker.fill(0)
-                }
-                val durableReset = readResetMarkerOrNull(paths) ?: throw localIdentityError(
-                    kind = LocalIdentityFailureKind.PERSISTENCE_FAILED,
-                    recovery = LocalIdentityRecovery.RETRY,
-                    reason = "Android reset-pending marker disappeared after atomic commit"
-                )
-                decodeResetMarker(namespace, durableReset)
-            } else {
-                decodeResetMarker(namespace, existingReset)
-            }
+            AndroidIdentityResetMarker.replaceAndVerify(
+                namespace = namespace,
+                replace = { marker -> writeAtomic(paths.resetPending, marker) },
+                reread = { readResetMarkerOrNull(paths) }
+            )
 
             val keyStore = openAndroidKeyStore()
             val alias = wrappingKeyAlias(namespace)
@@ -180,6 +166,7 @@ internal class AndroidSecureIdentityStorage(
         }
 
         var blobCommitted = false
+        var failedWriteCleanupHandled = false
         var record: ByteArray? = null
         var wrappedBlob: ByteArray? = null
         try {
@@ -190,7 +177,13 @@ internal class AndroidSecureIdentityStorage(
                 writeAtomic(paths.identityBlob, wrappedBlob)
                 blobCommitted = true
             } catch (error: Exception) {
-                paths.identityBlob.delete()
+                failedWriteCleanupHandled = true
+                cleanupFailedAndroidIdentityBlobWrite(
+                    primaryFailure = error,
+                    deleteBlob = paths.identityBlob::delete,
+                    rereadBlob = { readIdentityBlobOrNull(paths) },
+                    deleteAlias = { deleteAliasIfPresent(keyStore, alias) }
+                )
                 throw error
             }
 
@@ -211,13 +204,19 @@ internal class AndroidSecureIdentityStorage(
                 durableBlob.fill(0)
             }
         } catch (error: P2pError.LocalIdentityUnavailable) {
-            if (!blobCommitted) cleanupAliasFromFailedFirstCreation(keyStore, alias, error)
+            if (!blobCommitted && !failedWriteCleanupHandled) {
+                cleanupAliasFromFailedFirstCreation(keyStore, alias, error)
+            }
             throw error
         } catch (error: CancellationException) {
-            if (!blobCommitted) cleanupAliasFromFailedFirstCreation(keyStore, alias, error)
+            if (!blobCommitted && !failedWriteCleanupHandled) {
+                cleanupAliasFromFailedFirstCreation(keyStore, alias, error)
+            }
             throw error
         } catch (error: Exception) {
-            if (!blobCommitted) cleanupAliasFromFailedFirstCreation(keyStore, alias, error)
+            if (!blobCommitted && !failedWriteCleanupHandled) {
+                cleanupAliasFromFailedFirstCreation(keyStore, alias, error)
+            }
             throw localIdentityError(
                 kind = LocalIdentityFailureKind.PERSISTENCE_FAILED,
                 recovery = LocalIdentityRecovery.RETRY,
@@ -630,8 +629,92 @@ internal class AndroidSecureIdentityStorage(
     }
 }
 
+/** Keep the encrypted durable blob owned and wiped across every Keystore path. */
+internal inline fun <T> withClearedAndroidIdentityBlob(
+    blob: ByteArray?,
+    block: () -> T
+): T = try {
+    block()
+} finally {
+    blob?.fill(0)
+}
+
+/** Re-establish the explicit reset transaction even if its old marker is corrupt. */
+internal object AndroidIdentityResetMarker {
+    fun replaceAndVerify(
+        namespace: IdentityNamespace,
+        replace: (ByteArray) -> Unit,
+        reread: () -> ByteArray?
+    ) {
+        val marker = IdentityStateMarkerCodec.encodeResetPending(namespace)
+        try {
+            replace(marker)
+        } finally {
+            marker.fill(0)
+        }
+        val durable = reread() ?: throw localIdentityError(
+            kind = LocalIdentityFailureKind.PERSISTENCE_FAILED,
+            recovery = LocalIdentityRecovery.RETRY,
+            reason = "Android reset-pending marker disappeared after atomic commit"
+        )
+        try {
+            IdentityStateMarkerCodec.decodeResetPending(namespace, durable)
+        } catch (error: IdentityRecordCorruptException) {
+            throw localIdentityError(
+                kind = LocalIdentityFailureKind.CORRUPT_RECORD,
+                recovery = LocalIdentityRecovery.EXPLICIT_RESET_REQUIRED,
+                reason = "Malformed Android reset-pending marker after atomic replacement",
+                cause = error
+            )
+        } finally {
+            durable.fill(0)
+        }
+    }
+}
+
+/**
+ * Clean a failed first blob commit without destroying the only wrapping key
+ * while durable blob state is still present or cannot be inspected.
+ */
+internal inline fun cleanupFailedAndroidIdentityBlobWrite(
+    primaryFailure: Throwable,
+    deleteBlob: () -> Unit,
+    rereadBlob: () -> ByteArray?,
+    deleteAlias: () -> Unit
+) {
+    val blobAbsent = try {
+        deleteBlob()
+        val remaining = rereadBlob()
+        if (remaining == null) {
+            true
+        } else {
+            remaining.fill(0)
+            primaryFailure.addSuppressed(
+                localIdentityError(
+                    kind = LocalIdentityFailureKind.PERSISTENCE_FAILED,
+                    recovery = LocalIdentityRecovery.RETRY,
+                    reason = "Android identity blob remained after failed first-creation cleanup; " +
+                        "the wrapping key was retained"
+                )
+            )
+            false
+        }
+    } catch (cleanupFailure: Throwable) {
+        if (cleanupFailure !== primaryFailure) primaryFailure.addSuppressed(cleanupFailure)
+        false
+    }
+
+    if (blobAbsent) {
+        try {
+            deleteAlias()
+        } catch (cleanupFailure: Throwable) {
+            if (cleanupFailure !== primaryFailure) primaryFailure.addSuppressed(cleanupFailure)
+        }
+    }
+}
+
 /** Process-local exclusion between live kits and explicit reset calls. */
-private object AndroidSecureIdentityLiveGuard {
+internal object AndroidSecureIdentityLiveGuard {
     private val lock = Any()
     private val states = mutableMapOf<String, State>()
 

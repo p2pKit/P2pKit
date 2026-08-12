@@ -239,6 +239,56 @@ class SecureIdentityServiceTest {
         assertSame(cancellation, thrown)
     }
 
+    @Test
+    fun untypedResetFailureIsPersistenceFailureAndRetainsCause() {
+        val cause = IllegalStateException("reset backend failed")
+        val storage = object : SecureIdentityStorage {
+            override fun loadOrCreate(
+                namespace: IdentityNamespace,
+                fingerprintDigest: (EncodedIdentityKeyPair) -> ByteArray,
+                generate: () -> EncodedIdentityKeyPair
+            ): EncodedIdentityKeyPair = error("unused")
+
+            override fun reset(namespace: IdentityNamespace): Unit = throw cause
+        }
+
+        val error = assertFailsWith<P2pError.LocalIdentityUnavailable> {
+            SecureIdentityService(DeterministicTestIdentityCryptography(), storage)
+                .reset(AppId("reset-failure"))
+        }
+
+        assertEquals(LocalIdentityFailureKind.PERSISTENCE_FAILED, error.kind)
+        assertEquals(LocalIdentityRecovery.RETRY, error.recovery)
+        assertSame(cause, error.cause)
+    }
+
+    @Test
+    fun resetCancellationAndTypedFailurePropagateUnchanged() {
+        val cancellation = CancellationException("cancel identity reset")
+        val typed = localIdentityError(
+            kind = LocalIdentityFailureKind.LIVE_IDENTITY_IN_USE,
+            recovery = LocalIdentityRecovery.RETRY,
+            reason = "identity still live"
+        )
+
+        for (failure in listOf(cancellation, typed)) {
+            val storage = object : SecureIdentityStorage {
+                override fun loadOrCreate(
+                    namespace: IdentityNamespace,
+                    fingerprintDigest: (EncodedIdentityKeyPair) -> ByteArray,
+                    generate: () -> EncodedIdentityKeyPair
+                ): EncodedIdentityKeyPair = error("unused")
+
+                override fun reset(namespace: IdentityNamespace): Unit = throw failure
+            }
+            val thrown = assertFailsWith<Throwable> {
+                SecureIdentityService(DeterministicTestIdentityCryptography(), storage)
+                    .reset(AppId("reset-propagation"))
+            }
+            assertSame(failure, thrown)
+        }
+    }
+
     private fun validPair(seed: Int): EncodedIdentityKeyPair {
         val privateKey = ByteArray(32) { (seed + it).toByte() }
         val publicKey = privateKey.map { (it.toInt() xor 0x5a).toByte() }.toByteArray()

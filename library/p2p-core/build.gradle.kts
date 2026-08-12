@@ -4,6 +4,7 @@ import dev.p2pkit.build.GitCommitValueSource
 import dev.p2pkit.build.GitDirtyValueSource
 import dev.p2pkit.build.P2pPomMetadata
 import dev.p2pkit.build.VerifyBuildInfoTask
+import org.gradle.api.tasks.testing.Test
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -93,6 +94,7 @@ kotlin {
         namespace = "dev.p2pkit.core"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
+        withHostTest { }
     }
 
     // Core types compile for iOS; the iOS LAN/TCP transport (Bonjour +
@@ -119,12 +121,28 @@ kotlin {
             implementation(libs.cryptography.provider.jdk)
             implementation(libs.bouncycastle.provider)
         }
+        getByName("androidHostTest").dependencies {
+            implementation(kotlin("test"))
+        }
         iosMain.dependencies {
             implementation(libs.cryptography.provider.cryptokit)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
             implementation(libs.kotlinx.coroutines.test)
+        }
+    }
+}
+
+// Android KMP host tests execute against the compile-time android.jar stubs,
+// not a device/runtime implementation. Run only suites that deliberately use
+// Android-source-set code without invoking framework methods; common tests run
+// in full on JVM and the arm64 iOS Simulator instead.
+tasks.withType<Test>().configureEach {
+    if (name == "testAndroidHostTest") {
+        filter {
+            includeTestsMatching("*AndroidHostTest")
+            isFailOnNoMatchingTests = true
         }
     }
 }

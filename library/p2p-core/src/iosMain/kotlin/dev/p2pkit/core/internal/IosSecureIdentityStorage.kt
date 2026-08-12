@@ -145,23 +145,21 @@ internal class IosSecureIdentityStorage(
 
     private fun resetWhileExclusive(namespace: IdentityNamespace) {
         withProcessLock {
-            val currentReset = markerStore.readResetPending(namespace)
-            if (currentReset == null) {
-                val encoded = IdentityStateMarkerCodec.encodeResetPending(namespace)
-                try {
-                    markerStore.writeResetPending(namespace, encoded)
-                } finally {
-                    encoded.fill(0)
-                }
-                val durable = markerStore.readResetPending(namespace) ?: throw localIdentityError(
-                    kind = LocalIdentityFailureKind.PERSISTENCE_FAILED,
-                    recovery = LocalIdentityRecovery.RETRY,
-                    reason = "iOS reset-pending marker disappeared after atomic commit"
-                )
-                decodeResetMarker(namespace, durable)
-            } else {
-                decodeResetMarker(namespace, currentReset)
+            // Reset is already an explicit destructive authorization. Replace
+            // any malformed marker from a torn/corrupted prior transaction so
+            // the caller has a recovery path; ordinary load remains fail-closed.
+            val encoded = IdentityStateMarkerCodec.encodeResetPending(namespace)
+            try {
+                markerStore.writeResetPending(namespace, encoded)
+            } finally {
+                encoded.fill(0)
             }
+            val durable = markerStore.readResetPending(namespace) ?: throw localIdentityError(
+                kind = LocalIdentityFailureKind.PERSISTENCE_FAILED,
+                recovery = LocalIdentityRecovery.RETRY,
+                reason = "iOS reset-pending marker disappeared after atomic commit"
+            )
+            decodeResetMarker(namespace, durable)
 
             markerStore.deleteCommitted(namespace)
             markerStore.readCommitted(namespace)?.let { remaining ->

@@ -15,7 +15,12 @@ import dev.p2pkit.core.internal.JvmSecureIdentityStoreAdapter
  *
  * The host must additionally guarantee that no other process using the same
  * backing store is constructing or using this AppId. Core cannot infer that
- * cross-process lifecycle from the synchronous store SPI.
+ * cross-process lifecycle from the synchronous store SPI. This function is
+ * synchronous and may block on the host store; invoke it away from a UI/event
+ * thread when that store performs blocking I/O.
+ *
+ * @throws dev.p2pkit.core.P2pError.LocalIdentityUnavailable when reset cannot
+ *   safely complete. Follow the error's `recovery` value.
  */
 public fun resetJvmSecureIdentity(
     appId: AppId,
