@@ -453,9 +453,11 @@ class AndroidNetworkProvisioningManagerTest {
                 mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().first()
             }
             mgr.startLocalNetwork(LocalNetworkConfig())
+            assertEquals(1, wifi.lastHandle?.stopSubscriberCount)
             wifi.lastHandle?.simulateSystemStop("OEM battery policy")
             val event = withTimeout(2_000) { failedEventDeferred.await() }
             assertIs<NetworkProvisioningError.HotspotStopped>(event.error)
+            withTimeout(2_000) { wifi.lastHandle?.awaitWatcherStopped() }
         } finally {
             mgr.close()
         }
@@ -476,12 +478,14 @@ class AndroidNetworkProvisioningManagerTest {
                 mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().first()
             }
             assertIs<LocalNetworkResult.Started>(mgr.startLocalNetwork(LocalNetworkConfig()))
+            assertEquals(1, wifi.lastHandle?.stopSubscriberCount)
             wifi.lastHandle?.simulateSystemStop("OEM policy")
 
             assertIs<NetworkProvisioningError.CleanupFailed>(
                 withTimeout(2_000) { failedEvent.await() }.error
             )
             assertEquals(1, wifi.lastHandle?.closeAttempts)
+            withTimeout(2_000) { wifi.lastHandle?.awaitWatcherStopped() }
             mgr.stopLocalNetwork()
             assertTrue(wifi.lastHandle?.isClosed == true)
             assertEquals(NetworkProvisioningState.Idle, mgr.state.value)
@@ -676,6 +680,7 @@ class AndroidNetworkProvisioningManagerTest {
                 mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().first()
             }
             mgr.joinLocalNetwork(testCreds)
+            assertEquals(1, wifi.lastJoinHandle?.releaseSubscriberCount)
             wifi.lastJoinHandle?.simulateRelease("MIUI battery policy")
             val ev = withTimeout(2_000) { failedEventDeferred.await() }
             val err = assertIs<NetworkProvisioningError.JoinFailed>(ev.error)
@@ -688,6 +693,7 @@ class AndroidNetworkProvisioningManagerTest {
                 wifi.lastJoinHandle?.isClosed == true,
                 "System-initiated join release must close the JoinHandle"
             )
+            withTimeout(2_000) { wifi.lastJoinHandle?.awaitWatcherStopped() }
             assertIs<NetworkProvisioningState.Failed>(mgr.state.value)
             // The handle slot is cleared: a follow-up join must not be
             // rejected as "already active".
@@ -713,12 +719,14 @@ class AndroidNetworkProvisioningManagerTest {
             mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().first()
         }
         assertIs<JoinNetworkResult.Joined>(mgr.joinLocalNetwork(testCreds))
+        assertEquals(1, wifi.lastJoinHandle?.releaseSubscriberCount)
         wifi.lastJoinHandle?.simulateRelease("network vanished")
 
         assertIs<NetworkProvisioningError.CleanupFailed>(
             withTimeout(2_000) { failedEvent.await() }.error
         )
         assertEquals(1, wifi.lastJoinHandle?.closeAttempts)
+        withTimeout(2_000) { wifi.lastJoinHandle?.awaitWatcherStopped() }
         mgr.close()
         assertTrue(wifi.lastJoinHandle?.isClosed == true)
         assertEquals(2, wifi.lastJoinHandle?.closeAttempts)
@@ -1311,6 +1319,7 @@ private class FakeHotspotHandle(
     var closeAttempts: Int = 0
         private set
     private var closeFailuresRemaining: Int = closeFailures
+    val stopSubscriberCount: Int get() = _stopped.subscriptionCount.value
 
     override fun getCredentials(): WifiCredentials? = credentials
     override fun apHostAddresses(): List<String> = apHosts
@@ -1332,6 +1341,10 @@ private class FakeHotspotHandle(
     fun simulateSystemStop(reason: String) {
         _stopped.tryEmit(HotspotStopReason(reason))
     }
+
+    suspend fun awaitWatcherStopped() {
+        _stopped.subscriptionCount.first { it == 0 }
+    }
 }
 
 private class FakeJoinHandle(
@@ -1350,6 +1363,7 @@ private class FakeJoinHandle(
     var closeAttempts: Int = 0
         private set
     private var closeFailuresRemaining: Int = closeFailures
+    val releaseSubscriberCount: Int get() = _released.subscriptionCount.value
 
     override fun snapshotNetworkState(): dev.p2pkit.core.provisioning.NetworkState = state
     override fun close() {
@@ -1363,6 +1377,10 @@ private class FakeJoinHandle(
 
     fun simulateRelease(reason: String) {
         _released.tryEmit(reason)
+    }
+
+    suspend fun awaitWatcherStopped() {
+        _released.subscriptionCount.first { it == 0 }
     }
 }
 
