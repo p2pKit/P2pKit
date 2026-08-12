@@ -20,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -152,15 +153,6 @@ internal class IosLanDiscoveryTransport(
     private var cachedLocalPeer: LocalPeerInfo? = null
 
     /**
-     * V0.4-IOS-LISTENER-REBIND: captured by [onBeforeListenerRebind] so
-     * [onAfterListenerRebind] knows whether to recreate the browser. We
-     * cannot infer this from `browser != null` after the before-hook
-     * because the before-hook is the one that nulls it.
-     */
-    @Volatile
-    private var wasBrowsingBeforeRebind: Boolean = false
-
-    /**
      * V0.4-D-IOS-NUDGE: scope for the post-rebind Bonjour re-announce
      * nudge. SupervisorJob so a failed nudge doesn't poison the scope for
      * subsequent rebinds. Lives for the transport's lifetime.
@@ -246,6 +238,7 @@ internal class IosLanDiscoveryTransport(
     }
 
     override suspend fun stopAdvertising() = lock.withLock {
+        cancelPendingNudgeLocked()
         if (!advertising) return@withLock
         IosLanDebug.log("advertise", "stopping")
         val l = dataTransport.listener
@@ -395,13 +388,12 @@ internal class IosLanDiscoveryTransport(
             return@withLock
         }
         IosLanDebug.log("browse", "refresh: cancel + recreate browser to flush Bonjour cache")
-        val previous = browser
-        endpointRegistry.clear()
-        withAnnounceCacheLock {
-            if (browser === previous) {
-                browser = null
-                browserReady = false
-            }
+        val previous = withAnnounceCacheLock {
+            val current = browser
+            browser = null
+            browserReady = false
+            endpointRegistry.clear()
+            current
         }
         previous?.handle?.let { nw_browser_cancel(it) }
         try {
@@ -429,8 +421,7 @@ internal class IosLanDiscoveryTransport(
     // ──────────────────────────────────────────────────────────────────
 
     /**
-     * Pre-rebind: cancel the existing browser (if any) and capture the
-     * was-browsing flag for the after-hook. The data transport will
+     * Pre-rebind: cancel the existing browser (if any). The data transport will
      * cancel the listener shortly after this returns, which implicitly
      * drops its attached advertise descriptor — we do NOT need to call
      * `nw_listener_set_advertise_descriptor(..., null)` here.
@@ -446,14 +437,17 @@ internal class IosLanDiscoveryTransport(
      * current [browser] field state.
      */
     private suspend fun onBeforeListenerRebind(): Unit = lock.withLock {
-        wasBrowsingBeforeRebind = discoveryStartedByHost
-        val previous = browser
-        endpointRegistry.clear()
-        withAnnounceCacheLock {
-            if (browser === previous) {
-                browser = null
-                browserReady = false
-            }
+        // A nudge is scoped to the listener it captured. It must not issue a
+        // delayed descriptor mutation after that native listener is retired.
+        cancelPendingNudgeLocked()
+        val previous = withAnnounceCacheLock {
+            val current = browser
+            browser = null
+            browserReady = false
+            // A queued result either commits before this transaction and is
+            // cleared here, or observes the retired browser and cannot commit.
+            endpointRegistry.clear()
+            current
         }
         previous?.handle?.let { b ->
             IosLanDebug.log("browse", "rebind: cancelling old browser")
@@ -462,7 +456,7 @@ internal class IosLanDiscoveryTransport(
         IosLanDebug.log(
             "browse",
             "rebind: pre-rebind state captured " +
-                "(advertising=$advertising wasBrowsing=$wasBrowsingBeforeRebind " +
+                "(advertising=$advertising discoveryIntent=$discoveryStartedByHost " +
                 "cachedPeer=${cachedLocalPeer?.peerId?.value?.take(8)})"
         )
     }
@@ -470,7 +464,10 @@ internal class IosLanDiscoveryTransport(
     /**
      * Post-rebind: re-attach the advertise descriptor on the new listener
      * (preserving Bonjour identity via [cachedLocalPeer] reuse), and
-     * recreate the browser if we had one before the rebind.
+     * recreate the browser when the host still requests discovery and no
+     * browser already exists. A start racing between the hooks may create the
+     * browser first; the native-instance check prevents a duplicate. A stop
+     * revokes intent, so current intent/state are the restoration sources.
      */
     private suspend fun onAfterListenerRebind(newListener: nw_listener_t): Unit = lock.withLock {
         if (advertising) {
@@ -493,10 +490,9 @@ internal class IosLanDiscoveryTransport(
         } else {
             IosLanDebug.log("advertise", "rebind: was not advertising; nothing to re-attach")
         }
-        if (wasBrowsingBeforeRebind) {
+        if (discoveryStartedByHost && browser == null) {
             try {
                 createBrowserLocked(recoveryAttempt = 0)
-                wasBrowsingBeforeRebind = false
                 IosLanDebug.log("browse", "rebind: browser recreated on new listener queue")
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -508,7 +504,10 @@ internal class IosLanDiscoveryTransport(
                 scheduleBrowserRecoveryLocked("listener rebind create failure", attempt = 1)
             }
         } else {
-            IosLanDebug.log("browse", "rebind: was not browsing; nothing to recreate")
+            IosLanDebug.log(
+                "browse",
+                "rebind: browser restore not required by current host intent/state"
+            )
         }
     }
 
@@ -575,6 +574,13 @@ internal class IosLanDiscoveryTransport(
                 )
             }
         }
+    }
+
+    /** Caller holds [lock], so the nudge cannot concurrently own that lock. */
+    private suspend fun cancelPendingNudgeLocked() {
+        val pending = pendingNudgeJob
+        pendingNudgeJob = null
+        pending?.cancelAndJoin()
     }
 
     /**
@@ -703,6 +709,12 @@ internal class IosLanDiscoveryTransport(
 
     internal fun beginBrowserGenerationForTest() = beginBrowserGeneration()
 
+    /** Deterministic rebind interleaving seams for Apple lifecycle tests. */
+    internal suspend fun beforeListenerRebindForTest() = onBeforeListenerRebind()
+
+    internal suspend fun afterListenerRebindForTest(newListener: nw_listener_t) =
+        onAfterListenerRebind(newListener)
+
     private fun scheduleBrowserRecoveryFromCallback(reason: String, attempt: Int) {
         nudgeScope.launch {
             lock.withLock {
@@ -731,7 +743,6 @@ internal class IosLanDiscoveryTransport(
                         if (!discoveryStartedByHost || browser != null) return@withLock
                         try {
                             createBrowserLocked(recoveryAttempt = attempt)
-                            wasBrowsingBeforeRebind = false
                             IosLanDebug.log(
                                 "browse",
                                 "browser recovery $attempt/$BROWSER_RECOVERY_MAX_ATTEMPTS started"
@@ -942,6 +953,9 @@ internal class IosLanDiscoveryTransport(
 
     internal val hasBrowserForTest: Boolean
         get() = browser != null
+
+    internal val hasPendingNudgeForTest: Boolean
+        get() = pendingNudgeJob?.isActive == true
 
     /**
      * Shared lost-emission path: browse `result_removed` callbacks land here

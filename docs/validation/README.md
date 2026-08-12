@@ -28,6 +28,14 @@ commit `fc73837cfa154caa82a6f96172603108b8577842`; the exact automated boundary
 is recorded in the [GitHub audit](../maintenance/github-audit-2026-08.md).
 That evidence does not change either physical campaign's status.
 
+Apple LAN native listener/browser/dial ownership, rebind restoration, delayed
+Bonjour work, and caller-versus-library timeout classification were further
+strengthened and simulator-tested in implementation commit
+`7af3a4bb85d6a9b6f688bfe7245fc5f28028c889`; the exact automated boundary is
+recorded in the [GitHub audit](../maintenance/github-audit-2026-08.md). Real
+AWDL, Personal Hotspot, path rotation, lifecycle, and timeout measurements
+remain `NOT STARTED` and are not inferred from host or simulator evidence.
+
 Repository-side secure-handshake result ownership, duplicate HELLO/legacy
 FILE_OFFER field rejection, cancellation-preserving rejection diagnostics, and
 monotonic reassembly expiry were strengthened in implementation commit

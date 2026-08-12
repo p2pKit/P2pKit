@@ -16,7 +16,6 @@ import kotlinx.cinterop.convert
 import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.usePinned
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,7 +25,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import platform.Network.nw_connection_cancel
 import platform.Network.nw_connection_copy_current_path
 import platform.Network.nw_connection_set_queue
@@ -202,11 +201,10 @@ internal class IosRawConnection private constructor(
         }
         if (_state.value == ConnectionState.Connecting) {
             IosLanDebug.log("conn", "write(${bytes.size}): state=Connecting, awaiting transition (<=${writeReadyTimeoutMillis}ms)")
-            try {
-                withTimeout(writeReadyTimeoutMillis) {
-                    _state.first { it != ConnectionState.Connecting }
-                }
-            } catch (e: TimeoutCancellationException) {
+            val terminal = withTimeoutOrNull(writeReadyTimeoutMillis) {
+                _state.first { it != ConnectionState.Connecting }
+            }
+            if (terminal == null) {
                 IosLanDebug.log("conn", "write(${bytes.size}): TIMEOUT — connection wedged in Connecting")
                 closed = true
                 _state.value = ConnectionState.Closed
@@ -234,7 +232,11 @@ internal class IosRawConnection private constructor(
                 throw IllegalStateException("connection closed")
             }
             sendOverride?.let { send ->
-                withTimeout(WRITE_TIMEOUT_MILLIS) { send(bytes) }
+                val completed = withTimeoutOrNull(WRITE_TIMEOUT_MILLIS) {
+                    send(bytes)
+                    true
+                } ?: false
+                if (!completed) failWriteTimeout(bytes.size)
                 return@withLock
             }
             // Log the attempt up-front so the timeline shows the send was
@@ -242,68 +244,60 @@ internal class IosRawConnection private constructor(
             // "completion OK" per packet would drown out the lines that
             // matter when something goes wrong).
             IosLanDebug.log("conn", "write(${bytes.size}): nw_connection_send")
-            try {
-                // V0.6-WRITE-TIMEOUT (AUDIT-2026-06): bound the wait for the
-                // send-completion handler — parity with the JVM/Android 30 s
-                // write watchdog. A peer that stops draining (TCP receive
-                // window wedged) never fires the completion, which used to
-                // suspend this write forever while holding [writeLock]:
-                // messages silently stopped while session.state stayed
-                // Connected. Unlike the JVM's un-interruptible blocking
-                // OutputStream write, this suspension is genuinely
-                // cancellable, so a withTimeout around ONLY the send await
-                // is the whole fix. A late completion after the timeout
-                // resumes a cancelled continuation, which is a no-op.
-                withTimeout(WRITE_TIMEOUT_MILLIS) {
-                    suspendCancellableCoroutine<Unit> { cont ->
-                        bytes.usePinned { pinned ->
-                            p2pkit_nw_connection_send_default(
-                                connection = connection,
-                                buffer = pinned.addressOf(0),
-                                size = bytes.size.convert(),
-                                is_complete = false,
-                                completion = sendCompletion@ { error ->
-                                    if (error != null) {
-                                        IosLanDebug.log("conn", "write(${bytes.size}): completion ERROR — flipping state to Closed")
-                                        // Flip state to Closed AND latch closed=true
-                                        // before resuming with the exception. Without
-                                        // this the session-level keep-alive only learns
-                                        // the connection is dead one ping interval
-                                        // later. Symptom: messages silently stop being
-                                        // delivered while session.state stays Connected.
-                                        closed = true
-                                        _state.value = ConnectionState.Closed
-                                        cancelOnce("write error")
-                                        cont.resumeWithException(
-                                            NetworkException("nw_connection_send failed")
-                                        )
-                                    } else {
-                                        cont.resume(Unit)
-                                    }
-                                    return@sendCompletion
+            // V0.6-WRITE-TIMEOUT (AUDIT-2026-06): bound the wait for the
+            // send-completion handler — parity with the JVM/Android 30 s
+            // write watchdog. withTimeoutOrNull consumes only this owned
+            // deadline; an outer caller timeout/cancellation propagates.
+            val completed = withTimeoutOrNull(WRITE_TIMEOUT_MILLIS) {
+                suspendCancellableCoroutine<Unit> { cont ->
+                    bytes.usePinned { pinned ->
+                        p2pkit_nw_connection_send_default(
+                            connection = connection,
+                            buffer = pinned.addressOf(0),
+                            size = bytes.size.convert(),
+                            is_complete = false,
+                            completion = sendCompletion@ { error ->
+                                if (error != null) {
+                                    IosLanDebug.log("conn", "write(${bytes.size}): completion ERROR — flipping state to Closed")
+                                    // Flip state to Closed AND latch closed=true
+                                    // before resuming with the exception. Without
+                                    // this the session-level keep-alive only learns
+                                    // the connection is dead one ping interval
+                                    // later. Symptom: messages silently stop being
+                                    // delivered while session.state stays Connected.
+                                    closed = true
+                                    _state.value = ConnectionState.Closed
+                                    cancelOnce("write error")
+                                    cont.resumeWithException(
+                                        NetworkException("nw_connection_send failed")
+                                    )
+                                } else {
+                                    cont.resume(Unit)
                                 }
-                            )
-                        }
+                                return@sendCompletion
+                            }
+                        )
                     }
                 }
-            } catch (e: TimeoutCancellationException) {
-                // Catch ONLY the timeout: TimeoutCancellationException is a
-                // CancellationException subtype, but a parent cancellation
-                // arrives as a plain CancellationException and must keep
-                // propagating untouched.
-                IosLanDebug.log(
-                    "conn",
-                    "write(${bytes.size}): SEND TIMEOUT after ${WRITE_TIMEOUT_MILLIS}ms (peer not draining) — cancelling connection"
-                )
-                closed = true
-                _state.value = ConnectionState.Closed
-                cancelOnce("write timeout")
-                throw IllegalStateException(
-                    "nw_connection_send completion did not fire within " +
-                        "${WRITE_TIMEOUT_MILLIS}ms (peer not reading)"
-                )
-            }
+                true
+            } ?: false
+            if (!completed) failWriteTimeout(bytes.size)
         }
+    }
+
+    private fun failWriteTimeout(byteCount: Int): Nothing {
+        IosLanDebug.log(
+            "conn",
+            "write($byteCount): SEND TIMEOUT after ${WRITE_TIMEOUT_MILLIS}ms " +
+                "(peer not draining) — cancelling connection"
+        )
+        closed = true
+        _state.value = ConnectionState.Closed
+        cancelOnce("write timeout")
+        throw IllegalStateException(
+            "nw_connection_send completion did not fire within " +
+                "${WRITE_TIMEOUT_MILLIS}ms (peer not reading)"
+        )
     }
 
     override fun read(): Flow<ByteArray> = flow {

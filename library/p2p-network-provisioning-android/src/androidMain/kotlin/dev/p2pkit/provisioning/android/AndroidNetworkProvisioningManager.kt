@@ -20,6 +20,7 @@ import java.net.NetworkInterface
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -34,6 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -221,10 +223,12 @@ public class AndroidNetworkProvisioningManager internal constructor(
             }
             is HotspotStartResult.Started -> {
                 val h = startResult.handle
-                val watcher = scope.launch {
-                    h.stopped.collect { reason ->
-                        handleSystemStop(h, reason)
-                    }
+                // Enter collection before publishing the handle. The wrapper
+                // seam promises a one-shot terminal signal, but does not
+                // require replay; a normally scheduled collector could miss a
+                // stop emitted immediately after this operation returned.
+                val watcher = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    handleSystemStop(h, h.stopped.first())
                 }
                 var installed = false
                 var published = false
@@ -434,8 +438,11 @@ public class AndroidNetworkProvisioningManager internal constructor(
             }
             is JoinResult.Joined -> {
                 val h = joinResult.handle
-                val watcher = scope.launch {
-                    h.released.collect { reason -> handleJoinReleased(h, reason) }
+                // Subscribe before the joined handle becomes observable. This
+                // closes the same zero-replay admission window as the hotspot
+                // watcher and makes an immediate OS release deterministic.
+                val watcher = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    handleJoinReleased(h, h.released.first())
                 }
                 var installed = false
                 var published = false

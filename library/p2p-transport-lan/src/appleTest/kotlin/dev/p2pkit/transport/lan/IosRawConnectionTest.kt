@@ -20,7 +20,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -76,7 +78,9 @@ class IosRawConnectionTest {
         return IosRawConnection.wrapForWriteTest(conn, queue, send)
     }
 
-    private fun newWedgedConnectingConnection(): IosRawConnection {
+    private fun newWedgedConnectingConnection(
+        writeReadyTimeoutMillis: Long = 25
+    ): IosRawConnection {
         val params = p2pkit_nw_create_plain_tcp_parameters()
             ?: error("p2pkit_nw_create_plain_tcp_parameters returned null")
         val endpoint = nw_endpoint_create_host("127.0.0.1", "9")
@@ -87,7 +91,7 @@ class IosRawConnectionTest {
         return IosRawConnection.wrapConnectingForTest(
             connection = conn,
             queue = queue,
-            writeReadyTimeoutMillis = 25
+            writeReadyTimeoutMillis = writeReadyTimeoutMillis
         )
     }
 
@@ -133,6 +137,40 @@ class IosRawConnectionTest {
             assertFailsWith<IllegalStateException> { raw.write(byteArrayOf(4)) }
         }
         assertEquals("connection closed", repeated.message)
+    }
+
+    @Test
+    fun callerTimeoutIsNotReclassifiedAsWriteReadyTimeout() = runBlocking {
+        val raw = newWedgedConnectingConnection(writeReadyTimeoutMillis = 5_000)
+
+        assertFailsWith<TimeoutCancellationException> {
+            withTimeout(CALLER_TIMEOUT_MILLIS) {
+                raw.write(byteArrayOf(1, 2, 3))
+            }
+        }
+        assertEquals(
+            ConnectionState.Connecting,
+            raw.state.value,
+            "caller-owned timeout must not be reported as P2pKit's terminal write deadline"
+        )
+        raw.close()
+    }
+
+    @Test
+    fun callerTimeoutIsNotReclassifiedAsSendDeadline() = runBlocking {
+        val raw = newWriteControlledConnection { awaitCancellation() }
+
+        assertFailsWith<TimeoutCancellationException> {
+            withTimeout(CALLER_TIMEOUT_MILLIS) {
+                raw.write(byteArrayOf(1, 2, 3))
+            }
+        }
+        assertEquals(
+            ConnectionState.Connected,
+            raw.state.value,
+            "caller-owned timeout must not become P2pKit's terminal send deadline"
+        )
+        raw.close()
     }
 
     @Test
@@ -212,5 +250,6 @@ class IosRawConnectionTest {
 
     private companion object {
         const val CONNECTION_TIMEOUT_MILLIS: Long = 10_000
+        const val CALLER_TIMEOUT_MILLIS: Long = 100
     }
 }

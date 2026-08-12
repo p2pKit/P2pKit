@@ -7,21 +7,33 @@ import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportHint
+import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
 import dev.p2pkit.transport.lan.interop.p2pkit_test_bind_tcp_port
 import kotlin.concurrent.AtomicInt
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import platform.Network.nw_connection_cancel
+import platform.Network.nw_connection_create
+import platform.Network.nw_connection_t
+import platform.Network.nw_endpoint_create_host
 import platform.posix.sched_yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -29,10 +41,39 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /** Real Network.framework lifecycle regressions for listener/browser recovery. */
 class IosLanRecoveryTest {
+
+    private class ControlledInboundConnection(
+        private val nativeConnection: nw_connection_t
+    ) : IosConnectionHandle {
+        override val state: StateFlow<dev.p2pkit.core.ConnectionState> =
+            MutableStateFlow(dev.p2pkit.core.ConnectionState.Connecting)
+        var cancelled: Boolean = false
+            private set
+
+        override suspend fun write(bytes: ByteArray) = error("not used")
+        override fun read(): Flow<ByteArray> = emptyFlow()
+        override suspend fun close() = cancelNow("close")
+
+        override fun cancelNow(reason: String) {
+            if (cancelled) return
+            cancelled = true
+            nw_connection_cancel(nativeConnection)
+        }
+    }
+
+    private fun nativeConnection(): nw_connection_t {
+        val parameters = p2pkit_nw_create_plain_tcp_parameters()
+            ?: error("p2pkit_nw_create_plain_tcp_parameters returned null")
+        val endpoint = nw_endpoint_create_host("127.0.0.1", "9")
+            ?: error("nw_endpoint_create_host returned null")
+        return nw_connection_create(endpoint, parameters)
+            ?: error("nw_connection_create returned null")
+    }
 
     @Test
     fun listenerAndDialParametersEnablePeerToPeerRouting() = runBlocking {
@@ -100,6 +141,14 @@ class IosLanRecoveryTest {
         transportHints = listOf(TransportHint(TransportKind.LAN))
     )
 
+    private fun localPeer(suffix: String): LocalPeerInfo = LocalPeerInfo(
+        peerId = PeerId("ios-lan-recovery-local-$suffix"),
+        deviceName = "recovery-$suffix",
+        platform = Platform.IOS,
+        appId = AppId("ios-lan-recovery-$suffix"),
+        supportedTransports = setOf(TransportKind.LAN)
+    )
+
     @Test
     fun cancellingListenerStartClosesCandidateAndAllowsCleanRetry() = runBlocking {
         val candidateReady = CompletableDeferred<Unit>()
@@ -158,6 +207,42 @@ class IosLanRecoveryTest {
     }
 
     @Test
+    fun listenerRecoveryClearsEndpointPublishedAtBrowserRetirementBoundary() = runBlocking<Unit> {
+        val endpointRegistry = IosEndpointRegistry()
+        val transport = IosLanDataTransport(context("retirement-boundary"), endpointRegistry)
+        val stalePeer = PeerId("retirement-boundary-stale-peer")
+        var hookCalls = 0
+        transport.beforeListenerRebind = {
+            hookCalls += 1
+            endpointRegistry.put(
+                stalePeer,
+                assertNotNull(nw_endpoint_create_host("127.0.0.1", "43005")),
+                browserGeneration = hookCalls
+            )
+        }
+        try {
+            assertTrue(transport.start().isSuccess)
+            val oldListener = assertNotNull(transport.listener)
+
+            transport.cancelCurrentListenerForTest()
+
+            withTimeout(RECOVERY_TIMEOUT_MILLIS) {
+                while (transport.listener === oldListener || transport.tcpPort.value == null) {
+                    delay(POLL_MILLIS)
+                }
+            }
+            assertTrue(hookCalls >= 1)
+            assertEquals(
+                0,
+                endpointRegistry.sizeForTest(),
+                "the final clear must follow retirement of the old browser callback owner"
+            )
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Test
     fun closeReleasesTheExactNativeListenerPort() = runBlocking {
         val transport = IosLanDataTransport(context("exact-port"), IosEndpointRegistry())
         assertTrue(transport.start().isSuccess)
@@ -204,6 +289,142 @@ class IosLanRecoveryTest {
             assertNotNull(transport.tcpPort.value)
             assertEquals(3, transport.lifecycleObserverCountForTest)
         } finally {
+            transport.close()
+        }
+    }
+
+    @Test
+    fun staleListenerCallbackIsRejectedAndNativeConnectionIsCancelled() = runBlocking<Unit> {
+        val rejected = AtomicInt(0)
+        var wrapperCreations = 0
+        val transport = IosLanDataTransport(
+            transportContext = context("stale-inbound"),
+            endpointRegistry = IosEndpointRegistry(),
+            connectionRejector = { connection ->
+                rejected.incrementAndGet()
+                nw_connection_cancel(connection)
+            },
+            connectionFactory = { connection, _ ->
+                wrapperCreations += 1
+                ControlledInboundConnection(connection)
+            }
+        )
+        try {
+            assertTrue(transport.start().isSuccess)
+            val staleOwner = assertNotNull(transport.listener)
+            transport.stop()
+            assertTrue(transport.start().isSuccess)
+            assertNotSame(staleOwner, transport.listener)
+
+            assertFalse(
+                transport.handleInboundConnectionForTest(staleOwner, nativeConnection())
+            )
+            assertEquals(1, rejected.value)
+            assertEquals(0, wrapperCreations, "a stale callback must not start a wrapper")
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Test
+    fun currentListenerCallbackTransfersExactlyOneConnection() = runBlocking<Unit> {
+        var created: ControlledInboundConnection? = null
+        val transport = IosLanDataTransport(
+            transportContext = context("current-inbound"),
+            endpointRegistry = IosEndpointRegistry(),
+            connectionFactory = { connection, _ ->
+                ControlledInboundConnection(connection).also { created = it }
+            }
+        )
+        try {
+            assertTrue(transport.start().isSuccess)
+            val owner = assertNotNull(transport.listener)
+            val received = async { transport.incomingConnections().first() }
+
+            assertTrue(transport.handleInboundConnectionForTest(owner, nativeConnection()))
+            val accepted = assertNotNull(created)
+            assertSame(accepted, withTimeout(RECOVERY_TIMEOUT_MILLIS) { received.await() })
+            assertFalse(accepted.cancelled, "consumer owns a successfully transferred connection")
+            accepted.close()
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Test
+    fun connectionWrapperFailureRejectsNativeConnectionWithoutEscapingCallback() =
+        runBlocking<Unit> {
+            val rejected = AtomicInt(0)
+            val transport = IosLanDataTransport(
+                transportContext = context("failed-inbound-wrapper"),
+                endpointRegistry = IosEndpointRegistry(),
+                connectionRejector = { connection ->
+                    rejected.incrementAndGet()
+                    nw_connection_cancel(connection)
+                },
+                connectionFactory = { _, _ -> error("synthetic wrapper failure") }
+            )
+            try {
+                assertTrue(transport.start().isSuccess)
+
+                assertFalse(
+                    transport.handleInboundConnectionForTest(
+                        assertNotNull(transport.listener),
+                        nativeConnection()
+                    )
+                )
+                assertEquals(1, rejected.value)
+            } finally {
+                transport.close()
+            }
+        }
+
+    @Test
+    fun stopWaitsForAdmissionThenDrainsUntransferredConnection() = runBlocking<Unit> {
+        val admissionEntered = CompletableDeferred<Unit>()
+        val retireAttempted = CompletableDeferred<Unit>()
+        val releaseAdmission = AtomicInt(0)
+        var created: ControlledInboundConnection? = null
+        val transport = IosLanDataTransport(
+            transportContext = context("stop-inbound-race"),
+            endpointRegistry = IosEndpointRegistry(),
+            beforeInboundOfferForTest = {
+                admissionEntered.complete(Unit)
+                while (releaseAdmission.value == 0) sched_yield()
+            },
+            beforeInboundRetireForTest = { retireAttempted.complete(Unit) },
+            connectionFactory = { connection, _ ->
+                ControlledInboundConnection(connection).also { created = it }
+            }
+        )
+        try {
+            assertTrue(transport.start().isSuccess)
+            val owner = assertNotNull(transport.listener)
+            val callback = async(Dispatchers.Default) {
+                transport.handleInboundConnectionForTest(owner, nativeConnection())
+            }
+            admissionEntered.await()
+            val stopEntered = CompletableDeferred<Unit>()
+            val stopper = launch(Dispatchers.Default) {
+                stopEntered.complete(Unit)
+                transport.stop()
+            }
+            stopEntered.await()
+            retireAttempted.await()
+            assertFalse(
+                stopper.isCompleted,
+                "stop must wait while the admission transaction owns the boundary"
+            )
+            releaseAdmission.value = 1
+
+            assertTrue(withTimeout(RECOVERY_TIMEOUT_MILLIS) { callback.await() })
+            withTimeout(RECOVERY_TIMEOUT_MILLIS) { stopper.join() }
+            assertTrue(
+                assertNotNull(created).cancelled,
+                "stop must drain ownership that no session consumed"
+            )
+        } finally {
+            releaseAdmission.value = 1
             transport.close()
         }
     }
@@ -270,6 +491,109 @@ class IosLanRecoveryTest {
     }
 
     @Test
+    fun stopDiscoveryDuringListenerRebindCannotResurrectBrowser() = runBlocking<Unit> {
+        val endpointRegistry = IosEndpointRegistry()
+        val data = IosLanDataTransport(context("stop-during-rebind"), endpointRegistry)
+        val discovery = IosLanDiscoveryTransport(
+            context("stop-during-rebind"),
+            endpointRegistry,
+            data
+        )
+        try {
+            assertTrue(data.start().isSuccess)
+            discovery.startDiscovery()
+            assertTrue(discovery.hasBrowserForTest)
+
+            discovery.beforeListenerRebindForTest()
+            assertFalse(discovery.hasBrowserForTest)
+            discovery.stopDiscovery()
+            discovery.afterListenerRebindForTest(assertNotNull(data.listener))
+
+            assertFalse(
+                discovery.hasBrowserForTest,
+                "revoked host intent must win over a saved pre-rebind restore request"
+            )
+        } finally {
+            discovery.stopDiscovery()
+            data.close()
+        }
+    }
+
+    @Test
+    fun startDiscoveryDuringListenerRebindDoesNotCreateSecondBrowser() = runBlocking<Unit> {
+        val endpointRegistry = IosEndpointRegistry()
+        val data = IosLanDataTransport(context("start-during-rebind"), endpointRegistry)
+        val discovery = IosLanDiscoveryTransport(
+            context("start-during-rebind"),
+            endpointRegistry,
+            data
+        )
+        try {
+            assertTrue(data.start().isSuccess)
+            discovery.beforeListenerRebindForTest()
+
+            discovery.startDiscovery()
+            assertTrue(discovery.hasBrowserForTest)
+            assertEquals(1, discovery.browserGenerationForTest)
+
+            discovery.afterListenerRebindForTest(assertNotNull(data.listener))
+
+            assertTrue(discovery.hasBrowserForTest)
+            assertEquals(
+                1,
+                discovery.browserGenerationForTest,
+                "the interleaving must create exactly one native browser generation"
+            )
+        } finally {
+            discovery.stopDiscovery()
+            data.close()
+        }
+    }
+
+    @Test
+    fun listenerRebindCancelsNudgeOwnedByRetiringListener() = runBlocking<Unit> {
+        val endpointRegistry = IosEndpointRegistry()
+        val data = IosLanDataTransport(context("rebind-nudge"), endpointRegistry)
+        val discovery = IosLanDiscoveryTransport(context("rebind-nudge"), endpointRegistry, data)
+        try {
+            assertTrue(data.start().isSuccess)
+            discovery.startAdvertising(localPeer("rebind-nudge"))
+            discovery.afterListenerRebindForTest(assertNotNull(data.listener))
+            assertTrue(discovery.hasPendingNudgeForTest)
+
+            discovery.beforeListenerRebindForTest()
+
+            assertFalse(
+                discovery.hasPendingNudgeForTest,
+                "a retired listener must not receive delayed descriptor mutations"
+            )
+        } finally {
+            discovery.stopAdvertising()
+            data.close()
+        }
+    }
+
+    @Test
+    fun stopAdvertisingCancelsPendingBonjourNudge() = runBlocking<Unit> {
+        val endpointRegistry = IosEndpointRegistry()
+        val data = IosLanDataTransport(context("stop-nudge"), endpointRegistry)
+        val discovery = IosLanDiscoveryTransport(context("stop-nudge"), endpointRegistry, data)
+        try {
+            assertTrue(data.start().isSuccess)
+            discovery.startAdvertising(localPeer("stop-nudge"))
+            discovery.afterListenerRebindForTest(assertNotNull(data.listener))
+            assertTrue(discovery.hasPendingNudgeForTest)
+
+            discovery.stopAdvertising()
+
+            assertFalse(discovery.hasPendingNudgeForTest)
+        } finally {
+            discovery.stopAdvertising()
+            data.close()
+        }
+    }
+
+    @Test
     fun newBrowserGenerationInvalidatesOpaqueEndpointsBeforeFreshResults() {
         val endpointRegistry = IosEndpointRegistry()
         val data = IosLanDataTransport(context("endpoint-generation"), endpointRegistry)
@@ -291,6 +615,32 @@ class IosLanRecoveryTest {
 
         assertEquals(0, endpointRegistry.sizeForTest())
         assertEquals(1, discovery.browserGenerationForTest)
+    }
+
+    @Test
+    fun listenerRebindRetirementInvalidatesAllOldBrowserEndpoints() = runBlocking<Unit> {
+        val endpointRegistry = IosEndpointRegistry()
+        val data = IosLanDataTransport(context("retire-endpoint"), endpointRegistry)
+        val discovery = IosLanDiscoveryTransport(context("retire-endpoint"), endpointRegistry, data)
+        val peerId = PeerId("retire-endpoint-remote")
+        try {
+            assertTrue(data.start().isSuccess)
+            endpointRegistry.put(
+                peerId,
+                assertNotNull(nw_endpoint_create_host("127.0.0.1", "43004")),
+                browserGeneration = 1
+            )
+
+            discovery.beforeListenerRebindForTest()
+
+            assertEquals(
+                0,
+                endpointRegistry.sizeForTest(),
+                "browser retirement and endpoint invalidation are one ownership transaction"
+            )
+        } finally {
+            data.close()
+        }
     }
 
     @Test
