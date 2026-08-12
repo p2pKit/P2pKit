@@ -686,7 +686,69 @@ large trailing status stream. The release-script correction consumes the full
 stream while retaining the first fingerprint; its regression supplies 20,000
 trailing status records, and the disposable-key integration test passes the
 real signed bundle, signatures, checksums, manifest, and secret-safety checks.
-The replacement hosted result will be recorded only after it completes.
+The replacement hosted result is recorded below.
+
+Replacement complete gate
+[`31602005998`](https://github.com/p2pKit/P2pKit/actions/runs/31602005998)
+passed exact PR head `d155f4f15716aa895729c9f2fb48110a2873cf35`.
+PR [#88](https://github.com/p2pKit/P2pKit/pull/88) then merged normally as
+`db79c8c7f3e5521c9168ce82fd813733a867df8d`; head and merge share tree
+`63ea7fcc90a5cf398ceeb3018df08acdfd24e972`, so exact-tree reuse avoided a
+redundant complete gate.
+
+## Secure identity, cryptographic provider, and reset transaction evidence
+
+Implementation commit `dc4d07c5f80c57793c2eae984e23be2247b9ba87`
+(tree `1979342f7a7aeeca21af510f2fa5a0626c3fce52`) corrects the
+repository-executable ownership and recovery gaps found by the continuation
+audit:
+
+- Android now wipes the encrypted identity blob even when opening or querying
+  Keystore fails before decryption. A failed first blob write deletes the
+  wrapping alias only after a reread proves the blob is absent; uncertain or
+  remaining blob state retains the only key and fails closed instead of
+  converting a retryable write failure into permanent key loss.
+- Android, Apple, and JVM explicit reset can recover a malformed interrupted
+  reset marker, while ordinary construction still rejects it. JVM retains an
+  existing malformed marker as the durable fail-closed barrier until identity
+  deletion succeeds, eliminating a delete/reinsert crash window.
+- Unexpected reset-backend failures cross the common boundary as typed
+  `LocalIdentityUnavailable(PERSISTENCE_FAILED, RETRY)` errors; typed failures
+  and cancellation retain their exact identity.
+- Kit-construction rollback attempts both private-key wiping and usage-lease
+  release without replacing the primary construction failure or attempting
+  invalid self-suppression.
+- A deliberate Android KMP host-test target executes only Android-source tests
+  that do not invoke framework stubs. It validates the frozen authenticated
+  blob layout, live reset exclusion, cleanup ordering, and the actual Android
+  Bouncy Castle provider against SHA-256, HMAC-SHA-256, RFC 7748 X25519,
+  frozen Noise XX, and ChaCha20-Poly1305 authentication vectors.
+
+Exact changed production and regression areas:
+
+- `library/p2p-core/build.gradle.kts`
+- Android, iOS, and JVM secure-identity storage and maintenance entry points
+- common secure-identity service and kit-construction ownership
+- Android host, common, iOS Simulator, and JVM regression suites
+
+Focused and complete affected-module verification on the implementation
+commit passed under strict dependency verification:
+
+- focused identity/storage/provider suites — **PASS**: 33 JVM, 29 arm64 iOS
+  Simulator, and 18 Android-host tests, with zero failures, errors, or skips;
+- complete `p2p-core:check --rerun-tasks` — **PASS**: 643 JVM, 612 arm64 iOS
+  Simulator, and the same 18 Android-host tests, with zero failures, errors,
+  or skips; and
+- iosX64 production and test code compiled and the test binary linked. Runtime
+  execution is host-skipped on Apple Silicon and is not inferred from linkage.
+
+The final release/platform checks and protected boundary are recorded after
+they execute on the clean final workstream commit.
+
+Physical Android Keystore behavior, signed-device Apple Keychain behavior,
+independent secure-v2 interoperability, and professional cryptographic review
+remain external campaigns. Provider vectors and simulator/host state-machine
+tests do not upgrade those campaigns to PASS.
 
 ## Pull request audit
 
