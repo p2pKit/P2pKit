@@ -531,6 +531,44 @@ process binding. Apple manual-provisioning lifecycle behavior still requires
 the device lifecycle legs in `LAN-T07` and `ENV-01`; simulator tests do not
 prove suspension, process death, or AWDL.
 
+### Android terminal-signal admission follow-up
+
+The first complete-gate attempt for Apple follow-up PR
+[#92](https://github.com/p2pKit/P2pKit/pull/92),
+[run 31642934825](https://github.com/p2pKit/P2pKit/actions/runs/31642934825),
+failed the existing Android host regression
+`joinReleaseCleanupFailureIsTypedAndRetriedByClose`. The normally scheduled
+join watcher had not necessarily entered a zero-replay test flow before
+`joinLocalNetwork()` returned, so an immediate terminal release could be
+dropped and the test correctly timed out. The same admission gap existed for
+the hotspot-stop watcher. It was not caused by the Apple implementation, but
+the full gate exposed a real manager-side race rather than infrastructure
+noise.
+
+Commit `b0425b35ce7a3ef19d71d9eafc95fec2cf687e0d` starts both one-shot watchers
+undispatched before publishing their native handles and consumes exactly one
+terminal event. This removes the admission window and ensures the watcher
+terminates after that event instead of retaining a dormant collector until
+manager shutdown. The host fakes intentionally use `replay = 0`; regressions
+now prove the watcher is subscribed when each operation returns, the immediate
+event is handled, failed cleanup remains retryable, and the one-shot watcher
+has terminated afterward.
+
+Final local correction evidence on 2026-08-13:
+
+- the four immediate hotspot-stop/join-release regressions — **PASS**;
+- the complete Android provisioning host suite — **PASS**, 51 tests with zero
+  failures, errors, or skips;
+- Android provisioning `check`, ABI, and warning-failing Dokka under strict
+  dependency verification — **PASS**; and
+- the exact repository-wide `./gradlew check --rerun-tasks` boundary that
+  failed in the hosted run — **PASS** under strict dependency verification.
+
+No timeout or assertion was weakened. The correction changes no public API,
+ABI, Maven coordinate, wire byte, platform floor, tag, or published artifact.
+Real Android callback delivery and process binding remain subject to the
+physical `PROV-A12`, `PS-T01`, and `PS-T02` campaigns.
+
 ## Core secure protocol ownership workstream evidence
 
 Implementation commit `c867c90c82a1a7b675fb2d19a055911ee6f8e4cd`
