@@ -674,8 +674,19 @@ plugin branches rather than omitted declared tests. No executed JVM, arm64 iOS
 Simulator, or sample test was skipped. There is no public API/ABI, Maven
 coordinate, wire-byte, platform-floor, or publication-layout change. Physical
 platform behavior and all six external validation campaigns remain pending.
-The protected PR and its single hosted complete-gate result are pending and
-will be recorded only after they complete.
+
+The first protected `complete-gate` attempt for PR
+[#88](https://github.com/p2pKit/P2pKit/pull/88), run
+[`31600157407`](https://github.com/p2pKit/P2pKit/actions/runs/31600157407),
+failed in the signed Central bundle entry-point test after its Gradle
+publication and all 15 artifact-shape checks had passed. Under `pipefail`, the
+signature-status parser stopped reading as soon as it found `VALIDSIG`, which
+could give the upstream `printf` a broken pipe when GPG returned a sufficiently
+large trailing status stream. The release-script correction consumes the full
+stream while retaining the first fingerprint; its regression supplies 20,000
+trailing status records, and the disposable-key integration test passes the
+real signed bundle, signatures, checksums, manifest, and secret-safety checks.
+The replacement hosted result will be recorded only after it completes.
 
 ## Pull request audit
 
