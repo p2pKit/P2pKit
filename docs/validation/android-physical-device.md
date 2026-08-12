@@ -194,7 +194,13 @@ session. In each evidence ZIP locate `ensureJmdns: active` (initial bind) and
 `Network` when present, and the matching `dumpsys`/`ip addr` entry. A
 hotspot-host bind may correctly say `network=none`, but must name the explicit
 AP/tether interface and its private address; it must never select the cellular
-uplink. Send in both directions:
+uplink. Correlate each `connect peer=` line with that same route fingerprint.
+For an ordinary Wi-Fi/Ethernet `Network`, the TCP socket must use that
+network's route. For `network=none`, packet capture and the socket's local
+address must prove it was bound to the logged AP/tether address before the
+SYN. If no safe LAN route exists, connect must fail visibly before sending a
+SYN; it must not fall back to the process-default network. Send in both
+directions:
 
 - empty and 1-byte files;
 - deterministic 200 KiB, 5 MiB, and 49 MiB files;
@@ -218,6 +224,13 @@ Run `PS-T04`. During discovery, handshake, and transfer separately:
    new diagnostic session that records recovery state.
 5. Repeat **Advertise**/**Discover** toggles 50 times and **Stop kit**/start 20
    times, waiting for each terminal state rather than racing the UI.
+
+During the 50-toggle case, overlap a second network callback and one Stop with
+the logged close/recreate interval. A started rebind must finish one owned
+replacement before the superseding generation runs, or Stop must release that
+replacement afterward. Any overlapping JmDNS generations, missing terminal
+cleanup, silent callback stream, or recovery that requires process restart is
+a failure.
 
 The two switches represent retained host intent. With either switch enabled,
 backgrounding under the sample's default policy pauses that SDK feature;
