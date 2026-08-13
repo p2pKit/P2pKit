@@ -8,6 +8,9 @@ import org.gradle.plugins.signing.SigningExtension
 import org.gradle.api.services.BuildService
 import org.gradle.api.services.BuildServiceParameters
 import org.cyclonedx.gradle.CyclonedxDirectTask
+import org.cyclonedx.gradle.utils.CyclonedxUtils
+import org.cyclonedx.model.Dependency
+import org.cyclonedx.parsers.BomParserFactory
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 import com.android.build.gradle.tasks.BundleAar
 import kotlinx.validation.KotlinApiBuildTask
@@ -330,6 +333,7 @@ tasks.register("resolveAndLockAll") {
     )
 }
 
+val aggregateSbomGroup = group.toString()
 tasks.cyclonedxBom {
     projectType.set(org.cyclonedx.model.Component.Type.LIBRARY)
     componentGroup = project.group.toString()
@@ -340,6 +344,46 @@ tasks.cyclonedxBom {
     includeLicenseText = false
     jsonOutput.set(layout.buildDirectory.file("reports/cyclonedx/bom.json"))
     xmlOutput.set(layout.buildDirectory.file("reports/cyclonedx/bom.xml"))
+
+    // CycloneDX's aggregate task merges each subproject graph but does not
+    // connect its synthetic root component to those subprojects. Add the four
+    // published modules as the exact top-level dependency set so consumers can
+    // traverse the aggregate SBOM instead of receiving a disconnected graph.
+    doLast {
+        val jsonFile = jsonOutput.get().asFile
+        val xmlFile = xmlOutput.get().asFile
+        val bom = BomParserFactory.createParser(jsonFile).parse(jsonFile)
+        val rootRef = requireNotNull(bom.metadata?.component?.bomRef) {
+            "Aggregate SBOM root component has no bom-ref"
+        }
+        val publishedModules = setOf(
+            "p2p-core",
+            "p2p-transport-lan",
+            "p2p-network-provisioning-android",
+            "p2p-network-provisioning-desktop",
+        )
+        val moduleRefs = publishedModules.associateWith { moduleName ->
+            val matches = bom.components.orEmpty().filter { component ->
+                component.group == aggregateSbomGroup && component.name == moduleName
+            }
+            check(matches.size == 1) {
+                "Aggregate SBOM expected one $moduleName component, found ${matches.size}"
+            }
+            requireNotNull(matches.single().bomRef) {
+                "Aggregate SBOM component $moduleName has no bom-ref"
+            }
+        }.values.sorted()
+
+        val rootDependency = Dependency(rootRef).apply {
+            dependencies = moduleRefs.map(::Dependency)
+        }
+        bom.dependencies = bom.dependencies.orEmpty()
+            .filterNot { it.ref == rootRef }
+            .plus(rootDependency)
+            .sortedBy { it.ref }
+        CyclonedxUtils.writeJsonBom(schemaVersion.get(), bom, jsonFile)
+        CyclonedxUtils.writeXmlBom(schemaVersion.get(), bom, xmlFile)
+    }
 }
 
 // AUDIT-2026-06 / RC-readiness: wire artifact signing + a robust publish→sign
