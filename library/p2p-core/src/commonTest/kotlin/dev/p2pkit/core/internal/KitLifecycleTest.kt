@@ -126,6 +126,35 @@ class KitLifecycleTest {
     }
 
     @Test
+    fun defaultBackgroundPolicyStopsBothRequestedFeatures() = runBlocking {
+        val transport = TrackingTransport()
+        val kit = createTestKit {
+            appId = AppId("background-feature-stop-test")
+            deviceName = "Test"
+            transports { register(TrackingFactory(transport)) }
+        }
+        try {
+            kit.startAdvertising()
+            kit.startDiscovery()
+            assertEquals(FeatureState.Active, kit.advertisingState.value)
+            assertEquals(FeatureState.Active, kit.discoveryState.value)
+
+            kit.notifyAppBackgrounded()
+
+            withTimeout(5_000) {
+                kit.advertisingState.first { it == FeatureState.Idle }
+            }
+            withTimeout(5_000) {
+                kit.discoveryState.first { it == FeatureState.Idle }
+            }
+            assertTrue(transport.advertisingStopped)
+            assertTrue(transport.discoveryStopped)
+        } finally {
+            kit.stop()
+        }
+    }
+
+    @Test
     fun freshKitAfterStopIsIndependent() {
         runBlocking {
             val first = TrackingTransport()

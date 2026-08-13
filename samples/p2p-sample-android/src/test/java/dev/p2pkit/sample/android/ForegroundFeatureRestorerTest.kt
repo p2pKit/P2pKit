@@ -73,4 +73,37 @@ class ForegroundFeatureRestorerTest {
         )
         assertEquals(1, starts)
     }
+
+    @Test
+    fun laterBackgroundRevokesAWaitingForegroundEpisode() = runBlocking {
+        val coordinator = ForegroundRestoreCoordinator()
+        val lease = coordinator.foregrounded()
+        val states = MutableStateFlow<FeatureState>(FeatureState.Active)
+        var starts = 0
+
+        val job = launch(start = CoroutineStart.UNDISPATCHED) {
+            restoreRequestedFeatureAfterForeground(
+                isStillRequested = { coordinator.isCurrent(lease) },
+                states = states,
+                start = { starts += 1 }
+            )
+        }
+        coordinator.backgrounded()
+        states.value = FeatureState.Idle
+        job.join()
+
+        assertEquals(0, starts)
+        assertFalse(coordinator.isCurrent(lease))
+    }
+
+    @Test
+    fun rapidForegroundBackgroundForegroundKeepsOnlyLatestLeaseCurrent() {
+        val coordinator = ForegroundRestoreCoordinator()
+        val first = coordinator.foregrounded()
+        coordinator.backgrounded()
+        val second = coordinator.foregrounded()
+
+        assertFalse(coordinator.isCurrent(first))
+        assertTrue(coordinator.isCurrent(second))
+    }
 }
