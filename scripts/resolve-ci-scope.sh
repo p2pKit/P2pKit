@@ -85,17 +85,31 @@ case "$event_name" in
         ;;
     push)
         [[ "$ref_name" == "main" ]] || fail "push REF_NAME must be main"
-        # A main commit has a distinct identity from its PR merge fixture, and
-        # BuildInfo/release provenance embed that identity. Every main push
-        # therefore runs the complete gate, even when its tree matches a PR
-        # head.
-        scope="full"
         if is_commit "$before_sha" && git merge-base --is-ancestor "$before_sha" "$head"; then
             base="$before_sha"
-            reason="main push requires complete gate"
+            parent_line="$(git show -s --format=%P "$head")" ||
+                fail "cannot inspect main-push parents"
+            read -r -a push_parents <<<"$parent_line"
+            if [[ "${#push_parents[@]}" -eq 2 ]] &&
+                [[ "${push_parents[0]}" == "$before_sha" ]] &&
+                [[ "$(git rev-parse "$head^{tree}")" == \
+                    "$(git rev-parse "${push_parents[1]}^{tree}")" ]]; then
+                # Branch protection proves that the second parent entered
+                # through a required PR check. Reuse is safe only for one
+                # merge commit whose resulting tree is byte-identical to that
+                # verified PR head. Any batched, conflicted, or rewritten
+                # graph falls through to fresh classification/full scope.
+                scope="lightweight"
+                reason="protected exact-tree merge reuses required PR gate"
+            else
+                scope="$(classify_delta "$base" "$head")"
+                reason="main push changed-file classification"
+            fi
         elif is_commit "$before_sha"; then
+            scope="full"
             reason="push base is not an ancestor; using all-tree fallback"
         else
+            scope="full"
             reason="push base unavailable; using all-tree fallback"
         fi
         ;;

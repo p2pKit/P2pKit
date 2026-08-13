@@ -171,8 +171,8 @@ printf 'pushed docs\n' >>"$direct_docs_repo/docs/old.md"
 git -C "$direct_docs_repo" add .
 git -C "$direct_docs_repo" commit -qm "docs push"
 direct_docs_head="$(git -C "$direct_docs_repo" rev-parse HEAD)"
-expect_scope full "$direct_docs_base" "$direct_docs_head" \
-    "main push requires complete gate" \
+expect_scope lightweight "$direct_docs_base" "$direct_docs_head" \
+    "main push changed-file classification" \
     "$direct_docs_repo" push main "$direct_docs_head" "$direct_docs_base" '' ''
 
 exact_tree_repo="$(new_repo exact-tree-push)"
@@ -188,8 +188,8 @@ exact_tree_merge="$(git -C "$exact_tree_repo" rev-parse HEAD)"
 [[ "$(git -C "$exact_tree_repo" rev-parse "$exact_tree_merge^{tree}")" == \
     "$(git -C "$exact_tree_repo" rev-parse "$exact_tree_topic^{tree}")" ]] ||
     fail "exact-tree push fixture is not exact"
-expect_scope full "$exact_tree_base" "$exact_tree_merge" \
-    "main push requires complete gate" \
+expect_scope lightweight "$exact_tree_base" "$exact_tree_merge" \
+    "protected exact-tree merge reuses required PR gate" \
     "$exact_tree_repo" push main "$exact_tree_merge" "$exact_tree_base" '' ''
 
 # A multi-commit push ending in a merge must retain github.event.before, not
@@ -209,7 +209,7 @@ git -C "$multi_repo" merge -q --no-ff topic -m "last pushed merge"
 multi_head="$(git -C "$multi_repo" rev-parse HEAD)"
 [[ "$multi_base" != "$multi_first_parent" ]] || fail "multi-push fixture did not advance"
 expect_scope full "$multi_base" "$multi_head" \
-    "main push requires complete gate" \
+    "main push changed-file classification" \
     "$multi_repo" push main "$multi_head" "$multi_base" '' ''
 
 rewritten_repo="$(new_repo rewritten-push)"
@@ -256,4 +256,4 @@ expect_failure "push event/check-out mismatch" \
     "GITHUB_SHA does not equal the checked-out HEAD" \
     "$direct_docs_repo" push main "$direct_docs_base" "$zero" '' ''
 
-echo "RESULT: PASS — exact PR graphs/results, deterministic outputs, full main pushes, complete push ranges, and all-tree fallbacks are fail closed"
+echo "RESULT: PASS — exact PR graphs/results, exact-tree merge reuse, complete push ranges, and ambiguous/all-tree fallbacks are fail closed"
