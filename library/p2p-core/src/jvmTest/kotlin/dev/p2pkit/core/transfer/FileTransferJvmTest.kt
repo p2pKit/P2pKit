@@ -22,6 +22,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.io.Buffer
 import kotlinx.io.readByteArray
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -30,6 +31,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 @OptIn(ExplicitSecurityRisk::class)
 @Suppress("DEPRECATION")
@@ -199,6 +202,112 @@ class FileTransferJvmTest {
 
         assertEquals("existing", target.readText())
         assertEquals(listOf(target.name), directory.list()?.sorted())
+    }
+
+    @Test
+    fun durableDestinationAbortReportsAllFailuresAndRetriesOnlyIncompleteCleanup() = runBlocking {
+        val directory = Files.createTempDirectory("p2pkit-durable-abort-retry-").toFile()
+        tempFiles.add(directory)
+        val target = File(directory, "received.bin").also { it.writeText("existing") }
+        val closeFailure = IOException("injected sink close failure")
+        var closeAttempts = 0
+        var deleteAttempts = 0
+        val destination = JvmDurableFileDestination(
+            target = target,
+            closeSink = { opened ->
+                closeAttempts += 1
+                if (closeAttempts == 1) throw closeFailure
+                opened.close()
+            },
+            deleteTemp = { staging ->
+                deleteAttempts += 1
+                if (deleteAttempts == 1) false else staging.delete()
+            }
+        )
+        val sink = destination.openSink()
+        val buffer = Buffer().apply { write(byteArrayOf(1, 2, 3, 4)) }
+        sink.write(buffer, buffer.size)
+
+        val failure = assertFailsWith<IOException> { destination.abort(cause = null) }
+
+        assertTrue(failure.message.orEmpty().contains("staging sink close"))
+        assertTrue(failure.message.orEmpty().contains("staging file deletion"))
+        assertSame(closeFailure, failure.cause)
+        assertEquals(1, failure.suppressedExceptions.size)
+        assertTrue(failure.suppressedExceptions.single().message.orEmpty().contains("still exists"))
+        assertEquals(1, closeAttempts)
+        assertEquals(1, deleteAttempts)
+        assertTrue(directory.listFiles().orEmpty().any { it.extension == "part" })
+        assertFailsWith<IllegalStateException> { destination.commit() }
+
+        destination.abort(cause = null)
+        destination.abort(cause = null)
+
+        assertEquals(2, closeAttempts)
+        assertEquals(2, deleteAttempts)
+        assertEquals("existing", target.readText())
+        assertEquals(listOf(target.name), directory.list()?.sorted())
+    }
+
+    @Test
+    fun durableDestinationDoesNotCloseAgainWhenOnlyDeletionNeedsRetry() = runBlocking {
+        val directory = Files.createTempDirectory("p2pkit-durable-delete-retry-").toFile()
+        tempFiles.add(directory)
+        val target = File(directory, "received.bin")
+        var closeAttempts = 0
+        var deleteAttempts = 0
+        val destination = JvmDurableFileDestination(
+            target = target,
+            closeSink = { opened ->
+                closeAttempts += 1
+                opened.close()
+            },
+            deleteTemp = { staging ->
+                deleteAttempts += 1
+                if (deleteAttempts == 1) false else staging.delete()
+            }
+        )
+        destination.openSink()
+
+        assertFailsWith<IOException> { destination.abort(cause = null) }
+        assertEquals(1, closeAttempts)
+        assertEquals(1, deleteAttempts)
+
+        destination.abort(cause = null)
+        assertEquals(1, closeAttempts)
+        assertEquals(2, deleteAttempts)
+        assertTrue(directory.listFiles().isNullOrEmpty())
+    }
+
+    @Test
+    fun durableDestinationDoesNotDeleteAgainWhenOnlyCloseNeedsRetry() = runBlocking {
+        val directory = Files.createTempDirectory("p2pkit-durable-close-retry-").toFile()
+        tempFiles.add(directory)
+        val target = File(directory, "received.bin")
+        var closeAttempts = 0
+        var deleteAttempts = 0
+        val destination = JvmDurableFileDestination(
+            target = target,
+            closeSink = { opened ->
+                closeAttempts += 1
+                if (closeAttempts == 1) throw IOException("injected sink close failure")
+                opened.close()
+            },
+            deleteTemp = { staging ->
+                deleteAttempts += 1
+                staging.delete()
+            }
+        )
+        destination.openSink()
+
+        assertFailsWith<IOException> { destination.abort(cause = null) }
+        assertEquals(1, closeAttempts)
+        assertEquals(1, deleteAttempts)
+        assertTrue(directory.listFiles().isNullOrEmpty())
+
+        destination.abort(cause = null)
+        assertEquals(2, closeAttempts)
+        assertEquals(1, deleteAttempts)
     }
 }
 

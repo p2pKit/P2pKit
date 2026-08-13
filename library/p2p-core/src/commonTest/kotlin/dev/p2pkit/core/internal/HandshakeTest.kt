@@ -3,6 +3,7 @@ package dev.p2pkit.core.internal
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
@@ -17,6 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,10 +26,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.currentCoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class HandshakeTest {
 
@@ -154,14 +157,52 @@ class HandshakeTest {
     }
 
     @Test
-    fun rejectionErrorWritePreservesOwnerCancellation() = runBlocking {
-        val cancellation = CancellationException("owner cancelled during rejection write")
-        val connection = CancelOnSecondWriteConnection(cancellation)
+    fun callbackCancellationDuringRejectionDoesNotMaskStableHandshakeFailure() = runBlocking {
+        val connection = CancelOnSecondWriteConnection(
+            cancellation = CancellationException("protocol callback cancelled itself"),
+            cancelOwner = false
+        )
         val events = Channel<ProtocolEvent>(Channel.UNLIMITED).also {
             it.trySend(ProtocolEvent.Ping).getOrThrow()
         }
+        val logger = RecordingHandshakeLogger()
 
-        val failure = assertFailsWith<CancellationException> {
+        val failure = assertFailsWith<P2pError.HandshakeRejected> {
+            performHandshake(
+                protocol = protocol(),
+                connection = connection,
+                events = events,
+                localAppId = AppId("com.example"),
+                localPeerId = PeerId("local"),
+                localDeviceName = "LocalDev",
+                localPlatform = Platform.JVM_DESKTOP,
+                localTransports = setOf(TransportKind.LAN),
+                logger = logger
+            )
+        }
+
+        assertTrue(failure.reason.startsWith("Expected HELLO"))
+        assertEquals(2, connection.writeAttempts)
+        assertEquals(
+            listOf(
+                "Unable to send handshake rejection to peer: " +
+                    "CancellationException from active protocol callback"
+            ),
+            logger.debugMessages
+        )
+    }
+
+    @Test
+    fun callbackCancellationDuringVersionRejectionPreservesVersionMismatch() = runBlocking {
+        val connection = CancelOnSecondWriteConnection(
+            cancellation = CancellationException("protocol callback cancelled itself"),
+            cancelOwner = false
+        )
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED).also {
+            it.trySend(ProtocolEvent.Hello(helloFromPeer(protocolVersion = 99))).getOrThrow()
+        }
+
+        val failure = assertFailsWith<P2pError.VersionMismatch> {
             performHandshake(
                 protocol = protocol(),
                 connection = connection,
@@ -174,13 +215,41 @@ class HandshakeTest {
             )
         }
 
-        assertSame(cancellation, failure)
+        assertEquals(1, failure.localVersion)
+        assertEquals(99, failure.remoteVersion)
+        assertEquals(2, connection.writeAttempts)
+    }
+
+    @Test
+    fun genuineOwnerCancellationDuringRejectionPropagates() = runBlocking {
+        val cancellation = CancellationException("owner cancelled during rejection write")
+        val connection = CancelOnSecondWriteConnection(cancellation, cancelOwner = true)
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED).also {
+            it.trySend(ProtocolEvent.Ping).getOrThrow()
+        }
+
+        val owner = async {
+            performHandshake(
+                protocol = protocol(),
+                connection = connection,
+                events = events,
+                localAppId = AppId("com.example"),
+                localPeerId = PeerId("local"),
+                localDeviceName = "LocalDev",
+                localPlatform = Platform.JVM_DESKTOP,
+                localTransports = setOf(TransportKind.LAN)
+            )
+        }
+        val failure = assertFailsWith<CancellationException> { owner.await() }
+
+        assertEquals(cancellation.message, failure.message)
         assertEquals(2, connection.writeAttempts)
     }
 }
 
 private class CancelOnSecondWriteConnection(
     private val cancellation: CancellationException,
+    private val cancelOwner: Boolean,
 ) : RawConnection {
     override val state: StateFlow<ConnectionState> = MutableStateFlow(ConnectionState.Connected)
     var writeAttempts: Int = 0
@@ -188,10 +257,25 @@ private class CancelOnSecondWriteConnection(
 
     override suspend fun write(bytes: ByteArray) {
         writeAttempts++
-        if (writeAttempts == 2) throw cancellation
+        if (writeAttempts == 2) {
+            if (cancelOwner) currentCoroutineContext().cancel(cancellation)
+            throw cancellation
+        }
     }
 
     override fun read(): Flow<ByteArray> = emptyFlow()
 
     override suspend fun close() = Unit
+}
+
+private class RecordingHandshakeLogger : P2pLogger {
+    val debugMessages = mutableListOf<String>()
+
+    override fun debug(message: String) {
+        debugMessages += message
+    }
+
+    override fun info(message: String) = Unit
+    override fun warn(message: String, throwable: Throwable?) = Unit
+    override fun error(message: String, throwable: Throwable?) = Unit
 }

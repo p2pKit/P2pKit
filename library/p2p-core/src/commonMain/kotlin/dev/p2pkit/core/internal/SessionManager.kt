@@ -1032,7 +1032,8 @@ internal class SessionManager(
                     localTransports = localTransports,
                     protocolState = protocolState,
                     protocolVersion = protocolVersion,
-                    handshakeTimeoutMillis = setupTimeoutMillis
+                    handshakeTimeoutMillis = setupTimeoutMillis,
+                    logger = logger
                 )
 
                 val peerIdentity = when (securityMode) {
@@ -1201,7 +1202,11 @@ internal class SessionManager(
         try {
             protocol.sendError(connection, reason)
         } catch (cancelled: CancellationException) {
-            throw cancelled
+            currentCoroutineContext().ensureActive()
+            logger.debug(
+                "Unable to send handshake rejection to peer: " +
+                    "CancellationException from active protocol callback"
+            )
         } catch (failure: Throwable) {
             logger.debug(
                 "Unable to send handshake rejection to peer: " +
