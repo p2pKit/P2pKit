@@ -2225,6 +2225,7 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
     private let target: URL
     private let temporary: URL
     private let sink: FileHandleRawSink
+    private let removeItem: (URL) throws -> Void
     private let stateLock = NSLock()
     private var phase: Phase = .active
     private var opened = false
@@ -2233,8 +2234,14 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
         FileManager.default.fileExists(atPath: temporary.path)
     }
 
-    init(target: URL) throws {
+    init(
+        target: URL,
+        removeItem: @escaping (URL) throws -> Void = { url in
+            try FileManager.default.removeItem(at: url)
+        }
+    ) throws {
         self.target = target
+        self.removeItem = removeItem
         let directory = target.deletingLastPathComponent()
         var claimed: URL?
         for attempt in 0...100 {
@@ -2316,7 +2323,7 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
         sink.close()
         var cleanupError: Error?
         for url in [temporary, target] where FileManager.default.fileExists(atPath: url.path) {
-            do { try FileManager.default.removeItem(at: url) } catch { cleanupError = error }
+            do { try removeItem(url) } catch { cleanupError = error }
         }
         // Cleanup failure remains abort-retryable, but commit/open can never
         // resume after abort begins.

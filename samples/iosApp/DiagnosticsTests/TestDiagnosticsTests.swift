@@ -398,13 +398,23 @@ final class TestDiagnosticsTests: XCTestCase {
             "p2pkit-destination-abort-\(UUID().uuidString)",
             isDirectory: true
         )
-        let target = root.appendingPathComponent("reserved", isDirectory: true)
-        let blocker = target.appendingPathComponent("still-open")
-        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-        _ = FileManager.default.createFile(atPath: blocker.path, contents: Data())
+        let target = root.appendingPathComponent("reserved")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        XCTAssertTrue(FileManager.default.createFile(atPath: target.path, contents: Data()))
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let destination = try AtomicFileTransferDestination(target: target)
+        var rejectFirstTargetRemoval = true
+        let destination = try AtomicFileTransferDestination(target: target) { url in
+            if url == target && rejectFirstTargetRemoval {
+                rejectFirstTargetRemoval = false
+                throw NSError(
+                    domain: "dev.p2pkit.sample.tests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "injected target cleanup failure"]
+                )
+            }
+            try FileManager.default.removeItem(at: url)
+        }
         let firstAbort = await withCheckedContinuation { continuation in
             destination.abort(cause: nil) { continuation.resume(returning: $0) }
         }
@@ -416,7 +426,6 @@ final class TestDiagnosticsTests: XCTestCase {
         }
         XCTAssertNotNil(commitAfterAbort)
 
-        try FileManager.default.removeItem(at: blocker)
         let secondAbort = await withCheckedContinuation { continuation in
             destination.abort(cause: nil) { continuation.resume(returning: $0) }
         }
