@@ -32,50 +32,13 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          scope="full"
-          reason="fail-closed default"
-          base="$GITHUB_SHA"
-          head="$GITHUB_SHA"
+        run: scripts/resolve-ci-scope.sh >> "$GITHUB_OUTPUT"
 
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            reason="manual dispatch"
-          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
-            base="$PR_BASE_SHA"
-            head="$PR_HEAD_SHA"
-            changed_files="$RUNNER_TEMP/p2pkit-ci-changed-files"
-            git diff --name-only -z "$base...$head" > "$changed_files"
-            scope="$(scripts/classify-ci-scope.sh < "$changed_files")"
-            reason="pull request changed-file classification"
-          elif [[ "$EVENT_NAME" == "push" ]]; then
-            head="$GITHUB_SHA"
-            parent_count="$(git rev-list --parents -n 1 "$head" | awk '{print NF - 1}')"
-            if [[ "$REF_NAME" == "main" && "$parent_count" -gt 1 ]]; then
-              base="$(git rev-parse "$head^1")"
-              scope="lightweight"
-              reason="protected merge push reuses the required PR gate"
-            elif [[ -n "$BEFORE_SHA" && ! "$BEFORE_SHA" =~ ^0+$ ]] && git cat-file -e "$BEFORE_SHA^{commit}"; then
-              base="$BEFORE_SHA"
-              changed_files="$RUNNER_TEMP/p2pkit-ci-changed-files"
-              git diff --name-only -z "$base" "$head" > "$changed_files"
-              scope="$(scripts/classify-ci-scope.sh < "$changed_files")"
-              reason="direct push changed-file classification"
-            else
-              reason="push base unavailable"
-            fi
-          fi
-
-          if [[ "$scope" == "full" ]]; then
-            echo "full=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$scope" == "lightweight" ]]; then
-            echo "full=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "FATAL: unsupported CI scope: $scope" >&2
-            exit 1
-          fi
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "head=$head" >> "$GITHUB_OUTPUT"
-          echo "CI scope: $scope ($reason)"
+      - name: Verify committed and local whitespace
+        env:
+          BASE_SHA: ${{ steps.scope.outputs.base }}
+          HEAD_SHA: ${{ steps.scope.outputs.head }}
+        run: scripts/check-git-whitespace.sh "$BASE_SHA" "$HEAD_SHA"
 
       - name: Verify lightweight documentation change
         if: steps.scope.outputs.full != 'true'
@@ -83,8 +46,9 @@ jobs:
           BASE_SHA: ${{ steps.scope.outputs.base }}
           HEAD_SHA: ${{ steps.scope.outputs.head }}
         run: |
-          git diff --check "$BASE_SHA" "$HEAD_SHA"
           scripts/tests/classify-ci-scope-test.sh
+          scripts/tests/resolve-ci-scope-test.sh
+          scripts/tests/check-git-whitespace-test.sh
           scripts/check-release-metadata.sh
           scripts/tests/check-repository-layout.sh
           scripts/tests/check-markdown-links.sh
@@ -108,7 +72,8 @@ jobs:
 
       - name: Install Android SDK platforms
         if: steps.scope.outputs.full == 'true'
-        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
+        run: |
+          "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
 
       - name: Verify repository entry points
         if: steps.scope.outputs.full == 'true'
@@ -116,6 +81,7 @@ jobs:
           scripts/check-gradle-wrapper.sh
           scripts/tests/check-gradle-wrapper-test.sh
           scripts/tests/check-release-tag-test.sh
+          scripts/tests/check-release-identity-test.sh
           scripts/check-release-metadata.sh
           scripts/tests/check-maven-release-environment-test.sh
           scripts/tests/check-maven-namespace-access-test.sh
@@ -129,6 +95,8 @@ jobs:
           scripts/tests/check-osv-lockfile-coverage.sh
           scripts/tests/check-markdown-links.sh
           scripts/tests/classify-ci-scope-test.sh
+          scripts/tests/resolve-ci-scope-test.sh
+          scripts/tests/check-git-whitespace-test.sh
           scripts/tests/check-kotlin-toolchain-policy-test.sh
           source scripts/run-ios-app.sh
           device_json="$(xcrun simctl list -j devices available)"

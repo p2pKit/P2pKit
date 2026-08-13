@@ -41,22 +41,22 @@ jobs:
           echo "$xcodegen_bin_dir" >> "$GITHUB_PATH"
 
       - name: Install Android SDK platforms
-        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
+        run: |
+          "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
 
       - name: Validate immutable release identity
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
-          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
-          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
-          scripts/check-release-tag.sh "$RELEASE_TAG"
+          scripts/check-release-identity.sh "$RELEASE_TAG" "$RELEASE_SHA" require-tag
           scripts/check-release-metadata.sh
           scripts/check-maven-central-version.sh absent
 
       - name: Verify release tooling
         run: |
           scripts/tests/check-release-tag-test.sh
+          scripts/tests/check-release-identity-test.sh
           scripts/tests/check-maven-release-environment-test.sh
           scripts/tests/check-maven-namespace-access-test.sh
           scripts/tests/check-maven-central-version-test.sh
@@ -105,7 +105,8 @@ jobs:
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
 
       - name: Install Android SDK platforms
-        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
+        run: |
+          "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
 
       - name: Revalidate approved release and credentials
         env:
@@ -119,9 +120,7 @@ jobs:
           MAVEN_CENTRAL_TOKEN_ROTATE_BY: ${{ vars.MAVEN_CENTRAL_TOKEN_ROTATE_BY }}
           MAVEN_CENTRAL_NAMESPACE: io.github.apdelrahman1911
         run: |
-          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
-          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
-          scripts/check-release-tag.sh "$RELEASE_TAG"
+          scripts/check-release-identity.sh "$RELEASE_TAG" "$RELEASE_SHA" require-tag
           scripts/check-release-metadata.sh
           scripts/check-maven-release-environment.sh
           scripts/check-maven-central-version.sh absent

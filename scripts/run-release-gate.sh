@@ -12,9 +12,12 @@ scripts/tests/check-repository-layout.sh
 scripts/tests/check-osv-lockfile-coverage.sh
 scripts/tests/check-markdown-links.sh
 scripts/tests/classify-ci-scope-test.sh
+scripts/tests/resolve-ci-scope-test.sh
+scripts/tests/check-git-whitespace-test.sh
+scripts/tests/check-release-identity-test.sh
 scripts/tests/check-kotlin-toolchain-policy-test.sh
 scripts/check-release-metadata.sh
-git diff --check
+scripts/check-git-whitespace.sh
 ./gradlew check --console=plain
 scripts/check-sbom.sh
 scripts/check-publish-artifacts.sh

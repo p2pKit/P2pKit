@@ -4,7 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Tag to validate without publishing remotely
+        description: Exact release tag to validate without publishing remotely
+        required: true
+        type: string
+      release_sha:
+        description: Exact lowercase 40-hex commit already contained in main
         required: true
         type: string
 
@@ -16,10 +20,20 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 60
     env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
     steps:
-      - name: Check out repository
+      - name: Validate immutable release inputs
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Check out exact approved commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
       - name: Configure Java 17
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
@@ -32,11 +46,25 @@ jobs:
           xcodegen_bin_dir="$(scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen")"
           echo "$xcodegen_bin_dir" >> "$GITHUB_PATH"
       - name: Install Android SDK platforms
-        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
-      - name: Validate release identity
         run: |
-          scripts/check-release-tag.sh "$RELEASE_TAG"
+          "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
+      - name: Validate immutable release identity
+        run: |
+          scripts/check-release-identity.sh "$RELEASE_TAG" "$RELEASE_SHA" allow-missing-tag
           scripts/check-release-metadata.sh
+          scripts/check-maven-central-version.sh absent
+
+      - name: Verify release tooling
+        run: |
+          scripts/tests/check-release-tag-test.sh
+          scripts/tests/check-release-identity-test.sh
+          scripts/tests/check-maven-release-environment-test.sh
+          scripts/tests/check-maven-namespace-access-test.sh
+          scripts/tests/check-maven-central-version-test.sh
+          scripts/tests/publish-central-portal-bundle-test.sh
+          scripts/tests/build-central-portal-bundle-test.sh
+          scripts/tests/install-xcodegen-test.sh
+          scripts/tests/release-workflow-test.sh
       - name: Run local release gate
         run: scripts/run-release-gate.sh
       - name: Upload local release evidence
@@ -45,6 +73,7 @@ jobs:
         with:
           name: release-evidence-${{ env.RELEASE_TAG }}
           path: |
+            build/reports/release/**
             build/reports/cyclonedx/bom.*
             library/p2p-core/api/**
             library/p2p-transport-lan/api/**
