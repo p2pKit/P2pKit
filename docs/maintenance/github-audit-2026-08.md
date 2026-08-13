@@ -991,6 +991,7 @@ tests do not upgrade those campaigns to PASS.
 | [#100 — complete protocol and transfer correctness audit](https://github.com/p2pKit/P2pKit/pull/100) | Preserved caller timeout ownership, terminalized authenticated/parser/version failures, retained bounded per-epoch inbound transfer outcomes against replay/conflicting IDs, and made durable abort cleanup retryable and observable. | **Merged** normally as `45ba78aa4fd51ac09cd740794305b3b0c9c2d757`. Complete gate [31694675644](https://github.com/p2pKit/P2pKit/actions/runs/31694675644) passed exact head `d64e3fec4e1e52d7f8745894ecceabff60bbbf48`; merge and head share tree `f08200c60af379d59ed770034260f90191ea501b`. |
 | [#101 — fence watcher and lifecycle generations](https://github.com/p2pKit/P2pKit/pull/101) | Fenced retired Android/JVM watcher callbacks, reconciled route loss, reset Apple lifecycle episodes, rejected retired path callbacks, snapshotted safe Apple host addresses, and prevented stale Android foreground restoration. | **Merged** normally as `720ac62a8a19b9f9a8826fc9aa945a9b91318857`. Complete gate [31698656444](https://github.com/p2pKit/P2pKit/actions/runs/31698656444) passed exact head `748d34810107cfc7fa945f7a58e265519d094866`; merge and head share tree `e143b7e63fe17ab2e76ca309ee07fea885a14416`. |
 | [#102 — make diagnostic evidence and lifecycle truthful](https://github.com/p2pKit/P2pKit/pull/102) | Made session outcomes, transfer hashes, persisted exports, peer correlation, redaction, trace leases, and sample cleanup truthful across Android, CLI, Desktop, and iOS. The initial hosted failure exposed a platform-invalid deletion fixture; an injected one-shot removal failure now proves retry behavior deterministically. | **Merged** normally as `960f659bb6e7c2f44c29ef489c3e299d6d8e3acb`. Complete gate [31705190392](https://github.com/p2pKit/P2pKit/actions/runs/31705190392) passed exact head `f691a1242ffa0e30de16a00793fe9d86e4e6a598`; merge and head share tree `79fef2e4ed771b99ae3af091bdaa895047ff5fd7`. |
+| [#103 — harden final CI, ABI, SBOM, and release integrity](https://github.com/p2pKit/P2pKit/pull/103) | Added fail-closed CI/release identity, Android-only ABI protection, deterministic BuildInfo and XCFramework artifact provenance, a connected Apple-inclusive SBOM, embedded canonical licenses, protected Central access preflight, cross-host CLI/Desktop coverage, and three coordinated dependency/security updates. The first hosted run exposed a test that launched its supposed concurrent caller without proving admission; commit `056708d` uses undispatched admission and passed ten stress repetitions plus the complete 51-test module boundary. | **Merged** normally as `fbba43328df19cf72956df7417886361b335a570`. Replacement complete gate [31715657369](https://github.com/p2pKit/P2pKit/actions/runs/31715657369), dependency review, both OSV contexts, and macOS/Linux/Windows Desktop checks passed exact head `056708dfcda85d6b4aa9073c156ba386e17803b4`; merge and head share tree `588421f59efd1bcb4cc7d3b7e1205b1ab28b4f85`. |
 
 The recently closed, unmerged PRs were #46, whose stronger replacement is
 documented above, and #50, #51, #57, and #58, whose exact updates and authorship
@@ -1039,20 +1040,56 @@ Seven Dependabot PRs were then reviewed individually:
 
 | PR | Repository decision before final integration |
 | --- | --- |
-| [#93 — OSV scanner 2.5.0](https://github.com/p2pKit/P2pKit/pull/93) | Applicable and incorporated into the final CI/security batch with an immutable action SHA. Close as superseded only after that protected batch merges. |
+| [#93 — OSV scanner 2.5.0](https://github.com/p2pKit/P2pKit/pull/93) | **Closed as superseded.** Commit `e24555d` incorporated the immutable action SHA through PR #103; its exact tree passed both OSV contexts and the complete gate. The redundant branch was deleted. |
 | [#94 — AGP 9.3.1](https://github.com/p2pKit/P2pKit/pull/94) | **Retain/defer.** It requires Gradle 9.5 or newer and must be validated together with #98 rather than merged as an isolated catalog edit. |
 | [#95 — CycloneDX 3.4.0](https://github.com/p2pKit/P2pKit/pull/95) | **Retain/defer.** It is a build/plugin migration requiring its own JSON/XML graph and reproducibility review; the final SBOM integrity correction is validated on 3.3.0. |
-| [#96 — dependency-submission 6.3.0](https://github.com/p2pKit/P2pKit/pull/96) | Applicable and incorporated into the final CI/security batch with an immutable action SHA and cache isolation. Close as superseded only after that protected batch merges. |
+| [#96 — dependency-submission 6.3.0](https://github.com/p2pKit/P2pKit/pull/96) | **Closed as superseded.** Commit `e24555d` incorporated the immutable action SHA and coordinated cache isolation through PR #103. The redundant branch was deleted. |
 | [#97 — kotlinx-io 0.9.1](https://github.com/p2pKit/P2pKit/pull/97) | **Retain/defer.** This is a published KMP runtime change requiring protocol/storage vectors, every target, consumers, metadata, locks, and the full gate. |
 | [#98 — Gradle 9.7.0](https://github.com/p2pKit/P2pKit/pull/98) | **Retain/defer.** Coordinate it with #94 and revalidate plugins, configuration cache, publication, and every host. |
-| [#99 — Bouncy Castle 1.85.2](https://github.com/p2pKit/P2pKit/pull/99) | Applicable and incorporated with Dependabot authorship, strict verification metadata, normalized locks, and provider tests. Close as superseded only after the protected batch merges. |
+| [#99 — Bouncy Castle 1.85.2](https://github.com/p2pKit/P2pKit/pull/99) | **Closed as superseded.** Dependabot-authored commit `1aa6bd4` incorporated 1.85.2 with strict verification metadata, normalized locks, and provider/runtime checks through PR #103. The redundant branch was deleted. |
 
-The final CI/release-integrity batch remains a development change until its
-exact tree passes the protected complete gate. It adds fail-closed rename and
-merge-tree CI classification, committed-range whitespace checking, exact
-release tag/SHA binding, wired deterministic BuildInfo verification,
-Android-only ABI baselines, complete XCFramework byte/header provenance,
-Apple-inclusive and root-connected SBOM evidence, embedded canonical license
-files, real protected Central namespace access preflight, portable workflow
-policy checks, and cross-host CLI/Desktop coverage. It does not publish, tag,
-or change the immutable `v0.7.0-rc3` release.
+PR #103 completed the final CI/release-integrity batch. Its protected exact
+tree passed the complete gate, dependency review, both OSV contexts, and all
+three Desktop hosts, then merged without tree changes. It did not publish,
+tag, or change the immutable `v0.7.0-rc3` release.
+
+The remaining open GitHub security alert is `CVE-2026-53914` in Kotlin's KAPT
+incremental-cache deserialization before 2.4.20. P2pKit does not apply KAPT or
+declare a `kapt(...)` dependency, and PR #103 additionally prevents Gradle
+build-cache metadata from being restored or saved across hosted workflow trust
+boundaries. The first upstream patched version is currently a beta, so the
+alert remains visible pending a stable Kotlin toolchain release; it is not
+dismissed as fixed.
+
+### Final repository/external boundary by open issue
+
+The earlier issue table supplies the full implementation and acceptance
+history. The continuation audit added these final repository-side proofs; only
+the named external evidence remains:
+
+| Issue | Final repository-side proof | Only remaining evidence |
+| --- | --- | --- |
+| #21 | State-backed discovery relay plus PR #102 exact peer/session diagnostics and export correlation. | Physical Android `LAN-T01` A3/A3.1 idle and removal evidence. |
+| #23 | Apple endpoint leases plus PR #101 lifecycle/path generations and PR #102 connection correlation. | Apple/AWDL `LAN-T07` peer-restart timing. |
+| #25 | PR #101 fences retired JVM polling and reconciles the initial bind target. | Two-machine `ENV-02` macOS/Linux interface rotation. |
+| #26 | PR #101 fences Android callback/AP-poll generations and clears routes only at true idle. | OEM hotspot/provisioning `LAN-T01` route and multicast evidence. |
+| #27 | PR #101 resets lifecycle episodes across restart and fences retired path monitors. | Physical Personal Hotspot `LAN-T07` B3/B4 timing. |
+| #28 | PR #101 reconciles selected-network loss against the current fail-closed selector. | Physical VPN/Wi-Fi/hotspot `LAN-T01` route evidence. |
+| #29 | PR #101 prevents retired callbacks from publishing into a replacement watcher generation. | OEM 50-toggle `LAN-T01` callback/resource trace. |
+| #30 | PR #101 generation-fences AP readiness polling and initial reconciliation. | OEM hotspot readiness/bind-failure `LAN-T01` evidence. |
+| #31 | PR #101 generation-fences JVM polling and prevents admission-window topology loss. | Two-machine `ENV-02` Wi-Fi/interface flap evidence. |
+| #32 | Symmetric cellular policy plus PR #101 path-monitor ownership are deterministic. | Physical AWDL/Personal Hotspot `LAN-T07` path evidence. |
+| #33 | Selected-network sockets plus PR #101 idle route clearing and route-loss reconciliation are covered. | Physical kernel-route `LAN-T01` PCAP and system evidence. |
+| #34 | Symmetric peer-to-peer parameters and PR #101 path ownership are covered. | Real-device AWDL `LAN-T07` discovery/transfer evidence. |
+| #35 | Serialized rebind plus PR #101 callback/poll generations cover repository races without changing timeouts. | OEM 50-toggle `LAN-T01` timing evidence. |
+| #36 | PR #101 uses a foreground generation/current-foreground predicate and deterministic rapid lifecycle tests. | Physical Android `PS-T04` Doze/background/restart evidence. |
+| #37 | PR #101 resets the Apple lifecycle coordinator per observer lifetime and tests stop/start episodes. | Physical `LAN-T07` B4 interruption/lock/activation evidence. |
+| #38 | Endpoint generations plus PR #101 retired path-callback fencing cover repository ownership. | Physical path-rotation `LAN-T07` B3/B4 evidence. |
+| #39 | Bounded native ownership plus PR #102 correlated resource/evidence export is available. | Six-to-twelve-hour physical `LAN-T01` A3.1 soak. |
+| #40 | Caller/library timeout ownership is deterministic; no value was changed without measurement. | `ENV-02`/`LAN-T07` hostile and Apple timing evidence. |
+| #41 | Terminal write-ready cleanup plus PR #101 path generations are deterministic. | Physical Apple path fault `LAN-T07` B3/B4 timing. |
+| #43 | Generation-owned removal, convergent relay, and PR #102 peer correlation are covered. | Physical `LAN-T01` real JmDNS callback-shape/removal evidence. |
+| #44 | Cross-platform link-local selection/scope and current-route reconciliation are covered. | Physical `PS-T08`/`ENV-02` C7 link-local segment evidence. |
+
+Accordingly, these 21 issues remain open as **external/physical evidence
+only**. This classification does not turn any campaign result into PASS.
