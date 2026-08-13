@@ -1,6 +1,8 @@
 package dev.p2pkit.core.internal.security.noise
 
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.internal.security.SecureTerminalFailureSource
 import dev.p2pkit.core.security.PlatformSecurityCryptography
 import dev.p2pkit.core.security.platformSecurityCryptography
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
@@ -19,6 +21,8 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 
 class SecureV2TransportTest {
     private val cryptography: PlatformSecurityCryptography = platformSecurityCryptography()
@@ -70,6 +74,88 @@ class SecureV2TransportTest {
             // length-prefixed ciphertext and never equal their plaintext.
             assertEquals(6, pair.a.writtenChunks.size)
             assertEquals(false, pair.a.writtenChunks.takeLast(3).any { it.contentEquals(plaintext) })
+        } finally {
+            initiator.clearMetadata()
+            responder.clearMetadata()
+            initiator.connection.close()
+            responder.connection.close()
+            initiatorStatic.destroy()
+            responderStatic.destroy()
+        }
+    }
+
+    @Test
+    fun queuedTamperedRecordIsClassifiedBeforeSecureStateBecomesTerminal() = runTest {
+        val pair = FakeConnectionPair()
+        val initiatorPump = SingleCollectorRawPump(CopyingRawConnection(pair.a), this)
+        val responderPump = SingleCollectorRawPump(CopyingRawConnection(pair.b), this)
+        val initiatorStatic = generatedKeyPair()
+        val responderStatic = generatedKeyPair()
+        val initiatorDeferred = async {
+            driver.establish(initiatorPump, NoiseRole.Initiator, "secure.test", initiatorStatic) { true }
+        }
+        val responderDeferred = async {
+            driver.establish(responderPump, NoiseRole.Responder, "secure.test", responderStatic) { true }
+        }
+        val initiator = initiatorDeferred.await()
+        val responder = responderDeferred.await()
+        try {
+            initiator.connection.write("tamper-me".encodeToByteArray())
+            val encryptedRecord = pair.a.writtenChunks.last()
+            encryptedRecord[encryptedRecord.lastIndex] =
+                (encryptedRecord.last().toInt() xor 0x01).toByte()
+
+            // Raw EOF is now queued behind the complete encrypted record.
+            // The authenticated connection must not publish raw Closed before
+            // its sole reader has verified that queued record.
+            pair.a.close()
+            testScheduler.runCurrent()
+            assertEquals(ConnectionState.Connected, responder.connection.state.value)
+            val failureSource = assertIs<SecureTerminalFailureSource>(responder.connection)
+            assertEquals(null, failureSource.terminalFailure.value)
+
+            assertFailsWith<NoiseAuthenticationException> {
+                responder.connection.read().first()
+            }
+            assertEquals(ConnectionState.Failed, responder.connection.state.value)
+            assertIs<P2pError.AuthenticationFailed>(failureSource.terminalFailure.value)
+        } finally {
+            initiator.clearMetadata()
+            responder.clearMetadata()
+            initiator.connection.close()
+            responder.connection.close()
+            initiatorStatic.destroy()
+            responderStatic.destroy()
+        }
+    }
+
+    @Test
+    fun malformedRecordHeaderPublishesTerminalProtocolFailure() = runTest {
+        val pair = FakeConnectionPair()
+        val initiatorPump = SingleCollectorRawPump(CopyingRawConnection(pair.a), this)
+        val responderPump = SingleCollectorRawPump(CopyingRawConnection(pair.b), this)
+        val initiatorStatic = generatedKeyPair()
+        val responderStatic = generatedKeyPair()
+        val initiatorDeferred = async {
+            driver.establish(initiatorPump, NoiseRole.Initiator, "secure.test", initiatorStatic) { true }
+        }
+        val responderDeferred = async {
+            driver.establish(responderPump, NoiseRole.Responder, "secure.test", responderStatic) { true }
+        }
+        val initiator = initiatorDeferred.await()
+        val responder = responderDeferred.await()
+        try {
+            // Ciphertext length zero is structurally invalid even before
+            // authentication; inject it below the encrypted writer.
+            pair.a.write(byteArrayOf(0, 0))
+            val failureSource = assertIs<SecureTerminalFailureSource>(responder.connection)
+
+            assertFailsWith<NoiseProtocolException> {
+                responder.connection.read().first()
+            }
+
+            assertEquals(ConnectionState.Failed, responder.connection.state.value)
+            assertIs<P2pError.ProtocolError>(failureSource.terminalFailure.value)
         } finally {
             initiator.clearMetadata()
             responder.clearMetadata()

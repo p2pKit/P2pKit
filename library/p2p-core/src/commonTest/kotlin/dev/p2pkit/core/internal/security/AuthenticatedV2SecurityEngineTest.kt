@@ -67,6 +67,8 @@ class AuthenticatedV2SecurityEngineTest {
             responderAuthorization = PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp,
         )
         try {
+            assertIs<SecureTerminalFailureSource>(initiator)
+            assertIs<SecureTerminalFailureSource>(responder)
             assertEquals(responderIdentity.peerId, initiator.peerIdentity.peerId)
             assertEquals(responderIdentity.fingerprint, initiator.peerIdentity.fingerprint)
             assertEquals(initiatorIdentity.peerId, responder.peerIdentity.peerId)

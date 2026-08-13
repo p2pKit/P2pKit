@@ -428,6 +428,12 @@ private const val SECURE_ENGINE_CLEANUP_TIMEOUT_MILLIS: Long = 2_000
 
 /** Immutable authenticated identity paired with the already-secured stream. */
 private class AuthenticatedSecureConnection(
-    delegate: RawConnection,
+    private val delegate: RawConnection,
     override val peerIdentity: PeerIdentity,
-) : SecureConnection, RawConnection by delegate
+) : SecureConnection, RawConnection by delegate, SecureTerminalFailureSource {
+    private val secureDelegate: SecureTerminalFailureSource =
+        delegate as? SecureTerminalFailureSource
+            ?: error("Authenticated secure transport does not expose its failure source")
+
+    override val terminalFailure = secureDelegate.terminalFailure
+}

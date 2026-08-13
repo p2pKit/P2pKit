@@ -1,12 +1,17 @@
 package dev.p2pkit.core.internal.security.noise
 
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.internal.security.SecureTerminalFailureSource
 import dev.p2pkit.core.transport.RawConnection
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -18,8 +23,18 @@ internal class NoiseSecureRawConnection(
     private val pump: SingleCollectorRawPump,
     private val sendCipher: NoiseCipherState,
     private val receiveCipher: NoiseCipherState,
-) : RawConnection {
-    override val state: StateFlow<ConnectionState> get() = pump.state
+) : RawConnection, SecureTerminalFailureSource {
+    // Do not expose the underlying raw stream's terminal state directly. The
+    // pump can reach EOF after queuing a final encrypted record, before this
+    // layer has authenticated that record. Publishing raw Closed at that
+    // point lets the session reconnect and cancel the old reader before a
+    // queued tamper is classified. This state becomes terminal only when the
+    // authenticated stream itself has drained or failed.
+    private val mutableState = MutableStateFlow(ConnectionState.Connected)
+    override val state: StateFlow<ConnectionState> = mutableState.asStateFlow()
+
+    private val _terminalFailure = MutableStateFlow<P2pError?>(null)
+    override val terminalFailure: StateFlow<P2pError?> = _terminalFailure.asStateFlow()
 
     private val lifecycleMutex = Mutex()
     private val writeMutex = Mutex()
@@ -62,7 +77,11 @@ internal class NoiseSecureRawConnection(
             while (true) {
                 val header = pump.readExactlyOrNull(SECURE_RECORD_HEADER_SIZE_BYTES) ?: break
                 val ciphertextLength = try {
-                    readU16BigEndian(header[0], header[1]).also(SecureRecordFrame::validateCiphertextLength)
+                    readU16BigEndian(header[0], header[1])
+                        .also(SecureRecordFrame::validateCiphertextLength)
+                } catch (cause: NoiseProtocolException) {
+                    publishProtocolFailure(cause)
+                    throw cause
                 } finally {
                     header.wipe()
                 }
@@ -70,12 +89,29 @@ internal class NoiseSecureRawConnection(
                 var plaintext: ByteArray? = null
                 var delivered = false
                 try {
-                    plaintext = receiveMutex.withLock {
-                        ensureOpen()
-                        receiveCipher.decryptWithAd(ByteArray(0), ciphertext)
+                    plaintext = try {
+                        receiveMutex.withLock {
+                            ensureOpen()
+                            receiveCipher.decryptWithAd(ByteArray(0), ciphertext)
+                        }
+                    } catch (cause: NoiseAuthenticationException) {
+                        publishAuthenticationFailure(cause)
+                        throw cause
+                    } catch (cause: NoiseNonceExhaustedException) {
+                        // A fresh authenticated epoch has fresh cipher state;
+                        // nonce exhaustion is a local epoch-lifetime limit,
+                        // not evidence that the peer violated the protocol.
+                        throw cause
+                    } catch (cause: NoiseProtocolException) {
+                        publishProtocolFailure(cause)
+                        throw cause
                     }
                     if (plaintext.size > SECURE_RECORD_MAX_PLAINTEXT_BYTES) {
-                        throw NoiseAuthenticationException("Secure record plaintext exceeds its maximum")
+                        val cause = NoiseAuthenticationException(
+                            "Secure record plaintext exceeds its maximum"
+                        )
+                        publishAuthenticationFailure(cause)
+                        throw cause
                     }
                     // Flow collectors observe the same ByteArray during emit;
                     // ownership has transferred even when a downstream
@@ -121,12 +157,37 @@ internal class NoiseSecureRawConnection(
         throw primaryFailure
     }
 
+    private fun publishAuthenticationFailure(cause: NoiseAuthenticationException) {
+        publishTerminalFailure(P2pError.AuthenticationFailed(
+            "Secure record authentication failed"
+        ).also { it.underlying = cause })
+    }
+
+    private fun publishProtocolFailure(cause: NoiseProtocolException) {
+        publishTerminalFailure(P2pError.ProtocolError(
+            cause.message ?: "Malformed secure record"
+        ))
+    }
+
+    private fun publishTerminalFailure(failure: P2pError) {
+        if (_terminalFailure.value == null) {
+            _terminalFailure.value = failure
+        }
+    }
+
     private suspend fun closeInternal(primaryFailure: Throwable?) {
         var cleanupFailure: Throwable? = null
         withContext(NonCancellable) {
             val ownsClose = lifecycleMutex.withLock {
                 if (closed) false else {
                     closed = true
+                    mutableState.value = if (
+                        primaryFailure == null || primaryFailure is CancellationException
+                    ) {
+                        ConnectionState.Closed
+                    } else {
+                        ConnectionState.Failed
+                    }
                     true
                 }
             }

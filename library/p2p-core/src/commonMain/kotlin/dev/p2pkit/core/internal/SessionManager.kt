@@ -17,6 +17,7 @@ import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.internal.security.AuthenticatedV2SecurityEngine
+import dev.p2pkit.core.internal.security.noise.NoiseAuthenticationException
 import dev.p2pkit.core.internal.security.noise.NoiseRole
 import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolConstants
@@ -1008,6 +1009,12 @@ internal class SessionManager(
                     } catch (e: CancellationException) {
                         channel.close()
                         throw e
+                    } catch (e: NoiseAuthenticationException) {
+                        channel.close(
+                            P2pError.AuthenticationFailed(
+                                "Secure record authentication failed"
+                            ).also { it.underlying = e }
+                        )
                     } catch (e: Throwable) {
                         channel.close(e)
                     }

@@ -223,10 +223,25 @@ internal data class SecureFileResult(
             if ((flags == 0) != reasonBytes.isEmpty()) {
                 throw P2pError.ProtocolError("FILE_RESULT reason presence flag is inconsistent")
             }
-            val reason = if (reasonBytes.isEmpty()) null else reasonBytes.decodeStrictUtf8("FILE_RESULT reason")
-                .also { validateWireText(it, "FILE_RESULT reason",
-                    ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
-                    ProtocolConstants.MAX_REASON_PAYLOAD_BYTES, true) }
+            val reason = if (reasonBytes.isEmpty()) {
+                null
+            } else {
+                try {
+                    reasonBytes.decodeStrictUtf8("FILE_RESULT reason").also {
+                        validateWireText(
+                            it,
+                            "FILE_RESULT reason",
+                            ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
+                            ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
+                            true
+                        )
+                    }
+                } catch (failure: IllegalArgumentException) {
+                    throw P2pError.ProtocolError(
+                        "Malformed FILE_RESULT: ${failure.safeDiagnosticDetail()}"
+                    )
+                }
+            }
             reader.requireFinished("FILE_RESULT")
             return SecureFileResult(frameTransferId, code, phase, reason)
         }

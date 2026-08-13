@@ -73,6 +73,62 @@ class SecureFileTransferProtocolTest {
     }
 
     @Test
+    fun malformedAuthenticatedFileResultReasonIsAlwaysAProtocolError() {
+        val id = MessageId.random(Random(6))
+        val encoded = SecureFileResult(
+            id,
+            FileResultCode.PROTOCOL_FAILURE,
+            FileTransferPhase.RECEIVE,
+            "x"
+        ).encode()
+        val invalidUtf8 = encoded.copyOf().also { it[it.lastIndex] = 0x80.toByte() }
+        val forbiddenControl = encoded.copyOf().also { it[it.lastIndex] = 0x01 }
+
+        assertFailsWith<P2pError.ProtocolError> {
+            SecureFileResult.decode(id, invalidUtf8)
+        }
+        assertFailsWith<P2pError.ProtocolError> {
+            SecureFileResult.decode(id, forbiddenControl)
+        }
+    }
+
+    @Test
+    fun protocolEventsPropagatesMalformedAuthenticatedFileResultAsProtocolError() = runTest {
+        val pair = FakeConnectionPair()
+        val protocol = DefaultP2pProtocol(
+            clock = { 0L },
+            version = ProtocolConstants.SECURE_VERSION
+        )
+        val state = ProtocolSessionState("receiver", secure = true).also {
+            it.completeHello("sender", ProtocolFeatures.SECURE_V2)
+        }
+        val id = MessageId.random(Random(7))
+        val malformed = SecureFileResult(
+            id,
+            FileResultCode.PROTOCOL_FAILURE,
+            FileTransferPhase.RECEIVE,
+            "x"
+        ).encode().also { it[it.lastIndex] = 0x80.toByte() }
+        val received = async { runCatching { protocol.events(pair.b, state).first() } }
+
+        pair.a.write(
+            FrameCodec.encode(
+                Frame(
+                    type = PacketType.FILE_RESULT,
+                    flags = FrameFlags.LAST_CHUNK.toByte(),
+                    messageId = id,
+                    chunkIndex = 0,
+                    totalChunks = 1,
+                    payload = malformed,
+                    version = ProtocolConstants.SECURE_VERSION
+                )
+            )
+        )
+
+        assertIs<P2pError.ProtocolError>(received.await().exceptionOrNull())
+    }
+
+    @Test
     fun securePeerWithoutFileFeatureRejectsLegacyTransferFrames() = runTest {
         val pair = FakeConnectionPair()
         val protocol = DefaultP2pProtocol(

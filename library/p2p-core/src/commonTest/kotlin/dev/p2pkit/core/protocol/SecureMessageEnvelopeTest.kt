@@ -195,6 +195,86 @@ class SecureMessageEnvelopeTest {
     }
 
     @Test
+    fun malformedAuthenticatedTextIsAProtocolErrorAndDoesNotConsumeReplayState() {
+        val id = MessageId.random(Random(13))
+        val valid = AppMessageEnvelope.encode(
+            P2pMessage.Text("x"),
+            id,
+            0,
+            "alice",
+            "bob"
+        )
+        val malformed = valid.copyOf().also { envelope ->
+            val invalidContent = byteArrayOf(0x80.toByte())
+            envelope[envelope.lastIndex] = invalidContent.single()
+            sha256(invalidContent).copyBytes().copyInto(
+                destination = envelope,
+                destinationOffset = envelope.size - invalidContent.size - 32
+            )
+        }
+        val state = secureState("bob", "alice")
+
+        assertFailsWith<P2pError.ProtocolError> {
+            AppMessageEnvelope.decode(malformed, id, state)
+        }
+
+        val decoded = assertIs<P2pMessage.Text>(AppMessageEnvelope.decode(valid, id, state))
+        assertEquals("x", decoded.value)
+    }
+
+    @Test
+    fun malformedAuthenticatedIdentityTextIsNormalizedToProtocolError() {
+        val id = MessageId.random(Random(14))
+        val malformed = AppMessageEnvelope.encode(
+            P2pMessage.Binary(byteArrayOf(1)),
+            id,
+            0,
+            "alice",
+            "bob"
+        ).copyOf().also { envelope ->
+            val senderStart = 4 + 1 + 1 + 2 + MessageId.SIZE + 8 + 2
+            envelope[senderStart] = 0x80.toByte()
+        }
+
+        assertFailsWith<P2pError.ProtocolError> {
+            AppMessageEnvelope.decode(malformed, id, secureState("bob", "alice"))
+        }
+    }
+
+    @Test
+    fun malformedAuthenticatedMetadataTextIsNormalizedBeforeStateCommit() {
+        val id = MessageId.random(Random(15))
+        val valid = AppMessageEnvelope.encode(
+            P2pMessage.Binary(byteArrayOf(1), mapOf("k" to "v")),
+            id,
+            0,
+            "alice",
+            "bob"
+        )
+        // Fixed prefix (32), sender field (2 + 5), recipient field (2 + 3),
+        // metadata count (2), then the first key's u16 size.
+        val firstMetadataKey = 32 + 2 + 5 + 2 + 3 + 2 + 2
+        val invalidKeyUtf8 = valid.copyOf().also { it[firstMetadataKey] = 0x80.toByte() }
+        val forbiddenValueControl = valid.copyOf().also {
+            val firstMetadataValue = firstMetadataKey + 1 + 4
+            it[firstMetadataValue] = 0x01
+        }
+
+        assertFailsWith<P2pError.ProtocolError> {
+            AppMessageEnvelope.decode(invalidKeyUtf8, id, secureState("bob", "alice"))
+        }
+        assertFailsWith<P2pError.ProtocolError> {
+            AppMessageEnvelope.decode(forbiddenValueControl, id, secureState("bob", "alice"))
+        }
+
+        val rollbackState = secureState("bob", "alice")
+        assertFailsWith<P2pError.ProtocolError> {
+            AppMessageEnvelope.decode(invalidKeyUtf8, id, rollbackState)
+        }
+        assertIs<P2pMessage.Binary>(AppMessageEnvelope.decode(valid, id, rollbackState))
+    }
+
+    @Test
     fun protocolStateSnapshotsLocalCapabilities() {
         val features = mutableSetOf(ProtocolFeatures.APP_MESSAGE_ENVELOPE_V1)
         val state = ProtocolSessionState("alice", secure = true, localFeatures = features)
