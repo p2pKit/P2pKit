@@ -74,21 +74,33 @@ class AndroidServiceAdmissionsTest {
     }
 
     @Test
-    fun losingTheObservedPrimaryNetworkRequiresSelectorReconciliation() {
+    fun losingTheObservedOrSelectedPrimaryNetworkRequiresSelectorReconciliation() {
         val fallbackAlreadyAvailable = "wifi-a"
         val boundThenLost = "ethernet-b"
 
         val currentLoss = androidPrimaryNetworkLoss(
             observed = boundThenLost,
+            selected = boundThenLost,
+            lost = boundThenLost
+        )
+        val selectedLossWithObservedFallback = androidPrimaryNetworkLoss(
+            observed = fallbackAlreadyAvailable,
+            selected = boundThenLost,
             lost = boundThenLost
         )
         val unrelatedLoss = androidPrimaryNetworkLoss(
             observed = fallbackAlreadyAvailable,
+            selected = fallbackAlreadyAvailable,
             lost = boundThenLost
         )
 
         assertNull(currentLoss.observedAfterLoss)
         assertTrue(currentLoss.requiresSelectorReconciliation)
+        assertEquals(
+            fallbackAlreadyAvailable,
+            selectedLossWithObservedFallback.observedAfterLoss
+        )
+        assertTrue(selectedLossWithObservedFallback.requiresSelectorReconciliation)
         assertEquals(fallbackAlreadyAvailable, unrelatedLoss.observedAfterLoss)
         assertEquals(false, unrelatedLoss.requiresSelectorReconciliation)
     }

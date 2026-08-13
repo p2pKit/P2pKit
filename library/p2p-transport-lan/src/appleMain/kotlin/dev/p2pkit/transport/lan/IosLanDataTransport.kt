@@ -260,10 +260,16 @@ internal class IosLanDataTransport(
     @Volatile
     private var pathMonitor: nw_path_monitor_t = null
 
+    /** Callback authority for [pathMonitor], retired before native cancellation. */
+    @Volatile
+    private var pathMonitorOwner: ApplePathMonitorOwner? = null
+
+    private val pathMonitorCallbackState = ApplePathMonitorCallbackState()
+
     /**
      * Tokens returned by NSNotificationCenter for the three UIKit lifecycle
-     * signals coordinated by [lifecycleRecoveryCoordinator]. Held so stop and
-     * close can unregister every callback deterministically.
+     * signals coordinated by the current [AppleLifecycleRecoveryCoordinator].
+     * Held so stop and close can unregister every callback deterministically.
      *
      * Lifecycle-driven rebind is needed because the path-monitor signal
      * is insufficient on its own — iOS may invalidate `nw_listener_t` /
@@ -277,53 +283,9 @@ internal class IosLanDataTransport(
     @Volatile
     private var lifecycleObservers: List<NSObjectProtocol> = emptyList()
 
-    private val lifecycleRecoveryCoordinator = AppleLifecycleRecoveryCoordinator()
-
-    /**
-     * Whether the most recent path observation was `satisfied`.
-     * Read & written ONLY from the path-monitor update handler, which is
-     * invoked serially on [pathQueue] (created with `null` attributes →
-     * serial dispatch queue). The only cross-context write is
-     * [stopPathMonitor]'s reset, sequenced AFTER `nw_path_monitor_cancel`
-     * which prevents further handler invocations. `@Volatile` guarantees
-     * memory visibility across that boundary; `synchronized` is not
-     * available in Kotlin/Native.
-     */
+    /** A fresh coalescing owner is installed for every successful start. */
     @Volatile
-    private var lastWasSatisfied: Boolean = false
-
-    /** Has any path observation reported `satisfied` yet — used to skip first-signal rebind. */
-    @Volatile
-    private var hasEverObservedSatisfied: Boolean = false
-
-    /**
-     * V0.4-IOS-PATH-INTERFACE-CHANGE: 4-bit fingerprint of which
-     * interface types are currently part of the satisfied path:
-     *
-     *   bit 0 = Wi-Fi   (nw_interface_type_wifi)
-     *   bit 1 = cellular (nw_interface_type_cellular)
-     *   bit 2 = wired   (nw_interface_type_wired)
-     *   bit 3 = other   (nw_interface_type_other; includes hotspot/AWDL-like paths)
-     *
-     * Sentinel `-1` = never observed (used to skip first-signal rebind,
-     * paralleling [hasEverObservedSatisfied]). Required because Apple's
-     * `nw_path_status` stays `satisfied` when Wi-Fi flaps with cellular
-     * fallback available — the satisfaction bit doesn't change but the
-     * interface set does, and our LAN listener/browser are bound to
-     * whatever interface was active at registration. When the active
-     * interface set changes, the SDK must re-register on the new one.
-     *
-     * Read/written only from the path-monitor update handler (serial on
-     * [pathQueue]). The only cross-context write is [stopPathMonitor]'s
-     * reset, sequenced after `nw_path_monitor_cancel`; `@Volatile`
-     * guarantees visibility across that boundary.
-     */
-    @Volatile
-    private var lastInterfaceFingerprint: Int = -1
-
-    /** Live non-loopback interface addresses, including Wi-Fi DHCP rotation. */
-    @Volatile
-    private var lastAddressFingerprint: ULong = ULong.MAX_VALUE
+    private var lifecycleRecoveryCoordinator: AppleLifecycleRecoveryCoordinator? = null
 
     /**
      * Scope for the debounced rebind coroutine. SupervisorJob so one
@@ -395,10 +357,14 @@ internal class IosLanDataTransport(
         listenerLease = l
         startedByHost = true
         publishInboundListener(l.handle)
-        lifecycleRecoveryCoordinator.onSuccessfulRebind()
+        val lifecycleOwner = lifecycleRecoveryCoordinator
+            ?: AppleLifecycleRecoveryCoordinator().also {
+                lifecycleRecoveryCoordinator = it
+            }
+        lifecycleOwner.onSuccessfulRebind()
         IosLanDebug.log("data", "start: SUCCESS port=${_tcpPort.value}")
         startPathMonitor()
-        startForegroundObserver()
+        startForegroundObserver(lifecycleOwner)
         return Result.success(Unit)
     }
 
@@ -857,6 +823,9 @@ internal class IosLanDataTransport(
     /** Caller holds [startMutex]. */
     private suspend fun stopStartedResources(closeQueue: Boolean, clearEndpoints: Boolean) {
         startedByHost = false
+        val retiredLifecycleOwner = lifecycleRecoveryCoordinator
+        lifecycleRecoveryCoordinator = null
+        retiredLifecycleOwner?.retire()
         retireInboundListener(closeQueue = closeQueue)
         stopPendingDials("transport lifecycle stopped")
         stopPathMonitor()
@@ -903,22 +872,16 @@ internal class IosLanDataTransport(
             )
             return
         }
+        val owner = pathMonitorCallbackState.begin()
+        pathMonitorOwner = owner
         nw_path_monitor_set_queue(m, pathQueue)
         nw_path_monitor_set_update_handler(m) pathHandler@ { path ->
-            // All invocations of this handler are serialized on pathQueue
-            // (created as a serial dispatch queue). State reads/writes
-            // below are safe without explicit synchronization; the
-            // @Volatile annotations guarantee visibility against the
-            // stopPathMonitor reset path which runs after
-            // nw_path_monitor_cancel and therefore after the last handler
-            // invocation.
+            // Cancellation can leave an update queued on pathQueue. The
+            // owner check is a cheap early exit; publish below performs the
+            // authoritative generation check under the callback-state lock.
+            if (!owner.isActive()) return@pathHandler
             val status = nw_path_get_status(path)
             val isSatisfied = (status == nw_path_status_satisfied)
-            val prevWasSatisfied = lastWasSatisfied
-            val isFirstEver = !hasEverObservedSatisfied
-            lastWasSatisfied = isSatisfied
-            if (isSatisfied) hasEverObservedSatisfied = true
-            val becameSatisfied = isSatisfied && !prevWasSatisfied
 
             // V0.4-IOS-PATH-INTERFACE-CHANGE: complementary trigger that
             // fires when the satisfied path's interface set changes
@@ -935,74 +898,64 @@ internal class IosLanDataTransport(
                 usesWired = usesWired,
                 usesOther = usesOther
             )
-            val prevFingerprint = lastInterfaceFingerprint
-            val isFirstFingerprint = prevFingerprint == -1
-            // Only update fingerprint while satisfied — if we're transiently
-            // unsatisfied, we want to retain the last-known-good interface
-            // set so the next "back to satisfied" comparison sees the real
-            // pre-flap baseline, not a transient null state.
-            if (isSatisfied) lastInterfaceFingerprint = fingerprint
-            val interfaceChanged = isSatisfied &&
-                !isFirstFingerprint &&
-                prevFingerprint != fingerprint
             val addressFingerprint = p2pkit_lan_interface_fingerprint()
-            val previousAddressFingerprint = lastAddressFingerprint
-            val isFirstAddressFingerprint = previousAddressFingerprint == ULong.MAX_VALUE
-            if (isSatisfied) lastAddressFingerprint = addressFingerprint
-            val addressChanged = isSatisfied &&
-                !isFirstAddressFingerprint &&
-                previousAddressFingerprint != addressFingerprint
+            val update = pathMonitorCallbackState.publish(
+                owner = owner,
+                isSatisfied = isSatisfied,
+                interfaceFingerprint = fingerprint,
+                addressFingerprint = addressFingerprint
+            ) ?: return@pathHandler
 
             IosLanDebug.log(
                 "data",
                 "path-monitor: status=$status isSatisfied=$isSatisfied " +
-                    "becameSatisfied=$becameSatisfied isFirst=$isFirstEver " +
+                    "becameSatisfied=${update.becameSatisfied} " +
+                    "isFirst=${update.isFirstSatisfied} " +
                     "usesWifi=$usesWifi usesCellular=$usesCellular usesWired=$usesWired " +
                     "usesOther=$usesOther " +
-                    "fingerprint=$fingerprint prev=$prevFingerprint " +
-                    "interfaceChanged=$interfaceChanged addressFingerprint=$addressFingerprint " +
-                    "previousAddressFingerprint=$previousAddressFingerprint addressChanged=$addressChanged"
+                    "fingerprint=$fingerprint prev=${update.previousInterfaceFingerprint} " +
+                    "interfaceChanged=${update.interfaceChanged} " +
+                    "addressFingerprint=$addressFingerprint " +
+                    "previousAddressFingerprint=${update.previousAddressFingerprint} " +
+                    "addressChanged=${update.addressChanged}"
             )
 
-            if (!applePathNeedsRebind(
-                    becameSatisfied = becameSatisfied,
-                    isFirstEver = isFirstEver,
-                    interfaceChanged = interfaceChanged,
-                    addressChanged = addressChanged
-                )
-            ) {
-                return@pathHandler
-            }
+            if (!update.needsRebind) return@pathHandler
             when {
-                becameSatisfied && !isFirstEver -> {
-                    scheduleRebind("path satisfied after change (status=$status)")
-                }
-                interfaceChanged || addressChanged -> {
+                update.becameSatisfied && !update.isFirstSatisfied -> {
                     scheduleRebind(
-                        "active LAN path changed: interface=$prevFingerprint->$fingerprint " +
-                            "addresses=$previousAddressFingerprint->$addressFingerprint " +
+                        reason = "path satisfied after change (status=$status)",
+                        admit = owner::isActive
+                    )
+                }
+                update.interfaceChanged || update.addressChanged -> {
+                    scheduleRebind(
+                        reason = "active LAN path changed: " +
+                            "interface=${update.previousInterfaceFingerprint}->$fingerprint " +
+                            "addresses=${update.previousAddressFingerprint}->$addressFingerprint " +
                             "(usesWifi=$usesWifi usesCellular=$usesCellular " +
-                            "usesWired=$usesWired usesOther=$usesOther)"
+                            "usesWired=$usesWired usesOther=$usesOther)",
+                        admit = owner::isActive
                     )
                 }
             }
             return@pathHandler
         }
-        nw_path_monitor_start(m)
         pathMonitor = m
+        nw_path_monitor_start(m)
         IosLanDebug.log("data", "startPathMonitor: monitor started")
     }
 
     private fun stopPathMonitor() {
-        val m = pathMonitor ?: return
+        val owner = pathMonitorOwner
+        pathMonitorOwner = null
+        owner?.let(pathMonitorCallbackState::detach)
+        val m = pathMonitor
         pathMonitor = null
+        if (m == null) return
+        // Native cancellation does not drain callbacks already queued on
+        // pathQueue; the owner was retired before this call so they no-op.
         nw_path_monitor_cancel(m)
-        // Safe to reset directly: nw_path_monitor_cancel above prevents
-        // further handler invocations, and @Volatile guarantees visibility.
-        lastWasSatisfied = false
-        hasEverObservedSatisfied = false
-        lastInterfaceFingerprint = -1
-        lastAddressFingerprint = ULong.MAX_VALUE
         IosLanDebug.log("data", "stopPathMonitor: monitor cancelled, pending rebind cleared")
     }
 
@@ -1017,7 +970,7 @@ internal class IosLanDataTransport(
      * Notifications fire on the posting thread (main thread for UIKit
      * notifications); the callback only schedules — it does no I/O.
      */
-    private fun startForegroundObserver() {
+    private fun startForegroundObserver(owner: AppleLifecycleRecoveryCoordinator) {
         if (lifecycleObservers.isNotEmpty()) return
 
         fun observe(
@@ -1028,13 +981,7 @@ internal class IosLanDataTransport(
             `object` = null,
             queue = null
         ) lifecycleHandler@ { _: NSNotification? ->
-            val shouldRecover = lifecycleRecoveryCoordinator.onSignal(signal)
-            IosLanDebug.log(
-                "data",
-                "lifecycle notification observed signal=$signal " +
-                    "rebindScheduled=$shouldRecover"
-            )
-            if (shouldRecover) scheduleRebind("lifecycle recovery signal=$signal")
+            handleLifecycleSignal(owner, signal)
             return@lifecycleHandler
         }
 
@@ -1059,6 +1006,28 @@ internal class IosLanDataTransport(
         )
     }
 
+    private fun handleLifecycleSignal(
+        owner: AppleLifecycleRecoveryCoordinator,
+        signal: AppleLifecycleSignal
+    ): Boolean {
+        val shouldRecover =
+            lifecycleRecoveryCoordinator === owner && owner.onSignal(signal)
+        IosLanDebug.log(
+            "data",
+            "lifecycle notification observed signal=$signal " +
+                "rebindScheduled=$shouldRecover"
+        )
+        if (shouldRecover) {
+            scheduleRebind(
+                reason = "lifecycle recovery signal=$signal",
+                admit = {
+                    lifecycleRecoveryCoordinator === owner && owner.isAcceptingSignals()
+                }
+            )
+        }
+        return shouldRecover
+    }
+
     private fun stopForegroundObserver() {
         val tokens = lifecycleObservers
         if (tokens.isEmpty()) return
@@ -1070,6 +1039,10 @@ internal class IosLanDataTransport(
     internal val lifecycleObserverCountForTest: Int
         get() = lifecycleObservers.size
 
+    /** Deterministic signal seam; follows the exact observer admission path. */
+    internal fun handleLifecycleSignalForTest(signal: AppleLifecycleSignal): Boolean =
+        lifecycleRecoveryCoordinator?.let { handleLifecycleSignal(it, signal) } ?: false
+
     /**
      * Debounce-schedule a rebind. Each call cancels any pending job and
      * launches a fresh delay; back-to-back path callbacks during a single
@@ -1080,12 +1053,13 @@ internal class IosLanDataTransport(
     private fun scheduleRebind(
         reason: String,
         attempt: Int = 0,
-        delayMillis: Long = REBIND_DEBOUNCE_MILLIS
+        delayMillis: Long = REBIND_DEBOUNCE_MILLIS,
+        admit: () -> Boolean = { true }
     ) {
-        if (closed || !startedByHost) return
+        if (!admit() || closed || !startedByHost) return
         rebindScope.launch(start = CoroutineStart.UNDISPATCHED) {
             rebindScheduleMutex.withLock {
-                if (closed || !startedByHost) return@withLock
+                if (!admit() || closed || !startedByHost) return@withLock
                 pendingRebindJob?.cancel()
                 IosLanDebug.log(
                     "data",
@@ -1093,7 +1067,14 @@ internal class IosLanDataTransport(
                 )
                 pendingRebindJob = rebindScope.launch {
                     delay(delayMillis)
-                    rebindNow(reason, attempt)
+                    if (!admit()) {
+                        IosLanDebug.log(
+                            "data",
+                            "scheduleRebind: retired callback owner ignored ($reason)"
+                        )
+                        return@launch
+                    }
+                    rebindNow(reason, attempt, admit)
                 }
             }
         }
@@ -1104,7 +1085,11 @@ internal class IosLanDataTransport(
         pendingRebindJob = null
     }
 
-    private fun scheduleRebindRetry(reason: String, failedAttempt: Int) {
+    private fun scheduleRebindRetry(
+        reason: String,
+        failedAttempt: Int,
+        admit: () -> Boolean
+    ) {
         val nextAttempt = failedAttempt + 1
         if (nextAttempt > REBIND_RETRY_MAX_ATTEMPTS) {
             IosLanDebug.log(
@@ -1116,7 +1101,8 @@ internal class IosLanDataTransport(
         scheduleRebind(
             reason = "retry $nextAttempt/$REBIND_RETRY_MAX_ATTEMPTS after $reason",
             attempt = nextAttempt,
-            delayMillis = REBIND_RETRY_BASE_DELAY_MILLIS * nextAttempt
+            delayMillis = REBIND_RETRY_BASE_DELAY_MILLIS * nextAttempt,
+            admit = admit
         )
     }
 
@@ -1132,7 +1118,15 @@ internal class IosLanDataTransport(
      * case. The bounded retry generation continues without requiring an
      * external path event.
      */
-    private suspend fun rebindNow(reason: String, attempt: Int): Unit = startMutex.withLock {
+    private suspend fun rebindNow(
+        reason: String,
+        attempt: Int,
+        admit: () -> Boolean
+    ): Unit = startMutex.withLock {
+        if (!admit()) {
+            IosLanDebug.log("data", "rebindNow: callback owner retired; skipping ($reason)")
+            return@withLock
+        }
         if (closed) {
             IosLanDebug.log("data", "rebindNow: transport closed; skipping ($reason)")
             return@withLock
@@ -1170,7 +1164,7 @@ internal class IosLanDataTransport(
                 "data",
                 "rebindNow: old listener release is still pending; rebuild deferred ($reason)"
             )
-            scheduleRebindRetry("listener cleanup pending", attempt)
+            scheduleRebindRetry("listener cleanup pending", attempt, admit)
             return@withLock
         }
 
@@ -1180,7 +1174,7 @@ internal class IosLanDataTransport(
                 "data",
                 "rebindNow: REBUILD FAILED — listener stays null ($reason)"
             )
-            scheduleRebindRetry(reason, attempt)
+            scheduleRebindRetry(reason, attempt, admit)
             return@withLock
         }
         // Keep the defensive re-check even though close() is now serialized
@@ -1198,7 +1192,7 @@ internal class IosLanDataTransport(
 
         try {
             afterListenerRebind?.invoke(fresh.handle)
-            lifecycleRecoveryCoordinator.onSuccessfulRebind()
+            lifecycleRecoveryCoordinator?.onSuccessfulRebind()
             IosLanDebug.log(
                 "data",
                 "rebindNow: complete (port rotated: $oldPort -> $newPort)"
@@ -1211,7 +1205,7 @@ internal class IosLanDataTransport(
                 "rebindNow: listener ready but discovery restore failed: " +
                     "${error.message ?: error::class.simpleName} (listener=$newPort)"
             )
-            scheduleRebindRetry("discovery restore failure", attempt)
+            scheduleRebindRetry("discovery restore failure", attempt, admit)
         }
     }
 

@@ -294,6 +294,37 @@ class IosLanRecoveryTest {
     }
 
     @Test
+    fun restartableStopDoesNotCarryAnInactiveLifecycleEpisodeForward() = runBlocking<Unit> {
+        val transport = IosLanDataTransport(
+            context("restartable-lifecycle-signals"),
+            IosEndpointRegistry()
+        )
+        try {
+            assertTrue(transport.start().isSuccess)
+            assertFalse(
+                transport.handleLifecycleSignalForTest(AppleLifecycleSignal.WillResignActive)
+            )
+
+            transport.stop()
+            assertFalse(
+                transport.handleLifecycleSignalForTest(AppleLifecycleSignal.DidBecomeActive),
+                "stopped transport has no lifecycle callback owner"
+            )
+
+            assertTrue(transport.start().isSuccess)
+            assertFalse(
+                transport.handleLifecycleSignalForTest(AppleLifecycleSignal.WillResignActive)
+            )
+            assertTrue(
+                transport.handleLifecycleSignalForTest(AppleLifecycleSignal.DidBecomeActive),
+                "the first inactive episode after restart must schedule recovery"
+            )
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Test
     fun staleListenerCallbackIsRejectedAndNativeConnectionIsCancelled() = runBlocking<Unit> {
         val rejected = AtomicInt(0)
         var wrapperCreations = 0

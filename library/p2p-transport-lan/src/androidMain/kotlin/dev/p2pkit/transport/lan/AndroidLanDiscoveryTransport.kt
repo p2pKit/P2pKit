@@ -77,16 +77,17 @@ internal data class AndroidPrimaryNetworkLoss<N : Any>(
 
 internal fun <N : Any> androidPrimaryNetworkLoss(
     observed: N?,
+    selected: N?,
     lost: N
-): AndroidPrimaryNetworkLoss<N> = if (observed == lost) {
-    AndroidPrimaryNetworkLoss(
-        observedAfterLoss = null,
-        requiresSelectorReconciliation = true
-    )
-} else {
-    AndroidPrimaryNetworkLoss(
-        observedAfterLoss = observed,
-        requiresSelectorReconciliation = false
+): AndroidPrimaryNetworkLoss<N> {
+    val observedAfterLoss = observed.takeUnless { it == lost }
+    return AndroidPrimaryNetworkLoss(
+        observedAfterLoss = observedAfterLoss,
+        // registerNetworkCallback may already have reported an alternative,
+        // leaving `observed` on B while the JmDNS/data route is still selected
+        // on A. Losing selected A must still re-run the safe selector; Android
+        // does not emit a second onAvailable for already-present B.
+        requiresSelectorReconciliation = observed == lost || selected == lost
     )
 }
 
@@ -838,10 +839,14 @@ internal class AndroidLanDiscoveryTransport(
 
             override fun onLost(network: Network) {
                 publishForCurrentWatcher(lease) {
-                    val loss = androidPrimaryNetworkLoss(observedNetwork, network)
+                    val loss = androidPrimaryNetworkLoss(
+                        observed = observedNetwork,
+                        selected = networkState.selectedNetwork(),
+                        lost = network
+                    )
                     observedNetwork = loss.observedAfterLoss
                     if (loss.requiresSelectorReconciliation) {
-                        Log.d(TAG, "NetworkCallback.onLost: $network (observed cleared)")
+                        Log.d(TAG, "NetworkCallback.onLost: $network (reconciling selector)")
                         // A safe fallback may already have been present before
                         // the bound network disappeared, in which case Android
                         // emits no new onAvailable callback. Re-read the
