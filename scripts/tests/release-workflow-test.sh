@@ -20,7 +20,7 @@ RELEASE_METADATA_CHECK="$ROOT/scripts/check-release-metadata.sh"
 
 [[ -f "$WORKFLOW" ]] || { echo "FATAL: Maven Central workflow is missing" >&2; exit 1; }
 [[ -f "$DESKTOP_WORKFLOW" ]] || { echo "FATAL: Desktop cross-host workflow is missing" >&2; exit 1; }
-for workflow in "$CI_WORKFLOW" "$DRY_RUN_WORKFLOW" "$WORKFLOW" "$DESKTOP_WORKFLOW"; do
+while IFS= read -r -d '' workflow; do
     ruby -e 'require "yaml"; YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)' "$workflow"
     while IFS= read -r use; do
         revision="${use##*@}"
@@ -30,7 +30,7 @@ for workflow in "$CI_WORKFLOW" "$DRY_RUN_WORKFLOW" "$WORKFLOW" "$DESKTOP_WORKFLO
             exit 1
         }
     done < <(sed -n 's/^[[:space:]]*uses:[[:space:]]*//p' "$workflow")
-done
+done < <(find "$ROOT/.github/workflows" -type f \( -name '*.yml' -o -name '*.yaml' \) -print0)
 ruby - "$WORKFLOW" <<'RUBY'
 require "json"
 require "yaml"
@@ -49,6 +49,13 @@ expected = [
   "Upload once and wait for publication",
 ]
 raise "unexpected secret-bearing steps: #{secret_steps.inspect}" unless secret_steps == expected
+
+revalidate = publish.fetch("steps").find do |step|
+  step["name"] == "Revalidate approved release and credentials"
+end
+raise "protected credential revalidation step is missing" unless revalidate
+raise "protected publish job does not query real namespace/token access" unless
+  revalidate.fetch("run").include?("scripts/check-maven-namespace-access.sh")
 
 other_jobs = jobs.reject { |name, _| name == "publish-release" }
 raise "release secrets escaped the protected job" if JSON.generate(other_jobs).include?("secrets.")
@@ -123,6 +130,7 @@ require_text 'scripts/check-maven-central-version.sh absent'
 require_text 'scripts/check-release-identity.sh "$RELEASE_TAG" "$RELEASE_SHA" require-tag'
 require_text 'MAVEN_CENTRAL_NAMESPACE: io.github.apdelrahman1911'
 require_text 'scripts/tests/check-maven-namespace-access-test.sh'
+require_text 'scripts/check-maven-namespace-access.sh'
 require_text 'scripts/build-central-portal-bundle.sh'
 require_text 'scripts/publish-central-portal-bundle.sh'
 require_text 'cancel-in-progress: false'
@@ -167,11 +175,13 @@ for workflow in "$CI_WORKFLOW" "$DRY_RUN_WORKFLOW" "$WORKFLOW"; do
     }
 done
 
-grep -Fq 'os: [ubuntu-latest, windows-latest]' "$DESKTOP_WORKFLOW" || {
-    echo "FATAL: Desktop cross-host workflow does not cover Linux and Windows" >&2
+grep -Fq 'os: [ubuntu-latest, windows-latest, macos-15]' "$DESKTOP_WORKFLOW" || {
+    echo "FATAL: Desktop cross-host workflow does not cover Linux, Windows, and macOS" >&2
     exit 1
 }
 for task in \
+    ':p2p-sample-desktop:check' \
+    ':p2p-sample-desktop:installDist' \
     ':p2p-sample-desktop-ui:test' \
     ':p2p-sample-desktop-ui:checkRuntime' \
     ':p2p-sample-desktop-ui:hotRunArgfile' \
@@ -181,6 +191,10 @@ for task in \
         exit 1
     }
 done
+grep -Fq 'samples/p2p-sample-desktop/**' "$DESKTOP_WORKFLOW" || {
+    echo "FATAL: CLI changes do not trigger Desktop cross-host verification" >&2
+    exit 1
+}
 if grep -Eq -- 'continue-on-error|--offline|--write-locks|--write-verification-metadata' "$DESKTOP_WORKFLOW"; then
     echo "FATAL: Desktop cross-host verification is non-blocking, assumes a warm cache, or rewrites dependency state" >&2
     exit 1
@@ -250,6 +264,13 @@ sbom_evidence = steps.find { |step| step["name"] == "Upload SBOM evidence" }
 raise "CI SBOM evidence step is missing" unless sbom_evidence
 raise "early failures must not create a second missing-SBOM failure" unless
   sbom_evidence.fetch("with").fetch("if-no-files-found") == "warn"
+
+xc_evidence = steps.find { |step| step["name"] == "Upload XCFramework provenance evidence" }
+raise "CI XCFramework provenance evidence step is missing" unless xc_evidence
+raise "XCFramework provenance evidence must be full-scope only" unless
+  xc_evidence.fetch("if").include?("steps.scope.outputs.full == 'true'")
+raise "XCFramework provenance evidence does not include sidecars" unless
+  xc_evidence.fetch("with").fetch("path").include?("XCFrameworks/release/BUILD_*.txt")
 RUBY
 
 grep -Fq 'XCODEGEN_VERSION="2.45.4"' "$XCODEGEN_INSTALLER" || {

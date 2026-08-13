@@ -132,16 +132,21 @@ dokka {
 // identity fails instead of writing "unknown". A normal dependsOn edge orders
 // the writer after successful assembly, so a failed framework is not attested.
 val xcframeworkProvenancePaths = listOf(
-    "buildSrc/src/main/java/dev/p2pkit/build",
+    "buildSrc/src",
     "library/p2p-core/src",
     "library/p2p-transport-lan/src",
     "library/p2p-core/build.gradle.kts",
     "library/p2p-transport-lan/build.gradle.kts",
+    "library/p2p-core/gradle.lockfile",
+    "library/p2p-transport-lan/gradle.lockfile",
     "build.gradle.kts",
     "settings.gradle.kts",
+    "settings-gradle.lockfile",
+    "gradle.lockfile",
     "gradle.properties",
     "gradle/libs.versions.toml",
-    "gradle/wrapper/gradle-wrapper.properties",
+    "gradle/verification-metadata.xml",
+    "gradle/wrapper",
 )
 val xcframeworkProvenanceInputs = files(
     xcframeworkProvenancePaths.map(rootProject::file),
@@ -163,6 +168,12 @@ fun registerXcframeworkProvenanceVerification(config: String) {
             directory.file("P2pKitShared.xcframework/ios-arm64_x86_64-simulator/P2pKitShared.framework/P2pKitShared").asFile,
         )
     }
+    val frameworkArtifacts = outDir.map { directory ->
+        directory.dir("P2pKitShared.xcframework").asFileTree.matching {
+            include("**/*.framework/P2pKitShared")
+            include("**/*.framework/Headers/**")
+        }
+    }
     val writeTask = tasks.register<WriteXcframeworkProvenanceTask>(
         "writeP2pKitShared${capitalized}XCFrameworkProvenance",
     ) {
@@ -171,12 +182,14 @@ fun registerXcframeworkProvenanceVerification(config: String) {
         dependsOn("assembleP2pKitShared${capitalized}XCFramework")
         provenanceInputs.from(xcframeworkProvenanceInputs)
         this.frameworkBinaries.from(frameworkBinaries)
+        this.frameworkArtifacts.from(frameworkArtifacts)
         rootDirectory.set(rootProject.layout.projectDirectory)
         sourceCommit.set(xcframeworkCommit)
         relevantSourceDirty.set(xcframeworkDirty)
         commitFile.set(outDir.map { it.file("BUILD_COMMIT.txt") })
         stateFile.set(outDir.map { it.file("BUILD_SOURCE_STATE.txt") })
         fingerprintFile.set(outDir.map { it.file("BUILD_INPUTS_SHA256.txt") })
+        artifactFingerprintFile.set(outDir.map { it.file("BUILD_ARTIFACTS_SHA256.txt") })
     }
     tasks.register<VerifyXcframeworkProvenanceTask>(
         "verifyP2pKitShared${capitalized}XCFrameworkProvenance",
@@ -186,12 +199,14 @@ fun registerXcframeworkProvenanceVerification(config: String) {
         dependsOn(writeTask)
         provenanceInputs.from(xcframeworkProvenanceInputs)
         this.frameworkBinaries.from(frameworkBinaries)
+        this.frameworkArtifacts.from(frameworkArtifacts)
         rootDirectory.set(rootProject.layout.projectDirectory)
         sourceCommit.set(xcframeworkCommit)
         relevantSourceDirty.set(xcframeworkDirty)
         commitFile.set(writeTask.flatMap { it.commitFile })
         stateFile.set(writeTask.flatMap { it.stateFile })
         fingerprintFile.set(writeTask.flatMap { it.fingerprintFile })
+        artifactFingerprintFile.set(writeTask.flatMap { it.artifactFingerprintFile })
     }
 }
 

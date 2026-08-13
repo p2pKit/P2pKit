@@ -18,6 +18,9 @@ public final class P2pPomMetadata {
         pom.developers(developers -> developers.developer(developer -> {
             developer.getId().set("Apdelrahman1911");
             developer.getName().set("Abdelrahman");
+            developer.getEmail().set("apdelrahman1911@users.noreply.github.com");
+            developer.getOrganization().set("p2pKit");
+            developer.getOrganizationUrl().set("https://github.com/p2pKit");
         }));
         pom.scm(scm -> {
             scm.getUrl().set(REPOSITORY_URL);

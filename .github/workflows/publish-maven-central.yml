@@ -79,6 +79,7 @@ jobs:
             library/p2p-core/api/**
             library/p2p-transport-lan/api/**
             library/p2p-network-provisioning-desktop/api/**
+            library/p2p-transport-lan/build/XCFrameworks/release/BUILD_*.txt
           if-no-files-found: warn
 
   publish-release:
@@ -123,6 +124,7 @@ jobs:
           scripts/check-release-identity.sh "$RELEASE_TAG" "$RELEASE_SHA" require-tag
           scripts/check-release-metadata.sh
           scripts/check-maven-release-environment.sh
+          scripts/check-maven-namespace-access.sh
           scripts/check-maven-central-version.sh absent
 
       - name: Build and inspect signed Central bundle

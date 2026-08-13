@@ -9,6 +9,7 @@ import org.gradle.api.services.BuildService
 import org.gradle.api.services.BuildServiceParameters
 import org.cyclonedx.gradle.CyclonedxDirectTask
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
+import com.android.build.gradle.tasks.BundleAar
 import java.util.Base64
 
 // Plugin DSL dependencies resolve before the allprojects rules below exist.
@@ -171,7 +172,12 @@ allprojects {
     // disable the direct BOM task everywhere else.
     tasks.withType(CyclonedxDirectTask::class.java).configureEach {
         val releaseConfigurations = when (project.path) {
-            ":p2p-core", ":p2p-transport-lan" -> listOf("jvmRuntimeClasspath")
+            ":p2p-core", ":p2p-transport-lan" -> listOf(
+                "jvmRuntimeClasspath",
+                "iosArm64CompileKlibraries",
+                "iosSimulatorArm64CompileKlibraries",
+                "iosX64CompileKlibraries",
+            )
             ":p2p-network-provisioning-android" -> listOf("androidRuntimeClasspath")
             ":p2p-network-provisioning-desktop" -> listOf("runtimeClasspath")
             else -> null
@@ -293,6 +299,22 @@ tasks.cyclonedxBom {
 // docs/STABILIZATION_AND_RELEASE.md for the release recipe.
 subprojects {
     val sub = this
+
+    // Every distributable archive carries the exact repository license. This
+    // covers JVM/KMP metadata jars and Android KMP AARs without copying or
+    // maintaining per-module legal text.
+    tasks.withType(Jar::class.java).configureEach {
+        from(rootProject.layout.projectDirectory.file("LICENSE")) {
+            into("META-INF")
+            rename { "LICENSE" }
+        }
+    }
+    tasks.withType(BundleAar::class.java).configureEach {
+        from(rootProject.layout.projectDirectory.file("LICENSE")) {
+            into("META-INF")
+            rename { "LICENSE" }
+        }
+    }
 
     tasks.matching {
         it.name == "iosSimulatorArm64Test" ||

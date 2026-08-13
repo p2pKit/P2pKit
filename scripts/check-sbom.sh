@@ -33,7 +33,11 @@ jq --arg group "$GROUP" --arg version "$VERSION" -e '
         "p2p-network-provisioning-android",
         "p2p-network-provisioning-desktop",
         "kotlinx-coroutines-core",
-        "jmdns"
+        "jmdns",
+        "cryptography-provider-jdk-jvm",
+        "cryptography-provider-cryptokit-iosarm64",
+        "cryptography-provider-cryptokit-iossimulatorarm64",
+        "cryptography-provider-cryptokit-iosx64"
     ])) and
     ([.components[].name] | any(startswith("p2p-sample")) | not) and
     ([.components[].name] | any(. == "dokka-base" or . == "gradle-api") | not)

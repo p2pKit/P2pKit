@@ -144,3 +144,11 @@ jobs:
           # an earlier step has no SBOM to upload and must not manufacture a
           # second, misleading failure in this evidence-only step.
           if-no-files-found: warn
+
+      - name: Upload XCFramework provenance evidence
+        if: ${{ always() && steps.scope.outputs.full == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: xcframework-provenance
+          path: library/p2p-transport-lan/build/XCFrameworks/release/BUILD_*.txt
+          if-no-files-found: warn

@@ -12,6 +12,7 @@ on:
       - "gradle/libs.versions.toml"
       - "gradle/verification-metadata.xml"
       - "gradle.lockfile"
+      - "samples/p2p-sample-desktop/**"
       - "samples/p2p-sample-desktop-ui/**"
       - "samples/p2p-sample-diagnostics/**"
       - "library/p2p-core/**"
@@ -32,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -48,10 +49,12 @@ jobs:
       - name: Validate wrapper and configure Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
 
-      - name: Verify Desktop runtime, tests, Hot Reload tooling, and application image
+      - name: Verify CLI, Desktop runtime, tests, Hot Reload tooling, and application images
         shell: bash
         run: |
           ./gradlew --no-daemon \
+            :p2p-sample-desktop:check \
+            :p2p-sample-desktop:installDist \
             :p2p-sample-desktop-ui:test \
             :p2p-sample-desktop-ui:checkRuntime \
             :p2p-sample-desktop-ui:hotRunArgfile \

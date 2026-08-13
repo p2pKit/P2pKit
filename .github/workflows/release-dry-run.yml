@@ -75,6 +75,7 @@ jobs:
           path: |
             build/reports/release/**
             build/reports/cyclonedx/bom.*
+            library/p2p-transport-lan/build/XCFrameworks/release/BUILD_*.txt
             library/p2p-core/api/**
             library/p2p-transport-lan/api/**
             library/p2p-network-provisioning-desktop/api/**
