@@ -38,7 +38,8 @@ is_commit "$head" || fail "dependency-update head is not an available commit"
 changed="$(mktemp "${TMPDIR:-/tmp}/p2pkit-dependency-changed.XXXXXX")"
 base_config="$(mktemp "${TMPDIR:-/tmp}/p2pkit-dependency-base-config.XXXXXX")"
 head_config="$(mktemp "${TMPDIR:-/tmp}/p2pkit-dependency-head-config.XXXXXX")"
-trap 'rm -f "$changed" "$base_config" "$head_config"' EXIT
+metadata_diff="$(mktemp "${TMPDIR:-/tmp}/p2pkit-dependency-metadata-diff.XXXXXX")"
+trap 'rm -f "$changed" "$base_config" "$head_config" "$metadata_diff"' EXIT
 git -C "$ROOT" diff --no-renames --name-only "$base" "$head" -- >"$changed"
 
 changed_path() {
@@ -73,6 +74,8 @@ if [[ "$wrapper_changed" == true ]]; then
 fi
 
 if [[ "$metadata_changed" == true ]]; then
+    git -C "$ROOT" diff --unified=0 "$base" "$head" -- \
+        gradle/verification-metadata.xml >"$metadata_diff"
     if [[ "$base" != "$empty_tree" ]]; then
         git -C "$ROOT" show "$base:gradle/verification-metadata.xml" |
             sed -n '/<configuration>/,/<\/configuration>/p' >"$base_config"
@@ -82,13 +85,11 @@ if [[ "$metadata_changed" == true ]]; then
             fail "dependency update changed verification trust policy"
     fi
 
-    if git -C "$ROOT" diff --unified=0 "$base" "$head" -- gradle/verification-metadata.xml |
-        grep -Eq '^-[^-].*<(component|artifact|sha256)([ >])'; then
+    if grep -Eq '^-[^-].*<(component|artifact|sha256)([ >])' "$metadata_diff"; then
         fail "dependency update removed existing verified component/artifact history"
     fi
     if [[ "$catalog_changed" == true ]] &&
-        ! git -C "$ROOT" diff --unified=0 "$base" "$head" -- gradle/verification-metadata.xml |
-            grep -Eq '^\+[^+].*<component '; then
+        ! grep -Eq '^\+[^+].*<component ' "$metadata_diff"; then
         fail "catalog update added no explicitly checksummed component version"
     fi
 fi
