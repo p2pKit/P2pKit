@@ -276,5 +276,6 @@ internal object CliDiagnostics {
 
     fun helpLine(): String =
         "diag [start <TEST-ID> [session] [role] | status | export | " +
+            "fault <type> [expected-effect] | " +
             "complete <success|failure|cancelled|timeout|interrupted|recovered> | clear]"
 }

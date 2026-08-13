@@ -563,7 +563,12 @@ final class IOSTestDiagnosticStore: ObservableObject {
         var severity: TestDiagnosticSeverity = .debug
         if lower.contains("path") {
             eventName = TestDiagnosticEventName.networkPathChanged
-        } else if lower.contains("retry") {
+        } else if lower.contains("reconnect") && lower.contains("succeeded") {
+            eventName = TestDiagnosticEventName.recoveryCompleted
+        } else if lower.contains("reconnect") {
+            eventName = TestDiagnosticEventName.recoveryStarted
+        } else if (lower.contains("file") || lower.contains("transfer")) &&
+                    lower.contains("retry") {
             eventName = TestDiagnosticEventName.transferRetry
         } else if lower.contains("timeout") {
             eventName = TestDiagnosticEventName.timeoutExpired

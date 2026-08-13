@@ -196,6 +196,7 @@ private fun SetupScreen(
     // previous kit's async teardown, or two kits overlap (duplicate mDNS
     // advertisements + two TCP listeners).
     val isStopping by vm.isStopping.collectAsState()
+    val cleanupPending by vm.cleanupPending.collectAsState()
     val kmpSmokeBusy by vm.kmpSmokeBusy.collectAsState()
     val kmpSmokeResult by vm.kmpSmokeResult.collectAsState()
     Column(
@@ -244,6 +245,7 @@ private fun SetupScreen(
                 when {
                     isStarting -> "Starting…"
                     isStopping -> "Stopping previous run…"
+                    cleanupPending -> "Retry cleanup"
                     else -> "Start"
                 }
             )

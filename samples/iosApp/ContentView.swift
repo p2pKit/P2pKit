@@ -842,12 +842,22 @@ struct ContentView: View {
             diag("kit", "start FAILED: \(error.localizedDescription)")
             status = "Start failed: \(error.localizedDescription)"
             errorBanner = "Failed to start: \(error.localizedDescription)"
-            try? await built.stop()
-            frameTraceLease?.release()
-            frameTraceLease = nil
-            diagnostics.setLocalPeerId(nil)
-            self.kit = nil
-            debugLogTask?.cancel()
+            do {
+                try await built.stop()
+                frameTraceLease?.release()
+                frameTraceLease = nil
+                diagnostics.setLocalPeerId(nil)
+                self.kit = nil
+                debugLogTask?.cancel()
+            } catch let cleanupError {
+                // Keep the only owner and the Stop affordance. Dropping this
+                // reference would allow a second kit to overlap live SDK
+                // resources after a partial-start cleanup failure.
+                status = "Start failed — cleanup pending"
+                errorBanner = "Start failed and cleanup did not complete: " +
+                    cleanupError.localizedDescription + ". Tap Stop to retry."
+                diag("kit", "startup cleanup FAILED; ownership retained: \(cleanupError.localizedDescription)")
+            }
             return
         }
 
@@ -1248,6 +1258,16 @@ struct ContentView: View {
             try? await offer.reject(reason: "receiver could not prepare destination")
             return
         }
+        diagnostics.record(TestDiagnosticRecord(
+            peerId: "\(offer.peer.id)",
+            connectionId: diagnostics.connectionId(for: "\(offer.peer.id)"),
+            transferId: offer.id,
+            category: "storage",
+            eventName: TestDiagnosticEventName.temporaryFileCreated,
+            currentState: "prepared",
+            direction: .received,
+            details: ["location": "app-private", "contentsExported": "false"]
+        ))
         do {
             let transfer = try await offer.accept(destination: destination)
             diagnostics.transfer(
@@ -1263,6 +1283,24 @@ struct ContentView: View {
                 kind: .info
             )
             watchTransfer(transfer, direction: .receive, detail: dest.lastPathComponent) { completed in
+                let cleanupComplete = !destination.temporaryArtifactExists
+                self.diagnostics.record(TestDiagnosticRecord(
+                    peerId: "\(offer.peer.id)",
+                    connectionId: self.diagnostics.connectionId(for: "\(offer.peer.id)"),
+                    transferId: transfer.id,
+                    category: "storage",
+                    eventName: TestDiagnosticEventName.temporaryFileCleaned,
+                    severity: cleanupComplete ? .info : .error,
+                    currentState: cleanupComplete
+                        ? (completed ? "promoted" : "aborted")
+                        : "cleanup-failed",
+                    direction: .received,
+                    errorCode: cleanupComplete ? nil : "TEMPORARY_FILE_RETAINED",
+                    errorDescription: cleanupComplete ? nil : "temporary transfer file remains",
+                    outcome: cleanupComplete ? .success : .failure,
+                    details: ["location": "app-private", "contentsExported": "false"]
+                ))
+                guard cleanupComplete else { return "temporary cleanup incomplete" }
                 guard completed else { return nil }
                 do {
                     let digest = try sha256File(at: dest)
@@ -1305,6 +1343,21 @@ struct ContentView: View {
                         cleanupError.localizedDescription
                 )
             }
+            let cleanupComplete = !destination.temporaryArtifactExists
+            diagnostics.record(TestDiagnosticRecord(
+                peerId: "\(offer.peer.id)",
+                connectionId: diagnostics.connectionId(for: "\(offer.peer.id)"),
+                transferId: offer.id,
+                category: "storage",
+                eventName: TestDiagnosticEventName.temporaryFileCleaned,
+                severity: cleanupComplete ? .info : .error,
+                currentState: cleanupComplete ? "aborted" : "cleanup-failed",
+                direction: .received,
+                errorCode: cleanupComplete ? nil : "TEMPORARY_FILE_RETAINED",
+                errorDescription: cleanupComplete ? nil : "temporary transfer file remains",
+                outcome: cleanupComplete ? .success : .failure,
+                details: ["location": "app-private", "contentsExported": "false"]
+            ))
             diagnostics.transfer(
                 TestDiagnosticEventName.transferFailed,
                 peerId: "\(offer.peer.id)",
@@ -2167,7 +2220,7 @@ final class FileHandleRawSink: NSObject, Kotlinx_io_coreRawSink {
 /// created by `claimUniqueDestination` is a namespace reservation and is
 /// replaced only after verification succeeds.
 final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
-    private enum Phase { case active, committing, committed, aborted }
+    private enum Phase { case active, committing, committed, aborting, aborted }
 
     private let target: URL
     private let temporary: URL
@@ -2175,6 +2228,10 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
     private let stateLock = NSLock()
     private var phase: Phase = .active
     private var opened = false
+
+    var temporaryArtifactExists: Bool {
+        FileManager.default.fileExists(atPath: temporary.path)
+    }
 
     init(target: URL) throws {
         self.target = target
@@ -2249,13 +2306,21 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
             completionHandler(nil)
             return
         }
-        phase = .aborted
+        guard phase == .active || phase == .aborting else {
+            stateLock.unlock()
+            completionHandler(destinationError("destination is not abort-ready"))
+            return
+        }
+        phase = .aborting
 
         sink.close()
         var cleanupError: Error?
         for url in [temporary, target] where FileManager.default.fileExists(atPath: url.path) {
             do { try FileManager.default.removeItem(at: url) } catch { cleanupError = error }
         }
+        // Cleanup failure remains abort-retryable, but commit/open can never
+        // resume after abort begins.
+        phase = cleanupError == nil ? .aborted : .aborting
         stateLock.unlock()
         completionHandler(cleanupError)
     }

@@ -367,6 +367,62 @@ final class TestDiagnosticsTests: XCTestCase {
             try IOSTestDiagnosticStore.checksumManifest(for: complete)
         )
     }
+
+    @MainActor
+    func testTransportLogsSeparateRecoveryFromTransferRetry() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        _ = store.startSession(
+            testId: "PS-T05",
+            requestedSessionId: "session-retry-classification",
+            role: "both"
+        )
+
+        store.recordTransport("reconnect: attempt=2")
+        store.recordTransport("reconnect: attempt=2 succeeded")
+        store.recordTransport("file transfer retry attempt=3")
+
+        XCTAssertEqual(
+            Array(store.events.suffix(3).map(\.eventName)),
+            [
+                TestDiagnosticEventName.recoveryStarted,
+                TestDiagnosticEventName.recoveryCompleted,
+                TestDiagnosticEventName.transferRetry
+            ]
+        )
+    }
+
+    func testAtomicDestinationAbortFailureRemainsRetryableAndBlocksCommit() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "p2pkit-destination-abort-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let target = root.appendingPathComponent("reserved", isDirectory: true)
+        let blocker = target.appendingPathComponent("still-open")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        _ = FileManager.default.createFile(atPath: blocker.path, contents: Data())
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let destination = try AtomicFileTransferDestination(target: target)
+        let firstAbort = await withCheckedContinuation { continuation in
+            destination.abort(cause: nil) { continuation.resume(returning: $0) }
+        }
+        XCTAssertNotNil(firstAbort)
+        XCTAssertFalse(destination.temporaryArtifactExists)
+
+        let commitAfterAbort = await withCheckedContinuation { continuation in
+            destination.commit { continuation.resume(returning: $0) }
+        }
+        XCTAssertNotNil(commitAfterAbort)
+
+        try FileManager.default.removeItem(at: blocker)
+        let secondAbort = await withCheckedContinuation { continuation in
+            destination.abort(cause: nil) { continuation.resume(returning: $0) }
+        }
+        XCTAssertNil(secondAbort)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
+    }
 }
 
 private final class Fixture {

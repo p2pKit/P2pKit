@@ -671,6 +671,26 @@ class DiagnosticModelTest {
     }
 
     @Test
+    fun loggerSeparatesConnectionRecoveryFromTransferRetries() {
+        val recorder = recorder()
+        recorder.startSession("PS-T05", "both", "session-retry-classification")
+        val logger = StructuredSdkLogger(recorder)
+
+        logger.info("reconnect: attempt=2 peer=redacted")
+        logger.info("reconnect: attempt=2 succeeded")
+        logger.info("file transfer retry attempt=3")
+
+        assertEquals(
+            listOf(
+                DiagnosticEventNames.RECOVERY_STARTED,
+                DiagnosticEventNames.RECOVERY_COMPLETED,
+                DiagnosticEventNames.TRANSFER_RETRY
+            ),
+            recorder.snapshot().takeLast(3).map { it.eventName }
+        )
+    }
+
+    @Test
     fun frameParserRecordsPacketsChunksAcknowledgmentsAndRejects() {
         val recorder = recorder()
         recorder.startSession("ENV-02", "sender", "session-frame")

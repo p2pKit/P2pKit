@@ -49,6 +49,8 @@ import dev.p2pkit.sample.diagnostics.DiagnosticOutcome
 import dev.p2pkit.sample.diagnostics.DiagnosticRecord
 import dev.p2pkit.sample.diagnostics.DiagnosticRecorder
 import dev.p2pkit.sample.diagnostics.DiagnosticSeverity
+import dev.p2pkit.sample.diagnostics.cleanupStaleTransferPartsOnce
+import dev.p2pkit.sample.diagnostics.reservedFileDestination
 import dev.p2pkit.sample.diagnostics.StructuredFrameTrace
 import dev.p2pkit.sample.diagnostics.StructuredSdkLogger
 import dev.p2pkit.sample.kmp.createP2pKit
@@ -118,6 +120,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     /** True from [stop] until the in-flight kit.stop() coroutine returns. */
     private val _isStopping = MutableStateFlow(false)
     val isStopping: StateFlow<Boolean> = _isStopping.asStateFlow()
+
+    /** A kit still owns resources after a failed start/stop cleanup and must be retried. */
+    private val _cleanupPending = MutableStateFlow(false)
+    val cleanupPending: StateFlow<Boolean> = _cleanupPending.asStateFlow()
 
     private val _kmpSmokeBusy = MutableStateFlow(false)
     val kmpSmokeBusy: StateFlow<Boolean> = _kmpSmokeBusy.asStateFlow()
@@ -350,6 +356,32 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         diagnosticRecorder.record(record)
     }
 
+    private fun recordTemporaryFileEvent(
+        peerId: String,
+        transferId: String,
+        eventName: String,
+        state: String,
+        outcome: DiagnosticOutcome? = null,
+        error: Throwable? = null
+    ) {
+        recordDiagnostic(
+            DiagnosticRecord(
+                peerId = peerId,
+                connectionId = diagnostics.registerTransfer(transferId, peerId)?.connectionId,
+                transferId = transferId,
+                category = "storage",
+                eventName = eventName,
+                severity = if (error == null) DiagnosticSeverity.INFO else DiagnosticSeverity.ERROR,
+                currentState = state,
+                direction = DiagnosticDirection.RECEIVED,
+                outcome = outcome,
+                errorCode = error?.let { it::class.simpleName },
+                errorDescription = error?.message,
+                details = mapOf("location" to "app-private", "contentsExported" to "false")
+            )
+        )
+    }
+
     fun updateReconnectChoice(choice: ReconnectChoice) {
         if (_isRunning.value) return  // locked at kit construction
         reconnectChoice = choice
@@ -396,6 +428,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // previous kit is still stopping, or two kits would overlap (duplicate
         // mDNS advertisements + two TCP listeners).
         if (_isRunning.value || _isStarting.value || _isStopping.value) return  // idempotent + re-entry safe
+        if (kit != null) {
+            appendSystemMessage("cleanup is still pending; retrying kit stop before a new start")
+            stop()
+            return
+        }
         val trimmedName = deviceName.trim()
         if (trimmedName.isEmpty()) {
             Log.w(LOG_TAG, "start aborted: deviceName is blank")
@@ -486,6 +523,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         kit = newKit
+        _cleanupPending.value = false
         refreshMissingPermissions()
         _localPeerId.value = newKit.localPeerId.value
         diagnostics.setLocalPeerId(newKit.localPeerId.value)
@@ -596,7 +634,21 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 Log.e(LOG_TAG, "kit startup failed", t)
                 appendSystemMessage("start failed: ${t.message ?: t::class.simpleName}")
                 runCatchingNonCancel { newKit.stop() }
-                if (kit === newKit) kit = null
+                    .onSuccess {
+                        if (kit === newKit) kit = null
+                        _cleanupPending.value = false
+                        frameTraceLease?.release()
+                        frameTraceLease = null
+                        diagnostics.setLocalPeerId(null)
+                    }
+                    .onFailure { cleanupError ->
+                        _cleanupPending.value = true
+                        Log.e(LOG_TAG, "startup cleanup failed; kit ownership retained", cleanupError)
+                        appendSystemMessage(
+                            "startup cleanup failed; tap Retry cleanup: " +
+                                (cleanupError.message ?: cleanupError::class.simpleName)
+                        )
+                    }
                 runScope = null
                 _kitState.value = P2pState.Stopped
                 cancel()
@@ -1086,24 +1138,47 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
                 return
             }
+        recordTemporaryFileEvent(
+            peerId = pending.offer.peer.id.value,
+            transferId = pending.id,
+            eventName = DiagnosticEventNames.TEMP_FILE_CREATED,
+            state = "prepared"
+        )
         val incoming = try {
             pending.offer.accept(destination)
         } catch (cancelled: CancellationException) {
-            withContext(NonCancellable) {
+            val cleanup = withContext(NonCancellable) {
                 // Cleanup is best effort and must not replace the caller's
                 // original cancellation if a broken callback throws its own
                 // CancellationException.
                 runCatching { destination.abort(null) }
             }
+            recordTemporaryFileEvent(
+                peerId = pending.offer.peer.id.value,
+                transferId = pending.id,
+                eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
+                state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
+                outcome = if (cleanup.isSuccess) DiagnosticOutcome.SUCCESS else DiagnosticOutcome.FAILURE,
+                error = cleanup.exceptionOrNull()
+            )
             throw cancelled
         } catch (e: Throwable) {
-            withContext(NonCancellable) {
-                runCatching { destination.abort(null) }
+            val cleanup = withContext(NonCancellable) {
+                val result = runCatching { destination.abort(null) }
                 runCatching { pending.offer.reject("accept failed on receiver") }
                 withContext(Dispatchers.IO) {
                     runCatching { saveFile.delete() }
                 }
+                result
             }
+            recordTemporaryFileEvent(
+                peerId = pending.offer.peer.id.value,
+                transferId = pending.id,
+                eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
+                state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
+                outcome = if (cleanup.isSuccess) DiagnosticOutcome.SUCCESS else DiagnosticOutcome.FAILURE,
+                error = cleanup.exceptionOrNull()
+            )
             appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
             return
         }
@@ -1246,10 +1321,30 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 withContext(NonCancellable) {
                     bytesJob.cancelAndJoin()
                     if (!completed && destinationPath != null) {
-                        withContext(Dispatchers.IO) {
-                            runCatching { File(destinationPath).delete() }
+                        val cleanup = withContext(Dispatchers.IO) {
+                            runCatching {
+                                val destination = File(destinationPath)
+                                if (destination.exists() && !destination.delete()) {
+                                    error("destination reservation cleanup failed")
+                                }
+                            }
                         }
+                        recordTemporaryFileEvent(
+                            peerId = transfer.peer.id.value,
+                            transferId = transfer.id,
+                            eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
+                            state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
+                            outcome = if (cleanup.isSuccess) DiagnosticOutcome.SUCCESS else DiagnosticOutcome.FAILURE,
+                            error = cleanup.exceptionOrNull()
+                        )
                     } else if (completed && destinationPath != null) {
+                        recordTemporaryFileEvent(
+                            peerId = transfer.peer.id.value,
+                            transferId = transfer.id,
+                            eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
+                            state = "promoted",
+                            outcome = DiagnosticOutcome.SUCCESS
+                        )
                         val digest = withContext(Dispatchers.IO) {
                             runCatching { TestFileDigests.sha256(File(destinationPath)) }.getOrNull()
                         }
@@ -1465,11 +1560,52 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         )
 
         for (session in recipients) {
+            val connectionId = connectionIds[session.id]
+            val payloadSize = trimmed.toByteArray().size.toLong()
+            recordDiagnostic(
+                DiagnosticRecord(
+                    peerId = session.peer.id.value,
+                    connectionId = connectionId,
+                    category = "metadata",
+                    eventName = DiagnosticEventNames.METADATA_CREATED,
+                    payloadSizeBytes = payloadSize,
+                    direction = DiagnosticDirection.SENT,
+                    details = mapOf("messageType" to "text")
+                )
+            )
             scope.launch {
-                runCatchingNonCancel { session.send(body) }.onFailure {
-                    Log.w(LOG_TAG, "room: send to ${session.peer.name} failed", it)
-                    appendSystemMessage("send to ${session.peer.name} failed: ${it.message ?: it::class.simpleName}")
-                }
+                runCatchingNonCancel { session.send(body) }
+                    .onSuccess {
+                        recordDiagnostic(
+                            DiagnosticRecord(
+                                peerId = session.peer.id.value,
+                                connectionId = connectionId,
+                                category = "metadata",
+                                eventName = DiagnosticEventNames.METADATA_SENT,
+                                payloadSizeBytes = payloadSize,
+                                direction = DiagnosticDirection.SENT,
+                                outcome = DiagnosticOutcome.SUCCESS
+                            )
+                        )
+                    }
+                    .onFailure {
+                        recordDiagnostic(
+                            DiagnosticRecord(
+                                peerId = session.peer.id.value,
+                                connectionId = connectionId,
+                                category = "metadata",
+                                eventName = DiagnosticEventNames.METADATA_REJECTED,
+                                severity = DiagnosticSeverity.ERROR,
+                                payloadSizeBytes = payloadSize,
+                                direction = DiagnosticDirection.SENT,
+                                outcome = DiagnosticOutcome.FAILURE,
+                                errorCode = it::class.simpleName,
+                                errorDescription = it.message
+                            )
+                        )
+                        Log.w(LOG_TAG, "room: send to ${session.peer.name} failed", it)
+                        appendSystemMessage("send to ${session.peer.name} failed: ${it.message ?: it::class.simpleName}")
+                    }
             }
         }
     }
@@ -1529,7 +1665,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             )
         )
         _isStopping.value = true
-        kit = null
+        _cleanupPending.value = true
         _isRunning.value = false
         _advertising.value = false
         _discovering.value = false
@@ -1565,12 +1701,14 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     Log.e(LOG_TAG, "kit.stop failed; ownership retained", it)
                     // Snapshot-backed UI state remains main-thread confined.
                     withContext(Dispatchers.Main.immediate) {
-                        // Keep ownership so the user can retry a failed teardown.
-                        kit = toStop
-                        _isRunning.value = true
+                        // Keep ownership without presenting a false Running
+                        // state: all collectors were already cancelled.
+                        _cleanupPending.value = true
                         appendSystemMessage("stop failed: ${it.message ?: it::class.simpleName}")
                     }
                 }.onSuccess {
+                    if (kit === toStop) kit = null
+                    _cleanupPending.value = false
                     connectionIds.clear()
                     frameTraceLease?.release()
                     frameTraceLease = null
@@ -1587,8 +1725,6 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         frameTraceLease?.release()
         frameTraceLease = null
         diagnostics.shutdown()
-        val toStop = kit
-        kit = null
         val offersToReject = pendingFileOffers.toList()
         pendingFileOffers.clear()
         // AUDIT-2026-06: ARCH-samples-18 — never cancel cleanupScope while a
@@ -1596,12 +1732,21 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // then finish our own teardown, and only cancel the scope at the end.
         val finalCleanup = cleanupScope.launch {
             pendingStopJob?.join()
+            val toStop = kit
             if (toStop != null) {
                 offersToReject.forEach { pending ->
                     runCatchingNonCancel { pending.offer.reject("sample cleared before consent") }
                 }
                 runCatchingNonCancel { toStop.networkProvisioning.stopLocalNetwork() }
                 runCatchingNonCancel { toStop.stop() }
+                    .onSuccess {
+                        if (kit === toStop) kit = null
+                        _cleanupPending.value = false
+                    }
+                    .onFailure {
+                        Log.e(LOG_TAG, "final ViewModel cleanup failed; ownership retained", it)
+                        _cleanupPending.value = true
+                    }
             }
         }
         finalCleanup.invokeOnCompletion { cleanupScope.cancel() }
@@ -1774,22 +1919,38 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 session.peer.id.value
             )?.connectionId
             if (connectionId != null) connectionIds[session.id] = connectionId
-            recordDiagnostic(
-                DiagnosticRecord(
-                    peerId = session.peer.id.value,
-                    connectionId = connectionId,
-                    category = "connection",
-                    eventName = DiagnosticEventNames.CONNECTION_AUTHENTICATED,
-                    currentState = session.state.value.toString(),
-                    outcome = DiagnosticOutcome.SUCCESS
-                )
-            )
             connectedSessions.add(session)
             appendSystemMessage("connected to ${session.peer.name}")
             Log.i(LOG_TAG, "room: session added ${session.peer.name}")
             val incomingJob = scope.launch {
                 session.incoming.collect { msg ->
                     Log.i(LOG_TAG, "room: incoming from ${session.peer.name}")
+                    val payloadSize = when (msg) {
+                        is P2pMessage.Text -> msg.value.toByteArray().size.toLong()
+                        is P2pMessage.Binary -> msg.bytes.size.toLong()
+                    }
+                    recordDiagnostic(
+                        DiagnosticRecord(
+                            peerId = session.peer.id.value,
+                            connectionId = connectionIds[session.id],
+                            category = "metadata",
+                            eventName = DiagnosticEventNames.METADATA_RECEIVED,
+                            payloadSizeBytes = payloadSize,
+                            direction = DiagnosticDirection.RECEIVED
+                        )
+                    )
+                    recordDiagnostic(
+                        DiagnosticRecord(
+                            peerId = session.peer.id.value,
+                            connectionId = connectionIds[session.id],
+                            category = "metadata",
+                            eventName = DiagnosticEventNames.METADATA_VALIDATED,
+                            payloadSizeBytes = payloadSize,
+                            direction = DiagnosticDirection.RECEIVED,
+                            outcome = DiagnosticOutcome.SUCCESS,
+                            details = mapOf("authenticated" to "true")
+                        )
+                    )
                     appendRoomMessage(
                         RoomMessage(
                             id = nextMessageId++,
@@ -1825,6 +1986,16 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         )
                     )
                     if (st == ConnectionState.Connected) {
+                        recordDiagnostic(
+                            DiagnosticRecord(
+                                peerId = session.peer.id.value,
+                                connectionId = connectionIds[session.id],
+                                category = "security",
+                                eventName = DiagnosticEventNames.CONNECTION_AUTHENTICATED,
+                                currentState = "authenticated",
+                                outcome = DiagnosticOutcome.SUCCESS
+                            )
+                        )
                         recordDiagnostic(
                             DiagnosticRecord(
                                 peerId = session.peer.id.value,

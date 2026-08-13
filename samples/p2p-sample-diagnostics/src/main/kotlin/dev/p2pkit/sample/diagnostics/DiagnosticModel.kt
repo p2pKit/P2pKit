@@ -928,6 +928,8 @@ public class StructuredSdkLogger(
             "reconnect: attempt=" in lower && "succeeded" in lower ->
                 DiagnosticEventNames.RECOVERY_COMPLETED
             "reconnect: attempt=" in lower ->
+                DiagnosticEventNames.RECOVERY_STARTED
+            ("file" in lower || "transfer" in lower) && "retry" in lower ->
                 DiagnosticEventNames.TRANSFER_RETRY
             "timed out" in lower || "timeout" in lower ->
                 DiagnosticEventNames.TIMEOUT_EXPIRED
