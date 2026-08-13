@@ -35,103 +35,182 @@ resolve() {
             PR_BASE_SHA="$pr_base" \
             PR_HEAD_SHA="$pr_head" \
             RUNNER_TEMP="$WORK" \
-            "$RESOLVER" 2>/dev/null
+            "$RESOLVER"
     )
 }
 
 expect_scope() {
-    local expected="$1" reason_fragment="$2"
-    shift 2
-    local output full_value reason
-    output="$(resolve "$@")"
-    full_value="$(sed -n 's/^full=//p' <<<"$output")"
-    reason="$(sed -n 's/^reason=//p' <<<"$output")"
-    [[ "$(grep -Ec '^(full|base|head|reason)=' <<<"$output")" == "4" ]] ||
-        fail "resolver did not emit exactly four GitHub outputs: $output"
-    if [[ "$expected" == "full" ]]; then
-        [[ "$full_value" == "true" ]] || fail "expected full, got: $output"
+    local expected_scope="$1" expected_base="$2" expected_head="$3" expected_reason="$4"
+    shift 4
+    local expected_full actual_output expected_output actual_diagnostic expected_diagnostic
+    if [[ "$expected_scope" == "full" ]]; then
+        expected_full=true
     else
-        [[ "$full_value" == "false" ]] || fail "expected lightweight, got: $output"
+        expected_full=false
     fi
-    [[ "$reason" == *"$reason_fragment"* ]] ||
-        fail "reason '$reason' does not contain '$reason_fragment'"
+
+    if ! resolve "$@" >"$WORK/resolver.stdout" 2>"$WORK/resolver.stderr"; then
+        fail "resolver unexpectedly failed: $(<"$WORK/resolver.stderr")"
+    fi
+    actual_output="$(<"$WORK/resolver.stdout")"
+    expected_output="$(printf 'full=%s\nbase=%s\nhead=%s\nreason=%s\n' \
+        "$expected_full" "$expected_base" "$expected_head" "$expected_reason")"
+    [[ "$actual_output" == "$expected_output" ]] ||
+        fail "resolver outputs differ; expected [$expected_output], got [$actual_output]"
+
+    actual_diagnostic="$(<"$WORK/resolver.stderr")"
+    expected_diagnostic="CI scope: $expected_scope ($expected_reason)"
+    [[ "$actual_diagnostic" == "$expected_diagnostic" ]] ||
+        fail "resolver diagnostic differs; expected [$expected_diagnostic], got [$actual_diagnostic]"
+}
+
+expect_failure() {
+    local description="$1" expected_fragment="$2"
+    shift 2
+    if resolve "$@" >"$WORK/resolver.stdout" 2>"$WORK/resolver.stderr"; then
+        fail "$description unexpectedly passed"
+    fi
+    [[ ! -s "$WORK/resolver.stdout" ]] ||
+        fail "$description emitted partial GitHub outputs: $(<"$WORK/resolver.stdout")"
+    grep -Fq -- "$expected_fragment" "$WORK/resolver.stderr" ||
+        fail "$description did not report '$expected_fragment': $(<"$WORK/resolver.stderr")"
 }
 
 zero=0000000000000000000000000000000000000000
+missing=1111111111111111111111111111111111111111
 
-docs_repo="$(new_repo direct-docs)"
-docs_base="$(git -C "$docs_repo" rev-parse HEAD)"
-printf 'more docs\n' >>"$docs_repo/docs/old.md"
-git -C "$docs_repo" add .
-git -C "$docs_repo" commit -qm "docs"
-docs_head="$(git -C "$docs_repo" rev-parse HEAD)"
-expect_scope lightweight "direct push changed-file" \
-    "$docs_repo" push main "$docs_head" "$docs_base" '' ''
-expect_scope lightweight "pull request changed-file" \
-    "$docs_repo" pull_request feature "$docs_head" '' "$docs_base" "$docs_head"
+docs_pr_repo="$(new_repo docs-pr)"
+docs_pr_base="$(git -C "$docs_pr_repo" rev-parse HEAD)"
+git -C "$docs_pr_repo" switch -qc topic
+printf 'more docs\n' >>"$docs_pr_repo/docs/old.md"
+git -C "$docs_pr_repo" add .
+git -C "$docs_pr_repo" commit -qm "docs"
+docs_pr_head="$(git -C "$docs_pr_repo" rev-parse HEAD)"
+git -C "$docs_pr_repo" switch -q main
+git -C "$docs_pr_repo" merge -q --no-ff topic -m "synthetic PR merge"
+docs_pr_merge="$(git -C "$docs_pr_repo" rev-parse HEAD)"
+expect_scope lightweight "$docs_pr_base" "$docs_pr_merge" \
+    "pull request merge-result changed-file classification" \
+    "$docs_pr_repo" pull_request '17/merge' "$docs_pr_merge" '' \
+    "$docs_pr_base" "$docs_pr_head"
 
-source_repo="$(new_repo direct-source)"
-source_base="$(git -C "$source_repo" rev-parse HEAD)"
-printf 'code\n' >>"$source_repo/source.kt"
-git -C "$source_repo" add .
-git -C "$source_repo" commit -qm "source"
-source_head="$(git -C "$source_repo" rev-parse HEAD)"
-expect_scope full "direct push changed-file" \
-    "$source_repo" push main "$source_head" "$source_base" '' ''
+source_pr_repo="$(new_repo source-pr)"
+source_pr_base="$(git -C "$source_pr_repo" rev-parse HEAD)"
+git -C "$source_pr_repo" switch -qc topic
+printf 'code\n' >>"$source_pr_repo/source.kt"
+git -C "$source_pr_repo" add .
+git -C "$source_pr_repo" commit -qm "source"
+source_pr_head="$(git -C "$source_pr_repo" rev-parse HEAD)"
+git -C "$source_pr_repo" switch -q main
+git -C "$source_pr_repo" merge -q --no-ff topic -m "synthetic PR merge"
+source_pr_merge="$(git -C "$source_pr_repo" rev-parse HEAD)"
+expect_scope full "$source_pr_base" "$source_pr_merge" \
+    "pull request merge-result changed-file classification" \
+    "$source_pr_repo" pull_request '18/merge' "$source_pr_merge" '' \
+    "$source_pr_base" "$source_pr_head"
 
-rename_repo="$(new_repo rename-source-to-markdown)"
-rename_base="$(git -C "$rename_repo" rev-parse HEAD)"
-git -C "$rename_repo" mv source.kt notes.md
-git -C "$rename_repo" commit -qm "rename source to Markdown"
-rename_head="$(git -C "$rename_repo" rev-parse HEAD)"
-expect_scope full "pull request changed-file" \
-    "$rename_repo" pull_request feature "$rename_head" '' "$rename_base" "$rename_head"
-expect_scope full "direct push changed-file" \
-    "$rename_repo" push main "$rename_head" "$rename_base" '' ''
+rename_pr_repo="$(new_repo rename-pr)"
+rename_pr_base="$(git -C "$rename_pr_repo" rev-parse HEAD)"
+git -C "$rename_pr_repo" switch -qc topic
+git -C "$rename_pr_repo" mv source.kt notes.md
+git -C "$rename_pr_repo" commit -qm "rename source to Markdown"
+rename_pr_head="$(git -C "$rename_pr_repo" rev-parse HEAD)"
+git -C "$rename_pr_repo" switch -q main
+git -C "$rename_pr_repo" merge -q --no-ff topic -m "synthetic PR merge"
+rename_pr_merge="$(git -C "$rename_pr_repo" rev-parse HEAD)"
+expect_scope full "$rename_pr_base" "$rename_pr_merge" \
+    "pull request merge-result changed-file classification" \
+    "$rename_pr_repo" pull_request '19/merge' "$rename_pr_merge" '' \
+    "$rename_pr_base" "$rename_pr_head"
 
-markdown_rename_repo="$(new_repo rename-markdown)"
-markdown_rename_base="$(git -C "$markdown_rename_repo" rev-parse HEAD)"
-git -C "$markdown_rename_repo" mv docs/old.md docs/new.md
-git -C "$markdown_rename_repo" commit -qm "rename Markdown"
-markdown_rename_head="$(git -C "$markdown_rename_repo" rev-parse HEAD)"
-expect_scope lightweight "pull request changed-file" \
-    "$markdown_rename_repo" pull_request feature "$markdown_rename_head" '' \
-    "$markdown_rename_base" "$markdown_rename_head"
+# Even a two-parent commit with the advertised graph is classified from its
+# actual merge-result tree, so an unexpected non-Markdown result cannot inherit
+# a lightweight decision from the advertised PR head.
+result_repo="$(new_repo adversarial-merge-result)"
+result_base="$(git -C "$result_repo" rev-parse HEAD)"
+git -C "$result_repo" switch -qc topic
+printf 'topic docs\n' >>"$result_repo/docs/old.md"
+git -C "$result_repo" add .
+git -C "$result_repo" commit -qm "topic docs"
+result_pr_head="$(git -C "$result_repo" rev-parse HEAD)"
+git -C "$result_repo" switch -q main
+printf 'unexpected merge content\n' >>"$result_repo/source.kt"
+git -C "$result_repo" add source.kt
+result_tree="$(git -C "$result_repo" write-tree)"
+git -C "$result_repo" reset -q --hard "$result_base"
+result_merge="$(printf 'adversarial merge result\n' | git -C "$result_repo" commit-tree \
+    "$result_tree" -p "$result_base" -p "$result_pr_head")"
+git -C "$result_repo" reset -q --hard "$result_merge"
+expect_scope full "$result_base" "$result_merge" \
+    "pull request merge-result changed-file classification" \
+    "$result_repo" pull_request '20/merge' "$result_merge" '' \
+    "$result_base" "$result_pr_head"
 
-identical_repo="$(new_repo exact-tree-merge)"
-identical_base="$(git -C "$identical_repo" rev-parse HEAD)"
-git -C "$identical_repo" switch -qc topic
-printf 'topic source\n' >>"$identical_repo/source.kt"
-git -C "$identical_repo" add .
-git -C "$identical_repo" commit -qm "topic"
-topic_head="$(git -C "$identical_repo" rev-parse HEAD)"
-git -C "$identical_repo" switch -q main
-git -C "$identical_repo" merge -q --no-ff topic -m "merge topic"
-identical_merge="$(git -C "$identical_repo" rev-parse HEAD)"
-[[ "$(git -C "$identical_repo" rev-parse "HEAD^{tree}")" == \
-    "$(git -C "$identical_repo" rev-parse "$topic_head^{tree}")" ]] ||
-    fail "exact-tree merge fixture is not exact"
-expect_scope lightweight "exactly reuses its verified PR-parent tree" \
-    "$identical_repo" push main "$identical_merge" "$identical_base" '' ''
-expect_scope full "not exactly the single two-parent merge" \
-    "$identical_repo" push main "$identical_merge" "$zero" '' ''
-expect_scope full "not eligible for exact-tree reuse" \
-    "$identical_repo" push maintenance "$identical_merge" "$identical_base" '' ''
+expect_failure "mismatched PR base" \
+    "pull-request GITHUB_SHA first parent does not equal PR_BASE_SHA" \
+    "$docs_pr_repo" pull_request '17/merge' "$docs_pr_merge" '' \
+    "$docs_pr_head" "$docs_pr_base"
+expect_failure "mismatched PR head" \
+    "pull-request GITHUB_SHA second parent does not equal PR_HEAD_SHA" \
+    "$docs_pr_repo" pull_request '17/merge' "$docs_pr_merge" '' \
+    "$docs_pr_base" "$docs_pr_base"
+expect_failure "PR event/check-out mismatch" \
+    "GITHUB_SHA does not equal the checked-out HEAD" \
+    "$docs_pr_repo" pull_request '17/merge' "$docs_pr_head" '' \
+    "$docs_pr_base" "$docs_pr_head"
+git -C "$docs_pr_repo" switch -q topic
+expect_failure "non-merge PR event" \
+    "pull-request GITHUB_SHA must have exactly two parents" \
+    "$docs_pr_repo" pull_request '17/merge' "$docs_pr_head" '' \
+    "$docs_pr_base" "$docs_pr_head"
+git -C "$docs_pr_repo" switch -q main
 
-changed_repo="$(new_repo changed-tree-merge)"
-git -C "$changed_repo" switch -qc topic
-printf 'topic source\n' >>"$changed_repo/source.kt"
-git -C "$changed_repo" add .
-git -C "$changed_repo" commit -qm "topic"
-git -C "$changed_repo" switch -q main
-printf '# Main-only change\n' >"$changed_repo/docs/main.md"
-git -C "$changed_repo" add .
-git -C "$changed_repo" commit -qm "main change"
-git -C "$changed_repo" merge -q --no-ff topic -m "merge changed tree"
-changed_merge="$(git -C "$changed_repo" rev-parse HEAD)"
-changed_first_parent="$(git -C "$changed_repo" rev-parse HEAD^1)"
-expect_scope full "differs from the PR-parent tree" \
-    "$changed_repo" push main "$changed_merge" "$changed_first_parent" '' ''
+direct_docs_repo="$(new_repo direct-docs-push)"
+direct_docs_base="$(git -C "$direct_docs_repo" rev-parse HEAD)"
+printf 'pushed docs\n' >>"$direct_docs_repo/docs/old.md"
+git -C "$direct_docs_repo" add .
+git -C "$direct_docs_repo" commit -qm "docs push"
+direct_docs_head="$(git -C "$direct_docs_repo" rev-parse HEAD)"
+expect_scope full "$direct_docs_base" "$direct_docs_head" \
+    "main push requires complete gate" \
+    "$direct_docs_repo" push main "$direct_docs_head" "$direct_docs_base" '' ''
+
+exact_tree_repo="$(new_repo exact-tree-push)"
+exact_tree_base="$(git -C "$exact_tree_repo" rev-parse HEAD)"
+git -C "$exact_tree_repo" switch -qc topic
+printf 'topic source\n' >>"$exact_tree_repo/source.kt"
+git -C "$exact_tree_repo" add .
+git -C "$exact_tree_repo" commit -qm "topic"
+exact_tree_topic="$(git -C "$exact_tree_repo" rev-parse HEAD)"
+git -C "$exact_tree_repo" switch -q main
+git -C "$exact_tree_repo" merge -q --no-ff topic -m "exact-tree merge"
+exact_tree_merge="$(git -C "$exact_tree_repo" rev-parse HEAD)"
+[[ "$(git -C "$exact_tree_repo" rev-parse "$exact_tree_merge^{tree}")" == \
+    "$(git -C "$exact_tree_repo" rev-parse "$exact_tree_topic^{tree}")" ]] ||
+    fail "exact-tree push fixture is not exact"
+expect_scope full "$exact_tree_base" "$exact_tree_merge" \
+    "main push requires complete gate" \
+    "$exact_tree_repo" push main "$exact_tree_merge" "$exact_tree_base" '' ''
+
+# A multi-commit push ending in a merge must retain github.event.before, not
+# silently narrow the whitespace comparison to the merge's first parent.
+multi_repo="$(new_repo multi-commit-merge-push)"
+multi_base="$(git -C "$multi_repo" rev-parse HEAD)"
+git -C "$multi_repo" switch -qc topic
+printf 'topic source\n' >>"$multi_repo/source.kt"
+git -C "$multi_repo" add .
+git -C "$multi_repo" commit -qm "topic source"
+git -C "$multi_repo" switch -q main
+printf '# Main push commit\n' >"$multi_repo/docs/main.md"
+git -C "$multi_repo" add .
+git -C "$multi_repo" commit -qm "first pushed commit"
+multi_first_parent="$(git -C "$multi_repo" rev-parse HEAD)"
+git -C "$multi_repo" merge -q --no-ff topic -m "last pushed merge"
+multi_head="$(git -C "$multi_repo" rev-parse HEAD)"
+[[ "$multi_base" != "$multi_first_parent" ]] || fail "multi-push fixture did not advance"
+expect_scope full "$multi_base" "$multi_head" \
+    "main push requires complete gate" \
+    "$multi_repo" push main "$multi_head" "$multi_base" '' ''
 
 rewritten_repo="$(new_repo rewritten-push)"
 git -C "$rewritten_repo" switch -qc previous
@@ -144,37 +223,37 @@ printf 'replacement\n' >>"$rewritten_repo/source.kt"
 git -C "$rewritten_repo" add .
 git -C "$rewritten_repo" commit -qm "replacement line"
 rewritten_head="$(git -C "$rewritten_repo" rev-parse HEAD)"
-expect_scope full "not an ancestor" \
+rewritten_empty_tree="$(git -C "$rewritten_repo" hash-object -t tree /dev/null)"
+expect_scope full "$rewritten_empty_tree" "$rewritten_head" \
+    "push base is not an ancestor; using all-tree fallback" \
     "$rewritten_repo" push main "$rewritten_head" "$previous_head" '' ''
 
-octopus_repo="$(new_repo octopus)"
-octopus_base="$(git -C "$octopus_repo" rev-parse HEAD)"
-git -C "$octopus_repo" switch -qc one
-printf '# One\n' >"$octopus_repo/docs/one.md"
-git -C "$octopus_repo" add .
-git -C "$octopus_repo" commit -qm "one"
-git -C "$octopus_repo" switch -q main
-git -C "$octopus_repo" switch -qc two
-printf '# Two\n' >"$octopus_repo/docs/two.md"
-git -C "$octopus_repo" add .
-git -C "$octopus_repo" commit -qm "two"
-git -C "$octopus_repo" switch -q main
-git -C "$octopus_repo" merge -q --no-ff one two -m "octopus"
-octopus_head="$(git -C "$octopus_repo" rev-parse HEAD)"
-expect_scope full "multi-parent push" \
-    "$octopus_repo" push main "$octopus_head" "$octopus_base" '' ''
+direct_docs_empty_tree="$(git -C "$direct_docs_repo" hash-object -t tree /dev/null)"
+expect_scope full "$direct_docs_empty_tree" "$direct_docs_head" \
+    "push base unavailable; using all-tree fallback" \
+    "$direct_docs_repo" push main "$direct_docs_head" "$zero" '' ''
+expect_scope full "$direct_docs_empty_tree" "$direct_docs_head" \
+    "push base unavailable; using all-tree fallback" \
+    "$direct_docs_repo" push main "$direct_docs_head" "$missing" '' ''
+expect_scope full "$direct_docs_empty_tree" "$direct_docs_head" \
+    "manual dispatch uses all-tree fallback" \
+    "$direct_docs_repo" workflow_dispatch main "$direct_docs_head" '' '' ''
+expect_scope full "$direct_docs_empty_tree" "$direct_docs_head" \
+    "unsupported event uses all-tree fallback" \
+    "$direct_docs_repo" schedule main "$direct_docs_head" '' '' ''
 
-expect_scope full "push base unavailable" \
-    "$docs_repo" push main "$docs_head" "$zero" '' ''
-expect_scope full "push base unavailable" \
-    "$docs_repo" push main "$docs_base" "$zero" '' ''
-expect_scope full "manual dispatch" \
-    "$docs_repo" workflow_dispatch main "$docs_head" '' '' ''
-expect_scope full "unsupported event" \
-    "$docs_repo" schedule main "$docs_head" '' '' ''
+expect_failure "non-main push" "push REF_NAME must be main" \
+    "$direct_docs_repo" push maintenance "$direct_docs_head" "$direct_docs_base" '' ''
+expect_failure "unavailable GITHUB_SHA" \
+    "GITHUB_SHA is not an available exact commit" \
+    "$direct_docs_repo" push main "$zero" "$direct_docs_base" '' ''
+annotated_event_tag="$(git -C "$direct_docs_repo" tag -a event-object -m event-object HEAD &&
+    git -C "$direct_docs_repo" rev-parse refs/tags/event-object)"
+expect_failure "annotated tag object as GITHUB_SHA" \
+    "GITHUB_SHA is not an available exact commit" \
+    "$direct_docs_repo" push main "$annotated_event_tag" "$direct_docs_base" '' ''
+expect_failure "push event/check-out mismatch" \
+    "GITHUB_SHA does not equal the checked-out HEAD" \
+    "$direct_docs_repo" push main "$direct_docs_base" "$zero" '' ''
 
-if resolve "$docs_repo" push main "$zero" "$docs_base" '' '' >/dev/null 2>&1; then
-    fail "unavailable GITHUB_SHA did not fail closed"
-fi
-
-echo "RESULT: PASS — rename, direct, PR, exact-tree merge, changed merge, rewritten push, octopus, and invalid-SHA scopes are fail closed"
+echo "RESULT: PASS — exact PR graphs/results, deterministic outputs, full main pushes, complete push ranges, and all-tree fallbacks are fail closed"

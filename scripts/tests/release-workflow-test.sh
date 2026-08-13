@@ -118,6 +118,8 @@ require_text 'environment:'
 require_text 'name: maven-central'
 require_text 'persist-credentials: false'
 require_text 'scripts/check-maven-central-version.sh absent'
+# The dollar-prefixed names are literal workflow text, not shell expansions.
+# shellcheck disable=SC2016
 require_text 'scripts/check-release-identity.sh "$RELEASE_TAG" "$RELEASE_SHA" require-tag'
 require_text 'MAVEN_CENTRAL_NAMESPACE: io.github.apdelrahman1911'
 require_text 'scripts/tests/check-maven-namespace-access-test.sh'
@@ -138,6 +140,7 @@ for isolation_flag in --no-daemon --no-build-cache --rerun-tasks; do
         exit 1
     }
 done
+# shellcheck disable=SC2016
 grep -Fq 'RELEASE_RECORD="docs/releases/$LATEST_PUBLISHED.md"' "$RELEASE_METADATA_CHECK" || {
     echo "FATAL: release metadata does not select the current published release record dynamically" >&2
     exit 1
@@ -157,6 +160,7 @@ for workflow in "$CI_WORKFLOW" "$DRY_RUN_WORKFLOW" "$WORKFLOW"; do
         echo "FATAL: workflow does not install API 36 for libraries and API 37 for the Android sample: $workflow" >&2
         exit 1
     }
+    # shellcheck disable=SC2016
     grep -Fq 'scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen"' "$workflow" || {
         echo "FATAL: workflow does not install the pinned XcodeGen tool: $workflow" >&2
         exit 1
@@ -218,9 +222,18 @@ scope = steps.find { |step| step["name"] == "Classify required-check scope" }
 raise "CI scope resolution step is missing" unless scope
 raise "CI does not use the fail-closed scope resolver" unless
   scope.fetch("run").include?("scripts/resolve-ci-scope.sh")
+expected_scope_env = {
+  "EVENT_NAME" => "${{ github.event_name }}",
+  "REF_NAME" => "${{ github.ref_name }}",
+  "BEFORE_SHA" => "${{ github.event.before }}",
+  "PR_BASE_SHA" => "${{ github.event.pull_request.base.sha }}",
+  "PR_HEAD_SHA" => "${{ github.event.pull_request.head.sha }}",
+}
+raise "CI scope resolver is not bound to the complete event identity" unless
+  scope.fetch("env") == expected_scope_env
 
 whitespace = steps.find { |step| step["name"] == "Verify committed and local whitespace" }
-raise "CI exact-tree whitespace step is missing" unless whitespace
+raise "CI range/tree whitespace step is missing" unless whitespace
 raise "CI whitespace check must run for both scopes" if whitespace.key?("if")
 raise "CI whitespace check is not range-bound" unless
   whitespace.fetch("run").include?("scripts/check-git-whitespace.sh \"$BASE_SHA\" \"$HEAD_SHA\"")
@@ -253,7 +266,7 @@ grep -Fq 'id: scope' "$CI_WORKFLOW" || {
     exit 1
 }
 grep -Fq 'scripts/resolve-ci-scope.sh' "$CI_WORKFLOW" || {
-    echo "FATAL: CI does not use fail-closed exact-tree scope resolution" >&2
+    echo "FATAL: CI does not use fail-closed event-graph scope resolution" >&2
     exit 1
 }
 grep -Fq "if: steps.scope.outputs.full == 'true'" "$CI_WORKFLOW" || {
