@@ -332,7 +332,21 @@ class AndroidNetworkProvisioningManagerTest {
         val first = async(Dispatchers.Default) { runCatching { mgr.close() }.exceptionOrNull() }
         try {
             assertTrue(closeEntered.await(2, TimeUnit.SECONDS), "resource cleanup did not start")
-            val second = async(Dispatchers.Default) { runCatching { mgr.close() }.exceptionOrNull() }
+            // Start inline until close() suspends on the first caller's attempt.
+            // Merely launching on Dispatchers.Default does not prove concurrency:
+            // a busy runner may schedule this coroutine only after the latch is
+            // released and the failed first attempt completes, in which case a
+            // new (correctly retrying) close call observes success.
+            val second = async(
+                Dispatchers.Default,
+                start = CoroutineStart.UNDISPATCHED
+            ) {
+                runCatching { mgr.close() }.exceptionOrNull()
+            }
+            assertFalse(
+                second.isCompleted,
+                "second close must be awaiting the in-flight cleanup transaction"
+            )
 
             closeRelease.countDown()
             val firstFailure = assertIs<NetworkProvisioningError.CleanupFailed>(first.await())

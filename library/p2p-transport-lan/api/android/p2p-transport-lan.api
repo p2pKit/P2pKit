@@ -1,0 +1,16 @@
+public final class dev/p2pkit/transport/lan/AndroidLanDiag {
+	public static final field INSTANCE Ldev/p2pkit/transport/lan/AndroidLanDiag;
+	public final fun frame (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun getEnabled ()Z
+	public final fun getEvents ()Lkotlinx/coroutines/flow/SharedFlow;
+	public final fun getRetainHistory ()Z
+	public final fun getTraceFrames ()Z
+	public final fun setEnabled (Z)V
+	public final fun setRetainHistory (Z)V
+	public final fun setTraceFrames (Z)V
+}
+
+public final class dev/p2pkit/transport/lan/AndroidLanDslKt {
+	public static final fun lan (Ldev/p2pkit/core/dsl/TransportsBuilder;Landroid/content/Context;)V
+}
+

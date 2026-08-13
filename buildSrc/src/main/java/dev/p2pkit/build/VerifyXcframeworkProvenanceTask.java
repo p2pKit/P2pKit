@@ -28,6 +28,10 @@ public abstract class VerifyXcframeworkProvenanceTask extends DefaultTask {
     @PathSensitive(PathSensitivity.NONE)
     public abstract ConfigurableFileCollection getFrameworkBinaries();
 
+    @InputFiles
+    @PathSensitive(PathSensitivity.RELATIVE)
+    public abstract ConfigurableFileCollection getFrameworkArtifacts();
+
     @Internal
     public abstract DirectoryProperty getRootDirectory();
 
@@ -49,6 +53,10 @@ public abstract class VerifyXcframeworkProvenanceTask extends DefaultTask {
     @PathSensitive(PathSensitivity.NONE)
     public abstract RegularFileProperty getFingerprintFile();
 
+    @InputFile
+    @PathSensitive(PathSensitivity.NONE)
+    public abstract RegularFileProperty getArtifactFingerprintFile();
+
     @TaskAction
     public void verify() throws IOException {
         String expectedCommit = getSourceCommit().get();
@@ -65,6 +73,16 @@ public abstract class VerifyXcframeworkProvenanceTask extends DefaultTask {
         );
         String actualFingerprint = Files.readString(getFingerprintFile().get().getAsFile().toPath()).trim();
         require(actualFingerprint.equals(expectedFingerprint), "input fingerprint");
+        var artifacts = getFrameworkArtifacts().getFiles();
+        require(artifacts.size() >= 4 && artifacts.stream().allMatch(File::isFile), "framework artifacts");
+        String expectedArtifactFingerprint = ProvenanceFiles.fingerprint(
+            artifacts,
+            getRootDirectory().get().getAsFile()
+        );
+        String actualArtifactFingerprint = Files.readString(
+            getArtifactFingerprintFile().get().getAsFile().toPath()
+        ).trim();
+        require(actualArtifactFingerprint.equals(expectedArtifactFingerprint), "artifact fingerprint");
     }
 
     private static void require(boolean condition, String field) {

@@ -6,7 +6,8 @@ make documented breaking changes before `1.0.0` in a new version.
 
 - Published Maven coordinates and Git tags are immutable.
 - All P2pKit modules used by one application should have the same version.
-- Kotlin and Java compatibility is guarded by committed ABI baselines.
+- Kotlin and Java compatibility is guarded by committed JVM/KLIB baselines
+  plus Kotlin-metadata-aware Android bytecode baselines for Android-only APIs.
 - Swift consumes a source-built XCFramework; generated names and exported ABI
   are checked by Apple builds and Swift warnings-as-errors gates.
 - Protocol v2 changes require explicit negotiation and must fail closed with

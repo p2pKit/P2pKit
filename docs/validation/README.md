@@ -2,9 +2,15 @@
 
 This directory is the authoritative execution handbook for validation that
 cannot be completed honestly by a single local checkout. The latest published
-release is `0.7.0-rc3`, which is the immutable candidate for these campaigns;
-current `main` is a later `0.7.0-SNAPSHOT` development line. No status below is
-upgraded without retained evidence from the exact tested commit and artifacts.
+release, `0.7.0-rc3`, is immutable historical release evidence. Current `main`
+is a later `0.7.0-SNAPSHOT` development line containing post-RC3 corrections,
+so tests of either tree do not certify the other.
+
+Before any campaign starts, freeze one explicitly approved commit and artifact
+set, then record its commit SHA, tree SHA, version, and artifact checksums in
+every result. No post-audit campaign candidate has been designated by this
+document, and no status below is upgraded without retained evidence from the
+exact tested tree and artifacts.
 
 ## Current status
 

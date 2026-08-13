@@ -26,6 +26,10 @@ public abstract class WriteXcframeworkProvenanceTask extends DefaultTask {
     @PathSensitive(PathSensitivity.NONE)
     public abstract ConfigurableFileCollection getFrameworkBinaries();
 
+    @InputFiles
+    @PathSensitive(PathSensitivity.RELATIVE)
+    public abstract ConfigurableFileCollection getFrameworkArtifacts();
+
     @Internal
     public abstract DirectoryProperty getRootDirectory();
 
@@ -44,6 +48,9 @@ public abstract class WriteXcframeworkProvenanceTask extends DefaultTask {
     @OutputFile
     public abstract RegularFileProperty getFingerprintFile();
 
+    @OutputFile
+    public abstract RegularFileProperty getArtifactFingerprintFile();
+
     @TaskAction
     public void write() {
         String commit = getSourceCommit().get();
@@ -58,11 +65,23 @@ public abstract class WriteXcframeworkProvenanceTask extends DefaultTask {
             getProvenanceInputs().getFiles(),
             getRootDirectory().get().getAsFile()
         );
+        var artifacts = getFrameworkArtifacts().getFiles();
+        if (artifacts.size() < 4 || artifacts.stream().anyMatch(file -> !file.isFile())) {
+            throw new GradleException("XCFramework provenance did not capture binaries and headers");
+        }
+        String artifactFingerprint = ProvenanceFiles.fingerprint(
+            artifacts,
+            getRootDirectory().get().getAsFile()
+        );
         ProvenanceFiles.writeIfChanged(getCommitFile().get().getAsFile(), commit + "\n");
         ProvenanceFiles.writeIfChanged(
             getStateFile().get().getAsFile(),
             getRelevantSourceDirty().get() ? "dirty\n" : "clean\n"
         );
         ProvenanceFiles.writeIfChanged(getFingerprintFile().get().getAsFile(), fingerprint + "\n");
+        ProvenanceFiles.writeIfChanged(
+            getArtifactFingerprintFile().get().getAsFile(),
+            artifactFingerprint + "\n"
+        );
     }
 }

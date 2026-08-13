@@ -9,6 +9,11 @@
 - `BUILD-02` and `ENV-07` remote publication/consumer evidence are recorded in
   the [`0.7.0-rc3` release record](../releases/0.7.0-rc3.md).
 
+Those are immutable historical RC3 results. Current `main` is a post-RC3
+`0.7.0-SNAPSHOT` development line. Automated results for current `main` do not
+retroactively validate RC3, and RC3 results do not validate later fixes. The
+six campaigns below must use one separately frozen commit and artifact set.
+
 ## Pending external validation
 
 The following remain pending and must not be described as verified:

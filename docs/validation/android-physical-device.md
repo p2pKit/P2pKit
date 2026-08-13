@@ -36,15 +36,22 @@ coupling.
 From a clean checkout of the candidate commit:
 
 ```bash
-export P2PKIT_SHA="$(git rev-parse HEAD)"
+: "${P2PKIT_CANDIDATE_SHA:?set the approved 40-hex campaign commit}"
+export P2PKIT_SHA="$(git rev-parse 'HEAD^{commit}')"
+export P2PKIT_TREE="$(git rev-parse 'HEAD^{tree}')"
+test "$P2PKIT_SHA" = "$P2PKIT_CANDIDATE_SHA"
 test -z "$(git status --short)"
-test "$(git rev-parse 'v0.7.0-rc3^{commit}')" = \
-  "deed9e77b81b6f1082519f44804de038eb5dcc0e"
 ./gradlew --no-daemon :p2p-sample-android:clean \
   :p2p-sample-android:assembleDebug \
   :p2p-sample-android:assembleDebugAndroidTest
+shasum -a 256 samples/p2p-sample-android/build/outputs/apk/debug/*.apk
 adb devices -l
 ```
+
+Record `P2PKIT_SHA`, `P2PKIT_TREE`, and every APK hash. Do not substitute the
+immutable `v0.7.0-rc3` tag unless the campaign has explicitly been approved to
+certify RC3 itself; current post-RC3 source evidence cannot be attributed to
+that published release.
 
 Use a separate terminal with `ANDROID_SERIAL` set for each device:
 

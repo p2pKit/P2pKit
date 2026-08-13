@@ -1,4 +1,6 @@
 import dev.p2pkit.build.P2pPomMetadata
+import kotlinx.validation.KotlinApiBuildTask
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -32,6 +34,14 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
         }
     }
+}
+
+// Kotlin's built-in ABI validator excludes Android targets. Feed the
+// supplemental metadata-aware guard from the compiler's declared output;
+// flatMap retains producer ownership if Kotlin relocates that output.
+val compileAndroidMain = tasks.named<KotlinCompile>("compileAndroidMain")
+tasks.named<KotlinApiBuildTask>("buildAndroidAbi") {
+    inputClassesDirs.from(compileAndroidMain.flatMap { it.destinationDirectory })
 }
 
 dokka {

@@ -5,6 +5,8 @@ import dev.p2pkit.build.GitDirtyValueSource
 import dev.p2pkit.build.P2pPomMetadata
 import dev.p2pkit.build.VerifyBuildInfoTask
 import org.gradle.api.tasks.testing.Test
+import kotlinx.validation.KotlinApiBuildTask
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -42,14 +44,18 @@ val buildInfoCommitTime = providers.of(GitCommitTimeValueSource::class) {
 }
 
 val buildInfoRelevantPaths = listOf(
-    "buildSrc/src/main/java/dev/p2pkit/build",
+    "buildSrc/src",
     "library/p2p-core/src",
     "library/p2p-core/build.gradle.kts",
+    "library/p2p-core/gradle.lockfile",
     "build.gradle.kts",
     "settings.gradle.kts",
+    "settings-gradle.lockfile",
+    "gradle.lockfile",
     "gradle.properties",
     "gradle/libs.versions.toml",
-    "gradle/wrapper/gradle-wrapper.properties",
+    "gradle/verification-metadata.xml",
+    "gradle/wrapper",
 )
 val buildInfoDirty = providers.of(GitDirtyValueSource::class) {
     parameters.rootDirectory.set(rootProject.layout.projectDirectory)
@@ -75,6 +81,10 @@ val verifyBuildInfoReproducibility by tasks.registering(VerifyBuildInfoTask::cla
     sourceCommit.set(buildInfoGitCommit)
     sourceCommitTime.set(buildInfoCommitTime)
     relevantSourceDirty.set(buildInfoDirty)
+}
+
+tasks.named("check") {
+    dependsOn(verifyBuildInfoReproducibility)
 }
 
 kotlin {
@@ -132,6 +142,14 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
         }
     }
+}
+
+// Kotlin's built-in ABI validator excludes Android targets. Feed the
+// supplemental metadata-aware guard from the compiler's declared output;
+// flatMap retains producer ownership if Kotlin relocates that output.
+val compileAndroidMain = tasks.named<KotlinCompile>("compileAndroidMain")
+tasks.named<KotlinApiBuildTask>("buildAndroidAbi") {
+    inputClassesDirs.from(compileAndroidMain.flatMap { it.destinationDirectory })
 }
 
 // Android KMP host tests execute against the compile-time android.jar stubs,

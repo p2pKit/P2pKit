@@ -91,14 +91,31 @@ check() {
     source_entries="$(unzip -Z1 "$sources")"
     javadoc_entries="$(unzip -Z1 "$javadoc")"
     if [[ "$artifact" != "p2p-network-provisioning-android" ]]; then
-        [[ "$source_entries" =~ \.kt$ ]] || invalid="$invalid sources-without-kotlin"
+        grep -Eq '\.kt$' <<<"$source_entries" || invalid="$invalid sources-without-kotlin"
     fi
     [[ "$javadoc_entries" =~ (^|$'\n')([^$'\n']*/)?index\.html($|$'\n') ]] ||
         invalid="$invalid javadoc-without-index"
 
+    # Published JVM jars and Android AARs must carry the exact canonical
+    # repository license, not merely a POM URL.
+    local license_copy="$INSPECTION_DIR/$artifact-LICENSE"
+    if [[ "$main_suffix" == ".aar" ]]; then
+        if ! unzip -p "$main" META-INF/LICENSE >"$license_copy"; then
+            invalid="$invalid missing-embedded-license"
+        fi
+    elif [[ "$main_suffix" == ".jar" ]]; then
+        if ! unzip -p "$main" META-INF/LICENSE >"$license_copy"; then
+            invalid="$invalid missing-embedded-license"
+        fi
+    fi
+    if [[ -f "$license_copy" ]] && ! cmp -s "$ROOT/LICENSE" "$license_copy"; then
+        invalid="$invalid noncanonical-embedded-license"
+    fi
+
     xmllint --noout "$pom" >/dev/null 2>&1 || invalid="$invalid malformed-pom"
     local pom_group pom_artifact pom_version pom_name pom_description pom_url
-    local pom_license pom_developer pom_scm
+    local pom_license pom_developer pom_developer_email pom_developer_org
+    local pom_developer_org_url pom_scm
     pom_group="$(xmllint --xpath "string(/*[local-name()='project']/*[local-name()='groupId'])" "$pom")"
     pom_artifact="$(xmllint --xpath "string(/*[local-name()='project']/*[local-name()='artifactId'])" "$pom")"
     pom_version="$(xmllint --xpath "string(/*[local-name()='project']/*[local-name()='version'])" "$pom")"
@@ -107,6 +124,9 @@ check() {
     pom_url="$(xmllint --xpath "string(/*[local-name()='project']/*[local-name()='url'])" "$pom")"
     pom_license="$(xmllint --xpath "string(/*[local-name()='project']/*[local-name()='licenses']/*[local-name()='license']/*[local-name()='name'])" "$pom")"
     pom_developer="$(xmllint --xpath "string(/*[local-name()='project']/*[local-name()='developers']/*[local-name()='developer']/*[local-name()='id'])" "$pom")"
+    pom_developer_email="$(xmllint --xpath "string(/*[local-name()='project']/*[local-name()='developers']/*[local-name()='developer']/*[local-name()='email'])" "$pom")"
+    pom_developer_org="$(xmllint --xpath "string(/*[local-name()='project']/*[local-name()='developers']/*[local-name()='developer']/*[local-name()='organization'])" "$pom")"
+    pom_developer_org_url="$(xmllint --xpath "string(/*[local-name()='project']/*[local-name()='developers']/*[local-name()='developer']/*[local-name()='organizationUrl'])" "$pom")"
     pom_scm="$(xmllint --xpath "string(/*[local-name()='project']/*[local-name()='scm']/*[local-name()='url'])" "$pom")"
 
     [[ "$pom_group" == "$GROUP" ]] || invalid="$invalid pom-group"
@@ -117,6 +137,10 @@ check() {
     [[ "$pom_license" == "The Apache License, Version 2.0" ]] || invalid="$invalid pom-license"
     [[ -n "$pom_developer" && "$pom_scm" == "https://github.com/p2pKit/P2pKit" ]] ||
         invalid="$invalid pom-ownership"
+    [[ "$pom_developer_email" == "apdelrahman1911@users.noreply.github.com" &&
+       "$pom_developer_org" == "p2pKit" &&
+       "$pom_developer_org_url" == "https://github.com/p2pKit" ]] ||
+        invalid="$invalid pom-developer-metadata"
 
     local component_artifact="$artifact"
     case "$artifact" in

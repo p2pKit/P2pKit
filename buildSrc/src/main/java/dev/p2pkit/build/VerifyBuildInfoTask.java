@@ -2,6 +2,8 @@ package dev.p2pkit.build;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import org.gradle.api.DefaultTask;
 import org.gradle.api.GradleException;
 import org.gradle.api.file.RegularFileProperty;
@@ -31,18 +33,29 @@ public abstract class VerifyBuildInfoTask extends DefaultTask {
     @TaskAction
     public void verify() throws IOException {
         String content = Files.readString(getGeneratedFile().get().getAsFile().toPath());
-        require(content.contains("public const val COMMIT: String = \"" + getSourceCommit().get() + "\""));
-        require(content.contains("public const val COMMIT_TIME: String = \"" + getSourceCommitTime().get() + "\""));
-        require(content.contains("public const val DIRTY: Boolean = " + getRelevantSourceDirty().get()));
-        require(content.contains("public const val BRANCH: String = \"not-embedded\""));
-        require(content.contains("public const val BUILD_TIME: String = COMMIT_TIME"));
-        require(!content.contains("Instant.now"));
-        require(!content.contains("built \" + BUILD_TIME"));
+        String commit = getSourceCommit().get();
+        String commitTime = getSourceCommitTime().get();
+        require(commit.matches("[0-9a-f]{40,64}"));
+        require(validInstant(commitTime));
+        require(content.equals(GenerateBuildInfoTask.render(
+            commit,
+            commitTime,
+            getRelevantSourceDirty().get()
+        )));
     }
 
     private static void require(boolean condition) {
         if (!condition) {
             throw new GradleException("Generated BuildInfo violates the reproducible provenance contract");
+        }
+    }
+
+    private static boolean validInstant(String value) {
+        try {
+            Instant.parse(value);
+            return true;
+        } catch (DateTimeParseException ignored) {
+            return false;
         }
     }
 }

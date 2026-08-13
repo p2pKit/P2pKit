@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# The quoted expressions below are intentional literal source-policy probes.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -13,6 +15,7 @@ PUBLICATION_GATE="$ROOT/scripts/check-publish-artifacts.sh"
 XCFRAMEWORK_GATE="$ROOT/scripts/check-xcframework-minimum-os.sh"
 CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 RELEASE_GATE="$ROOT/scripts/run-release-gate.sh"
+WORKFLOW_DIR="$ROOT/.github/workflows"
 
 fail() {
     echo "FATAL: $*" >&2
@@ -20,9 +23,41 @@ fail() {
 }
 
 grep -Fq 'kotlin = "2.4.10"' "$CATALOG" || fail "Kotlin 2.4.10 is not the catalog toolchain"
+grep -Fq 'binary-compatibility-validator = "0.18.1"' "$CATALOG" ||
+    fail "the Android ABI metadata reader is not pinned"
 grep -Fqx 'IOS_MIN_VERSION=14.0' "$PROPERTIES" || fail "the iOS 14 floor is not canonical"
 grep -Fqx 'kotlin.native.ignoreDisabledTargets=true' "$PROPERTIES" ||
     fail "Apple Silicon host-mismatch handling is not explicit"
+
+# Kotlin 2.4.10 is the latest stable toolchain but is below the first patched
+# 2.4.20 EAP for CVE-2026-53914. GitHub builds may keep dependency/wrapper
+# caches, but no Gradle action may restore or persist caches/build-cache-1
+# across runs until a stable patched Kotlin toolchain is qualified.
+gradle_workflow_count=0
+for workflow in "$WORKFLOW_DIR"/*.yml "$WORKFLOW_DIR"/*.yaml; do
+    [[ -f "$workflow" ]] || continue
+    grep -Eq 'uses: gradle/actions/(setup-gradle|dependency-submission)@' "$workflow" || continue
+    gradle_workflow_count=$((gradle_workflow_count + 1))
+    awk '
+        function verify_previous_step() {
+            if (gradle_action && !build_cache_excluded) exit 1
+        }
+        /^[[:space:]]{6}- name:/ {
+            verify_previous_step()
+            gradle_action = 0
+            build_cache_excluded = 0
+        }
+        /uses: gradle\/actions\/(setup-gradle|dependency-submission)@/ {
+            gradle_action = 1
+        }
+        /gradle-home-cache-excludes: caches\/build-cache-1/ {
+            if (gradle_action) build_cache_excluded = 1
+        }
+        END { verify_previous_step() }
+    ' "$workflow" ||
+        fail "Gradle action in $workflow does not exclude persisted build-cache metadata"
+done
+[[ "$gradle_workflow_count" -gt 0 ]] || fail "no Gradle workflow cache policy was inspected"
 
 [[ "$(grep -Fc 'compilerOptions.moduleName.set(project.name)' "$CORE_BUILD")" == "2" ]] ||
     fail "p2p-core does not preserve both JVM and Android module names"
@@ -32,6 +67,9 @@ grep -Fq 'compilerOptions.moduleName.set(project.name)' "$ANDROID_PROVISIONING_B
     fail "Android provisioning does not preserve its module name"
 grep -Fq 'compilerOptions.moduleName.set(project.name)' "$DESKTOP_PROVISIONING_BUILD" ||
     fail "Desktop provisioning does not preserve its module name"
+
+"$ROOT/scripts/check-android-abi-guard.sh"
+"$ROOT/scripts/tests/check-android-abi-guard-policy-test.sh"
 
 grep -Fq -- '-Xoverride-konan-properties=minVersion.ios=$iosMinimumVersion' "$LAN_BUILD" ||
     fail "the repository XCFramework does not apply the canonical iOS floor"
@@ -50,8 +88,10 @@ if grep -Fq 'version "2.3.21"' "$CONSUMER_GATE"; then
 fi
 
 # Kotlin 2.4.10 intentionally embeds the preceding ABI-tools release in its
-# isolated kotlinInternalAbiValidation configuration. No 2.3.21 component may
-# leak into compiler, application, test, publication, or consumer classpaths.
+# isolated kotlinInternalAbiValidation configuration. The Android-only ABI
+# guard uses the same metadata reader in its isolated androidAbiRuntime
+# configuration. No 2.3.21 component may leak into compiler, application,
+# test, publication, or consumer classpaths.
 while IFS= read -r legacy_match; do
     legacy_entry="${legacy_match#*:}"
     legacy_entry="${legacy_entry#*:}"
@@ -60,13 +100,15 @@ while IFS= read -r legacy_match; do
         org.jetbrains.kotlin:abi-tools:2.3.21=kotlinInternalAbiValidation | \
         org.jetbrains.kotlin:kotlin-klib-abi-reader:2.3.21=kotlinInternalAbiValidation | \
         org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21=kotlinInternalAbiValidation | \
-        org.jetbrains.kotlin:kotlin-stdlib:2.3.21=kotlinInternalAbiValidation)
+        org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21=androidAbiRuntime,kotlinInternalAbiValidation | \
+        org.jetbrains.kotlin:kotlin-stdlib:2.3.21=kotlinInternalAbiValidation | \
+        org.jetbrains.kotlin:kotlin-stdlib:2.3.21=androidAbiRuntime,kotlinInternalAbiValidation)
             ;;
         *)
             fail "stale Kotlin 2.3.21 dependency escaped the isolated ABI toolchain: $legacy_match"
             ;;
     esac
-done < <(rg -n '2\.3\.21' --glob 'gradle.lockfile' "$ROOT" || true)
+done < <(grep -R -n -E --include='gradle.lockfile' '2\.3\.21' "$ROOT" || true)
 
 grep -Fq 'check_rc2_legacy_jvm_symbols' "$PUBLICATION_GATE" ||
     fail "published artifacts do not retain the supplemental RC2 JVM-symbol guard"
@@ -81,4 +123,4 @@ bash -n "$CONSUMER_GATE"
 bash -n "$PUBLICATION_GATE"
 bash -n "$XCFRAMEWORK_GATE"
 
-echo "RESULT: PASS — Kotlin 2.4 module identities, dynamic consumers, and the iOS 14 binary floor are locked"
+echo "RESULT: PASS — Kotlin 2.4 module identities, compiler-owned Android ABI guards, dynamic consumers, and the iOS 14 binary floor are locked"
