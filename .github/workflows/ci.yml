@@ -40,6 +40,15 @@ jobs:
           HEAD_SHA: ${{ steps.scope.outputs.head }}
         run: scripts/check-git-whitespace.sh "$BASE_SHA" "$HEAD_SHA"
 
+      - name: Verify dependency update completeness
+        if: steps.scope.outputs.full == 'true'
+        env:
+          BASE_SHA: ${{ steps.scope.outputs.base }}
+          HEAD_SHA: ${{ steps.scope.outputs.head }}
+        run: |
+          scripts/check-dependency-update.sh "$BASE_SHA" "$HEAD_SHA"
+          scripts/tests/check-dependency-update-policy-test.sh
+
       - name: Verify lightweight documentation change
         if: steps.scope.outputs.full != 'true'
         env:

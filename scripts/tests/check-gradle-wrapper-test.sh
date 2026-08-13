@@ -24,7 +24,7 @@ expect_failure() {
 reset_fixture
 "$ROOT/scripts/check-gradle-wrapper.sh" "$FIXTURE" >/dev/null
 
-sed -i.bak 's/gradle-9\.3\.1-bin/gradle-9.3.0-bin/' "$FIXTURE/gradle/wrapper/gradle-wrapper.properties"
+sed -i.bak 's/gradle-9\.7\.0-bin/gradle-9.6.1-bin/' "$FIXTURE/gradle/wrapper/gradle-wrapper.properties"
 expect_failure "distribution URL"
 
 reset_fixture

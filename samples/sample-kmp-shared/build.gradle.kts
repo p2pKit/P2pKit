@@ -11,6 +11,7 @@ kotlin {
         namespace = "dev.p2pkit.sample.kmp"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
+        withHostTest { }
     }
 
     sourceSets {
