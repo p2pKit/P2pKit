@@ -95,6 +95,25 @@ git -C "$valid_fixture" commit -qm valid
 valid_head="$(git -C "$valid_fixture" rev-parse HEAD)"
 (cd "$valid_fixture" && scripts/check-dependency-update.sh "$valid_base" "$valid_head" >/dev/null)
 
+whitespace_fixture="$(new_fixture whitespace-range)"
+whitespace_base="$(git -C "$whitespace_fixture" rev-parse HEAD)"
+printf 'bad earlier dependency-update whitespace \n' >"$whitespace_fixture/earlier.txt"
+git -C "$whitespace_fixture" add earlier.txt
+git -C "$whitespace_fixture" commit -qm "bad earlier range"
+sed -i.bak 's/fixture = "1.0"/fixture = "1.1"/' \
+    "$whitespace_fixture/gradle/libs.versions.toml"
+sed -i.bak '/<\/components>/i\
+      <component group="example" name="library" version="1.1">\
+         <artifact name="library-1.1.jar">\
+            <sha256 value="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" origin="Reviewed fixture"/>\
+         </artifact>\
+      </component>' "$whitespace_fixture/gradle/verification-metadata.xml"
+git -C "$whitespace_fixture" add gradle
+git -C "$whitespace_fixture" commit -qm "complete dependency update"
+whitespace_head="$(git -C "$whitespace_fixture" rev-parse HEAD)"
+expect_failure "earlier update-range whitespace" "trailing whitespace" \
+    bash -c "cd '$whitespace_fixture' && scripts/check-dependency-update.sh '$whitespace_base' '$whitespace_head'"
+
 trust_fixture="$(new_fixture trust)"
 sed -i.bak '/<components>/i\
       <trusted-artifacts><trust group="*"/></trusted-artifacts>' "$trust_fixture/gradle/verification-metadata.xml"

@@ -2,3 +2,8 @@
 # separator line. Keep the generated format without treating it as whitespace
 # damage during the repository diff gate.
 **/*.api whitespace=-blank-at-eof
+
+# Keep the generated Windows launcher byte-stable across maintainer hosts.
+# Windows accepts LF batch files, while a CRLF blob makes `git diff --check`
+# report every added line as trailing whitespace on the protected PR range.
+gradlew.bat text eol=lf

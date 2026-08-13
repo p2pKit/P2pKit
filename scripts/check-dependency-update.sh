@@ -35,6 +35,12 @@ is_commit "$head" || fail "dependency-update head is not an available commit"
 [[ "$(git -C "$ROOT" rev-parse 'HEAD^{commit}')" == "$head" ]] ||
     fail "dependency-update head does not equal the checked-out exact tree"
 
+# Check the complete update range, not merely HEAD^..HEAD or the worktree.
+# Dependabot updates can span several commits (for example AGP + wrapper +
+# maintainer corrections), so a defect in an earlier bot commit must fail the
+# local pre-push check before CI constructs its synthetic merge commit.
+git -C "$ROOT" diff --check "$base" "$head" --
+
 changed="$(mktemp "${TMPDIR:-/tmp}/p2pkit-dependency-changed.XXXXXX")"
 base_config="$(mktemp "${TMPDIR:-/tmp}/p2pkit-dependency-base-config.XXXXXX")"
 head_config="$(mktemp "${TMPDIR:-/tmp}/p2pkit-dependency-head-config.XXXXXX")"
