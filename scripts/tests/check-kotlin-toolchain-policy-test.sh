@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# The quoted expressions below are intentional literal source-policy probes.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -31,7 +33,11 @@ grep -Fqx 'kotlin.native.ignoreDisabledTargets=true' "$PROPERTIES" ||
 # 2.4.20 EAP for CVE-2026-53914. GitHub builds may keep dependency/wrapper
 # caches, but no Gradle action may restore or persist caches/build-cache-1
 # across runs until a stable patched Kotlin toolchain is qualified.
-while IFS= read -r workflow; do
+gradle_workflow_count=0
+for workflow in "$WORKFLOW_DIR"/*.yml "$WORKFLOW_DIR"/*.yaml; do
+    [[ -f "$workflow" ]] || continue
+    grep -Eq 'uses: gradle/actions/(setup-gradle|dependency-submission)@' "$workflow" || continue
+    gradle_workflow_count=$((gradle_workflow_count + 1))
     awk '
         function verify_previous_step() {
             if (gradle_action && !build_cache_excluded) exit 1
@@ -50,7 +56,8 @@ while IFS= read -r workflow; do
         END { verify_previous_step() }
     ' "$workflow" ||
         fail "Gradle action in $workflow does not exclude persisted build-cache metadata"
-done < <(rg -l 'uses: gradle/actions/(setup-gradle|dependency-submission)@' "$WORKFLOW_DIR")
+done
+[[ "$gradle_workflow_count" -gt 0 ]] || fail "no Gradle workflow cache policy was inspected"
 
 [[ "$(grep -Fc 'compilerOptions.moduleName.set(project.name)' "$CORE_BUILD")" == "2" ]] ||
     fail "p2p-core does not preserve both JVM and Android module names"
@@ -101,7 +108,7 @@ while IFS= read -r legacy_match; do
             fail "stale Kotlin 2.3.21 dependency escaped the isolated ABI toolchain: $legacy_match"
             ;;
     esac
-done < <(rg -n '2\.3\.21' --glob 'gradle.lockfile' "$ROOT" || true)
+done < <(grep -R -n -E --include='gradle.lockfile' '2\.3\.21' "$ROOT" || true)
 
 grep -Fq 'check_rc2_legacy_jvm_symbols' "$PUBLICATION_GATE" ||
     fail "published artifacts do not retain the supplemental RC2 JVM-symbol guard"

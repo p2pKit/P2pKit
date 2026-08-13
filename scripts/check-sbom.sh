@@ -84,7 +84,7 @@ done < <(
         .["bom-ref"]
     ' "$JSON"
 )
-if rg -q '/Users/|/home/|p2p-sample|dokka-base|gradle-api' "$JSON" "$XML"; then
+if grep -Eq '/Users/|/home/|p2p-sample|dokka-base|gradle-api' "$JSON" "$XML"; then
     echo "FATAL: SBOM leaks a workstation path or includes sample/build dependencies" >&2
     exit 1
 fi
