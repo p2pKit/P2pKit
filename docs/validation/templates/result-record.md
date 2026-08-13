@@ -1,7 +1,8 @@
 # Validation result record
 
-Copy this template into the exact candidate's `docs/validation/results/`
-directory. One file represents one immutable run.
+Copy this template into the exact frozen candidate's
+`docs/validation/results/` directory. One file represents one immutable run;
+never reuse an RC3 result for a post-RC3 tree or vice versa.
 
 ```yaml
 schema_version: 1

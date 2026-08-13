@@ -983,6 +983,14 @@ tests do not upgrade those campaigns to PASS.
 | [#85 — harden secure protocol ownership and parsing](https://github.com/p2pKit/P2pKit/pull/85) | Closed post-handshake lease ownership, duplicate JSON-field acceptance, cancellation misclassification, and wall-clock reassembly-expiry gaps without changing approved wire bytes. | **Merged** normally as `0b267fa97dc09a573d3a7fb1e00416a5d5d16c12`. Complete gate [31524495713](https://github.com/p2pKit/P2pKit/actions/runs/31524495713) passed on head `701612ef2daa222376fc953e6a739da0f4e9ed04`; merge and head share tree `c944e628ac95f703a80277d2038f0daa56981013`. |
 | [#86 — harden core discovery admission and publication](https://github.com/p2pKit/P2pKit/pull/86) | Validated and bounded third-party discovery events, normalized provenance, capped retention, and generation-ordered peer publication with deterministic hostile-input and concurrency coverage. | **Merged** normally as `f8cf629d7209fdb6dc321c180123d26028ae63d7`. Complete gate [31531533715](https://github.com/p2pKit/P2pKit/actions/runs/31531533715) passed on head `90d50e83ad16419061fd5964f438b1baa09173ec`; merge and head share tree `d93b3d5598bc13037dd802aeeac7dfdad57231ab`. |
 | [#87 — harden core lifecycle and persistent identity](https://github.com/p2pKit/P2pKit/pull/87) | Made startup and observer acquisition cancellation-safe, bounded and strictly decoded persisted identities, validated wire-bound local identity, and bounded transient process-lock registries. | **Merged** normally as `a99a890c2208e33fe413869a424b60dacadca71f`. Complete gate [31542848494](https://github.com/p2pKit/P2pKit/actions/runs/31542848494) passed on head `f699c232075b923faa69b3f5a4f8fb2e95842db1`; merge and head share tree `0c42da2bbfe80727705a4d69977021df689f28d8`. |
+| [#88 — harden public configuration and transport SPI](https://github.com/p2pKit/P2pKit/pull/88) | Closed the public-API audit's configuration validation, immutable snapshot, capability, lifecycle, and third-party transport ownership gaps with focused ABI and platform coverage recorded above. | **Merged** normally as `db79c8c7f3e5521c9168ce82fd813733a867df8d`; the temporary branch was deleted after protected checks. |
+| [#89 — harden secure identity recovery](https://github.com/p2pKit/P2pKit/pull/89) | Completed the identity/crypto/storage workstream's bounded recovery, corruption, cancellation, cleanup, and cross-platform state-machine corrections. | **Merged** normally as `43363c03cb6df1fbb12d555e0a462ca26f689fe9`; independent interoperability and professional cryptographic review remain external. |
+| [#90 — bind Android dials to the selected route](https://github.com/p2pKit/P2pKit/pull/90) | Unified Android discovery and dial route ownership, fail-closed candidate selection, socket cleanup, and deterministic route/fallback tests. | **Merged** normally as `c20268527e0ddb117e64c212907db718f4b3985e`; real OEM/kernel route evidence remains pending. |
+| [#91 — preserve callback and link-local evidence](https://github.com/p2pKit/P2pKit/pull/91) | Added bounded raw LAN callback diagnostics and deterministic link-local selection/scope coverage without exposing TXT payloads or claiming real-network success. | **Merged** normally as `d5fc596ba23b8a99947d8700f03984aae5f0edd4`; long-idle and physical link-local evidence remains pending. |
+| [#92 — harden final Apple LAN lifecycle ownership](https://github.com/p2pKit/P2pKit/pull/92) | Completed Apple listener/browser/dial generation ownership, cancellation, timeout classification, and simulator regression coverage. | **Merged** normally as `f410546cb1bd1a5b8eed0c61c6e6ffb7ee89cece`; AWDL, path rotation, and device lifecycle evidence remains pending. |
+| [#100 — complete protocol and transfer correctness audit](https://github.com/p2pKit/P2pKit/pull/100) | Preserved caller timeout ownership, terminalized authenticated/parser/version failures, retained bounded per-epoch inbound transfer outcomes against replay/conflicting IDs, and made durable abort cleanup retryable and observable. | **Merged** normally as `45ba78aa4fd51ac09cd740794305b3b0c9c2d757`. Complete gate [31694675644](https://github.com/p2pKit/P2pKit/actions/runs/31694675644) passed exact head `d64e3fec4e1e52d7f8745894ecceabff60bbbf48`; merge and head share tree `f08200c60af379d59ed770034260f90191ea501b`. |
+| [#101 — fence watcher and lifecycle generations](https://github.com/p2pKit/P2pKit/pull/101) | Fenced retired Android/JVM watcher callbacks, reconciled route loss, reset Apple lifecycle episodes, rejected retired path callbacks, snapshotted safe Apple host addresses, and prevented stale Android foreground restoration. | **Merged** normally as `720ac62a8a19b9f9a8826fc9aa945a9b91318857`. Complete gate [31698656444](https://github.com/p2pKit/P2pKit/actions/runs/31698656444) passed exact head `748d34810107cfc7fa945f7a58e265519d094866`; merge and head share tree `e143b7e63fe17ab2e76ca309ee07fea885a14416`. |
+| [#102 — make diagnostic evidence and lifecycle truthful](https://github.com/p2pKit/P2pKit/pull/102) | Made session outcomes, transfer hashes, persisted exports, peer correlation, redaction, trace leases, and sample cleanup truthful across Android, CLI, Desktop, and iOS. The initial hosted failure exposed a platform-invalid deletion fixture; an injected one-shot removal failure now proves retry behavior deterministically. | **Merged** normally as `960f659bb6e7c2f44c29ef489c3e299d6d8e3acb`. Complete gate [31705190392](https://github.com/p2pKit/P2pKit/actions/runs/31705190392) passed exact head `f691a1242ffa0e30de16a00793fe9d86e4e6a598`; merge and head share tree `79fef2e4ed771b99ae3af091bdaa895047ff5fd7`. |
 
 The recently closed, unmerged PRs were #46, whose stronger replacement is
 documented above, and #50, #51, #57, and #58, whose exact updates and authorship
@@ -1015,3 +1023,36 @@ level. It contains exactly the four publication secret names and two
 non-secret rotation/fingerprint variables required by the release workflow;
 there are no repository-level secrets or variables. No credential value was
 read, changed, or exposed during this audit.
+
+## Continuation state — 2026-08-13
+
+The code-first continuation through PR #102 leaves 21 open LAN/device issues:
+`#21`, `#23`, `#25`–`#41`, `#43`, and `#44`. The issue table at the start of
+this document remains authoritative per issue. PRs #100–#102 add the final
+automatable prerequisites: secure/transfer terminal correctness, watcher and
+lifecycle generation fencing, current Apple address snapshots, truthful sample
+correlation, and exportable evidence. None supplies OEM radio behavior, AWDL,
+real kernel routing, hours-long cache measurements, or hostile-network timing,
+so none of those issues is closed or relabeled PASS from automated evidence.
+
+Seven Dependabot PRs were then reviewed individually:
+
+| PR | Repository decision before final integration |
+| --- | --- |
+| [#93 — OSV scanner 2.5.0](https://github.com/p2pKit/P2pKit/pull/93) | Applicable and incorporated into the final CI/security batch with an immutable action SHA. Close as superseded only after that protected batch merges. |
+| [#94 — AGP 9.3.1](https://github.com/p2pKit/P2pKit/pull/94) | **Retain/defer.** It requires Gradle 9.5 or newer and must be validated together with #98 rather than merged as an isolated catalog edit. |
+| [#95 — CycloneDX 3.4.0](https://github.com/p2pKit/P2pKit/pull/95) | **Retain/defer.** It is a build/plugin migration requiring its own JSON/XML graph and reproducibility review; the final SBOM integrity correction is validated on 3.3.0. |
+| [#96 — dependency-submission 6.3.0](https://github.com/p2pKit/P2pKit/pull/96) | Applicable and incorporated into the final CI/security batch with an immutable action SHA and cache isolation. Close as superseded only after that protected batch merges. |
+| [#97 — kotlinx-io 0.9.1](https://github.com/p2pKit/P2pKit/pull/97) | **Retain/defer.** This is a published KMP runtime change requiring protocol/storage vectors, every target, consumers, metadata, locks, and the full gate. |
+| [#98 — Gradle 9.7.0](https://github.com/p2pKit/P2pKit/pull/98) | **Retain/defer.** Coordinate it with #94 and revalidate plugins, configuration cache, publication, and every host. |
+| [#99 — Bouncy Castle 1.85.2](https://github.com/p2pKit/P2pKit/pull/99) | Applicable and incorporated with Dependabot authorship, strict verification metadata, normalized locks, and provider tests. Close as superseded only after the protected batch merges. |
+
+The final CI/release-integrity batch remains a development change until its
+exact tree passes the protected complete gate. It adds fail-closed rename and
+merge-tree CI classification, committed-range whitespace checking, exact
+release tag/SHA binding, wired deterministic BuildInfo verification,
+Android-only ABI baselines, complete XCFramework byte/header provenance,
+Apple-inclusive and root-connected SBOM evidence, embedded canonical license
+files, real protected Central namespace access preflight, portable workflow
+policy checks, and cross-host CLI/Desktop coverage. It does not publish, tag,
+or change the immutable `v0.7.0-rc3` release.
