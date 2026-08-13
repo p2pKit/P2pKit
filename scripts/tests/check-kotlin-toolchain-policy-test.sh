@@ -13,6 +13,7 @@ PUBLICATION_GATE="$ROOT/scripts/check-publish-artifacts.sh"
 XCFRAMEWORK_GATE="$ROOT/scripts/check-xcframework-minimum-os.sh"
 CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 RELEASE_GATE="$ROOT/scripts/run-release-gate.sh"
+WORKFLOW_DIR="$ROOT/.github/workflows"
 
 fail() {
     echo "FATAL: $*" >&2
@@ -25,6 +26,31 @@ grep -Fq 'binary-compatibility-validator = "0.18.1"' "$CATALOG" ||
 grep -Fqx 'IOS_MIN_VERSION=14.0' "$PROPERTIES" || fail "the iOS 14 floor is not canonical"
 grep -Fqx 'kotlin.native.ignoreDisabledTargets=true' "$PROPERTIES" ||
     fail "Apple Silicon host-mismatch handling is not explicit"
+
+# Kotlin 2.4.10 is the latest stable toolchain but is below the first patched
+# 2.4.20 EAP for CVE-2026-53914. GitHub builds may keep dependency/wrapper
+# caches, but no Gradle action may restore or persist caches/build-cache-1
+# across runs until a stable patched Kotlin toolchain is qualified.
+while IFS= read -r workflow; do
+    awk '
+        function verify_previous_step() {
+            if (gradle_action && !build_cache_excluded) exit 1
+        }
+        /^[[:space:]]{6}- name:/ {
+            verify_previous_step()
+            gradle_action = 0
+            build_cache_excluded = 0
+        }
+        /uses: gradle\/actions\/(setup-gradle|dependency-submission)@/ {
+            gradle_action = 1
+        }
+        /gradle-home-cache-excludes: caches\/build-cache-1/ {
+            if (gradle_action) build_cache_excluded = 1
+        }
+        END { verify_previous_step() }
+    ' "$workflow" ||
+        fail "Gradle action in $workflow does not exclude persisted build-cache metadata"
+done < <(rg -l 'uses: gradle/actions/(setup-gradle|dependency-submission)@' "$WORKFLOW_DIR")
 
 [[ "$(grep -Fc 'compilerOptions.moduleName.set(project.name)' "$CORE_BUILD")" == "2" ]] ||
     fail "p2p-core does not preserve both JVM and Android module names"

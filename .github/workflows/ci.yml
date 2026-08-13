@@ -63,6 +63,11 @@ jobs:
       - name: Validate wrapper and configure Gradle
         if: steps.scope.outputs.full == 'true'
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          # Kotlin 2.4.10 predates the build-cache deserialization fix. Keep
+          # dependency/wrapper caching, but never persist or restore its local
+          # build-cache metadata across trust boundaries (CVE-2026-53914).
+          gradle-home-cache-excludes: caches/build-cache-1
 
       - name: Install pinned XcodeGen
         if: steps.scope.outputs.full == 'true'
