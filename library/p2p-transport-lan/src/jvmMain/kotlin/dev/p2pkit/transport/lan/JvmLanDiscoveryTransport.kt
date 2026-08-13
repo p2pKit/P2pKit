@@ -17,12 +17,8 @@ import javax.jmdns.ServiceListener
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /** One callback generation installed in JmDNS by the lifecycle coordinator. */
@@ -132,12 +128,6 @@ internal class JvmLanDiscoveryTransport(
     private val lifecycleScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    @Volatile
-    private var observedNetworkTarget: JvmLanBindTarget? = null
-
-    @Volatile
-    private var networkWatcherJob: Job? = null
-
     private val handleCreator = BoundedBlockingHandleCreator<JmDNS>(
         timeoutMillis = JMDNS_CREATE_TIMEOUT_MS,
         threadName = "p2pkit-jmdns-create-${registration.localPeerId.value.take(8)}",
@@ -156,6 +146,25 @@ internal class JvmLanDiscoveryTransport(
         rebindScope = lifecycleScope,
         ioContext = Dispatchers.IO
     )
+
+    /**
+     * Lazy to avoid touching [coordinator] while its operations object is
+     * being constructed. Each callback carries its watcher-generation
+     * admission predicate into the coordinator's scheduling lock.
+     */
+    private val networkWatcher: JvmLanNetworkWatcher by lazy {
+        JvmLanNetworkWatcher(
+            scope = lifecycleScope,
+            pollIntervalMillis = NETWORK_WATCH_INTERVAL_MS,
+            currentTarget = ::currentJvmLanBindTarget,
+            targetChanged = { previous, next, admit ->
+                coordinator.scheduleRebind(
+                    reason = "JVM LAN bind target changed: $previous -> $next",
+                    admit = admit
+                )
+            }
+        )
+    }
 
     /** Service-instance ownership admitted only after full record validation. */
     private val serviceAdmissions = JvmServiceAdmissions()
@@ -445,7 +454,7 @@ internal class JvmLanDiscoveryTransport(
             override fun createHandleBlocking(
                 target: JvmLanBindTarget?,
                 forRebind: Boolean
-            ): JmDNS {
+            ): JmdnsHandleBinding<JvmLanBindTarget, JmDNS> {
                 val selected = target ?: currentJvmLanBindTarget()
                     ?: throw IOException(
                         "No up multicast-capable LAN address is available for JmDNS"
@@ -469,7 +478,7 @@ internal class JvmLanDiscoveryTransport(
                             "name=${fresh.getName()}"
                     )
                 }
-                return fresh
+                return JmdnsHandleBinding(selected, fresh)
             }
 
             override fun closeHandleBlocking(handle: JmDNS) = handle.close()
@@ -516,13 +525,15 @@ internal class JvmLanDiscoveryTransport(
             }
 
             override fun currentNetwork(): JvmLanBindTarget? = currentJvmLanBindTarget()
-            override fun observedNetwork(): JvmLanBindTarget? = observedNetworkTarget
+            override fun observedNetwork(): JvmLanBindTarget? = networkWatcher.observedTarget()
             override fun observedDefaultNetwork(): String? = null
-            override fun isWatcherActive(): Boolean = networkWatcherJob?.isActive == true
+            override fun isWatcherActive(): Boolean = networkWatcher.isActive()
             override fun acquireMulticastLock() = Unit
             override fun releaseMulticastLock() = Unit
-            override fun startNetworkWatcher() = startNetworkWatcherIfNeeded()
-            override fun stopNetworkWatcher() = stopNetworkWatcherNow()
+            override fun startNetworkWatcher(boundNetwork: JvmLanBindTarget?) =
+                networkWatcher.start(boundNetwork)
+
+            override fun stopNetworkWatcher() = networkWatcher.stop()
 
             override fun logDebug(message: String) {
                 JvmLanDiag.log("lifecycle", message)
@@ -536,29 +547,6 @@ internal class JvmLanDiscoveryTransport(
             }
         }
 
-    private fun startNetworkWatcherIfNeeded() {
-        if (networkWatcherJob?.isActive == true) return
-        observedNetworkTarget = currentJvmLanBindTarget()
-        networkWatcherJob = lifecycleScope.launch {
-            while (isActive) {
-                delay(NETWORK_WATCH_INTERVAL_MS)
-                val next = currentJvmLanBindTarget()
-                val previous = observedNetworkTarget
-                if (next != previous) {
-                    observedNetworkTarget = next
-                    coordinator.scheduleRebind(
-                        "JVM LAN bind target changed: $previous -> $next"
-                    )
-                }
-            }
-        }
-    }
-
-    private fun stopNetworkWatcherNow() {
-        networkWatcherJob?.cancel()
-        networkWatcherJob = null
-        observedNetworkTarget = null
-    }
 }
 
 /**

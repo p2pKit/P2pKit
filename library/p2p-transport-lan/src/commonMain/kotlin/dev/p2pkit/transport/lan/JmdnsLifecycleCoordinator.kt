@@ -28,16 +28,24 @@ import kotlin.coroutines.CoroutineContext
  * suspend themselves. Everything else must be cheap and non-blocking — it is
  * called inline under the coordinator lock.
  */
+internal data class JmdnsHandleBinding<N : Any, H : Any>(
+    /** Exact target the returned handle actually bound, after any safe re-resolution. */
+    val network: N?,
+    val handle: H
+)
+
 internal interface JmdnsLifecycleOps<N : Any, H : Any> {
     /**
-     * Create the platform mDNS handle bound to [target]'s explicit address.
-     * A null/unusable target must fail visibly rather than delegating to an
-     * unrelated platform-default interface. [forRebind] only selects the
+     * Create the platform mDNS handle bound to [target]'s explicit address,
+     * or re-resolve an explicit safe LAN target if topology changed since the
+     * coordinator's snapshot. The returned binding must report the exact
+     * target used. A null/unusable target must fail visibly rather than
+     * delegating to an unrelated platform-default interface. [forRebind] only selects the
      * diagnostic-trail wording — the load-bearing log lines
      * (`rebindNow: rebinding onto …`, consumed by the operational handbooks
      * under `docs/validation/`) must keep their original prefixes.
      */
-    fun createHandleBlocking(target: N?, forRebind: Boolean): H
+    fun createHandleBlocking(target: N?, forRebind: Boolean): JmdnsHandleBinding<N, H>
 
     fun closeHandleBlocking(handle: H)
 
@@ -89,8 +97,15 @@ internal interface JmdnsLifecycleOps<N : Any, H : Any> {
     /** Unconditional release of the multicast lock; the coordinator applies the intent-based idle guard. */
     fun releaseMulticastLock()
 
-    /** Idempotent registration of the platform network-rotation watcher. */
-    fun startNetworkWatcher()
+    /**
+     * Idempotent registration of the platform network-rotation watcher.
+     * [boundNetwork] is the exact target used by the live handle. The watcher
+     * must reconcile its first authoritative observation against this value;
+     * otherwise a topology change between handle creation and watcher
+     * registration can be accepted as the watcher's baseline and never cause
+     * a rebind.
+     */
+    fun startNetworkWatcher(boundNetwork: N?)
 
     /** Unconditional watcher teardown (unregister callbacks, reset observed state); idle-guarded by the coordinator. */
     fun stopNetworkWatcher()
@@ -238,7 +253,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
                 "startAdvertising: registered, " +
                     "boundNetwork=$boundNetwork boundDefaultNetwork=$boundDefaultNetwork"
             )
-            ops.startNetworkWatcher()
+            ops.startNetworkWatcher(boundNetwork)
         } catch (e: Throwable) {
             advertisingIntent = false
             cachedLocalPeer = null
@@ -290,7 +305,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
                 "startDiscovery: listener added, " +
                     "boundNetwork=$boundNetwork boundDefaultNetwork=$boundDefaultNetwork"
             )
-            ops.startNetworkWatcher()
+            ops.startNetworkWatcher(boundNetwork)
         } catch (e: Throwable) {
             discoveryIntent = false
             bindingHealthy = false
@@ -391,9 +406,24 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
      * No [lock] is taken here — that happens inside [rebindNow]. Platform
      * watcher callbacks must remain cheap and non-blocking.
      */
-    fun scheduleRebind(reason: String, force: Boolean = false) {
+    fun scheduleRebind(
+        reason: String,
+        force: Boolean = false,
+        admit: () -> Boolean = { true }
+    ) {
         rebindScope.launch(start = CoroutineStart.UNDISPATCHED) {
             scheduleLock.withLock {
+                // Platform callbacks may already be queued when a watcher is
+                // retired. Evaluate their generation lease while holding the
+                // same lock that owns pending-job replacement. A callback
+                // admitted before teardown is cancelled by
+                // stopNetworkWatcherIfIdle(); a callback reaching this point
+                // after teardown/restart is rejected and cannot mutate the
+                // new watcher's rebind queue.
+                if (!admit()) {
+                    ops.logDebug("scheduleRebind: retired watcher ignored ($reason)")
+                    return@withLock
+                }
                 pendingForcedRebind = pendingForcedRebind || force
                 pendingRebindJob?.cancel()
                 ops.logDebug("scheduleRebind: $reason (force=$force debounce=${rebindDebounceMillis}ms)")
@@ -521,7 +551,8 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         rebindRetryAttempts = 0
         retryTargetInitialized = false
         ops.logDebug(
-            "rebindNow: complete; boundNetwork=$target boundDefaultNetwork=$defaultTarget"
+            "rebindNow: complete; boundNetwork=$boundNetwork " +
+                "boundDefaultNetwork=$boundDefaultNetwork"
         )
     }
 
@@ -531,15 +562,15 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         val target = ops.currentNetwork()
         val defaultTarget = ops.observedDefaultNetwork()
         val fresh = createHandleClosingOrphanOnCancel(target, forRebind = false)
-        handle = fresh
+        handle = fresh.handle
         // Record the exact observations used for this construction. Starting
         // the second feature on an existing shared handle must not relabel an
         // old socket as bound to a newly observed interface before the
         // watcher has actually completed a rebind.
-        boundNetwork = target
+        boundNetwork = fresh.network
         boundDefaultNetwork = defaultTarget
         bindingHealthy = bindingMatchesIntents()
-        return fresh
+        return fresh.handle
     }
 
     private fun bindingMatchesIntents(): Boolean =
@@ -561,7 +592,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         // be a cellular/VPN signal and must never be handed to the multicast
         // handle creator as a fallback LAN target.
         val fresh = createHandleClosingOrphanOnCancel(target, forRebind)
-        handle = fresh
+        handle = fresh.handle
         bindingHealthy = false
         try {
             if (advertisingIntent) {
@@ -569,13 +600,13 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
                     ?: error("advertising intent has no cached LocalPeerInfo")
                 val token = ops.createServiceToken(localPeer)
                 advertisedToken = token
-                withContext(ioContext) { ops.registerServiceBlocking(fresh, token) }
+                withContext(ioContext) { ops.registerServiceBlocking(fresh.handle, token) }
                 ops.logDebug("rebindNow: registerService completed on fresh JmDNS")
             }
             if (discoveryIntent) {
-                val token = ops.createListenerToken(fresh)
+                val token = ops.createListenerToken(fresh.handle)
                 listenerToken = token
-                withContext(ioContext) { ops.addListenerBlocking(fresh, token) }
+                withContext(ioContext) { ops.addListenerBlocking(fresh.handle, token) }
                 ops.logDebug("rebindNow: addServiceListener completed on fresh JmDNS")
             }
         } catch (error: Throwable) {
@@ -594,7 +625,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         }
         bindingHealthy = bindingMatchesIntents()
         check(bindingHealthy) { "installed JmDNS resources do not match lifecycle intent" }
-        boundNetwork = target
+        boundNetwork = fresh.network
         boundDefaultNetwork = defaultTarget
     }
 
@@ -705,15 +736,18 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
      * always waits for its block, so the catch below cannot race the
      * assignment.)
      */
-    private suspend fun createHandleClosingOrphanOnCancel(target: N?, forRebind: Boolean): H {
-        var produced: H? = null
+    private suspend fun createHandleClosingOrphanOnCancel(
+        target: N?,
+        forRebind: Boolean
+    ): JmdnsHandleBinding<N, H> {
+        var produced: JmdnsHandleBinding<N, H>? = null
         try {
             withContext(ioContext) {
                 produced = ops.createHandleBlocking(target, forRebind)
             }
         } catch (e: CancellationException) {
             produced?.let { orphan ->
-                handle = orphan
+                handle = orphan.handle
                 bindingHealthy = false
                 withContext(NonCancellable) {
                     try {

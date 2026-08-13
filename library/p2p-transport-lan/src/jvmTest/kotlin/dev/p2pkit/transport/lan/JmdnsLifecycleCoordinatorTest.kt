@@ -71,6 +71,9 @@ class JmdnsLifecycleCoordinatorTest {
         val createCalls = AtomicInteger(0)
         val created = CopyOnWriteArrayList<FakeHandle>()
         val createdTargets = CopyOnWriteArrayList<FakeNet?>()
+
+        @Volatile
+        var actualCreatedNetwork: FakeNet? = null
         val closed = CopyOnWriteArrayList<FakeHandle>()
         val registrations = CopyOnWriteArrayList<Pair<FakeHandle, LocalPeerInfo>>()
         val unregistrations = CopyOnWriteArrayList<Any>()
@@ -82,6 +85,9 @@ class JmdnsLifecycleCoordinatorTest {
 
         @Volatile
         var watcherActive = false
+
+        @Volatile
+        var watcherBoundNetwork: FakeNet? = null
 
         @Volatile
         var current: FakeNet? = null
@@ -170,7 +176,10 @@ class JmdnsLifecycleCoordinatorTest {
             }
         }
 
-        override fun createHandleBlocking(target: FakeNet?, forRebind: Boolean): FakeHandle {
+        override fun createHandleBlocking(
+            target: FakeNet?,
+            forRebind: Boolean
+        ): JmdnsHandleBinding<FakeNet, FakeHandle> {
             createCalls.incrementAndGet()
             createdTargets += target
             createEntered.put(Unit)
@@ -181,7 +190,7 @@ class JmdnsLifecycleCoordinatorTest {
             }
             val handle = FakeHandle(createCalls.get())
             created += handle
-            return handle
+            return JmdnsHandleBinding(actualCreatedNetwork ?: target, handle)
         }
 
         override fun closeHandleBlocking(handle: FakeHandle) {
@@ -281,7 +290,8 @@ class JmdnsLifecycleCoordinatorTest {
             lockHeld = false
         }
 
-        override fun startNetworkWatcher() {
+        override fun startNetworkWatcher(boundNetwork: FakeNet?) {
+            watcherBoundNetwork = boundNetwork
             watcherActive = true
             if (failNextWatcherStart) {
                 failNextWatcherStart = false
@@ -295,6 +305,7 @@ class JmdnsLifecycleCoordinatorTest {
                 throw IOException("injected watcher cleanup failure")
             }
             watcherActive = false
+            watcherBoundNetwork = null
         }
 
         override fun logDebug(message: String) = Unit
@@ -369,7 +380,8 @@ class JmdnsLifecycleCoordinatorTest {
 
     @Test
     fun startBothSidesSharesOneHandleAndStopBothReleasesEverything() {
-        val ops = FakeOps().apply { current = FakeNet("wifi0") }
+        val wifi = FakeNet("wifi0")
+        val ops = FakeOps().apply { current = wifi }
         coordinatorTest(ops) { coordinator, _ ->
             coordinator.startAdvertising(localPeer)
             coordinator.startDiscovery()
@@ -380,6 +392,7 @@ class JmdnsLifecycleCoordinatorTest {
             val listener = ops.listenersAdded.single()
             assertTrue(ops.lockHeld)
             assertTrue(ops.watcherActive)
+            assertSame(wifi, ops.watcherBoundNetwork)
 
             coordinator.stopAdvertising()
             // Discovery still intended: shared handle, lock, and watcher stay.
@@ -394,6 +407,24 @@ class JmdnsLifecycleCoordinatorTest {
             assertEquals(1, ops.closed.size, "idle close must release the shared handle")
             assertFalse(ops.lockHeld)
             assertFalse(ops.watcherActive)
+            assertEquals(null, ops.watcherBoundNetwork)
+        }
+    }
+
+    @Test
+    fun watcherReceivesExactTargetResolvedByHandleCreation() {
+        val resolved = FakeNet("wifi-resolved-during-create")
+        val ops = FakeOps().apply {
+            current = null
+            actualCreatedNetwork = resolved
+        }
+        coordinatorTest(ops) { coordinator, _ ->
+            coordinator.startAdvertising(localPeer)
+
+            assertEquals(listOf<FakeNet?>(null), ops.createdTargets)
+            assertSame(resolved, ops.watcherBoundNetwork)
+
+            coordinator.stopAdvertising()
         }
     }
 
@@ -1152,6 +1183,31 @@ class JmdnsLifecycleCoordinatorTest {
             delay(100)
             assertEquals(0, ops.createCalls.get())
             assertTrue(ops.closed.isEmpty())
+        }
+    }
+
+    @Test
+    fun retiredWatcherGenerationCannotScheduleAgainstTheLiveCoordinator() {
+        val wifiA = FakeNet("wifi-a")
+        val wifiB = FakeNet("wifi-b")
+        val ops = FakeOps().apply {
+            current = wifiA
+            observed = wifiA
+        }
+        coordinatorTest(ops) { coordinator, _ ->
+            coordinator.startAdvertising(localPeer)
+            ops.current = wifiB
+            ops.observed = wifiB
+
+            coordinator.scheduleRebind(
+                reason = "queued callback from retired watcher",
+                admit = { false }
+            )
+            delay(25)
+
+            assertEquals(1, ops.createCalls.get())
+            assertTrue(ops.watcherActive)
+            coordinator.stopAdvertising()
         }
     }
 
