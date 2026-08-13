@@ -1,6 +1,7 @@
 # This is a Gradle generated file for dependency locking.
 # Manual edits can break the build and are not advised.
 # This file is expected to be part of source control.
+# To regenerate this file, run: ./gradlew :p2p-sample-diagnostics:dependencies --write-locks
 dev.whyoleg.cryptography:cryptography-bigint-jvm:0.6.0=runtimeClasspath,testRuntimeClasspath
 dev.whyoleg.cryptography:cryptography-bigint:0.6.0=runtimeClasspath,testRuntimeClasspath
 dev.whyoleg.cryptography:cryptography-bom:0.6.0=runtimeClasspath,testRuntimeClasspath

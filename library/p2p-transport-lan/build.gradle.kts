@@ -80,7 +80,7 @@ kotlin {
         target.binaries.framework {
             baseName = "P2pKitShared"
             isStatic = false
-            export(project(":p2p-core"))
+            export(project.dependencies.project(":p2p-core"))
             xcf.add(this)
         }
     }

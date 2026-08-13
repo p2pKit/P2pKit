@@ -5,6 +5,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      android-gradle-toolchain:
+        patterns:
+          - "agp"
+          - "gradle-wrapper"
   - package-ecosystem: github-actions
     directory: /
     schedule:

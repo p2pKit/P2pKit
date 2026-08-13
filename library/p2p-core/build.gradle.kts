@@ -62,26 +62,27 @@ val buildInfoDirty = providers.of(GitDirtyValueSource::class) {
     parameters.relevantPaths.set(buildInfoRelevantPaths)
 }
 
-val generateBuildInfo by tasks.registering(GenerateBuildInfoTask::class) {
+val generateBuildInfo = tasks.register<GenerateBuildInfoTask>("generateBuildInfo") {
     sourceCommit.set(buildInfoGitCommit)
     sourceCommitTime.set(buildInfoCommitTime)
     relevantSourceDirty.set(buildInfoDirty)
     outputDirectory.set(layout.buildDirectory.dir("generated/buildinfo/commonMain/kotlin"))
 }
 
-val verifyBuildInfoReproducibility by tasks.registering(VerifyBuildInfoTask::class) {
-    group = "verification"
-    description = "Verifies that generated BuildInfo contains only stable source provenance."
-    dependsOn(generateBuildInfo)
-    generatedFile.set(
-        generateBuildInfo.flatMap { task ->
-            task.outputDirectory.file("dev/p2pkit/core/BuildInfo.kt")
-        },
-    )
-    sourceCommit.set(buildInfoGitCommit)
-    sourceCommitTime.set(buildInfoCommitTime)
-    relevantSourceDirty.set(buildInfoDirty)
-}
+val verifyBuildInfoReproducibility =
+    tasks.register<VerifyBuildInfoTask>("verifyBuildInfoReproducibility") {
+        group = "verification"
+        description = "Verifies that generated BuildInfo contains only stable source provenance."
+        dependsOn(generateBuildInfo)
+        generatedFile.set(
+            generateBuildInfo.flatMap { task ->
+                task.outputDirectory.file("dev/p2pkit/core/BuildInfo.kt")
+            },
+        )
+        sourceCommit.set(buildInfoGitCommit)
+        sourceCommitTime.set(buildInfoCommitTime)
+        relevantSourceDirty.set(buildInfoDirty)
+    }
 
 tasks.named("check") {
     dependsOn(verifyBuildInfoReproducibility)

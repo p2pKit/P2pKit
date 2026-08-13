@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verifies the complete checked-in Gradle wrapper against reviewed Gradle 9.3.1
+# Verifies the complete checked-in Gradle wrapper against reviewed Gradle 9.7.0
 # release material. An optional repository root supports deterministic fixtures.
 set -euo pipefail
 
@@ -9,11 +9,11 @@ WRAPPER_JAR="$ROOT/gradle/wrapper/gradle-wrapper.jar"
 GRADLEW="$ROOT/gradlew"
 GRADLEW_BAT="$ROOT/gradlew.bat"
 
-EXPECTED_URL='https\://services.gradle.org/distributions/gradle-9.3.1-bin.zip'
-EXPECTED_DISTRIBUTION_SHA='b266d5ff6b90eada6dc3b20cb090e3731302e553a27c5d3e4df1f0d76beaff06'
-EXPECTED_WRAPPER_JAR_SHA='b3a875ddc1f044746e1b1a55f645584505f4a10438c1afea9f15e92a7c42ec13'
-EXPECTED_GRADLEW_SHA='fb68debc1b1acf8ec55dc0d5e5495e1dedd0bd6b61f304bee61613eeb2bd9b92'
-EXPECTED_GRADLEW_BAT_SHA='9ca26d733ada3a45f27b2151288f54e75c9f95b287d1f82ef942ec5cc2d4f006'
+EXPECTED_URL='https\://services.gradle.org/distributions/gradle-9.7.0-bin.zip'
+EXPECTED_DISTRIBUTION_SHA='84fbba45c7f4c64abc77460e1c00f541e9f960e3c7ed2538f1ede19eacd873ae'
+EXPECTED_WRAPPER_JAR_SHA='7a9ce74cff467ca1bf60a4fcd9f05185acceda4d0f382434d393e17864262c5d'
+EXPECTED_GRADLEW_SHA='a5a5c199ba02189ae8c46a334223371a20599d9c298ef65e7540ede4a3f72d59'
+EXPECTED_GRADLEW_BAT_SHA='59328c7a17f673b1a63040bfb380a0c749e5d6df3406f7f18641060314cd9aa1'
 
 fail() {
     echo "FATAL: $*" >&2
@@ -46,4 +46,4 @@ done
 [[ "$(sha256 "$GRADLEW")" == "$EXPECTED_GRADLEW_SHA" ]] || fail "gradlew checksum mismatch"
 [[ "$(sha256 "$GRADLEW_BAT")" == "$EXPECTED_GRADLEW_BAT_SHA" ]] || fail "gradlew.bat checksum mismatch"
 
-echo "RESULT: PASS — Gradle 9.3.1 wrapper URL and all component checksums match reviewed values"
+echo "RESULT: PASS — Gradle 9.7.0 wrapper URL and all component checksums match reviewed values"
