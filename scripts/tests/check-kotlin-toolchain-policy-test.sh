@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CATALOG="$ROOT/gradle/libs.versions.toml"
 PROPERTIES="$ROOT/gradle.properties"
-ROOT_BUILD="$ROOT/build.gradle.kts"
 CORE_BUILD="$ROOT/library/p2p-core/build.gradle.kts"
 LAN_BUILD="$ROOT/library/p2p-transport-lan/build.gradle.kts"
 ANDROID_PROVISIONING_BUILD="$ROOT/library/p2p-network-provisioning-android/build.gradle.kts"
@@ -36,44 +35,8 @@ grep -Fq 'compilerOptions.moduleName.set(project.name)' "$ANDROID_PROVISIONING_B
 grep -Fq 'compilerOptions.moduleName.set(project.name)' "$DESKTOP_PROVISIONING_BUILD" ||
     fail "Desktop provisioning does not preserve its module name"
 
-grep -Fq 'alias(libs.plugins.binary.compatibility.validator) apply false' "$ROOT_BUILD" ||
-    fail "the Kotlin-aware Android ABI dumper is not available to the build"
-for android_abi_project in \
-    ':p2p-core' \
-    ':p2p-transport-lan' \
-    ':p2p-network-provisioning-android'; do
-    grep -Fq "\"$android_abi_project\"" "$ROOT_BUILD" ||
-        fail "$android_abi_project is missing from Android ABI coverage"
-done
-grep -Fq 'tasks.register<KotlinApiBuildTask>("buildAndroidAbi")' "$ROOT_BUILD" ||
-    fail "the Android ABI extraction task is missing"
-grep -Fq 'tasks.register<KotlinApiCompareTask>("checkAndroidAbi")' "$ROOT_BUILD" ||
-    fail "the Android ABI comparison task is missing"
-grep -Fq ':p2p-core:checkAndroidAbi :p2p-transport-lan:checkAndroidAbi :p2p-network-provisioning-android:checkAndroidAbi' "$CI_WORKFLOW" ||
-    fail "CI does not invoke every Android ABI comparison explicitly"
-
-CORE_ANDROID_ABI="$ROOT/library/p2p-core/api/android/p2p-core.api"
-LAN_ANDROID_ABI="$ROOT/library/p2p-transport-lan/api/android/p2p-transport-lan.api"
-PROVISIONING_ANDROID_ABI="$ROOT/library/p2p-network-provisioning-android/api/android/p2p-network-provisioning-android.api"
-for required_signature in \
-    'dev/p2pkit/core/AndroidNetworkPathObserver' \
-    'dev/p2pkit/core/android/P2pKitAndroid' \
-    'dev/p2pkit/core/transfer/FileTransferAndroidKt'; do
-    grep -Fq "$required_signature" "$CORE_ANDROID_ABI" ||
-        fail "the core Android ABI baseline omits $required_signature"
-done
-for required_signature in \
-    'dev/p2pkit/transport/lan/AndroidLanDiag' \
-    'dev/p2pkit/transport/lan/AndroidLanDslKt'; do
-    grep -Fq "$required_signature" "$LAN_ANDROID_ABI" ||
-        fail "the LAN Android ABI baseline omits $required_signature"
-done
-for required_signature in \
-    'dev/p2pkit/provisioning/android/AndroidNetworkProvisioningManager' \
-    'dev/p2pkit/provisioning/android/AndroidProvisioningFactory'; do
-    grep -Fq "$required_signature" "$PROVISIONING_ANDROID_ABI" ||
-        fail "the provisioning Android ABI baseline omits $required_signature"
-done
+"$ROOT/scripts/check-android-abi-guard.sh"
+"$ROOT/scripts/tests/check-android-abi-guard-policy-test.sh"
 
 grep -Fq -- '-Xoverride-konan-properties=minVersion.ios=$iosMinimumVersion' "$LAN_BUILD" ||
     fail "the repository XCFramework does not apply the canonical iOS floor"
@@ -127,4 +90,4 @@ bash -n "$CONSUMER_GATE"
 bash -n "$PUBLICATION_GATE"
 bash -n "$XCFRAMEWORK_GATE"
 
-echo "RESULT: PASS — Kotlin 2.4 module identities, dynamic consumers, and the iOS 14 binary floor are locked"
+echo "RESULT: PASS — Kotlin 2.4 module identities, compiler-owned Android ABI guards, dynamic consumers, and the iOS 14 binary floor are locked"

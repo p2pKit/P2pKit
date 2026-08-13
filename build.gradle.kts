@@ -222,8 +222,6 @@ subprojects {
     val buildAndroidAbi = tasks.register<KotlinApiBuildTask>("buildAndroidAbi") {
         group = "verification"
         description = "Extracts the Kotlin-visible ABI from the Android main bytecode."
-        dependsOn("compileAndroidMain")
-        inputClassesDirs.from(layout.buildDirectory.dir("classes/kotlin/android/main"))
         outputApiFile.set(
             layout.buildDirectory.file("kotlin/androidAbi/${project.name}.api"),
         )
