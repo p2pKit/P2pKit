@@ -1079,6 +1079,22 @@ internal class SessionManager(
                 )
             }
         } catch (e: TimeoutCancellationException) {
+            // Nested withTimeout calls reuse TimeoutCancellationException for
+            // both their own deadline and a cancelled caller's deadline. If
+            // our parent context is no longer active, the caller owns this
+            // cancellation; preserve it instead of reporting a false
+            // authentication/HELLO timeout. Cleanup still owns the raw stream
+            // and gets the same bounded clean-close opportunity as any other
+            // caller cancellation.
+            if (!currentCoroutineContext().isActive) {
+                cleanupHandshake(
+                    rawConnection,
+                    selectedConnection,
+                    readerJob,
+                    sendCleanClose = true
+                )?.let(e::addSuppressed)
+                throw e
+            }
             cleanupHandshake(rawConnection, selectedConnection, readerJob)?.let(e::addSuppressed)
             throw if (securityMode is SecurityMode.AuthenticatedV2) {
                 P2pError.AuthenticationFailed(
