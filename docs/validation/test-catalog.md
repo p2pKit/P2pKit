@@ -430,8 +430,13 @@ Actions:
    owning kit. The caller cancellation must not detach work; owner stop must
    close the manager terminally; later methods must return ManagerClosed and
    repeated close must be safe. Before Stop, verify the returned port/app ID/
-   peer ID/device name/fingerprint/pairing QR. Empty Apple `hostAddresses` is
-   intentional; a fabricated synchronous address is a failure.
+   peer ID/device name/fingerprint/pairing QR. Compare Apple `hostAddresses`
+   with a same-moment `getifaddrs` capture: each value must be an active LAN /
+   AWDL unicast address, IPv6 link-local values must retain their validated
+   interface zone, and loopback, wildcard, multicast, broadcast, cellular,
+   VPN/tunnel, or down-interface values must not appear. An empty list is
+   acceptable only when the capture has no eligible address or enumeration
+   reports an error.
 
 Commands:
 

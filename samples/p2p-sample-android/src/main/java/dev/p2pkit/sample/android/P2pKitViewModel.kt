@@ -253,6 +253,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     private val cleanupScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val advertisingToggleMutex = Mutex()
     private val discoveryToggleMutex = Mutex()
+    private val foregroundRestoreCoordinator = ForegroundRestoreCoordinator()
+
+    @Volatile
+    private var foregroundRestoreJob: Job? = null
     private val connectionIds: MutableMap<String, String> = mutableMapOf()
 
     /**
@@ -1465,6 +1469,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     fun stop() {
         val toStop = kit ?: return
         if (_isStopping.value) return
+        retireForegroundRestore()
         recordDiagnostic(
             DiagnosticRecord(
                 category = "application",
@@ -1529,6 +1534,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     override fun onCleared() {
+        retireForegroundRestore()
         diagnostics.shutdown()
         val toStop = kit
         kit = null
@@ -1551,6 +1557,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun notifyForegrounded() {
+        val foregroundLease = foregroundRestoreCoordinator.foregrounded()
         recordDiagnostic(
             DiagnosticRecord(
                 category = "application",
@@ -1561,12 +1568,14 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val currentKit = kit ?: return
         currentKit.notifyAppForegrounded()
         val scope = runScope ?: return
-        scope.launch {
-            restoreRequestedFeaturesAfterForeground(currentKit)
+        foregroundRestoreJob?.cancel()
+        foregroundRestoreJob = scope.launch {
+            restoreRequestedFeaturesAfterForeground(currentKit, foregroundLease)
         }
     }
 
     fun notifyBackgrounded() {
+        retireForegroundRestore()
         recordDiagnostic(
             DiagnosticRecord(
                 category = "application",
@@ -1575,6 +1584,12 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             )
         )
         kit?.notifyAppBackgrounded()
+    }
+
+    private fun retireForegroundRestore() {
+        foregroundRestoreCoordinator.backgrounded()
+        foregroundRestoreJob?.cancel()
+        foregroundRestoreJob = null
     }
 
     /**
@@ -1586,12 +1601,23 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      * state prevents a rapid stop/start Activity transition from letting an
      * early idempotent start lose to the still-pending background stop.
      */
-    private suspend fun restoreRequestedFeaturesAfterForeground(currentKit: P2pKit) {
+    private suspend fun restoreRequestedFeaturesAfterForeground(
+        currentKit: P2pKit,
+        foregroundLease: ForegroundRestoreCoordinator.Lease
+    ) {
         advertisingToggleMutex.withLock {
-            if (kit !== currentKit || !_advertising.value) return@withLock
+            if (!isForegroundRestoreCurrent(currentKit, foregroundLease, _advertising.value)) {
+                return@withLock
+            }
             runCatchingNonCancel {
                 restoreRequestedFeatureAfterForeground(
-                    isStillRequested = { kit === currentKit && _advertising.value },
+                    isStillRequested = {
+                        isForegroundRestoreCurrent(
+                            currentKit,
+                            foregroundLease,
+                            _advertising.value
+                        )
+                    },
                     states = currentKit.advertisingState,
                     start = currentKit::startAdvertising
                 )
@@ -1613,10 +1639,18 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 }
         }
         discoveryToggleMutex.withLock {
-            if (kit !== currentKit || !_discovering.value) return@withLock
+            if (!isForegroundRestoreCurrent(currentKit, foregroundLease, _discovering.value)) {
+                return@withLock
+            }
             runCatchingNonCancel {
                 restoreRequestedFeatureAfterForeground(
-                    isStillRequested = { kit === currentKit && _discovering.value },
+                    isStillRequested = {
+                        isForegroundRestoreCurrent(
+                            currentKit,
+                            foregroundLease,
+                            _discovering.value
+                        )
+                    },
                     states = currentKit.discoveryState,
                     start = currentKit::startDiscovery
                 )
@@ -1638,6 +1672,15 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 }
         }
     }
+
+    private fun isForegroundRestoreCurrent(
+        expectedKit: P2pKit,
+        lease: ForegroundRestoreCoordinator.Lease,
+        featureRequested: Boolean
+    ): Boolean =
+        kit === expectedKit &&
+            featureRequested &&
+            foregroundRestoreCoordinator.isCurrent(lease)
 
     // --- helpers ----------------------------------------------------------
 

@@ -373,6 +373,33 @@ class AndroidLanDataTransportOwnershipTest {
     }
 
     @Test
+    fun idleRouteClearForcesTheNextManualDialToResolveCurrentTopology() = runBlocking {
+        val staleTarget = hotspotTarget(address = "192.168.43.1", interfaceName = "softap0")
+        val currentTarget = hotspotTarget(address = "192.168.50.1", interfaceName = "softap1")
+        val resolverCalls = AtomicInteger()
+        val routeState = AndroidLanNetworkState {
+            resolverCalls.incrementAndGet()
+            currentTarget
+        }.apply { select(staleTarget) }
+        val socket = RecordingRouteSocket()
+        val transport = AndroidLanDataTransport(
+            registration = registration("manual-route-after-idle"),
+            networkState = routeState,
+            socketFactory = { socket }
+        )
+
+        // This is the discovery coordinator's true-idle ownership boundary.
+        routeState.clear()
+        val raw = transport.connect(peer("android-manual-peer-after-idle"))
+
+        val bound = assertIs<InetSocketAddress>(socket.boundEndpoint)
+        assertEquals("192.168.50.1", bound.address.hostAddress)
+        assertEquals(1, resolverCalls.get())
+        raw.close()
+        transport.close()
+    }
+
+    @Test
     fun routeBindFailuresCloseEveryCandidateAndRemainTyped() = runBlocking {
         val sockets = mutableListOf<FailingRouteBindSocket>()
         val transport = AndroidLanDataTransport(
@@ -429,12 +456,15 @@ class AndroidLanDataTransportOwnershipTest {
         transport.close()
     }
 
-    private fun hotspotTarget() = AndroidLanBindTarget(
+    private fun hotspotTarget(
+        address: String = "192.168.43.1",
+        interfaceName: String = "softap0"
+    ) = AndroidLanBindTarget(
         network = null,
-        interfaceName = "softap0",
-        address = InetAddress.getByName("192.168.43.1"),
+        interfaceName = interfaceName,
+        address = InetAddress.getByName(address),
         localAddresses = emptyList(),
-        fingerprint = "softap0:192.168.43.1/24"
+        fingerprint = "$interfaceName:$address/24"
     )
 
     private fun registration(id: String) = LanServiceRegistration(

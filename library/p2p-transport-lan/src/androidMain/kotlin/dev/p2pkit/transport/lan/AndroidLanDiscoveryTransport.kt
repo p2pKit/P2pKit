@@ -24,6 +24,7 @@ import javax.jmdns.ServiceInfo
 import javax.jmdns.ServiceListener
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -50,6 +51,44 @@ internal class AndroidListenerLease {
     fun publishIfActive(block: () -> Unit) = synchronized(gate) {
         if (active) block()
     }
+}
+
+/** One restartable ownership generation for Android topology callbacks. */
+internal class AndroidNetworkWatcherLease {
+    private val gate = Any()
+
+    @Volatile
+    private var active: Boolean = true
+
+    fun isActive(): Boolean = active
+
+    fun deactivate() = synchronized(gate) { active = false }
+
+    fun publishIfActive(block: () -> Unit) = synchronized(gate) {
+        if (active) block()
+    }
+}
+
+/** Pure decision used by the Android callback and its host-side regression test. */
+internal data class AndroidPrimaryNetworkLoss<N : Any>(
+    val observedAfterLoss: N?,
+    val requiresSelectorReconciliation: Boolean
+)
+
+internal fun <N : Any> androidPrimaryNetworkLoss(
+    observed: N?,
+    selected: N?,
+    lost: N
+): AndroidPrimaryNetworkLoss<N> {
+    val observedAfterLoss = observed.takeUnless { it == lost }
+    return AndroidPrimaryNetworkLoss(
+        observedAfterLoss = observedAfterLoss,
+        // registerNetworkCallback may already have reported an alternative,
+        // leaving `observed` on B while the JmDNS/data route is still selected
+        // on A. Losing selected A must still re-run the safe selector; Android
+        // does not emit a second onAvailable for already-present B.
+        requiresSelectorReconciliation = observed == lost || selected == lost
+    )
 }
 
 /** Testable ownership for removals whose JmDNS event has no TXT payload. */
@@ -188,6 +227,10 @@ internal class AndroidLanDiscoveryTransport(
      */
     @Volatile
     private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** Active callback/poller generation; retired before any teardown begins. */
+    @Volatile
+    private var networkWatcherLease: AndroidNetworkWatcherLease? = null
 
     private val networkLock = Any()
 
@@ -337,7 +380,7 @@ internal class AndroidLanDiscoveryTransport(
             override fun createHandleBlocking(
                 target: AndroidLanBindTarget?,
                 forRebind: Boolean
-            ): JmDNS {
+            ): JmdnsHandleBinding<AndroidLanBindTarget, JmDNS> {
                 val selected = target ?: currentBindTarget()
                     ?: throw IOException(
                         "No Wi-Fi, Ethernet, AP, or tether LAN address is available for JmDNS"
@@ -371,18 +414,18 @@ internal class AndroidLanDiscoveryTransport(
                     (if (forRebind) "rebindNow: JmDNS recreated" else "ensureJmdns: created handle") +
                         " bindAddr=${selected.address.hostAddress} iface=${selected.interfaceName}"
                 )
-                return fresh
+                return JmdnsHandleBinding(selected, fresh)
             }
 
             override fun closeHandleBlocking(handle: JmDNS) {
                 handle.close()
                 boundTarget = null
                 // Keep the last immutable route snapshot while the shared
-                // handle is being recreated or discovery is temporarily
-                // idle. TCP dials therefore remain interface-bound (or fail
-                // on the stale route) instead of silently falling back to the
-                // process-default cellular path. The data transport clears
-                // the snapshot only on its permanent close.
+                // handle is being recreated. TCP dials therefore remain
+                // interface-bound (or fail on the stale route) instead of
+                // silently falling back to the process-default cellular path.
+                // The watcher teardown clears it only at the coordinator's
+                // true-idle boundary, after both discovery intents stop.
             }
 
             override fun createServiceToken(localPeer: LocalPeerInfo): Any =
@@ -443,7 +486,8 @@ internal class AndroidLanDiscoveryTransport(
                 multicastLock = null
             }
 
-            override fun startNetworkWatcher() = ensureNetworkWatcherStarted()
+            override fun startNetworkWatcher(boundNetwork: AndroidLanBindTarget?) =
+                ensureNetworkWatcherStarted(boundNetwork)
 
             override fun stopNetworkWatcher() = stopNetworkWatcherNow()
 
@@ -653,9 +697,19 @@ internal class AndroidLanDiscoveryTransport(
      * coordinator from `startAdvertising` / `startDiscovery` inside its
      * lock, so it never races with the rebind body.
      */
-    private fun ensureNetworkWatcherStarted() {
+    private fun ensureNetworkWatcherStarted(boundNetwork: AndroidLanBindTarget?) {
+        // A failed unregister retains the old callback as retryable ownership,
+        // but that generation is already retired. Do not silently reuse it as
+        // the next start's watcher.
+        networkWatcherLease?.takeUnless(AndroidNetworkWatcherLease::isActive)?.let {
+            stopNetworkWatcherNow()
+        }
+        val lease = synchronized(networkLock) {
+            networkWatcherLease?.takeIf(AndroidNetworkWatcherLease::isActive)
+                ?: AndroidNetworkWatcherLease().also { networkWatcherLease = it }
+        }
         if (networkCallback == null) {
-            val cb = buildPrimaryNetworkCallback()
+            val cb = buildPrimaryNetworkCallback(lease)
             val request = NetworkRequest.Builder()
                 .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                 .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
@@ -669,7 +723,7 @@ internal class AndroidLanDiscoveryTransport(
             }
         }
         if (defaultNetworkCallback == null) {
-            val cb = buildDefaultNetworkCallback()
+            val cb = buildDefaultNetworkCallback(lease)
             try {
                 connectivity.registerDefaultNetworkCallback(cb)
                 defaultNetworkCallback = cb
@@ -679,71 +733,131 @@ internal class AndroidLanDiscoveryTransport(
             }
         }
         if (interfaceWatcherJob?.isActive != true) {
-            observedInterfaceFingerprint = androidLanInterfaceFingerprint()
-            interfaceWatcherJob = rebindScope.launch {
+            val initialFingerprint = androidLanInterfaceFingerprint()
+            val job = rebindScope.launch(start = CoroutineStart.LAZY) {
                 while (isActive) {
                     delay(INTERFACE_WATCH_INTERVAL_MS)
                     val next = androidLanInterfaceFingerprint()
-                    val previous = observedInterfaceFingerprint
-                    if (next != previous) {
-                        observedInterfaceFingerprint = next
-                        Log.d(TAG, "AP/tether interface fingerprint changed: $previous -> $next")
-                        coordinator.scheduleRebind(
-                            "AP/tether interface/address set changed",
-                            force = true
-                        )
+                    publishForCurrentWatcher(lease) {
+                        val previous = observedInterfaceFingerprint
+                        if (next != previous) {
+                            observedInterfaceFingerprint = next
+                            Log.d(
+                                TAG,
+                                "AP/tether interface fingerprint changed: $previous -> $next"
+                            )
+                            coordinator.scheduleRebind(
+                                reason = "AP/tether interface/address set changed",
+                                force = true,
+                                admit = lease::isActive
+                            )
+                        }
                     }
                 }
             }
-            Log.d(TAG, "ensureNetworkWatcherStarted: started AP/tether interface watcher")
+            val installed = synchronized(networkLock) {
+                if (networkWatcherLease !== lease || !lease.isActive()) {
+                    false
+                } else {
+                    observedInterfaceFingerprint = initialFingerprint
+                    interfaceWatcherJob = job
+                    true
+                }
+            }
+            if (installed) {
+                job.start()
+                Log.d(TAG, "ensureNetworkWatcherStarted: started AP/tether interface watcher")
+            } else {
+                job.cancel()
+            }
+        }
+
+        // Reconcile the first authoritative topology snapshot against the
+        // exact handle target. Without this step, a change that lands between
+        // handle creation and callback registration becomes the watcher's
+        // baseline and never emits an onAvailable delta.
+        val initialTarget = currentAndroidLanBindTarget(connectivity)
+        if (initialTarget != boundNetwork) {
+            publishForCurrentWatcher(lease) {
+                coordinator.scheduleRebind(
+                    reason = "Android LAN bind target changed before watcher admission: " +
+                        "$boundNetwork -> $initialTarget",
+                    admit = lease::isActive
+                )
+            }
         }
     }
 
     /**
-     * Primary callback construction. Body unchanged from V0.4-NSD — only
-     * client-mode WIFI/ETHERNET rotation triggers scheduleRebind here;
-     * `onLost` is informational (clears state, awaits next onAvailable).
+     * Primary WIFI/ETHERNET callback. Every callback is fenced by [lease].
+     * `onLost` schedules a selector reconciliation as well as clearing the
+     * observation: an already-available fallback network does not generate a
+     * second `onAvailable` merely because the currently bound network died.
      */
-    private fun buildPrimaryNetworkCallback(): ConnectivityManager.NetworkCallback =
+    private fun buildPrimaryNetworkCallback(
+        lease: AndroidNetworkWatcherLease
+    ): ConnectivityManager.NetworkCallback =
         object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                val previous = synchronized(networkLock) {
-                    val p = observedNetwork
+                publishForCurrentWatcher(lease) {
+                    val previous = observedNetwork
                     observedNetwork = network
-                    p
-                }
-                // registerNetworkCallback reports the currently available
-                // network once. Ignore that initial callback only when the
-                // JmDNS handle is actually bound to the same Network; a null
-                // or different selected network still requires a rebind.
-                val alreadyBound = previous == null && networkState.selectedNetwork() == network
-                if (previous != network && !alreadyBound) {
-                    Log.d(TAG, "NetworkCallback.onAvailable: rotation detected, prev=$previous now=$network")
-                    coordinator.scheduleRebind("onAvailable rotation: $previous -> $network")
-                } else {
-                    Log.d(TAG, "NetworkCallback.onAvailable: $network (no rebind)")
+                    // registerNetworkCallback reports the currently available
+                    // network once. Ignore that initial callback only when the
+                    // JmDNS handle is actually bound to the same Network; a null
+                    // or different selected network still requires a rebind.
+                    val alreadyBound =
+                        previous == null && networkState.selectedNetwork() == network
+                    if (previous != network && !alreadyBound) {
+                        Log.d(
+                            TAG,
+                            "NetworkCallback.onAvailable: rotation detected, " +
+                                "prev=$previous now=$network"
+                        )
+                        coordinator.scheduleRebind(
+                            reason = "onAvailable rotation: $previous -> $network",
+                            admit = lease::isActive
+                        )
+                    } else {
+                        Log.d(TAG, "NetworkCallback.onAvailable: $network (no rebind)")
+                    }
                 }
             }
 
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
-                val current = synchronized(networkLock) { observedNetwork }
-                if (current == network && isSafeAndroidLanNetwork(connectivity, network)) {
-                    Log.d(TAG, "NetworkCallback.onLinkPropertiesChanged: $network")
-                    coordinator.scheduleRebind("LAN addresses changed on $network", force = true)
+                publishForCurrentWatcher(lease) {
+                    if (observedNetwork == network && isSafeAndroidLanNetwork(connectivity, network)) {
+                        Log.d(TAG, "NetworkCallback.onLinkPropertiesChanged: $network")
+                        coordinator.scheduleRebind(
+                            reason = "LAN addresses changed on $network",
+                            force = true,
+                            admit = lease::isActive
+                        )
+                    }
                 }
             }
 
             override fun onLost(network: Network) {
-                val cleared = synchronized(networkLock) {
-                    if (observedNetwork == network) {
-                        observedNetwork = null
-                        true
-                    } else false
-                }
-                if (cleared) {
-                    Log.d(TAG, "NetworkCallback.onLost: $network (observed cleared; awaiting next onAvailable)")
-                } else {
-                    Log.d(TAG, "NetworkCallback.onLost: $network (was not current observed)")
+                publishForCurrentWatcher(lease) {
+                    val loss = androidPrimaryNetworkLoss(
+                        observed = observedNetwork,
+                        selected = networkState.selectedNetwork(),
+                        lost = network
+                    )
+                    observedNetwork = loss.observedAfterLoss
+                    if (loss.requiresSelectorReconciliation) {
+                        Log.d(TAG, "NetworkCallback.onLost: $network (reconciling selector)")
+                        // A safe fallback may already have been present before
+                        // the bound network disappeared, in which case Android
+                        // emits no new onAvailable callback. Re-read the
+                        // selector through the normal debounced transaction.
+                        coordinator.scheduleRebind(
+                            reason = "primary LAN network lost: $network",
+                            admit = lease::isActive
+                        )
+                    } else {
+                        Log.d(TAG, "NetworkCallback.onLost: $network (was not current observed)")
+                    }
                 }
             }
         }
@@ -757,37 +871,56 @@ internal class AndroidLanDiscoveryTransport(
      * coordinator's `rebindNow` absorb any redundant fires when both
      * callbacks see the same transition.
      */
-    private fun buildDefaultNetworkCallback(): ConnectivityManager.NetworkCallback =
+    private fun buildDefaultNetworkCallback(
+        lease: AndroidNetworkWatcherLease
+    ): ConnectivityManager.NetworkCallback =
         object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                val prev = synchronized(networkLock) {
-                    val p = observedDefaultNetwork
+                publishForCurrentWatcher(lease) {
+                    val prev = observedDefaultNetwork
                     observedDefaultNetwork = network
-                    p
-                }
-                if (prev != network) {
-                    Log.d(TAG, "DefaultNetworkCallback.onAvailable: prev=$prev now=$network")
-                    coordinator.scheduleRebind("default network changed: $prev -> $network")
-                } else {
-                    Log.d(TAG, "DefaultNetworkCallback.onAvailable: $network (no change)")
+                    if (prev != network) {
+                        Log.d(TAG, "DefaultNetworkCallback.onAvailable: prev=$prev now=$network")
+                        coordinator.scheduleRebind(
+                            reason = "default network changed: $prev -> $network",
+                            admit = lease::isActive
+                        )
+                    } else {
+                        Log.d(TAG, "DefaultNetworkCallback.onAvailable: $network (no change)")
+                    }
                 }
             }
 
             override fun onLost(network: Network) {
-                val cleared = synchronized(networkLock) {
-                    if (observedDefaultNetwork == network) {
+                publishForCurrentWatcher(lease) {
+                    val cleared = if (observedDefaultNetwork == network) {
                         observedDefaultNetwork = null
                         true
                     } else false
-                }
-                if (cleared) {
-                    Log.d(TAG, "DefaultNetworkCallback.onLost: $network (default cleared)")
-                    coordinator.scheduleRebind("default network lost: $network")
-                } else {
-                    Log.d(TAG, "DefaultNetworkCallback.onLost: $network (was not current default)")
+                    if (cleared) {
+                        Log.d(TAG, "DefaultNetworkCallback.onLost: $network (default cleared)")
+                        coordinator.scheduleRebind(
+                            reason = "default network lost: $network",
+                            admit = lease::isActive
+                        )
+                    } else {
+                        Log.d(TAG, "DefaultNetworkCallback.onLost: $network (was not current default)")
+                    }
                 }
             }
         }
+
+    /** Publish one callback only while [lease] owns the active watcher generation. */
+    private fun publishForCurrentWatcher(
+        lease: AndroidNetworkWatcherLease,
+        block: () -> Unit
+    ) {
+        lease.publishIfActive {
+            synchronized(networkLock) {
+                if (networkWatcherLease === lease) block()
+            }
+        }
+    }
 
     /**
      * Tears down BOTH callbacks (primary + default) and resets observed
@@ -800,6 +933,10 @@ internal class AndroidLanDiscoveryTransport(
      */
     private fun stopNetworkWatcherNow() {
         var firstFailure: Exception? = null
+        val retiredLease = synchronized(networkLock) { networkWatcherLease }
+        // Retire callback publication before cancellation/unregistration;
+        // Android may already have queued a callback on a binder thread.
+        retiredLease?.deactivate()
         interfaceWatcherJob?.cancel()
         interfaceWatcherJob = null
         observedInterfaceFingerprint = null
@@ -826,7 +963,12 @@ internal class AndroidLanDiscoveryTransport(
             synchronized(networkLock) {
                 observedNetwork = null
                 observedDefaultNetwork = null
+                if (networkWatcherLease === retiredLease) networkWatcherLease = null
             }
+            // Discovery no longer owns a live route. A later manual-peer dial
+            // must invoke the safe resolver instead of reusing this retired
+            // immutable snapshot.
+            networkState.clear()
             Log.d(TAG, "stopNetworkWatcherIfIdle: stopped callbacks/interface watcher and reset state")
         }
         firstFailure?.let { throw it }

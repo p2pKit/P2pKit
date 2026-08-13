@@ -45,4 +45,19 @@ class AppleLifecycleRecoveryCoordinatorTest {
         assertFalse(coordinator.onSignal(AppleLifecycleSignal.WillResignActive))
         assertTrue(coordinator.onSignal(AppleLifecycleSignal.WillEnterForeground))
     }
+
+    @Test
+    fun retiredTransportEpisodeCannotSuppressFreshOwnerRecovery() {
+        val retired = AppleLifecycleRecoveryCoordinator()
+
+        assertFalse(retired.onSignal(AppleLifecycleSignal.WillResignActive))
+        retired.retire()
+        assertFalse(retired.isAcceptingSignals())
+        assertFalse(retired.onSignal(AppleLifecycleSignal.DidBecomeActive))
+
+        val current = AppleLifecycleRecoveryCoordinator()
+        current.onSuccessfulRebind()
+        assertFalse(current.onSignal(AppleLifecycleSignal.WillResignActive))
+        assertTrue(current.onSignal(AppleLifecycleSignal.DidBecomeActive))
+    }
 }

@@ -45,25 +45,27 @@ import kotlinx.coroutines.withContext
  *
  * The single feature this manager DOES expose is **manual-IP fallback**:
  * - [getManualConnectionInfo] returns the local kit's port and authenticated
- *   identity for exchanging out-of-band. The Swift host supplies an address
- *   from its path monitor because this manager intentionally returns no
- *   synchronous address snapshot.
+ *   identity plus a synchronous snapshot of safe LAN interface addresses for
+ *   exchanging out-of-band.
  * - [createManualPeer] registers a synthetic peer keyed by
  *   `TransportHint(host, port)` so the iOS LAN data transport can dial
  *   it via `nw_endpoint_create_host` — see
  *   [IosLanDataTransport.connect]'s manual-IP fallback branch.
  *
- * The `hostAddresses` list returned by [getManualConnectionInfo] is always
- * empty on iOS — Apple offers no synchronous non-loopback IP enumeration
- * without a path-monitor subscription, so only the port/ids are populated;
- * Swift consumers read the local IP themselves if they need to display one
- * (e.g. `CNCopySupportedInterfaces` / `NWPathMonitor`). [networkState] and
- * [events] remain static; [state] changes only for terminal [close].
+ * Address enumeration is a moment-in-time `getifaddrs` snapshot rather than
+ * a path subscription. It includes active Wi-Fi/wired/AWDL IPv4 and IPv6
+ * unicast addresses, preserves a validated zone on IPv6 link-local values,
+ * and excludes loopback, wildcard, multicast, broadcast, cellular, and VPN
+ * tunnel candidates. The list can still be empty when no eligible interface
+ * exists or enumeration fails. [networkState] and [events] remain static;
+ * [state] changes only for terminal [close].
  */
 public class IosManualNetworkProvisioningManager internal constructor(
     private val ctx: ProvisioningContext,
     private val lifecycleHooks: IosManualProvisioningLifecycleHooks =
-        IosManualProvisioningLifecycleHooks()
+        IosManualProvisioningLifecycleHooks(),
+    private val addressScanner: AppleInterfaceAddressScanner =
+        AppleInterfaceAddressScanner(::collectAppleInterfaceAddressSnapshot)
 ) : NetworkProvisioningManager {
 
     private val scopeJob = SupervisorJob(parent = ctx.parentJob)
@@ -120,14 +122,14 @@ public class IosManualNetworkProvisioningManager internal constructor(
             // `kit.start()` (or the first lifecycle call) succeeds.
             val port = ctx.lanTcpPort() ?: return@runManagerOperation null
             lifecycleHooks.beforeManualInfoResult()
-            // Apple does not give us a non-loopback IP list synchronously without
-            // a path monitor subscription; populating hostAddresses requires the
-            // Swift consumer to read it themselves (e.g., via
-            // CNCopySupportedInterfaces or NWPathMonitor on the iOS side and pass
-            // it in). Returning an empty list still surfaces the port and ids,
-            // which is all the dialer needs.
+            val addressSnapshot = addressScanner.scan()
+            addressSnapshot.enumerationErrorCode?.let { errorCode ->
+                ctx.logger.warn(
+                    "provisioning: Apple interface address snapshot failed with errno=$errorCode"
+                )
+            }
             ManualConnectionInfo(
-                hostAddresses = emptyList(),
+                hostAddresses = selectAppleHostAddresses(addressSnapshot.candidates),
                 port = port,
                 appId = ctx.appId,
                 peerId = ctx.localPeerId,

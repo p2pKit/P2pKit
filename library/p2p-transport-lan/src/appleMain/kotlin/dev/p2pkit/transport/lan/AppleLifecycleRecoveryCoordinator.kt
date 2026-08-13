@@ -25,12 +25,14 @@ internal enum class AppleLifecycleSignal {
  */
 internal class AppleLifecycleRecoveryCoordinator {
     private val lock = NSLock()
+    private var accepting: Boolean = true
     private var active: Boolean = true
     private var episode: Long = 0
     private var requestedEpisode: Long = NO_EPISODE
     private var recoveredEpisode: Long = 0
 
     fun onSignal(signal: AppleLifecycleSignal): Boolean = withLock {
+        if (!accepting) return@withLock false
         when (signal) {
             AppleLifecycleSignal.WillResignActive -> {
                 if (active) {
@@ -53,8 +55,19 @@ internal class AppleLifecycleRecoveryCoordinator {
 
     /** Mark the current lifecycle episode fresh after any successful rebind. */
     fun onSuccessfulRebind() = withLock {
-        recoveredEpisode = episode
+        if (accepting) recoveredEpisode = episode
     }
+
+    /**
+     * Permanently retire this transport-lifetime owner. UIKit may already
+     * have queued a notification when its observer is removed; that callback
+     * must not mutate or schedule against a later stop/start generation.
+     */
+    fun retire() = withLock {
+        accepting = false
+    }
+
+    fun isAcceptingSignals(): Boolean = withLock { accepting }
 
     private fun requestRecoveryLocked(): Boolean {
         if (recoveredEpisode == episode || requestedEpisode == episode) return false

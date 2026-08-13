@@ -55,4 +55,53 @@ class AndroidServiceAdmissionsTest {
         assertEquals(setOf(peer), admissions.drain())
         assertTrue(admissions.drain().isEmpty())
     }
+
+    @Test
+    fun retiredNetworkWatcherLeaseCannotPublishIntoANewLifetime() {
+        val retired = AndroidNetworkWatcherLease()
+        val current = AndroidNetworkWatcherLease()
+        var retiredPublications = 0
+        var currentPublications = 0
+
+        retired.publishIfActive { retiredPublications++ }
+        retired.deactivate()
+        retired.publishIfActive { retiredPublications++ }
+        current.publishIfActive { currentPublications++ }
+
+        assertEquals(1, retiredPublications)
+        assertEquals(1, currentPublications)
+        assertTrue(current.isActive())
+    }
+
+    @Test
+    fun losingTheObservedOrSelectedPrimaryNetworkRequiresSelectorReconciliation() {
+        val fallbackAlreadyAvailable = "wifi-a"
+        val boundThenLost = "ethernet-b"
+
+        val currentLoss = androidPrimaryNetworkLoss(
+            observed = boundThenLost,
+            selected = boundThenLost,
+            lost = boundThenLost
+        )
+        val selectedLossWithObservedFallback = androidPrimaryNetworkLoss(
+            observed = fallbackAlreadyAvailable,
+            selected = boundThenLost,
+            lost = boundThenLost
+        )
+        val unrelatedLoss = androidPrimaryNetworkLoss(
+            observed = fallbackAlreadyAvailable,
+            selected = fallbackAlreadyAvailable,
+            lost = boundThenLost
+        )
+
+        assertNull(currentLoss.observedAfterLoss)
+        assertTrue(currentLoss.requiresSelectorReconciliation)
+        assertEquals(
+            fallbackAlreadyAvailable,
+            selectedLossWithObservedFallback.observedAfterLoss
+        )
+        assertTrue(selectedLossWithObservedFallback.requiresSelectorReconciliation)
+        assertEquals(fallbackAlreadyAvailable, unrelatedLoss.observedAfterLoss)
+        assertEquals(false, unrelatedLoss.requiresSelectorReconciliation)
+    }
 }
