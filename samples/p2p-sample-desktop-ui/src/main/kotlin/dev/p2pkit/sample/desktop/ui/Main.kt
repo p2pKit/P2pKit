@@ -122,7 +122,6 @@ fun main() {
     // P2pKitLAN / P2pKitFRAME line to stdout of the terminal that launched the
     // UI. Harmless in a test harness; the library defaults stay off.
     JvmLanDiag.enabled = true
-    FrameTrace.enabled = true
     application {
         Window(
             onCloseRequest = ::exitApplication,
@@ -150,17 +149,13 @@ private fun P2pKitSampleApp() {
     }
     val holder = remember { DesktopP2pState(appScope) }
     var showDiagnostics by remember { mutableStateOf(false) }
-    remember(holder) {
-        FrameTrace.sink = {
+    DisposableEffect(holder) {
+        val frameTraceLease = FrameTrace.installSink(enabled = true) {
             println("P2pKitFRAME $it")
             holder.diagnostics.frame(it)
         }
-        Unit
-    }
-
-    // Final clean-up when the whole app composable leaves.
-    DisposableEffect(holder) {
         onDispose {
+            frameTraceLease.release()
             holder.shutdownIfRunning()
             // The stop coroutine above is owned by appScope; cancellation is
             // intentionally deferred to process/window teardown by the host.
@@ -171,6 +166,13 @@ private fun P2pKitSampleApp() {
         if (showDiagnostics) {
             DesktopDiagnosticsScreen(
                 diagnostics = holder.diagnostics,
+                activeConnections = holder.connectedSessions.map { session ->
+                    DesktopDiagnosticConnectionSnapshot(
+                        sessionId = session.id,
+                        peerId = session.peer.id.value,
+                        state = session.state.value.toString()
+                    )
+                },
                 revision = holder.diagnosticRevision,
                 onBack = { showDiagnostics = false }
             )
@@ -722,6 +724,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
                     System.err.println("[p2pkit ERROR] ${_lifecycleError.value}".sanitizedForTerminal())
                 }.onSuccess {
                     if (kit === toStop) kit = null
+                    diagnostics.localPeerId = null
                     _lifecycleError.value = null
                 }
             } finally {
@@ -762,7 +765,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
             diagnostics.recorder.record(
                 DiagnosticRecord(
                     peerId = session.peer.id.value,
-                    connectionId = diagnostics.latestConnectionId,
+                    connectionId = diagnostics.connectionIdFor(session.peer.id.value),
                     category = "file",
                     eventName = DiagnosticEventNames.FILE_SELECTED,
                     payloadSizeBytes = file.length(),
@@ -1160,6 +1163,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
             val removed = connectedSessions.firstOrNull { it.id == id }
             if (removed != null) {
                 diagnostics.connection(
+                    removed.id,
                     removed.peer.id.value,
                     "Closed",
                     removed.state.value.toString()
@@ -1174,6 +1178,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
         for (session in current) {
             if (sessionJobs.containsKey(session.id)) continue
             diagnostics.connection(
+                session.id,
                 session.peer.id.value,
                 session.state.value.toString()
             )
@@ -1194,7 +1199,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
                     diagnostics.recorder.record(
                         DiagnosticRecord(
                             peerId = session.peer.id.value,
-                            connectionId = diagnostics.latestConnectionId,
+                            connectionId = diagnostics.connectionIdFor(session.peer.id.value),
                             category = "metadata",
                             eventName = DiagnosticEventNames.METADATA_VALIDATED,
                             payloadSizeBytes = when (msg) {
@@ -1222,6 +1227,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
                 session.state.collect { st ->
                     System.err.println("[p2pkit] session ${session.peer.name.sanitizedForTerminal()} → $st")
                     diagnostics.connection(
+                        session.id,
                         session.peer.id.value,
                         st.toString(),
                         previous

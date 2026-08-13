@@ -110,6 +110,147 @@ class DiagnosticModelTest {
     }
 
     @Test
+    fun concurrentPeersAndTransfersKeepExactCorrelation() {
+        val recorder = recorder(maxEvents = 2_000)
+        recorder.startSession("PS-T01", "both", "shared-session")
+        val registry = DiagnosticCorrelationRegistry(
+            activeSessionId = { recorder.activeSessionId },
+            maxTransfers = 32
+        )
+        registry.setLocalPeerId("local-peer")
+        val peerA = assertNotNull(registry.registerConnection("sdk-session-a", "peer-a"))
+        val peerB = assertNotNull(registry.registerConnection("sdk-session-b", "peer-b"))
+        assertNotEquals(peerA.connectionId, peerB.connectionId)
+
+        val ready = CountDownLatch(2)
+        val start = CountDownLatch(1)
+        val threads = listOf("transfer-a" to "peer-a", "transfer-b" to "peer-b").map {
+                (transferId, peerId) ->
+            thread {
+                ready.countDown()
+                start.await()
+                repeat(100) {
+                    val correlation = assertNotNull(registry.registerTransfer(transferId, peerId))
+                    recorder.record(
+                        DiagnosticRecord(
+                            peerId = correlation.peerId,
+                            connectionId = correlation.connectionId,
+                            transferId = transferId,
+                            category = "transfer",
+                            eventName = DiagnosticEventNames.TRANSFER_PROGRESS
+                        )
+                    )
+                }
+            }
+        }
+        assertTrue(ready.await(5, TimeUnit.SECONDS))
+        start.countDown()
+        threads.forEach { it.join(5_000) }
+        assertTrue(threads.none { it.isAlive })
+
+        val events = recorder.snapshot().filter { it.transferId != null }
+        assertEquals(setOf(peerA.connectionId), events.filter { it.transferId == "transfer-a" }
+            .mapNotNull { it.connectionId }.toSet())
+        assertEquals(setOf(peerB.connectionId), events.filter { it.transferId == "transfer-b" }
+            .mapNotNull { it.connectionId }.toSet())
+        assertEquals(peerA, registry.connectionForSession("sdk-session-a"))
+        assertEquals(peerB, registry.connectionForPeer("peer-b"))
+    }
+
+    @Test
+    fun frameTraceUsesExactTransferOwnerAndLeavesAmbiguityUnassigned() {
+        val recorder = recorder()
+        recorder.startSession("PS-T01", "both", "shared-session")
+        val registry = DiagnosticCorrelationRegistry(
+            activeSessionId = { recorder.activeSessionId }
+        )
+        registry.setLocalPeerId("local-peer")
+        registry.registerConnection("sdk-session-a", "peer-a")
+        registry.registerConnection("sdk-session-b", "peer-b")
+        val first = assertNotNull(registry.registerTransfer("a".repeat(32), "peer-a"))
+        registry.registerTransfer("b".repeat(32), "peer-b")
+
+        StructuredFrameTrace.record(
+            recorder,
+            "TX type=FILE_DATA len=64B chunk=0/1 id=${"a".repeat(32)} LAST",
+            correlationForTransfer = registry::correlationForTransfer
+        )
+        val attributed = recorder.snapshot().last()
+        assertEquals("a".repeat(32), attributed.transferId)
+        assertEquals(first.connectionId, attributed.connectionId)
+        assertEquals(anonymizeIdentifier("peer-a"), attributed.peerId)
+
+        // A same transfer id on a different connection cannot be resolved
+        // from a process-global frame line; it must never become last-wins.
+        registry.registerTransfer("a".repeat(32), "peer-b")
+        StructuredFrameTrace.record(
+            recorder,
+            "RX type=FILE_COMMIT len=72B xfer=${"a".repeat(32)}",
+            correlationForTransfer = registry::correlationForTransfer
+        )
+        val ambiguous = recorder.snapshot().last()
+        assertEquals("a".repeat(32), ambiguous.transferId)
+        assertNull(ambiguous.connectionId)
+        assertNull(ambiguous.peerId)
+    }
+
+    @Test
+    fun transferCorrelationNeverInventsAnUnobservedConnection() {
+        val recorder = recorder()
+        recorder.startSession("PS-T01", "sender", "shared-session")
+        val registry = DiagnosticCorrelationRegistry(
+            activeSessionId = { recorder.activeSessionId }
+        )
+        registry.setLocalPeerId("local-peer")
+
+        assertNull(registry.connectionForPeer("peer-a"))
+        assertNull(registry.registerTransfer("transfer-a", "peer-a"))
+        assertNull(registry.correlationForTransfer("transfer-a"))
+    }
+
+    @Test
+    fun newTestSessionNeverReusesPriorConnectionCorrelation() {
+        val recorder = recorder()
+        recorder.startSession("PS-T01", "both", "session-a")
+        val registry = DiagnosticCorrelationRegistry(
+            activeSessionId = { recorder.activeSessionId }
+        )
+        registry.setLocalPeerId("local-peer")
+        val before = assertNotNull(registry.registerConnection("sdk-session", "peer-a"))
+
+        recorder.startSession("PS-T01", "both", "session-b")
+        registry.resetSession()
+        assertNull(registry.connectionForPeer("peer-a"))
+        assertNull(registry.connectionForSession("sdk-session"))
+        val after = assertNotNull(registry.registerConnection("sdk-session", "peer-a"))
+        assertNotEquals(before.connectionId, after.connectionId)
+        assertEquals(after, registry.connectionForSession("sdk-session"))
+    }
+
+    @Test
+    fun retiredSdkSessionCannotEraseReplacementTransferOwnership() {
+        val recorder = recorder()
+        recorder.startSession("PS-T01", "both", "shared-session")
+        val registry = DiagnosticCorrelationRegistry(
+            activeSessionId = { recorder.activeSessionId }
+        )
+        registry.setLocalPeerId("local-peer")
+        val retired = assertNotNull(registry.registerConnection("sdk-session-old", "peer-a"))
+        val replacement = assertNotNull(
+            registry.registerConnection("sdk-session-new", "peer-a")
+        )
+        assertEquals(retired.connectionId, replacement.connectionId)
+        assertNull(registry.connectionForSession("sdk-session-old"))
+        val transfer = assertNotNull(
+            registry.registerTransfer("transfer-new", "peer-a", "sdk-session-new")
+        )
+
+        assertNull(registry.removeConnection("sdk-session-old"))
+        assertEquals(replacement, registry.connectionForPeer("peer-a"))
+        assertEquals(transfer, registry.correlationForTransfer("transfer-new"))
+    }
+
+    @Test
     fun sensitiveValuesAndNetworkAddressesAreRedacted() {
         val recorder = recorder()
         recorder.startSession("PS-T01", "receiver", "session-redaction")

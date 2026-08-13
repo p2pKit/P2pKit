@@ -168,12 +168,12 @@ internal class DefaultP2pProtocol(
         return when (frame.type) {
             PacketType.DATA, PacketType.FILE_DATA ->
                 "$base chunk=${frame.chunkIndex}/${frame.totalChunks} " +
-                    "id=${frame.messageId.toString().take(8)}" +
+                    "id=${frame.messageId}" +
                     (if (frame.isLastChunk) " LAST" else "")
             PacketType.FILE_OFFER, PacketType.FILE_ACCEPT, PacketType.FILE_REJECT,
             PacketType.FILE_DONE, PacketType.FILE_CANCEL, PacketType.FILE_FINISH,
             PacketType.FILE_COMMIT, PacketType.FILE_RESULT ->
-                "$base xfer=${frame.messageId.toString().take(8)}"
+                "$base xfer=${frame.messageId}"
             else -> base
         }
     }

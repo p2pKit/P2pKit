@@ -19,6 +19,7 @@ import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.protocol.FrameTrace
+import dev.p2pkit.core.protocol.FrameTraceLease
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pState
@@ -50,7 +51,6 @@ import dev.p2pkit.sample.diagnostics.DiagnosticRecorder
 import dev.p2pkit.sample.diagnostics.DiagnosticSeverity
 import dev.p2pkit.sample.diagnostics.StructuredFrameTrace
 import dev.p2pkit.sample.diagnostics.StructuredSdkLogger
-import dev.p2pkit.sample.diagnostics.correlationConnectionId
 import dev.p2pkit.sample.kmp.createP2pKit
 import dev.p2pkit.sample.kmp.runDiscoverAndGreet
 import dev.p2pkit.transport.lan.AndroidLanDiag
@@ -258,6 +258,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     @Volatile
     private var foregroundRestoreJob: Job? = null
     private val connectionIds: MutableMap<String, String> = mutableMapOf()
+    private var frameTraceLease: FrameTraceLease? = null
 
     /**
      * AUDIT-2026-06: A-G8-samples-android-13 — all three per-session
@@ -300,6 +301,22 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         runCatching {
             diagnostics.beginSession(diagnosticTestId, diagnosticRole, requestedSessionId)
         }.onSuccess { id ->
+            diagnostics.setLocalPeerId(newKitLocalPeerId().takeIf { it.isNotBlank() })
+            connectionIds.clear()
+            connectedSessions.forEach { session ->
+                val correlation = diagnostics.registerConnection(session.id, session.peer.id.value)
+                correlation?.let { connectionIds[session.id] = it.connectionId }
+                recordDiagnostic(
+                    DiagnosticRecord(
+                        peerId = session.peer.id.value,
+                        connectionId = correlation?.connectionId,
+                        category = "connection",
+                        eventName = DiagnosticEventNames.CONNECTION_STATE_CHANGED,
+                        currentState = session.state.value.toString(),
+                        details = mapOf("sessionSnapshot" to "true")
+                    )
+                )
+            }
             appendSystemMessage(
                 "diagnostics active: test=${diagnosticRecorder.activeTestId} " +
                     "session=$id role=${diagnosticRecorder.activeRole}"
@@ -404,15 +421,15 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // diagnostic harness opts in explicitly.
         AndroidLanDiag.enabled = true
         AndroidLanDiag.retainHistory = true
-        FrameTrace.sink = {
+        frameTraceLease?.release()
+        frameTraceLease = FrameTrace.installSink(enabled = true) {
             Log.d("P2pKitFrame", it)
             StructuredFrameTrace.record(
-                diagnosticRecorder,
-                it,
-                connectionIds.values.firstOrNull()
+                recorder = diagnosticRecorder,
+                line = it,
+                correlationForTransfer = diagnostics::correlationForTransfer
             )
         }
-        FrameTrace.enabled = true
         val newKit = try {
             P2pKit.create {
                 appId = AppId(APP_ID)
@@ -457,18 +474,12 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 logger = StructuredSdkLogger(
                     recorder = diagnosticRecorder,
-                    delegate = TailLogger(this@P2pKitViewModel),
-                    context = {
-                        val session = connectedSessions.lastOrNull()
-                        Triple(
-                            session?.peer?.id?.value,
-                            session?.let { connectionIds[it.id] },
-                            fileTransfers.lastOrNull()?.id
-                        )
-                    }
+                    delegate = TailLogger(this@P2pKitViewModel)
                 )
             }
         } catch (t: Throwable) {
+            frameTraceLease?.release()
+            frameTraceLease = null
             _isStarting.value = false
             Log.e(LOG_TAG, "kit create failed", t)
             appendSystemMessage("start failed: ${t.message ?: t::class.simpleName}")
@@ -477,6 +488,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         kit = newKit
         refreshMissingPermissions()
         _localPeerId.value = newKit.localPeerId.value
+        diagnostics.setLocalPeerId(newKit.localPeerId.value)
         Log.i(
             LOG_TAG,
             "kit started: deviceName=${newKit.localDeviceName} appId=${newKit.appId.value} " +
@@ -868,6 +880,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 recordDiagnostic(
                     DiagnosticRecord(
                         peerId = peerId,
+                        connectionId = diagnostics.connectionForPeer(peerId)?.connectionId,
                         category = "file",
                         eventName = DiagnosticEventNames.FILE_SELECTED,
                         payloadSizeBytes = size,
@@ -887,9 +900,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 appendSystemMessage("send file failed: ${it.message ?: it::class.simpleName}")
                 return@launch
             }
+            val transferCorrelation = diagnostics.registerTransfer(transfer.id, peerId)
             recordDiagnostic(
                 DiagnosticRecord(
                     peerId = peerId,
+                    connectionId = transferCorrelation?.connectionId,
                     transferId = transfer.id,
                     category = "transfer",
                     eventName = DiagnosticEventNames.TRANSFER_PREPARED,
@@ -901,6 +916,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 recordDiagnostic(
                     DiagnosticRecord(
                         peerId = peerId,
+                        connectionId = transferCorrelation?.connectionId,
                         transferId = transfer.id,
                         category = "file",
                         eventName = DiagnosticEventNames.FILE_SENDER_HASH,
@@ -996,6 +1012,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         cleanupScope.launch { runCatchingNonCancel { pending.offer.reject("rejected by user") } }
         recordDiagnostic(
             DiagnosticRecord(
+                peerId = pending.offer.peer.id.value,
+                connectionId = diagnostics.registerTransfer(id, pending.offer.peer.id.value)?.connectionId,
                 transferId = id,
                 category = "transfer",
                 eventName = DiagnosticEventNames.TRANSFER_OFFER_REJECTED,
@@ -1013,6 +1031,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         recordDiagnostic(
             DiagnosticRecord(
                 peerId = pending.offer.peer.id.value,
+                connectionId = diagnostics.registerTransfer(
+                    id,
+                    pending.offer.peer.id.value
+                )?.connectionId,
                 transferId = id,
                 category = "transfer",
                 eventName = DiagnosticEventNames.TRANSFER_OFFER_ACCEPTED,
@@ -1093,6 +1115,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         peerName: String,
         scope: CoroutineScope
     ) {
+        val correlation = diagnostics.registerTransfer(transfer.id, transfer.peer.id.value)
         addRow(
             FileTransferRow(
                 id = transfer.id,
@@ -1110,6 +1133,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         recordDiagnostic(
             DiagnosticRecord(
                 peerId = transfer.peer.id.value,
+                connectionId = correlation?.connectionId,
                 transferId = transfer.id,
                 category = "transfer",
                 eventName = DiagnosticEventNames.TRANSFER_PREPARED,
@@ -1128,6 +1152,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         destinationPath: String,
         scope: CoroutineScope
     ) {
+        val correlation = diagnostics.registerTransfer(transfer.id, transfer.peer.id.value)
         addRow(
             FileTransferRow(
                 id = transfer.id,
@@ -1142,15 +1167,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 transfer = transfer
             )
         )
-        connectionIds[transfer.id] = correlationConnectionId(
-            diagnosticRecorder.activeSessionId,
-            transfer.peer.id.value,
-            diagnosticRecorder.environment.safeDeviceId
-        )
         recordDiagnostic(
             DiagnosticRecord(
                 peerId = transfer.peer.id.value,
-                connectionId = connectionIds[transfer.id],
+                connectionId = correlation?.connectionId,
                 transferId = transfer.id,
                 category = "transfer",
                 eventName = DiagnosticEventNames.TRANSFER_STARTED,
@@ -1194,7 +1214,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     recordDiagnostic(
                         DiagnosticRecord(
                             peerId = transfer.peer.id.value,
-                            connectionId = connectionIds[transfer.id],
+                            connectionId = diagnostics.registerTransfer(
+                                transfer.id,
+                                transfer.peer.id.value
+                            )?.connectionId,
                             transferId = transfer.id,
                             category = "transfer",
                             eventName = eventName,
@@ -1235,7 +1258,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                             recordDiagnostic(
                                 DiagnosticRecord(
                                     peerId = transfer.peer.id.value,
-                                    connectionId = connectionIds[transfer.id],
+                                    connectionId = diagnostics.registerTransfer(
+                                        transfer.id,
+                                        transfer.peer.id.value
+                                    )?.connectionId,
                                     transferId = transfer.id,
                                     category = "file",
                                     eventName = DiagnosticEventNames.FILE_RECEIVER_HASH,
@@ -1258,7 +1284,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                             recordDiagnostic(
                                 DiagnosticRecord(
                                     peerId = transfer.peer.id.value,
-                                    connectionId = connectionIds[transfer.id],
+                                    connectionId = diagnostics.registerTransfer(
+                                        transfer.id,
+                                        transfer.peer.id.value
+                                    )?.connectionId,
                                     transferId = transfer.id,
                                     category = "file",
                                     eventName = DiagnosticEventNames.FILE_INTEGRITY_CHECKED,
@@ -1541,6 +1570,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         _isRunning.value = true
                         appendSystemMessage("stop failed: ${it.message ?: it::class.simpleName}")
                     }
+                }.onSuccess {
+                    connectionIds.clear()
+                    frameTraceLease?.release()
+                    frameTraceLease = null
+                    diagnostics.setLocalPeerId(null)
                 }
             } finally {
                 _isStopping.value = false
@@ -1550,6 +1584,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         retireForegroundRestore()
+        frameTraceLease?.release()
+        frameTraceLease = null
         diagnostics.shutdown()
         val toStop = kit
         kit = null
@@ -1711,16 +1747,18 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             sessionJobs.remove(id)?.forEach { it.cancel() }
             val removed = connectedSessions.firstOrNull { it.id == id }
             if (removed != null) {
+                val correlation = diagnostics.removeConnection(id)
                 recordDiagnostic(
                     DiagnosticRecord(
                         peerId = removed.peer.id.value,
-                        connectionId = connectionIds.remove(id),
+                        connectionId = correlation?.connectionId ?: connectionIds[id],
                         category = "connection",
                         eventName = DiagnosticEventNames.CONNECTION_DISCONNECTED,
                         previousState = removed.state.value.toString(),
                         currentState = "Closed"
                     )
                 )
+                connectionIds.remove(id)
                 connectedSessions.remove(removed)
                 targetedPeerIds.remove(removed.peer.id.value)
                 appendSystemMessage("disconnected from ${removed.peer.name}")
@@ -1731,12 +1769,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // Add sessions that are new in the kit.
         for (session in current) {
             if (sessionJobs.containsKey(session.id)) continue
-            val connectionId = correlationConnectionId(
-                diagnosticRecorder.activeSessionId,
-                newKitLocalPeerId(),
+            val connectionId = diagnostics.registerConnection(
+                session.id,
                 session.peer.id.value
-            )
-            connectionIds[session.id] = connectionId
+            )?.connectionId
+            if (connectionId != null) connectionIds[session.id] = connectionId
             recordDiagnostic(
                 DiagnosticRecord(
                     peerId = session.peer.id.value,

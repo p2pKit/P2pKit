@@ -4,6 +4,197 @@ import XCTest
 
 final class TestDiagnosticsTests: XCTestCase {
     @MainActor
+    func testMultiPeerCorrelationUsesRealSessionAndTransferOwnership() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        _ = store.startSession(
+            testId: "PS-T01",
+            requestedSessionId: "shared-session",
+            role: "both"
+        )
+        store.setLocalPeerId("local-peer")
+        store.connection(
+            peerId: "peer-a",
+            rawConnectionId: "sdk-session-a",
+            state: "Connected",
+            previous: nil
+        )
+        store.connection(
+            peerId: "peer-b",
+            rawConnectionId: "sdk-session-b",
+            state: "Connected",
+            previous: nil
+        )
+        let connectionA = try XCTUnwrap(store.connectionId(for: "peer-a"))
+        let connectionB = try XCTUnwrap(store.connectionId(for: "peer-b"))
+        XCTAssertNotEqual(connectionA, connectionB)
+
+        let transferA = String(repeating: "a", count: 32)
+        let transferB = String(repeating: "b", count: 32)
+        store.transfer(
+            TestDiagnosticEventName.transferStarted,
+            peerId: "peer-a",
+            transferId: transferA,
+            state: "Transferring",
+            size: 64,
+            direction: .sent
+        )
+        store.transfer(
+            TestDiagnosticEventName.transferStarted,
+            peerId: "peer-b",
+            transferId: transferB,
+            state: "Transferring",
+            size: 64,
+            direction: .sent
+        )
+        store.recordFrame(
+            "TX type=FILE_DATA len=64B chunk=0/1 id=\(transferA) LAST"
+        )
+        let frame = try XCTUnwrap(store.events.last)
+        XCTAssertEqual(frame.transferId, transferA)
+        XCTAssertEqual(frame.connectionId, connectionA)
+        XCTAssertNotEqual(frame.connectionId, connectionB)
+
+        // Same transfer ID on two peers is unresolvable in a process-global
+        // frame line, so correlation must become explicitly absent.
+        store.transfer(
+            TestDiagnosticEventName.transferStarted,
+            peerId: "peer-b",
+            transferId: transferA,
+            state: "Transferring",
+            size: 64,
+            direction: .received
+        )
+        store.recordFrame("RX type=FILE_COMMIT len=72B xfer=\(transferA)")
+        let ambiguous = try XCTUnwrap(store.events.last)
+        XCTAssertEqual(ambiguous.transferId, transferA)
+        XCTAssertNil(ambiguous.connectionId)
+        XCTAssertNil(ambiguous.peerId)
+    }
+
+    @MainActor
+    func testBothPeersDeriveSameConnectionAndNewTestSessionRotatesIt() throws {
+        let fixtureA = try Fixture()
+        let fixtureB = try Fixture()
+        defer {
+            fixtureA.cleanup()
+            fixtureB.cleanup()
+        }
+        let first = fixtureA.store()
+        let second = fixtureB.store()
+        _ = first.startSession(
+            testId: "ENV-02",
+            requestedSessionId: "shared-session",
+            role: "client"
+        )
+        _ = second.startSession(
+            testId: "ENV-02",
+            requestedSessionId: "shared-session",
+            role: "server"
+        )
+        first.setLocalPeerId("peer-a")
+        second.setLocalPeerId("peer-b")
+        first.connection(
+            peerId: "peer-b",
+            rawConnectionId: "sdk-session-a",
+            state: "Connected",
+            previous: nil
+        )
+        second.connection(
+            peerId: "peer-a",
+            rawConnectionId: "sdk-session-b",
+            state: "Connected",
+            previous: nil
+        )
+        let matchingA = try XCTUnwrap(first.connectionId(for: "peer-b"))
+        let matchingB = try XCTUnwrap(second.connectionId(for: "peer-a"))
+        XCTAssertEqual(matchingA, matchingB)
+
+        _ = first.startSession(
+            testId: "ENV-02",
+            requestedSessionId: "next-session",
+            role: "client"
+        )
+        first.connection(
+            peerId: "peer-b",
+            rawConnectionId: "sdk-session-next",
+            state: "Connected",
+            previous: nil
+        )
+        let rotated = try XCTUnwrap(first.connectionId(for: "peer-b"))
+        XCTAssertNotEqual(matchingA, rotated)
+    }
+
+    @MainActor
+    func testRetiredSdkSessionCannotEraseReplacementTransferOwnership() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        _ = store.startSession(
+            testId: "PS-T01",
+            requestedSessionId: "shared-session",
+            role: "both"
+        )
+        store.setLocalPeerId("local-peer")
+        store.connection(
+            peerId: "peer-a",
+            rawConnectionId: "sdk-session-old",
+            state: "Connected",
+            previous: nil
+        )
+        store.connection(
+            peerId: "peer-a",
+            rawConnectionId: "sdk-session-new",
+            state: "Connected",
+            previous: nil
+        )
+        let transferId = String(repeating: "a", count: 32)
+        store.transfer(
+            TestDiagnosticEventName.transferStarted,
+            peerId: "peer-a",
+            transferId: transferId,
+            state: "Transferring",
+            size: 64,
+            direction: .sent
+        )
+        let replacementConnection = try XCTUnwrap(store.connectionId(for: "peer-a"))
+
+        XCTAssertNil(store.removeConnection(rawConnectionId: "sdk-session-old"))
+        store.recordFrame("TX type=FILE_DATA len=64B chunk=0/1 id=\(transferId) LAST")
+        XCTAssertEqual(store.events.last?.connectionId, replacementConnection)
+        XCTAssertEqual(store.events.last?.transferId, transferId)
+    }
+
+    @MainActor
+    func testTransferCorrelationNeverInventsAnUnobservedConnection() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        _ = store.startSession(
+            testId: "PS-T01",
+            requestedSessionId: "shared-session",
+            role: "sender"
+        )
+        store.setLocalPeerId("local-peer")
+        let transferId = String(repeating: "a", count: 32)
+
+        XCTAssertNil(store.connectionId(for: "peer-a"))
+        store.transfer(
+            TestDiagnosticEventName.transferStarted,
+            peerId: "peer-a",
+            transferId: transferId,
+            state: "Transferring",
+            size: 64,
+            direction: .sent
+        )
+        store.recordFrame("TX type=FILE_DATA len=64B chunk=0/1 id=\(transferId) LAST")
+        XCTAssertNil(store.events.last?.connectionId)
+        XCTAssertNil(store.events.last?.peerId)
+        XCTAssertEqual(store.events.last?.transferId, transferId)
+    }
+
+    @MainActor
     func testFinalOutcomeAndHashesRemainSessionAndTransferScoped() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

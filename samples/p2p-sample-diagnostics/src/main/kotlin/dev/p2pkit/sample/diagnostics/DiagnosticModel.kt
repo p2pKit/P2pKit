@@ -218,6 +218,146 @@ public data class DiagnosticRecord(
     val details: Map<String, String> = emptyMap()
 )
 
+/** Exact sample-side ownership tuple for one peer connection or transfer. */
+public data class DiagnosticCorrelation(
+    val peerId: String,
+    val connectionId: String,
+    val transferId: String? = null
+)
+
+/**
+ * Thread-safe correlation index used by the JVM/Android sample harnesses.
+ *
+ * It never guesses from a "latest" peer. Connection identifiers are derived
+ * only from the active test session and the two real SDK peer identifiers;
+ * transfer identifiers are the real SDK identifiers. A frame without a known
+ * transfer remains unassigned instead of being attributed to an unrelated
+ * concurrent peer.
+ */
+public class DiagnosticCorrelationRegistry(
+    private val activeSessionId: () -> String,
+    private val maxTransfers: Int = 1_024
+) {
+    private val lock: Any = Any()
+    private var localPeerId: String? = null
+    private val connectionsBySession: MutableMap<String, DiagnosticCorrelation> = mutableMapOf()
+    private val connectionsByPeer: MutableMap<String, SessionCorrelation> = mutableMapOf()
+    private val transfers: LinkedHashMap<String, TransferOwnership> = linkedMapOf()
+
+    init {
+        require(maxTransfers > 0)
+    }
+
+    public fun setLocalPeerId(peerId: String?) {
+        val normalized = peerId?.trim()?.takeIf { it.isNotEmpty() }
+        synchronized(lock) {
+            if (localPeerId == normalized) return
+            localPeerId = normalized
+            connectionsBySession.clear()
+            connectionsByPeer.clear()
+            transfers.clear()
+        }
+    }
+
+    /** Clears session-bound ownership while retaining the current local peer. */
+    public fun resetSession() {
+        synchronized(lock) {
+            connectionsBySession.clear()
+            connectionsByPeer.clear()
+            transfers.clear()
+        }
+    }
+
+    public fun registerConnection(sessionId: String, peerId: String): DiagnosticCorrelation? {
+        val testSession = activeSessionId()
+        return synchronized(lock) {
+            val connectionId = connectionIdLocked(testSession, peerId) ?: return@synchronized null
+            val correlation = DiagnosticCorrelation(peerId, connectionId)
+            connectionsBySession.entries.removeAll { (otherSessionId, otherCorrelation) ->
+                otherSessionId != sessionId && otherCorrelation.peerId == peerId
+            }
+            connectionsBySession[sessionId]?.let { replaced ->
+                connectionsByPeer[replaced.peerId]
+                    ?.takeIf { it.sessionId == sessionId }
+                    ?.let { connectionsByPeer.remove(replaced.peerId) }
+            }
+            connectionsBySession[sessionId] = correlation
+            connectionsByPeer[peerId] = SessionCorrelation(sessionId, correlation)
+            correlation
+        }
+    }
+
+    public fun removeConnection(sessionId: String): DiagnosticCorrelation? = synchronized(lock) {
+        val removed = connectionsBySession.remove(sessionId) ?: return@synchronized null
+        connectionsByPeer[removed.peerId]
+            ?.takeIf { it.sessionId == sessionId }
+            ?.let { connectionsByPeer.remove(removed.peerId) }
+        // A reconnect to the same peer intentionally has the same public
+        // correlation id within one test session. Keep bounded transfer
+        // ownership until the test session is reset so a late close for the
+        // retired SDK session cannot erase transfers owned by its replacement.
+        removed
+    }
+
+    public fun connectionForSession(sessionId: String): DiagnosticCorrelation? =
+        synchronized(lock) { connectionsBySession[sessionId] }
+
+    public fun connectionForPeer(peerId: String): DiagnosticCorrelation? =
+        synchronized(lock) { connectionsByPeer[peerId]?.correlation }
+
+    public fun registerTransfer(
+        transferId: String,
+        peerId: String,
+        sessionId: String? = null
+    ): DiagnosticCorrelation? {
+        return synchronized(lock) {
+            val connection = sessionId?.let(connectionsBySession::get)
+                ?: connectionsByPeer[peerId]?.correlation
+                ?: return@synchronized null
+            val correlation = connection.copy(transferId = transferId)
+            val existing = transfers.remove(transferId)
+            transfers[transferId] = TransferOwnership(
+                correlation = if (existing?.ambiguous != true &&
+                    (existing?.correlation == null ||
+                        existing.correlation.connectionId == correlation.connectionId)
+                ) {
+                    correlation
+                } else {
+                    // FrameTrace is process-global and its wire line contains
+                    // no connection handle. A transfer-id collision across
+                    // peers is therefore explicitly ambiguous, never last-wins.
+                    null
+                },
+                ambiguous = existing?.ambiguous == true ||
+                    (existing?.correlation != null &&
+                        existing.correlation.connectionId != correlation.connectionId)
+            )
+            while (transfers.size > maxTransfers) {
+                transfers.remove(transfers.keys.first())
+            }
+            correlation
+        }
+    }
+
+    public fun correlationForTransfer(transferId: String): DiagnosticCorrelation? =
+        synchronized(lock) { transfers[transferId]?.correlation }
+
+    private fun connectionIdLocked(testSessionId: String, remotePeerId: String): String? {
+        val local = localPeerId ?: return null
+        return correlationConnectionId(testSessionId, local, remotePeerId)
+    }
+
+    private data class SessionCorrelation(
+        val sessionId: String,
+        val correlation: DiagnosticCorrelation
+    )
+
+    private data class TransferOwnership(
+        val correlation: DiagnosticCorrelation?,
+        val ambiguous: Boolean
+    )
+}
+
 /**
  * Thread-safe bounded recorder. It retains at most [maxEvents] and
  * [maxEncodedBytes] across at most [maxSessions] session identifiers.
@@ -687,7 +827,8 @@ public object StructuredFrameTrace {
     public fun record(
         recorder: DiagnosticRecorder,
         line: String,
-        connectionId: String? = null
+        connectionId: String? = null,
+        correlationForTransfer: (String) -> DiagnosticCorrelation? = { null }
     ) {
         val match = frame.matchEntire(line.trim())
         if (match == null) {
@@ -704,6 +845,10 @@ public object StructuredFrameTrace {
             return
         }
         val (wireDirection, packetType, size, chunk, chunks, messageId, transferId) = match.destructured
+        val exactTransferId = transferId.ifEmpty {
+            messageId.takeIf { packetType == "FILE_DATA" && it.isNotEmpty() }.orEmpty()
+        }.ifEmpty { null }
+        val correlation = exactTransferId?.let(correlationForTransfer)
         val direction = if (wireDirection == "TX") DiagnosticDirection.SENT else DiagnosticDirection.RECEIVED
         val eventName = when (packetType) {
             "FILE_COMMIT" -> DiagnosticEventNames.TRANSFER_ACK
@@ -715,8 +860,9 @@ public object StructuredFrameTrace {
         }
         recorder.record(
             DiagnosticRecord(
-                connectionId = connectionId,
-                transferId = transferId.ifEmpty { null },
+                peerId = correlation?.peerId,
+                connectionId = correlation?.connectionId ?: connectionId,
+                transferId = exactTransferId,
                 category = if (packetType.startsWith("FILE_")) "transfer" else "protocol",
                 eventName = eventName,
                 protocolVersion = recorder.configuration.protocolVersion,

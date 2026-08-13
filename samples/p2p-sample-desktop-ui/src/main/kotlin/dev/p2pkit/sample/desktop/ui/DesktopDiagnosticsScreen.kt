@@ -39,6 +39,7 @@ import java.awt.datatransfer.StringSelection
 @Composable
 internal fun DesktopDiagnosticsScreen(
     diagnostics: DesktopDiagnosticHarness,
+    activeConnections: List<DesktopDiagnosticConnectionSnapshot>,
     revision: Long,
     onBack: () -> Unit
 ) {
@@ -130,7 +131,8 @@ internal fun DesktopDiagnosticsScreen(
                     requestedSession = diagnostics.startSession(
                         testId,
                         role,
-                        requestedSession.ifBlank { null }
+                        requestedSession.ifBlank { null },
+                        activeConnections
                     )
                 }.onFailure { exportStatus = "Could not start session: ${it.message}" }
             }) { Text("Begin test session") }

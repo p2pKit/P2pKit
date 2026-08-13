@@ -113,14 +113,15 @@ fun main(args: Array<String>) {
     // LAN forensic trace (Issue #2). ON by default in this harness — every
     // P2pKitLAN line goes to stdout (greppable). Pass `trace=off` to silence,
     // or `trace=frames` to additionally log every byte chunk on the data socket.
+    val frameTraceEnabled = launch.traceMode != "off"
     when (launch.traceMode) {
-        "off" -> { JvmLanDiag.enabled = false; FrameTrace.enabled = false }
+        "off" -> JvmLanDiag.enabled = false
         "frames" -> {
-            JvmLanDiag.enabled = true; JvmLanDiag.traceFrames = true; FrameTrace.enabled = true
+            JvmLanDiag.enabled = true; JvmLanDiag.traceFrames = true
         }
-        else -> { JvmLanDiag.enabled = true; FrameTrace.enabled = true }
+        else -> JvmLanDiag.enabled = true
     }
-    FrameTrace.sink = {
+    val frameTraceLease = FrameTrace.installSink(enabled = frameTraceEnabled) {
         println("P2pKitFRAME $it")
         CliDiagnostics.frame(it)
     }
@@ -136,19 +137,24 @@ fun main(args: Array<String>) {
             "identity storage is process-local and must be replaced in production."
     )
 
-    val p2p = P2pKit.create {
-        this.appId = appId
-        this.deviceName = deviceName
-        jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
-        security {
-            mode = SecurityMode.AuthenticatedV2(
-                PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
-            )
+    val p2p = try {
+        P2pKit.create {
+            this.appId = appId
+            this.deviceName = deviceName
+            jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
+            security {
+                mode = SecurityMode.AuthenticatedV2(
+                    PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+                )
+            }
+            transports { lan() }
+            lifecycle { reconnectPolicy = reconnect }
+            networkProvisioning { jvm() }
+            logger = CliDiagnostics.logger()
         }
-        transports { lan() }
-        lifecycle { reconnectPolicy = reconnect }
-        networkProvisioning { jvm() }
-        logger = CliDiagnostics.logger()
+    } catch (failure: Throwable) {
+        frameTraceLease.release()
+        throw failure
     }
     CliDiagnostics.localPeerId = p2p.localPeerId.value
     val advertising = StateLatch()
@@ -294,6 +300,7 @@ fun main(args: Array<String>) {
             runCatching { p2p.stop() }.onFailure {
                 System.err.println("kit.stop() failed: ${it.message}".sanitizedForTerminal())
             }
+            frameTraceLease.release()
             if (CliDiagnostics.recorder.summary().finalOutcome == null) {
                 CliDiagnostics.complete(DiagnosticOutcome.CANCELLATION, "CLI terminated by operator")
             }
@@ -382,7 +389,14 @@ private suspend fun repl(
                         val session = parts.getOrNull(2)
                         val role = parts.getOrNull(3) ?: "both"
                         runCatching {
-                            CliDiagnostics.recorder.startSession(testId, role, session)
+                            CliDiagnostics.startSession(testId, role, session)
+                            sessions.values.forEach { active ->
+                                CliDiagnostics.connection(
+                                    sessionId = active.id,
+                                    peerId = active.peer.id.value,
+                                    state = active.state.value.toString()
+                                )
+                            }
                             CliDiagnostics.recorder.record(
                                 DiagnosticRecord(
                                     category = "test",
@@ -634,7 +648,7 @@ private suspend fun repl(
                         CliDiagnostics.recorder.record(
                             DiagnosticRecord(
                                 peerId = session.peer.id.value,
-                                connectionId = CliDiagnostics.latestConnectionId,
+                                connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value),
                                 category = "metadata",
                                 eventName = DiagnosticEventNames.METADATA_CREATED,
                                 direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.SENT,
@@ -647,7 +661,7 @@ private suspend fun repl(
                                 CliDiagnostics.recorder.record(
                                     DiagnosticRecord(
                                         peerId = session.peer.id.value,
-                                        connectionId = CliDiagnostics.latestConnectionId,
+                                        connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value),
                                         category = "metadata",
                                         eventName = DiagnosticEventNames.METADATA_SENT,
                                         direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.SENT,
@@ -698,7 +712,7 @@ private suspend fun repl(
                             CliDiagnostics.recorder.record(
                                 DiagnosticRecord(
                                     peerId = session.peer.id.value,
-                                    connectionId = CliDiagnostics.latestConnectionId,
+                                    connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value),
                                     category = "metadata",
                                     eventName = DiagnosticEventNames.METADATA_SENT,
                                     direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.SENT,
@@ -1040,10 +1054,9 @@ private fun registerSession(
 ) {
     sessions[session.peer.id.value] = session
     if (!wiredSessionIds.add(session.id)) return // collectors already wired on this instance
-    val connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value)
     CliDiagnostics.connection(
+        sessionId = session.id,
         peerId = session.peer.id.value,
-        connectionId = connectionId,
         state = session.state.value.toString()
     )
     wireIncoming(session, scope, pendingFileOffers)
@@ -1052,8 +1065,8 @@ private fun registerSession(
         session.state.collect { st ->
             println("[state] ${session.peer.name.sanitizedForTerminal()} → $st")
             CliDiagnostics.connection(
+                sessionId = session.id,
                 peerId = session.peer.id.value,
-                connectionId = connectionId,
                 state = st.toString(),
                 previous = previous
             )
@@ -1079,7 +1092,7 @@ private fun wireIncoming(
                     CliDiagnostics.recorder.record(
                         DiagnosticRecord(
                             peerId = session.peer.id.value,
-                            connectionId = CliDiagnostics.latestConnectionId,
+                            connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value),
                             category = "metadata",
                             eventName = DiagnosticEventNames.METADATA_RECEIVED,
                             direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.RECEIVED,

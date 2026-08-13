@@ -964,8 +964,13 @@ public final class dev/p2pkit/core/protocol/FrameTrace {
 	public static final field INSTANCE Ldev/p2pkit/core/protocol/FrameTrace;
 	public final fun getEnabled ()Z
 	public final fun getSink ()Lkotlin/jvm/functions/Function1;
+	public final fun installSink (ZLkotlin/jvm/functions/Function1;)Ldev/p2pkit/core/protocol/FrameTraceLease;
 	public final fun setEnabled (Z)V
 	public final fun setSink (Lkotlin/jvm/functions/Function1;)V
+}
+
+public final class dev/p2pkit/core/protocol/FrameTraceLease {
+	public final fun release ()V
 }
 
 public abstract class dev/p2pkit/core/provisioning/JoinNetworkResult {

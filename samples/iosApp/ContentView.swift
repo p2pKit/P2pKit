@@ -41,6 +41,7 @@ struct ContentView: View {
     @State private var incomingSessionsTask: Task<Void, Never>?
     @State private var debugLogTask: Task<Void, Never>?
     @State private var permissionCheckTask: Task<Void, Never>?
+    @State private var frameTraceLease: FrameTraceLease?
 
     // AUDIT-2026-06 (A-G9-samples-desktop-ios-09): per-session and
     // per-transfer collector Tasks are tracked by id so stop() and
@@ -272,7 +273,16 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showDiagnostics) {
-            IOSTestDiagnosticsView(diagnostics: diagnostics)
+            IOSTestDiagnosticsView(
+                diagnostics: diagnostics,
+                activeConnections: sessions.map { session in
+                    TestDiagnosticConnectionSnapshot(
+                        rawConnectionId: session.id,
+                        peerId: session.peerId,
+                        state: session.state
+                    )
+                }
+            )
         }
         .onChange(of: scenePhase) { phase in
             switch phase {
@@ -726,16 +736,15 @@ struct ContentView: View {
 
         // Decoded frame-type trace (Issue #2/#3). With its default sink, each
         // TX/RX frame line (PING/PONG/DATA/FILE_*) prints "P2pKitFRAME …" to the
-        // unified log → Xcode console / Console.app (filter "P2pKitFRAME").
-        // To also surface frames in the on-screen log, additionally set:
-        //   FrameTrace.shared.sink = { IosLanDebug.shared.log(tag: "frame", message: $0) }
-        FrameTrace.shared.sink = { line in
+        // unified log → Xcode console / Console.app (filter "P2pKitFRAME")
+        // and into the owner-scoped in-app diagnostic recorder below.
+        frameTraceLease?.release()
+        frameTraceLease = FrameTrace.shared.installSink(enabled: true) { line in
             IosLanDebug.shared.log(tag: "frame", message: line)
             Task { @MainActor in
                 self.diagnostics.recordFrame(line)
             }
         }
-        FrameTrace.shared.enabled = true
 
         // Subscribe to IosLanDebug BEFORE startAdvertising/Discovery so
         // we capture every browser-state and result-change from t=0.
@@ -798,6 +807,8 @@ struct ContentView: View {
                 }
             }
         } catch {
+            frameTraceLease?.release()
+            frameTraceLease = nil
             status = "Create failed: \(error.localizedDescription)"
             errorBanner = "Could not load the secure local identity: \(error.localizedDescription)"
             diag("kit", "create FAILED: \(error.localizedDescription)")
@@ -805,6 +816,7 @@ struct ContentView: View {
         }
         self.kit = built
         self.localPeerId = "\(built.localPeerId)"
+        diagnostics.setLocalPeerId(localPeerId)
         diagnostics.record(TestDiagnosticRecord(
             peerId: localPeerId,
             category: "peer",
@@ -831,6 +843,9 @@ struct ContentView: View {
             status = "Start failed: \(error.localizedDescription)"
             errorBanner = "Failed to start: \(error.localizedDescription)"
             try? await built.stop()
+            frameTraceLease?.release()
+            frameTraceLease = nil
+            diagnostics.setLocalPeerId(nil)
             self.kit = nil
             debugLogTask?.cancel()
             return
@@ -989,9 +1004,10 @@ struct ContentView: View {
         // because watchForTerminal cleaned them out after Closed/Failed).
         let currentIds = Set(sessionRows.map { $0.id })
         for prev in self.sessions where !currentIds.contains(prev.id) {
+            let connectionId = diagnostics.removeConnection(rawConnectionId: prev.id)
             diagnostics.record(TestDiagnosticRecord(
                 peerId: prev.peerId,
-                connectionId: diagnostics.activeConnectionId,
+                connectionId: connectionId,
                 category: "connection",
                 eventName: TestDiagnosticEventName.connectionDisconnected,
                 currentState: "removed",
@@ -1092,7 +1108,7 @@ struct ContentView: View {
                     if let text = msg as? P2pMessage.Text {
                         self.diagnostics.record(TestDiagnosticRecord(
                             peerId: "\(session.peer.id)",
-                            connectionId: self.diagnostics.activeConnectionId,
+                            connectionId: self.diagnostics.connectionId(for: "\(session.peer.id)"),
                             category: "metadata",
                             eventName: TestDiagnosticEventName.metadataReceived,
                             direction: .received,
@@ -1101,7 +1117,7 @@ struct ContentView: View {
                         ))
                         self.diagnostics.record(TestDiagnosticRecord(
                             peerId: "\(session.peer.id)",
-                            connectionId: self.diagnostics.activeConnectionId,
+                            connectionId: self.diagnostics.connectionId(for: "\(session.peer.id)"),
                             category: "metadata",
                             eventName: TestDiagnosticEventName.metadataValidated,
                             direction: .received,
@@ -1357,7 +1373,7 @@ struct ContentView: View {
         let digest = source.sha256Hex
         diagnostics.record(TestDiagnosticRecord(
             peerId: row.peerId,
-            connectionId: diagnostics.activeConnectionId,
+            connectionId: diagnostics.connectionId(for: row.peerId),
             category: "file",
             eventName: TestDiagnosticEventName.fileGenerated,
             direction: .sent,
@@ -1407,7 +1423,9 @@ struct ContentView: View {
             diagnostics.transfer(
                 TestDiagnosticEventName.transferFailed,
                 peerId: row.peerId,
-                transferId: diagnostics.activeTransferId ?? "transfer-unknown",
+                // sendFile failed before returning an SDK transfer handle, so
+                // there is no truthful transfer id to correlate here.
+                transferId: nil,
                 state: "failed",
                 size: Int64(size),
                 direction: .sent,
@@ -1747,7 +1765,7 @@ struct ContentView: View {
             do {
                 diagnostics.record(TestDiagnosticRecord(
                     peerId: row.peerId,
-                    connectionId: diagnostics.activeConnectionId,
+                    connectionId: diagnostics.connectionId(for: row.peerId),
                     category: "metadata",
                     eventName: TestDiagnosticEventName.metadataCreated,
                     direction: .sent,
@@ -1757,7 +1775,7 @@ struct ContentView: View {
                 try await row.session.send(message: P2pMessage.Text(value: text, metadata: [:]))
                 diagnostics.record(TestDiagnosticRecord(
                     peerId: row.peerId,
-                    connectionId: diagnostics.activeConnectionId,
+                    connectionId: diagnostics.connectionId(for: row.peerId),
                     category: "metadata",
                     eventName: TestDiagnosticEventName.metadataSent,
                     direction: .sent,
@@ -1859,6 +1877,9 @@ struct ContentView: View {
         // file looking complete.
         transferWatchTasks.values.forEach { $0.cancel() }
         transferWatchTasks = [:]
+        frameTraceLease?.release()
+        frameTraceLease = nil
+        diagnostics.setLocalPeerId(nil)
         kit = nil
         peers = []
         sessions = []

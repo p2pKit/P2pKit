@@ -6,6 +6,8 @@ import android.provider.Settings
 import androidx.core.content.edit
 import dev.p2pkit.core.BuildInfo
 import dev.p2pkit.sample.diagnostics.DiagnosticConfiguration
+import dev.p2pkit.sample.diagnostics.DiagnosticCorrelation
+import dev.p2pkit.sample.diagnostics.DiagnosticCorrelationRegistry
 import dev.p2pkit.sample.diagnostics.DiagnosticEnvironment
 import dev.p2pkit.sample.diagnostics.DiagnosticEventNames
 import dev.p2pkit.sample.diagnostics.DiagnosticEvidenceExporter
@@ -68,6 +70,9 @@ internal class AndroidDiagnosticHarness(
             }
         }
     )
+    private val correlations = DiagnosticCorrelationRegistry(
+        activeSessionId = { recorder.activeSessionId }
+    )
 
     init {
         val restoredTest = preferences.getString(KEY_TEST_ID, null)
@@ -96,6 +101,7 @@ internal class AndroidDiagnosticHarness(
 
     fun beginSession(testId: String, role: String, requestedSessionId: String?): String {
         val sessionId = recorder.startSession(testId, role, requestedSessionId)
+        correlations.resetSession()
         preferences.edit {
             putString(KEY_TEST_ID, recorder.activeTestId)
             putString(KEY_SESSION_ID, sessionId)
@@ -116,6 +122,23 @@ internal class AndroidDiagnosticHarness(
         recorder.completeSession(outcome, reason, finalState)
     }
 
+    fun setLocalPeerId(peerId: String?) = correlations.setLocalPeerId(peerId)
+
+    fun registerConnection(sessionId: String, peerId: String): DiagnosticCorrelation? =
+        correlations.registerConnection(sessionId, peerId)
+
+    fun removeConnection(sessionId: String): DiagnosticCorrelation? =
+        correlations.removeConnection(sessionId)
+
+    fun connectionForPeer(peerId: String): DiagnosticCorrelation? =
+        correlations.connectionForPeer(peerId)
+
+    fun registerTransfer(transferId: String, peerId: String): DiagnosticCorrelation? =
+        correlations.registerTransfer(transferId, peerId)
+
+    fun correlationForTransfer(transferId: String): DiagnosticCorrelation? =
+        correlations.correlationForTransfer(transferId)
+
     fun export(): File = DiagnosticEvidenceExporter.export(
         recorder = recorder,
         directory = File(appContext.cacheDir, "test-evidence"),
@@ -127,6 +150,7 @@ internal class AndroidDiagnosticHarness(
         val removed = recorder.clearCurrentSession()
         rollingSink.clearSession(current)
         preferences.edit { clear() }
+        correlations.resetSession()
         return removed
     }
 
@@ -138,6 +162,7 @@ internal class AndroidDiagnosticHarness(
                 currentState = "view-model-cleared"
             )
         )
+        correlations.resetSession()
     }
 
     private fun recordUnassignedStartup() {

@@ -3,6 +3,7 @@ package dev.p2pkit.sample.desktop
 import dev.p2pkit.core.BuildInfo
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.sample.diagnostics.DiagnosticConfiguration
+import dev.p2pkit.sample.diagnostics.DiagnosticCorrelationRegistry
 import dev.p2pkit.sample.diagnostics.DiagnosticDirection
 import dev.p2pkit.sample.diagnostics.DiagnosticEnvironment
 import dev.p2pkit.sample.diagnostics.DiagnosticEventNames
@@ -28,25 +29,22 @@ internal object CliDiagnostics {
         private set
     private lateinit var rolling: RollingJsonlFileSink
     private lateinit var evidenceDirectory: File
+    private lateinit var correlations: DiagnosticCorrelationRegistry
     private var directJsonl: File? = null
     private var configured = false
     private val directLock = Any()
 
     @Volatile
-    var latestConnectionId: String? = null
-    @Volatile
-    var latestPeerId: String? = null
-    @Volatile
     var latestTransferId: String? = null
     @Volatile
-    var localPeerId: String = "local"
+    var localPeerId: String? = null
+        set(value) {
+            field = value
+            if (::correlations.isInitialized) correlations.setLocalPeerId(value)
+        }
 
-    fun connectionIdFor(peerId: String): String =
-        dev.p2pkit.sample.diagnostics.correlationConnectionId(
-            recorder.activeSessionId,
-            localPeerId,
-            peerId
-        )
+    fun connectionIdFor(peerId: String): String? =
+        correlations.connectionForPeer(peerId)?.connectionId
 
     fun configure(options: CliLaunchOptions) {
         val home = File(System.getProperty("user.home") ?: ".")
@@ -95,6 +93,10 @@ internal object CliDiagnostics {
                 }
             }
         )
+        correlations = DiagnosticCorrelationRegistry(
+            activeSessionId = { recorder.activeSessionId }
+        )
+        correlations.setLocalPeerId(localPeerId)
         recorder.startSession(
             options.testId ?: "PS-T05",
             options.role ?: "both",
@@ -115,15 +117,15 @@ internal object CliDiagnostics {
     }
 
     fun logger(delegate: P2pLogger = StdErrLogger): P2pLogger =
-        StructuredSdkLogger(
-            recorder = recorder,
-            delegate = delegate,
-            context = { Triple(latestPeerId, latestConnectionId, latestTransferId) }
-        )
+        StructuredSdkLogger(recorder = recorder, delegate = delegate)
 
     fun frame(line: String) {
         if (!configured) return
-        StructuredFrameTrace.record(recorder, line, latestConnectionId)
+        StructuredFrameTrace.record(
+            recorder = recorder,
+            line = line,
+            correlationForTransfer = correlations::correlationForTransfer
+        )
     }
 
     fun transport(line: String) {
@@ -142,9 +144,8 @@ internal object CliDiagnostics {
         )
     }
 
-    fun connection(peerId: String, connectionId: String, state: String, previous: String? = null) {
-        latestPeerId = peerId
-        latestConnectionId = connectionId
+    fun connection(sessionId: String, peerId: String, state: String, previous: String? = null) {
+        val connectionId = correlations.registerConnection(sessionId, peerId)?.connectionId
         recorder.record(
             DiagnosticRecord(
                 peerId = peerId,
@@ -174,6 +175,9 @@ internal object CliDiagnostics {
                 )
             )
         }
+        if (state == "Closed" || state == "Failed") {
+            correlations.removeConnection(sessionId)
+        }
     }
 
     fun transfer(
@@ -187,12 +191,12 @@ internal object CliDiagnostics {
         error: Throwable? = null,
         details: Map<String, String> = emptyMap()
     ) {
-        latestPeerId = peerId
+        val correlation = correlations.registerTransfer(transferId, peerId)
         latestTransferId = transferId
         recorder.record(
             DiagnosticRecord(
                 peerId = peerId,
-                connectionId = latestConnectionId,
+                connectionId = correlation?.connectionId,
                 transferId = transferId,
                 category = "transfer",
                 eventName = eventName,
@@ -208,10 +212,11 @@ internal object CliDiagnostics {
     }
 
     fun fileHash(peerId: String, transferId: String, size: Long, digest: String, receiver: Boolean) {
+        val correlation = correlations.registerTransfer(transferId, peerId)
         recorder.record(
             DiagnosticRecord(
                 peerId = peerId,
-                connectionId = latestConnectionId,
+                connectionId = correlation?.connectionId,
                 transferId = transferId,
                 category = "file",
                 eventName = if (receiver) {
@@ -246,6 +251,12 @@ internal object CliDiagnostics {
         }
     }
 
+    fun startSession(testId: String, role: String, sessionId: String?): String =
+        recorder.startSession(testId, role, sessionId).also {
+            correlations.resetSession()
+            latestTransferId = null
+        }
+
     fun complete(outcome: DiagnosticOutcome, reason: String) {
         recorder.completeSession(outcome, reason, outcome.name)
     }
@@ -260,6 +271,7 @@ internal object CliDiagnostics {
             )
         )
         runCatching { export() }
+        correlations.resetSession()
     }
 
     fun helpLine(): String =
