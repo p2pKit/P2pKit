@@ -1,5 +1,8 @@
 package dev.p2pkit.sample.desktop.ui
 
+import dev.p2pkit.sample.diagnostics.reservedFileDestination
+import dev.p2pkit.sample.diagnostics.cleanupStaleTransferPartsOnce
+
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.Executors

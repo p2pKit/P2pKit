@@ -695,7 +695,9 @@ At each prompt run `info`, `peers`, `sessions`, `send`, `sendfile`,
 `offers`, `accept`, `reject`, `close`, `adv off/on`, `disc off/on`, and
 `quit`. Repeat with an unknown option, duplicate option, malformed reconnect,
 ambiguous peer prefix, EOF, SIGTERM, and the approved injected create/stop/REPL
-failure. PASS requires one clean shutdown, no stranded child process, no
+failure. Immediately before each externally injected action, run
+`diag fault <type> <expected-effect>` so the JSONL timeline and wrapper
+transcript share a timestamped action marker. PASS requires one clean shutdown, no
 duplicate collector output, and sanitized terminal text. FAIL includes a
 process leak, bypassed `finally`, option treated as a device name, or a
 terminal outcome that depends on timing.
@@ -888,8 +890,8 @@ test, while the missing hardware/infrastructure remains a blocker.
 | Background/foreground/restart | Real iOS lifecycle and Stop cleanup | Activity rotation; process death is intentionally external | EOF/SIGTERM/quit | Window disposal/Stop |
 | File selection/generation | Deterministic generated presets | Android SAF `OpenDocument` any type/size | Filesystem path | Native file chooser |
 | KMP consumer runtime | Swift/XCFramework consumer plus physical sample | `Run KMP consumer smoke` button calls `initP2pKitAndroid`/`runDiscoverAndGreet` | JVM KMP consumer tests and CLI | Uses published JVM/consumer checks |
-| Packet/timeout/fault controls | Logs and OS/network tools; no production fault toggle | Logs and adb/network tools; no production fault toggle | `trace=off|frames`, external process fault wrapper | External headful/fault harness |
-| Structured diagnostic viewer | `Test Diagnostics` sheet: begin session, active IDs/state/progress/hashes, search, session/transfer/severity filters, pause, select/copy, clear-current confirmation | `Diagnostics` screen: same fields and filters, live/paused rows, selected/all copy, clear-current confirmation | `diag start/status/export/complete/clear`; JSONL is also written with `log=<path>` | `Diagnostics` screen: active IDs/state/progress/hashes, search/session/transfer/severity filters, pause, selected/all copy, clear-current confirmation |
+| Packet/timeout/fault controls | Logs and OS/network tools; no production fault toggle | Logs and adb/network tools; no production fault toggle | `trace=off|frames`, external process fault wrapper, `diag fault` evidence marker | External headful/fault harness |
+| Structured diagnostic viewer | `Test Diagnostics` sheet: begin session, active IDs/state/progress/hashes, search, session/transfer/severity filters, pause, select/copy, clear-current confirmation | `Diagnostics` screen: same fields and filters, live/paused rows, selected/all copy, clear-current confirmation | `diag start/status/fault/export/complete/clear`; JSONL is also written with `log=<path>` | `Diagnostics` screen: active IDs/state/progress/hashes, search/session/transfer/severity filters, pause, selected/all copy, clear-current confirmation |
 | Evidence export | `Export Test Evidence` presents a ZIP through the iOS share sheet | `Export Test Evidence` launches the Android share sheet for a ZIP | `diag export` writes a ZIP; `log=<path>` writes bounded JSONL | `Export Test Evidence` writes the ZIP and opens the evidence directory |
 | Structured fields | JSONL schema v1: timestamp, OS/app/build/SHA/device hash, test/session/role/peer/connection/transfer, state transition, protocol/packet/direction/size/sequence/retry/timeout, outcome, redaction | Same schema via `p2p-sample-diagnostics`; Android transport stream is opt-in and bounded | Same schema plus CLI command/configuration and bounded rolling files | Same schema plus Compose lifecycle/window events and bounded rolling files |
 | Correlation | Shared operator-entered `testSessionId`; `conn-<hash>` and transfer IDs are visible/exported; compare both peer ZIPs | Same; persisted active session survives process restart | Same; pass `test/session/role` at launch or `diag start` | Same; compare both peer ZIPs |

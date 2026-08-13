@@ -21,6 +21,8 @@ import dev.p2pkit.core.protocol.FrameTrace
 import dev.p2pkit.sample.diagnostics.DiagnosticEventNames
 import dev.p2pkit.sample.diagnostics.DiagnosticOutcome
 import dev.p2pkit.sample.diagnostics.DiagnosticRecord
+import dev.p2pkit.sample.diagnostics.cleanupStaleTransferPartsOnce
+import dev.p2pkit.sample.diagnostics.reservedFileDestination
 import dev.p2pkit.provisioning.desktop.jvm
 import dev.p2pkit.transport.lan.JvmLanDiag
 import dev.p2pkit.transport.lan.lan
@@ -113,14 +115,15 @@ fun main(args: Array<String>) {
     // LAN forensic trace (Issue #2). ON by default in this harness — every
     // P2pKitLAN line goes to stdout (greppable). Pass `trace=off` to silence,
     // or `trace=frames` to additionally log every byte chunk on the data socket.
+    val frameTraceEnabled = launch.traceMode != "off"
     when (launch.traceMode) {
-        "off" -> { JvmLanDiag.enabled = false; FrameTrace.enabled = false }
+        "off" -> JvmLanDiag.enabled = false
         "frames" -> {
-            JvmLanDiag.enabled = true; JvmLanDiag.traceFrames = true; FrameTrace.enabled = true
+            JvmLanDiag.enabled = true; JvmLanDiag.traceFrames = true
         }
-        else -> { JvmLanDiag.enabled = true; FrameTrace.enabled = true }
+        else -> JvmLanDiag.enabled = true
     }
-    FrameTrace.sink = {
+    val frameTraceLease = FrameTrace.installSink(enabled = frameTraceEnabled) {
         println("P2pKitFRAME $it")
         CliDiagnostics.frame(it)
     }
@@ -136,19 +139,24 @@ fun main(args: Array<String>) {
             "identity storage is process-local and must be replaced in production."
     )
 
-    val p2p = P2pKit.create {
-        this.appId = appId
-        this.deviceName = deviceName
-        jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
-        security {
-            mode = SecurityMode.AuthenticatedV2(
-                PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
-            )
+    val p2p = try {
+        P2pKit.create {
+            this.appId = appId
+            this.deviceName = deviceName
+            jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
+            security {
+                mode = SecurityMode.AuthenticatedV2(
+                    PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+                )
+            }
+            transports { lan() }
+            lifecycle { reconnectPolicy = reconnect }
+            networkProvisioning { jvm() }
+            logger = CliDiagnostics.logger()
         }
-        transports { lan() }
-        lifecycle { reconnectPolicy = reconnect }
-        networkProvisioning { jvm() }
-        logger = CliDiagnostics.logger()
+    } catch (failure: Throwable) {
+        frameTraceLease.release()
+        throw failure
     }
     CliDiagnostics.localPeerId = p2p.localPeerId.value
     val advertising = StateLatch()
@@ -294,6 +302,7 @@ fun main(args: Array<String>) {
             runCatching { p2p.stop() }.onFailure {
                 System.err.println("kit.stop() failed: ${it.message}".sanitizedForTerminal())
             }
+            frameTraceLease.release()
             if (CliDiagnostics.recorder.summary().finalOutcome == null) {
                 CliDiagnostics.complete(DiagnosticOutcome.CANCELLATION, "CLI terminated by operator")
             }
@@ -366,7 +375,9 @@ private suspend fun repl(
                 val parts = arg.split(Regex("\\s+")).filter { it.isNotBlank() }
                 when (parts.firstOrNull()) {
                     null, "status" -> {
-                        val summary = CliDiagnostics.recorder.summary()
+                        val summary = CliDiagnostics.recorder.summary(
+                            selectedTransferId = CliDiagnostics.latestTransferId
+                        )
                         println(
                             "diagnostics test=${summary.testId} session=${summary.testSessionId} " +
                                 "role=${summary.role} events=${summary.eventCount} " +
@@ -380,7 +391,14 @@ private suspend fun repl(
                         val session = parts.getOrNull(2)
                         val role = parts.getOrNull(3) ?: "both"
                         runCatching {
-                            CliDiagnostics.recorder.startSession(testId, role, session)
+                            CliDiagnostics.startSession(testId, role, session)
+                            sessions.values.forEach { active ->
+                                CliDiagnostics.connection(
+                                    sessionId = active.id,
+                                    peerId = active.peer.id.value,
+                                    state = active.state.value.toString()
+                                )
+                            }
                             CliDiagnostics.recorder.record(
                                 DiagnosticRecord(
                                     category = "test",
@@ -396,6 +414,30 @@ private suspend fun repl(
                         runCatching { CliDiagnostics.export() }
                             .onSuccess { println("evidence exported: ${it.absolutePath}") }
                             .onFailure { println("evidence export failed: ${it.message}") }
+                    }
+                    "fault" -> {
+                        val faultType = parts.getOrNull(1)
+                        if (faultType == null) {
+                            println("usage: diag fault <type> [expected-effect]")
+                        } else {
+                            val expectedEffect = parts.drop(2).joinToString(" ").ifBlank { "unspecified" }
+                            CliDiagnostics.recorder.record(
+                                DiagnosticRecord(
+                                    category = "fault",
+                                    eventName = DiagnosticEventNames.FAULT_INJECTED,
+                                    severity = dev.p2pkit.sample.diagnostics.DiagnosticSeverity.WARNING,
+                                    currentState = "externally-injected",
+                                    outcome = DiagnosticOutcome.INTERRUPTION,
+                                    details = mapOf(
+                                        "faultType" to faultType,
+                                        "expectedEffect" to expectedEffect,
+                                        "operatorDeclared" to "true",
+                                        "productionBehaviorChanged" to "false"
+                                    )
+                                )
+                            )
+                            println("recorded external fault action: $faultType")
+                        }
                     }
                     "complete" -> {
                         val outcome = when (parts.getOrNull(1)?.lowercase()) {
@@ -632,7 +674,7 @@ private suspend fun repl(
                         CliDiagnostics.recorder.record(
                             DiagnosticRecord(
                                 peerId = session.peer.id.value,
-                                connectionId = CliDiagnostics.latestConnectionId,
+                                connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value),
                                 category = "metadata",
                                 eventName = DiagnosticEventNames.METADATA_CREATED,
                                 direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.SENT,
@@ -645,7 +687,7 @@ private suspend fun repl(
                                 CliDiagnostics.recorder.record(
                                     DiagnosticRecord(
                                         peerId = session.peer.id.value,
-                                        connectionId = CliDiagnostics.latestConnectionId,
+                                        connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value),
                                         category = "metadata",
                                         eventName = DiagnosticEventNames.METADATA_SENT,
                                         direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.SENT,
@@ -655,10 +697,24 @@ private suspend fun repl(
                                 )
                             }
                             .onFailure {
-                            System.err.println(
-                                "send to ${session.peer.name} failed: ${it.message}".sanitizedForTerminal()
-                            )
-                        }
+                                CliDiagnostics.recorder.record(
+                                    DiagnosticRecord(
+                                        peerId = session.peer.id.value,
+                                        connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value),
+                                        category = "metadata",
+                                        eventName = DiagnosticEventNames.METADATA_REJECTED,
+                                        severity = dev.p2pkit.sample.diagnostics.DiagnosticSeverity.ERROR,
+                                        direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.SENT,
+                                        payloadSizeBytes = arg.toByteArray().size.toLong(),
+                                        outcome = DiagnosticOutcome.FAILURE,
+                                        errorCode = it::class.simpleName,
+                                        errorDescription = it.message
+                                    )
+                                )
+                                System.err.println(
+                                    "send to ${session.peer.name} failed: ${it.message}".sanitizedForTerminal()
+                                )
+                            }
                     }
                 }
             }
@@ -690,13 +746,24 @@ private suspend fun repl(
                     continue
                 }
                 println("[to ${session.peer.name.sanitizedForTerminal()}] $text")
+                CliDiagnostics.recorder.record(
+                    DiagnosticRecord(
+                        peerId = session.peer.id.value,
+                        connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value),
+                        category = "metadata",
+                        eventName = DiagnosticEventNames.METADATA_CREATED,
+                        direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.SENT,
+                        payloadSizeBytes = text.toByteArray().size.toLong(),
+                        details = mapOf("metadataKeys" to "")
+                    )
+                )
                 scope.launch {
                     runCatching { session.send(P2pMessage.Text(text)) }
                         .onSuccess {
                             CliDiagnostics.recorder.record(
                                 DiagnosticRecord(
                                     peerId = session.peer.id.value,
-                                    connectionId = CliDiagnostics.latestConnectionId,
+                                    connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value),
                                     category = "metadata",
                                     eventName = DiagnosticEventNames.METADATA_SENT,
                                     direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.SENT,
@@ -706,10 +773,24 @@ private suspend fun repl(
                             )
                         }
                         .onFailure {
-                        System.err.println(
-                            "send to ${session.peer.name} failed: ${it.message}".sanitizedForTerminal()
-                        )
-                    }
+                            CliDiagnostics.recorder.record(
+                                DiagnosticRecord(
+                                    peerId = session.peer.id.value,
+                                    connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value),
+                                    category = "metadata",
+                                    eventName = DiagnosticEventNames.METADATA_REJECTED,
+                                    severity = dev.p2pkit.sample.diagnostics.DiagnosticSeverity.ERROR,
+                                    direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.SENT,
+                                    payloadSizeBytes = text.toByteArray().size.toLong(),
+                                    outcome = DiagnosticOutcome.FAILURE,
+                                    errorCode = it::class.simpleName,
+                                    errorDescription = it.message
+                                )
+                            )
+                            System.err.println(
+                                "send to ${session.peer.name} failed: ${it.message}".sanitizedForTerminal()
+                            )
+                        }
                 }
             }
 
@@ -795,13 +876,6 @@ private suspend fun repl(
                         )
                     )
                     println("[file → ${session.peer.name.sanitizedForTerminal()}] sha256=$sourceDigest")
-                    CliDiagnostics.fileHash(
-                        session.peer.id.value,
-                        null,
-                        file.length(),
-                        sourceDigest,
-                        receiver = false
-                    )
                     runCatching { session.sendFile(file) }
                         .onSuccess { transfer ->
                             CliDiagnostics.transfer(
@@ -811,6 +885,13 @@ private suspend fun repl(
                                 state = transfer.state.value.toString(),
                                 size = transfer.sizeBytes,
                                 direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.SENT
+                            )
+                            CliDiagnostics.fileHash(
+                                session.peer.id.value,
+                                transfer.id,
+                                file.length(),
+                                sourceDigest,
+                                receiver = false
                             )
                             scope.launch {
                                 transfer.state.first { st ->
@@ -978,6 +1059,8 @@ private fun printHelp() {
           diag start <TEST-ID> [session] [role]
                                              — start/correlate a test session
           diag export                        — write JSONL/text/summary evidence ZIP
+          diag fault <type> [expected-effect]
+                                             — timestamp an externally injected fault
           diag complete <outcome>             — record final test result
           diag clear                          — clear only the active session
           help                               — show this list
@@ -1038,10 +1121,9 @@ private fun registerSession(
 ) {
     sessions[session.peer.id.value] = session
     if (!wiredSessionIds.add(session.id)) return // collectors already wired on this instance
-    val connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value)
     CliDiagnostics.connection(
+        sessionId = session.id,
         peerId = session.peer.id.value,
-        connectionId = connectionId,
         state = session.state.value.toString()
     )
     wireIncoming(session, scope, pendingFileOffers)
@@ -1050,8 +1132,8 @@ private fun registerSession(
         session.state.collect { st ->
             println("[state] ${session.peer.name.sanitizedForTerminal()} → $st")
             CliDiagnostics.connection(
+                sessionId = session.id,
                 peerId = session.peer.id.value,
-                connectionId = connectionId,
                 state = st.toString(),
                 previous = previous
             )
@@ -1072,20 +1154,39 @@ private fun wireIncoming(
 ) {
     session.incoming
         .onEach { msg ->
+            val payloadSize = when (msg) {
+                is P2pMessage.Text -> msg.value.toByteArray().size.toLong()
+                is P2pMessage.Binary -> msg.bytes.size.toLong()
+            }
+            val metadataKeys = when (msg) {
+                is P2pMessage.Text -> msg.metadata.keys
+                is P2pMessage.Binary -> msg.metadata.keys
+            }.sorted().joinToString(",")
+            CliDiagnostics.recorder.record(
+                DiagnosticRecord(
+                    peerId = session.peer.id.value,
+                    connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value),
+                    category = "metadata",
+                    eventName = DiagnosticEventNames.METADATA_RECEIVED,
+                    direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.RECEIVED,
+                    payloadSizeBytes = payloadSize,
+                    details = mapOf("metadataKeys" to metadataKeys)
+                )
+            )
+            CliDiagnostics.recorder.record(
+                DiagnosticRecord(
+                    peerId = session.peer.id.value,
+                    connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value),
+                    category = "metadata",
+                    eventName = DiagnosticEventNames.METADATA_VALIDATED,
+                    direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.RECEIVED,
+                    payloadSizeBytes = payloadSize,
+                    outcome = DiagnosticOutcome.SUCCESS,
+                    details = mapOf("authenticated" to "true", "metadataKeys" to metadataKeys)
+                )
+            )
             when (msg) {
                 is P2pMessage.Text -> {
-                    CliDiagnostics.recorder.record(
-                        DiagnosticRecord(
-                            peerId = session.peer.id.value,
-                            connectionId = CliDiagnostics.latestConnectionId,
-                            category = "metadata",
-                            eventName = DiagnosticEventNames.METADATA_RECEIVED,
-                            direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.RECEIVED,
-                            payloadSizeBytes = msg.value.toByteArray().size.toLong(),
-                            outcome = DiagnosticOutcome.SUCCESS,
-                            details = mapOf("metadataKeys" to msg.metadata.keys.sorted().joinToString(","))
-                        )
-                    )
                     println("[${session.peer.name.sanitizedForTerminal()}] ${msg.value.sanitizedForTerminal()}")
                 }
                 is P2pMessage.Binary -> println("[${session.peer.name.sanitizedForTerminal()}] <binary ${msg.bytes.size}B>")
@@ -1200,17 +1301,40 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
         System.err.println("[file ← $peerName] destination failed: ${error.message}".sanitizedForTerminal())
         return
     }
+    recordTemporaryFileEvent(
+        peerId = offer.peer.id.value,
+        transferId = offer.id,
+        eventName = DiagnosticEventNames.TEMP_FILE_CREATED,
+        state = "prepared"
+    )
     val transfer = try {
         offer.accept(destination)
     } catch (cancelled: CancellationException) {
-        withContext(NonCancellable) { runCatching { destination.abort(null) } }
+        val cleanup = withContext(NonCancellable) { runCatching { destination.abort(null) } }
+        recordTemporaryFileEvent(
+            peerId = offer.peer.id.value,
+            transferId = offer.id,
+            eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
+            state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
+            outcome = if (cleanup.isSuccess) DiagnosticOutcome.SUCCESS else DiagnosticOutcome.FAILURE,
+            error = cleanup.exceptionOrNull()
+        )
         throw cancelled
     } catch (error: Throwable) {
-        withContext(NonCancellable) {
-            runCatching { destination.abort(null) }
+        val cleanup = withContext(NonCancellable) {
+            val result = runCatching { destination.abort(null) }
             runCatching { saveFile.delete() }
             runCatching { offer.reject("accept failed: ${error.message}") }
+            result
         }
+        recordTemporaryFileEvent(
+            peerId = offer.peer.id.value,
+            transferId = offer.id,
+            eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
+            state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
+            outcome = if (cleanup.isSuccess) DiagnosticOutcome.SUCCESS else DiagnosticOutcome.FAILURE,
+            error = cleanup.exceptionOrNull()
+        )
         System.err.println("[file ← $peerName] accept failed: ${error.message}".sanitizedForTerminal())
         return
     }
@@ -1279,9 +1403,61 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
         }
     } finally {
         withContext(NonCancellable) {
-            if (!completed) runCatching { saveFile.delete() }
+            if (completed) {
+                recordTemporaryFileEvent(
+                    peerId = offer.peer.id.value,
+                    transferId = transfer.id,
+                    eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
+                    state = "promoted",
+                    outcome = DiagnosticOutcome.SUCCESS
+                )
+            } else {
+                val cleanup = runCatching {
+                    if (saveFile.exists() && !saveFile.delete()) {
+                        error("destination reservation cleanup failed")
+                    }
+                }
+                recordTemporaryFileEvent(
+                    peerId = offer.peer.id.value,
+                    transferId = transfer.id,
+                    eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
+                    state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
+                    outcome = if (cleanup.isSuccess) DiagnosticOutcome.SUCCESS else DiagnosticOutcome.FAILURE,
+                    error = cleanup.exceptionOrNull()
+                )
+            }
         }
     }
+}
+
+private fun recordTemporaryFileEvent(
+    peerId: String,
+    transferId: String,
+    eventName: String,
+    state: String,
+    outcome: DiagnosticOutcome? = null,
+    error: Throwable? = null
+) {
+    CliDiagnostics.recorder.record(
+        DiagnosticRecord(
+            peerId = peerId,
+            connectionId = CliDiagnostics.connectionIdFor(peerId),
+            transferId = transferId,
+            category = "storage",
+            eventName = eventName,
+            severity = if (error == null) {
+                dev.p2pkit.sample.diagnostics.DiagnosticSeverity.INFO
+            } else {
+                dev.p2pkit.sample.diagnostics.DiagnosticSeverity.ERROR
+            },
+            currentState = state,
+            direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.RECEIVED,
+            outcome = outcome,
+            errorCode = error?.let { it::class.simpleName },
+            errorDescription = error?.message,
+            details = mapOf("location" to "app-private", "contentsExported" to "false")
+        )
+    )
 }
 
 private suspend fun rejectPendingOffers(

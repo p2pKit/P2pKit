@@ -39,6 +39,7 @@ import java.awt.datatransfer.StringSelection
 @Composable
 internal fun DesktopDiagnosticsScreen(
     diagnostics: DesktopDiagnosticHarness,
+    activeConnections: List<DesktopDiagnosticConnectionSnapshot>,
     revision: Long,
     onBack: () -> Unit
 ) {
@@ -64,7 +65,7 @@ internal fun DesktopDiagnosticsScreen(
     )
     val liveEvents = remember(revision, filter) { diagnostics.recorder.snapshot(filter) }
     val events = if (paused) pausedEvents else liveEvents
-    val summary = diagnostics.recorder.summary()
+    val summary = diagnostics.summary()
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -130,7 +131,8 @@ internal fun DesktopDiagnosticsScreen(
                     requestedSession = diagnostics.startSession(
                         testId,
                         role,
-                        requestedSession.ifBlank { null }
+                        requestedSession.ifBlank { null },
+                        activeConnections
                     )
                 }.onFailure { exportStatus = "Could not start session: ${it.message}" }
             }) { Text("Begin test session") }

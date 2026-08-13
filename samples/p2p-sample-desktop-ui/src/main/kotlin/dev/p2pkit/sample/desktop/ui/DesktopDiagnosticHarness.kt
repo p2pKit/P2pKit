@@ -3,6 +3,7 @@ package dev.p2pkit.sample.desktop.ui
 import dev.p2pkit.core.BuildInfo
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.sample.diagnostics.DiagnosticConfiguration
+import dev.p2pkit.sample.diagnostics.DiagnosticCorrelationRegistry
 import dev.p2pkit.sample.diagnostics.DiagnosticDirection
 import dev.p2pkit.sample.diagnostics.DiagnosticEnvironment
 import dev.p2pkit.sample.diagnostics.DiagnosticEventNames
@@ -14,7 +15,6 @@ import dev.p2pkit.sample.diagnostics.RollingJsonlFileSink
 import dev.p2pkit.sample.diagnostics.StructuredFrameTrace
 import dev.p2pkit.sample.diagnostics.StructuredSdkLogger
 import dev.p2pkit.sample.diagnostics.anonymizeIdentifier
-import dev.p2pkit.sample.diagnostics.correlationConnectionId
 import java.io.File
 import java.net.InetAddress
 
@@ -58,12 +58,16 @@ internal class DesktopDiagnosticHarness(
         }
     )
 
+    private val correlations = DiagnosticCorrelationRegistry(
+        activeSessionId = { recorder.activeSessionId }
+    )
+
     @Volatile
-    var localPeerId: String = "local"
-    @Volatile
-    var latestPeerId: String? = null
-    @Volatile
-    var latestConnectionId: String? = null
+    var localPeerId: String? = null
+        set(value) {
+            field = value
+            correlations.setLocalPeerId(value)
+        }
     @Volatile
     var latestTransferId: String? = null
 
@@ -79,8 +83,31 @@ internal class DesktopDiagnosticHarness(
         )
     }
 
-    fun startSession(testId: String, role: String, sessionId: String?): String =
+    fun startSession(
+        testId: String,
+        role: String,
+        sessionId: String?,
+        activeConnections: List<DesktopDiagnosticConnectionSnapshot> = emptyList()
+    ): String =
         recorder.startSession(testId, role, sessionId).also {
+            correlations.resetSession()
+            latestTransferId = null
+            activeConnections.forEach { connection ->
+                val correlation = correlations.registerConnection(
+                    connection.sessionId,
+                    connection.peerId
+                )
+                recorder.record(
+                    DiagnosticRecord(
+                        peerId = connection.peerId,
+                        connectionId = correlation?.connectionId,
+                        category = "connection",
+                        eventName = DiagnosticEventNames.CONNECTION_STATE_CHANGED,
+                        currentState = connection.state,
+                        details = mapOf("sessionSnapshot" to "true")
+                    )
+                )
+            }
             recorder.record(
                 DiagnosticRecord(
                     category = "test",
@@ -91,13 +118,13 @@ internal class DesktopDiagnosticHarness(
         }
 
     fun logger(delegate: P2pLogger): P2pLogger =
-        StructuredSdkLogger(
-            recorder,
-            delegate,
-            context = { Triple(latestPeerId, latestConnectionId, latestTransferId) }
-        )
+        StructuredSdkLogger(recorder, delegate)
 
-    fun frame(line: String) = StructuredFrameTrace.record(recorder, line, latestConnectionId)
+    fun frame(line: String) = StructuredFrameTrace.record(
+        recorder = recorder,
+        line = line,
+        correlationForTransfer = correlations::correlationForTransfer
+    )
 
     fun transport(line: String) {
         recorder.record(
@@ -109,10 +136,13 @@ internal class DesktopDiagnosticHarness(
         )
     }
 
-    fun connection(peerId: String, state: String, previous: String? = null): String {
-        val connection = correlationConnectionId(recorder.activeSessionId, localPeerId, peerId)
-        latestPeerId = peerId
-        latestConnectionId = connection
+    fun connection(
+        sessionId: String,
+        peerId: String,
+        state: String,
+        previous: String? = null
+    ): String? {
+        val connection = correlations.registerConnection(sessionId, peerId)?.connectionId
         recorder.record(
             DiagnosticRecord(
                 peerId = peerId,
@@ -142,8 +172,13 @@ internal class DesktopDiagnosticHarness(
                 )
             )
         }
+        if (state == "Closed" || state == "Failed") {
+            correlations.removeConnection(sessionId)
+        }
         return connection
     }
+
+    fun connectionIdFor(peerId: String): String? = correlations.connectionForPeer(peerId)?.connectionId
 
     fun transfer(
         peerId: String,
@@ -156,12 +191,12 @@ internal class DesktopDiagnosticHarness(
         error: Throwable? = null,
         details: Map<String, String> = emptyMap()
     ) {
-        latestPeerId = peerId
+        val correlation = correlations.registerTransfer(transferId, peerId)
         latestTransferId = transferId
         recorder.record(
             DiagnosticRecord(
                 peerId = peerId,
-                connectionId = latestConnectionId,
+                connectionId = correlation?.connectionId,
                 transferId = transferId,
                 category = "transfer",
                 eventName = eventName,
@@ -176,11 +211,12 @@ internal class DesktopDiagnosticHarness(
         )
     }
 
-    fun hash(peerId: String, transferId: String?, size: Long, digest: String, receiver: Boolean) {
+    fun hash(peerId: String, transferId: String, size: Long, digest: String, receiver: Boolean) {
+        val correlation = correlations.registerTransfer(transferId, peerId)
         recorder.record(
             DiagnosticRecord(
                 peerId = peerId,
-                connectionId = latestConnectionId,
+                connectionId = correlation?.connectionId,
                 transferId = transferId,
                 category = "file",
                 eventName = if (receiver) {
@@ -199,10 +235,12 @@ internal class DesktopDiagnosticHarness(
         recorder.completeSession(outcome, "operator selected ${outcome.name}", outcome.name)
     }
 
+    fun summary() = recorder.summary(selectedTransferId = latestTransferId)
+
     fun export(): File = DiagnosticEvidenceExporter.export(
         recorder,
         File(home, ".p2pkit/test-evidence"),
-        additionalFiles = rolling.evidenceFiles()
+        additionalFiles = rolling.evidenceFiles(recorder.activeSessionId)
     )
 
     fun clearCurrent(): Int {
@@ -220,5 +258,12 @@ internal class DesktopDiagnosticHarness(
                 currentState = "window-closed"
             )
         )
+        correlations.resetSession()
     }
 }
+
+internal data class DesktopDiagnosticConnectionSnapshot(
+    val sessionId: String,
+    val peerId: String,
+    val state: String
+)

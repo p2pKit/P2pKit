@@ -3,11 +3,16 @@ package dev.p2pkit.sample.diagnostics
 import dev.p2pkit.core.P2pLogger
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.FileOutputStream
+import java.net.InetAddress
 import java.nio.charset.StandardCharsets
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneId
@@ -128,6 +133,18 @@ public data class DiagnosticConfiguration(
 )
 
 @Serializable
+public data class DiagnosticTransferSummary(
+    val transferId: String,
+    val connectionIds: List<String>,
+    val peerIds: List<String>,
+    val senderFileSizeBytes: Long?,
+    val receiverFileSizeBytes: Long?,
+    val senderSha256: String?,
+    val receiverSha256: String?,
+    val integrityMatch: Boolean?
+)
+
+@Serializable
 public data class DiagnosticSessionSummary(
     val schemaVersion: Int = DiagnosticEvent.SCHEMA_VERSION,
     val testId: String,
@@ -145,6 +162,13 @@ public data class DiagnosticSessionSummary(
     val connectionIds: List<String>,
     val transferIds: List<String>,
     val peerIds: List<String>,
+    /**
+     * Hash and integrity evidence grouped by the exact transfer identifier.
+     * Top-level hash fields are populated only when [selectedTransferId]
+     * identifies one unambiguous transfer.
+     */
+    val transferSummaries: List<DiagnosticTransferSummary>,
+    val selectedTransferId: String?,
     val senderFileSizeBytes: Long?,
     val receiverFileSizeBytes: Long?,
     val senderSha256: String?,
@@ -194,6 +218,146 @@ public data class DiagnosticRecord(
     val details: Map<String, String> = emptyMap()
 )
 
+/** Exact sample-side ownership tuple for one peer connection or transfer. */
+public data class DiagnosticCorrelation(
+    val peerId: String,
+    val connectionId: String,
+    val transferId: String? = null
+)
+
+/**
+ * Thread-safe correlation index used by the JVM/Android sample harnesses.
+ *
+ * It never guesses from a "latest" peer. Connection identifiers are derived
+ * only from the active test session and the two real SDK peer identifiers;
+ * transfer identifiers are the real SDK identifiers. A frame without a known
+ * transfer remains unassigned instead of being attributed to an unrelated
+ * concurrent peer.
+ */
+public class DiagnosticCorrelationRegistry(
+    private val activeSessionId: () -> String,
+    private val maxTransfers: Int = 1_024
+) {
+    private val lock: Any = Any()
+    private var localPeerId: String? = null
+    private val connectionsBySession: MutableMap<String, DiagnosticCorrelation> = mutableMapOf()
+    private val connectionsByPeer: MutableMap<String, SessionCorrelation> = mutableMapOf()
+    private val transfers: LinkedHashMap<String, TransferOwnership> = linkedMapOf()
+
+    init {
+        require(maxTransfers > 0)
+    }
+
+    public fun setLocalPeerId(peerId: String?) {
+        val normalized = peerId?.trim()?.takeIf { it.isNotEmpty() }
+        synchronized(lock) {
+            if (localPeerId == normalized) return
+            localPeerId = normalized
+            connectionsBySession.clear()
+            connectionsByPeer.clear()
+            transfers.clear()
+        }
+    }
+
+    /** Clears session-bound ownership while retaining the current local peer. */
+    public fun resetSession() {
+        synchronized(lock) {
+            connectionsBySession.clear()
+            connectionsByPeer.clear()
+            transfers.clear()
+        }
+    }
+
+    public fun registerConnection(sessionId: String, peerId: String): DiagnosticCorrelation? {
+        val testSession = activeSessionId()
+        return synchronized(lock) {
+            val connectionId = connectionIdLocked(testSession, peerId) ?: return@synchronized null
+            val correlation = DiagnosticCorrelation(peerId, connectionId)
+            connectionsBySession.entries.removeAll { (otherSessionId, otherCorrelation) ->
+                otherSessionId != sessionId && otherCorrelation.peerId == peerId
+            }
+            connectionsBySession[sessionId]?.let { replaced ->
+                connectionsByPeer[replaced.peerId]
+                    ?.takeIf { it.sessionId == sessionId }
+                    ?.let { connectionsByPeer.remove(replaced.peerId) }
+            }
+            connectionsBySession[sessionId] = correlation
+            connectionsByPeer[peerId] = SessionCorrelation(sessionId, correlation)
+            correlation
+        }
+    }
+
+    public fun removeConnection(sessionId: String): DiagnosticCorrelation? = synchronized(lock) {
+        val removed = connectionsBySession.remove(sessionId) ?: return@synchronized null
+        connectionsByPeer[removed.peerId]
+            ?.takeIf { it.sessionId == sessionId }
+            ?.let { connectionsByPeer.remove(removed.peerId) }
+        // A reconnect to the same peer intentionally has the same public
+        // correlation id within one test session. Keep bounded transfer
+        // ownership until the test session is reset so a late close for the
+        // retired SDK session cannot erase transfers owned by its replacement.
+        removed
+    }
+
+    public fun connectionForSession(sessionId: String): DiagnosticCorrelation? =
+        synchronized(lock) { connectionsBySession[sessionId] }
+
+    public fun connectionForPeer(peerId: String): DiagnosticCorrelation? =
+        synchronized(lock) { connectionsByPeer[peerId]?.correlation }
+
+    public fun registerTransfer(
+        transferId: String,
+        peerId: String,
+        sessionId: String? = null
+    ): DiagnosticCorrelation? {
+        return synchronized(lock) {
+            val connection = sessionId?.let(connectionsBySession::get)
+                ?: connectionsByPeer[peerId]?.correlation
+                ?: return@synchronized null
+            val correlation = connection.copy(transferId = transferId)
+            val existing = transfers.remove(transferId)
+            transfers[transferId] = TransferOwnership(
+                correlation = if (existing?.ambiguous != true &&
+                    (existing?.correlation == null ||
+                        existing.correlation.connectionId == correlation.connectionId)
+                ) {
+                    correlation
+                } else {
+                    // FrameTrace is process-global and its wire line contains
+                    // no connection handle. A transfer-id collision across
+                    // peers is therefore explicitly ambiguous, never last-wins.
+                    null
+                },
+                ambiguous = existing?.ambiguous == true ||
+                    (existing?.correlation != null &&
+                        existing.correlation.connectionId != correlation.connectionId)
+            )
+            while (transfers.size > maxTransfers) {
+                transfers.remove(transfers.keys.first())
+            }
+            correlation
+        }
+    }
+
+    public fun correlationForTransfer(transferId: String): DiagnosticCorrelation? =
+        synchronized(lock) { transfers[transferId]?.correlation }
+
+    private fun connectionIdLocked(testSessionId: String, remotePeerId: String): String? {
+        val local = localPeerId ?: return null
+        return correlationConnectionId(testSessionId, local, remotePeerId)
+    }
+
+    private data class SessionCorrelation(
+        val sessionId: String,
+        val correlation: DiagnosticCorrelation
+    )
+
+    private data class TransferOwnership(
+        val correlation: DiagnosticCorrelation?,
+        val ambiguous: Boolean
+    )
+}
+
 /**
  * Thread-safe bounded recorder. It retains at most [maxEvents] and
  * [maxEncodedBytes] across at most [maxSessions] session identifiers.
@@ -213,26 +377,37 @@ public class DiagnosticRecorder(
 ) {
     private val lock: Any = Any()
     private val entries: MutableList<StoredEvent> = mutableListOf()
+    private val pendingSinkLines: ArrayDeque<PendingSinkLine> = ArrayDeque()
+    private var pendingSinkBytes: Int = 0
     private var nextIndex: Long = 1L
     private var encodedBytes: Int = 0
     private var droppedEvents: Long = 0L
-    private var sessionStartElapsed: Long = monotonicMillis()
+    private var sinkDraining: Boolean = false
+    private var sessionContext: SessionContext = SessionContext(
+        testId = "UNASSIGNED",
+        sessionId = "session-unassigned",
+        role = "unspecified",
+        startElapsedMillis = monotonicMillis()
+    )
 
-    @Volatile
-    public var activeTestId: String = "UNASSIGNED"
-        private set
+    public val activeTestId: String
+        get() = synchronized(lock) { sessionContext.testId }
 
-    @Volatile
-    public var activeSessionId: String = "session-unassigned"
-        private set
+    public val activeSessionId: String
+        get() = synchronized(lock) { sessionContext.sessionId }
 
-    @Volatile
-    public var activeRole: String = "unspecified"
-        private set
+    public val activeRole: String
+        get() = synchronized(lock) { sessionContext.role }
 
     @Volatile
     public var displayPaused: Boolean = false
         private set
+
+    init {
+        require(maxEvents > 0) { "maxEvents must be positive" }
+        require(maxEncodedBytes > 0) { "maxEncodedBytes must be positive" }
+        require(maxSessions > 0) { "maxSessions must be positive" }
+    }
 
     public fun startSession(testId: String, role: String, requestedSessionId: String? = null): String {
         val normalizedTestId = normalizeTestId(testId)
@@ -243,19 +418,26 @@ public class DiagnosticRecorder(
         require(role.trim().matches(SAFE_ROLE)) {
             "Role must use 1-24 letters, digits, '_', or '-'"
         }
-        activeTestId = normalizedTestId
-        activeSessionId = sessionId
-        activeRole = role.trim().lowercase()
-        sessionStartElapsed = monotonicMillis()
-        record(
-            DiagnosticRecord(
-                category = "test",
-                eventName = DiagnosticEventNames.TEST_SESSION_CREATED,
-                currentState = "active",
-                protocolVersion = configuration.protocolVersion,
-                details = mapOf("testMode" to "true")
-            )
+        val newContext = SessionContext(
+            testId = normalizedTestId,
+            sessionId = sessionId,
+            role = role.trim().lowercase(),
+            startElapsedMillis = monotonicMillis()
         )
+        val shouldDrain = synchronized(lock) {
+            sessionContext = newContext
+            appendSafelyLocked(
+                DiagnosticRecord(
+                    category = "test",
+                    eventName = DiagnosticEventNames.TEST_SESSION_CREATED,
+                    currentState = "active",
+                    protocolVersion = configuration.protocolVersion,
+                    details = mapOf("testMode" to "true")
+                ),
+                newContext
+            )
+        }
+        drainSinkIfOwner(shouldDrain)
         return sessionId
     }
 
@@ -265,20 +447,25 @@ public class DiagnosticRecorder(
         } else {
             DiagnosticSeverity.ERROR
         }
-        record(
-            DiagnosticRecord(
-                category = "test",
-                eventName = DiagnosticEventNames.TEST_SESSION_COMPLETED,
-                severity = severity,
-                currentState = finalState,
-                protocolVersion = configuration.protocolVersion,
-                durationMillis = (monotonicMillis() - sessionStartElapsed).coerceAtLeast(0L),
-                errorCode = if (severity == DiagnosticSeverity.ERROR) "TEST_NOT_SUCCESSFUL" else null,
-                errorDescription = if (severity == DiagnosticSeverity.ERROR) reason else null,
-                outcome = outcome,
-                details = mapOf("reason" to reason)
+        val shouldDrain = synchronized(lock) {
+            val context = sessionContext
+            appendSafelyLocked(
+                DiagnosticRecord(
+                    category = "test",
+                    eventName = DiagnosticEventNames.TEST_SESSION_COMPLETED,
+                    severity = severity,
+                    currentState = finalState,
+                    protocolVersion = configuration.protocolVersion,
+                    durationMillis = (monotonicMillis() - context.startElapsedMillis).coerceAtLeast(0L),
+                    errorCode = if (severity == DiagnosticSeverity.ERROR) "TEST_NOT_SUCCESSFUL" else null,
+                    errorDescription = if (severity == DiagnosticSeverity.ERROR) reason else null,
+                    outcome = outcome,
+                    details = mapOf("reason" to reason)
+                ),
+                context
             )
-        )
+        }
+        drainSinkIfOwner(shouldDrain)
     }
 
     /**
@@ -287,62 +474,10 @@ public class DiagnosticRecorder(
      * being observed.
      */
     public fun record(record: DiagnosticRecord) {
-        try {
-            val redacted = DiagnosticRedactor.redact(record.details)
-            val safeError = record.errorDescription?.let(DiagnosticRedactor::redactText)
-            val event = synchronized(lock) {
-                DiagnosticEvent(
-                    index = nextIndex++,
-                    timestamp = timestamp(),
-                    platform = environment.platform,
-                    operatingSystem = environment.operatingSystem,
-                    applicationVersion = environment.applicationVersion,
-                    buildNumber = environment.buildNumber,
-                    gitCommitSha = environment.gitCommitSha,
-                    safeDeviceId = environment.safeDeviceId,
-                    testSessionId = activeSessionId,
-                    testId = activeTestId,
-                    role = activeRole,
-                    peerId = record.peerId?.let(::anonymizeIdentifier),
-                    connectionId = record.connectionId?.takeIf { it.matches(SAFE_ID) },
-                    transferId = record.transferId?.takeIf { it.matches(SAFE_ID) },
-                    category = stableName(record.category),
-                    eventName = stableName(record.eventName),
-                    severity = record.severity,
-                    currentState = record.currentState?.let(DiagnosticRedactor::redactText),
-                    previousState = record.previousState?.let(DiagnosticRedactor::redactText),
-                    protocolVersion = record.protocolVersion ?: configuration.protocolVersion,
-                    packetType = record.packetType?.let(::stableName),
-                    direction = record.direction,
-                    payloadSizeBytes = record.payloadSizeBytes,
-                    sequenceNumber = record.sequenceNumber,
-                    chunkNumber = record.chunkNumber,
-                    chunkCount = record.chunkCount,
-                    retryNumber = record.retryNumber,
-                    timeoutMillis = record.timeoutMillis,
-                    retryDelayMillis = record.retryDelayMillis,
-                    durationMillis = record.durationMillis,
-                    errorCode = record.errorCode?.let(::stableName),
-                    errorDescription = safeError,
-                    outcome = record.outcome,
-                    details = redacted.values,
-                    redactedFields = redacted.redactedFields
-                )
-            }
-            val json = JSON.encodeToString(event)
-            synchronized(lock) {
-                entries += StoredEvent(event, json, json.toByteArray(StandardCharsets.UTF_8).size + 1)
-                encodedBytes += entries.last().bytes
-                enforceBounds()
-            }
-            try {
-                eventSink(json)
-            } catch (_: Throwable) {
-                synchronized(lock) { droppedEvents++ }
-            }
-        } catch (_: Throwable) {
-            synchronized(lock) { droppedEvents++ }
+        val shouldDrain = synchronized(lock) {
+            appendSafelyLocked(record, sessionContext)
         }
+        drainSinkIfOwner(shouldDrain)
     }
 
     public fun snapshot(filter: DiagnosticFilter = DiagnosticFilter()): List<DiagnosticEvent> =
@@ -352,9 +487,14 @@ public class DiagnosticRecorder(
 
     public fun jsonLines(sessionId: String = activeSessionId): String =
         synchronized(lock) {
-            entries.asSequence()
+            val selected = entries.asSequence()
                 .filter { it.event.testSessionId == sessionId }
-                .joinToString(separator = "\n", postfix = if (entries.isNotEmpty()) "\n" else "") { it.json }
+                .map { it.json }
+                .toList()
+            selected.joinToString(
+                separator = "\n",
+                postfix = if (selected.isNotEmpty()) "\n" else ""
+            )
         }
 
     public fun readableText(sessionId: String = activeSessionId): String =
@@ -381,19 +521,45 @@ public class DiagnosticRecorder(
 
     public fun summary(
         sessionId: String = activeSessionId,
-        manualEvidence: List<String> = DEFAULT_MANUAL_EVIDENCE
+        manualEvidence: List<String> = DEFAULT_MANUAL_EVIDENCE,
+        selectedTransferId: String? = null
     ): DiagnosticSessionSummary {
-        val events = snapshot(DiagnosticFilter(sessionId = sessionId))
+        selectedTransferId?.let {
+            require(it.matches(SAFE_ID)) { "Selected transfer ID is not share-safe" }
+        }
+        val captured = synchronized(lock) {
+            SummaryCapture(
+                events = entries.asSequence()
+                    .map { it.event }
+                    .filter { it.testSessionId == sessionId }
+                    .toList(),
+                activeContext = sessionContext,
+                droppedEventCount = droppedEvents
+            )
+        }
+        val events = captured.events
         val start = events.firstOrNull()
         val end = events.lastOrNull()
-        val senderMetadata = events.lastOrNull { it.eventName == DiagnosticEventNames.FILE_SENDER_HASH }
-        val receiverMetadata = events.lastOrNull { it.eventName == DiagnosticEventNames.FILE_RECEIVER_HASH }
-        val integrity = events.lastOrNull { it.eventName == DiagnosticEventNames.FILE_INTEGRITY_CHECKED }
-        val terminal = events.lastOrNull { it.outcome != null }
+        val transferSummaries = events.asSequence()
+            .mapNotNull { it.transferId }
+            .distinct()
+            .map { transferId -> transferSummary(transferId, events) }
+            .toList()
+        val selectedTransfer = when {
+            selectedTransferId != null -> transferSummaries.singleOrNull {
+                it.transferId == selectedTransferId
+            }
+            transferSummaries.size == 1 -> transferSummaries.single()
+            else -> null
+        }
+        val terminal = events.lastOrNull {
+            it.eventName == DiagnosticEventNames.TEST_SESSION_COMPLETED && it.outcome != null
+        }
+        val fallbackContext = captured.activeContext.takeIf { it.sessionId == sessionId }
         return DiagnosticSessionSummary(
-            testId = start?.testId ?: activeTestId,
+            testId = start?.testId ?: fallbackContext?.testId ?: "UNASSIGNED",
             testSessionId = sessionId,
-            role = start?.role ?: activeRole,
+            role = start?.role ?: fallbackContext?.role ?: "unspecified",
             platform = environment.platform,
             operatingSystem = environment.operatingSystem,
             applicationVersion = environment.applicationVersion,
@@ -406,17 +572,19 @@ public class DiagnosticRecorder(
             connectionIds = events.mapNotNull { it.connectionId }.distinct(),
             transferIds = events.mapNotNull { it.transferId }.distinct(),
             peerIds = events.mapNotNull { it.peerId }.distinct(),
-            senderFileSizeBytes = senderMetadata?.payloadSizeBytes,
-            receiverFileSizeBytes = receiverMetadata?.payloadSizeBytes,
-            senderSha256 = senderMetadata?.details?.get("sha256"),
-            receiverSha256 = receiverMetadata?.details?.get("sha256"),
-            integrityMatch = integrity?.details?.get("match")?.toBooleanStrictOrNull(),
+            transferSummaries = transferSummaries,
+            selectedTransferId = selectedTransfer?.transferId,
+            senderFileSizeBytes = selectedTransfer?.senderFileSizeBytes,
+            receiverFileSizeBytes = selectedTransfer?.receiverFileSizeBytes,
+            senderSha256 = selectedTransfer?.senderSha256,
+            receiverSha256 = selectedTransfer?.receiverSha256,
+            integrityMatch = selectedTransfer?.integrityMatch,
             finalState = terminal?.currentState,
             finalOutcome = terminal?.outcome,
             warningCount = events.count { it.severity == DiagnosticSeverity.WARNING },
             errorCount = events.count { it.severity == DiagnosticSeverity.ERROR },
             eventCount = events.size,
-            droppedEventCount = droppedEventCount(),
+            droppedEventCount = captured.droppedEventCount,
             configuration = configuration.copy(
                 faultInjection = DiagnosticRedactor.redact(configuration.faultInjection).values,
                 values = DiagnosticRedactor.redact(configuration.values).values
@@ -435,6 +603,7 @@ public class DiagnosticRecorder(
 
     /** Clears only the active test session. Callers provide confirmation in their UI. */
     public fun clearCurrentSession(): Int = synchronized(lock) {
+        val activeSessionId = sessionContext.sessionId
         val before = entries.size
         entries.removeAll { it.event.testSessionId == activeSessionId }
         encodedBytes = entries.sumOf { it.bytes }
@@ -442,6 +611,98 @@ public class DiagnosticRecorder(
     }
 
     public fun droppedEventCount(): Long = synchronized(lock) { droppedEvents }
+
+    private fun appendSafelyLocked(record: DiagnosticRecord, context: SessionContext): Boolean {
+        return try {
+            val redacted = DiagnosticRedactor.redact(record.details)
+            val event = DiagnosticEvent(
+                index = nextIndex,
+                timestamp = timestamp(),
+                platform = environment.platform,
+                operatingSystem = environment.operatingSystem,
+                applicationVersion = environment.applicationVersion,
+                buildNumber = environment.buildNumber,
+                gitCommitSha = environment.gitCommitSha,
+                safeDeviceId = environment.safeDeviceId,
+                testSessionId = context.sessionId,
+                testId = context.testId,
+                role = context.role,
+                peerId = record.peerId?.let(::anonymizeIdentifier),
+                connectionId = record.connectionId?.takeIf { it.matches(SAFE_ID) },
+                transferId = record.transferId?.takeIf { it.matches(SAFE_ID) },
+                category = stableName(record.category),
+                eventName = stableName(record.eventName),
+                severity = record.severity,
+                currentState = record.currentState?.let(DiagnosticRedactor::redactText),
+                previousState = record.previousState?.let(DiagnosticRedactor::redactText),
+                protocolVersion = record.protocolVersion ?: configuration.protocolVersion,
+                packetType = record.packetType?.let(::stableName),
+                direction = record.direction,
+                payloadSizeBytes = record.payloadSizeBytes,
+                sequenceNumber = record.sequenceNumber,
+                chunkNumber = record.chunkNumber,
+                chunkCount = record.chunkCount,
+                retryNumber = record.retryNumber,
+                timeoutMillis = record.timeoutMillis,
+                retryDelayMillis = record.retryDelayMillis,
+                durationMillis = record.durationMillis,
+                errorCode = record.errorCode?.let(::stableName),
+                errorDescription = record.errorDescription?.let(DiagnosticRedactor::redactText),
+                outcome = record.outcome,
+                details = redacted.values,
+                redactedFields = redacted.redactedFields
+            )
+            val json = JSON.encodeToString(event)
+            val stored = StoredEvent(
+                event,
+                json,
+                json.toByteArray(StandardCharsets.UTF_8).size + 1
+            )
+            entries += stored
+            nextIndex++
+            encodedBytes += stored.bytes
+            enforceBounds()
+            if (pendingSinkLines.size >= maxEvents || pendingSinkBytes + stored.bytes > maxEncodedBytes) {
+                droppedEvents++
+                return false
+            }
+            pendingSinkLines.addLast(PendingSinkLine(json, stored.bytes))
+            pendingSinkBytes += stored.bytes
+            if (!sinkDraining) {
+                sinkDraining = true
+                true
+            } else {
+                false
+            }
+        } catch (_: Throwable) {
+            droppedEvents++
+            false
+        }
+    }
+
+    /**
+     * One caller drains the append-ordered queue. The external sink is never
+     * invoked under [lock], so a slow or re-entrant sink cannot deadlock the
+     * recorder or reorder persisted JSONL.
+     */
+    private fun drainSinkIfOwner(owner: Boolean) {
+        if (!owner) return
+        while (true) {
+            val line = synchronized(lock) {
+                if (pendingSinkLines.isEmpty()) {
+                    sinkDraining = false
+                    null
+                } else {
+                    pendingSinkLines.removeFirst().also { pendingSinkBytes -= it.bytes }
+                }
+            } ?: return
+            try {
+                eventSink(line.json)
+            } catch (_: Throwable) {
+                synchronized(lock) { droppedEvents++ }
+            }
+        }
+    }
 
     private fun enforceBounds() {
         while (entries.size > maxEvents || encodedBytes > maxEncodedBytes) {
@@ -457,7 +718,41 @@ public class DiagnosticRecorder(
         }
     }
 
+    private data class SessionContext(
+        val testId: String,
+        val sessionId: String,
+        val role: String,
+        val startElapsedMillis: Long
+    )
+
+    private data class SummaryCapture(
+        val events: List<DiagnosticEvent>,
+        val activeContext: SessionContext,
+        val droppedEventCount: Long
+    )
+
     private data class StoredEvent(val event: DiagnosticEvent, val json: String, val bytes: Int)
+    private data class PendingSinkLine(val json: String, val bytes: Int)
+}
+
+private fun transferSummary(
+    transferId: String,
+    sessionEvents: List<DiagnosticEvent>
+): DiagnosticTransferSummary {
+    val events = sessionEvents.filter { it.transferId == transferId }
+    val sender = events.lastOrNull { it.eventName == DiagnosticEventNames.FILE_SENDER_HASH }
+    val receiver = events.lastOrNull { it.eventName == DiagnosticEventNames.FILE_RECEIVER_HASH }
+    val integrity = events.lastOrNull { it.eventName == DiagnosticEventNames.FILE_INTEGRITY_CHECKED }
+    return DiagnosticTransferSummary(
+        transferId = transferId,
+        connectionIds = events.mapNotNull { it.connectionId }.distinct(),
+        peerIds = events.mapNotNull { it.peerId }.distinct(),
+        senderFileSizeBytes = sender?.payloadSizeBytes,
+        receiverFileSizeBytes = receiver?.payloadSizeBytes,
+        senderSha256 = sender?.details?.get("sha256"),
+        receiverSha256 = receiver?.details?.get("sha256"),
+        integrityMatch = integrity?.details?.get("match")?.toBooleanStrictOrNull()
+    )
 }
 
 public object DiagnosticEventNames {
@@ -532,7 +827,8 @@ public object StructuredFrameTrace {
     public fun record(
         recorder: DiagnosticRecorder,
         line: String,
-        connectionId: String? = null
+        connectionId: String? = null,
+        correlationForTransfer: (String) -> DiagnosticCorrelation? = { null }
     ) {
         val match = frame.matchEntire(line.trim())
         if (match == null) {
@@ -549,6 +845,10 @@ public object StructuredFrameTrace {
             return
         }
         val (wireDirection, packetType, size, chunk, chunks, messageId, transferId) = match.destructured
+        val exactTransferId = transferId.ifEmpty {
+            messageId.takeIf { packetType == "FILE_DATA" && it.isNotEmpty() }.orEmpty()
+        }.ifEmpty { null }
+        val correlation = exactTransferId?.let(correlationForTransfer)
         val direction = if (wireDirection == "TX") DiagnosticDirection.SENT else DiagnosticDirection.RECEIVED
         val eventName = when (packetType) {
             "FILE_COMMIT" -> DiagnosticEventNames.TRANSFER_ACK
@@ -560,8 +860,9 @@ public object StructuredFrameTrace {
         }
         recorder.record(
             DiagnosticRecord(
-                connectionId = connectionId,
-                transferId = transferId.ifEmpty { null },
+                peerId = correlation?.peerId,
+                connectionId = correlation?.connectionId ?: connectionId,
+                transferId = exactTransferId,
                 category = if (packetType.startsWith("FILE_")) "transfer" else "protocol",
                 eventName = eventName,
                 protocolVersion = recorder.configuration.protocolVersion,
@@ -627,6 +928,8 @@ public class StructuredSdkLogger(
             "reconnect: attempt=" in lower && "succeeded" in lower ->
                 DiagnosticEventNames.RECOVERY_COMPLETED
             "reconnect: attempt=" in lower ->
+                DiagnosticEventNames.RECOVERY_STARTED
+            ("file" in lower || "transfer" in lower) && "retry" in lower ->
                 DiagnosticEventNames.TRANSFER_RETRY
             "timed out" in lower || "timeout" in lower ->
                 DiagnosticEventNames.TIMEOUT_EXPIRED
@@ -651,15 +954,25 @@ public class StructuredSdkLogger(
 
 public object DiagnosticRedactor {
     private val sensitiveKey = Regex(
-        "(?i)(password|passphrase|credential|secret|token|private.?key|signing|authorization|cookie|ssid|bssid|payload|content)"
+        "(?i)(password|passphrase|credential|secret|token|private.?key|signing|authorization|" +
+            "cookie|ssid|bssid|payload|content|file.?name|peer.?name|device.?name|display.?name|" +
+            "host(?:name)?|ip(?:v[46])?.?address|address|(?:^|[_.-])name(?:$|[_.-]))"
     )
     private val credentialValue = Regex(
         """(?i)\b(bearer\s+[A-Za-z0-9._~+/=-]+|gh[pousr]_[A-Za-z0-9_]+|AKIA[A-Z0-9]{16})\b"""
     )
     private val sensitiveAssignment = Regex(
-        """(?i)(payload|content|body|data|text|message|bytes|raw)\s*=\s*(?:"[^"]*"|\S+)"""
+        """(?i)(password|passphrase|credential|secret|token|ssid|bssid|payload|content|body|data|""" +
+            """text|message|bytes|raw|file.?name|peer.?name|device.?name|display.?name|name|""" +
+            """peer|device|host(?:name)?|ip(?:v[46])?.?address|address)\s*=\s*(?:"[^"]*"|'[^']*'|\S+)"""
     )
     private val ipv4 = Regex("""(?<![A-Za-z0-9])(?:\d{1,3}\.){3}\d{1,3}(?![A-Za-z0-9])""")
+    private val ipv6Candidate = Regex(
+        """(?i)(?<![A-Za-z0-9])(?:\[[0-9a-f:.%_-]+]|[0-9a-f:.]*:[0-9a-f:.%_-]+)(?![A-Za-z0-9])"""
+    )
+    private val macAddress = Regex(
+        """(?i)(?<![0-9a-f])(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}(?![0-9a-f])"""
+    )
     private val control = Regex("""[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]""")
 
     public data class Result(val values: Map<String, String>, val redactedFields: List<String>)
@@ -683,13 +996,38 @@ public object DiagnosticRedactor {
         val payloadsRemoved = sensitiveAssignment.replace(credentialsRemoved) {
             "${it.groupValues[1]}=<redacted>"
         }
-        return ipv4.replace(payloadsRemoved) {
+        val macsRemoved = macAddress.replace(payloadsRemoved) {
+            "<redacted-mac:${anonymizeIdentifier(it.value)}>"
+        }
+        val ipv6Removed = ipv6Candidate.replace(macsRemoved) {
+            if (isIpv6Literal(it.value)) {
+                "<redacted-ip:${anonymizeIdentifier(it.value)}>"
+            } else {
+                it.value
+            }
+        }
+        return ipv4.replace(ipv6Removed) {
             "<redacted-ip:${anonymizeIdentifier(it.value)}>"
         }
+    }
+
+    private fun isIpv6Literal(candidate: String): Boolean {
+        val unwrapped = candidate.removePrefix("[").removeSuffix("]")
+        val address = unwrapped.substringBefore('%')
+        if (':' !in address) return false
+        return runCatching { InetAddress.getByName(address) }.isSuccess
     }
 }
 
 public object DiagnosticEvidenceExporter {
+    private val safeEvidenceFilename = Regex("[A-Za-z0-9._-]{1,96}")
+    private val reservedEvidenceFilenames: Set<String> = setOf(
+        "events.jsonl",
+        "events.txt",
+        "summary.json",
+        "manual-evidence-required.txt",
+        "checksums.sha256"
+    )
     private val filenameTimestamp = DateTimeFormatter
         .ofPattern("yyyy-MM-dd'T'HHmmss")
         .withZone(ZoneId.of("UTC"))
@@ -721,8 +1059,11 @@ public object DiagnosticEvidenceExporter {
             ).toByteArray(StandardCharsets.UTF_8)
         ).apply {
             additionalFiles.toSortedMap().forEach { (name, bytes) ->
-                require(name.matches(Regex("[A-Za-z0-9._-]{1,96}"))) {
+                require(name.matches(safeEvidenceFilename)) {
                     "Additional evidence filename is not safe"
+                }
+                require(name !in reservedEvidenceFilenames) {
+                    "Additional evidence filename is reserved: $name"
                 }
                 put(name, bytes)
             }
@@ -739,8 +1080,19 @@ public object DiagnosticEvidenceExporter {
                     zip.closeEntry()
                 }
             }
-            check(temporary.renameTo(target)) {
-                "Could not atomically publish evidence package"
+            try {
+                Files.move(
+                    temporary.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(
+                    temporary.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING
+                )
             }
             recorder.record(
                 DiagnosticRecord(
@@ -786,13 +1138,27 @@ public object DiagnosticEvidenceExporter {
 
     /** Verification helper used by tests and sample-evidence generation. */
     public fun verifyChecksums(zip: File): Boolean = ZipFile(zip).use { archive ->
-        val checksumEntry = archive.getEntry("checksums.sha256") ?: return false
-        val lines = archive.getInputStream(checksumEntry).bufferedReader().readLines()
-        lines.filter { it.isNotBlank() }.all { line ->
+        val entries = buildList {
+            val enumeration = archive.entries()
+            while (enumeration.hasMoreElements()) add(enumeration.nextElement())
+        }
+        if (entries.any { it.isDirectory || !it.name.matches(safeEvidenceFilename) }) return false
+        if (entries.map { it.name }.distinct().size != entries.size) return false
+        val checksumEntries = entries.filter { it.name == "checksums.sha256" }
+        if (checksumEntries.size != 1) return false
+        val dataEntries = entries.filterNot { it.name == "checksums.sha256" }.associateBy { it.name }
+        val lines = archive.getInputStream(checksumEntries.single()).bufferedReader().readLines()
+        val manifest = linkedMapOf<String, String>()
+        for (line in lines.filter { it.isNotBlank() }) {
             val split = line.split("  ", limit = 2)
-            if (split.size != 2) return@all false
-            val entry = archive.getEntry(split[1]) ?: return@all false
-            sha256(archive.getInputStream(entry).readBytes()) == split[0]
+            if (split.size != 2 || !split[0].matches(Regex("[0-9a-f]{64}"))) return false
+            val name = split[1]
+            if (!name.matches(safeEvidenceFilename) || name == "checksums.sha256") return false
+            if (manifest.put(name, split[0]) != null) return false
+        }
+        if (manifest.keys != dataEntries.keys) return false
+        manifest.all { (name, expected) ->
+            sha256(archive.getInputStream(dataEntries.getValue(name)).readBytes()) == expected
         }
     }
 }
@@ -828,13 +1194,32 @@ public class RollingJsonlFileSink(
         }
     }
 
-    public fun evidenceFiles(): Map<String, ByteArray> = synchronized(lock) {
+    /** Returns only persisted records belonging to the selected test session. */
+    public fun evidenceFiles(sessionId: String): Map<String, ByteArray> = synchronized(lock) {
+        require(sessionId.matches(SAFE_ID))
         if (!directory.isDirectory) return@synchronized emptyMap()
         directory.listFiles()
             .orEmpty()
             .filter { it.isFile && it.name.matches(ROTATED_NAME) }
             .sortedBy { it.name }
-            .associate { "process-${it.name}" to it.readBytes() }
+            .mapNotNull { file ->
+                val selected = file.useLines { lines ->
+                    lines.mapNotNull { line ->
+                        runCatching { JSON.decodeFromString<DiagnosticEvent>(line) }
+                            .getOrNull()
+                            ?.takeIf { it.testSessionId == sessionId }
+                            ?.let { line }
+                    }.toList()
+                }
+                if (selected.isEmpty()) {
+                    null
+                } else {
+                    "process-${file.name}" to
+                        (selected.joinToString(separator = "\n", postfix = "\n"))
+                            .toByteArray(StandardCharsets.UTF_8)
+                }
+            }
+            .toMap()
     }
 
     public fun clear() {

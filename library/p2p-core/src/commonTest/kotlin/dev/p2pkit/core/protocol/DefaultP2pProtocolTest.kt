@@ -462,6 +462,43 @@ class DefaultP2pProtocolTest {
     }
 
     @Test
+    fun fileFrameTraceRetainsTheCompleteTransferIdentifier() {
+        runBlocking {
+            val previousEnabled = FrameTrace.enabled
+            val previousSink = FrameTrace.sink
+            val lines = mutableListOf<String>()
+            val lease = FrameTrace.installSink(enabled = true, sink = lines::add)
+            try {
+                val pair = FakeConnectionPair()
+                val protocol = protocol()
+                val transferId = MessageId(ByteArray(MessageId.SIZE) { it.toByte() })
+                val expectedId = transferId.toString()
+
+                protocol.sendFileAccept(pair.a, transferId)
+                protocol.sendFileDataFrame(
+                    pair.a,
+                    Frame(
+                        type = PacketType.FILE_DATA,
+                        flags = FrameFlags.LAST_CHUNK.toByte(),
+                        messageId = transferId,
+                        chunkIndex = 0,
+                        totalChunks = 1,
+                        payload = byteArrayOf(1)
+                    )
+                )
+
+                assertEquals(expectedId, lines[0].substringAfter("xfer="))
+                assertEquals(expectedId, lines[1].substringAfter("id=").substringBefore(' '))
+                assertEquals(MessageId.SIZE * 2, expectedId.length)
+            } finally {
+                lease.release()
+                FrameTrace.sink = previousSink
+                FrameTrace.enabled = previousEnabled
+            }
+        }
+    }
+
+    @Test
     fun malformedBodyWarningsAreBoundedPerConnection() {
         runBlocking {
             val pair = FakeConnectionPair()

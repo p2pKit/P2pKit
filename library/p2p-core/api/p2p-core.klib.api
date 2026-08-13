@@ -601,6 +601,10 @@ final class dev.p2pkit.core.permission/NoOpP2pPermissionManager : dev.p2pkit.cor
     final suspend fun requiredPermissions(): kotlin.collections/List<dev.p2pkit.core.permission/P2pPermission> // dev.p2pkit.core.permission/NoOpP2pPermissionManager.requiredPermissions|requiredPermissions(){}[0]
 }
 
+final class dev.p2pkit.core.protocol/FrameTraceLease { // dev.p2pkit.core.protocol/FrameTraceLease|null[0]
+    final fun release() // dev.p2pkit.core.protocol/FrameTraceLease.release|release(){}[0]
+}
+
 final class dev.p2pkit.core.provisioning/LocalNetworkConfig { // dev.p2pkit.core.provisioning/LocalNetworkConfig|null[0]
     constructor <init>(kotlin/String? = ...) // dev.p2pkit.core.provisioning/LocalNetworkConfig.<init>|<init>(kotlin.String?){}[0]
 
@@ -2022,6 +2026,8 @@ final object dev.p2pkit.core.protocol/FrameTrace { // dev.p2pkit.core.protocol/F
     final var sink // dev.p2pkit.core.protocol/FrameTrace.sink|{}sink[0]
         final fun <get-sink>(): kotlin/Function1<kotlin/String, kotlin/Unit> // dev.p2pkit.core.protocol/FrameTrace.sink.<get-sink>|<get-sink>(){}[0]
         final fun <set-sink>(kotlin/Function1<kotlin/String, kotlin/Unit>) // dev.p2pkit.core.protocol/FrameTrace.sink.<set-sink>|<set-sink>(kotlin.Function1<kotlin.String,kotlin.Unit>){}[0]
+
+    final fun installSink(kotlin/Boolean, kotlin/Function1<kotlin/String, kotlin/Unit>): dev.p2pkit.core.protocol/FrameTraceLease // dev.p2pkit.core.protocol/FrameTrace.installSink|installSink(kotlin.Boolean;kotlin.Function1<kotlin.String,kotlin.Unit>){}[0]
 }
 
 final object dev.p2pkit.core/BuildInfo { // dev.p2pkit.core/BuildInfo|null[0]

@@ -58,13 +58,19 @@ of every case use `diag complete <outcome>` and `diag export` before process
 cleanup. See the `PS-T05` event sequence in
 [`test-catalog.md`](test-catalog.md).
 
+Immediately before each externally applied fault, run
+`diag fault <type> <expected-effect>`. This command only timestamps and records
+the operator action; it does not alter the SDK, authentication, transport, or
+production defaults. Use the same short `<type>` in the wrapper transcript.
+
 ## Automated and controlled CLI cases
 
 ### D1 — command and option contract
 
 At the prompt run `info`, `peers`, `sessions`, `adv off/on`, `disc off/on`,
 `mesh off/on`, `connect`, `manual`, `send`, `to`, `sendfile`, `offers`,
-`accept`, `reject`, `close`, every `diag` form, and `quit`. Exercise:
+`accept`, `reject`, `close`, every `diag` form (including `diag fault`), and
+`quit`. Exercise:
 
 - `--help`, unknown options, duplicate named options, blank values, malformed
   `reconnect`, invalid `trace`, invalid role/test/session, and overly long input;
@@ -83,6 +89,8 @@ During handshake, idle connection, and 49 MiB transfer separately:
 2. Send `SIGTERM`; repeat with `SIGKILL` as the crash case.
 3. Close Bob's stdin; close the terminal emulator; kill Alice while receiving.
 4. Restart the peer with the same profile, then with a new profile.
+
+Record `diag fault` immediately before steps 1–3 with the exact signal/action.
 
 Use `ps`, `jcmd`, or the OS equivalent to retain PID/process-tree evidence.
 Graceful termination must execute teardown once. Crash must be surfaced as

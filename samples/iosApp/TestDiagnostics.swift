@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import SwiftUI
 import UIKit
@@ -78,6 +79,12 @@ struct TestDiagnosticEvent: Codable, Identifiable, Equatable {
     let outcome: TestDiagnosticOutcome?
     let details: [String: String]
     let redactedFields: [String]
+}
+
+struct TestDiagnosticConnectionSnapshot {
+    let rawConnectionId: String
+    let peerId: String
+    let state: String
 }
 
 struct TestDiagnosticRecord {
@@ -164,7 +171,18 @@ enum TestDiagnosticEventName {
     static let diagnosticFailure = "diagnostics.failure"
 }
 
-private struct TestDiagnosticSummary: Codable {
+struct TestDiagnosticTransferSummary: Codable, Equatable {
+    let transferId: String
+    let connectionIds: [String]
+    let peerIds: [String]
+    let senderFileSizeBytes: Int64?
+    let receiverFileSizeBytes: Int64?
+    let senderSha256: String?
+    let receiverSha256: String?
+    let integrityMatch: Bool?
+}
+
+struct TestDiagnosticSummary: Codable {
     let schemaVersion: Int
     let testId: String
     let testSessionId: String
@@ -181,6 +199,8 @@ private struct TestDiagnosticSummary: Codable {
     let connectionIds: [String]
     let transferIds: [String]
     let peerIds: [String]
+    let transferSummaries: [TestDiagnosticTransferSummary]
+    let selectedTransferId: String?
     let senderFileSizeBytes: Int64?
     let receiverFileSizeBytes: Int64?
     let senderSha256: String?
@@ -194,6 +214,20 @@ private struct TestDiagnosticSummary: Codable {
     let droppedEventCount: Int64
     let configuration: [String: String]
     let manualEvidenceStillRequired: [String]
+}
+
+enum TestDiagnosticEvidenceError: LocalizedError {
+    case reservedFilename(String)
+    case invalidChecksumManifest
+
+    var errorDescription: String? {
+        switch self {
+        case .reservedFilename(let name):
+            return "Diagnostic evidence tried to replace reserved file \(name)"
+        case .invalidChecksumManifest:
+            return "Diagnostic evidence checksum manifest is incomplete or ambiguous"
+        }
+    }
 }
 
 @MainActor
@@ -241,10 +275,50 @@ final class IOSTestDiagnosticStore: ObservableObject {
     private var encodedBytes = 0
     private var droppedEvents: Int64 = 0
     private var sessionStart = Date()
+    private var localPeerId: String?
+    private var connectionsBySession: [String: Correlation] = [:]
+    private var connectionsByPeer: [String: SessionCorrelation] = [:]
+    private var transferCorrelations: [String: TransferOwnership] = [:]
+    private var transferEvidence: [String: TransferEvidence] = [:]
     private let encoder: JSONEncoder
     private let logDirectory: URL
+    private let evidenceDirectory: URL
+    private let defaults: UserDefaults
 
-    init(baseDirectory: URL? = nil, defaults: UserDefaults = .standard) {
+    private struct TransferEvidence {
+        var senderFileSizeBytes: Int64? = nil
+        var receiverFileSizeBytes: Int64? = nil
+        var senderSha256: String? = nil
+        var receiverSha256: String? = nil
+
+        var integrityMatch: Bool? {
+            guard let senderSha256, let receiverSha256 else { return nil }
+            return senderSha256 == receiverSha256
+        }
+    }
+
+    private struct Correlation {
+        let peerId: String
+        let connectionId: String
+        let transferId: String?
+    }
+
+    private struct TransferOwnership {
+        let correlation: Correlation?
+        let ambiguous: Bool
+    }
+
+    private struct SessionCorrelation {
+        let rawConnectionId: String
+        let correlation: Correlation
+    }
+
+    init(
+        baseDirectory: URL? = nil,
+        evidenceDirectory: URL? = nil,
+        defaults: UserDefaults = .standard
+    ) {
+        self.defaults = defaults
         applicationVersion = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
         ) as? String ?? "0"
@@ -263,6 +337,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
         activeRole = Self.normalizedRole(
             defaults.string(forKey: Self.defaultsRole) ?? "both"
         )
+        localPeerId = nil
         encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         if let baseDirectory {
@@ -276,6 +351,14 @@ final class IOSTestDiagnosticStore: ObservableObject {
                 "P2pKitTestDiagnostics",
                 isDirectory: true
             )
+        }
+        if let evidenceDirectory {
+            self.evidenceDirectory = evidenceDirectory
+        } else {
+            self.evidenceDirectory = FileManager.default.urls(
+                for: .documentDirectory,
+                in: .userDomainMask
+            )[0].appendingPathComponent("P2pKitEvidence", isDirectory: true)
         }
         try? FileManager.default.createDirectory(
             at: logDirectory,
@@ -299,7 +382,12 @@ final class IOSTestDiagnosticStore: ObservableObject {
     }
 
     @discardableResult
-    func startSession(testId: String, requestedSessionId: String?, role: String) -> String {
+    func startSession(
+        testId: String,
+        requestedSessionId: String?,
+        role: String,
+        activeConnections: [TestDiagnosticConnectionSnapshot] = []
+    ) -> String {
         activeTestId = Self.normalizedTestId(testId)
         activeSessionId = Self.normalizedSessionId(
             requestedSessionId?.isEmpty == false
@@ -315,11 +403,15 @@ final class IOSTestDiagnosticStore: ObservableObject {
         senderSha256 = nil
         receiverSha256 = nil
         integrityMatch = nil
+        transferEvidence.removeAll()
+        connectionsBySession.removeAll()
+        connectionsByPeer.removeAll()
+        transferCorrelations.removeAll()
         finalOutcome = nil
         sessionStart = Date()
-        UserDefaults.standard.set(activeTestId, forKey: Self.defaultsTest)
-        UserDefaults.standard.set(activeSessionId, forKey: Self.defaultsSession)
-        UserDefaults.standard.set(activeRole, forKey: Self.defaultsRole)
+        defaults.set(activeTestId, forKey: Self.defaultsTest)
+        defaults.set(activeSessionId, forKey: Self.defaultsSession)
+        defaults.set(activeRole, forKey: Self.defaultsRole)
         record(TestDiagnosticRecord(
             category: "test",
             eventName: TestDiagnosticEventName.testSessionCreated,
@@ -331,6 +423,15 @@ final class IOSTestDiagnosticStore: ObservableObject {
             eventName: TestDiagnosticEventName.testModeActivated,
             currentState: "enabled"
         ))
+        for connection in activeConnections {
+            self.connection(
+                peerId: connection.peerId,
+                rawConnectionId: connection.rawConnectionId,
+                state: connection.state,
+                previous: nil,
+                sessionSnapshot: true
+            )
+        }
         return activeSessionId
     }
 
@@ -348,6 +449,35 @@ final class IOSTestDiagnosticStore: ObservableObject {
             outcome: outcome,
             details: ["reason": reason]
         ))
+    }
+
+    func setLocalPeerId(_ peerId: String?) {
+        let normalized = peerId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let next = normalized?.isEmpty == false ? normalized : nil
+        guard localPeerId != next else { return }
+        localPeerId = next
+        connectionsBySession.removeAll()
+        connectionsByPeer.removeAll()
+        transferCorrelations.removeAll()
+    }
+
+    func connectionId(for peerId: String) -> String? {
+        connectionsByPeer[peerId]?.correlation.connectionId
+    }
+
+    @discardableResult
+    func removeConnection(rawConnectionId: String) -> String? {
+        guard let removed = connectionsBySession.removeValue(forKey: rawConnectionId) else {
+            return nil
+        }
+        if connectionsByPeer[removed.peerId]?.rawConnectionId == rawConnectionId {
+            connectionsByPeer[removed.peerId] = nil
+        }
+        // Reconnects to the same peer intentionally share a correlation id
+        // within one test session. Keep bounded transfer ownership until the
+        // session resets so a late close from the retired SDK session cannot
+        // erase transfers owned by its replacement.
+        return removed.connectionId
     }
 
     func record(_ input: TestDiagnosticRecord) {
@@ -433,7 +563,12 @@ final class IOSTestDiagnosticStore: ObservableObject {
         var severity: TestDiagnosticSeverity = .debug
         if lower.contains("path") {
             eventName = TestDiagnosticEventName.networkPathChanged
-        } else if lower.contains("retry") {
+        } else if lower.contains("reconnect") && lower.contains("succeeded") {
+            eventName = TestDiagnosticEventName.recoveryCompleted
+        } else if lower.contains("reconnect") {
+            eventName = TestDiagnosticEventName.recoveryStarted
+        } else if (lower.contains("file") || lower.contains("transfer")) &&
+                    lower.contains("retry") {
             eventName = TestDiagnosticEventName.transferRetry
         } else if lower.contains("timeout") {
             eventName = TestDiagnosticEventName.timeoutExpired
@@ -448,8 +583,6 @@ final class IOSTestDiagnosticStore: ObservableObject {
             severity = .error
         }
         record(TestDiagnosticRecord(
-            connectionId: activeConnectionId,
-            transferId: activeTransferId,
             category: "transport",
             eventName: eventName,
             severity: severity,
@@ -460,7 +593,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
 
     func recordFrame(_ line: String) {
         let expression = try? NSRegularExpression(
-            pattern: #"^(TX|RX)\s+type=([A-Za-z0-9_]+)\s+len=(\d+)(?:.*?\bchunk=(\d+))?(?:.*?\bxfer=([A-Za-z0-9._-]+))?"#
+            pattern: #"^(TX|RX)\s+type=([A-Za-z0-9_]+)\s+len=(\d+)B(?:\s+chunk=(\d+)/(\d+)\s+id=([A-Za-z0-9]+)(?:\s+LAST)?)?(?:\s+xfer=([A-Za-z0-9._-]+))?.*$"#
         )
         let range = NSRange(line.startIndex..., in: line)
         guard let match = expression?.firstMatch(in: line, range: range),
@@ -480,10 +613,15 @@ final class IOSTestDiagnosticStore: ObservableObject {
         let size = Int64(line[lengthRange])
         let chunk = match.range(at: 4).location == NSNotFound ? nil :
             Range(match.range(at: 4), in: line).flatMap { Int(line[$0]) }
-        let transfer = match.range(at: 5).location == NSNotFound ? activeTransferId :
-            Range(match.range(at: 5), in: line).map { String(line[$0]) }
+        let messageId = match.range(at: 6).location == NSNotFound ? nil :
+            Range(match.range(at: 6), in: line).map { String(line[$0]) }
+        let explicitTransfer = match.range(at: 7).location == NSNotFound ? nil :
+            Range(match.range(at: 7), in: line).map { String(line[$0]) }
+        let transfer = explicitTransfer ?? (packet == "FILE_DATA" ? messageId : nil)
+        let correlation = transfer.flatMap { transferCorrelations[$0]?.correlation }
         record(TestDiagnosticRecord(
-            connectionId: activeConnectionId,
+            peerId: correlation?.peerId,
+            connectionId: correlation?.connectionId,
             transferId: transfer,
             category: "protocol",
             eventName: sent ? TestDiagnosticEventName.packetSent : TestDiagnosticEventName.packetReceived,
@@ -495,10 +633,23 @@ final class IOSTestDiagnosticStore: ObservableObject {
         ))
     }
 
-    func connection(peerId: String, rawConnectionId: String, state: String, previous: String?) {
-        activeConnectionId = "conn-" + String(Self.sha256(
-            Data("\(activeSessionId)|\(rawConnectionId)".utf8)
-        ).prefix(16))
+    func connection(
+        peerId: String,
+        rawConnectionId: String,
+        state: String,
+        previous: String?,
+        sessionSnapshot: Bool = false
+    ) {
+        guard let correlation = derivedConnection(peerId: peerId) else { return }
+        activeConnectionId = correlation.connectionId
+        connectionsBySession = connectionsBySession.filter {
+            $0.key == rawConnectionId || $0.value.peerId != peerId
+        }
+        connectionsBySession[rawConnectionId] = correlation
+        connectionsByPeer[peerId] = SessionCorrelation(
+            rawConnectionId: rawConnectionId,
+            correlation: correlation
+        )
         currentConnectionState = state
         record(TestDiagnosticRecord(
             peerId: peerId,
@@ -506,7 +657,8 @@ final class IOSTestDiagnosticStore: ObservableObject {
             category: "connection",
             eventName: TestDiagnosticEventName.connectionStateChanged,
             currentState: state,
-            previousState: previous
+            previousState: previous,
+            details: sessionSnapshot ? ["sessionSnapshot": "true"] : [:]
         ))
         if state == "Connected" {
             record(TestDiagnosticRecord(
@@ -530,7 +682,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
     func transfer(
         _ eventName: String,
         peerId: String,
-        transferId: String,
+        transferId: String?,
         state: String,
         size: Int64?,
         direction: TestDiagnosticDirection,
@@ -538,11 +690,18 @@ final class IOSTestDiagnosticStore: ObservableObject {
         error: String? = nil,
         details: [String: String] = [:]
     ) {
+        let correlation = transferId.flatMap {
+            registerTransfer(peerId: peerId, transferId: $0)
+        }
         activeTransferId = transferId
         currentTransferState = state
+        let selectedEvidence = transferId.flatMap { transferEvidence[$0] }
+        senderSha256 = selectedEvidence?.senderSha256
+        receiverSha256 = selectedEvidence?.receiverSha256
+        integrityMatch = selectedEvidence?.integrityMatch
         record(TestDiagnosticRecord(
             peerId: peerId,
-            connectionId: activeConnectionId,
+            connectionId: correlation?.connectionId,
             transferId: transferId,
             category: "transfer",
             eventName: eventName,
@@ -575,15 +734,29 @@ final class IOSTestDiagnosticStore: ObservableObject {
 
     func fileHash(
         peerId: String,
-        transferId: String?,
+        transferId: String,
         size: Int64,
         digest: String,
         receiver: Bool
     ) {
-        if receiver { receiverSha256 = digest } else { senderSha256 = digest }
+        let correlation = registerTransfer(peerId: peerId, transferId: transferId)
+        var evidence = transferEvidence[transferId] ?? TransferEvidence()
+        if receiver {
+            evidence.receiverFileSizeBytes = size
+            evidence.receiverSha256 = digest
+        } else {
+            evidence.senderFileSizeBytes = size
+            evidence.senderSha256 = digest
+        }
+        transferEvidence[transferId] = evidence
+        if activeTransferId == transferId {
+            senderSha256 = evidence.senderSha256
+            receiverSha256 = evidence.receiverSha256
+            integrityMatch = evidence.integrityMatch
+        }
         record(TestDiagnosticRecord(
             peerId: peerId,
-            connectionId: activeConnectionId,
+            connectionId: correlation?.connectionId,
             transferId: transferId,
             category: "file",
             eventName: receiver ? TestDiagnosticEventName.receiverHash : TestDiagnosticEventName.senderHash,
@@ -591,20 +764,51 @@ final class IOSTestDiagnosticStore: ObservableObject {
             payloadSizeBytes: size,
             details: ["sha256": digest]
         ))
-        if let senderSha256, let receiverSha256 {
-            integrityMatch = senderSha256 == receiverSha256
+        if let match = evidence.integrityMatch {
             record(TestDiagnosticRecord(
                 peerId: peerId,
-                connectionId: activeConnectionId,
+                connectionId: correlation?.connectionId,
                 transferId: transferId,
                 category: "file",
                 eventName: TestDiagnosticEventName.integrityChecked,
-                severity: integrityMatch == true ? .info : .error,
-                currentState: integrityMatch == true ? "matched" : "mismatch",
-                outcome: integrityMatch == true ? .success : .failure,
-                details: ["match": integrityMatch == true ? "true" : "false"]
+                severity: match ? .info : .error,
+                currentState: match ? "matched" : "mismatch",
+                outcome: match ? .success : .failure,
+                details: ["match": match ? "true" : "false"]
             ))
         }
+    }
+
+    private func derivedConnection(peerId: String) -> Correlation? {
+        guard let localPeerId else { return nil }
+        let peers = [Self.anonymized(localPeerId), Self.anonymized(peerId)].sorted()
+        let raw = "\(activeSessionId)|\(peers[0])|\(peers[1])"
+        let connectionId = "conn-" + String(Self.sha256(Data(raw.utf8)).prefix(20))
+        return Correlation(peerId: peerId, connectionId: connectionId, transferId: nil)
+    }
+
+    private func registerTransfer(peerId: String, transferId: String) -> Correlation? {
+        guard let connection = connectionsByPeer[peerId]?.correlation else {
+            return nil
+        }
+        let correlation = Correlation(
+            peerId: peerId,
+            connectionId: connection.connectionId,
+            transferId: transferId
+        )
+        let existing = transferCorrelations[transferId]
+        let ambiguous = existing?.ambiguous == true || (
+            existing?.correlation != nil &&
+                existing?.correlation?.connectionId != correlation.connectionId
+        )
+        transferCorrelations[transferId] = TransferOwnership(
+            correlation: ambiguous ? nil : correlation,
+            ambiguous: ambiguous
+        )
+        if transferCorrelations.count > 1_024, let oldest = transferCorrelations.keys.first {
+            transferCorrelations[oldest] = nil
+        }
+        return correlation
     }
 
     func filtered(
@@ -666,10 +870,16 @@ final class IOSTestDiagnosticStore: ObservableObject {
                 manual.map { "- \($0)" }.joined(separator: "\n").appending("\n").utf8
             )
         ]
-        let checksums = files.keys.sorted().map {
-            "\(Self.sha256(files[$0]!))  \($0)"
-        }.joined(separator: "\n") + "\n"
-        files["checksums.sha256"] = Data(checksums.utf8)
+        for (name, data) in persistedEvidenceFiles(sessionId: activeSessionId) {
+            guard files[name] == nil, name != "checksums.sha256" else {
+                throw TestDiagnosticEvidenceError.reservedFilename(name)
+            }
+            files[name] = data
+        }
+        files["checksums.sha256"] = try Self.checksumManifest(for: files)
+        guard Self.checksumManifestIsComplete(files) else {
+            throw TestDiagnosticEvidenceError.invalidChecksumManifest
+        }
         let timestamp = Self.filenameTimestamp(summary.startTimestamp ?? Self.timestamp())
         let filename = [
             Self.filenamePart(activeTestId),
@@ -677,21 +887,18 @@ final class IOSTestDiagnosticStore: ObservableObject {
             timestamp,
             Self.filenamePart(activeSessionId)
         ].joined(separator: "_") + ".zip"
-        let exportDirectory = FileManager.default.urls(
-            for: .documentDirectory,
-            in: .userDomainMask
-        )[0].appendingPathComponent("P2pKitEvidence", isDirectory: true)
         try FileManager.default.createDirectory(
-            at: exportDirectory,
+            at: evidenceDirectory,
             withIntermediateDirectories: true
         )
-        let destination = exportDirectory.appendingPathComponent(filename)
+        let destination = evidenceDirectory.appendingPathComponent(filename)
         let temporary = destination.appendingPathExtension("part")
         try SimpleEvidenceZip.write(files: files, to: temporary)
         if FileManager.default.fileExists(atPath: destination.path) {
-            try FileManager.default.removeItem(at: destination)
+            _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
+        } else {
+            try FileManager.default.moveItem(at: temporary, to: destination)
         }
-        try FileManager.default.moveItem(at: temporary, to: destination)
         record(TestDiagnosticRecord(
             category: "evidence",
             eventName: TestDiagnosticEventName.evidenceExported,
@@ -703,19 +910,24 @@ final class IOSTestDiagnosticStore: ObservableObject {
         return destination
     }
 
-    private func makeSummary(
+    func makeSummary(
         _ selected: [TestDiagnosticEvent],
         manual: [String]
     ) -> TestDiagnosticSummary {
-        let sender = selected.last { $0.eventName == TestDiagnosticEventName.senderHash }
-        let receiver = selected.last { $0.eventName == TestDiagnosticEventName.receiverHash }
-        let integrity = selected.last { $0.eventName == TestDiagnosticEventName.integrityChecked }
-        let terminal = selected.last { $0.outcome != nil }
+        let transferIds = Self.distinct(selected.compactMap(\.transferId))
+        let transferSummaries = transferIds.map { transferId in
+            Self.transferSummary(transferId: transferId, events: selected)
+        }
+        let selectedTransfer = transferSummaries.count == 1 ? transferSummaries[0] : nil
+        let terminal = selected.last {
+            $0.eventName == TestDiagnosticEventName.testSessionCompleted && $0.outcome != nil
+        }
+        let first = selected.first
         return TestDiagnosticSummary(
             schemaVersion: 1,
-            testId: activeTestId,
-            testSessionId: activeSessionId,
-            role: activeRole,
+            testId: first?.testId ?? activeTestId,
+            testSessionId: first?.testSessionId ?? activeSessionId,
+            role: first?.role ?? activeRole,
             platform: platform,
             operatingSystem: operatingSystem,
             applicationVersion: applicationVersion,
@@ -726,13 +938,15 @@ final class IOSTestDiagnosticStore: ObservableObject {
             endTimestamp: selected.last?.timestamp,
             protocolVersion: "secure-v2",
             connectionIds: Self.distinct(selected.compactMap(\.connectionId)),
-            transferIds: Self.distinct(selected.compactMap(\.transferId)),
+            transferIds: transferIds,
             peerIds: Self.distinct(selected.compactMap(\.peerId)),
-            senderFileSizeBytes: sender?.payloadSizeBytes,
-            receiverFileSizeBytes: receiver?.payloadSizeBytes,
-            senderSha256: sender?.details["sha256"],
-            receiverSha256: receiver?.details["sha256"],
-            integrityMatch: integrity?.details["match"].flatMap(Bool.init),
+            transferSummaries: transferSummaries,
+            selectedTransferId: selectedTransfer?.transferId,
+            senderFileSizeBytes: selectedTransfer?.senderFileSizeBytes,
+            receiverFileSizeBytes: selectedTransfer?.receiverFileSizeBytes,
+            senderSha256: selectedTransfer?.senderSha256,
+            receiverSha256: selectedTransfer?.receiverSha256,
+            integrityMatch: selectedTransfer?.integrityMatch,
             finalState: terminal?.currentState,
             finalOutcome: terminal?.outcome,
             warningCount: selected.filter { $0.severity == .warning }.count,
@@ -741,6 +955,26 @@ final class IOSTestDiagnosticStore: ObservableObject {
             droppedEventCount: droppedEvents,
             configuration: configuration,
             manualEvidenceStillRequired: manual
+        )
+    }
+
+    private static func transferSummary(
+        transferId: String,
+        events: [TestDiagnosticEvent]
+    ) -> TestDiagnosticTransferSummary {
+        let selected = events.filter { $0.transferId == transferId }
+        let sender = selected.last { $0.eventName == TestDiagnosticEventName.senderHash }
+        let receiver = selected.last { $0.eventName == TestDiagnosticEventName.receiverHash }
+        let integrity = selected.last { $0.eventName == TestDiagnosticEventName.integrityChecked }
+        return TestDiagnosticTransferSummary(
+            transferId: transferId,
+            connectionIds: distinct(selected.compactMap(\.connectionId)),
+            peerIds: distinct(selected.compactMap(\.peerId)),
+            senderFileSizeBytes: sender?.payloadSizeBytes,
+            receiverFileSizeBytes: receiver?.payloadSizeBytes,
+            senderSha256: sender?.details["sha256"],
+            receiverSha256: receiver?.details["sha256"],
+            integrityMatch: integrity?.details["match"].flatMap(Bool.init)
         )
     }
 
@@ -792,6 +1026,31 @@ final class IOSTestDiagnosticStore: ObservableObject {
                 options: .atomic
             )
         }
+    }
+
+    /// Returns restart-spanning JSONL with only exact decoded session matches.
+    /// Malformed or older-schema lines are not copied into a shareable package.
+    func persistedEvidenceFiles(sessionId: String) -> [String: Data] {
+        let names = ["events.jsonl", "events.1.jsonl", "events.2.jsonl", "events.3.jsonl"]
+        var result: [String: Data] = [:]
+        for name in names {
+            let source = logDirectory.appendingPathComponent(name)
+            guard let contents = try? Data(contentsOf: source), !contents.isEmpty else { continue }
+            let selected = contents.split(separator: 0x0a).compactMap { line -> Data? in
+                let data = Data(line)
+                guard let event = try? JSONDecoder().decode(TestDiagnosticEvent.self, from: data),
+                      event.testSessionId == sessionId else { return nil }
+                return data
+            }
+            guard !selected.isEmpty else { continue }
+            var filtered = Data()
+            for line in selected {
+                filtered.append(line)
+                filtered.append(0x0a)
+            }
+            result["process-\(name)"] = filtered
+        }
+        return result
     }
 
     private static func timestamp() -> String {
@@ -857,14 +1116,16 @@ final class IOSTestDiagnosticStore: ObservableObject {
     ) {
         let sensitive = [
             "password", "passphrase", "credential", "secret", "token",
-            "privatekey", "private_key", "signing", "authorization", "cookie",
-            "ssid", "bssid", "payload", "content"
+            "privatekey", "signing", "authorization", "cookie", "ssid", "bssid",
+            "payload", "content", "filename", "peername", "devicename", "displayname",
+            "hostname", "ipaddress", "ipv4address", "ipv6address", "address", "name"
         ]
         var safe: [String: String] = [:]
         var fields: [String] = []
         for (key, value) in values {
+            let normalizedKey = key.lowercased().filter { $0.isLetter || $0.isNumber }
             if sensitive.contains(where: {
-                key.lowercased().replacingOccurrences(of: "-", with: "").contains($0)
+                normalizedKey.contains($0)
             }) {
                 safe[key] = "<redacted>"
                 fields.append(key)
@@ -875,7 +1136,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
         return (safe, fields.sorted())
     }
 
-    private static func redactText(_ value: String) -> String {
+    static func redactText(_ value: String) -> String {
         var result = String(value.unicodeScalars.filter {
             $0.value >= 0x20 && $0.value != 0x7f
         }.prefix(1_024))
@@ -888,13 +1149,38 @@ final class IOSTestDiagnosticStore: ObservableObject {
             withTemplate: "<redacted-credential>"
         ) ?? result
         let sensitiveAssignment = try? NSRegularExpression(
-            pattern: #"(?i)(payload|content|body|data|text|message|bytes|raw)\s*=\s*(?:"[^"]*"|\S+)"#
+            pattern: #"(?i)(password|passphrase|credential|secret|token|ssid|bssid|payload|content|body|data|text|message|bytes|raw|file.?name|peer.?name|device.?name|display.?name|name|peer|device|host(?:name)?|ip(?:v[46])?.?address|address)\s*=\s*(?:"[^"]*"|'[^']*'|\S+)"#
         )
         result = sensitiveAssignment?.stringByReplacingMatches(
             in: result,
             range: NSRange(result.startIndex..., in: result),
             withTemplate: "$1=<redacted>"
         ) ?? result
+        let mac = try? NSRegularExpression(
+            pattern: #"(?i)(?<![0-9a-f])(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}(?![0-9a-f])"#
+        )
+        let macMatches = Array(mac?.matches(
+            in: result,
+            range: NSRange(result.startIndex..., in: result)
+        ) ?? []).reversed()
+        for match in macMatches {
+            guard let range = Range(match.range, in: result) else { continue }
+            let raw = String(result[range])
+            result.replaceSubrange(range, with: "<redacted-mac:\(anonymized(raw))>")
+        }
+        let ipv6 = try? NSRegularExpression(
+            pattern: #"(?i)(?<![A-Za-z0-9])(?:\[[0-9a-f:.%_-]+\]|[0-9a-f:.]*:[0-9a-f:.%_-]+)(?![A-Za-z0-9])"#
+        )
+        let ipv6Matches = Array(ipv6?.matches(
+            in: result,
+            range: NSRange(result.startIndex..., in: result)
+        ) ?? []).reversed()
+        for match in ipv6Matches {
+            guard let range = Range(match.range, in: result) else { continue }
+            let raw = String(result[range])
+            guard isIPv6Literal(raw) else { continue }
+            result.replaceSubrange(range, with: "<redacted-ip:\(anonymized(raw))>")
+        }
         let ipv4 = try? NSRegularExpression(
             pattern: #"(?<![A-Za-z0-9])(?:\d{1,3}\.){3}\d{1,3}(?![A-Za-z0-9])"#
         )
@@ -908,6 +1194,47 @@ final class IOSTestDiagnosticStore: ObservableObject {
             result.replaceSubrange(range, with: "<redacted-ip:\(anonymized(raw))>")
         }
         return result
+    }
+
+    private static func isIPv6Literal(_ candidate: String) -> Bool {
+        let unwrapped = candidate.hasPrefix("[") && candidate.hasSuffix("]")
+            ? String(candidate.dropFirst().dropLast())
+            : candidate
+        let address = String(unwrapped.split(separator: "%", maxSplits: 1)[0])
+        guard address.contains(":") else { return false }
+        var parsed = in6_addr()
+        return address.withCString { inet_pton(AF_INET6, $0, &parsed) == 1 }
+    }
+
+    static func checksumManifest(for files: [String: Data]) throws -> Data {
+        guard files["checksums.sha256"] == nil else {
+            throw TestDiagnosticEvidenceError.reservedFilename("checksums.sha256")
+        }
+        let manifest = files.keys.sorted().map { name in
+            "\(sha256(files[name]!))  \(name)"
+        }.joined(separator: "\n") + "\n"
+        return Data(manifest.utf8)
+    }
+
+    static func checksumManifestIsComplete(_ files: [String: Data]) -> Bool {
+        guard let manifestData = files["checksums.sha256"],
+              let manifestText = String(data: manifestData, encoding: .utf8) else { return false }
+        let dataFiles = files.filter { $0.key != "checksums.sha256" }
+        var listed: [String: String] = [:]
+        for line in manifestText.split(separator: "\n", omittingEmptySubsequences: true) {
+            let parts = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            guard parts.count == 2 else { return false }
+            let digest = String(parts[0])
+            let name = String(parts[1])
+            guard digest.range(of: #"^[0-9a-f]{64}$"#, options: .regularExpression) != nil,
+                  name != "checksums.sha256",
+                  listed.updateValue(digest, forKey: name) == nil else { return false }
+        }
+        guard Set(listed.keys) == Set(dataFiles.keys) else { return false }
+        return listed.allSatisfy { name, digest in
+            guard let data = dataFiles[name] else { return false }
+            return sha256(data) == digest
+        }
     }
 
     private static func readable(_ event: TestDiagnosticEvent) -> String {
@@ -964,6 +1291,7 @@ private struct DiagnosticValueRow: View {
 
 struct IOSTestDiagnosticsView: View {
     @ObservedObject var diagnostics: IOSTestDiagnosticStore
+    let activeConnections: [TestDiagnosticConnectionSnapshot]
     @Environment(\.dismiss) private var dismiss
     @State private var testId = ""
     @State private var requestedSessionId = ""
@@ -1027,7 +1355,8 @@ struct IOSTestDiagnosticsView: View {
                         _ = diagnostics.startSession(
                             testId: testId,
                             requestedSessionId: requestedSessionId.isEmpty ? nil : requestedSessionId,
-                            role: role
+                            role: role,
+                            activeConnections: activeConnections
                         )
                         sessionFilter = diagnostics.activeSessionId
                     }
