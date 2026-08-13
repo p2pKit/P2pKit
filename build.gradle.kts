@@ -217,8 +217,8 @@ subprojects {
         description = "Runtime used to extract Kotlin-aware Android ABI signatures."
     }
     dependencies {
-        add(androidAbiRuntime.name, "org.ow2.asm:asm:9.9.1")
-        add(androidAbiRuntime.name, "org.ow2.asm:asm-tree:9.9.1")
+        add(androidAbiRuntime.name, "org.ow2.asm:asm:9.10.1")
+        add(androidAbiRuntime.name, "org.ow2.asm:asm-tree:9.10.1")
         add(androidAbiRuntime.name, "org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21")
     }
 
