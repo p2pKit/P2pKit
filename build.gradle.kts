@@ -10,6 +10,8 @@ import org.gradle.api.services.BuildServiceParameters
 import org.cyclonedx.gradle.CyclonedxDirectTask
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 import com.android.build.gradle.tasks.BundleAar
+import kotlinx.validation.KotlinApiBuildTask
+import kotlinx.validation.KotlinApiCompareTask
 import java.util.Base64
 
 // Plugin DSL dependencies resolve before the allprojects rules below exist.
@@ -67,6 +69,7 @@ plugins {
     alias(libs.plugins.jetbrains.compose) apply false
     alias(libs.plugins.dokka) apply false
     alias(libs.plugins.cyclonedx)
+    alias(libs.plugins.binary.compatibility.validator) apply false
 }
 
 abstract class NetworkIntegrationTestService : BuildService<BuildServiceParameters.None>
@@ -189,6 +192,61 @@ allprojects {
             includeMetadataResolution.set(false)
             includeBuildEnvironment.set(false)
         }
+    }
+}
+
+// Kotlin's built-in ABI validation deliberately excludes Android-only
+// publications. Protect the Kotlin-visible Android bytecode explicitly with
+// the same metadata-aware dumper used by JetBrains' compatibility validator;
+// raw javap output would incorrectly freeze Kotlin-internal declarations.
+val androidAbiProjects = setOf(
+    ":p2p-core",
+    ":p2p-transport-lan",
+    ":p2p-network-provisioning-android",
+)
+
+subprojects {
+    if (path !in androidAbiProjects) return@subprojects
+
+    val androidAbiRuntime = configurations.register("androidAbiRuntime") {
+        isCanBeConsumed = false
+        isCanBeResolved = true
+        description = "Runtime used to extract Kotlin-aware Android ABI signatures."
+    }
+    dependencies {
+        add(androidAbiRuntime.name, "org.ow2.asm:asm:9.9.1")
+        add(androidAbiRuntime.name, "org.ow2.asm:asm-tree:9.9.1")
+        add(androidAbiRuntime.name, "org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21")
+    }
+
+    val buildAndroidAbi = tasks.register<KotlinApiBuildTask>("buildAndroidAbi") {
+        group = "verification"
+        description = "Extracts the Kotlin-visible ABI from the Android main bytecode."
+        dependsOn("compileAndroidMain")
+        inputClassesDirs.from(layout.buildDirectory.dir("classes/kotlin/android/main"))
+        outputApiFile.set(
+            layout.buildDirectory.file("kotlin/androidAbi/${project.name}.api"),
+        )
+        runtimeClasspath.from(androidAbiRuntime)
+    }
+
+    val checkAndroidAbi = tasks.register<KotlinApiCompareTask>("checkAndroidAbi") {
+        group = "verification"
+        description = "Checks Android-only public API against the committed ABI baseline."
+        projectApiFile.set(layout.projectDirectory.file("api/android/${project.name}.api"))
+        generatedApiFile.set(buildAndroidAbi.flatMap { it.outputApiFile })
+    }
+
+    tasks.register<Copy>("updateAndroidAbi") {
+        group = "other"
+        description = "Updates the committed Android-only ABI baseline after review."
+        dependsOn(buildAndroidAbi)
+        from(buildAndroidAbi.flatMap { it.outputApiFile })
+        into(layout.projectDirectory.dir("api/android"))
+    }
+
+    tasks.matching { it.name == "check" }.configureEach {
+        dependsOn(checkAndroidAbi)
     }
 }
 

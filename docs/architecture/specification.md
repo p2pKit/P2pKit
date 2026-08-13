@@ -2,8 +2,9 @@
 
 This document is the maintained high-level contract for the `0.7` release
 candidate line. Public ABI files under each library module are the executable
-binary-compatibility baselines. The detailed design record produced during the
-0.7 remediation is preserved in
+binary-compatibility baselines; `api/android/` protects Android-only bytecode
+that Kotlin's built-in JVM/KLIB validator does not inspect. The detailed design
+record produced during the 0.7 remediation is preserved in
 [`../archive/remediation/2026-07/P2pKit-Spec.md`](../archive/remediation/2026-07/P2pKit-Spec.md).
 
 ## Lifecycle

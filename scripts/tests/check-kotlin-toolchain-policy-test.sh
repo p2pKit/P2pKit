@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CATALOG="$ROOT/gradle/libs.versions.toml"
 PROPERTIES="$ROOT/gradle.properties"
+ROOT_BUILD="$ROOT/build.gradle.kts"
 CORE_BUILD="$ROOT/library/p2p-core/build.gradle.kts"
 LAN_BUILD="$ROOT/library/p2p-transport-lan/build.gradle.kts"
 ANDROID_PROVISIONING_BUILD="$ROOT/library/p2p-network-provisioning-android/build.gradle.kts"
@@ -20,6 +21,8 @@ fail() {
 }
 
 grep -Fq 'kotlin = "2.4.10"' "$CATALOG" || fail "Kotlin 2.4.10 is not the catalog toolchain"
+grep -Fq 'binary-compatibility-validator = "0.18.1"' "$CATALOG" ||
+    fail "the Android ABI metadata reader is not pinned"
 grep -Fqx 'IOS_MIN_VERSION=14.0' "$PROPERTIES" || fail "the iOS 14 floor is not canonical"
 grep -Fqx 'kotlin.native.ignoreDisabledTargets=true' "$PROPERTIES" ||
     fail "Apple Silicon host-mismatch handling is not explicit"
@@ -32,6 +35,45 @@ grep -Fq 'compilerOptions.moduleName.set(project.name)' "$ANDROID_PROVISIONING_B
     fail "Android provisioning does not preserve its module name"
 grep -Fq 'compilerOptions.moduleName.set(project.name)' "$DESKTOP_PROVISIONING_BUILD" ||
     fail "Desktop provisioning does not preserve its module name"
+
+grep -Fq 'alias(libs.plugins.binary.compatibility.validator) apply false' "$ROOT_BUILD" ||
+    fail "the Kotlin-aware Android ABI dumper is not available to the build"
+for android_abi_project in \
+    ':p2p-core' \
+    ':p2p-transport-lan' \
+    ':p2p-network-provisioning-android'; do
+    grep -Fq "\"$android_abi_project\"" "$ROOT_BUILD" ||
+        fail "$android_abi_project is missing from Android ABI coverage"
+done
+grep -Fq 'tasks.register<KotlinApiBuildTask>("buildAndroidAbi")' "$ROOT_BUILD" ||
+    fail "the Android ABI extraction task is missing"
+grep -Fq 'tasks.register<KotlinApiCompareTask>("checkAndroidAbi")' "$ROOT_BUILD" ||
+    fail "the Android ABI comparison task is missing"
+grep -Fq ':p2p-core:checkAndroidAbi :p2p-transport-lan:checkAndroidAbi :p2p-network-provisioning-android:checkAndroidAbi' "$CI_WORKFLOW" ||
+    fail "CI does not invoke every Android ABI comparison explicitly"
+
+CORE_ANDROID_ABI="$ROOT/library/p2p-core/api/android/p2p-core.api"
+LAN_ANDROID_ABI="$ROOT/library/p2p-transport-lan/api/android/p2p-transport-lan.api"
+PROVISIONING_ANDROID_ABI="$ROOT/library/p2p-network-provisioning-android/api/android/p2p-network-provisioning-android.api"
+for required_signature in \
+    'dev/p2pkit/core/AndroidNetworkPathObserver' \
+    'dev/p2pkit/core/android/P2pKitAndroid' \
+    'dev/p2pkit/core/transfer/FileTransferAndroidKt'; do
+    grep -Fq "$required_signature" "$CORE_ANDROID_ABI" ||
+        fail "the core Android ABI baseline omits $required_signature"
+done
+for required_signature in \
+    'dev/p2pkit/transport/lan/AndroidLanDiag' \
+    'dev/p2pkit/transport/lan/AndroidLanDslKt'; do
+    grep -Fq "$required_signature" "$LAN_ANDROID_ABI" ||
+        fail "the LAN Android ABI baseline omits $required_signature"
+done
+for required_signature in \
+    'dev/p2pkit/provisioning/android/AndroidNetworkProvisioningManager' \
+    'dev/p2pkit/provisioning/android/AndroidProvisioningFactory'; do
+    grep -Fq "$required_signature" "$PROVISIONING_ANDROID_ABI" ||
+        fail "the provisioning Android ABI baseline omits $required_signature"
+done
 
 grep -Fq -- '-Xoverride-konan-properties=minVersion.ios=$iosMinimumVersion' "$LAN_BUILD" ||
     fail "the repository XCFramework does not apply the canonical iOS floor"
@@ -50,8 +92,10 @@ if grep -Fq 'version "2.3.21"' "$CONSUMER_GATE"; then
 fi
 
 # Kotlin 2.4.10 intentionally embeds the preceding ABI-tools release in its
-# isolated kotlinInternalAbiValidation configuration. No 2.3.21 component may
-# leak into compiler, application, test, publication, or consumer classpaths.
+# isolated kotlinInternalAbiValidation configuration. The Android-only ABI
+# guard uses the same metadata reader in its isolated androidAbiRuntime
+# configuration. No 2.3.21 component may leak into compiler, application,
+# test, publication, or consumer classpaths.
 while IFS= read -r legacy_match; do
     legacy_entry="${legacy_match#*:}"
     legacy_entry="${legacy_entry#*:}"
@@ -60,7 +104,9 @@ while IFS= read -r legacy_match; do
         org.jetbrains.kotlin:abi-tools:2.3.21=kotlinInternalAbiValidation | \
         org.jetbrains.kotlin:kotlin-klib-abi-reader:2.3.21=kotlinInternalAbiValidation | \
         org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21=kotlinInternalAbiValidation | \
-        org.jetbrains.kotlin:kotlin-stdlib:2.3.21=kotlinInternalAbiValidation)
+        org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21=androidAbiRuntime,kotlinInternalAbiValidation | \
+        org.jetbrains.kotlin:kotlin-stdlib:2.3.21=kotlinInternalAbiValidation | \
+        org.jetbrains.kotlin:kotlin-stdlib:2.3.21=androidAbiRuntime,kotlinInternalAbiValidation)
             ;;
         *)
             fail "stale Kotlin 2.3.21 dependency escaped the isolated ABI toolchain: $legacy_match"

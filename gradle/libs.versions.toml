@@ -22,6 +22,7 @@ jetbrains-compose-material3 = "1.9.0"
 jetbrains-compose-material-icons = "1.7.3"
 dokka = "2.2.0"
 cyclonedx = "3.3.0"
+binary-compatibility-validator = "0.18.1"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -64,3 +65,4 @@ cryptography = { id = "dev.whyoleg.cryptography", version.ref = "cryptography" }
 jetbrains-compose = { id = "org.jetbrains.compose", version.ref = "jetbrains-compose" }
 dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
 cyclonedx = { id = "org.cyclonedx.bom", version.ref = "cyclonedx" }
+binary-compatibility-validator = { id = "org.jetbrains.kotlinx.binary-compatibility-validator", version.ref = "binary-compatibility-validator" }

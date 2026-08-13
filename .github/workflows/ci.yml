@@ -122,7 +122,7 @@ jobs:
       - name: Verify API, documentation, and SBOM
         if: steps.scope.outputs.full == 'true'
         run: |
-          ./gradlew :p2p-core:checkKotlinAbi :p2p-transport-lan:checkKotlinAbi :p2p-network-provisioning-android:checkKotlinAbi :p2p-network-provisioning-desktop:checkKotlinAbi --console=plain
+          ./gradlew :p2p-core:checkKotlinAbi :p2p-transport-lan:checkKotlinAbi :p2p-network-provisioning-android:checkKotlinAbi :p2p-network-provisioning-desktop:checkKotlinAbi :p2p-core:checkAndroidAbi :p2p-transport-lan:checkAndroidAbi :p2p-network-provisioning-android:checkAndroidAbi --console=plain
           ./gradlew :p2p-core:dokkaGeneratePublicationHtml :p2p-transport-lan:dokkaGeneratePublicationHtml :p2p-network-provisioning-android:dokkaGeneratePublicationHtml :p2p-network-provisioning-desktop:dokkaGeneratePublicationHtml --console=plain
           scripts/check-sbom.sh
 
