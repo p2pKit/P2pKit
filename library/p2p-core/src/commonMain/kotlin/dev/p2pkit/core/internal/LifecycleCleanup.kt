@@ -9,7 +9,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -18,7 +17,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
 internal data class CleanupIssue(
@@ -32,9 +30,13 @@ internal sealed interface BoundedOperationResult<out T> {
     data class Failure(val cause: Throwable) : BoundedOperationResult<Nothing>
     data class TimedOut(
         val timeoutMillis: Long,
-        val cause: TimeoutCancellationException
+        val cause: Throwable
     ) : BoundedOperationResult<Nothing>
 }
+
+/** A deadline owned by [runBoundedIndependentOperation], never caller cancellation. */
+internal class OwnedOperationTimeoutException(timeoutMillis: Long) :
+    Exception("Operation timed out after $timeoutMillis ms")
 
 /**
  * Acquire this mutex within [timeoutMillis], retaining ownership only when
@@ -195,12 +197,18 @@ internal suspend fun <T> runBoundedIndependentOperation(
         // rather than allowing a virtual scheduler to jump past a worker that
         // has not had a chance to run.
         var producerResult = false
-        val result = try {
-            withContext(deadlineDispatcher) {
-                withTimeout(timeoutMillis) { settlement.await() }
-            }.also { producerResult = true }
-        } catch (timeout: TimeoutCancellationException) {
-            val timedOut = BoundedOperationResult.TimedOut(timeoutMillis, timeout)
+        val settled = withContext(deadlineDispatcher) {
+            // withTimeoutOrNull distinguishes its own deadline from an outer
+            // caller deadline. A nested caller timeout must remain
+            // cancellation; classifying TimeoutCancellationException only by
+            // type would incorrectly turn it into this operation's timeout.
+            withTimeoutOrNull(timeoutMillis) { settlement.await() }
+        }
+        val result = if (settled == null) {
+            val timedOut = BoundedOperationResult.TimedOut(
+                timeoutMillis,
+                OwnedOperationTimeoutException(timeoutMillis)
+            )
             // Resolve an exact-deadline race in favor of the operation when
             // it already settled. This prevents a successful commit/close
             // from being reported as timed out merely because timeout
@@ -210,6 +218,9 @@ internal suspend fun <T> runBoundedIndependentOperation(
             } else {
                 settlement.await().also { producerResult = true }
             }
+        } else {
+            producerResult = true
+            settled
         }
         if (producerResult) {
             // Claim synchronously after one final cancellation check. A

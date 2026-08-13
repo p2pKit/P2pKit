@@ -17,6 +17,7 @@ import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.internal.security.AuthenticatedV2SecurityEngine
+import dev.p2pkit.core.internal.security.noise.NoiseAuthenticationException
 import dev.p2pkit.core.internal.security.noise.NoiseRole
 import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolConstants
@@ -1008,6 +1009,12 @@ internal class SessionManager(
                     } catch (e: CancellationException) {
                         channel.close()
                         throw e
+                    } catch (e: NoiseAuthenticationException) {
+                        channel.close(
+                            P2pError.AuthenticationFailed(
+                                "Secure record authentication failed"
+                            ).also { it.underlying = e }
+                        )
                     } catch (e: Throwable) {
                         channel.close(e)
                     }
@@ -1025,7 +1032,8 @@ internal class SessionManager(
                     localTransports = localTransports,
                     protocolState = protocolState,
                     protocolVersion = protocolVersion,
-                    handshakeTimeoutMillis = setupTimeoutMillis
+                    handshakeTimeoutMillis = setupTimeoutMillis,
+                    logger = logger
                 )
 
                 val peerIdentity = when (securityMode) {
@@ -1079,6 +1087,22 @@ internal class SessionManager(
                 )
             }
         } catch (e: TimeoutCancellationException) {
+            // Nested withTimeout calls reuse TimeoutCancellationException for
+            // both their own deadline and a cancelled caller's deadline. If
+            // our parent context is no longer active, the caller owns this
+            // cancellation; preserve it instead of reporting a false
+            // authentication/HELLO timeout. Cleanup still owns the raw stream
+            // and gets the same bounded clean-close opportunity as any other
+            // caller cancellation.
+            if (!currentCoroutineContext().isActive) {
+                cleanupHandshake(
+                    rawConnection,
+                    selectedConnection,
+                    readerJob,
+                    sendCleanClose = true
+                )?.let(e::addSuppressed)
+                throw e
+            }
             cleanupHandshake(rawConnection, selectedConnection, readerJob)?.let(e::addSuppressed)
             throw if (securityMode is SecurityMode.AuthenticatedV2) {
                 P2pError.AuthenticationFailed(
@@ -1178,7 +1202,11 @@ internal class SessionManager(
         try {
             protocol.sendError(connection, reason)
         } catch (cancelled: CancellationException) {
-            throw cancelled
+            currentCoroutineContext().ensureActive()
+            logger.debug(
+                "Unable to send handshake rejection to peer: " +
+                    "CancellationException from active protocol callback"
+            )
         } catch (failure: Throwable) {
             logger.debug(
                 "Unable to send handshake rejection to peer: " +

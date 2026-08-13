@@ -6,22 +6,24 @@ import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.Retryability
+import dev.p2pkit.core.internal.security.Sha256Hasher
 import dev.p2pkit.core.protocol.FileOfferPayload
+import dev.p2pkit.core.protocol.FileResultCode
 import dev.p2pkit.core.protocol.Frame
 import dev.p2pkit.core.protocol.MessageId
 import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.PreparedSourceLengthChangedException
-import dev.p2pkit.core.protocol.ProtocolSessionState
+import dev.p2pkit.core.protocol.ProtocolConstants
 import dev.p2pkit.core.protocol.ProtocolFeatures
+import dev.p2pkit.core.protocol.ProtocolSessionState
 import dev.p2pkit.core.protocol.SecureFileCommit
 import dev.p2pkit.core.protocol.SecureFileFinish
 import dev.p2pkit.core.protocol.SecureFileOffer
 import dev.p2pkit.core.protocol.SecureFileResult
-import dev.p2pkit.core.protocol.FileResultCode
-import dev.p2pkit.core.internal.security.Sha256Hasher
-import dev.p2pkit.core.transfer.FileTransferDestination
 import dev.p2pkit.core.protocol.streamFileData
+import dev.p2pkit.core.protocol.validateWireText
 import dev.p2pkit.core.transfer.FileTransferConfig
+import dev.p2pkit.core.transfer.FileTransferDestination
 import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
@@ -100,6 +102,17 @@ internal class FileTransferDispatcher(
 
     private val outgoing: MutableMap<MessageId, OutgoingEntry> = mutableMapOf()
     private val incoming: MutableMap<MessageId, IncomingEntry> = mutableMapOf()
+
+    /**
+     * Authenticated inbound transactions that reached a terminal outcome in
+     * the current connection epoch. Entries are never evicted within an
+     * epoch: evicting one would let a delayed/replayed FILE_OFFER publish a
+     * second application offer and potentially commit the same transaction
+     * twice. Admission reserves one ledger slot for every live secure offer,
+     * so terminal registration can remain atomic with map removal.
+     */
+    private val terminalIncoming: MutableMap<MessageId, TerminalIncomingTransaction> =
+        mutableMapOf()
     private val ambiguousIncomingTransferIds: MutableSet<MessageId> = mutableSetOf()
     private var ambiguousIncomingCapacityExhausted: Boolean = false
     private val lock = Mutex()
@@ -158,6 +171,18 @@ internal class FileTransferDispatcher(
         var idleGeneration: Long = 0L,
         val acceptanceCommitted: CompletableDeferred<Boolean> = CompletableDeferred()
     )
+
+    private data class TerminalIncomingTransaction(
+        val offer: SecureFileOffer,
+        val response: IncomingTerminalResponse
+    )
+
+    private sealed interface IncomingTerminalResponse {
+        data class Commit(val value: SecureFileCommit) : IncomingTerminalResponse
+        data class Result(val value: SecureFileResult) : IncomingTerminalResponse
+        data class Reject(val reason: String?) : IncomingTerminalResponse
+        data class Cancel(val reason: String?) : IncomingTerminalResponse
+    }
 
     // ---- Outgoing API ----
 
@@ -604,14 +629,24 @@ internal class FileTransferDispatcher(
                 )
             }
         } catch (e: CancellationException) {
-            removeIncoming(session.transferId, entry)?.cancelJobs()
+            val response = IncomingTerminalResponse.Cancel("receiver acceptance cancelled")
             withContext(NonCancellable) {
+                val removed = removeIncomingTerminal(session.transferId, entry, response)
+                removed?.cancelJobs()
                 abortUnownedDestination(
                     destination,
                     cause = null,
                     label = "cancelled destination open for ${session.transferId}"
                 )
                 session.setState(FileTransferState.Cancelled("accept cancelled while opening destination"))
+                if (removed != null) {
+                    sendIncomingTerminalResponse(
+                        session.transferId,
+                        response,
+                        entry.writeEpoch,
+                        "cancelled destination open"
+                    )
+                }
             }
             throw e
         } catch (e: Throwable) {
@@ -623,26 +658,46 @@ internal class FileTransferDispatcher(
                 "destination open failed",
                 e
             ) as P2pError.FileTransferFailed
-            removeIncoming(session.transferId, entry)?.cancelJobs()
+            val response = incomingFailureResponse(session.transferId, error)
+            val removed = removeIncomingTerminal(session.transferId, entry, response)
+            removed?.cancelJobs()
             abortUnownedDestination(
                 destination,
                 cause = error,
                 label = "failed destination open for ${session.transferId}"
             )
             session.markFailed(error)
+            if (removed != null) {
+                sendIncomingTerminalResponse(
+                    session.transferId,
+                    response,
+                    entry.writeEpoch,
+                    "failed destination open"
+                )
+            }
             throw error
         }
         val installed = try {
             session.installReceiver(sink, destination)
         } catch (e: CancellationException) {
-            removeIncoming(session.transferId, entry)?.cancelJobs()
+            val response = IncomingTerminalResponse.Cancel("receiver acceptance cancelled")
             withContext(NonCancellable) {
+                val removed = removeIncomingTerminal(session.transferId, entry, response)
+                removed?.cancelJobs()
                 abortUnownedDestination(
                     destination,
                     cause = null,
                     label = "cancelled destination install for ${session.transferId}"
                 )
                 session.setState(FileTransferState.Cancelled("accept cancelled while installing destination"))
+                if (removed != null) {
+                    sendIncomingTerminalResponse(
+                        session.transferId,
+                        response,
+                        entry.writeEpoch,
+                        "cancelled destination install"
+                    )
+                }
             }
             throw e
         } catch (e: Throwable) {
@@ -654,22 +709,42 @@ internal class FileTransferDispatcher(
                 "destination install failed",
                 e
             ) as P2pError.FileTransferFailed
-            removeIncoming(session.transferId, entry)?.cancelJobs()
+            val response = incomingFailureResponse(session.transferId, error)
+            val removed = removeIncomingTerminal(session.transferId, entry, response)
+            removed?.cancelJobs()
             abortUnownedDestination(
                 destination,
                 cause = error,
                 label = "failed destination install for ${session.transferId}"
             )
             session.markFailed(error)
+            if (removed != null) {
+                sendIncomingTerminalResponse(
+                    session.transferId,
+                    response,
+                    entry.writeEpoch,
+                    "failed destination install"
+                )
+            }
             throw error
         }
         if (!installed) {
-            removeIncoming(session.transferId, entry)?.cancelJobs()
+            val response = IncomingTerminalResponse.Cancel("receiver acceptance did not commit")
+            val removed = removeIncomingTerminal(session.transferId, entry, response)
+            removed?.cancelJobs()
             abortUnownedDestination(
                 destination,
                 cause = null,
                 label = "terminal destination install for ${session.transferId}"
             )
+            if (removed != null) {
+                sendIncomingTerminalResponse(
+                    session.transferId,
+                    response,
+                    entry.writeEpoch,
+                    "terminal destination install"
+                )
+            }
             throw IllegalStateException("Offer ${session.id} became terminal during acceptance")
         }
         sendFileAcceptWithinDeadline(entry, secure = true)
@@ -689,6 +764,7 @@ internal class FileTransferDispatcher(
     }
 
     suspend fun rejectOffer(session: IncomingFileSession, reason: String?) {
+        val response = incomingRejectResponse(reason)
         val entry = lock.withLock {
             val current = incoming[session.transferId]
                 ?: throw IllegalStateException("Offer ${session.id} is no longer pending")
@@ -698,40 +774,41 @@ internal class FileTransferDispatcher(
             if (current.phase != IncomingPhase.OFFERED || session.state.value.isTerminal()) {
                 throw IllegalStateException("Offer ${session.id} was already accepted or rejected")
             }
-            incoming.remove(session.transferId)
-            removePendingOfferLocked(current.session)
-            current
+            removeIncomingLocked(current, response)
         }
-        entry.acceptanceCommitted.complete(false)
         entry.cancelJobs()
         session.setState(FileTransferState.Rejected(reason))
-        sendBestEffort("FILE_REJECT for ${session.transferId}", entry.writeEpoch) { connection ->
-            protocol.sendFileReject(connection, session.transferId, reason)
-        }
+        sendIncomingTerminalResponse(
+            transferId = session.transferId,
+            response = response,
+            expectedEpoch = entry.writeEpoch,
+            label = "FILE_REJECT"
+        )
     }
 
     suspend fun cancelIncoming(session: IncomingFileSession, reason: String?) {
-        val entry = lock.withLock {
+        val (entry, response) = lock.withLock {
             val current = incoming[session.transferId] ?: return
             if (current.session !== session) return
-            incoming.remove(session.transferId)
-            removePendingOfferLocked(current.session)
-            current
+            val accepted = current.phase != IncomingPhase.OFFERED
+            val terminalResponse = if (accepted) {
+                incomingCancelResponse(reason)
+            } else {
+                incomingRejectResponse(reason)
+            }
+            removeIncomingLocked(current, terminalResponse) to terminalResponse
         }
-        entry.acceptanceCommitted.complete(false)
-        val accepted = entry.phase != IncomingPhase.OFFERED
         val changed = withContext(NonCancellable) {
             entry.cancelJobs()
             terminalizeIncoming(entry, FileTransferState.Cancelled(reason))
         }
         if (!changed) return
-        sendBestEffort("cancel for ${session.transferId}", entry.writeEpoch) { connection ->
-            if (accepted) {
-                protocol.sendFileCancel(connection, session.transferId, reason)
-            } else {
-                protocol.sendFileReject(connection, session.transferId, reason)
-            }
-        }
+        sendIncomingTerminalResponse(
+            transferId = session.transferId,
+            response = response,
+            expectedEpoch = entry.writeEpoch,
+            label = "cancel"
+        )
     }
 
     // ---- Inbound protocol events ----
@@ -743,18 +820,6 @@ internal class FileTransferDispatcher(
     ) {
         if (closed) return
         val eventEpoch = writeEpoch
-        if (payload.sizeBytes > config.maxFileSizeBytes || !hasSupportedChunkCount(payload.sizeBytes)) {
-            val reason = if (payload.sizeBytes > config.maxFileSizeBytes) {
-                "sizeBytes ${payload.sizeBytes} exceeds maxFileSizeBytes ${config.maxFileSizeBytes}"
-            } else {
-                "file requires more than ${Int.MAX_VALUE} chunks"
-            }
-            sendBestEffort("FILE_REJECT for $transferId", eventEpoch) { connection ->
-                protocol.sendFileReject(connection, transferId, reason)
-            }
-            return
-        }
-
         val session = IncomingFileSession(
             peer = remotePeer,
             name = payload.name,
@@ -765,17 +830,37 @@ internal class FileTransferDispatcher(
             dispatcher = this
         )
         val insertion = lock.withLock {
+            val terminal = terminalIncoming[transferId]
             val existingIncoming = incoming[transferId]
             when {
                 closed -> OfferInsertion.CLOSED
-                ambiguousIncomingCapacityExhausted -> OfferInsertion.CAPACITY
+                terminal != null && terminal.offer == secureOffer ->
+                    OfferInsertion.ReplayTerminal(terminal.response)
+                terminal != null -> OfferInsertion.CONFLICT
+                ambiguousIncomingCapacityExhausted -> OfferInsertion.Capacity(
+                    "ambiguous transfer-id capacity exhausted; reconnect required"
+                )
                 transferId in ambiguousIncomingTransferIds -> OfferInsertion.RETIRED
                 existingIncoming != null && existingIncoming.payload == payload &&
                     existingIncoming.secureOffer == secureOffer ->
                     OfferInsertion.EXACT_DUPLICATE
                 existingIncoming != null -> OfferInsertion.CONFLICT
                 outgoing.containsKey(transferId) -> OfferInsertion.CONFLICT
-                incoming.size >= MAX_ACTIVE_INCOMING_TRANSFERS -> OfferInsertion.CAPACITY
+                payload.sizeBytes > config.maxFileSizeBytes -> OfferInsertion.Capacity(
+                    "sizeBytes ${payload.sizeBytes} exceeds maxFileSizeBytes " +
+                        config.maxFileSizeBytes
+                )
+                !hasSupportedChunkCount(payload.sizeBytes) -> OfferInsertion.Capacity(
+                    "file requires more than ${Int.MAX_VALUE} chunks"
+                )
+                incoming.size >= MAX_ACTIVE_INCOMING_TRANSFERS -> OfferInsertion.Capacity(
+                    "too many active incoming transfers"
+                )
+                secureOffer != null &&
+                    secureIncomingTransactionCountLocked() >= MAX_TERMINAL_INCOMING_TRANSACTIONS ->
+                    OfferInsertion.Capacity(
+                        "authenticated transfer replay ledger capacity exhausted; reconnect required"
+                    )
                 else -> {
                     val entry = IncomingEntry(session, payload, secureOffer, eventEpoch)
                     incoming[transferId] = entry
@@ -792,6 +877,19 @@ internal class FileTransferDispatcher(
                 logger.debug("Session $sessionId: repeated FILE_OFFER transferId $transferId; ignoring")
                 return
             }
+            is OfferInsertion.ReplayTerminal -> {
+                logger.debug(
+                    "Session $sessionId: replayed terminal FILE_OFFER transferId $transferId; " +
+                        "replaying terminal response"
+                )
+                sendIncomingTerminalResponse(
+                    transferId = transferId,
+                    response = insertion.response,
+                    expectedEpoch = eventEpoch,
+                    label = "replayed terminal response"
+                )
+                return
+            }
             OfferInsertion.RETIRED -> {
                 sendBestEffort("retired-id FILE_CANCEL for $transferId", eventEpoch) { connection ->
                     protocol.sendFileCancel(connection, transferId, "transfer id is retired in this session")
@@ -805,9 +903,9 @@ internal class FileTransferDispatcher(
                 transferId = transferId,
                 reason = "Conflicting FILE_OFFER reused transferId $transferId"
             )
-            OfferInsertion.CAPACITY -> {
+            is OfferInsertion.Capacity -> {
                 sendBestEffort("capacity FILE_REJECT for $transferId", eventEpoch) { connection ->
-                    protocol.sendFileReject(connection, transferId, "too many active incoming transfers")
+                    protocol.sendFileReject(connection, transferId, insertion.reason)
                 }
                 return
             }
@@ -1108,23 +1206,27 @@ internal class FileTransferDispatcher(
                 }
             }
             if (!committed) return
-            val removed = removeIncoming(finish.transferId, entry) ?: return
-            removed.cancelJobs()
             val offer = checkNotNull(entry.secureOffer)
-            sendCleanupBestEffort(
-                "FILE_COMMIT for ${finish.transferId}",
-                entry.writeEpoch
-            ) { connection ->
-                    protocol.sendFileCommit(
-                        connection,
-                        SecureFileCommit(
-                            finish.transferId,
-                            finish.sizeBytes,
-                            finish.contentDigest,
-                            offer.offerHash
-                        )
-                    )
-            }
+            val response = IncomingTerminalResponse.Commit(
+                SecureFileCommit(
+                    finish.transferId,
+                    finish.sizeBytes,
+                    finish.contentDigest,
+                    offer.offerHash
+                )
+            )
+            val removed = removeIncomingTerminal(
+                finish.transferId,
+                entry,
+                response
+            ) ?: return
+            removed.cancelJobs()
+            sendIncomingTerminalResponse(
+                transferId = finish.transferId,
+                response = response,
+                expectedEpoch = entry.writeEpoch,
+                label = "FILE_COMMIT"
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -1219,7 +1321,10 @@ internal class FileTransferDispatcher(
             )
             return
         }
-        val incomingEntry = removeIncoming(result.transferId)
+        val incomingEntry = removeIncomingTerminal(
+            transferId = result.transferId,
+            response = IncomingTerminalResponse.Result(result)
+        )
         if (incomingEntry != null) {
             incomingEntry.cancelJobs()
             terminalizeIncoming(
@@ -1242,7 +1347,10 @@ internal class FileTransferDispatcher(
             )
             return
         }
-        val incomingEntry = removeIncoming(transferId)
+        val incomingEntry = removeIncomingTerminal(
+            transferId = transferId,
+            response = incomingCancelResponse(reason)
+        )
         if (incomingEntry != null) {
             incomingEntry.cancelJobs()
             terminalizeIncoming(incomingEntry, FileTransferState.Cancelled(reason))
@@ -1259,6 +1367,7 @@ internal class FileTransferDispatcher(
     suspend fun reopen() {
         lock.withLock {
             check(closed) { "File-transfer dispatcher can reopen only after closeAll" }
+            terminalIncoming.clear()
             ambiguousIncomingTransferIds.clear()
             ambiguousIncomingCapacityExhausted = false
             writeEpoch = FileTransferWriteEpoch()
@@ -1877,23 +1986,21 @@ internal class FileTransferDispatcher(
     }
 
     private suspend fun autoRejectIncoming(entry: IncomingEntry) {
+        val response = IncomingTerminalResponse.Reject("timeout")
         val removed = lock.withLock {
             val current = incoming[entry.session.transferId]
             if (current !== entry || current.phase != IncomingPhase.OFFERED) return
-            incoming.remove(entry.session.transferId)
-            removePendingOfferLocked(current.session)
-            current
+            removeIncomingLocked(current, response)
         }
-        removed.acceptanceCommitted.complete(false)
         withContext(NonCancellable) {
             removed.cancelJobs()
             terminalizeIncoming(removed, FileTransferState.Rejected("timeout"))
-            sendCleanupBestEffort(
-                "timeout FILE_REJECT for ${entry.session.transferId}",
-                entry.writeEpoch
-            ) { connection ->
-                protocol.sendFileReject(connection, entry.session.transferId, "timeout")
-            }
+            sendIncomingTerminalResponse(
+                transferId = entry.session.transferId,
+                response = response,
+                expectedEpoch = entry.writeEpoch,
+                label = "timeout FILE_REJECT"
+            )
         }
     }
 
@@ -1985,12 +2092,23 @@ internal class FileTransferDispatcher(
         requiredIdleGeneration: Long?,
         kind: String
     ) {
+        val response = if (entry.secureOffer != null) {
+            IncomingTerminalResponse.Result(
+                SecureFileResult(
+                    entry.session.transferId,
+                    FileResultCode.TIMEOUT,
+                    FileTransferPhase.RECEIVE,
+                    "$kind transfer timeout"
+                )
+            )
+        } else {
+            IncomingTerminalResponse.Cancel("$kind transfer timeout")
+        }
         val removed = lock.withLock {
             val current = incoming[entry.session.transferId]
             if (current !== entry || current.phase != IncomingPhase.ACCEPTED) return
             if (requiredIdleGeneration != null && current.idleGeneration != requiredIdleGeneration) return
-            incoming.remove(entry.session.transferId)
-            current
+            removeIncomingLocked(current, response)
         }
         withContext(NonCancellable) {
             removed.cancelJobs()
@@ -2011,24 +2129,12 @@ internal class FileTransferDispatcher(
                     )
                 )
             )
-            sendCleanupBestEffort(
-                "$kind-timeout terminal for ${entry.session.transferId}",
-                entry.writeEpoch
-            ) { connection ->
-                if (entry.secureOffer != null) {
-                    protocol.sendFileResult(
-                        connection,
-                        SecureFileResult(
-                            entry.session.transferId,
-                            FileResultCode.TIMEOUT,
-                            FileTransferPhase.RECEIVE,
-                            "$kind transfer timeout"
-                        )
-                    )
-                } else {
-                    protocol.sendFileCancel(connection, entry.session.transferId, "$kind transfer timeout")
-                }
-            }
+            sendIncomingTerminalResponse(
+                transferId = entry.session.transferId,
+                response = response,
+                expectedEpoch = entry.writeEpoch,
+                label = "$kind-timeout terminal"
+            )
         }
     }
 
@@ -2208,20 +2314,26 @@ internal class FileTransferDispatcher(
         terminalState: FileTransferState
     ) {
         withContext(NonCancellable) {
+            val response = IncomingTerminalResponse.Cancel("accept did not commit")
             val removed = lock.withLock {
                 val current = incoming[entry.session.transferId]
                 if (current !== entry) return@withLock null
-                incoming.remove(entry.session.transferId)
-                removePendingOfferLocked(current.session)
-                current.acceptanceCommitted.complete(false)
-                if (ambiguousIncomingTransferIds.size < MAX_AMBIGUOUS_INCOMING_TRANSFER_IDS) {
-                    ambiguousIncomingTransferIds += entry.session.transferId
+                if (current.secureOffer != null) {
+                    removeIncomingLocked(current, response)
                 } else {
-                    // Fail closed for the remainder of this epoch instead of
-                    // evicting an id that a late FILE_ACCEPT could still use.
-                    ambiguousIncomingCapacityExhausted = true
+                    incoming.remove(entry.session.transferId)
+                    removePendingOfferLocked(current.session)
+                    current.acceptanceCommitted.complete(false)
+                    if (ambiguousIncomingTransferIds.size < MAX_AMBIGUOUS_INCOMING_TRANSFER_IDS) {
+                        ambiguousIncomingTransferIds += entry.session.transferId
+                    } else {
+                        // Fail closed for the remainder of this epoch instead
+                        // of evicting an id that a late FILE_ACCEPT could
+                        // still use.
+                        ambiguousIncomingCapacityExhausted = true
+                    }
+                    current
                 }
-                current
             } ?: return@withContext
             removed.cancelJobs()
             terminalizeIncoming(removed, terminalState)
@@ -2238,21 +2350,23 @@ internal class FileTransferDispatcher(
         entry: IncomingEntry,
         label: String
     ) {
-        val isRetired = lock.withLock {
-            entry.session.transferId in ambiguousIncomingTransferIds ||
-                ambiguousIncomingCapacityExhausted
+        val response = lock.withLock {
+            terminalIncoming[entry.session.transferId]?.response
+                ?: if (entry.session.transferId in ambiguousIncomingTransferIds ||
+                    ambiguousIncomingCapacityExhausted
+                ) {
+                    IncomingTerminalResponse.Cancel("accept did not commit")
+                } else {
+                    null
+                }
         }
-        if (!isRetired) return
-        sendCleanupBestEffort(
-            "$label FILE_CANCEL for ${entry.session.transferId}",
-            entry.writeEpoch
-        ) { connection ->
-            protocol.sendFileCancel(
-                connection,
-                entry.session.transferId,
-                "accept did not commit"
-            )
-        }
+        if (response == null) return
+        sendIncomingTerminalResponse(
+            transferId = entry.session.transferId,
+            response = response,
+            expectedEpoch = entry.writeEpoch,
+            label = "$label FILE_CANCEL"
+        )
     }
 
     private suspend fun failIncomingTransfer(entry: IncomingEntry, prefix: String, cause: Throwable) {
@@ -2339,20 +2453,27 @@ internal class FileTransferDispatcher(
                 cause
             )
         }
-        val removed = removeIncoming(entry.session.transferId, entry) ?: return
+        val response = IncomingTerminalResponse.Result(
+            SecureFileResult(
+                entry.session.transferId,
+                code,
+                phase,
+                safeWireFailureReason(code)
+            )
+        )
+        val removed = removeIncomingTerminal(
+            entry.session.transferId,
+            entry,
+            response
+        ) ?: return
         removed.cancelJobs()
         if (!terminalizeIncoming(removed, FileTransferState.Failed(error))) return
-        sendBestEffort("FILE_RESULT for ${entry.session.transferId}", entry.writeEpoch) { connection ->
-            protocol.sendFileResult(
-                connection,
-                SecureFileResult(
-                    entry.session.transferId,
-                    code,
-                    phase,
-                    safeWireFailureReason(code)
-                )
-            )
-        }
+        sendIncomingTerminalResponse(
+            transferId = entry.session.transferId,
+            response = response,
+            expectedEpoch = entry.writeEpoch,
+            label = "FILE_RESULT"
+        )
     }
 
     private fun safeWireFailureReason(code: FileResultCode): String = when (code) {
@@ -2361,6 +2482,73 @@ internal class FileTransferDispatcher(
         FileResultCode.PROTOCOL_FAILURE -> "file-transfer protocol failure"
         FileResultCode.SOURCE_CHANGED -> "prepared source changed"
         FileResultCode.TIMEOUT -> "file-transfer timeout"
+    }
+
+    private fun incomingFailureResponse(
+        transferId: MessageId,
+        error: P2pError.FileTransferFailed
+    ): IncomingTerminalResponse.Result {
+        val code = when (error.kind) {
+            FileTransferFailureKind.INTEGRITY -> FileResultCode.DIGEST_MISMATCH
+            FileTransferFailureKind.TRANSFER_PROTOCOL -> FileResultCode.PROTOCOL_FAILURE
+            FileTransferFailureKind.SOURCE_CHANGED -> FileResultCode.SOURCE_CHANGED
+            FileTransferFailureKind.TIMEOUT -> FileResultCode.TIMEOUT
+            else -> FileResultCode.STORAGE_FAILURE
+        }
+        return IncomingTerminalResponse.Result(
+            SecureFileResult(
+                transferId = transferId,
+                code = code,
+                phase = error.phase,
+                reason = safeWireFailureReason(code)
+            )
+        )
+    }
+
+    private fun incomingRejectResponse(reason: String?): IncomingTerminalResponse.Reject =
+        IncomingTerminalResponse.Reject(
+            boundedTerminalReason(reason, fallback = "receiver rejected transfer")
+        )
+
+    private fun incomingCancelResponse(reason: String?): IncomingTerminalResponse.Cancel =
+        IncomingTerminalResponse.Cancel(
+            boundedTerminalReason(reason, fallback = "receiver cancelled transfer")
+        )
+
+    private fun boundedTerminalReason(reason: String?, fallback: String): String? {
+        if (reason == null) return null
+        return try {
+            validateWireText(
+                value = reason,
+                field = "file-transfer terminal reason",
+                maxChars = ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
+                maxUtf8Bytes = ProtocolConstants.MAX_REASON_PAYLOAD_BYTES,
+                requireNonBlank = true
+            )
+            reason
+        } catch (_: IllegalArgumentException) {
+            fallback
+        }
+    }
+
+    private suspend fun sendIncomingTerminalResponse(
+        transferId: MessageId,
+        response: IncomingTerminalResponse,
+        expectedEpoch: FileTransferWriteEpoch,
+        label: String
+    ) {
+        sendCleanupBestEffort("$label for $transferId", expectedEpoch) { connection ->
+            when (response) {
+                is IncomingTerminalResponse.Commit ->
+                    protocol.sendFileCommit(connection, response.value)
+                is IncomingTerminalResponse.Result ->
+                    protocol.sendFileResult(connection, response.value)
+                is IncomingTerminalResponse.Reject ->
+                    protocol.sendFileReject(connection, transferId, response.reason)
+                is IncomingTerminalResponse.Cancel ->
+                    protocol.sendFileCancel(connection, transferId, response.reason)
+            }
+        }
     }
 
     private suspend fun <T> withEpochWrite(
@@ -2578,10 +2766,50 @@ internal class FileTransferDispatcher(
     ): IncomingEntry? = lock.withLock {
         val current = incoming[transferId] ?: return@withLock null
         if (expected != null && current !== expected) return@withLock null
-        incoming.remove(transferId)
-        removePendingOfferLocked(current.session)
-        current.also { it.acceptanceCommitted.complete(false) }
+        check(current.secureOffer == null) {
+            "Authenticated inbound removal requires a terminal ledger outcome"
+        }
+        removeIncomingLocked(current, terminalResponse = null)
     }
+
+    private suspend fun removeIncomingTerminal(
+        transferId: MessageId,
+        expected: IncomingEntry? = null,
+        response: IncomingTerminalResponse
+    ): IncomingEntry? = lock.withLock {
+        val current = incoming[transferId] ?: return@withLock null
+        if (expected != null && current !== expected) return@withLock null
+        removeIncomingLocked(current, response)
+    }
+
+    private fun removeIncomingLocked(
+        current: IncomingEntry,
+        terminalResponse: IncomingTerminalResponse?
+    ): IncomingEntry {
+        val secureOffer = current.secureOffer
+        if (secureOffer != null) {
+            checkNotNull(terminalResponse) {
+                "Authenticated inbound removal requires a terminal ledger outcome"
+            }
+            check(terminalIncoming[current.session.transferId] == null) {
+                "Authenticated inbound transfer already has a terminal ledger outcome"
+            }
+            check(terminalIncoming.size < MAX_TERMINAL_INCOMING_TRANSACTIONS) {
+                "Authenticated inbound terminal ledger reservation was lost"
+            }
+            terminalIncoming[current.session.transferId] = TerminalIncomingTransaction(
+                offer = secureOffer,
+                response = terminalResponse
+            )
+        }
+        incoming.remove(current.session.transferId)
+        removePendingOfferLocked(current.session)
+        current.acceptanceCommitted.complete(false)
+        return current
+    }
+
+    private fun secureIncomingTransactionCountLocked(): Int =
+        terminalIncoming.size + incoming.values.count { it.secureOffer != null }
 
     private fun removePendingOfferLocked(session: IncomingFileSession) {
         val current = _pendingFileOffers.value
@@ -2602,7 +2830,7 @@ internal class FileTransferDispatcher(
         repeat(MAX_TRANSFER_ID_ATTEMPTS) {
             val candidate = MessageId.random(random)
             if (candidate !in outgoing && candidate !in incoming &&
-                candidate !in ambiguousIncomingTransferIds
+                candidate !in terminalIncoming && candidate !in ambiguousIncomingTransferIds
             ) {
                 return candidate
             }
@@ -2730,9 +2958,12 @@ internal class FileTransferDispatcher(
     private sealed interface OfferInsertion {
         data object CLOSED : OfferInsertion
         data object EXACT_DUPLICATE : OfferInsertion
+        data class ReplayTerminal(
+            val response: IncomingTerminalResponse
+        ) : OfferInsertion
         data object RETIRED : OfferInsertion
         data object CONFLICT : OfferInsertion
-        data object CAPACITY : OfferInsertion
+        data class Capacity(val reason: String) : OfferInsertion
         data class Inserted(val entry: IncomingEntry) : OfferInsertion
     }
 
@@ -2770,6 +3001,7 @@ internal class FileTransferDispatcher(
 private const val MAX_ACTIVE_INCOMING_TRANSFERS: Int = 64
 private const val MAX_INCOMING_OFFER_EVENT_BUFFER: Int = 64
 private const val MAX_ACTIVE_OUTGOING_TRANSFERS: Int = 64
+private const val MAX_TERMINAL_INCOMING_TRANSACTIONS: Int = 256
 private const val MAX_AMBIGUOUS_INCOMING_TRANSFER_IDS: Int = 256
 private const val MAX_CONCURRENT_FILE_OPERATIONS: Int = 8
 private const val MAX_CONCURRENT_OUTGOING_STREAMS: Int = 8

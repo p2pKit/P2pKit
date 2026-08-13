@@ -97,7 +97,11 @@ public interface FileTransferDestination {
      * Close and remove uncommitted staging state.
      *
      * [cause] is the typed terminal failure when one exists. Repeated calls,
-     * including calls after a successful [commit], must be harmless.
+     * including calls after a successful [commit], must be harmless. If
+     * resource cleanup fails, the implementation must propagate that failure
+     * and retain ownership of only the work that did not complete. A later
+     * call retries the incomplete cleanup; [openSink] and [commit] must remain
+     * terminally unavailable once abort has begun.
      */
     public suspend fun abort(cause: P2pError.FileTransferFailed?)
 }

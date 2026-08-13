@@ -2867,6 +2867,357 @@ class FileTransferFlowTest {
     }
 
     @Test
+    fun completedSecureOfferReplayReturnsCommitWithoutRepublishingOrRecommitting() = runTest {
+        val protocol = RecordingFileProtocol()
+        val dispatcher = directDispatcher(
+            backgroundScope,
+            protocol,
+            FileTransferConfig(
+                maxFileSizeBytes = 4,
+                chunkSizeBytes = 4,
+                offerTimeoutMillis = 1_000
+            ),
+            protocolState = secureProtocolState()
+        )
+        val bytes = byteArrayOf(1, 2, 3, 4)
+        val id = MessageId.random(Random(8_020))
+        val offer = SecureFileOffer.create(id, "once.bin", bytes.size.toLong(), null, sha256(bytes))
+        val payload = FileOfferPayload("once.bin", bytes.size.toLong())
+        val destination = RecordingDestination()
+
+        dispatcher.onFileOffer(id, payload, offer)
+        val pending = assertIs<IncomingFileSession>(dispatcher.pendingFileOffers.value.single())
+        pending.accept(destination)
+        dispatcher.onFileData(fileFrame(id, bytes))
+        dispatcher.onFileFinish(
+            SecureFileFinish(id, bytes.size.toLong(), 1, sha256(bytes), offer.offerHash)
+        )
+
+        assertEquals(1, destination.commitCount)
+        assertEquals(1, protocol.fileCommits.size)
+        assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+
+        dispatcher.onFileOffer(id, payload.copy(), offer)
+
+        assertEquals(1, destination.commitCount, "an exact replay must not commit storage twice")
+        assertEquals(2, protocol.fileCommits.size, "the terminal COMMIT must be replayed")
+        assertEquals(protocol.fileCommits.first(), protocol.fileCommits.last())
+        assertTrue(dispatcher.pendingFileOffers.value.isEmpty(), "a replay must not reach the app")
+
+        val conflictingBytes = byteArrayOf(1, 2, 3, 4, 5)
+        val conflicting = SecureFileOffer.create(
+            id,
+            "different.bin",
+            conflictingBytes.size.toLong(),
+            null,
+            sha256(conflictingBytes)
+        )
+        val failure = assertFailsWith<P2pError.FileTransferFailed> {
+            dispatcher.onFileOffer(
+                id,
+                FileOfferPayload("different.bin", conflictingBytes.size.toLong()),
+                conflicting
+            )
+        }
+        assertEquals(FileTransferFailureKind.TRANSFER_PROTOCOL, failure.kind)
+        assertEquals(FileTransferPhase.OFFER, failure.phase)
+        assertEquals(2, protocol.fileCommits.size)
+    }
+
+    @Test
+    fun secureOfferReplayDuringBlockedCommitResponseCannotCreateSecondTransaction() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol().apply { gateCommit = true }
+        val dispatcher = directDispatcher(
+            scope,
+            protocol,
+            FileTransferConfig(chunkSizeBytes = 4, offerTimeoutMillis = 60_000),
+            protocolState = secureProtocolState()
+        )
+        val bytes = byteArrayOf(5, 6, 7, 8)
+        val id = MessageId.random(Random(8_021))
+        val offer = SecureFileOffer.create(id, "blocked.bin", 4L, null, sha256(bytes))
+        val payload = FileOfferPayload("blocked.bin", 4L)
+        val destination = RecordingDestination()
+        try {
+            dispatcher.onFileOffer(id, payload, offer)
+            val pending = assertIs<IncomingFileSession>(dispatcher.pendingFileOffers.value.single())
+            pending.accept(destination)
+            dispatcher.onFileData(fileFrame(id, bytes))
+            val finish = SecureFileFinish(id, 4L, 1, sha256(bytes), offer.offerHash)
+
+            val finishing = async { dispatcher.onFileFinish(finish) }
+            withTimeout(5_000) { protocol.commitStarts.receive() }
+
+            val replaying = async { dispatcher.onFileOffer(id, payload.copy(), offer) }
+            yield()
+            assertFalse(finishing.isCompleted)
+            assertFalse(replaying.isCompleted, "the replay response is serialized behind the first COMMIT")
+            assertEquals(1, destination.commitCount)
+            assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+
+            protocol.commitReleases.send(Unit)
+            withTimeout(5_000) { finishing.await() }
+            withTimeout(5_000) { protocol.commitStarts.receive() }
+            assertEquals(1, destination.commitCount)
+            assertEquals(2, protocol.fileCommits.size)
+            assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+            protocol.commitReleases.send(Unit)
+            withTimeout(5_000) { replaying.await() }
+        } finally {
+            protocol.commitReleases.trySend(Unit)
+            protocol.commitReleases.trySend(Unit)
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun rejectedFailedAndTimedOutSecureOffersReplayTheirTerminalResponses() = runTest {
+        val protocol = RecordingFileProtocol()
+        val config = FileTransferConfig(chunkSizeBytes = 4, offerTimeoutMillis = 100)
+        val dispatcher = directDispatcher(
+            backgroundScope,
+            protocol,
+            config,
+            protocolState = secureProtocolState()
+        )
+
+        val rejectedId = MessageId.random(Random(8_022))
+        val rejectedOffer = SecureFileOffer.create(
+            rejectedId,
+            "rejected.bin",
+            0L,
+            null,
+            sha256(ByteArray(0))
+        )
+        val rejectedPayload = FileOfferPayload("rejected.bin", 0L)
+        dispatcher.onFileOffer(rejectedId, rejectedPayload, rejectedOffer)
+        dispatcher.pendingFileOffers.value.single().reject("not accepted")
+        dispatcher.onFileOffer(rejectedId, rejectedPayload.copy(), rejectedOffer)
+        assertEquals(listOf(rejectedId, rejectedId), protocol.fileRejects)
+        assertEquals(
+            listOf<Pair<MessageId, String?>>(
+                rejectedId to "not accepted",
+                rejectedId to "not accepted"
+            ),
+            protocol.fileRejectReasons
+        )
+
+        val boundedReasonId = MessageId.random(Random(8_026))
+        val boundedReasonOffer = SecureFileOffer.create(
+            boundedReasonId,
+            "bounded-reason.bin",
+            0L,
+            null,
+            sha256(ByteArray(0))
+        )
+        val boundedReasonPayload = FileOfferPayload("bounded-reason.bin", 0L)
+        dispatcher.onFileOffer(boundedReasonId, boundedReasonPayload, boundedReasonOffer)
+        dispatcher.pendingFileOffers.value.single().reject("x".repeat(2_048))
+        dispatcher.onFileOffer(
+            boundedReasonId,
+            boundedReasonPayload.copy(),
+            boundedReasonOffer
+        )
+        assertEquals(
+            listOf<Pair<MessageId, String?>>(
+                boundedReasonId to "receiver rejected transfer",
+                boundedReasonId to "receiver rejected transfer"
+            ),
+            protocol.fileRejectReasons.takeLast(2)
+        )
+
+        val failedBytes = byteArrayOf(9)
+        val failedId = MessageId.random(Random(8_023))
+        val failedOffer = SecureFileOffer.create(
+            failedId,
+            "failed.bin",
+            1L,
+            null,
+            sha256(failedBytes)
+        )
+        val failedPayload = FileOfferPayload("failed.bin", 1L)
+        dispatcher.onFileOffer(failedId, failedPayload, failedOffer)
+        val failed = assertIs<IncomingFileSession>(dispatcher.pendingFileOffers.value.single())
+        val failingDestination = RecordingDestination(commitFailure = IOException("commit failed"))
+        failed.accept(failingDestination)
+        dispatcher.onFileData(fileFrame(failedId, failedBytes))
+        dispatcher.onFileFinish(
+            SecureFileFinish(failedId, 1L, 1, sha256(failedBytes), failedOffer.offerHash)
+        )
+        dispatcher.onFileOffer(failedId, failedPayload.copy(), failedOffer)
+        assertEquals(1, failingDestination.commitCount)
+        assertEquals(2, protocol.fileResults.size)
+        assertEquals(protocol.fileResults.first(), protocol.fileResults.last())
+
+        val timedOutId = MessageId.random(Random(8_024))
+        val timedOutOffer = SecureFileOffer.create(
+            timedOutId,
+            "timeout.bin",
+            0L,
+            null,
+            sha256(ByteArray(0))
+        )
+        val timedOutPayload = FileOfferPayload("timeout.bin", 0L)
+        dispatcher.onFileOffer(timedOutId, timedOutPayload, timedOutOffer)
+        advanceTimeBy(config.offerTimeoutMillis)
+        runCurrent()
+        dispatcher.onFileOffer(timedOutId, timedOutPayload.copy(), timedOutOffer)
+        assertEquals(listOf(timedOutId, timedOutId), protocol.fileRejects.takeLast(2))
+
+        val acceptedTimeoutId = MessageId.random(Random(8_025))
+        val acceptedTimeoutOffer = SecureFileOffer.create(
+            acceptedTimeoutId,
+            "accepted-timeout.bin",
+            1L,
+            null,
+            sha256(byteArrayOf(1))
+        )
+        val acceptedTimeoutPayload = FileOfferPayload("accepted-timeout.bin", 1L)
+        dispatcher.onFileOffer(acceptedTimeoutId, acceptedTimeoutPayload, acceptedTimeoutOffer)
+        val acceptedTimeout = assertIs<IncomingFileSession>(
+            dispatcher.pendingFileOffers.value.single()
+        )
+        val timeoutDestination = RecordingDestination()
+        acceptedTimeout.accept(timeoutDestination)
+        advanceTimeBy(config.offerTimeoutMillis)
+        runCurrent()
+        dispatcher.onFileOffer(
+            acceptedTimeoutId,
+            acceptedTimeoutPayload.copy(),
+            acceptedTimeoutOffer
+        )
+        assertEquals(1, timeoutDestination.abortCount)
+        assertEquals(4, protocol.fileResults.size)
+        assertTrue(protocol.fileResults.takeLast(2).all { it.code == FileResultCode.TIMEOUT })
+        assertEquals(protocol.fileResults[2], protocol.fileResults[3])
+        assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+    }
+
+    @Test
+    fun secureTerminalLedgerIsBoundedAndResetsOnlyWhenConnectionEpochReopens() = runTest {
+        val protocol = RecordingFileProtocol()
+        val dispatcher = directDispatcher(
+            backgroundScope,
+            protocol,
+            FileTransferConfig(chunkSizeBytes = 4, offerTimeoutMillis = 60_000),
+            protocolState = secureProtocolState()
+        )
+        val emptyDigest = sha256(ByteArray(0))
+        var firstId: MessageId? = null
+        var firstOffer: SecureFileOffer? = null
+        repeat(255) { index ->
+            val id = MessageId(ByteArray(MessageId.SIZE).also { bytes ->
+                bytes[0] = index.toByte()
+                bytes[1] = (index ushr 8).toByte()
+            })
+            val offer = SecureFileOffer.create(id, "entry-$index.bin", 0L, null, emptyDigest)
+            dispatcher.onFileOffer(id, FileOfferPayload("entry-$index.bin", 0L), offer)
+            dispatcher.pendingFileOffers.value.single().reject("bounded ledger")
+            if (index == 0) {
+                firstId = id
+                firstOffer = offer
+            }
+        }
+        assertEquals(255, protocol.fileRejects.size)
+
+        val reservedId = MessageId(ByteArray(MessageId.SIZE).also { bytes ->
+            bytes[0] = 255.toByte()
+        })
+        val reservedOffer = SecureFileOffer.create(
+            reservedId,
+            "entry-255.bin",
+            0L,
+            null,
+            emptyDigest
+        )
+        dispatcher.onFileOffer(
+            reservedId,
+            FileOfferPayload("entry-255.bin", 0L),
+            reservedOffer
+        )
+        val reserved = dispatcher.pendingFileOffers.value.single()
+
+        val overflowId = MessageId(ByteArray(MessageId.SIZE) { 0x7f })
+        val overflowOffer = SecureFileOffer.create(
+            overflowId,
+            "overflow.bin",
+            0L,
+            null,
+            emptyDigest
+        )
+        dispatcher.onFileOffer(
+            overflowId,
+            FileOfferPayload("overflow.bin", 0L),
+            overflowOffer
+        )
+        assertEquals(listOf(reserved), dispatcher.pendingFileOffers.value)
+        assertEquals(256, protocol.fileRejects.size)
+
+        reserved.reject("consume reserved terminal slot")
+        assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+        assertEquals(257, protocol.fileRejects.size)
+
+        val retainedId = checkNotNull(firstId)
+        val retainedOffer = checkNotNull(firstOffer)
+        dispatcher.onFileOffer(
+            retainedId,
+            FileOfferPayload("entry-0.bin", 0L),
+            retainedOffer
+        )
+        assertEquals(258, protocol.fileRejects.size, "retained outcomes remain replayable at capacity")
+
+        dispatcher.closeAll("rotate epoch")
+        dispatcher.reopen()
+        dispatcher.onFileOffer(
+            retainedId,
+            FileOfferPayload("entry-0.bin", 0L),
+            retainedOffer
+        )
+        assertEquals(retainedId, (dispatcher.pendingFileOffers.value.single() as IncomingFileSession).transferId)
+    }
+
+    @Test
+    fun outgoingTransferIdAllocationCannotCollideWithTerminalInboundLedger() = runTest {
+        val protocol = RecordingFileProtocol()
+        val constantRandom = object : Random() {
+            override fun nextBits(bitCount: Int): Int = 0
+        }
+        val dispatcher = directDispatcher(
+            backgroundScope,
+            protocol,
+            FileTransferConfig(chunkSizeBytes = 4, offerTimeoutMillis = 60_000),
+            random = constantRandom,
+            protocolState = secureProtocolState()
+        )
+        val retainedId = MessageId.random(constantRandom)
+        val offer = SecureFileOffer.create(
+            retainedId,
+            "inbound.bin",
+            0L,
+            null,
+            sha256(ByteArray(0))
+        )
+        dispatcher.onFileOffer(
+            retainedId,
+            FileOfferPayload("inbound.bin", 0L),
+            offer
+        )
+        dispatcher.pendingFileOffers.value.single().reject("retain id")
+
+        val failure = assertFailsWith<P2pError.FileTransferFailed> {
+            dispatcher.sendPreparedFile(
+                "outbound.bin",
+                null,
+                ByteArrayPreparedSource(ByteArray(0))
+            )
+        }
+        assertEquals(FileTransferFailureKind.TRANSFER_PROTOCOL, failure.kind)
+        assertTrue(failure.reason.contains("unique transfer id"))
+        assertTrue(protocol.secureOffers.isEmpty())
+    }
+
+    @Test
     fun callerCancellationDuringDestinationOpenPropagatesAndCleansRetainedOffer() = runBlocking {
         val scope = CoroutineScope(coroutineContext + Job())
         val protocol = RecordingFileProtocol()
@@ -3769,6 +4120,7 @@ private class BlockingDestination(
     private val commitFailure: Throwable? = null
 ) : FileTransferDestination {
     private val aborts = AtomicInt(0)
+    private val commits = AtomicInt(0)
     val buffer = Buffer()
     val openEntered = CompletableDeferred<Unit>()
     val openRelease = CompletableDeferred<Unit>()
@@ -3779,6 +4131,7 @@ private class BlockingDestination(
     val abortExited = CompletableDeferred<Unit>()
 
     val abortCount: Int get() = aborts.load()
+    val commitCount: Int get() = commits.load()
 
     override fun openSink(): RawSink {
         openEntered.complete(Unit)
@@ -3792,6 +4145,7 @@ private class BlockingDestination(
     }
 
     override suspend fun commit() {
+        commits.addAndFetch(1)
         commitEntered.complete(Unit)
         if (blockCommit) {
             withContext(NonCancellable) { commitRelease.await() }
@@ -3958,6 +4312,7 @@ private class RecordingFileProtocol : P2pProtocol {
     /** (transferId, reason) per FILE_CANCEL, in send order. */
     val fileCancels = mutableListOf<Pair<MessageId, String?>>()
     val fileRejects = mutableListOf<MessageId>()
+    val fileRejectReasons = mutableListOf<Pair<MessageId, String?>>()
 
     /** When non-null, [sendFileOffer] throws it instead of recording (offer-write-failure injection). */
     var offerFailure: Throwable? = null
@@ -3981,6 +4336,9 @@ private class RecordingFileProtocol : P2pProtocol {
     val finishStarted = CompletableDeferred<Unit>()
     val finishRelease = CompletableDeferred<Unit>()
     val finishExited = CompletableDeferred<Unit>()
+    var gateCommit: Boolean = false
+    val commitStarts = Channel<Unit>(Channel.UNLIMITED)
+    val commitReleases = Channel<Unit>(Channel.UNLIMITED)
     var gateReject: Boolean = false
     val rejectStarted = CompletableDeferred<Unit>()
     val rejectRelease = CompletableDeferred<Unit>()
@@ -4060,6 +4418,7 @@ private class RecordingFileProtocol : P2pProtocol {
 
     override suspend fun sendFileReject(connection: RawConnection, transferId: MessageId, reason: String?) {
         fileRejects.add(transferId)
+        fileRejectReasons.add(transferId to reason)
         if (gateReject) {
             rejectStarted.complete(Unit)
             try {
@@ -4111,6 +4470,8 @@ private class RecordingFileProtocol : P2pProtocol {
 
     override suspend fun sendFileCommit(connection: RawConnection, commit: SecureFileCommit) {
         fileCommits += commit
+        commitStarts.send(Unit)
+        if (gateCommit) commitReleases.receive()
     }
 
     override suspend fun sendFileResult(connection: RawConnection, result: SecureFileResult) {

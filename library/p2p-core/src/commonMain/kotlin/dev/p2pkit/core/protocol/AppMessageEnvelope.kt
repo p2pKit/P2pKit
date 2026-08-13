@@ -83,79 +83,129 @@ internal object AppMessageEnvelope {
         if (payload.size > ProtocolConstants.MAX_APP_MESSAGE_ENVELOPE_BYTES) {
             throw P2pError.ProtocolError("Application message envelope exceeds the configured bound")
         }
-        val reader = Reader(payload)
-        if (!reader.bytes(MAGIC.size).contentEquals(MAGIC)) {
-            throw P2pError.ProtocolError("Invalid application message envelope magic")
-        }
-        if (reader.u8() != VERSION) throw P2pError.ProtocolError("Unsupported application envelope version")
-        val type = reader.u8()
-        if (type != TYPE_TEXT && type != TYPE_BINARY) {
-            throw P2pError.ProtocolError("Unsupported application message type $type")
-        }
-        if (reader.u16() != 0) throw P2pError.ProtocolError("Application envelope flags must be zero")
-        val embeddedId = MessageId(reader.bytes(MessageId.SIZE))
-        if (embeddedId != frameMessageId) {
-            throw P2pError.ProtocolError("Application envelope messageId does not match frame header")
-        }
-        val sequence = reader.u64()
-        val sender = reader.sizedU16("senderPeerId", HelloPayload.MAX_FIELD_UTF8_BYTES)
-            .decodeStrictUtf8("application senderPeerId")
-        val recipient = reader.sizedU16("recipientPeerId", HelloPayload.MAX_FIELD_UTF8_BYTES)
-            .decodeStrictUtf8("application recipientPeerId")
-        validateWireText(sender, "application senderPeerId", HelloPayload.MAX_FIELD_LEN,
-            HelloPayload.MAX_FIELD_UTF8_BYTES, true)
-        validateWireText(recipient, "application recipientPeerId", HelloPayload.MAX_FIELD_LEN,
-            HelloPayload.MAX_FIELD_UTF8_BYTES, true)
-        if (sender != state.remotePeerId || recipient != state.localPeerId) {
-            throw P2pError.AuthenticatedIdentityMismatch(
-                "Application envelope identity does not match the authenticated session"
+        val decoded = try {
+            val reader = Reader(payload)
+            if (!reader.bytes(MAGIC.size).contentEquals(MAGIC)) {
+                throw P2pError.ProtocolError("Invalid application message envelope magic")
+            }
+            if (reader.u8() != VERSION) {
+                throw P2pError.ProtocolError("Unsupported application envelope version")
+            }
+            val type = reader.u8()
+            if (type != TYPE_TEXT && type != TYPE_BINARY) {
+                throw P2pError.ProtocolError("Unsupported application message type $type")
+            }
+            if (reader.u16() != 0) {
+                throw P2pError.ProtocolError("Application envelope flags must be zero")
+            }
+            val embeddedId = MessageId(reader.bytes(MessageId.SIZE))
+            if (embeddedId != frameMessageId) {
+                throw P2pError.ProtocolError("Application envelope messageId does not match frame header")
+            }
+            val sequence = reader.u64()
+            val sender = reader.sizedU16("senderPeerId", HelloPayload.MAX_FIELD_UTF8_BYTES)
+                .decodeStrictUtf8("application senderPeerId")
+            val recipient = reader.sizedU16("recipientPeerId", HelloPayload.MAX_FIELD_UTF8_BYTES)
+                .decodeStrictUtf8("application recipientPeerId")
+            validateWireText(
+                sender,
+                "application senderPeerId",
+                HelloPayload.MAX_FIELD_LEN,
+                HelloPayload.MAX_FIELD_UTF8_BYTES,
+                true
+            )
+            validateWireText(
+                recipient,
+                "application recipientPeerId",
+                HelloPayload.MAX_FIELD_LEN,
+                HelloPayload.MAX_FIELD_UTF8_BYTES,
+                true
+            )
+            if (sender != state.remotePeerId || recipient != state.localPeerId) {
+                throw P2pError.AuthenticatedIdentityMismatch(
+                    "Application envelope identity does not match the authenticated session"
+                )
+            }
+            val count = reader.u16()
+            if (count > MAX_METADATA_ENTRIES) {
+                throw P2pError.ProtocolError(
+                    "Application metadata has $count entries; max $MAX_METADATA_ENTRIES"
+                )
+            }
+            val metadata = linkedMapOf<String, String>()
+            var metadataBytes = 0
+            var previousKey: ByteArray? = null
+            repeat(count) {
+                val keyBytes = reader.sizedU16("metadata key", MAX_METADATA_KEY_BYTES)
+                val valueBytes = reader.sizedU32("metadata value", MAX_METADATA_VALUE_BYTES)
+                metadataBytes += keyBytes.size + valueBytes.size
+                if (metadataBytes > MAX_METADATA_BYTES) {
+                    throw P2pError.ProtocolError(
+                        "Application metadata exceeds $MAX_METADATA_BYTES bytes"
+                    )
+                }
+                val prior = previousKey
+                if (prior != null && compareUnsigned(prior, keyBytes) >= 0) {
+                    throw P2pError.ProtocolError(
+                        "Application metadata keys are duplicated or not canonical"
+                    )
+                }
+                previousKey = keyBytes
+                val key = keyBytes.decodeStrictUtf8("metadata key")
+                val value = valueBytes.decodeStrictUtf8("metadata value")
+                validateWireText(
+                    key,
+                    "metadata key",
+                    MAX_METADATA_KEY_BYTES,
+                    MAX_METADATA_KEY_BYTES,
+                    true
+                )
+                validateWireText(
+                    value,
+                    "metadata value",
+                    MAX_METADATA_VALUE_BYTES,
+                    MAX_METADATA_VALUE_BYTES,
+                    false
+                )
+                metadata[key] = value
+            }
+            val contentLength = reader.u64()
+            if (contentLength > ProtocolConstants.MAX_PAYLOAD_BYTES) {
+                throw P2pError.ProtocolError(
+                    "Application content length $contentLength exceeds maximum"
+                )
+            }
+            val expectedDigest = reader.bytes(32)
+            if (contentLength > Int.MAX_VALUE || reader.remaining != contentLength.toInt()) {
+                throw P2pError.ProtocolError(
+                    "Application content length does not match envelope bytes"
+                )
+            }
+            val content = reader.bytes(contentLength.toInt())
+            if (!sha256(content).copyBytes().contentEquals(expectedDigest)) {
+                throw P2pError.ProtocolError("Application content SHA-256 mismatch")
+            }
+            val message = if (type == TYPE_TEXT) {
+                P2pMessage.Text(content.decodeStrictUtf8("application text content"), metadata)
+            } else {
+                P2pMessage.Binary(content, metadata)
+            }
+            DecodedEnvelope(sequence, message)
+        } catch (failure: IllegalArgumentException) {
+            throw P2pError.ProtocolError(
+                "Malformed application message envelope: ${failure.safeDiagnosticDetail()}"
             )
         }
-        val count = reader.u16()
-        if (count > MAX_METADATA_ENTRIES) {
-            throw P2pError.ProtocolError("Application metadata has $count entries; max $MAX_METADATA_ENTRIES")
-        }
-        val metadata = linkedMapOf<String, String>()
-        var metadataBytes = 0
-        var previousKey: ByteArray? = null
-        repeat(count) {
-            val keyBytes = reader.sizedU16("metadata key", MAX_METADATA_KEY_BYTES)
-            val valueBytes = reader.sizedU32("metadata value", MAX_METADATA_VALUE_BYTES)
-            metadataBytes += keyBytes.size + valueBytes.size
-            if (metadataBytes > MAX_METADATA_BYTES) {
-                throw P2pError.ProtocolError("Application metadata exceeds $MAX_METADATA_BYTES bytes")
-            }
-            val prior = previousKey
-            if (prior != null && compareUnsigned(prior, keyBytes) >= 0) {
-                throw P2pError.ProtocolError("Application metadata keys are duplicated or not canonical")
-            }
-            previousKey = keyBytes
-            val key = keyBytes.decodeStrictUtf8("metadata key")
-            val value = valueBytes.decodeStrictUtf8("metadata value")
-            validateWireText(key, "metadata key", MAX_METADATA_KEY_BYTES, MAX_METADATA_KEY_BYTES, true)
-            validateWireText(value, "metadata value", MAX_METADATA_VALUE_BYTES,
-                MAX_METADATA_VALUE_BYTES, false)
-            metadata[key] = value
-        }
-        val contentLength = reader.u64()
-        if (contentLength > ProtocolConstants.MAX_PAYLOAD_BYTES) {
-            throw P2pError.ProtocolError("Application content length $contentLength exceeds maximum")
-        }
-        val expectedDigest = reader.bytes(32)
-        if (contentLength > Int.MAX_VALUE || reader.remaining != contentLength.toInt()) {
-            throw P2pError.ProtocolError("Application content length does not match envelope bytes")
-        }
-        val content = reader.bytes(contentLength.toInt())
-        if (!sha256(content).copyBytes().contentEquals(expectedDigest)) {
-            throw P2pError.ProtocolError("Application content SHA-256 mismatch")
-        }
-        state.commitInboundEnvelope(sequence, frameMessageId)
-        return if (type == TYPE_TEXT) {
-            P2pMessage.Text(content.decodeStrictUtf8("application text content"), metadata)
-        } else {
-            P2pMessage.Binary(content, metadata)
-        }
+
+        // Replay/sequence state is committed only after every peer-controlled
+        // field, including the application payload, has been decoded and the
+        // immutable public message snapshot has been constructed. A rejected
+        // envelope therefore cannot consume a sequence or message id.
+        state.commitInboundEnvelope(decoded.sequence, frameMessageId)
+        return decoded.message
     }
+
+    private data class DecodedEnvelope(val sequence: Long, val message: P2pMessage)
 
     private fun encodeIdentity(value: String, field: String): ByteArray {
         validateWireText(value, field, HelloPayload.MAX_FIELD_LEN, HelloPayload.MAX_FIELD_UTF8_BYTES, true)

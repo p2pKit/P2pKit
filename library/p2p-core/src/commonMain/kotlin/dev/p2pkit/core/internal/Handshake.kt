@@ -2,6 +2,7 @@ package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -13,6 +14,8 @@ import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -36,7 +39,8 @@ internal suspend fun performHandshake(
     localTransports: Set<TransportKind>,
     protocolState: dev.p2pkit.core.protocol.ProtocolSessionState? = null,
     protocolVersion: Byte = ProtocolConstants.LEGACY_VERSION,
-    handshakeTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS
+    handshakeTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
+    logger: P2pLogger = P2pLogger.NoOp
 ): HelloPayload {
 
     val localHello = HelloPayload(
@@ -53,25 +57,25 @@ internal suspend fun performHandshake(
     val firstEvent = withTimeoutOrNull(handshakeTimeoutMillis) {
         events.receive()
     } ?: run {
-        sendErrorBestEffort(protocol, connection, "handshake timeout")
+        sendErrorBestEffort(protocol, connection, "handshake timeout", logger)
         throw P2pError.HandshakeRejected("Handshake timed out after $handshakeTimeoutMillis ms")
     }
 
     if (firstEvent !is ProtocolEvent.Hello) {
-        sendErrorBestEffort(protocol, connection, "expected HELLO")
+        sendErrorBestEffort(protocol, connection, "expected HELLO", logger)
         throw P2pError.HandshakeRejected("Expected HELLO, got $firstEvent")
     }
 
     val peerHello = firstEvent.payload
 
     if (peerHello.appId != localAppId.value) {
-        sendErrorBestEffort(protocol, connection, "appId mismatch")
+        sendErrorBestEffort(protocol, connection, "appId mismatch", logger)
         throw P2pError.HandshakeRejected(
             "appId mismatch: local=${localAppId.value} remote=${peerHello.appId}"
         )
     }
     if (peerHello.protocolVersion != protocolVersion.toUByte().toInt()) {
-        sendErrorBestEffort(protocol, connection, "protocol version mismatch")
+        sendErrorBestEffort(protocol, connection, "protocol version mismatch", logger)
         throw P2pError.VersionMismatch(
             localVersion = protocolVersion.toUByte().toInt(),
             remoteVersion = peerHello.protocolVersion
@@ -86,11 +90,16 @@ private suspend fun sendErrorBestEffort(
     protocol: P2pProtocol,
     connection: RawConnection,
     reason: String,
+    logger: P2pLogger,
 ) {
     try {
         protocol.sendError(connection, reason)
     } catch (cancelled: CancellationException) {
-        throw cancelled
+        currentCoroutineContext().ensureActive()
+        logger.debug(
+            "Unable to send handshake rejection to peer: " +
+                "CancellationException from active protocol callback"
+        )
     } catch (_: Exception) {
         // The peer is already being rejected; an ordinary best-effort write
         // failure must not replace the stable local validation error.

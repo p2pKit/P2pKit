@@ -14,6 +14,7 @@ import dev.p2pkit.core.Retryability
 import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.protocol.ProtocolSessionState
+import dev.p2pkit.core.internal.security.SecureTerminalFailureSource
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
@@ -266,10 +267,41 @@ internal class P2pSessionImpl(
         // the same epoch's connection. Rearm replaces `connection` and
         // cancels the epoch; new loops then see the new ref.
         val epochConnection = connection
+        val epoch = ConnectionEpoch(epochConnection, readerJob, job, epochToken)
         lastPongAt.value = monotonicClock()
         epochScope.launch { routeEvents(events) }
         epochScope.launch { keepAliveLoop(epochConnection) }
-        epochScope.launch { observeRawState(epochConnection) }
+        epochScope.launch { observeSecureTerminalFailure(epochConnection, epoch) }
+        epochScope.launch { observeRawState(epochConnection, epoch) }
+    }
+
+    private suspend fun observeSecureTerminalFailure(
+        epochConnection: RawConnection,
+        epoch: ConnectionEpoch
+    ) {
+        val source = epochConnection as? SecureTerminalFailureSource ?: return
+        val failure = source.terminalFailure.first { it != null } ?: return
+        transitionForSecureFailure(failure, epoch)
+    }
+
+    private suspend fun transitionForSecureFailure(
+        failure: P2pError,
+        epoch: ConnectionEpoch
+    ) {
+        val (kind, reason) = when (failure) {
+            is P2pError.AuthenticationFailed ->
+                FileTransferFailureKind.AUTHENTICATION to failure.reason
+            is P2pError.ProtocolError ->
+                FileTransferFailureKind.TRANSFER_PROTOCOL to failure.reason
+            else -> error("Unsupported secure terminal failure: ${failure::class.simpleName}")
+        }
+        transitionToTerminal(
+            target = ConnectionState.Failed,
+            cause = reason,
+            fileFailureKind = kind,
+            fileRetryability = Retryability.NOT_RETRYABLE,
+            expectedEpoch = epoch
+        )
     }
 
     /**
@@ -310,11 +342,21 @@ internal class P2pSessionImpl(
      * error flips the raw state synchronously) — the case this observer was
      * built for.
      */
-    private suspend fun observeRawState(epochConnection: RawConnection) {
+    private suspend fun observeRawState(
+        epochConnection: RawConnection,
+        epoch: ConnectionEpoch
+    ) {
         epochConnection.state.collect { rawState ->
             when (rawState) {
                 ConnectionState.Closed, ConnectionState.Failed -> {
                     if (_state.value == ConnectionState.Connected) {
+                        val secureFailure =
+                            (epochConnection as? SecureTerminalFailureSource)
+                                ?.terminalFailure?.value
+                        if (secureFailure != null) {
+                            transitionForSecureFailure(secureFailure, epoch)
+                            return@collect
+                        }
                         // AUDIT-2026-07 (SES-1): bounded deferral to the
                         // protocol-event classification (see KDoc above).
                         // withTimeoutOrNull swallows only its own timeout;
@@ -323,7 +365,14 @@ internal class P2pSessionImpl(
                             _state.first { it != ConnectionState.Connected }
                         }
                         if (_state.value == ConnectionState.Connected) {
-                            onConnectionLost("raw connection -> $rawState")
+                            val delayedSecureFailure =
+                                (epochConnection as? SecureTerminalFailureSource)
+                                    ?.terminalFailure?.value
+                            if (delayedSecureFailure != null) {
+                                transitionForSecureFailure(delayedSecureFailure, epoch)
+                            } else {
+                                onConnectionLost("raw connection -> $rawState")
+                            }
                         }
                     }
                 }
@@ -1328,6 +1377,22 @@ internal class P2pSessionImpl(
             )
         } catch (e: P2pError.AuthenticatedIdentityMismatch) {
             logger.warn("Session $id: authenticated envelope identity mismatch", e)
+            transitionToTerminal(
+                target = ConnectionState.Failed,
+                cause = e.reason,
+                fileFailureKind = FileTransferFailureKind.AUTHENTICATION,
+                fileRetryability = Retryability.NOT_RETRYABLE
+            )
+        } catch (e: P2pError.VersionMismatch) {
+            logger.warn("Session $id: protocol version mismatch", e)
+            transitionToTerminal(
+                target = ConnectionState.Failed,
+                cause = e.message ?: "Protocol version mismatch",
+                fileFailureKind = FileTransferFailureKind.TRANSFER_PROTOCOL,
+                fileRetryability = Retryability.NOT_RETRYABLE
+            )
+        } catch (e: P2pError.AuthenticationFailed) {
+            logger.warn("Session $id: authenticated transport failure", e)
             transitionToTerminal(
                 target = ConnectionState.Failed,
                 cause = e.reason,

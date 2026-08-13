@@ -51,6 +51,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -179,6 +180,40 @@ class SecureSessionIntegrationTest {
             }
             assertTrue(failure.message.orEmpty().contains("timed out after 100 ms"))
             assertEquals(1, blockedPair.a.writeAttempts)
+            assertEquals(ConnectionState.Closed, blockedPair.a.state.value)
+            assertTrue(alice.sessions.value.isEmpty())
+        } finally {
+            alice.stop()
+        }
+    }
+
+    @Test
+    fun callerDeadlineDuringSecureSetupRemainsCancellationAndClosesRaw() = runBlocking {
+        val appId = AppId("secure.session.caller-timeout")
+        val blockedPair = FakeConnectionPair()
+        blockedPair.a.writeLatencyMillis = 10_000
+        val alice = secureKit(
+            appId,
+            "Alice",
+            MemorySecureIdentityStorage(),
+            FakeDataTransport(outgoingConnection = { blockedPair.a }),
+            PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp,
+            setupTimeoutMillis = 5_000
+        )
+        try {
+            assertFailsWith<TimeoutCancellationException> {
+                withTimeout(500) {
+                    alice.connect(
+                        Peer(
+                            id = PeerId("caller-timeout-peer"),
+                            name = "Unresponsive peer",
+                            platform = Platform.JVM_DESKTOP,
+                            supportedTransports = setOf(TransportKind.LAN)
+                        )
+                    )
+                }
+            }
+            assertEquals(1, blockedPair.a.writeAttempts, "caller timeout must occur inside secure setup")
             assertEquals(ConnectionState.Closed, blockedPair.a.state.value)
             assertTrue(alice.sessions.value.isEmpty())
         } finally {

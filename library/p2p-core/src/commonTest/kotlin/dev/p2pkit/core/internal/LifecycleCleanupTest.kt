@@ -7,16 +7,19 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
@@ -107,6 +110,39 @@ class LifecycleCleanupTest {
     }
 
     @Test
+    fun callerTimeoutIsNotReclassifiedAsTheOperationDeadline() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val disposed = AtomicInt(0)
+        val caller = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+            withTimeout(100L) {
+                runBoundedIndependentOperation(
+                    timeoutMillis = 5_000L,
+                    operationDispatcher = Dispatchers.Unconfined,
+                    deadlineDispatcher = StandardTestDispatcher(testScheduler),
+                    onLateSuccess = { disposed.addAndFetch(1) }
+                ) {
+                    entered.complete(Unit)
+                    withContext(NonCancellable) { release.await() }
+                    "late-value"
+                }
+            }
+        }
+
+        runCurrent()
+        assertTrue(entered.isCompleted, "operation must be admitted before the caller deadline")
+        advanceTimeBy(100L)
+        runCurrent()
+
+        assertIs<TimeoutCancellationException>(caller.getCompletionExceptionOrNull())
+        assertEquals(0, disposed.load())
+
+        release.complete(Unit)
+        runCurrent()
+        assertEquals(1, disposed.load(), "caller cancellation must dispose the abandoned value once")
+    }
+
+    @Test
     fun cleanupTimeoutIsMachineClassifiableWithoutParsingItsMessage() = runBlocking {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
@@ -151,7 +187,13 @@ class LifecycleCleanupTest {
             }
         }
         firstEntered.await()
-        assertIs<BoundedOperationResult.TimedOut>(withTimeout(5_000) { first.await() })
+        val firstTimeout = assertIs<BoundedOperationResult.TimedOut>(
+            withTimeout(5_000) { first.await() }
+        )
+        assertTrue(
+            firstTimeout.cause !is CancellationException,
+            "an owned deadline must not masquerade as caller cancellation"
+        )
 
         val second = runBoundedIndependentOperation(
             timeoutMillis = 50L,
