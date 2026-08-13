@@ -191,11 +191,13 @@ must close the manager terminally and every later provisioning method must
 return the typed ManagerClosed failure. Repeated close/Stop calls must remain
 safe. Before Stop, inspect the returned object through the harness: app ID,
 peer ID, device name, fingerprint, pairing QR, and listener port must match the
-running kit. `hostAddresses` is intentionally empty on Apple because this API
-does not synchronously invent a non-loopback path address; the UI currently
-shows only the port. Empty addresses are expected, while a fabricated address,
-missing secure identity, detached callback after Stop, or successful post-close
-operation is a FAIL.
+running kit. Compare `hostAddresses` with a same-moment `getifaddrs` capture.
+Every returned value must be an active LAN/AWDL unicast address; IPv6
+link-local values must retain their validated interface zone. Loopback,
+wildcard, multicast, broadcast, cellular, VPN/tunnel, and down-interface
+values are a FAIL. An empty list is valid only when the capture has no eligible
+address or enumeration reports an error. A missing secure identity, detached
+callback after Stop, or successful post-close operation is also a FAIL.
 
 For each inactive episode, retain the ordered lifecycle and rebind events.
 `WillEnterForeground` followed by `DidBecomeActive` may produce only one actual

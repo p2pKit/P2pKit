@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -35,6 +36,107 @@ static inline nw_parameters_t p2pkit_nw_create_plain_tcp_parameters(void) {
         NW_PARAMETERS_DISABLE_PROTOCOL,
         NW_PARAMETERS_DEFAULT_CONFIGURATION
     );
+}
+
+/**
+ * Borrowed view of one IPv4/IPv6 address returned by getifaddrs(). Every
+ * pointer is valid only for the duration of the enumeration callback. Kotlin
+ * callers must copy the bytes/name before the callback returns.
+ */
+typedef struct p2pkit_lan_interface_address {
+    const uint8_t *address_bytes;
+    uint32_t address_length;
+    uint8_t ip_version;
+    const char *interface_name;
+    uint32_t interface_index;
+    uint32_t address_scope_id;
+    bool interface_is_up;
+    bool interface_is_running;
+    bool interface_is_loopback;
+    bool interface_is_point_to_point;
+    bool interface_supports_multicast;
+    bool address_is_interface_broadcast;
+} p2pkit_lan_interface_address_t;
+
+/**
+ * Synchronously enumerate a borrowed snapshot of Apple interface addresses.
+ *
+ * This helper deliberately performs no product-policy filtering beyond the
+ * address family: the Kotlin caller owns the LAN-interface and unicast rules
+ * and tests them deterministically. The callback is synchronous, and the
+ * getifaddrs list is always released before this function returns.
+ *
+ * Returns 0 on success or an errno value when enumeration cannot start.
+ */
+static inline int p2pkit_lan_enumerate_interface_addresses(
+    void (^handler)(const p2pkit_lan_interface_address_t *candidate)
+) {
+    if (handler == NULL) return EINVAL;
+
+    struct ifaddrs *interfaces = NULL;
+    if (getifaddrs(&interfaces) != 0) {
+        int enumeration_errno = errno;
+        return enumeration_errno != 0 ? enumeration_errno : EIO;
+    }
+    if (interfaces == NULL) return EIO;
+
+    for (struct ifaddrs *entry = interfaces; entry != NULL; entry = entry->ifa_next) {
+        if (entry->ifa_addr == NULL || entry->ifa_name == NULL) continue;
+
+        const uint8_t *bytes = NULL;
+        uint32_t length = 0;
+        uint8_t version = 0;
+        uint32_t scope_id = 0;
+        bool is_interface_broadcast = false;
+        sa_family_t family = entry->ifa_addr->sa_family;
+        if (family == AF_INET) {
+            if (entry->ifa_addr->sa_len < sizeof(struct sockaddr_in)) continue;
+            const struct sockaddr_in *address =
+                (const struct sockaddr_in *)entry->ifa_addr;
+            bytes = (const uint8_t *)&address->sin_addr;
+            length = (uint32_t)sizeof(struct in_addr);
+            version = 4;
+
+            if ((entry->ifa_flags & IFF_BROADCAST) != 0 &&
+                entry->ifa_broadaddr != NULL &&
+                entry->ifa_broadaddr->sa_family == AF_INET &&
+                entry->ifa_broadaddr->sa_len >= sizeof(struct sockaddr_in)) {
+                const struct sockaddr_in *broadcast =
+                    (const struct sockaddr_in *)entry->ifa_broadaddr;
+                is_interface_broadcast =
+                    memcmp(&address->sin_addr, &broadcast->sin_addr, sizeof(struct in_addr)) == 0;
+            }
+        } else if (family == AF_INET6) {
+            if (entry->ifa_addr->sa_len < sizeof(struct sockaddr_in6)) continue;
+            const struct sockaddr_in6 *address =
+                (const struct sockaddr_in6 *)entry->ifa_addr;
+            bytes = (const uint8_t *)&address->sin6_addr;
+            length = (uint32_t)sizeof(struct in6_addr);
+            version = 6;
+            scope_id = address->sin6_scope_id;
+        } else {
+            continue;
+        }
+
+        p2pkit_lan_interface_address_t candidate = {
+            .address_bytes = bytes,
+            .address_length = length,
+            .ip_version = version,
+            .interface_name = entry->ifa_name,
+            .interface_index = if_nametoindex(entry->ifa_name),
+            .address_scope_id = scope_id,
+            .interface_is_up = (entry->ifa_flags & IFF_UP) != 0,
+            .interface_is_running = (entry->ifa_flags & IFF_RUNNING) != 0,
+            .interface_is_loopback = (entry->ifa_flags & IFF_LOOPBACK) != 0,
+            .interface_is_point_to_point = (entry->ifa_flags & IFF_POINTOPOINT) != 0,
+            .interface_supports_multicast = (entry->ifa_flags & IFF_MULTICAST) != 0,
+            .address_is_interface_broadcast = is_interface_broadcast,
+        };
+        handler(&candidate);
+    }
+
+    freeifaddrs(interfaces);
+    return 0;
 }
 
 /**
