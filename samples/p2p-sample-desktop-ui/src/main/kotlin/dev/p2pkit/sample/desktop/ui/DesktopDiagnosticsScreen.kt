@@ -64,7 +64,7 @@ internal fun DesktopDiagnosticsScreen(
     )
     val liveEvents = remember(revision, filter) { diagnostics.recorder.snapshot(filter) }
     val events = if (paused) pausedEvents else liveEvents
-    val summary = diagnostics.recorder.summary()
+    val summary = diagnostics.summary()
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),

@@ -119,7 +119,7 @@ internal class AndroidDiagnosticHarness(
     fun export(): File = DiagnosticEvidenceExporter.export(
         recorder = recorder,
         directory = File(appContext.cacheDir, "test-evidence"),
-        additionalFiles = rollingSink.evidenceFiles()
+        additionalFiles = rollingSink.evidenceFiles(recorder.activeSessionId)
     )
 
     fun clearCurrentSession(): Int {

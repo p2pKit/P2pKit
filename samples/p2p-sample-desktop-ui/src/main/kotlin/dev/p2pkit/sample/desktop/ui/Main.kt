@@ -769,7 +769,6 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
                     details = mapOf("filename" to file.name, "mimeType" to "test-fixture")
                 )
             )
-            diagnostics.hash(session.peer.id.value, null, file.length(), sourceDigest, receiver = false)
             appendSystemMessage("prepared ${file.name} sha256=$sourceDigest")
             val transfer = runCatchingCancellable { session.sendFile(file) }
                 .getOrElse {
@@ -786,6 +785,13 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
                 state = transfer.state.value.toString(),
                 size = transfer.sizeBytes,
                 direction = DiagnosticDirection.SENT
+            )
+            diagnostics.hash(
+                session.peer.id.value,
+                transfer.id,
+                file.length(),
+                sourceDigest,
+                receiver = false
             )
             registerOutgoingTransfer(transfer, session.peer.name, scope)
         }

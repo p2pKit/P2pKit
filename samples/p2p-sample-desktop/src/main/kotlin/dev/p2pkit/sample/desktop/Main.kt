@@ -366,7 +366,9 @@ private suspend fun repl(
                 val parts = arg.split(Regex("\\s+")).filter { it.isNotBlank() }
                 when (parts.firstOrNull()) {
                     null, "status" -> {
-                        val summary = CliDiagnostics.recorder.summary()
+                        val summary = CliDiagnostics.recorder.summary(
+                            selectedTransferId = CliDiagnostics.latestTransferId
+                        )
                         println(
                             "diagnostics test=${summary.testId} session=${summary.testSessionId} " +
                                 "role=${summary.role} events=${summary.eventCount} " +
@@ -795,13 +797,6 @@ private suspend fun repl(
                         )
                     )
                     println("[file → ${session.peer.name.sanitizedForTerminal()}] sha256=$sourceDigest")
-                    CliDiagnostics.fileHash(
-                        session.peer.id.value,
-                        null,
-                        file.length(),
-                        sourceDigest,
-                        receiver = false
-                    )
                     runCatching { session.sendFile(file) }
                         .onSuccess { transfer ->
                             CliDiagnostics.transfer(
@@ -811,6 +806,13 @@ private suspend fun repl(
                                 state = transfer.state.value.toString(),
                                 size = transfer.sizeBytes,
                                 direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.SENT
+                            )
+                            CliDiagnostics.fileHash(
+                                session.peer.id.value,
+                                transfer.id,
+                                file.length(),
+                                sourceDigest,
+                                receiver = false
                             )
                             scope.launch {
                                 transfer.state.first { st ->

@@ -325,7 +325,9 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     fun diagnosticEvents(filter: DiagnosticFilter = DiagnosticFilter()) =
         diagnosticRecorder.snapshot(filter)
 
-    fun diagnosticSummary() = diagnosticRecorder.summary()
+    fun diagnosticSummary() = diagnosticRecorder.summary(
+        selectedTransferId = diagnosticRecorder.snapshot().lastOrNull { it.transferId != null }?.transferId
+    )
 
     internal fun recordDiagnostic(record: DiagnosticRecord) {
         diagnosticRecorder.record(record)
@@ -867,9 +869,9 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     DiagnosticRecord(
                         peerId = peerId,
                         category = "file",
-                        eventName = DiagnosticEventNames.FILE_SENDER_HASH,
+                        eventName = DiagnosticEventNames.FILE_SELECTED,
                         payloadSizeBytes = size,
-                        details = mapOf("sha256" to preparedHash)
+                        details = mapOf("source" to "android-content-uri")
                     )
                 )
                 appendSystemMessage("prepared file sha256=$preparedHash")
@@ -895,6 +897,19 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     payloadSizeBytes = transfer.sizeBytes
                 )
             )
+            if (preparedHash != null) {
+                recordDiagnostic(
+                    DiagnosticRecord(
+                        peerId = peerId,
+                        transferId = transfer.id,
+                        category = "file",
+                        eventName = DiagnosticEventNames.FILE_SENDER_HASH,
+                        payloadSizeBytes = transfer.sizeBytes,
+                        direction = DiagnosticDirection.SENT,
+                        details = mapOf("sha256" to preparedHash)
+                    )
+                )
+            }
             registerOutgoingTransfer(transfer, session.peer.name, scope)
         }
     }

@@ -3,15 +3,21 @@ package dev.p2pkit.sample.diagnostics
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DiagnosticModelTest {
@@ -130,6 +136,53 @@ class DiagnosticModelTest {
     }
 
     @Test
+    fun redactionCoversIpv6ScopesMacAddressesCredentialsAndNames() {
+        val recorder = recorder()
+        recorder.startSession("ENV-02", "receiver", "session-network-redaction")
+        recorder.record(
+            DiagnosticRecord(
+                category = "security",
+                eventName = "security.network_values.checked",
+                errorDescription =
+                    "peer=Alice filename=private.txt host=[fe80::1%en0] " +
+                        "gateway=2001:db8::42 mac=aa:bb:cc:dd:ee:ff token=ghp_secretvalue",
+                details = mapOf(
+                    "filename" to "private.txt",
+                    "peerName" to "Alice's phone",
+                    "device_name" to "Personal iPhone",
+                    "ipv6Address" to "fe80::1%en0",
+                    "mac" to "11-22-33-44-55-66",
+                    "safeNote" to
+                        "route 192.0.2.10 -> [fe80::abcd%wlan0] via 00:11:22:33:44:55"
+                )
+            )
+        )
+
+        val event = recorder.snapshot().last()
+        assertEquals("<redacted>", event.details["filename"])
+        assertEquals("<redacted>", event.details["peerName"])
+        assertEquals("<redacted>", event.details["device_name"])
+        assertEquals("<redacted>", event.details["ipv6Address"])
+        assertTrue(event.details.getValue("mac").contains("<redacted-mac:"))
+        assertTrue(event.details.getValue("safeNote").contains("<redacted-ip:"))
+        assertTrue(event.details.getValue("safeNote").contains("<redacted-mac:"))
+        val exportedText = buildString {
+            append(event.errorDescription)
+            append(event.details.values.joinToString())
+        }
+        listOf(
+            "Alice",
+            "private.txt",
+            "fe80::1",
+            "2001:db8::42",
+            "aa:bb:cc:dd:ee:ff",
+            "ghp_secretvalue",
+            "192.0.2.10",
+            "00:11:22:33:44:55"
+        ).forEach { secret -> assertFalse(secret in exportedText, "leaked $secret") }
+    }
+
+    @Test
     fun exportHasDeterministicValidNameFilesAndChecksums() {
         val recorder = recorder(timestamp = { "2026-07-23T15:45:00.000Z" })
         recorder.startSession("PS-T01", "sender", "session-abc123")
@@ -146,9 +199,246 @@ class DiagnosticModelTest {
                 assertNotNull(it.getEntry("manual-evidence-required.txt"))
                 assertNotNull(it.getEntry("checksums.sha256"))
             }
+            recorder.record(
+                DiagnosticRecord(category = "test", eventName = "test.export.repeated")
+            )
+            val replacement = DiagnosticEvidenceExporter.export(recorder, directory)
+            assertEquals(zip, replacement)
+            assertTrue(DiagnosticEvidenceExporter.verifyChecksums(replacement))
+            ZipFile(replacement).use {
+                val events = it.getInputStream(it.getEntry("events.jsonl")).bufferedReader().readText()
+                assertTrue("test.export.repeated" in events)
+            }
         } finally {
             directory.deleteRecursively()
         }
+    }
+
+    @Test
+    fun additionalEvidenceCannotReplaceCanonicalFiles() {
+        val recorder = recorder()
+        recorder.startSession("PS-T01", "sender", "session-reserved")
+        val directory = Files.createTempDirectory("p2pkit-evidence-reserved").toFile()
+        try {
+            listOf(
+                "events.jsonl",
+                "events.txt",
+                "summary.json",
+                "manual-evidence-required.txt",
+                "checksums.sha256"
+            ).forEach { reserved ->
+                assertFailsWith<IllegalArgumentException> {
+                    DiagnosticEvidenceExporter.export(
+                        recorder,
+                        directory,
+                        additionalFiles = mapOf(reserved to "replacement".toByteArray())
+                    )
+                }
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun checksumVerificationRejectsUnlistedAndDuplicateManifestEntries() {
+        val directory = Files.createTempDirectory("p2pkit-evidence-manifest").toFile()
+        try {
+            val payload = "payload".toByteArray()
+            val digest = sha256(payload)
+            val unlisted = File(directory, "unlisted.zip")
+            writeZip(
+                unlisted,
+                listOf(
+                    "events.jsonl" to payload,
+                    "extra.txt" to "extra".toByteArray(),
+                    "checksums.sha256" to "$digest  events.jsonl\n".toByteArray()
+                )
+            )
+            assertFalse(DiagnosticEvidenceExporter.verifyChecksums(unlisted))
+
+            val duplicate = File(directory, "duplicate.zip")
+            writeZip(
+                duplicate,
+                listOf(
+                    "events.jsonl" to payload,
+                    "checksums.sha256" to (
+                        "$digest  events.jsonl\n$digest  events.jsonl\n"
+                    ).toByteArray()
+                )
+            )
+            assertFalse(DiagnosticEvidenceExporter.verifyChecksums(duplicate))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun finalOutcomeComesOnlyFromTheExplicitSessionCompletionEvent() {
+        val recorder = recorder()
+        recorder.startSession("PS-T05", "both", "session-outcome")
+        recorder.record(
+            DiagnosticRecord(
+                transferId = "transfer-1",
+                category = "transfer",
+                eventName = DiagnosticEventNames.TRANSFER_COMPLETED,
+                currentState = "completed",
+                outcome = DiagnosticOutcome.SUCCESS
+            )
+        )
+        recorder.record(
+            DiagnosticRecord(
+                category = "diagnostics",
+                eventName = DiagnosticEventNames.DIAGNOSTIC_FAILURE,
+                severity = DiagnosticSeverity.ERROR,
+                outcome = DiagnosticOutcome.FAILURE
+            )
+        )
+
+        assertNull(recorder.summary().finalOutcome)
+        assertNull(recorder.summary().finalState)
+
+        recorder.completeSession(DiagnosticOutcome.CANCELLATION, "operator cancelled", "cancelled")
+        assertEquals(DiagnosticOutcome.CANCELLATION, recorder.summary().finalOutcome)
+        assertEquals("cancelled", recorder.summary().finalState)
+    }
+
+    @Test
+    fun hashAndIntegrityEvidenceNeverMixesTransfers() {
+        val recorder = recorder()
+        recorder.startSession("PS-T01", "both", "session-transfers")
+        fun hash(transferId: String, sender: Boolean, digest: String) {
+            recorder.record(
+                DiagnosticRecord(
+                    connectionId = "connection-$transferId",
+                    transferId = transferId,
+                    category = "file",
+                    eventName = if (sender) {
+                        DiagnosticEventNames.FILE_SENDER_HASH
+                    } else {
+                        DiagnosticEventNames.FILE_RECEIVER_HASH
+                    },
+                    payloadSizeBytes = if (sender) 10 else 11,
+                    details = mapOf("sha256" to digest)
+                )
+            )
+        }
+        hash("transfer-a", sender = true, digest = "a".repeat(64))
+        hash("transfer-b", sender = false, digest = "b".repeat(64))
+        recorder.record(
+            DiagnosticRecord(
+                transferId = "transfer-b",
+                category = "file",
+                eventName = DiagnosticEventNames.FILE_INTEGRITY_CHECKED,
+                details = mapOf("match" to "false")
+            )
+        )
+
+        val ambiguous = recorder.summary()
+        assertNull(ambiguous.selectedTransferId)
+        assertNull(ambiguous.senderSha256)
+        assertNull(ambiguous.receiverSha256)
+        assertNull(ambiguous.integrityMatch)
+        assertEquals(2, ambiguous.transferSummaries.size)
+
+        val first = recorder.summary(selectedTransferId = "transfer-a")
+        assertEquals("transfer-a", first.selectedTransferId)
+        assertEquals("a".repeat(64), first.senderSha256)
+        assertNull(first.receiverSha256)
+        assertNull(first.integrityMatch)
+
+        val second = recorder.summary(selectedTransferId = "transfer-b")
+        assertEquals("transfer-b", second.selectedTransferId)
+        assertNull(second.senderSha256)
+        assertEquals("b".repeat(64), second.receiverSha256)
+        assertFalse(second.integrityMatch ?: true)
+    }
+
+    @Test
+    fun sessionContextAndPersistedIndexOrderAreAtomicWhileSinkIsBlocked() {
+        val firstSinkCall = CountDownLatch(1)
+        val releaseSink = CountDownLatch(1)
+        val sessionChanged = CountDownLatch(1)
+        val persisted = mutableListOf<String>()
+        val persistedLock = Any()
+        val recorder = recorder(eventSink = { line ->
+            synchronized(persistedLock) { persisted += line }
+            if (firstSinkCall.count == 1L) {
+                firstSinkCall.countDown()
+                check(releaseSink.await(5, TimeUnit.SECONDS)) { "test did not release sink" }
+            }
+        })
+
+        val first = thread {
+            recorder.startSession("PS-T01", "sender", "session-a")
+        }
+        assertTrue(firstSinkCall.await(5, TimeUnit.SECONDS), "first sink call never started")
+        val second = thread {
+            recorder.startSession("PS-T02", "receiver", "session-b")
+            recorder.record(
+                DiagnosticRecord(
+                    category = "test",
+                    eventName = "test.atomic_context"
+                )
+            )
+            sessionChanged.countDown()
+        }
+        assertTrue(
+            sessionChanged.await(5, TimeUnit.SECONDS),
+            "session mutation waited for the external sink, so the sink ran under the recorder lock"
+        )
+        releaseSink.countDown()
+        first.join(5_000)
+        second.join(5_000)
+        assertFalse(first.isAlive)
+        assertFalse(second.isAlive)
+
+        val stored = recorder.snapshot()
+        assertEquals(listOf(1L, 2L, 3L), stored.map { it.index })
+        assertEquals("session-a", stored[0].testSessionId)
+        assertEquals("PS-T01", stored[0].testId)
+        assertTrue(stored.drop(1).all { it.testSessionId == "session-b" && it.testId == "PS-T02" })
+        val persistedEvents = synchronized(persistedLock) {
+            persisted.map { JSON.decodeFromString<DiagnosticEvent>(it) }
+        }
+        assertEquals(stored.map { it.index }, persistedEvents.map { it.index })
+    }
+
+    @Test
+    fun blockedExternalSinkCannotCreateAnUnboundedPendingQueue() {
+        val sinkEntered = CountDownLatch(1)
+        val releaseSink = CountDownLatch(1)
+        val persisted = mutableListOf<DiagnosticEvent>()
+        val recorder = recorder(maxEvents = 4, eventSink = { line ->
+            synchronized(persisted) {
+                persisted += JSON.decodeFromString<DiagnosticEvent>(line)
+            }
+            if (sinkEntered.count == 1L) {
+                sinkEntered.countDown()
+                check(releaseSink.await(5, TimeUnit.SECONDS)) { "test did not release sink" }
+            }
+        })
+        val owner = thread {
+            recorder.startSession("PS-T01", "sender", "session-bounded-sink")
+        }
+        assertTrue(sinkEntered.await(5, TimeUnit.SECONDS))
+
+        repeat(20) { index ->
+            recorder.record(
+                DiagnosticRecord(
+                    category = "test",
+                    eventName = "test.pending.$index"
+                )
+            )
+        }
+        releaseSink.countDown()
+        owner.join(5_000)
+        assertFalse(owner.isAlive)
+
+        val persistedSnapshot = synchronized(persisted) { persisted.toList() }
+        assertTrue(persistedSnapshot.size <= 5, "one in-flight event plus four bounded pending events")
+        assertEquals(persistedSnapshot.map { it.index }.sorted(), persistedSnapshot.map { it.index })
+        assertTrue(recorder.droppedEventCount() >= 17)
     }
 
     @Test
@@ -284,17 +574,59 @@ class DiagnosticModelTest {
         val directory = Files.createTempDirectory("p2pkit-rolling").toFile()
         try {
             val sink = RollingJsonlFileSink(directory, maxBytes = 4_096, maxFiles = 2)
-            sink("""{"testSessionId":"session-a","index":1}""")
-            repeat(200) { sink("""{"testSessionId":"session-b","index":$it,"padding":"${"x".repeat(80)}"}""") }
-            sink("""{"testSessionId":"session-a","index":2}""")
-            val files = directory.listFiles().orEmpty().filter { it.name.endsWith(".jsonl") }
+            val recorder = recorder(maxEvents = 1_000, eventSink = sink)
+            recorder.startSession("PS-T01", "sender", "session-a")
+            recorder.record(DiagnosticRecord(category = "test", eventName = "test.session_a.first"))
+            recorder.startSession("PS-T02", "receiver", "session-b")
+            repeat(200) { index ->
+                recorder.record(
+                    DiagnosticRecord(
+                        category = "test",
+                        eventName = "test.session_b.$index",
+                        details = mapOf("padding" to "x".repeat(80))
+                    )
+                )
+            }
+            recorder.startSession("PS-T01", "sender", "session-a")
+            recorder.record(DiagnosticRecord(category = "test", eventName = "test.session_a.last"))
+            val selected = sink.evidenceFiles("session-a")
+            assertTrue(selected.isNotEmpty())
+            assertTrue(selected.values.all { bytes ->
+                val text = bytes.decodeToString()
+                "\"testSessionId\":\"session-a\"" in text &&
+                    "\"testSessionId\":\"session-b\"" !in text
+            })
+            val evidenceDirectory = File(directory, "evidence")
+            val archive = DiagnosticEvidenceExporter.export(
+                recorder,
+                evidenceDirectory,
+                additionalFiles = selected
+            )
+            assertTrue(DiagnosticEvidenceExporter.verifyChecksums(archive))
+            ZipFile(archive).use { zip ->
+                val processEntries = buildList {
+                    val entries = zip.entries()
+                    while (entries.hasMoreElements()) {
+                        entries.nextElement().takeIf { it.name.startsWith("process-") }?.let(::add)
+                    }
+                }
+                assertTrue(processEntries.isNotEmpty())
+                val processText = processEntries.joinToString("\n") {
+                    zip.getInputStream(it).bufferedReader().readText()
+                }
+                assertTrue("\"testSessionId\":\"session-a\"" in processText)
+                assertFalse("\"testSessionId\":\"session-b\"" in processText)
+            }
+            val files = directory.listFiles().orEmpty().filter {
+                it.name.matches(Regex("""diagnostic-events\.jsonl(?:\.\d+)?"""))
+            }
             assertTrue(files.size <= 2)
             assertTrue(files.all { it.length() <= 4_096 })
             sink.clearSession("session-b")
-            assertTrue(directory.listFiles().orEmpty().none { file ->
+            assertTrue(files.none { file ->
                 file.readText().contains("\"testSessionId\":\"session-b\"")
             })
-            assertTrue(directory.listFiles().orEmpty().any { file ->
+            assertTrue(files.any { file ->
                 file.readText().contains("\"testSessionId\":\"session-a\"")
             })
         } finally {
@@ -322,4 +654,14 @@ class DiagnosticModelTest {
         idFactory = { "session-fixed" },
         eventSink = eventSink
     )
+
+    private fun writeZip(file: File, entries: List<Pair<String, ByteArray>>) {
+        ZipOutputStream(FileOutputStream(file)).use { zip ->
+            entries.forEach { (name, contents) ->
+                zip.putNextEntry(ZipEntry(name))
+                zip.write(contents)
+                zip.closeEntry()
+            }
+        }
+    }
 }

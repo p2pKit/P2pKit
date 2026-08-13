@@ -176,7 +176,7 @@ internal class DesktopDiagnosticHarness(
         )
     }
 
-    fun hash(peerId: String, transferId: String?, size: Long, digest: String, receiver: Boolean) {
+    fun hash(peerId: String, transferId: String, size: Long, digest: String, receiver: Boolean) {
         recorder.record(
             DiagnosticRecord(
                 peerId = peerId,
@@ -199,10 +199,12 @@ internal class DesktopDiagnosticHarness(
         recorder.completeSession(outcome, "operator selected ${outcome.name}", outcome.name)
     }
 
+    fun summary() = recorder.summary(selectedTransferId = latestTransferId)
+
     fun export(): File = DiagnosticEvidenceExporter.export(
         recorder,
         File(home, ".p2pkit/test-evidence"),
-        additionalFiles = rolling.evidenceFiles()
+        additionalFiles = rolling.evidenceFiles(recorder.activeSessionId)
     )
 
     fun clearCurrent(): Int {

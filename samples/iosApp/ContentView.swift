@@ -1364,13 +1364,6 @@ struct ContentView: View {
             payloadSizeBytes: Int64(size),
             details: ["name": name, "preset": preset.rawValue]
         ))
-        diagnostics.fileHash(
-            peerId: row.peerId,
-            transferId: nil,
-            size: Int64(size),
-            digest: digest,
-            receiver: false
-        )
         diag("file", "sendFile '\(name)' (\(size) B) sha256=\(digest) -> \(row.peerName)")
         appendMessage("prepared \(name): sha256 \(digest)", kind: .info)
         do {

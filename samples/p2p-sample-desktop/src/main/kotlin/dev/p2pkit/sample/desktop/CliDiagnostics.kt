@@ -207,7 +207,7 @@ internal object CliDiagnostics {
         )
     }
 
-    fun fileHash(peerId: String, transferId: String?, size: Long, digest: String, receiver: Boolean) {
+    fun fileHash(peerId: String, transferId: String, size: Long, digest: String, receiver: Boolean) {
         recorder.record(
             DiagnosticRecord(
                 peerId = peerId,
@@ -229,7 +229,7 @@ internal object CliDiagnostics {
     fun export(): File = DiagnosticEvidenceExporter.export(
         recorder = recorder,
         directory = evidenceDirectory,
-        additionalFiles = rolling.evidenceFiles()
+        additionalFiles = rolling.evidenceFiles(recorder.activeSessionId)
     )
 
     fun clearCurrent() {

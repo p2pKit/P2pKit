@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import SwiftUI
 import UIKit
@@ -164,7 +165,18 @@ enum TestDiagnosticEventName {
     static let diagnosticFailure = "diagnostics.failure"
 }
 
-private struct TestDiagnosticSummary: Codable {
+struct TestDiagnosticTransferSummary: Codable, Equatable {
+    let transferId: String
+    let connectionIds: [String]
+    let peerIds: [String]
+    let senderFileSizeBytes: Int64?
+    let receiverFileSizeBytes: Int64?
+    let senderSha256: String?
+    let receiverSha256: String?
+    let integrityMatch: Bool?
+}
+
+struct TestDiagnosticSummary: Codable {
     let schemaVersion: Int
     let testId: String
     let testSessionId: String
@@ -181,6 +193,8 @@ private struct TestDiagnosticSummary: Codable {
     let connectionIds: [String]
     let transferIds: [String]
     let peerIds: [String]
+    let transferSummaries: [TestDiagnosticTransferSummary]
+    let selectedTransferId: String?
     let senderFileSizeBytes: Int64?
     let receiverFileSizeBytes: Int64?
     let senderSha256: String?
@@ -194,6 +208,20 @@ private struct TestDiagnosticSummary: Codable {
     let droppedEventCount: Int64
     let configuration: [String: String]
     let manualEvidenceStillRequired: [String]
+}
+
+enum TestDiagnosticEvidenceError: LocalizedError {
+    case reservedFilename(String)
+    case invalidChecksumManifest
+
+    var errorDescription: String? {
+        switch self {
+        case .reservedFilename(let name):
+            return "Diagnostic evidence tried to replace reserved file \(name)"
+        case .invalidChecksumManifest:
+            return "Diagnostic evidence checksum manifest is incomplete or ambiguous"
+        }
+    }
 }
 
 @MainActor
@@ -241,10 +269,30 @@ final class IOSTestDiagnosticStore: ObservableObject {
     private var encodedBytes = 0
     private var droppedEvents: Int64 = 0
     private var sessionStart = Date()
+    private var transferEvidence: [String: TransferEvidence] = [:]
     private let encoder: JSONEncoder
     private let logDirectory: URL
+    private let evidenceDirectory: URL
+    private let defaults: UserDefaults
 
-    init(baseDirectory: URL? = nil, defaults: UserDefaults = .standard) {
+    private struct TransferEvidence {
+        var senderFileSizeBytes: Int64? = nil
+        var receiverFileSizeBytes: Int64? = nil
+        var senderSha256: String? = nil
+        var receiverSha256: String? = nil
+
+        var integrityMatch: Bool? {
+            guard let senderSha256, let receiverSha256 else { return nil }
+            return senderSha256 == receiverSha256
+        }
+    }
+
+    init(
+        baseDirectory: URL? = nil,
+        evidenceDirectory: URL? = nil,
+        defaults: UserDefaults = .standard
+    ) {
+        self.defaults = defaults
         applicationVersion = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
         ) as? String ?? "0"
@@ -276,6 +324,14 @@ final class IOSTestDiagnosticStore: ObservableObject {
                 "P2pKitTestDiagnostics",
                 isDirectory: true
             )
+        }
+        if let evidenceDirectory {
+            self.evidenceDirectory = evidenceDirectory
+        } else {
+            self.evidenceDirectory = FileManager.default.urls(
+                for: .documentDirectory,
+                in: .userDomainMask
+            )[0].appendingPathComponent("P2pKitEvidence", isDirectory: true)
         }
         try? FileManager.default.createDirectory(
             at: logDirectory,
@@ -315,11 +371,12 @@ final class IOSTestDiagnosticStore: ObservableObject {
         senderSha256 = nil
         receiverSha256 = nil
         integrityMatch = nil
+        transferEvidence.removeAll()
         finalOutcome = nil
         sessionStart = Date()
-        UserDefaults.standard.set(activeTestId, forKey: Self.defaultsTest)
-        UserDefaults.standard.set(activeSessionId, forKey: Self.defaultsSession)
-        UserDefaults.standard.set(activeRole, forKey: Self.defaultsRole)
+        defaults.set(activeTestId, forKey: Self.defaultsTest)
+        defaults.set(activeSessionId, forKey: Self.defaultsSession)
+        defaults.set(activeRole, forKey: Self.defaultsRole)
         record(TestDiagnosticRecord(
             category: "test",
             eventName: TestDiagnosticEventName.testSessionCreated,
@@ -540,6 +597,10 @@ final class IOSTestDiagnosticStore: ObservableObject {
     ) {
         activeTransferId = transferId
         currentTransferState = state
+        let selectedEvidence = transferEvidence[transferId]
+        senderSha256 = selectedEvidence?.senderSha256
+        receiverSha256 = selectedEvidence?.receiverSha256
+        integrityMatch = selectedEvidence?.integrityMatch
         record(TestDiagnosticRecord(
             peerId: peerId,
             connectionId: activeConnectionId,
@@ -575,12 +636,25 @@ final class IOSTestDiagnosticStore: ObservableObject {
 
     func fileHash(
         peerId: String,
-        transferId: String?,
+        transferId: String,
         size: Int64,
         digest: String,
         receiver: Bool
     ) {
-        if receiver { receiverSha256 = digest } else { senderSha256 = digest }
+        var evidence = transferEvidence[transferId] ?? TransferEvidence()
+        if receiver {
+            evidence.receiverFileSizeBytes = size
+            evidence.receiverSha256 = digest
+        } else {
+            evidence.senderFileSizeBytes = size
+            evidence.senderSha256 = digest
+        }
+        transferEvidence[transferId] = evidence
+        if activeTransferId == transferId {
+            senderSha256 = evidence.senderSha256
+            receiverSha256 = evidence.receiverSha256
+            integrityMatch = evidence.integrityMatch
+        }
         record(TestDiagnosticRecord(
             peerId: peerId,
             connectionId: activeConnectionId,
@@ -591,18 +665,17 @@ final class IOSTestDiagnosticStore: ObservableObject {
             payloadSizeBytes: size,
             details: ["sha256": digest]
         ))
-        if let senderSha256, let receiverSha256 {
-            integrityMatch = senderSha256 == receiverSha256
+        if let match = evidence.integrityMatch {
             record(TestDiagnosticRecord(
                 peerId: peerId,
                 connectionId: activeConnectionId,
                 transferId: transferId,
                 category: "file",
                 eventName: TestDiagnosticEventName.integrityChecked,
-                severity: integrityMatch == true ? .info : .error,
-                currentState: integrityMatch == true ? "matched" : "mismatch",
-                outcome: integrityMatch == true ? .success : .failure,
-                details: ["match": integrityMatch == true ? "true" : "false"]
+                severity: match ? .info : .error,
+                currentState: match ? "matched" : "mismatch",
+                outcome: match ? .success : .failure,
+                details: ["match": match ? "true" : "false"]
             ))
         }
     }
@@ -666,10 +739,16 @@ final class IOSTestDiagnosticStore: ObservableObject {
                 manual.map { "- \($0)" }.joined(separator: "\n").appending("\n").utf8
             )
         ]
-        let checksums = files.keys.sorted().map {
-            "\(Self.sha256(files[$0]!))  \($0)"
-        }.joined(separator: "\n") + "\n"
-        files["checksums.sha256"] = Data(checksums.utf8)
+        for (name, data) in persistedEvidenceFiles(sessionId: activeSessionId) {
+            guard files[name] == nil, name != "checksums.sha256" else {
+                throw TestDiagnosticEvidenceError.reservedFilename(name)
+            }
+            files[name] = data
+        }
+        files["checksums.sha256"] = try Self.checksumManifest(for: files)
+        guard Self.checksumManifestIsComplete(files) else {
+            throw TestDiagnosticEvidenceError.invalidChecksumManifest
+        }
         let timestamp = Self.filenameTimestamp(summary.startTimestamp ?? Self.timestamp())
         let filename = [
             Self.filenamePart(activeTestId),
@@ -677,21 +756,18 @@ final class IOSTestDiagnosticStore: ObservableObject {
             timestamp,
             Self.filenamePart(activeSessionId)
         ].joined(separator: "_") + ".zip"
-        let exportDirectory = FileManager.default.urls(
-            for: .documentDirectory,
-            in: .userDomainMask
-        )[0].appendingPathComponent("P2pKitEvidence", isDirectory: true)
         try FileManager.default.createDirectory(
-            at: exportDirectory,
+            at: evidenceDirectory,
             withIntermediateDirectories: true
         )
-        let destination = exportDirectory.appendingPathComponent(filename)
+        let destination = evidenceDirectory.appendingPathComponent(filename)
         let temporary = destination.appendingPathExtension("part")
         try SimpleEvidenceZip.write(files: files, to: temporary)
         if FileManager.default.fileExists(atPath: destination.path) {
-            try FileManager.default.removeItem(at: destination)
+            _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
+        } else {
+            try FileManager.default.moveItem(at: temporary, to: destination)
         }
-        try FileManager.default.moveItem(at: temporary, to: destination)
         record(TestDiagnosticRecord(
             category: "evidence",
             eventName: TestDiagnosticEventName.evidenceExported,
@@ -703,19 +779,24 @@ final class IOSTestDiagnosticStore: ObservableObject {
         return destination
     }
 
-    private func makeSummary(
+    func makeSummary(
         _ selected: [TestDiagnosticEvent],
         manual: [String]
     ) -> TestDiagnosticSummary {
-        let sender = selected.last { $0.eventName == TestDiagnosticEventName.senderHash }
-        let receiver = selected.last { $0.eventName == TestDiagnosticEventName.receiverHash }
-        let integrity = selected.last { $0.eventName == TestDiagnosticEventName.integrityChecked }
-        let terminal = selected.last { $0.outcome != nil }
+        let transferIds = Self.distinct(selected.compactMap(\.transferId))
+        let transferSummaries = transferIds.map { transferId in
+            Self.transferSummary(transferId: transferId, events: selected)
+        }
+        let selectedTransfer = transferSummaries.count == 1 ? transferSummaries[0] : nil
+        let terminal = selected.last {
+            $0.eventName == TestDiagnosticEventName.testSessionCompleted && $0.outcome != nil
+        }
+        let first = selected.first
         return TestDiagnosticSummary(
             schemaVersion: 1,
-            testId: activeTestId,
-            testSessionId: activeSessionId,
-            role: activeRole,
+            testId: first?.testId ?? activeTestId,
+            testSessionId: first?.testSessionId ?? activeSessionId,
+            role: first?.role ?? activeRole,
             platform: platform,
             operatingSystem: operatingSystem,
             applicationVersion: applicationVersion,
@@ -726,13 +807,15 @@ final class IOSTestDiagnosticStore: ObservableObject {
             endTimestamp: selected.last?.timestamp,
             protocolVersion: "secure-v2",
             connectionIds: Self.distinct(selected.compactMap(\.connectionId)),
-            transferIds: Self.distinct(selected.compactMap(\.transferId)),
+            transferIds: transferIds,
             peerIds: Self.distinct(selected.compactMap(\.peerId)),
-            senderFileSizeBytes: sender?.payloadSizeBytes,
-            receiverFileSizeBytes: receiver?.payloadSizeBytes,
-            senderSha256: sender?.details["sha256"],
-            receiverSha256: receiver?.details["sha256"],
-            integrityMatch: integrity?.details["match"].flatMap(Bool.init),
+            transferSummaries: transferSummaries,
+            selectedTransferId: selectedTransfer?.transferId,
+            senderFileSizeBytes: selectedTransfer?.senderFileSizeBytes,
+            receiverFileSizeBytes: selectedTransfer?.receiverFileSizeBytes,
+            senderSha256: selectedTransfer?.senderSha256,
+            receiverSha256: selectedTransfer?.receiverSha256,
+            integrityMatch: selectedTransfer?.integrityMatch,
             finalState: terminal?.currentState,
             finalOutcome: terminal?.outcome,
             warningCount: selected.filter { $0.severity == .warning }.count,
@@ -741,6 +824,26 @@ final class IOSTestDiagnosticStore: ObservableObject {
             droppedEventCount: droppedEvents,
             configuration: configuration,
             manualEvidenceStillRequired: manual
+        )
+    }
+
+    private static func transferSummary(
+        transferId: String,
+        events: [TestDiagnosticEvent]
+    ) -> TestDiagnosticTransferSummary {
+        let selected = events.filter { $0.transferId == transferId }
+        let sender = selected.last { $0.eventName == TestDiagnosticEventName.senderHash }
+        let receiver = selected.last { $0.eventName == TestDiagnosticEventName.receiverHash }
+        let integrity = selected.last { $0.eventName == TestDiagnosticEventName.integrityChecked }
+        return TestDiagnosticTransferSummary(
+            transferId: transferId,
+            connectionIds: distinct(selected.compactMap(\.connectionId)),
+            peerIds: distinct(selected.compactMap(\.peerId)),
+            senderFileSizeBytes: sender?.payloadSizeBytes,
+            receiverFileSizeBytes: receiver?.payloadSizeBytes,
+            senderSha256: sender?.details["sha256"],
+            receiverSha256: receiver?.details["sha256"],
+            integrityMatch: integrity?.details["match"].flatMap(Bool.init)
         )
     }
 
@@ -792,6 +895,31 @@ final class IOSTestDiagnosticStore: ObservableObject {
                 options: .atomic
             )
         }
+    }
+
+    /// Returns restart-spanning JSONL with only exact decoded session matches.
+    /// Malformed or older-schema lines are not copied into a shareable package.
+    func persistedEvidenceFiles(sessionId: String) -> [String: Data] {
+        let names = ["events.jsonl", "events.1.jsonl", "events.2.jsonl", "events.3.jsonl"]
+        var result: [String: Data] = [:]
+        for name in names {
+            let source = logDirectory.appendingPathComponent(name)
+            guard let contents = try? Data(contentsOf: source), !contents.isEmpty else { continue }
+            let selected = contents.split(separator: 0x0a).compactMap { line -> Data? in
+                let data = Data(line)
+                guard let event = try? JSONDecoder().decode(TestDiagnosticEvent.self, from: data),
+                      event.testSessionId == sessionId else { return nil }
+                return data
+            }
+            guard !selected.isEmpty else { continue }
+            var filtered = Data()
+            for line in selected {
+                filtered.append(line)
+                filtered.append(0x0a)
+            }
+            result["process-\(name)"] = filtered
+        }
+        return result
     }
 
     private static func timestamp() -> String {
@@ -857,14 +985,16 @@ final class IOSTestDiagnosticStore: ObservableObject {
     ) {
         let sensitive = [
             "password", "passphrase", "credential", "secret", "token",
-            "privatekey", "private_key", "signing", "authorization", "cookie",
-            "ssid", "bssid", "payload", "content"
+            "privatekey", "signing", "authorization", "cookie", "ssid", "bssid",
+            "payload", "content", "filename", "peername", "devicename", "displayname",
+            "hostname", "ipaddress", "ipv4address", "ipv6address", "address", "name"
         ]
         var safe: [String: String] = [:]
         var fields: [String] = []
         for (key, value) in values {
+            let normalizedKey = key.lowercased().filter { $0.isLetter || $0.isNumber }
             if sensitive.contains(where: {
-                key.lowercased().replacingOccurrences(of: "-", with: "").contains($0)
+                normalizedKey.contains($0)
             }) {
                 safe[key] = "<redacted>"
                 fields.append(key)
@@ -875,7 +1005,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
         return (safe, fields.sorted())
     }
 
-    private static func redactText(_ value: String) -> String {
+    static func redactText(_ value: String) -> String {
         var result = String(value.unicodeScalars.filter {
             $0.value >= 0x20 && $0.value != 0x7f
         }.prefix(1_024))
@@ -888,13 +1018,38 @@ final class IOSTestDiagnosticStore: ObservableObject {
             withTemplate: "<redacted-credential>"
         ) ?? result
         let sensitiveAssignment = try? NSRegularExpression(
-            pattern: #"(?i)(payload|content|body|data|text|message|bytes|raw)\s*=\s*(?:"[^"]*"|\S+)"#
+            pattern: #"(?i)(password|passphrase|credential|secret|token|ssid|bssid|payload|content|body|data|text|message|bytes|raw|file.?name|peer.?name|device.?name|display.?name|name|peer|device|host(?:name)?|ip(?:v[46])?.?address|address)\s*=\s*(?:"[^"]*"|'[^']*'|\S+)"#
         )
         result = sensitiveAssignment?.stringByReplacingMatches(
             in: result,
             range: NSRange(result.startIndex..., in: result),
             withTemplate: "$1=<redacted>"
         ) ?? result
+        let mac = try? NSRegularExpression(
+            pattern: #"(?i)(?<![0-9a-f])(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}(?![0-9a-f])"#
+        )
+        let macMatches = Array(mac?.matches(
+            in: result,
+            range: NSRange(result.startIndex..., in: result)
+        ) ?? []).reversed()
+        for match in macMatches {
+            guard let range = Range(match.range, in: result) else { continue }
+            let raw = String(result[range])
+            result.replaceSubrange(range, with: "<redacted-mac:\(anonymized(raw))>")
+        }
+        let ipv6 = try? NSRegularExpression(
+            pattern: #"(?i)(?<![A-Za-z0-9])(?:\[[0-9a-f:.%_-]+\]|[0-9a-f:.]*:[0-9a-f:.%_-]+)(?![A-Za-z0-9])"#
+        )
+        let ipv6Matches = Array(ipv6?.matches(
+            in: result,
+            range: NSRange(result.startIndex..., in: result)
+        ) ?? []).reversed()
+        for match in ipv6Matches {
+            guard let range = Range(match.range, in: result) else { continue }
+            let raw = String(result[range])
+            guard isIPv6Literal(raw) else { continue }
+            result.replaceSubrange(range, with: "<redacted-ip:\(anonymized(raw))>")
+        }
         let ipv4 = try? NSRegularExpression(
             pattern: #"(?<![A-Za-z0-9])(?:\d{1,3}\.){3}\d{1,3}(?![A-Za-z0-9])"#
         )
@@ -908,6 +1063,47 @@ final class IOSTestDiagnosticStore: ObservableObject {
             result.replaceSubrange(range, with: "<redacted-ip:\(anonymized(raw))>")
         }
         return result
+    }
+
+    private static func isIPv6Literal(_ candidate: String) -> Bool {
+        let unwrapped = candidate.hasPrefix("[") && candidate.hasSuffix("]")
+            ? String(candidate.dropFirst().dropLast())
+            : candidate
+        let address = String(unwrapped.split(separator: "%", maxSplits: 1)[0])
+        guard address.contains(":") else { return false }
+        var parsed = in6_addr()
+        return address.withCString { inet_pton(AF_INET6, $0, &parsed) == 1 }
+    }
+
+    static func checksumManifest(for files: [String: Data]) throws -> Data {
+        guard files["checksums.sha256"] == nil else {
+            throw TestDiagnosticEvidenceError.reservedFilename("checksums.sha256")
+        }
+        let manifest = files.keys.sorted().map { name in
+            "\(sha256(files[name]!))  \(name)"
+        }.joined(separator: "\n") + "\n"
+        return Data(manifest.utf8)
+    }
+
+    static func checksumManifestIsComplete(_ files: [String: Data]) -> Bool {
+        guard let manifestData = files["checksums.sha256"],
+              let manifestText = String(data: manifestData, encoding: .utf8) else { return false }
+        let dataFiles = files.filter { $0.key != "checksums.sha256" }
+        var listed: [String: String] = [:]
+        for line in manifestText.split(separator: "\n", omittingEmptySubsequences: true) {
+            let parts = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            guard parts.count == 2 else { return false }
+            let digest = String(parts[0])
+            let name = String(parts[1])
+            guard digest.range(of: #"^[0-9a-f]{64}$"#, options: .regularExpression) != nil,
+                  name != "checksums.sha256",
+                  listed.updateValue(digest, forKey: name) == nil else { return false }
+        }
+        guard Set(listed.keys) == Set(dataFiles.keys) else { return false }
+        return listed.allSatisfy { name, digest in
+            guard let data = dataFiles[name] else { return false }
+            return sha256(data) == digest
+        }
     }
 
     private static func readable(_ event: TestDiagnosticEvent) -> String {
