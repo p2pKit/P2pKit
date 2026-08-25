@@ -1059,7 +1059,9 @@ declare a `kapt(...)` dependency, and PR #103 additionally prevents Gradle
 build-cache metadata from being restored or saved across hosted workflow trust
 boundaries. The first upstream patched version is currently a beta, so the
 alert remains visible pending a stable Kotlin toolchain release; it is not
-dismissed as fixed.
+dismissed as fixed. The recurring OSV lockfile scan carries the same explicit,
+expiring exception through 2026-10-31; every other advisory remains
+fail-closed.
 
 ### Final repository/external boundary by open issue
 

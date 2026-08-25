@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORKFLOW="$ROOT/.github/workflows/osv-scanner.yml"
+CONFIG="$ROOT/osv-scanner.toml"
 
 fail() {
     echo "FATAL: $*" >&2
@@ -26,6 +27,17 @@ git -C "$ROOT" ls-files --error-unmatch "$buildscript_lock" >/dev/null 2>&1 ||
     fail "root build-plugin lock is not tracked: $buildscript_lock"
 grep -Eq '^[^#[:space:]][^=]*:[^=]*=([^,]*,)*classpath(,|$)' "$ROOT/$buildscript_lock" ||
     fail "root build-plugin lock contains no classpath dependencies"
+
+git -C "$ROOT" ls-files --error-unmatch "osv-scanner.toml" >/dev/null 2>&1 ||
+    fail "OSV exception policy is not tracked"
+[[ "$(grep -Fxc '        --config=./osv-scanner.toml' "$WORKFLOW" || true)" == "1" ]] ||
+    fail "OSV workflow must apply the repository-wide exception policy exactly once"
+[[ "$(grep -Fxc 'id = "GHSA-r937-wjx7-w2jp"' "$CONFIG" || true)" == "1" ]] ||
+    fail "Kotlin build-cache advisory exception must be explicit and unique"
+grep -Fqx 'ignoreUntil = 2026-10-31' "$CONFIG" ||
+    fail "Kotlin build-cache advisory exception must expire on 2026-10-31"
+grep -Fq 'caches/build-cache-1' "$CONFIG" ||
+    fail "Kotlin advisory exception must document the enforced cache isolation"
 
 # Gradle verification metadata is a checksum allowlist that retains historical
 # artifacts. It is not resolved dependency state, so treating it as a lockfile

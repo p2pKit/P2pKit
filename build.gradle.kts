@@ -162,7 +162,7 @@ allprojects {
             val requestedGroup = requested.group ?: return@eachDependency
             val requestedModule = "$requestedGroup:${requested.name}"
             val minimumVersion = when (requestedGroup) {
-                "io.netty" -> "4.1.136.Final"
+                "io.netty" -> "4.1.137.Final"
                 "org.bouncycastle" -> "1.85"
                 else -> advisoryMinimumVersions[requestedModule]
             }

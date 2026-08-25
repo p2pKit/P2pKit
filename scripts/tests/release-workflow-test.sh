@@ -362,19 +362,19 @@ grep -Fq 'XCODEGEN_SHA256="090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc8
     exit 1
 }
 
-grep -Fq '"io.netty" -> "4.1.136.Final"' "$ROOT/build.gradle.kts" || {
-    echo "FATAL: Netty advisory floor is not 4.1.136.Final" >&2
+grep -Fq '"io.netty" -> "4.1.137.Final"' "$ROOT/build.gradle.kts" || {
+    echo "FATAL: Netty advisory floor is not 4.1.137.Final" >&2
     exit 1
 }
 [[ "$(grep -Fc '"org.jsoup:jsoup" to "1.23.1"' "$ROOT/build.gradle.kts")" == "2" ]] || {
     echo "FATAL: root and project build-tool jsoup advisory floors are not 1.23.1" >&2
     exit 1
 }
-grep -Fq 'io.netty:netty-codec-http:4.1.136.Final=' "$ANDROID_LOCK" || {
+grep -Fq 'io.netty:netty-codec-http:4.1.137.Final=' "$ANDROID_LOCK" || {
     echo "FATAL: Android test tooling is not locked to patched Netty" >&2
     exit 1
 }
-if grep -Fq 'io.netty:netty-codec-http:4.1.135.Final=' "$ANDROID_LOCK"; then
+if grep -Eq 'io.netty:netty-codec-http:4\.1\.(135|136)\.Final=' "$ANDROID_LOCK"; then
     echo "FATAL: vulnerable Netty remains in the Android test-tooling lock" >&2
     exit 1
 fi

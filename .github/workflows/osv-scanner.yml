@@ -22,6 +22,7 @@ jobs:
       fail-on-vuln: true
       upload-sarif: true
       scan-args: |-
+        --config=./osv-scanner.toml
         --lockfile=gradle.lockfile:./buildscript-gradle.lockfile
         --lockfile=./library/p2p-core/gradle.lockfile
         --lockfile=./library/p2p-transport-lan/gradle.lockfile
