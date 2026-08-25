@@ -25,8 +25,9 @@ import kotlin.coroutines.CoroutineContext
  *
  * The `*Blocking` functions may block (JmDNS calls do); the coordinator hops
  * to its blocking-I/O context around every call, so implementations must NOT hop or
- * suspend themselves. Everything else must be cheap and non-blocking — it is
- * called inline under the coordinator lock.
+ * suspend themselves. Network probes are also allowed to block and are always
+ * sampled on that context before the lifecycle lock is acquired. Everything else
+ * must be cheap and non-blocking — it is called inline under the coordinator lock.
  */
 internal data class JmdnsHandleBinding<N : Any, H : Any>(
     /** Exact target the returned handle actually bound, after any safe re-resolution. */
@@ -73,10 +74,10 @@ internal interface JmdnsLifecycleOps<N : Any, H : Any> {
 
     fun removeListenerBlocking(handle: H, token: Any)
 
-    /** The platform's current active network (bind target for lazy starts). */
+    /** The platform's current active network (bind target for lazy starts). May block. */
     fun currentNetwork(): N?
 
-    /** Most recent usable LAN target derived from the primary platform watcher. */
+    /** Most recent usable LAN target derived from the primary platform watcher. May block. */
     fun observedNetwork(): N?
 
     /**
@@ -114,6 +115,11 @@ internal interface JmdnsLifecycleOps<N : Any, H : Any> {
 
     fun logWarn(message: String, error: Throwable? = null)
 }
+
+private data class JmdnsNetworkSnapshot<N : Any>(
+    val target: N?,
+    val defaultTarget: Any?
+)
 
 /**
  * Platform-neutral JmDNS-style lifecycle state machine shared by the JVM and
@@ -226,13 +232,40 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
     /** Preserve a same-network address-change request while callbacks coalesce. */
     private var pendingForcedRebind = false
 
-    suspend fun startAdvertising(localPeer: LocalPeerInfo): Unit = lock.withLock {
-        if (advertisingIntent && advertisedToken != null && bindingHealthy) return@withLock
+    /**
+     * Network selection can perform JNI enumeration or synchronous platform
+     * IPC. Keep every such probe outside [lock]; callers pass this immutable
+     * sample into the serialized ownership transaction.
+     */
+    private suspend fun sampleCurrentNetwork(): JmdnsNetworkSnapshot<N> = withContext(ioContext) {
+        JmdnsNetworkSnapshot(
+            target = ops.currentNetwork(),
+            defaultTarget = ops.observedDefaultNetwork()
+        )
+    }
 
-        repairUnhealthyBindingBeforeStart()
+    private suspend fun sampleObservedNetwork(): JmdnsNetworkSnapshot<N> = withContext(ioContext) {
+        JmdnsNetworkSnapshot(
+            target = ops.observedNetwork() ?: ops.currentNetwork(),
+            defaultTarget = ops.observedDefaultNetwork()
+        )
+    }
+
+    suspend fun startAdvertising(localPeer: LocalPeerInfo) {
+        val snapshot = sampleCurrentNetwork()
+        lock.withLock { startAdvertisingLocked(localPeer, snapshot) }
+    }
+
+    private suspend fun startAdvertisingLocked(
+        localPeer: LocalPeerInfo,
+        snapshot: JmdnsNetworkSnapshot<N>
+    ) {
+        if (advertisingIntent && advertisedToken != null && bindingHealthy) return
+
+        repairUnhealthyBindingBeforeStart(snapshot)
         // Repair may have restored this same intent after a failed rebind or
         // cleanup. Do not register a second service on the repaired handle.
-        if (advertisingIntent && advertisedToken != null && bindingHealthy) return@withLock
+        if (advertisingIntent && advertisedToken != null && bindingHealthy) return
 
         try {
             // Acquisition, token construction, blocking registration, and
@@ -241,7 +274,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
             // thrown ServiceInfo/listener builder could strand the freshly
             // created handle and Android multicast lock with no active intent.
             ops.acquireMulticastLock()
-            val h = ensureHandle()
+            val h = ensureHandle(snapshot)
             val token = ops.createServiceToken(localPeer)
             advertisedToken = token
             bindingHealthy = false
@@ -258,7 +291,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
             advertisingIntent = false
             cachedLocalPeer = null
             bindingHealthy = false
-            failedStartCleanup()
+            failedStartCleanup(snapshot)
             throw e
         }
     }
@@ -285,16 +318,21 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         currentCoroutineContext().ensureActive()
     }
 
-    suspend fun startDiscovery(): Unit = lock.withLock {
-        if (discoveryIntent && listenerToken != null && bindingHealthy) return@withLock
+    suspend fun startDiscovery() {
+        val snapshot = sampleCurrentNetwork()
+        lock.withLock { startDiscoveryLocked(snapshot) }
+    }
 
-        repairUnhealthyBindingBeforeStart()
+    private suspend fun startDiscoveryLocked(snapshot: JmdnsNetworkSnapshot<N>) {
+        if (discoveryIntent && listenerToken != null && bindingHealthy) return
+
+        repairUnhealthyBindingBeforeStart(snapshot)
         // As above, repair can satisfy the requested intent itself.
-        if (discoveryIntent && listenerToken != null && bindingHealthy) return@withLock
+        if (discoveryIntent && listenerToken != null && bindingHealthy) return
 
         try {
             ops.acquireMulticastLock()
-            val h = ensureHandle()
+            val h = ensureHandle(snapshot)
             val token = ops.createListenerToken(h)
             listenerToken = token
             bindingHealthy = false
@@ -309,7 +347,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         } catch (e: Throwable) {
             discoveryIntent = false
             bindingHealthy = false
-            failedStartCleanup()
+            failedStartCleanup(snapshot)
             throw e
         }
     }
@@ -459,18 +497,23 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
      *     case; the authoritative platform selector can still supply an
      *     explicit AP/tether bind target after the debounce window.
      */
-    private suspend fun rebindNow(reason: String, force: Boolean = false): Unit = lock.withLock {
+    private suspend fun rebindNow(reason: String, force: Boolean = false) {
         // A superseding callback cancels the older pending job to reset the
         // debounce window. Once that job has entered the ownership
         // transaction, cancellation must not strand a closed handle, an
         // ambiguously installed token, or a missing replacement. The shared
         // lifecycle lock still serializes the superseding transaction.
         withContext(NonCancellable) {
-            rebindNowLocked(reason, force)
+            val snapshot = sampleObservedNetwork()
+            lock.withLock { rebindNowLocked(reason, force, snapshot) }
         }
     }
 
-    private suspend fun rebindNowLocked(reason: String, force: Boolean) {
+    private suspend fun rebindNowLocked(
+        reason: String,
+        force: Boolean,
+        snapshot: JmdnsNetworkSnapshot<N>
+    ) {
         if (!ops.isWatcherActive()) {
             ops.logDebug("rebindNow: watcher already stopped; skipping ($reason)")
             return
@@ -479,8 +522,8 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         // never the raw system-default signal. If the primary observer has no
         // target (the Android hotspot-host case), re-read the authoritative
         // selector after debounce so an AP/tether interface can be chosen.
-        val target = ops.observedNetwork() ?: ops.currentNetwork()
-        val defaultTarget = ops.observedDefaultNetwork()
+        val target = snapshot.target
+        val defaultTarget = snapshot.defaultTarget
 
         if (!retryTargetInitialized || target != retryTarget || defaultTarget != retryDefaultTarget) {
             rebindRetryJob?.cancel()
@@ -556,19 +599,17 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         )
     }
 
-    /** Lazily creates the handle bound to the current active network. Called under [lock]. */
-    private suspend fun ensureHandle(): H {
+    /** Lazily creates the handle from the network sample captured before [lock]. */
+    private suspend fun ensureHandle(snapshot: JmdnsNetworkSnapshot<N>): H {
         handle?.let { return it }
-        val target = ops.currentNetwork()
-        val defaultTarget = ops.observedDefaultNetwork()
-        val fresh = createHandleClosingOrphanOnCancel(target, forRebind = false)
+        val fresh = createHandleClosingOrphanOnCancel(snapshot.target, forRebind = false)
         handle = fresh.handle
         // Record the exact observations used for this construction. Starting
         // the second feature on an existing shared handle must not relabel an
         // old socket as bound to a newly observed interface before the
         // watcher has actually completed a rebind.
         boundNetwork = fresh.network
-        boundDefaultNetwork = defaultTarget
+        boundDefaultNetwork = snapshot.defaultTarget
         bindingHealthy = bindingMatchesIntents()
         return fresh.handle
     }
@@ -693,10 +734,9 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
             withContext(NonCancellable) {
                 closeCurrentHandle()
                 if (advertisingIntent || discoveryIntent) {
-                    val target = ops.currentNetwork()
                     installCurrentIntents(
-                        target = target,
-                        defaultTarget = ops.observedDefaultNetwork(),
+                        target = boundNetwork,
+                        defaultTarget = boundDefaultNetwork,
                         forRebind = true
                     )
                 }
@@ -713,14 +753,13 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         }
     }
 
-    private suspend fun repairUnhealthyBindingBeforeStart() {
+    private suspend fun repairUnhealthyBindingBeforeStart(snapshot: JmdnsNetworkSnapshot<N>) {
         if (bindingHealthy && bindingMatchesIntents()) return
         closeCurrentHandle()
         if (advertisingIntent || discoveryIntent) {
-            val target = ops.currentNetwork()
             installCurrentIntents(
-                target = target,
-                defaultTarget = ops.observedDefaultNetwork(),
+                target = snapshot.target,
+                defaultTarget = snapshot.defaultTarget,
                 forRebind = true
             )
         }
@@ -774,15 +813,14 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
      * keeps both when the OTHER side is active) before the failure is
      * rethrown; NonCancellable so a cancelled start cleans up too.
      */
-    private suspend fun failedStartCleanup() {
+    private suspend fun failedStartCleanup(snapshot: JmdnsNetworkSnapshot<N>) {
         withContext(NonCancellable) {
             try {
                 closeCurrentHandle()
                 if (advertisingIntent || discoveryIntent) {
-                    val target = ops.currentNetwork()
                     installCurrentIntents(
-                        target = target,
-                        defaultTarget = ops.observedDefaultNetwork(),
+                        target = snapshot.target,
+                        defaultTarget = snapshot.defaultTarget,
                         forRebind = true
                     )
                 }

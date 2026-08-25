@@ -156,6 +156,7 @@ internal class JvmLanDiscoveryTransport(
         JvmLanNetworkWatcher(
             scope = lifecycleScope,
             pollIntervalMillis = NETWORK_WATCH_INTERVAL_MS,
+            snapshotContext = Dispatchers.IO,
             currentTarget = ::currentJvmLanBindTarget,
             targetChanged = { previous, next, admit ->
                 coordinator.scheduleRebind(

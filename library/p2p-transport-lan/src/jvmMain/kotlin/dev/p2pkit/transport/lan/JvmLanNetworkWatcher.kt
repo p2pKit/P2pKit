@@ -3,9 +3,12 @@ package dev.p2pkit.transport.lan
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.CoroutineContext
 
 /**
  * Restart-safe polling owner for the JVM LAN bind target.
@@ -19,6 +22,7 @@ import kotlinx.coroutines.launch
 internal class JvmLanNetworkWatcher(
     private val scope: CoroutineScope,
     private val pollIntervalMillis: Long,
+    private val snapshotContext: CoroutineContext,
     private val currentTarget: () -> JvmLanBindTarget?,
     private val targetChanged: (
         previous: JvmLanBindTarget?,
@@ -45,8 +49,10 @@ internal class JvmLanNetworkWatcher(
     }
 
     /**
-     * Start one polling lifetime and reconcile its initial observation with
-     * the target used to construct the already-live JmDNS handle.
+     * Start one polling lifetime. The initial topology read is scheduled on
+     * [snapshotContext] after ownership is published, so this non-suspending
+     * method never performs NIC enumeration while its caller owns a lifecycle
+     * lock. Until that read settles, [boundTarget] is the observation.
      */
     fun start(boundTarget: JvmLanBindTarget?) {
         synchronized(gate) {
@@ -62,30 +68,35 @@ internal class JvmLanNetworkWatcher(
             observed = null
         }
 
-        val initial = try {
-            currentTarget()
-        } catch (error: Throwable) {
-            synchronized(gate) {
-                if (generation === owner) {
-                    owner.active = false
-                    generation = null
-                    observed = null
-                }
-            }
-            throw error
-        }
         val job = scope.launch(start = CoroutineStart.LAZY) {
-            while (isActive) {
-                delay(pollIntervalMillis)
-                val next = currentTarget()
-                synchronized(gate) {
-                    if (generation !== owner || !owner.active) return@synchronized
-                    val previous = observed
-                    if (next != previous) {
-                        observed = next
-                        targetChanged(previous, next) { owner.active }
+            while (currentCoroutineContext().isActive) {
+                val next = try {
+                    withContext(snapshotContext) { currentTarget() }
+                } catch (error: Throwable) {
+                    synchronized(gate) {
+                        if (generation === owner) {
+                            owner.active = false
+                            generation = null
+                            observed = null
+                            watcherJob = null
+                        }
+                    }
+                    return@launch
+                }
+                val shouldContinue = synchronized(gate) {
+                    if (generation !== owner || !owner.active) {
+                        false
+                    } else {
+                        val previous = observed
+                        if (next != previous) {
+                            observed = next
+                            targetChanged(previous, next) { owner.active }
+                        }
+                        true
                     }
                 }
+                if (!shouldContinue) return@launch
+                delay(pollIntervalMillis)
             }
         }
 
@@ -93,11 +104,8 @@ internal class JvmLanNetworkWatcher(
             if (generation !== owner || !owner.active) {
                 false
             } else {
-                observed = initial
+                observed = boundTarget
                 watcherJob = job
-                if (initial != boundTarget) {
-                    targetChanged(boundTarget, initial) { owner.active }
-                }
                 true
             }
         }

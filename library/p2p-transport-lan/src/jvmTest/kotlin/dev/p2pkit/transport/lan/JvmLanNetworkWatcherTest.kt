@@ -3,6 +3,7 @@ package dev.p2pkit.transport.lan
 import java.net.InetAddress
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -10,7 +11,6 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /** Deterministic ownership tests for the restartable JVM topology poller. */
@@ -25,6 +25,7 @@ class JvmLanNetworkWatcherTest {
         val watcher = JvmLanNetworkWatcher(
             scope = this,
             pollIntervalMillis = 100,
+            snapshotContext = Dispatchers.Unconfined,
             currentTarget = current::get,
             targetChanged = { previous, next, admit ->
                 if (admit()) changes += previous to next
@@ -32,6 +33,7 @@ class JvmLanNetworkWatcherTest {
         )
 
         watcher.start(boundTarget = wifiA)
+        runCurrent()
 
         assertEquals(
             listOf<Pair<JvmLanBindTarget?, JvmLanBindTarget?>>(wifiA to wifiB),
@@ -51,12 +53,14 @@ class JvmLanNetworkWatcherTest {
         val watcher = JvmLanNetworkWatcher(
             scope = this,
             pollIntervalMillis = 100,
+            snapshotContext = Dispatchers.Unconfined,
             currentTarget = current::get,
             targetChanged = { previous, next, admit ->
                 if (admit()) changes += previous to next
             }
         )
         watcher.start(boundTarget = wifiA)
+        runCurrent()
 
         advanceTimeBy(100)
         runCurrent()
@@ -87,6 +91,7 @@ class JvmLanNetworkWatcherTest {
         watcher = JvmLanNetworkWatcher(
             scope = this,
             pollIntervalMillis = 100,
+            snapshotContext = Dispatchers.Unconfined,
             currentTarget = {
                 when (reads.getAndIncrement()) {
                     0 -> wifiA
@@ -106,6 +111,7 @@ class JvmLanNetworkWatcherTest {
             }
         )
         watcher.start(boundTarget = wifiA)
+        runCurrent()
 
         advanceTimeBy(100)
         runCurrent()
@@ -123,17 +129,46 @@ class JvmLanNetworkWatcherTest {
         val watcher = JvmLanNetworkWatcher(
             scope = this,
             pollIntervalMillis = 100,
+            snapshotContext = Dispatchers.Unconfined,
             currentTarget = {
                 if (fail.getAndSet(false)) error("injected snapshot failure") else wifi
             },
             targetChanged = { _, _, _ -> error("no topology change expected") }
         )
 
-        assertFailsWith<IllegalStateException> { watcher.start(boundTarget = wifi) }
+        watcher.start(boundTarget = wifi)
+        runCurrent()
         assertFalse(watcher.isActive())
 
         watcher.start(boundTarget = wifi)
+        runCurrent()
         assertTrue(watcher.isActive())
+        watcher.stop()
+    }
+
+    @Test
+    fun startPublishesTheBoundTargetBeforeTheAsyncSnapshot() = runTest {
+        val wifi = target("wifi", "192.168.10.2")
+        val reads = AtomicInteger()
+        val watcher = JvmLanNetworkWatcher(
+            scope = this,
+            pollIntervalMillis = 100,
+            snapshotContext = Dispatchers.Unconfined,
+            currentTarget = {
+                reads.incrementAndGet()
+                wifi
+            },
+            targetChanged = { _, _, _ -> error("no topology change expected") }
+        )
+
+        watcher.start(boundTarget = wifi)
+
+        assertEquals(0, reads.get(), "start must not enumerate interfaces inline")
+        assertEquals(wifi, watcher.observedTarget())
+        assertTrue(watcher.isActive())
+
+        runCurrent()
+        assertEquals(1, reads.get())
         watcher.stop()
     }
 

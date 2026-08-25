@@ -8,12 +8,15 @@ import dev.p2pkit.core.transport.LocalPeerInfo
 import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.coroutineScope
@@ -21,6 +24,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -97,6 +102,17 @@ class JmdnsLifecycleCoordinatorTest {
 
         @Volatile
         var observedDefault: FakeNet? = null
+
+        @Volatile
+        var observedNetworkGate: CountDownLatch? = null
+
+        val observedNetworkEntered = LinkedBlockingQueue<Unit>()
+
+        @Volatile
+        var currentNetworkThread: String? = null
+
+        @Volatile
+        var observedNetworkThread: String? = null
 
         /** While > 0, [createHandleBlocking] throws and decrements. */
         val createFailuresRemaining = AtomicInteger(0)
@@ -264,9 +280,17 @@ class JmdnsLifecycleCoordinatorTest {
             listenersRemoved += token
         }
 
-        override fun currentNetwork(): FakeNet? = current
+        override fun currentNetwork(): FakeNet? {
+            currentNetworkThread = Thread.currentThread().name
+            return current
+        }
 
-        override fun observedNetwork(): FakeNet? = observed
+        override fun observedNetwork(): FakeNet? {
+            observedNetworkThread = Thread.currentThread().name
+            observedNetworkEntered.put(Unit)
+            observedNetworkGate?.let { awaitNonCancellableGate(it, "observedNetworkGate") }
+            return observed
+        }
 
         override fun observedDefaultNetwork(): FakeNet? = observedDefault
 
@@ -331,6 +355,7 @@ class JmdnsLifecycleCoordinatorTest {
         debounceMillis: Long = 1,
         retryBaseMillis: Long = 1,
         maxAttempts: Int = 5,
+        ioContext: CoroutineContext = Dispatchers.IO,
         body: suspend (
             coordinator: JmdnsLifecycleCoordinator<FakeNet, FakeHandle>,
             rebindScope: CoroutineScope
@@ -341,7 +366,7 @@ class JmdnsLifecycleCoordinatorTest {
             val coordinator = JmdnsLifecycleCoordinator(
                 ops = ops,
                 rebindScope = rebindScope,
-                ioContext = Dispatchers.IO,
+                ioContext = ioContext,
                 rebindDebounceMillis = debounceMillis,
                 rebindRetryBaseDelayMillis = retryBaseMillis,
                 rebindRetryMaxAttempts = maxAttempts
@@ -1315,6 +1340,59 @@ class JmdnsLifecycleCoordinatorTest {
             var invokedInWindow = false
             coordinator.refreshDiscovery { invokedInWindow = true }
             assertFalse(invokedInWindow, "refresh must skip in the failed-rebind window")
+        }
+    }
+
+    @Test
+    fun blockedNetworkProbeDoesNotHoldLifecycleLock() {
+        val wifi = FakeNet("wifi0")
+        val ops = FakeOps().apply {
+            current = wifi
+            observed = wifi
+        }
+        coordinatorTest(ops) { coordinator, scope ->
+            coordinator.startAdvertising(localPeer)
+
+            val probeGate = CountDownLatch(1)
+            ops.observedNetworkGate = probeGate
+            coordinator.scheduleRebind("blocked network probe", force = true)
+            awaitBlockingCall(ops.observedNetworkEntered, "observedNetwork")
+
+            try {
+                val stopped = CompletableDeferred<Unit>()
+                scope.launch {
+                    coordinator.stopAdvertising()
+                    stopped.complete(Unit)
+                }
+                withTimeout(1_000) { stopped.await() }
+                assertFalse(ops.watcherActive, "stop must not queue behind an IO-side network probe")
+            } finally {
+                probeGate.countDown()
+            }
+        }
+    }
+
+    @Test
+    fun networkProbesUseTheInjectedIoContext() {
+        val probeDispatcher = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "p2pkit-network-probe")
+        }.asCoroutineDispatcher()
+        try {
+            val wifi = FakeNet("wifi0")
+            val ops = FakeOps().apply {
+                current = wifi
+                observed = wifi
+            }
+            coordinatorTest(ops, ioContext = probeDispatcher) { coordinator, _ ->
+                coordinator.startAdvertising(localPeer)
+                assertTrue(ops.currentNetworkThread?.startsWith("p2pkit-network-probe") == true)
+
+                coordinator.scheduleRebind("verify network probe dispatcher", force = true)
+                coordinator.awaitPendingRebindForTest()
+                assertTrue(ops.observedNetworkThread?.startsWith("p2pkit-network-probe") == true)
+            }
+        } finally {
+            probeDispatcher.close()
         }
     }
 

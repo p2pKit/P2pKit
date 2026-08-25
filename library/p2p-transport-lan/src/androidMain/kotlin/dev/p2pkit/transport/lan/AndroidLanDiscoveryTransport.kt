@@ -733,11 +733,36 @@ internal class AndroidLanDiscoveryTransport(
             }
         }
         if (interfaceWatcherJob?.isActive != true) {
-            val initialFingerprint = androidLanInterfaceFingerprint()
             val job = rebindScope.launch(start = CoroutineStart.LAZY) {
+                // Interface enumeration and ConnectivityManager selection can
+                // perform JNI/binder work. This watcher is started while the
+                // coordinator owns its lifecycle lock, so take both initial
+                // snapshots asynchronously on IO before publishing them.
+                val initialFingerprint = withContext(Dispatchers.IO) {
+                    androidLanInterfaceFingerprint()
+                }
+                publishForCurrentWatcher(lease) {
+                    observedInterfaceFingerprint = initialFingerprint
+                }
+
+                val initialTarget = withContext(Dispatchers.IO) {
+                    currentAndroidLanBindTarget(connectivity)
+                }
+                if (initialTarget != boundNetwork) {
+                    publishForCurrentWatcher(lease) {
+                        coordinator.scheduleRebind(
+                            reason = "Android LAN bind target changed before watcher admission: " +
+                                "$boundNetwork -> $initialTarget",
+                            admit = lease::isActive
+                        )
+                    }
+                }
+
                 while (isActive) {
                     delay(INTERFACE_WATCH_INTERVAL_MS)
-                    val next = androidLanInterfaceFingerprint()
+                    val next = withContext(Dispatchers.IO) {
+                        androidLanInterfaceFingerprint()
+                    }
                     publishForCurrentWatcher(lease) {
                         val previous = observedInterfaceFingerprint
                         if (next != previous) {
@@ -759,7 +784,7 @@ internal class AndroidLanDiscoveryTransport(
                 if (networkWatcherLease !== lease || !lease.isActive()) {
                     false
                 } else {
-                    observedInterfaceFingerprint = initialFingerprint
+                    observedInterfaceFingerprint = null
                     interfaceWatcherJob = job
                     true
                 }
@@ -772,20 +797,6 @@ internal class AndroidLanDiscoveryTransport(
             }
         }
 
-        // Reconcile the first authoritative topology snapshot against the
-        // exact handle target. Without this step, a change that lands between
-        // handle creation and callback registration becomes the watcher's
-        // baseline and never emits an onAvailable delta.
-        val initialTarget = currentAndroidLanBindTarget(connectivity)
-        if (initialTarget != boundNetwork) {
-            publishForCurrentWatcher(lease) {
-                coordinator.scheduleRebind(
-                    reason = "Android LAN bind target changed before watcher admission: " +
-                        "$boundNetwork -> $initialTarget",
-                    admit = lease::isActive
-                )
-            }
-        }
     }
 
     /**
