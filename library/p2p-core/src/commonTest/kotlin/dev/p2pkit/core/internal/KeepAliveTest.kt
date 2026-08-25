@@ -588,6 +588,159 @@ class KeepAliveTest {
     }
 
     @Test
+    fun pongDeadlineFailsWhilePingWriterIsParkedBehindSendMutex() = runTest {
+        val pair = FakeConnectionPair()
+        pair.a.suspendWrites()
+        val protocol = DefaultP2pProtocol(clock = { testScheduler.currentTime })
+        val supervisor = SupervisorJob()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + supervisor)
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
+        val session = P2pSessionImpl(
+            id = "keepalive-stalled-writer",
+            peer = Peer(
+                PeerId("stalled-writer-peer"),
+                "Stalled writer",
+                Platform.JVM_DESKTOP,
+                setOf(TransportKind.LAN)
+            ),
+            initialConnection = pair.a,
+            initialEvents = events,
+            protocol = protocol,
+            parentScope = scope,
+            keepAlive = KeepAliveConfig(pingIntervalMillis = 50, timeoutMillis = 150),
+            clock = { testScheduler.currentTime },
+            logger = P2pLogger.NoOp
+        )
+        session.start()
+
+        try {
+            testScheduler.advanceTimeBy(50)
+            testScheduler.runCurrent()
+            assertEquals(1, pair.a.writeAttempts, "the first PING must hold the shared send mutex")
+            assertEquals(ConnectionState.Connected, session.state.value)
+
+            testScheduler.advanceTimeBy(100)
+            testScheduler.runCurrent()
+            assertEquals(
+                ConnectionState.Failed,
+                session.state.value,
+                "PONG expiry must not wait for a parked outbound writer"
+            )
+        } finally {
+            // FakeRawConnection models a blocking socket write that only a
+            // transport close/resume can release; avoid leaving a child parked
+            // after the assertion has completed.
+            pair.a.resumeWrites()
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun pongDeadlineDoesNotFailWhilePongsArriveBehindParkedPingWriter() = runTest {
+        val pair = FakeConnectionPair()
+        pair.a.suspendWrites()
+        val protocol = DefaultP2pProtocol(clock = { testScheduler.currentTime })
+        val supervisor = SupervisorJob()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + supervisor)
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
+        val session = P2pSessionImpl(
+            id = "keepalive-stalled-writer-with-pongs",
+            peer = Peer(
+                PeerId("stalled-writer-pongs-peer"),
+                "Stalled writer with PONGs",
+                Platform.JVM_DESKTOP,
+                setOf(TransportKind.LAN)
+            ),
+            initialConnection = pair.a,
+            initialEvents = events,
+            protocol = protocol,
+            parentScope = scope,
+            keepAlive = KeepAliveConfig(pingIntervalMillis = 50, timeoutMillis = 150),
+            clock = { testScheduler.currentTime },
+            logger = P2pLogger.NoOp
+        )
+        val feeder = scope.launch {
+            while (isActive) {
+                events.send(ProtocolEvent.Pong)
+                delay(25)
+            }
+        }
+        session.start()
+
+        try {
+            testScheduler.advanceTimeBy(500)
+            testScheduler.runCurrent()
+            assertEquals(
+                ConnectionState.Connected,
+                session.state.value,
+                "fresh PONGs must keep the session alive despite the parked PING writer"
+            )
+        } finally {
+            feeder.cancel()
+            pair.a.resumeWrites()
+            supervisor.cancel()
+        }
+    }
+
+    @Test
+    fun pongDeadlineWatchdogIsRearmedWithAReplacementEpoch() = runTest {
+        val initial = FakeConnectionPair()
+        val replacement = FakeConnectionPair()
+        replacement.a.suspendWrites()
+        val protocol = DefaultP2pProtocol(clock = { testScheduler.currentTime })
+        val supervisor = SupervisorJob()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + supervisor)
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
+        val session = P2pSessionImpl(
+            id = "keepalive-rearm-watchdog",
+            peer = Peer(
+                PeerId("rearm-watchdog-peer"),
+                "Rearmed watchdog",
+                Platform.JVM_DESKTOP,
+                setOf(TransportKind.LAN)
+            ),
+            initialConnection = initial.a,
+            initialEvents = events,
+            protocol = protocol,
+            parentScope = scope,
+            keepAlive = KeepAliveConfig(pingIntervalMillis = 50, timeoutMillis = 150),
+            clock = { testScheduler.currentTime },
+            logger = P2pLogger.NoOp
+        )
+        session.start()
+
+        try {
+            // Move the old epoch close to its deadline, then replace it. The
+            // new epoch must reset lastPongAt and launch a fresh watchdog.
+            testScheduler.advanceTimeBy(100)
+            testScheduler.runCurrent()
+            assertTrue(
+                session.rearmWith(replacement.a, Channel(Channel.UNLIMITED)),
+                "the replacement epoch must be installed"
+            )
+
+            testScheduler.advanceTimeBy(50)
+            testScheduler.runCurrent()
+            assertEquals(1, replacement.a.writeAttempts)
+            assertEquals(ConnectionState.Connected, session.state.value)
+
+            testScheduler.advanceTimeBy(99)
+            testScheduler.runCurrent()
+            assertEquals(
+                ConnectionState.Connected,
+                session.state.value,
+                "the replacement epoch deadline must start at rearm, not the old epoch's timestamp"
+            )
+            testScheduler.advanceTimeBy(1)
+            testScheduler.runCurrent()
+            assertEquals(ConnectionState.Failed, session.state.value)
+        } finally {
+            replacement.a.resumeWrites()
+            supervisor.cancel()
+        }
+    }
+
+    @Test
     fun sessionTransitionsToFailedWhenNoPongArrivesWithinTimeout() {
         runTest {
             val pair = FakeConnectionPair()

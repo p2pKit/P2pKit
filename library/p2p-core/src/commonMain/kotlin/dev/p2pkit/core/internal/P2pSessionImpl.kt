@@ -263,7 +263,7 @@ internal class P2pSessionImpl(
         val job = SupervisorJob(parent = sessionJob)
         epochJob = job
         val epochScope = CoroutineScope(scope.coroutineContext + job)
-        // Capture the current connection ref once so all three loops act on
+        // Capture the current connection ref once so all epoch-bound loops act on
         // the same epoch's connection. Rearm replaces `connection` and
         // cancels the epoch; new loops then see the new ref.
         val epochConnection = connection
@@ -271,6 +271,11 @@ internal class P2pSessionImpl(
         lastPongAt.value = monotonicClock()
         epochScope.launch { routeEvents(events) }
         epochScope.launch { keepAliveLoop(epochConnection) }
+        // Keep liveness enforcement independent of outbound writes. A peer
+        // that stops draining its socket can park another holder of
+        // sendMutex; the PONG deadline must still be evaluated while that
+        // writer is suspended.
+        epochScope.launch { pongDeadlineWatchdog() }
         epochScope.launch { observeSecureTerminalFailure(epochConnection, epoch) }
         epochScope.launch { observeRawState(epochConnection, epoch) }
     }
@@ -1409,12 +1414,10 @@ internal class P2pSessionImpl(
         while (scope.isActive && _state.value == ConnectionState.Connected) {
             delay(keepAlive.pingIntervalMillis)
             if (!scope.isActive || _state.value != ConnectionState.Connected) return
-            // Evaluate PONG liveness BEFORE attempting the PING write: if a
-            // wedged peer blocks the shared sendMutex (file chunk parked in a
-            // full TCP send window), the timeout must still fire. Checking
-            // only after the send let a stuck writer disable keep-alive — and
-            // close()/stop() behind the same mutex — forever
-            // (AUDIT-2026-06 fix).
+            // Avoid starting another PING once the independent deadline
+            // watchdog has already observed an expired PONG deadline. This
+            // check is only an optimization; it must not be the sole
+            // liveness check because the send below may suspend indefinitely.
             val sincePongBeforeSend = monotonicClock() - lastPongAt.value
             if (sincePongBeforeSend >= keepAlive.timeoutMillis) {
                 logger.warn(
@@ -1442,6 +1445,33 @@ internal class P2pSessionImpl(
                 onConnectionLost("keep-alive timeout")
                 return
             }
+        }
+    }
+
+    /**
+     * Enforces the PONG deadline without touching [sendMutex]. The ping loop
+     * also checks the deadline, but its outbound write can be parked behind an
+     * application or file-transfer send. This coroutine remains able to wake,
+     * observe [lastPongAt], and transition the session while that happens.
+     *
+     * The delay is bounded by the current deadline rather than a fixed tick;
+     * a PONG arriving during the delay is observed when the old deadline is
+     * reached, then the next delay is calculated from the refreshed timestamp.
+     * The coroutine is a child of the epoch job, so rearm and terminal cleanup
+     * cancel it with the rest of that epoch.
+     */
+    private suspend fun pongDeadlineWatchdog() {
+        while (scope.isActive && _state.value == ConnectionState.Connected) {
+            val sinceLastPong = monotonicClock() - lastPongAt.value
+            if (sinceLastPong >= keepAlive.timeoutMillis) {
+                logger.warn(
+                    "Session $id: no PONG received for $sinceLastPong ms " +
+                        "(timeout=${keepAlive.timeoutMillis} ms; deadline watchdog)"
+                )
+                onConnectionLost("keep-alive timeout")
+                return
+            }
+            delay(keepAlive.timeoutMillis - sinceLastPong)
         }
     }
 
