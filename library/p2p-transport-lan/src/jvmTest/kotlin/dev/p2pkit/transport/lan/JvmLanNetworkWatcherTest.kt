@@ -1,9 +1,13 @@
 package dev.p2pkit.transport.lan
 
 import java.net.InetAddress
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -170,6 +174,37 @@ class JvmLanNetworkWatcherTest {
         runCurrent()
         assertEquals(1, reads.get())
         watcher.stop()
+    }
+
+    @Test
+    fun snapshotsRunOnTheInjectedIoContext() = runTest {
+        val snapshotDispatcher = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "p2pkit-network-probe")
+        }.asCoroutineDispatcher()
+        try {
+            val wifi = target("wifi", "192.168.10.2")
+            val thread = AtomicReference<String>()
+            val entered = CompletableDeferred<Unit>()
+            val watcher = JvmLanNetworkWatcher(
+                scope = this,
+                pollIntervalMillis = 100,
+                snapshotContext = snapshotDispatcher,
+                currentTarget = {
+                    thread.set(Thread.currentThread().name)
+                    entered.complete(Unit)
+                    wifi
+                },
+                targetChanged = { _, _, _ -> error("no topology change expected") }
+            )
+
+            watcher.start(boundTarget = wifi)
+            runCurrent()
+            withTimeout(1_000) { entered.await() }
+            assertTrue(thread.get().startsWith("p2pkit-network-probe"))
+            watcher.stop()
+        } finally {
+            snapshotDispatcher.close()
+        }
     }
 
     private fun target(name: String, address: String): JvmLanBindTarget =
