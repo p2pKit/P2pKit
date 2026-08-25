@@ -12,6 +12,12 @@ fail() {
 }
 
 [[ -f "$METADATA" ]] || fail "missing Gradle verification metadata"
+[[ "$(grep -Fc 'resolutionStrategy.activateDependencyLocking()' "$ROOT/build.gradle.kts")" == "1" ]] ||
+    fail "root build-plugin classpath dependency locking is not activated exactly once"
+[[ -f "$ROOT/buildscript-gradle.lockfile" ]] || fail "missing root build-plugin dependency lock"
+grep -Eq '^[^#[:space:]][^=]*:[^=]*=([^,]*,)*classpath(,|$)' \
+    "$ROOT/buildscript-gradle.lockfile" ||
+    fail "root build-plugin dependency lock contains no classpath components"
 grep -Fq 'dependency-verification-1.4.xsd' "$METADATA" ||
     fail "verification metadata does not use the reviewed Gradle 9.7 schema"
 [[ "$(grep -Fc '<verify-metadata>true</verify-metadata>' "$METADATA")" == "1" ]] ||
@@ -70,7 +76,7 @@ awk -v entries="$entries" '
 duplicate="$(LC_ALL=C sort "$entries" | uniq -d | head -1)"
 [[ -z "$duplicate" ]] || fail "duplicate verified artifact entry: $duplicate"
 
-stale_utp="$(find "$ROOT" -name gradle.lockfile -type f -exec \
+stale_utp="$(find "$ROOT" -name '*gradle.lockfile' -type f -exec \
     grep -H -m1 -E '(^|[=,])_internal-unified-test-platform-' {} + 2>/dev/null | head -1 || true)"
 [[ -z "$stale_utp" ]] ||
     fail "dependency lock retains a removed AGP internal UTP configuration: $stale_utp"

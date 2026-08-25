@@ -11,12 +11,21 @@ fail() {
 
 declare -a expected=()
 while IFS= read -r lockfile; do
-    if [[ "$lockfile" == "settings-gradle.lockfile" ]]; then
+    if ! grep -Eq '^[^#[:space:]][^=]*:[^=]*=' "$ROOT/$lockfile"; then
+        continue
+    fi
+    if [[ "$(basename "$lockfile")" != "gradle.lockfile" ]]; then
         expected+=("--lockfile=gradle.lockfile:./$lockfile")
     else
         expected+=("--lockfile=./$lockfile")
     fi
 done < <(git -C "$ROOT" ls-files '*gradle.lockfile' | LC_ALL=C sort)
+
+buildscript_lock="buildscript-gradle.lockfile"
+git -C "$ROOT" ls-files --error-unmatch "$buildscript_lock" >/dev/null 2>&1 ||
+    fail "root build-plugin lock is not tracked: $buildscript_lock"
+grep -Eq '^[^#[:space:]][^=]*:[^=]*=([^,]*,)*classpath(,|$)' "$ROOT/$buildscript_lock" ||
+    fail "root build-plugin lock contains no classpath dependencies"
 
 # Gradle verification metadata is a checksum allowlist that retains historical
 # artifacts. It is not resolved dependency state, so treating it as a lockfile
@@ -33,6 +42,6 @@ done
 
 actual_count="$(grep -Ec '^[[:space:]]+--lockfile=' "$WORKFLOW")"
 [[ "$actual_count" == "${#expected[@]}" ]] ||
-    fail "OSV workflow has $actual_count lockfile arguments; expected ${#expected[@]} tracked dependency inputs"
+    fail "OSV workflow has $actual_count lockfile arguments; expected ${#expected[@]} non-empty dependency inputs"
 
-echo "RESULT: PASS — OSV scans all ${#expected[@]} tracked Gradle dependency locks"
+echo "RESULT: PASS — OSV scans all ${#expected[@]} non-empty Gradle dependency locks, including build plugins"

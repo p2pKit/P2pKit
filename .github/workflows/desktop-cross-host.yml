@@ -12,6 +12,7 @@ on:
       - "gradle/libs.versions.toml"
       - "gradle/verification-metadata.xml"
       - "gradle.lockfile"
+      - "buildscript-gradle.lockfile"
       - "samples/p2p-sample-desktop/**"
       - "samples/p2p-sample-desktop-ui/**"
       - "samples/p2p-sample-diagnostics/**"

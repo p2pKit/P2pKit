@@ -43,6 +43,14 @@ new_fixture() {
 XML
     printf '[versions]\nfixture = "1.0"\n' >"$fixture/gradle/libs.versions.toml"
     printf 'example:library:1.0=runtimeClasspath\n' >"$fixture/gradle.lockfile"
+    cat >"$fixture/build.gradle.kts" <<'KOTLIN'
+buildscript {
+    configurations.configureEach {
+        resolutionStrategy.activateDependencyLocking()
+    }
+}
+KOTLIN
+    printf 'example:plugin:1.0=classpath\n' >"$fixture/buildscript-gradle.lockfile"
     for path in gradle/wrapper/gradle-wrapper.properties gradle/wrapper/gradle-wrapper.jar gradlew gradlew.bat; do
         printf 'wrapper-v1\n' >"$fixture/$path"
     done
@@ -125,6 +133,16 @@ sed -i.bak 's/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/d
     "$hash_fixture/gradle/verification-metadata.xml"
 expect_failure "weak checksum" "invalid SHA-256" \
     bash -c "cd '$hash_fixture' && scripts/check-dependency-verification.sh"
+
+unlocked_buildscript_fixture="$(new_fixture unlocked-buildscript)"
+sed -i.bak '/activateDependencyLocking/d' "$unlocked_buildscript_fixture/build.gradle.kts"
+expect_failure "unlocked buildscript" "dependency locking is not activated" \
+    bash -c "cd '$unlocked_buildscript_fixture' && scripts/check-dependency-verification.sh"
+
+empty_buildscript_lock_fixture="$(new_fixture empty-buildscript-lock)"
+printf 'empty=classpath\n' >"$empty_buildscript_lock_fixture/buildscript-gradle.lockfile"
+expect_failure "empty buildscript lock" "contains no classpath components" \
+    bash -c "cd '$empty_buildscript_lock_fixture' && scripts/check-dependency-verification.sh"
 
 stale_lock_fixture="$(new_fixture stale-lock)"
 printf 'example:old-utp:1.0=_internal-unified-test-platform-core\n' \

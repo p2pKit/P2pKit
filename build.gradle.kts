@@ -22,6 +22,7 @@ import java.util.Base64
 // cannot execute an older vulnerable transitive dependency in trusted CI.
 buildscript {
     configurations.configureEach {
+        resolutionStrategy.activateDependencyLocking()
         resolutionStrategy.eachDependency {
             val requestedGroup = requested.group ?: return@eachDependency
             val requestedModule = "$requestedGroup:${requested.name}"
@@ -253,8 +254,9 @@ subprojects {
 
 val verifyBuildPluginSecurityFloors = tasks.register("verifyBuildPluginSecurityFloors") {
     group = "verification"
-    description = "Fails when the trusted root build classpath resolves below an advisory floor."
+    description = "Fails when the root build classpath drifts from its lock or resolves below an advisory floor."
     doLast {
+        val classpath = buildscript.configurations.getByName("classpath")
         val required = setOf(
             "com.fasterxml.jackson.core:jackson-core",
             "com.fasterxml.jackson.core:jackson-databind",
@@ -263,31 +265,56 @@ val verifyBuildPluginSecurityFloors = tasks.register("verifyBuildPluginSecurityF
             "org.bouncycastle:bcprov-jdk18on",
             "org.jdom:jdom2",
         )
+        val resolvedComponents = classpath.incoming.resolutionResult.allComponents
+            .mapNotNull { it.id as? org.gradle.api.artifacts.component.ModuleComponentIdentifier }
+            .map { "${it.group}:${it.module}:${it.version}" }
+            .toSet()
+        val buildscriptLock = layout.projectDirectory.file("buildscript-gradle.lockfile").asFile
+        check(buildscriptLock.isFile) {
+            "Root build-plugin classpath has no committed buildscript-gradle.lockfile"
+        }
+        val lockedComponents = buildscriptLock.readLines()
+            .asSequence()
+            .filterNot { it.isBlank() || it.startsWith("#") || it.startsWith("empty=") }
+            .filter { line -> line.substringAfter('=', "").split(',').contains("classpath") }
+            .map { it.substringBefore('=') }
+            .toSet()
+        check(lockedComponents.isNotEmpty()) {
+            "Root build-plugin lock contains no classpath components"
+        }
+        check(resolvedComponents == lockedComponents) {
+            val missing = (resolvedComponents - lockedComponents).sorted()
+            val stale = (lockedComponents - resolvedComponents).sorted()
+            "Root build-plugin lock does not match the resolved classpath; " +
+                "missing=$missing, stale=$stale"
+        }
+
         val checked = mutableSetOf<String>()
         val violations = mutableListOf<String>()
-        buildscript.configurations.getByName("classpath")
-            .incoming.resolutionResult.allComponents
-            .mapNotNull { it.id as? org.gradle.api.artifacts.component.ModuleComponentIdentifier }
-            .forEach { component ->
-                val module = "${component.group}:${component.module}"
-                val minimum = when (component.group) {
-                    "org.bouncycastle" -> "1.85"
-                    else -> advisoryMinimumVersions[module]
-                }
-                if (minimum != null) {
-                    checked += module
-                    if (isVersionBelow(component.version, minimum)) {
-                        violations += "$module:${component.version} < $minimum"
-                    }
+        resolvedComponents.forEach { component ->
+            val module = component.substringBeforeLast(':')
+            val version = component.substringAfterLast(':')
+            val minimum = when (module.substringBefore(':')) {
+                "org.bouncycastle" -> "1.85"
+                else -> advisoryMinimumVersions[module]
+            }
+            if (minimum != null) {
+                checked += module
+                if (isVersionBelow(version, minimum)) {
+                    violations += "$module:$version < $minimum"
                 }
             }
+        }
         check(checked.containsAll(required)) {
             "Root build-plugin security verification did not resolve: ${(required - checked).sorted()}"
         }
         check(violations.isEmpty()) {
             "Root build-plugin advisory floors failed: ${violations.sorted()}"
         }
-        logger.lifecycle("Root build-plugin advisory floors verified for ${checked.size} modules")
+        logger.lifecycle(
+            "Root build-plugin lock verified for ${resolvedComponents.size} components; " +
+                "advisory floors verified for ${checked.size} modules"
+        )
     }
 }
 
