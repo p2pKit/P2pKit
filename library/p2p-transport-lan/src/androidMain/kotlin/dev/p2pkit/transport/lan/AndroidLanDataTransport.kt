@@ -156,7 +156,7 @@ internal class AndroidLanDataTransport(
         }
         Log.d(
             TAG,
-            "server bound: ${sock.localSocketAddress} (wildcard 0.0.0.0, port=${sock.localPort})"
+            "server bound: ${sock.localSocketAddress} (policy-filtered wildcard, port=${sock.localPort})"
         )
         Result.success(Unit)
     }
@@ -343,6 +343,15 @@ internal class AndroidLanDataTransport(
                     // dropping leaked the fd while the remote believed it had
                     // connected (AUDIT-2026-06 fix).
                     Log.d(TAG, "inbound from ${socket.remoteSocketAddress} -> local ${socket.localSocketAddress}")
+                    if (!isSelectedLanAddress(socket.localAddress)) {
+                        Log.d(
+                            TAG,
+                            "REJECTED ${socket.remoteSocketAddress} on excluded local " +
+                                socket.localAddress.hostAddress
+                        )
+                        runCatching { socket.close() }
+                        continue
+                    }
                     val raw = AndroidRawConnection(socket)
                     val offered = trySend(raw)
                     if (offered.isFailure) {
@@ -461,6 +470,12 @@ internal class AndroidLanDataTransport(
             closeServerSocketRetainingFailure(socket)?.let(error::addSuppressed)
             throw error
         }
+    }
+
+    private fun isSelectedLanAddress(actual: java.net.InetAddress): Boolean {
+        val state = networkState ?: return true
+        val selected = runCatching { state.selectedRoute()?.localAddress }.getOrNull() ?: return false
+        return selected.hostAddress == actual.hostAddress
     }
 
     private companion object {

@@ -10,15 +10,19 @@ import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.TransportHint
 import java.io.IOException
 import java.net.BindException
+import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -231,6 +235,31 @@ class JvmLanDataTransportOwnershipTest {
         transport.stop()
         assertTrue(first.isClosed)
         assertTrue(transport.start().isSuccess)
+        transport.close()
+    }
+
+    @Test
+    fun wildcardListenerRejectsConnectionsOutsideTheSelectedLanAddress() = runBlocking {
+        val selected = AtomicReference(InetAddress.getByName("192.0.2.1"))
+        val transport = JvmLanDataTransport(
+            registration = registration("inbound-interface-policy"),
+            selectedLanAddress = { selected.get() }
+        )
+        assertTrue(transport.start().isSuccess)
+        val accepted = async(Dispatchers.Default) {
+            withTimeout(TEST_TIMEOUT_MS) { transport.incomingConnections().first() }
+        }
+        val excluded = Socket(InetAddress.getLoopbackAddress(), requireNotNull(transport.tcpPort.value))
+        delay(100)
+        assertFalse(accepted.isCompleted, "an excluded local interface must not reach core")
+
+        selected.set(InetAddress.getLoopbackAddress())
+        val allowed = Socket(InetAddress.getLoopbackAddress(), requireNotNull(transport.tcpPort.value))
+        val raw = accepted.await()
+
+        raw.close()
+        excluded.close()
+        allowed.close()
         transport.close()
     }
 

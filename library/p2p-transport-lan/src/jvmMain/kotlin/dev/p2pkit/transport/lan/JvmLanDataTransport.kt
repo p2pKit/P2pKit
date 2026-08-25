@@ -25,6 +25,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.net.ConnectException
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NoRouteToHostException
 import java.net.ServerSocket
@@ -37,6 +38,7 @@ internal class JvmLanDataTransport(
     private val registration: LanServiceRegistration,
     private val socketFactory: () -> Socket = ::Socket,
     private val serverSocketFactory: () -> ServerSocket = ::ServerSocket,
+    private val selectedLanAddress: (() -> InetAddress?)? = null,
     private val beforeListenerResourceCheckForTest: (() -> Unit)? = null,
     private val beforeDialOwnershipHandoffForTest: (() -> Unit)? = null,
     private val afterListenerDetachForTest: (() -> Unit)? = null
@@ -164,7 +166,7 @@ internal class JvmLanDataTransport(
         }
         JvmLanDiag.log(
             "data",
-            "server bound: ${sock.localSocketAddress} (wildcard 0.0.0.0, port=${sock.localPort})"
+            "server bound: ${sock.localSocketAddress} (policy-filtered wildcard, port=${sock.localPort})"
         )
         Result.success(Unit)
     }
@@ -299,6 +301,14 @@ internal class JvmLanDataTransport(
                         "accept",
                         "inbound from ${socket.remoteSocketAddress} -> local ${socket.localSocketAddress}"
                     )
+                    if (!isSelectedLanAddress(socket.localAddress)) {
+                        JvmLanDiag.log(
+                            "accept",
+                            "REJECTED ${socket.remoteSocketAddress} on excluded local ${socket.localAddress.hostAddress}"
+                        )
+                        runCatching { socket.close() }
+                        continue
+                    }
                     // Close the socket when the channel refuses it (buffer full
                     // under an accept burst / stalled collector): silently
                     // dropping leaked the fd while the remote believed it had
@@ -420,6 +430,12 @@ internal class JvmLanDataTransport(
             closeServerSocketRetainingFailure(socket)?.let(error::addSuppressed)
             throw error
         }
+    }
+
+    private fun isSelectedLanAddress(actual: InetAddress): Boolean {
+        val provider = selectedLanAddress ?: return true
+        val selected = runCatching(provider).getOrNull() ?: return false
+        return selected.hostAddress == actual.hostAddress
     }
 
     private companion object {

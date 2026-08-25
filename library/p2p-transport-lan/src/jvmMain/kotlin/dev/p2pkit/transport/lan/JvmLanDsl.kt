@@ -47,7 +47,10 @@ internal object JvmLanTransportFactory : TransportFactory {
             fingerprint = context.localFingerprint
         )
         return TransportPair(
-            data = JvmLanDataTransport(registration),
+            data = JvmLanDataTransport(
+                registration = registration,
+                selectedLanAddress = { currentJvmLanBindTarget()?.address }
+            ),
             discovery = JvmLanDiscoveryTransport(registration)
         )
     }
