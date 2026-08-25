@@ -107,6 +107,10 @@ private object Dimens {
     val LineGap = 2.dp
 }
 
+internal const val SECURITY_POSTURE_WARNING: String =
+    "DEVELOPMENT MODE: accepting any authenticated peer with this AppId. " +
+        "Production apps must pin peer fingerprints with PinnedOnly."
+
 class MainActivity : ComponentActivity() {
     private val sampleViewModel: P2pKitViewModel by viewModels()
 
@@ -215,6 +219,7 @@ private fun SetupScreen(
             text = "Discover devices on your Wi-Fi and chat with all of them in a room.",
             style = MaterialTheme.typography.bodyMedium
         )
+        SecurityPostureWarning()
         OutlinedTextField(
             value = vm.deviceName,
             onValueChange = vm::updateDeviceName,
@@ -397,6 +402,8 @@ private fun RoomScreen(
             .verticalScroll(rememberScrollState())
             .padding(Dimens.ScreenPadding)
     ) {
+        SecurityPostureWarning()
+        Spacer(Modifier.height(Dimens.ItemGap))
         StatusHeader(
             appId = vm.appId,
             deviceName = vm.deviceName,
@@ -635,6 +642,21 @@ private fun RoomScreen(
 // =====================================================================
 // Pieces
 // =====================================================================
+
+@Composable
+private fun SecurityPostureWarning() {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = SECURITY_POSTURE_WARNING,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.errorContainer)
+                .padding(Dimens.CardPadding)
+        )
+    }
+}
 
 @Composable
 private fun StatusHeader(

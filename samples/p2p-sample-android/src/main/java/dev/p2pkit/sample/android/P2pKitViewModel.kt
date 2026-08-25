@@ -96,7 +96,6 @@ import java.io.File
  * Lifecycle survives Activity recreation (rotation, dark-mode, locale, …).
  * Process death is out of scope.
  */
-@OptIn(ExplicitSecurityRisk::class)
 class P2pKitViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- identity ----------------------------------------------------------
@@ -188,10 +187,13 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      * (AUDIT-2026-06: A-G8-samples-android-09 — comment previously claimed
      * the SDK does not arbitrate.)
      *
-     * Default ON — this is the behavior that makes a 3-device room work
-     * out-of-the-box. Toggle OFF to test selective connect.
+     * This sample deliberately uses [PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp]
+     * to make local development testing easy. That policy does not verify a
+     * peer's product or user identity, so auto-mesh is OFF by default: enabling
+     * it connects to discovered peers whose fingerprints have not been verified.
+     * Production apps should use [PeerAuthorizationPolicy.PinnedOnly].
      */
-    private val _autoMesh = MutableStateFlow(true)
+    private val _autoMesh = MutableStateFlow(DEFAULT_AUTO_MESH_ENABLED)
     val autoMesh: StateFlow<Boolean> = _autoMesh.asStateFlow()
 
     // --- configuration ----------------------------------------------------
@@ -433,6 +435,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         Log.i(LOG_TAG, "auto-mesh = ${_autoMesh.value}")
     }
 
+    @OptIn(ExplicitSecurityRisk::class)
     fun start() {
         // AUDIT-2026-06: D-G8-samples-android-02 — also refuse while the
         // previous kit is still stopping, or two kits would overlap (duplicate
@@ -482,6 +485,12 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 appId = AppId(APP_ID)
                 this.deviceName = this@P2pKitViewModel.deviceName
                 security {
+                    // DEVELOPMENT SAMPLE ONLY: this admits any authenticated
+                    // peer using the public AppId, not a verified user or
+                    // product identity. Auto-mesh remains opt-in and the UI
+                    // labels this posture. Production apps must use
+                    // PeerAuthorizationPolicy.PinnedOnly with a verified
+                    // fingerprint before connecting.
                     mode = SecurityMode.AuthenticatedV2(
                         PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
                     )
@@ -2083,6 +2092,9 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         const val ROOM_MESSAGE_BYTE_CAPACITY = 256 * 1024
     }
 }
+
+/** The sample must require an explicit user action before auto-connecting. */
+internal const val DEFAULT_AUTO_MESH_ENABLED: Boolean = false
 
 /**
  * AUDIT-2026-06: C-G8-samples-android-18 — `runCatching` variant that rethrows
