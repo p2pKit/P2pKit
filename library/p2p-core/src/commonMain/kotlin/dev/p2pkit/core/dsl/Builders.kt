@@ -286,11 +286,17 @@ public class SecurityConfigBuilder internal constructor(public var mode: Securit
 @P2pKitDsl
 public class FileTransferConfigBuilder internal constructor(initial: FileTransferConfig) {
     public var maxFileSizeBytes: Long = initial.maxFileSizeBytes
+    public var maxConcurrentIncomingBytes: Long = initial.maxConcurrentIncomingBytes
     public var chunkSizeBytes: Int = initial.chunkSizeBytes
     public var offerTimeoutMillis: Long = initial.offerTimeoutMillis
 
     internal fun toConfig(): FileTransferConfig =
-        FileTransferConfig(maxFileSizeBytes, chunkSizeBytes, offerTimeoutMillis)
+        FileTransferConfig(
+            maxFileSizeBytes = maxFileSizeBytes,
+            maxConcurrentIncomingBytes = maxConcurrentIncomingBytes,
+            chunkSizeBytes = chunkSizeBytes,
+            offerTimeoutMillis = offerTimeoutMillis
+        )
 }
 
 @P2pKitDsl

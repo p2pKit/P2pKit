@@ -10,6 +10,7 @@ import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 class PublicConfigurationValidationTest {
@@ -37,6 +38,9 @@ class PublicConfigurationValidationTest {
             FileTransferConfig(maxFileSizeBytes = 0)
         }
         assertFailsWith<IllegalArgumentException> {
+            FileTransferConfig(maxConcurrentIncomingBytes = 0)
+        }
+        assertFailsWith<IllegalArgumentException> {
             FileTransferConfig(chunkSizeBytes = 0)
         }
         assertFailsWith<IllegalArgumentException> {
@@ -51,6 +55,24 @@ class PublicConfigurationValidationTest {
                 chunkSizeBytes = 1
             )
         }
+    }
+
+    @Test
+    fun fileTransferAggregateLimitIsConfigurableWithoutChangingLegacyConstruction() {
+        val configured = FileTransferConfig(
+            maxFileSizeBytes = 16L,
+            chunkSizeBytes = 1,
+            offerTimeoutMillis = 1,
+            maxConcurrentIncomingBytes = 32L
+        )
+        val legacy = FileTransferConfig(16L, 1, 1)
+
+        assertEquals(32L, configured.maxConcurrentIncomingBytes)
+        assertEquals(8L * 1024 * 1024 * 1024, legacy.maxConcurrentIncomingBytes)
+        assertEquals(
+            legacy.maxConcurrentIncomingBytes,
+            legacy.copy(maxFileSizeBytes = 8L).maxConcurrentIncomingBytes
+        )
     }
 
     @Test

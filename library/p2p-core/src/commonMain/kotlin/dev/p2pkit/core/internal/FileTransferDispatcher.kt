@@ -29,6 +29,7 @@ import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transfer.PreparedFileSource
 import dev.p2pkit.core.transfer.Sha256Digest
+import dev.p2pkit.core.transfer.StorageCapacityCheckingFileTransferDestination
 import dev.p2pkit.core.transfer.acceptedIdleTimeoutMillis
 import dev.p2pkit.core.transfer.acceptedOverallTimeoutMillis
 import dev.p2pkit.core.transfer.commitTimeoutMillis
@@ -607,6 +608,8 @@ internal class FileTransferDispatcher(
                         )
                     }
                 ) {
+                    (destination as? StorageCapacityCheckingFileTransferDestination)
+                        ?.requireAvailableStorage(session.sizeBytes)
                     destination.openSink()
                 }
             ) {
@@ -855,6 +858,10 @@ internal class FileTransferDispatcher(
                 )
                 incoming.size >= MAX_ACTIVE_INCOMING_TRANSFERS -> OfferInsertion.Capacity(
                     "too many active incoming transfers"
+                )
+                !hasIncomingByteCapacityLocked(payload.sizeBytes) -> OfferInsertion.Capacity(
+                    "aggregate incoming byte capacity " +
+                        "${config.maxConcurrentIncomingBytes} would be exceeded"
                 )
                 secureOffer != null &&
                     secureIncomingTransactionCountLocked() >= MAX_TERMINAL_INCOMING_TRANSACTIONS ->
@@ -2810,6 +2817,18 @@ internal class FileTransferDispatcher(
 
     private fun secureIncomingTransactionCountLocked(): Int =
         terminalIncoming.size + incoming.values.count { it.secureOffer != null }
+
+    /** Caller holds [lock]. Saturate instead of letting a hostile declaration wrap the sum. */
+    private fun hasIncomingByteCapacityLocked(sizeBytes: Long): Boolean {
+        if (sizeBytes < 0L || sizeBytes > config.maxConcurrentIncomingBytes) return false
+        var activeBytes = 0L
+        for (entry in incoming.values) {
+            val entrySize = entry.payload.sizeBytes
+            if (entrySize > Long.MAX_VALUE - activeBytes) return false
+            activeBytes += entrySize
+        }
+        return activeBytes <= config.maxConcurrentIncomingBytes - sizeBytes
+    }
 
     private fun removePendingOfferLocked(session: IncomingFileSession) {
         val current = _pendingFileOffers.value

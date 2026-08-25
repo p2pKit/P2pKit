@@ -14,6 +14,32 @@ import kotlin.test.assertTrue
 /** Host-executable parity proof for Android's platform destination abort state machine. */
 class AndroidDurableFileDestinationAndroidHostTest {
     @Test
+    fun capacityPreflightRetainsConfiguredFreeSpace() = runBlocking {
+        withTempDirectory("p2pkit-android-capacity-") { directory ->
+            val accepted = AndroidDurableFileDestination(
+                target = File(directory, "accepted.bin"),
+                usableSpace = { 9L },
+                minimumFreeSpaceBytes = 5L
+            )
+            val rejected = AndroidDurableFileDestination(
+                target = File(directory, "rejected.bin"),
+                usableSpace = { 9L },
+                minimumFreeSpaceBytes = 5L
+            )
+
+            accepted.requireAvailableStorage(4L)
+            val failure = assertFailsWith<IOException> {
+                rejected.requireAvailableStorage(5L)
+            }
+
+            assertTrue(failure.message.orEmpty().contains("Insufficient usable space"))
+            accepted.abort(cause = null)
+            rejected.abort(cause = null)
+            assertTrue(directory.listFiles().isNullOrEmpty())
+        }
+    }
+
+    @Test
     fun abortReportsAllFailuresAndRetriesOnlyIncompleteCleanup() = runBlocking {
         val directory = Files.createTempDirectory("p2pkit-android-abort-retry-").toFile()
         try {

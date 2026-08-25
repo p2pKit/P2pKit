@@ -188,6 +188,30 @@ class FileTransferJvmTest {
     }
 
     @Test
+    fun durableDestinationPreflightRetainsConfiguredFreeSpace() = runBlocking {
+        val directory = Files.createTempDirectory("p2pkit-durable-capacity-").toFile()
+        tempFiles.add(directory)
+        val accepted = JvmDurableFileDestination(
+            target = File(directory, "accepted.bin"),
+            usableSpace = { 9L },
+            minimumFreeSpaceBytes = 5L
+        )
+        val rejected = JvmDurableFileDestination(
+            target = File(directory, "rejected.bin"),
+            usableSpace = { 9L },
+            minimumFreeSpaceBytes = 5L
+        )
+
+        accepted.requireAvailableStorage(4L)
+        val failure = assertFailsWith<IOException> { rejected.requireAvailableStorage(5L) }
+
+        assertTrue(failure.message.orEmpty().contains("Insufficient usable space"))
+        accepted.abort(cause = null)
+        rejected.abort(cause = null)
+        assertTrue(directory.listFiles().isNullOrEmpty())
+    }
+
+    @Test
     fun durableDestinationSkipsUnsupportedWindowsDirectorySync() = runBlocking {
         val directory = Files.createTempDirectory("p2pkit-durable-windows-").toFile()
         tempFiles.add(directory)

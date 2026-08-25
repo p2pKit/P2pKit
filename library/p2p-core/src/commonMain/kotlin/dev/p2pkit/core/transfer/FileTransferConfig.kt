@@ -5,9 +5,10 @@ package dev.p2pkit.core.transfer
  *
  * Configured via `fileTransfer { … }` on [dev.p2pkit.core.dsl.P2pKitBuilder].
  * All defaults are sensible for typical LAN file transfer; raise
- * [maxFileSizeBytes] to allow very large files, lower [offerTimeoutMillis] for
- * unattended setups, lower [chunkSizeBytes] to give other traffic (PING,
- * messages) more frequent slots on the write mutex.
+ * [maxFileSizeBytes] and [maxConcurrentIncomingBytes] together for large
+ * batches, lower [offerTimeoutMillis] for unattended setups, lower
+ * [chunkSizeBytes] to give other traffic (PING, messages) more frequent slots
+ * on the write mutex.
  */
 public data class FileTransferConfig(
     /** Hard positive cap on a single file's byte size. Defaults to 2 GiB. */
@@ -28,10 +29,48 @@ public data class FileTransferConfig(
      * times this value. Secure-v2 receiver commit and sender FILE_COMMIT
      * acknowledgement each use the same bound. Must be positive. Default 30 s.
      */
-    val offerTimeoutMillis: Long = 30_000
+    val offerTimeoutMillis: Long = 30_000,
+
+    /**
+     * Hard positive cap on the sum of peer-declared bytes in all active
+     * incoming transfers. The receiver reserves this budget when it admits an
+     * offer and releases it when that offer reaches a terminal state, before
+     * an application can open a staging sink. Defaults to 8 GiB.
+     *
+     * Increase this together with [maxFileSizeBytes] only when the receiving
+     * application has an appropriate storage policy for larger batches.
+     */
+    val maxConcurrentIncomingBytes: Long = DEFAULT_MAX_CONCURRENT_INCOMING_BYTES
 ) {
+    /** Retains the published three-argument constructor for existing callers. */
+    public constructor(
+        maxFileSizeBytes: Long,
+        chunkSizeBytes: Int,
+        offerTimeoutMillis: Long
+    ) : this(
+        maxFileSizeBytes = maxFileSizeBytes,
+        chunkSizeBytes = chunkSizeBytes,
+        offerTimeoutMillis = offerTimeoutMillis,
+        maxConcurrentIncomingBytes = DEFAULT_MAX_CONCURRENT_INCOMING_BYTES
+    )
+
+    /** Retains the published three-property copy overload for existing callers. */
+    public fun copy(
+        maxFileSizeBytes: Long = this.maxFileSizeBytes,
+        chunkSizeBytes: Int = this.chunkSizeBytes,
+        offerTimeoutMillis: Long = this.offerTimeoutMillis
+    ): FileTransferConfig = FileTransferConfig(
+        maxFileSizeBytes = maxFileSizeBytes,
+        chunkSizeBytes = chunkSizeBytes,
+        offerTimeoutMillis = offerTimeoutMillis,
+        maxConcurrentIncomingBytes = maxConcurrentIncomingBytes
+    )
+
     init {
         require(maxFileSizeBytes > 0) { "maxFileSizeBytes must be positive" }
+        require(maxConcurrentIncomingBytes > 0) {
+            "maxConcurrentIncomingBytes must be positive"
+        }
         require(chunkSizeBytes in 1..(4 * 1024 * 1024)) {
             "chunkSizeBytes must be in 1..4MiB (got $chunkSizeBytes)"
         }
@@ -43,6 +82,8 @@ public data class FileTransferConfig(
         }
     }
 }
+
+private const val DEFAULT_MAX_CONCURRENT_INCOMING_BYTES: Long = 8L * 1024 * 1024 * 1024
 
 /**
  * Accepted transfers must not retain a sink forever when a peer stays

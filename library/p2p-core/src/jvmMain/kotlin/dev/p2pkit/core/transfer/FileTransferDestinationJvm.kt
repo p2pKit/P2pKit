@@ -18,25 +18,61 @@ import kotlinx.io.asSink
  * unavailable. The public JDK cannot open Windows directory handles with the
  * flags needed by `FlushFileBuffers`, so Windows commit guarantees synced file
  * content and atomic publication but cannot guarantee that the directory entry
- * survives sudden power loss.
+ * survives sudden power loss. The standard receive path also retains 64 MiB
+ * of usable space after the advertised file size fits; use the overload to
+ * choose a different headroom.
  */
 public fun durableFileDestination(target: File): FileTransferDestination =
-    JvmDurableFileDestination(target)
+    durableFileDestination(target, DEFAULT_DURABLE_DESTINATION_MINIMUM_FREE_SPACE_BYTES)
+
+/**
+ * Create a durable destination that retains at least [minimumFreeSpaceBytes]
+ * after the offered file's declared size fits in the target volume.
+ *
+ * The standard receive path checks this before opening the staging sink. It
+ * is a preflight rather than a reservation: other processes can still change
+ * filesystem capacity while a transfer is running.
+ */
+public fun durableFileDestination(
+    target: File,
+    minimumFreeSpaceBytes: Long
+): FileTransferDestination = JvmDurableFileDestination(target, minimumFreeSpaceBytes = minimumFreeSpaceBytes)
 
 internal class JvmDurableFileDestination(
     target: File,
     private val closeSink: (RawSink) -> Unit = { it.close() },
     private val deleteTemp: (File) -> Boolean = { it.delete() },
     private val operatingSystemName: String = System.getProperty("os.name").orEmpty(),
-    private val syncDirectory: (File) -> Unit = ::forceDirectory
-) : FileTransferDestination {
+    private val syncDirectory: (File) -> Unit = ::forceDirectory,
+    private val usableSpace: (File) -> Long = { it.usableSpace },
+    private val minimumFreeSpaceBytes: Long = DEFAULT_DURABLE_DESTINATION_MINIMUM_FREE_SPACE_BYTES
+) : FileTransferDestination, StorageCapacityCheckingFileTransferDestination {
     private val target = target.absoluteFile
     private val parent = checkNotNull(this.target.parentFile) { "Target must have a parent directory" }
         .also { require(it.isDirectory) { "Target parent is not a directory: ${it.absolutePath}" } }
+
+    init {
+        require(minimumFreeSpaceBytes >= 0) { "minimumFreeSpaceBytes must be non-negative" }
+    }
+
     private val temp = File.createTempFile(tempPrefix(this.target.name), ".part", parent)
     private var stream: FileOutputStream? = null
     private var sink: RawSink? = null
     private var state = DestinationState.NEW
+
+    override fun requireAvailableStorage(expectedSizeBytes: Long) = synchronized(this) {
+        if (!hasRequiredStorageCapacity(
+                availableBytes = usableSpace(parent),
+                expectedSizeBytes = expectedSizeBytes,
+                minimumFreeSpaceBytes = minimumFreeSpaceBytes
+            )
+        ) {
+            throw IOException(
+                "Insufficient usable space for $expectedSizeBytes-byte transfer while retaining " +
+                    "$minimumFreeSpaceBytes bytes"
+            )
+        }
+    }
 
     override fun openSink(): RawSink = synchronized(this) {
         check(state == DestinationState.NEW) { "Destination was already opened or terminal" }

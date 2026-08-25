@@ -34,6 +34,7 @@ import dev.p2pkit.core.transfer.FileTransferDestination
 import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transfer.PreparedFileSource
 import dev.p2pkit.core.transfer.Sha256Digest
+import dev.p2pkit.core.transfer.StorageCapacityCheckingFileTransferDestination
 import dev.p2pkit.core.transfer.isTerminal
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
@@ -2538,6 +2539,85 @@ class FileTransferFlowTest {
     }
 
     @Test
+    fun aggregateIncomingByteCapacityRejectsBeforePublishingAndReleasesOnTerminalOffer() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol()
+        val dispatcher = directDispatcher(
+            scope = scope,
+            protocol = protocol,
+            config = FileTransferConfig(
+                maxFileSizeBytes = 8L,
+                chunkSizeBytes = 1,
+                offerTimeoutMillis = 60_000L,
+                maxConcurrentIncomingBytes = 5L
+            )
+        )
+        val firstId = MessageId.random(Random(2_100))
+        val secondId = MessageId.random(Random(2_101))
+        val overCapacityId = MessageId.random(Random(2_102))
+        val replacementId = MessageId.random(Random(2_103))
+        try {
+            dispatcher.onFileOffer(firstId, FileOfferPayload("first.bin", 3L))
+            dispatcher.onFileOffer(secondId, FileOfferPayload("second.bin", 2L))
+
+            dispatcher.onFileOffer(overCapacityId, FileOfferPayload("over-capacity.bin", 1L))
+
+            assertEquals(listOf(overCapacityId), protocol.fileRejects)
+            assertTrue(
+                protocol.fileRejectReasons.single().second.orEmpty()
+                    .contains("aggregate incoming byte capacity")
+            )
+            assertEquals(
+                listOf(firstId, secondId),
+                dispatcher.pendingFileOffers.value.map { (it as IncomingFileSession).transferId }
+            )
+
+            (dispatcher.pendingFileOffers.value.first() as IncomingFileSession).reject("not needed")
+            dispatcher.onFileOffer(replacementId, FileOfferPayload("replacement.bin", 3L))
+
+            assertEquals(
+                listOf(secondId, replacementId),
+                dispatcher.pendingFileOffers.value.map { (it as IncomingFileSession).transferId }
+            )
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun destinationStoragePreflightRunsBeforeOpeningAndReturnsTypedFailure() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val protocol = RecordingFileProtocol()
+        val dispatcher = directDispatcher(
+            scope = scope,
+            protocol = protocol,
+            protocolState = secureProtocolState()
+        )
+        val id = MessageId.random(Random(2_104))
+        val bytes = byteArrayOf(1, 2, 3)
+        val offer = SecureFileOffer.create(id, "capacity.bin", bytes.size.toLong(), null, sha256(bytes))
+        val destination = PreflightRejectingDestination()
+        try {
+            dispatcher.onFileOffer(id, FileOfferPayload("capacity.bin", bytes.size.toLong()), offer)
+            val pending = assertIs<IncomingFileSession>(dispatcher.pendingFileOffers.value.single())
+
+            val failure = assertFailsWith<P2pError.FileTransferFailed> {
+                pending.accept(destination)
+            }
+
+            assertEquals(FileTransferFailureKind.STORAGE, failure.kind)
+            assertEquals(FileTransferPhase.ACCEPT, failure.phase)
+            assertEquals(bytes.size.toLong(), destination.requestedBytes)
+            assertEquals(1, destination.preflightCount)
+            assertEquals(0, destination.openCount)
+            assertIs<FileTransferState.Failed>(pending.state.value)
+            assertEquals(FileResultCode.STORAGE_FAILURE, protocol.fileResults.single().code)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun outgoingOfferWriteHasDeadlineAndLateCompletionIsCompensated() = runBlocking {
         val scope = CoroutineScope(coroutineContext + Job())
         val protocol = RecordingFileProtocol().apply {
@@ -4109,6 +4189,29 @@ private class BlockingPreparedSource(content: ByteArray) : PreparedFileSource {
         }
         return opened
     }
+}
+
+private class PreflightRejectingDestination :
+    FileTransferDestination,
+    StorageCapacityCheckingFileTransferDestination {
+    var requestedBytes: Long? = null
+    var preflightCount: Int = 0
+    var openCount: Int = 0
+
+    override fun requireAvailableStorage(expectedSizeBytes: Long) {
+        requestedBytes = expectedSizeBytes
+        preflightCount++
+        throw IOException("injected insufficient usable space")
+    }
+
+    override fun openSink(): RawSink {
+        openCount++
+        return Buffer()
+    }
+
+    override suspend fun commit() {}
+
+    override suspend fun abort(cause: P2pError.FileTransferFailed?) {}
 }
 
 @OptIn(ExperimentalAtomicApi::class)

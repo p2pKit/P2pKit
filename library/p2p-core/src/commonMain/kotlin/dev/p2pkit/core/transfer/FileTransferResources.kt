@@ -107,3 +107,30 @@ public interface FileTransferDestination {
      */
     public suspend fun abort(cause: P2pError.FileTransferFailed?)
 }
+
+/**
+ * Internal capability implemented by the built-in durable destinations.
+ *
+ * A [FileTransferDestination] cannot generally identify its backing storage,
+ * so application-defined destinations retain responsibility for their own
+ * quota policy. The dispatcher invokes this capability, when present, before
+ * it opens the staging sink for the offered byte count.
+ */
+internal interface StorageCapacityCheckingFileTransferDestination {
+    /** Fail before opening the staging sink when [expectedSizeBytes] cannot fit safely. */
+    fun requireAvailableStorage(expectedSizeBytes: Long)
+}
+
+internal const val DEFAULT_DURABLE_DESTINATION_MINIMUM_FREE_SPACE_BYTES: Long = 64L * 1024 * 1024
+
+internal fun hasRequiredStorageCapacity(
+    availableBytes: Long,
+    expectedSizeBytes: Long,
+    minimumFreeSpaceBytes: Long
+): Boolean {
+    require(expectedSizeBytes >= 0) { "expectedSizeBytes must be non-negative" }
+    require(minimumFreeSpaceBytes >= 0) { "minimumFreeSpaceBytes must be non-negative" }
+    if (availableBytes < 0) return false
+    if (expectedSizeBytes > Long.MAX_VALUE - minimumFreeSpaceBytes) return false
+    return availableBytes >= expectedSizeBytes + minimumFreeSpaceBytes
+}
