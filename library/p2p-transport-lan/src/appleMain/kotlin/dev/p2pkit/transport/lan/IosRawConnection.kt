@@ -3,6 +3,7 @@
 package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.transport.InboundConnectionAdmission
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_connection_receive_default
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_connection_send_default
@@ -50,6 +51,29 @@ import platform.posix.uint8_tVar
 /** Non-suspending cancellation ownership required by Network.framework callbacks. */
 internal interface IosConnectionHandle : RawConnection {
     fun cancelNow(reason: String)
+}
+
+/** Adds a per-source lease without changing outbound connection behavior. */
+internal class IosAdmissionControlledConnection(
+    private val delegate: IosConnectionHandle,
+    private val lease: SourceAdmissionLease
+) : IosConnectionHandle, InboundConnectionAdmission {
+    override val admissionSource: String = lease.source
+    override val state: StateFlow<ConnectionState> = delegate.state
+
+    override suspend fun write(bytes: ByteArray) = delegate.write(bytes)
+    override fun read(): Flow<ByteArray> = delegate.read()
+    override suspend fun close() = cancelNow("close()")
+
+    override fun cancelNow(reason: String) {
+        try {
+            delegate.cancelNow(reason)
+        } finally {
+            lease.release()
+        }
+    }
+
+    override fun releasePreHandshakeAdmission() = lease.release()
 }
 
 /**

@@ -27,6 +27,7 @@ import dev.p2pkit.core.security.LocalSecureIdentity
 import dev.p2pkit.core.security.SecureConnection
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.DataTransport
+import dev.p2pkit.core.transport.InboundConnectionAdmission
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.PeerAuthenticationHint
 import dev.p2pkit.core.transport.PeerOrigin
@@ -513,10 +514,15 @@ internal class SessionManager(
         // resources (event channel, reader job) are allocated. A conforming
         // peer simply redials once capacity frees up.
         if (!preHandshakeGate.tryAcquire()) {
+            val source = (connection as? InboundConnectionAdmission)
+                ?.let { admission -> runCatching { admission.admissionSource }.getOrNull() }
+                ?.let { " from $it" }
+                .orEmpty()
             logger.warn(
-                "Inbound connection refused: pre-handshake setups at capacity " +
+                "Inbound connection$source refused: pre-handshake setups at capacity " +
                     "($MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS)"
             )
+            releaseTransportPreHandshakeAdmission(connection)
             // This cleanup must not inherit the kit Job: shutdown can
             // linearize between the capacity decision and launch. Use the
             // bounded independent owner so a just-refused socket always gets
@@ -545,6 +551,7 @@ internal class SessionManager(
                 if (!released) {
                     released = true
                     preHandshakeGate.release()
+                    releaseTransportPreHandshakeAdmission(connection)
                 }
             }
             try {
@@ -577,9 +584,20 @@ internal class SessionManager(
             // cleanup obligation to a detached, bounded worker.
             if (!launchBodyStarted.isCompleted) {
                 preHandshakeGate.release()
+                releaseTransportPreHandshakeAdmission(connection)
                 launchIndependentUncommittedConnectionCleanup(connection)
             }
         }
+    }
+
+    /**
+     * Return a transport-owned per-source slot without allowing a faulty
+     * third-party transport hook to strand the core's setup lifecycle.
+     */
+    private fun releaseTransportPreHandshakeAdmission(connection: RawConnection) {
+        val admission = connection as? InboundConnectionAdmission ?: return
+        runCatching { admission.releasePreHandshakeAdmission() }
+            .onFailure { logger.warn("Inbound transport admission release failed", it) }
     }
 
     @OptIn(DelicateCoroutinesApi::class, ExperimentalCoroutinesApi::class)

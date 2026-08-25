@@ -71,6 +71,7 @@ internal class JvmLanDataTransport(
     private val lifecycleGeneration = AtomicLong()
     private val pendingDialSockets = mutableSetOf<Socket>()
     private val retainedDialSocketCleanup = mutableSetOf<Socket>()
+    private val inboundAdmission = PerSourceAdmissionLimiter()
 
     @Volatile private var restartPort: Int = 0
     @Volatile private var hasStarted: Boolean = false
@@ -309,11 +310,28 @@ internal class JvmLanDataTransport(
                         runCatching { socket.close() }
                         continue
                     }
+                    val source = runCatching { socket.inetAddress.hostAddress }
+                        .getOrNull()
+                        ?.takeIf(String::isNotBlank)
+                        ?: UNKNOWN_INBOUND_SOURCE
+                    val admissionLease = inboundAdmission.tryAcquire(source)
+                    if (admissionLease == null) {
+                        JvmLanDiag.log(
+                            "accept",
+                            "REJECTED ${socket.remoteSocketAddress}: per-source pre-handshake " +
+                                "capacity ($MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE)"
+                        )
+                        runCatching { socket.close() }
+                        continue
+                    }
                     // Close the socket when the channel refuses it (buffer full
                     // under an accept burst / stalled collector): silently
                     // dropping leaked the fd while the remote believed it had
                     // connected (AUDIT-2026-06 fix).
-                    val raw = JvmRawConnection(socket)
+                    val raw = AdmissionControlledRawConnection(
+                        JvmRawConnection(socket),
+                        admissionLease
+                    )
                     val offered = trySend(raw)
                     if (offered.isFailure) {
                         JvmLanDiag.log("accept", "DROPPED ${socket.remoteSocketAddress} (channel full) — closing")
@@ -449,5 +467,6 @@ internal class JvmLanDataTransport(
 
     private companion object {
         const val NANOS_PER_MILLISECOND: Long = 1_000_000
+        const val UNKNOWN_INBOUND_SOURCE: String = "unknown"
     }
 }

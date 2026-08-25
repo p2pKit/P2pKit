@@ -70,6 +70,7 @@ internal class AndroidLanDataTransport(
     private val lifecycleGeneration = AtomicLong()
     private val pendingDialSockets = mutableSetOf<Socket>()
     private val retainedDialSocketCleanup = mutableSetOf<Socket>()
+    private val inboundAdmission = PerSourceAdmissionLimiter()
     @Volatile private var restartPort: Int = 0
     @Volatile private var hasStarted: Boolean = false
 
@@ -352,7 +353,24 @@ internal class AndroidLanDataTransport(
                         runCatching { socket.close() }
                         continue
                     }
-                    val raw = AndroidRawConnection(socket)
+                    val source = runCatching { socket.inetAddress.hostAddress }
+                        .getOrNull()
+                        ?.takeIf(String::isNotBlank)
+                        ?: UNKNOWN_INBOUND_SOURCE
+                    val admissionLease = inboundAdmission.tryAcquire(source)
+                    if (admissionLease == null) {
+                        Log.d(
+                            TAG,
+                            "REJECTED ${socket.remoteSocketAddress}: per-source pre-handshake " +
+                                "capacity ($MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE)"
+                        )
+                        runCatching { socket.close() }
+                        continue
+                    }
+                    val raw = AdmissionControlledRawConnection(
+                        AndroidRawConnection(socket),
+                        admissionLease
+                    )
                     val offered = trySend(raw)
                     if (offered.isFailure) {
                         Log.d(TAG, "DROPPED ${socket.remoteSocketAddress} (channel full) — closing")
@@ -492,5 +510,6 @@ internal class AndroidLanDataTransport(
     private companion object {
         const val TAG = "P2pKitLanData"
         const val NANOS_PER_MILLISECOND: Long = 1_000_000
+        const val UNKNOWN_INBOUND_SOURCE: String = "unknown"
     }
 }

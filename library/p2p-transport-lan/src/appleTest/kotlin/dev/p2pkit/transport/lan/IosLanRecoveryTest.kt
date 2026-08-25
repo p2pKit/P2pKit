@@ -7,8 +7,9 @@ import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
-import dev.p2pkit.core.transport.LocalPeerInfo
+import dev.p2pkit.core.transport.InboundConnectionAdmission
 import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportHint
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
@@ -26,6 +27,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -38,6 +41,7 @@ import platform.posix.sched_yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
@@ -374,9 +378,51 @@ class IosLanRecoveryTest {
 
             assertTrue(transport.handleInboundConnectionForTest(owner, nativeConnection()))
             val accepted = assertNotNull(created)
-            assertSame(accepted, withTimeout(RECOVERY_TIMEOUT_MILLIS) { received.await() })
+            val transferred = withTimeout(RECOVERY_TIMEOUT_MILLIS) { received.await() }
+            assertIs<InboundConnectionAdmission>(transferred)
             assertFalse(accepted.cancelled, "consumer owns a successfully transferred connection")
-            accepted.close()
+            transferred.close()
+            assertTrue(accepted.cancelled)
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Test
+    fun oneInboundSourceIsCappedBeforeQueueingAndRecoversAfterRelease() = runBlocking<Unit> {
+        val rejected = AtomicInt(0)
+        val transport = IosLanDataTransport(
+            transportContext = context("per-source-admission"),
+            endpointRegistry = IosEndpointRegistry(),
+            inboundSourceProvider = { "source-a" },
+            connectionRejector = { connection ->
+                rejected.incrementAndGet()
+                nw_connection_cancel(connection)
+            },
+            connectionFactory = { connection, _ -> ControlledInboundConnection(connection) }
+        )
+        try {
+            assertTrue(transport.start().isSuccess)
+            val owner = assertNotNull(transport.listener)
+            val firstTwo = async { transport.incomingConnections().take(2).toList() }
+
+            assertTrue(transport.handleInboundConnectionForTest(owner, nativeConnection()))
+            assertTrue(transport.handleInboundConnectionForTest(owner, nativeConnection()))
+            assertFalse(transport.handleInboundConnectionForTest(owner, nativeConnection()))
+            assertEquals(1, rejected.value)
+
+            val admitted = withTimeout(RECOVERY_TIMEOUT_MILLIS) { firstTwo.await() }
+            assertIs<InboundConnectionAdmission>(admitted.first())
+                .releasePreHandshakeAdmission()
+
+            assertTrue(
+                transport.handleInboundConnectionForTest(owner, nativeConnection()),
+                "releasing one handshake slot must admit the next connection from that source"
+            )
+            withTimeout(RECOVERY_TIMEOUT_MILLIS) {
+                transport.incomingConnections().first().close()
+            }
+            admitted.last().close()
         } finally {
             transport.close()
         }

@@ -347,6 +347,13 @@ abstract interface dev.p2pkit.core.transport/HasLocalTcpEndpoint { // dev.p2pkit
         abstract fun <get-tcpPort>(): kotlinx.coroutines.flow/StateFlow<kotlin/Int?> // dev.p2pkit.core.transport/HasLocalTcpEndpoint.tcpPort.<get-tcpPort>|<get-tcpPort>(){}[0]
 }
 
+abstract interface dev.p2pkit.core.transport/InboundConnectionAdmission { // dev.p2pkit.core.transport/InboundConnectionAdmission|null[0]
+    abstract val admissionSource // dev.p2pkit.core.transport/InboundConnectionAdmission.admissionSource|{}admissionSource[0]
+        abstract fun <get-admissionSource>(): kotlin/String // dev.p2pkit.core.transport/InboundConnectionAdmission.admissionSource.<get-admissionSource>|<get-admissionSource>(){}[0]
+
+    abstract fun releasePreHandshakeAdmission() // dev.p2pkit.core.transport/InboundConnectionAdmission.releasePreHandshakeAdmission|releasePreHandshakeAdmission(){}[0]
+}
+
 abstract interface dev.p2pkit.core.transport/RawConnection { // dev.p2pkit.core.transport/RawConnection|null[0]
     abstract val state // dev.p2pkit.core.transport/RawConnection.state|{}state[0]
         abstract fun <get-state>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.core/ConnectionState> // dev.p2pkit.core.transport/RawConnection.state.<get-state>|<get-state>(){}[0]

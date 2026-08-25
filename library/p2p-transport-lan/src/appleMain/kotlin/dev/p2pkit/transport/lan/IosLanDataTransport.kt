@@ -13,6 +13,7 @@ import dev.p2pkit.core.transport.TransportContext
 import kotlin.concurrent.Volatile
 import kotlin.coroutines.resume
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.toKString
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -41,8 +42,10 @@ import platform.Foundation.NSNotificationCenter
 import platform.Foundation.NSLock
 import platform.Network.nw_connection_create
 import platform.Network.nw_connection_cancel
+import platform.Network.nw_connection_copy_endpoint
 import platform.Network.nw_connection_t
 import platform.Network.nw_endpoint_create_host
+import platform.Network.nw_endpoint_get_hostname
 import platform.Network.nw_error_get_error_code
 import platform.Network.nw_endpoint_t
 import platform.Network.nw_listener_cancel
@@ -115,6 +118,8 @@ internal class IosLanDataTransport(
     private val beforeInboundRetireForTest: (() -> Unit)? = null,
     /** Test-only synchronization point before a connected dial transfers ownership. */
     private val beforeDialOwnershipHandoffForTest: (() -> Unit)? = null,
+    /** Test seam for the accepted connection's stable remote-address key. */
+    private val inboundSourceProvider: (nw_connection_t) -> String? = ::appleInboundSource,
     private val connectionFactory: (nw_connection_t, dispatch_queue_t) -> IosConnectionHandle =
         { connection, connectionQueue -> IosRawConnection.wrap(connection, connectionQueue) }
 ) : DataTransport, HasLocalTcpEndpoint {
@@ -221,6 +226,7 @@ internal class IosLanDataTransport(
         capacity = MAX_BUFFERED_INBOUND_CONNECTIONS,
         onDrop = { it.cancelNow("inbound admission rejected") }
     )
+    private val inboundAdmission = PerSourceAdmissionLimiter()
     private val inboundOwnershipLock = NSLock()
     private var inboundListenerOwner: nw_listener_t = null
     private val startMutex = Mutex()
@@ -501,9 +507,24 @@ internal class IosLanDataTransport(
                 rejectNativeConnection(connection, "stale/inactive listener")
                 return@withInboundOwnershipLock false
             }
-            val raw = try {
+            val source = runCatching { inboundSourceProvider(connection) }
+                .getOrNull()
+                ?.takeIf(String::isNotBlank)
+                ?: UNKNOWN_INBOUND_SOURCE
+            val admissionLease = inboundAdmission.tryAcquire(source)
+            if (admissionLease == null) {
+                IosLanDebug.log(
+                    "data",
+                    "listener: rejected inbound source=$source; per-source pre-handshake " +
+                        "capacity ($MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE)"
+                )
+                rejectNativeConnection(connection, "per-source pre-handshake capacity")
+                return@withInboundOwnershipLock false
+            }
+            val delegate = try {
                 connectionFactory(connection, queue)
             } catch (error: Throwable) {
+                admissionLease.release()
                 // Do not throw across the native callback boundary. The
                 // connection was not accepted and remains ours to cancel.
                 rejectNativeConnection(connection, "connection wrapper failure")
@@ -513,6 +534,7 @@ internal class IosLanDataTransport(
                 )
                 return@withInboundOwnershipLock false
             }
+            val raw = IosAdmissionControlledConnection(delegate, admissionLease)
             try {
                 beforeInboundOfferForTest?.invoke()
                 val sent = incomingQueue.offer(raw)
@@ -1249,8 +1271,14 @@ internal class IosLanDataTransport(
         const val LISTENER_CANCEL_TIMEOUT_MILLIS: Long = 2_000
         const val REBIND_RETRY_BASE_DELAY_MILLIS: Long = 250
         const val REBIND_RETRY_MAX_ATTEMPTS: Int = 5
+        const val UNKNOWN_INBOUND_SOURCE: String = "unknown"
     }
 }
+
+private fun appleInboundSource(connection: nw_connection_t): String? =
+    nw_connection_copy_endpoint(connection)
+        ?.let(::nw_endpoint_get_hostname)
+        ?.toKString()
 
 internal fun applePathNeedsRebind(
     becameSatisfied: Boolean,

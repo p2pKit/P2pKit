@@ -6,7 +6,9 @@ import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.transport.InboundConnectionAdmission
 import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportHint
 import java.io.IOException
 import java.net.BindException
@@ -21,6 +23,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -304,6 +308,40 @@ class AndroidLanDataTransportOwnershipTest {
         raw.close()
         allowed.close()
         transport.close()
+    }
+
+    @Test
+    fun inboundPerSourceQuotaRejectsBeforeQueueAndRecoversAfterRelease() = runBlocking {
+        val transport = AndroidLanDataTransport(registration("per-source-admission"))
+        val clients = mutableListOf<Socket>()
+        try {
+            assertTrue(transport.start().isSuccess)
+            val port = requireNotNull(transport.tcpPort.value)
+            val received = Channel<RawConnection>(Channel.UNLIMITED)
+            val collector = launch(Dispatchers.Default) {
+                transport.incomingConnections().collect(received::send)
+            }
+            repeat(MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE + 1) {
+                clients += Socket(InetAddress.getLoopbackAddress(), port)
+            }
+
+            val admitted = withTimeout(TEST_TIMEOUT_MS) {
+                List(MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE) { received.receive() }
+            }
+            val refused = clients.last()
+            refused.soTimeout = 2_000
+            assertEquals(-1, refused.getInputStream().read())
+
+            assertIs<InboundConnectionAdmission>(admitted.first())
+                .releasePreHandshakeAdmission()
+            clients += Socket(InetAddress.getLoopbackAddress(), port)
+            withTimeout(TEST_TIMEOUT_MS) { received.receive() }.close()
+            admitted.forEach { it.close() }
+            collector.cancelAndJoin()
+        } finally {
+            clients.forEach { runCatching { it.close() } }
+            transport.close()
+        }
     }
 
     @Test

@@ -1633,6 +1633,11 @@ public abstract interface class dev/p2pkit/core/transport/HasLocalTcpEndpoint {
 	public abstract fun getTcpPort ()Lkotlinx/coroutines/flow/StateFlow;
 }
 
+public abstract interface class dev/p2pkit/core/transport/InboundConnectionAdmission {
+	public abstract fun getAdmissionSource ()Ljava/lang/String;
+	public abstract fun releasePreHandshakeAdmission ()V
+}
+
 public final class dev/p2pkit/core/transport/InternalKt {
 	public static final fun discoveryLifetime (Ldev/p2pkit/core/transport/InternalPeer;)Ldev/p2pkit/core/transport/DiscoveryLifetime;
 	public static final fun withDiscoveryLifetime (Ldev/p2pkit/core/transport/TransportHint;Ldev/p2pkit/core/transport/DiscoveryLifetime;)Ldev/p2pkit/core/transport/TransportHint;

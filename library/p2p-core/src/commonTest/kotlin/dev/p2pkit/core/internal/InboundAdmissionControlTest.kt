@@ -10,12 +10,17 @@ import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.RecordingLogger
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.transport.InboundConnectionAdmission
+import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
@@ -99,7 +104,10 @@ class InboundAdmissionControlTest {
             // HELLO. All of them must be ADMITTED (at-cap conforming load is
             // unaffected): each setup sends the kit's HELLO on its wire.
             val stalled = List(MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS) { FakeConnectionPair() }
-            stalled.forEach { transport.emitIncoming(it.b) }
+            val stalledAdmissions = stalled.mapIndexed { index, pair ->
+                TrackingAdmissionConnection(pair.b, "stalled-$index")
+            }
+            stalledAdmissions.forEach { transport.emitIncoming(it) }
             awaitTrue("all $MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS at-bound setups admitted (kit HELLO sent)") {
                 stalled.all { it.b.writeAttempts > 0 }
             }
@@ -107,13 +115,19 @@ class InboundAdmissionControlTest {
             // One connection past the bound: refused before any allocation —
             // closed, warned, no kit HELLO ever written on it, no session.
             val excess = FakeConnectionPair()
-            transport.emitIncoming(excess.b)
+            val excessAdmission = TrackingAdmissionConnection(excess.b, "excess")
+            transport.emitIncoming(excessAdmission)
             awaitTrue("refusal diagnostic for the connection past the bound") {
                 logger.warnings.any { it.contains(preHandshakeRefusalFragment) }
             }
             awaitTrue("refused connection closed") {
                 excess.b.state.value == ConnectionState.Closed
             }
+            assertEquals(
+                1,
+                excessAdmission.releaseCount,
+                "a core-gate refusal must immediately return its transport slot"
+            )
             assertEquals(
                 0, excess.b.writeAttempts,
                 "the kit must not allocate handshake work for a refused connection"
@@ -131,6 +145,9 @@ class InboundAdmissionControlTest {
                 // when several handshakes complete close together.
                 bob.sessions.first { it.size >= successCount }
             }
+            awaitTrue("successful handshakes returned their transport admission slots") {
+                stalledAdmissions.take(successCount).all { it.releaseCount == 1 }
+            }
 
             // Permit recovery, failure path: the other half hang up without
             // ever sending HELLO — each setup fails, is logged, and releases
@@ -140,11 +157,15 @@ class InboundAdmissionControlTest {
                 logger.warnings.count { it.contains(setupFailedFragment) } >=
                     MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS - successCount
             }
+            awaitTrue("failed handshakes returned their transport admission slots") {
+                stalledAdmissions.drop(successCount).all { it.releaseCount == 1 }
+            }
 
             // With every permit returned (both outcomes), a fresh inbound
             // connection is admitted and completes normally.
             val late = FakeConnectionPair()
-            transport.emitIncoming(late.b)
+            val lateAdmission = TrackingAdmissionConnection(late.b, "late")
+            transport.emitIncoming(lateAdmission)
             awaitTrue("post-recovery connection admitted (kit HELLO sent)") {
                 late.b.writeAttempts > 0
             }
@@ -154,6 +175,11 @@ class InboundAdmissionControlTest {
                     sessions.any { it.peer.id.value == "peer-late" }
                 }
             }
+            assertEquals(
+                1,
+                lateAdmission.releaseCount,
+                "a successful late handshake must return its transport slot"
+            )
 
             // Exactly one connection was ever refused at the pre-handshake
             // bound; refusal never recurred once capacity was free.
@@ -251,4 +277,33 @@ private class AdmissionFactory(private val transport: FakeDataTransport) : Trans
         dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = null)
+}
+
+private class TrackingAdmissionConnection(
+    private val delegate: RawConnection,
+    override val admissionSource: String
+) : RawConnection, InboundConnectionAdmission {
+    private val released = MutableStateFlow(false)
+    private val releases = MutableStateFlow(0)
+
+    val releaseCount: Int
+        get() = releases.value
+
+    override val state: StateFlow<ConnectionState> = delegate.state
+    override suspend fun write(bytes: ByteArray) = delegate.write(bytes)
+    override fun read(): Flow<ByteArray> = delegate.read()
+
+    override suspend fun close() {
+        try {
+            delegate.close()
+        } finally {
+            releasePreHandshakeAdmission()
+        }
+    }
+
+    override fun releasePreHandshakeAdmission() {
+        if (released.compareAndSet(expect = false, update = true)) {
+            releases.value += 1
+        }
+    }
 }

@@ -41,13 +41,13 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
- * AUDIT-2026-07 (SEC-1, decision #9a) / coverage plan P1-26, integration
- * half: inbound admission control over a REAL `ServerSocket` + real loopback
- * TCP with full [P2pKit] instances. K raw sockets that connect and never
- * send HELLO must leave the kit responsive:
+ * Inbound admission control over a real `ServerSocket` + real loopback TCP
+ * with full [P2pKit] instances. Raw sockets from one source that connect and
+ * never send HELLO must leave the kit responsive:
  *
- *  - connections past the pre-handshake bound are refused (closed by the
- *    kit with a warn diagnostic, no kit HELLO ever written on them);
+ *  - connections past the per-source bound are refused by the transport
+ *    before buffering or core handshake allocation;
+ *  - a peer from a distinct source can still complete an inbound handshake;
  *  - the admitted setups hold bounded resources and an OUTBOUND connect
  *    from the kit still succeeds while inbound capacity is saturated;
  *  - once the non-conforming sockets go away, admission capacity recovers
@@ -77,7 +77,7 @@ class JvmLanAdmissionControlTest {
     }
 
     @Test
-    fun neverHelloConnectionsAreBoundedAndKitStaysResponsive() {
+    fun oneSilentSourceCannotExhaustInboundAdmission() {
         runBlocking {
             val bobLogger = AdmissionRecordingLogger()
             val bobTransport = newLanTransport("Bob")
@@ -86,7 +86,8 @@ class JvmLanAdmissionControlTest {
             bob.start()
             val bobPort = requireNotNull(bobTransport.tcpPort.value)
 
-            // K raw connections that never send HELLO, all kept open.
+            // Raw connections from IPv4 loopback that never send HELLO, all
+            // kept open. Only the per-source quota may reach the core.
             val sockets = List(NEVER_HELLO_COUNT) {
                 Socket().also { s ->
                     s.connect(
@@ -96,17 +97,9 @@ class JvmLanAdmissionControlTest {
                 }
             }
             try {
-                // Pre-handshake bound: the excess connections are refused with
-                // a warn diagnostic (bound value mirrors the internal
-                // MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS policy constant).
-                val expectedRefusals = NEVER_HELLO_COUNT - PRE_HANDSHAKE_BOUND
-                awaitTrue("$expectedRefusals refusal diagnostics") {
-                    bobLogger.warnings().count { it.contains(REFUSAL_FRAGMENT) } >= expectedRefusals
-                }
-
-                // fd evidence, per socket: a refused connection was closed by
-                // the kit with NOTHING written on it (EOF, no bytes); an
-                // admitted one received the kit's HELLO bytes.
+                // fd evidence, per socket: a transport-refused connection was
+                // closed with no HELLO; an admitted one received HELLO bytes.
+                val expectedRefusals = NEVER_HELLO_COUNT - PER_SOURCE_BOUND
                 var refusedClosed = 0
                 var admitted = 0
                 for (s in sockets) {
@@ -126,13 +119,13 @@ class JvmLanAdmissionControlTest {
                     "connections past the bound must be closed without any handshake bytes"
                 )
                 assertEquals(
-                    PRE_HANDSHAKE_BOUND, admitted,
-                    "connections within the bound must be admitted (kit HELLO sent)"
+                    PER_SOURCE_BOUND, admitted,
+                    "only the source's fair share may enter core handshake setup"
                 )
                 assertEquals(
-                    expectedRefusals,
+                    0,
                     bobLogger.warnings().count { it.contains(REFUSAL_FRAGMENT) },
-                    "exactly one refusal diagnostic per refused connection"
+                    "transport admission must reject the flood before the global core gate"
                 )
                 assertTrue(
                     bob.sessions.value.isEmpty(),
@@ -160,6 +153,35 @@ class JvmLanAdmissionControlTest {
                     "outbound while saturated",
                     assertIs<P2pMessage.Text>(outboundMsg).value
                 )
+
+                // IPv6 loopback is a distinct source principal. It must be
+                // admitted while IPv4 loopback still holds its full quota.
+                val carolStub = AdmissionStubDiscovery()
+                val carol = newKit(
+                    "Carol",
+                    AdmissionRecordingLogger(),
+                    AdmissionPairFactory(
+                        newLanTransport("Carol", InetAddress.getByName("::1")),
+                        carolStub
+                    )
+                )
+                val (carolOutgoing, bobIncoming) = establishSession(
+                    dialer = carol,
+                    dialerStub = carolStub,
+                    acceptor = bob,
+                    acceptorName = "Bob",
+                    acceptorPort = bobPort,
+                    acceptorHost = "::1"
+                )
+                val fairInbound = exchangeMessage(
+                    carolOutgoing,
+                    bobIncoming,
+                    P2pMessage.Text("different source admitted")
+                )
+                assertEquals(
+                    "different source admitted",
+                    assertIs<P2pMessage.Text>(fairInbound).value
+                )
             } finally {
                 // Release: the non-conforming sockets go away; every admitted
                 // setup fails (EOF) and returns its admission permit.
@@ -167,30 +189,30 @@ class JvmLanAdmissionControlTest {
             }
             awaitTrue("all admitted never-HELLO setups surfaced as failures") {
                 bobLogger.warnings().count { it.contains("Incoming session setup failed") } >=
-                    PRE_HANDSHAKE_BOUND
+                    PER_SOURCE_BOUND
             }
 
-            // Inbound admission recovered: a legitimate peer (Carol) dials
-            // Bob and gets a working session.
-            val carolStub = AdmissionStubDiscovery()
-            val carol = newKit(
-                "Carol",
+            // Source A's slots were evicted on close, so another IPv4 peer can
+            // immediately use that source key and complete a handshake.
+            val daveStub = AdmissionStubDiscovery()
+            val dave = newKit(
+                "Dave",
                 AdmissionRecordingLogger(),
-                AdmissionPairFactory(newLanTransport("Carol"), carolStub)
+                AdmissionPairFactory(newLanTransport("Dave"), daveStub)
             )
-            val (carolOutgoing, bobIncoming) = establishSession(
-                dialer = carol, dialerStub = carolStub, acceptor = bob,
+            val (daveOutgoing, bobIncoming) = establishSession(
+                dialer = dave, dialerStub = daveStub, acceptor = bob,
                 acceptorName = "Bob", acceptorPort = requireNotNull(bobTransport.tcpPort.value)
             )
             val inboundMsg = exchangeMessage(
-                carolOutgoing, bobIncoming, P2pMessage.Text("inbound after recovery")
+                daveOutgoing, bobIncoming, P2pMessage.Text("inbound after recovery")
             )
             assertEquals("inbound after recovery", assertIs<P2pMessage.Text>(inboundMsg).value)
 
             // Bounded session state + no kit-scope escalation.
             assertEquals(
-                2, bob.sessions.value.size,
-                "expected exactly the outgoing-to-Alice and incoming-from-Carol sessions"
+                3, bob.sessions.value.size,
+                "expected outgoing Alice plus incoming Carol and Dave sessions"
             )
             assertTrue(
                 bobLogger.warnings().none { it.contains("inbound acceptance ended") },
@@ -207,14 +229,22 @@ class JvmLanAdmissionControlTest {
     // Harness (same shape as JvmLanAcceptLoopResilienceTest)
     // ---------------------------------------------------------------------
 
-    private fun newLanTransport(name: String): JvmLanDataTransport =
+    private fun newLanTransport(
+        name: String,
+        outboundSource: InetAddress? = null
+    ): JvmLanDataTransport =
         JvmLanDataTransport(
             LanServiceRegistration(
                 appId = AppId(unique),
                 localPeerId = PeerId("$name-registration"),
                 deviceName = name,
                 platform = Platform.JVM_DESKTOP
-            )
+            ),
+            socketFactory = {
+                Socket().apply {
+                    outboundSource?.let { bind(InetSocketAddress(it, 0)) }
+                }
+            }
         )
 
     private fun newKit(name: String, kitLogger: P2pLogger, factory: TransportFactory): P2pKit {
@@ -250,7 +280,8 @@ class JvmLanAdmissionControlTest {
         dialerStub: AdmissionStubDiscovery,
         acceptor: P2pKit,
         acceptorName: String,
-        acceptorPort: Int
+        acceptorPort: Int,
+        acceptorHost: String = "127.0.0.1"
     ): Pair<P2pSession, P2pSession> {
         val acceptorPeer = Peer(
             id = acceptor.localPeerId,
@@ -264,7 +295,7 @@ class JvmLanAdmissionControlTest {
             InternalPeer(
                 publicPeer = acceptorPeer,
                 transportHints = listOf(
-                    TransportHint(type = TransportKind.LAN, host = "127.0.0.1", port = acceptorPort)
+                    TransportHint(type = TransportKind.LAN, host = acceptorHost, port = acceptorPort)
                 )
             )
         )
@@ -306,16 +337,11 @@ class JvmLanAdmissionControlTest {
     }
 
     private companion object {
-        /**
-         * Mirrors the internal `MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS` policy
-         * constant in `dev.p2pkit.core.internal.SessionManager` (not visible
-         * across the module boundary). If the policy value changes, update
-         * this in the same commit.
-         */
-        const val PRE_HANDSHAKE_BOUND: Int = 16
+        /** Mirrors [MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE]. */
+        const val PER_SOURCE_BOUND: Int = 2
 
         /** Raw connections opened that never send HELLO (> the bound). */
-        const val NEVER_HELLO_COUNT: Int = 20
+        const val NEVER_HELLO_COUNT: Int = 4
 
         /** Warn fragment logged on a pre-handshake admission refusal. */
         const val REFUSAL_FRAGMENT: String = "pre-handshake setups at capacity"
