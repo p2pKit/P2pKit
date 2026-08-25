@@ -176,8 +176,9 @@ public interface P2pSession {
      *
      * The SDK opens [source] only after the peer accepts, hashes the streamed
      * bytes again, and completes the returned handle only after the receiver
-     * verifies the digest, flushes, durably commits its destination, and sends
-     * the authenticated commit acknowledgement.
+     * verifies the digest, flushes, completes the destination's documented
+     * platform durability contract, and sends the authenticated commit
+     * acknowledgement.
      *
      * [PreparedFileSource.open] is not called until the offer is accepted. A
      * peer that lacks the feature fails with `UNSUPPORTED_FEATURE`. No

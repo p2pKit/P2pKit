@@ -3,8 +3,8 @@
 P2pKit is a Kotlin Multiplatform local-network peer-to-peer library. The host
 application owns product admission, user identity, application messages,
 lifecycle integration, and coroutine scopes. P2pKit owns discovery, sessions,
-the secure transport protocol, bounded framing, reconnect, and durable file
-transfer.
+the secure transport protocol, bounded framing, reconnect, and transactional
+file transfer with platform-specific durability guarantees.
 
 ```text
 Application
@@ -14,7 +14,7 @@ Application
        ├─ peer registry and feature state
        ├─ session manager and reconnect arbitration
        ├─ authenticated-v2 records and protocol framing
-       ├─ durable file transfer and SHA-256 commit
+       ├─ transactional file transfer and SHA-256 commit
        ├─ LAN transport: JmDNS/Bonjour + TCP
        └─ optional Android/JVM provisioning sidecars
 ```

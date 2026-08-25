@@ -188,6 +188,64 @@ class FileTransferJvmTest {
     }
 
     @Test
+    fun durableDestinationSkipsUnsupportedWindowsDirectorySync() = runBlocking {
+        val directory = Files.createTempDirectory("p2pkit-durable-windows-").toFile()
+        tempFiles.add(directory)
+        val target = File(directory, "received.bin")
+        var directorySyncAttempts = 0
+        val destination = JvmDurableFileDestination(
+            target = target,
+            operatingSystemName = "Windows 11",
+            syncDirectory = {
+                directorySyncAttempts += 1
+                throw IOException("Windows directories cannot be opened as FileChannel")
+            }
+        )
+        val payload = byteArrayOf(1, 2, 3, 4)
+        val sink = destination.openSink()
+        val buffer = Buffer().apply { write(payload) }
+        sink.write(buffer, buffer.size)
+
+        destination.commit()
+        destination.commit()
+
+        assertEquals(0, directorySyncAttempts)
+        assertContentEquals(payload, target.readBytes())
+        assertEquals(listOf(target.name), directory.list()?.sorted())
+    }
+
+    @Test
+    fun durableDestinationStillFailsAndRetriesWhenPosixDirectorySyncFails() = runBlocking {
+        val directory = Files.createTempDirectory("p2pkit-durable-posix-").toFile()
+        tempFiles.add(directory)
+        val target = File(directory, "received.bin")
+        var directorySyncAttempts = 0
+        val destination = JvmDurableFileDestination(
+            target = target,
+            operatingSystemName = "Linux",
+            syncDirectory = {
+                directorySyncAttempts += 1
+                if (directorySyncAttempts == 1) throw IOException("injected directory fsync failure")
+            }
+        )
+        val payload = byteArrayOf(5, 6, 7, 8)
+        val sink = destination.openSink()
+        val buffer = Buffer().apply { write(payload) }
+        sink.write(buffer, buffer.size)
+
+        val failure = assertFailsWith<IOException> { destination.commit() }
+        assertEquals("injected directory fsync failure", failure.message)
+        assertContentEquals(payload, target.readBytes())
+
+        destination.commit()
+        destination.commit()
+
+        assertEquals(2, directorySyncAttempts)
+        assertContentEquals(payload, target.readBytes())
+        assertEquals(listOf(target.name), directory.list()?.sorted())
+    }
+
+    @Test
     fun durableDestinationAbortRemovesPartialAndPreservesExistingTarget() = runBlocking {
         val directory = Files.createTempDirectory("p2pkit-durable-abort-").toFile()
         tempFiles.add(directory)

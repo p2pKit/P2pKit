@@ -11,11 +11,14 @@ import kotlinx.io.RawSink
 import kotlinx.io.asSink
 
 /**
- * Create a temporary-file, fsync, atomic-rename destination for [target].
+ * Create a temporary-file, file-fsync, atomic-rename destination for [target].
  *
- * The target's parent directory must already exist. Commit fails rather than
- * silently weakening durability if the filesystem cannot atomically replace
- * the target or cannot fsync its parent directory.
+ * The target's parent directory must already exist. On POSIX filesystems,
+ * commit also fsyncs that directory and fails if the durability barrier is
+ * unavailable. The public JDK cannot open Windows directory handles with the
+ * flags needed by `FlushFileBuffers`, so Windows commit guarantees synced file
+ * content and atomic publication but cannot guarantee that the directory entry
+ * survives sudden power loss.
  */
 public fun durableFileDestination(target: File): FileTransferDestination =
     JvmDurableFileDestination(target)
@@ -23,7 +26,9 @@ public fun durableFileDestination(target: File): FileTransferDestination =
 internal class JvmDurableFileDestination(
     target: File,
     private val closeSink: (RawSink) -> Unit = { it.close() },
-    private val deleteTemp: (File) -> Boolean = { it.delete() }
+    private val deleteTemp: (File) -> Boolean = { it.delete() },
+    private val operatingSystemName: String = System.getProperty("os.name").orEmpty(),
+    private val syncDirectory: (File) -> Unit = ::forceDirectory
 ) : FileTransferDestination {
     private val target = target.absoluteFile
     private val parent = checkNotNull(this.target.parentFile) { "Target must have a parent directory" }
@@ -115,9 +120,17 @@ internal class JvmDurableFileDestination(
     }
 
     private fun syncParentDirectory() {
-        FileChannel.open(parent.toPath(), StandardOpenOption.READ).use { it.force(true) }
+        if (isWindows(operatingSystemName)) return
+        syncDirectory(parent)
     }
 }
+
+private fun forceDirectory(directory: File) {
+    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
+}
+
+private fun isWindows(operatingSystemName: String): Boolean =
+    operatingSystemName.startsWith("Windows", ignoreCase = true)
 
 private enum class DestinationState {
     NEW,

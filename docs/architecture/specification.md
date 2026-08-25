@@ -53,7 +53,11 @@ record produced during the 0.7 remediation is preserved in
 - The sender hashes the exact prepared byte snapshot before transfer. The
   negotiated `file-commit-sha256-v1` flow transmits length and SHA-256, streams
   bounded chunks, verifies at the receiver, flushes and atomically commits the
-  destination, then sends the durable acknowledgement.
+  destination, then sends the commit acknowledgement. JVM destinations fsync
+  file content and atomically rename it. POSIX JVM hosts additionally fsync the
+  parent directory; the public JDK exposes no equivalent directory barrier on
+  Windows, so that platform cannot guarantee the rename survives sudden power
+  loss.
 - Duplicate/retry handling is transfer-ID based and must not create multiple
   committed outputs. SHA-256 detects corruption but is not authentication; the
   authenticated-v2 transport supplies authenticity.

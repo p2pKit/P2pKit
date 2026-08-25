@@ -48,8 +48,10 @@ public interface PreparedFileSource {
  * [openSink] is called once after the offer has been accepted. The SDK writes
  * and hashes the offered bytes, flushes its buffer, verifies the digest, and
  * then calls [commit]. A durable implementation closes/fsyncs its temporary
- * file and atomically publishes it before returning from [commit]. Only then
- * does the protocol acknowledge success to the sender.
+ * file and atomically publishes it before returning from [commit], applying
+ * any additional durability barrier its platform exposes. Only then does the
+ * protocol acknowledge success to the sender. Platform factories document
+ * limitations where an operating-system barrier is unavailable.
  *
  * [commit] and [abort] are suspending and must not return until their resource
  * work is complete. [abort] is called when an accepted transfer fails or is
@@ -57,8 +59,8 @@ public interface PreparedFileSource {
  * state. Both terminal methods must be idempotent and safe when they race,
  * because a deadline, remote terminal event, and an already-running commit
  * can overlap. Once publication begins, cancellation must not leave an
- * ambiguous half-published result: finish the atomic publish and directory
- * durability work or throw a storage failure.
+ * ambiguous half-published result: finish the atomic publish and the
+ * platform-supported durability work or throw a storage failure.
  *
  * The SDK bounds open/commit/abort waits on independently owned workers. A
  * callback that ignores cancellation therefore cannot freeze the protocol or

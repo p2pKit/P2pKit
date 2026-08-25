@@ -230,8 +230,11 @@ There is no automatic fallback to plaintext.
 
 Public collection models are snapshot values. Text/binary messages are capped
 at 4 MiB. File transfer is streaming and completes only after the authenticated
-receiver verifies the sender's prepared SHA-256 snapshot and durably commits
-the destination.
+receiver verifies the sender's prepared SHA-256 snapshot and completes the
+destination's platform durability contract. The JVM destination fsyncs file
+content and atomically publishes it; POSIX hosts also fsync the parent
+directory. The public JDK exposes no equivalent parent-directory barrier on
+Windows, so sudden power loss may lose the renamed directory entry there.
 
 Read the [security model](docs/security/model.md),
 [compatibility policy](docs/compatibility.md), and
