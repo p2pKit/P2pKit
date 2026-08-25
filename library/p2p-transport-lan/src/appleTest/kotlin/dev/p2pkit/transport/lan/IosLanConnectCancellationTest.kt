@@ -235,11 +235,11 @@ class IosLanConnectCancellationTest {
     fun failedOldDialCannotRemoveConcurrentFreshBrowseEndpoint() = runBlocking {
         val registry = IosEndpointRegistry()
         val peer = testPeer("ios-remote-fresh-endpoint")
-        val oldLease = registry.put(
+        val oldLease = assertNotNull(registry.put(
             peer.publicPeer.id,
             assertNotNull(nw_endpoint_create_host("127.0.0.1", "44001")),
             browserGeneration = 1
-        )
+        ))
         var freshLease: IosEndpointRegistry.Lease? = null
         val transport = IosLanDataTransport(
             transportContext = TransportContext(
@@ -250,11 +250,11 @@ class IosLanConnectCancellationTest {
             ),
             endpointRegistry = registry,
             connectionFactory = { connection, _ ->
-                freshLease = registry.put(
+                freshLease = assertNotNull(registry.put(
                     peer.publicPeer.id,
                     assertNotNull(nw_endpoint_create_host("127.0.0.1", "44002")),
                     browserGeneration = oldLease.browserGeneration + 1
-                )
+                ))
                 ControlledConnection(connection).also(ControlledConnection::fail)
             }
         )

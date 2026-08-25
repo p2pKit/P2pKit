@@ -3,11 +3,26 @@ package dev.p2pkit.transport.lan
 import dev.p2pkit.core.PeerId
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** Deterministic contract for Android JmDNS removals with no ServiceInfo/TXT. */
 class AndroidServiceAdmissionsTest {
+    @Test
+    fun unauthenticatedServiceOwnershipIsBounded() {
+        val admissions = AndroidServiceAdmissions()
+        val lease = AndroidListenerLease()
+        repeat(MAX_TRACKED_LAN_PEERS) { index ->
+            assertTrue(admissions.admit("service-$index", PeerId("peer-$index"), lease))
+        }
+
+        assertFalse(admissions.admit("overflow", PeerId("overflow"), lease))
+        assertEquals(MAX_TRACKED_LAN_PEERS, admissions.sizeForTest())
+        assertTrue(admissions.admit("service-0", PeerId("peer-updated"), lease))
+        assertEquals(MAX_TRACKED_LAN_PEERS, admissions.sizeForTest())
+    }
+
     @Test
     fun instanceNameRecoversExactPeerIdWithoutRemovalMetadata() {
         val admissions = AndroidServiceAdmissions()

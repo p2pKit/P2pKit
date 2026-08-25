@@ -17,9 +17,29 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ReliablePeerEventRelayTest {
+    @Test
+    fun capRejectsNewPeersOnceButAllowsUpdatesToTrackedPeers() {
+        val rejected = mutableListOf<PeerId>()
+        val relay = ReliablePeerEventRelay(maxTrackedPeers = 2, onCapacityRejected = rejected::add)
+        val first = peer("first")
+        val second = peer("second")
+
+        assertTrue(relay.upsert(first))
+        assertTrue(relay.upsert(second))
+        assertFalse(relay.upsert(peer("third")))
+        assertFalse(relay.upsert(peer("fourth")))
+        assertEquals(2, relay.sizeForTest())
+        assertEquals(listOf(PeerId("third")), rejected)
+
+        assertTrue(relay.upsert(peer("first", name = "updated")))
+        assertEquals(2, relay.sizeForTest())
+    }
+
     @Test
     fun lateCollectorReceivesCurrentPeersAsFoundInStableOrder() = runTest {
         val relay = ReliablePeerEventRelay()

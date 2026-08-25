@@ -107,7 +107,13 @@ internal class IosLanDiscoveryTransport(
 
     override val type: TransportKind = TransportKind.LAN
 
-    private val peerEventRelay = ReliablePeerEventRelay()
+    private val peerEventRelay = ReliablePeerEventRelay { peerId ->
+        IosLanDebug.log(
+            "browse",
+            "discovery peer capacity ($MAX_TRACKED_LAN_PEERS) reached; suppressing new peer " +
+                peerId.value.take(8)
+        )
+    }
     override val events: Flow<PeerEvent> = peerEventRelay.events
 
     private val lock = Mutex()
@@ -187,6 +193,7 @@ internal class IosLanDiscoveryTransport(
      */
     private val announceCacheLock = NSLock()
     private var announceCache: Map<String, AnnounceEntry> = emptyMap()
+    private var announceCapacityRejectionReported = false
 
     /**
      * AUDIT-2026-06 (#8): incremented (under [lock]) every time a new
@@ -333,6 +340,17 @@ internal class IosLanDiscoveryTransport(
         onConfirmed: () -> Unit = {}
     ): Boolean = withAnnounceCacheLock {
         if (!isCurrentGeneration()) return@withAnnounceCacheLock false
+        if (pid !in announceCache && announceCache.size >= MAX_TRACKED_LAN_PEERS) {
+            if (!announceCapacityRejectionReported) {
+                announceCapacityRejectionReported = true
+                IosLanDebug.log(
+                    "browse",
+                    "discovery peer capacity ($MAX_TRACKED_LAN_PEERS) reached; suppressing new peer " +
+                        pid.take(8)
+                )
+            }
+            return@withAnnounceCacheLock false
+        }
         announceCache = announceCache + (pid to entry)
         onConfirmed()
         true
@@ -871,8 +889,12 @@ internal class IosLanDiscoveryTransport(
                     browser?.generation == generation
             },
             onConfirmed = {
-                endpointRegistry.put(peerId, endpoint, browserGeneration = generation)
-                peerEventRelay.upsert(internalPeer)
+                checkNotNull(endpointRegistry.put(peerId, endpoint, browserGeneration = generation)) {
+                    "endpoint registry must have the same peer budget as announce cache"
+                }
+                check(peerEventRelay.upsert(internalPeer)) {
+                    "relay must have the same peer budget as announce cache"
+                }
             }
         )
         if (!committed) return

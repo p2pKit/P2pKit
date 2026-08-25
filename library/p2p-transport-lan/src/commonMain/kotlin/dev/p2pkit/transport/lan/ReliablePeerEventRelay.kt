@@ -29,7 +29,10 @@ import kotlinx.coroutines.flow.update
  * coalesced to their latest value; that is intentional because this is a
  * current-state relay, not an unbounded discovery-history log.
  */
-internal class ReliablePeerEventRelay {
+internal class ReliablePeerEventRelay(
+    private val maxTrackedPeers: Int = MAX_TRACKED_LAN_PEERS,
+    private val onCapacityRejected: (PeerId) -> Unit = {}
+) {
     private data class RelayEntry(
         val peer: InternalPeer,
         /** Fresh identity for each absent -> present lifecycle. */
@@ -37,6 +40,11 @@ internal class ReliablePeerEventRelay {
     )
 
     private val state = MutableStateFlow<Map<PeerId, RelayEntry>>(emptyMap())
+    private val capacityRejectionReported = MutableStateFlow(false)
+
+    init {
+        require(maxTrackedPeers > 0) { "maxTrackedPeers must be > 0" }
+    }
 
     /** A per-collector lifecycle diff of the authoritative live-peer set. */
     val events: Flow<PeerEvent> = flow {
@@ -69,15 +77,23 @@ internal class ReliablePeerEventRelay {
     }
 
     /** Publish a new peer or the latest immutable value for an existing one. */
-    fun upsert(peer: InternalPeer) {
+    fun upsert(peer: InternalPeer): Boolean {
         val peerId = peer.publicPeer.id
-        state.update { current ->
+        while (true) {
+            val current = state.value
             val prior = current[peerId]
-            when {
+            if (prior == null && current.size >= maxTrackedPeers) {
+                if (capacityRejectionReported.compareAndSet(expect = false, update = true)) {
+                    onCapacityRejected(peerId)
+                }
+                return false
+            }
+            val updated = when {
                 prior == null -> current + (peerId to RelayEntry(peer, Any()))
-                prior.peer == peer -> current
+                prior.peer == peer -> return true
                 else -> current + (peerId to prior.copy(peer = peer))
             }
+            if (state.compareAndSet(current, updated)) return true
         }
     }
 
@@ -94,4 +110,9 @@ internal class ReliablePeerEventRelay {
             if (current.isEmpty()) current else emptyMap()
         }
     }
+
+    internal fun sizeForTest(): Int = state.value.size
 }
+
+/** Hard ceiling for unauthenticated discovery identities retained per transport. */
+internal const val MAX_TRACKED_LAN_PEERS: Int = 256

@@ -22,7 +22,6 @@ import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
 import javax.jmdns.ServiceListener
-import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -98,23 +97,29 @@ internal class AndroidServiceAdmissions {
         val owner: AndroidListenerLease
     )
 
-    private val entries = ConcurrentHashMap<String, Admission>()
+    private val gate = Any()
+    private val entries = mutableMapOf<String, Admission>()
 
-    fun admit(instanceName: String, peerId: PeerId, owner: AndroidListenerLease) {
+    /** Retain only a bounded number of unauthenticated DNS-SD identities. */
+    fun admit(instanceName: String, peerId: PeerId, owner: AndroidListenerLease): Boolean = synchronized(gate) {
+        if (instanceName !in entries && entries.size >= MAX_TRACKED_LAN_PEERS) return@synchronized false
         entries[instanceName] = Admission(peerId, owner)
+        true
     }
 
-    fun remove(instanceName: String, callbackOwner: AndroidListenerLease): PeerId? {
+    fun remove(instanceName: String, callbackOwner: AndroidListenerLease): PeerId? = synchronized(gate) {
         val admission = entries[instanceName] ?: return null
         if (admission.owner !== callbackOwner && admission.owner.isActive()) return null
-        return if (entries.remove(instanceName, admission)) admission.peerId else null
+        if (entries.remove(instanceName) === admission) admission.peerId else null
     }
 
-    fun drain(): Set<PeerId> {
+    fun drain(): Set<PeerId> = synchronized(gate) {
         val peers = entries.values.mapTo(mutableSetOf()) { it.peerId }
         entries.clear()
         return peers
     }
+
+    internal fun sizeForTest(): Int = synchronized(gate) { entries.size }
 }
 
 /**
@@ -185,7 +190,13 @@ internal class AndroidLanDiscoveryTransport(
 
     override val type: TransportKind = TransportKind.LAN
 
-    private val peerEventRelay = ReliablePeerEventRelay()
+    private val peerEventRelay = ReliablePeerEventRelay { peerId ->
+        Log.w(
+            TAG,
+            "discovery peer capacity ($MAX_TRACKED_LAN_PEERS) reached; suppressing new peer " +
+                peerId.value.take(8)
+        )
+    }
     override val events: Flow<PeerEvent> = peerEventRelay.events
 
     private val wifi: WifiManager? =
@@ -643,14 +654,19 @@ internal class AndroidLanDiscoveryTransport(
             if (port !in 1..65_535) return
             val internalPeer = record.toInternalPeer(lanTransportHints(hosts, port))
             lease.publishIfActive {
-                admittedServices.admit(event.name, record.peerId, lease)
+                if (!admittedServices.admit(event.name, record.peerId, lease)) {
+                    return@publishIfActive
+                }
+                if (!peerEventRelay.upsert(internalPeer)) {
+                    admittedServices.remove(event.name, lease)
+                    return@publishIfActive
+                }
                 Log.d(
                     TAG,
                     "serviceResolved: pid=${record.peerId.value.take(8)} " +
                         "candidates=[${candidates.joinToString(",") { it.hostAddress ?: it.toString() }}] " +
                         "ordered=${hosts.joinToString(",") { "$it:$port" }} — publishing peer state"
                 )
-                peerEventRelay.upsert(internalPeer)
             }
         }
     }

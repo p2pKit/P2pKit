@@ -37,10 +37,13 @@ internal class IosEndpointRegistry {
 
     private val entries = MutableStateFlow<Map<PeerId, Lease>>(emptyMap())
 
-    fun put(peerId: PeerId, endpoint: nw_endpoint_t, browserGeneration: Int): Lease {
+    fun put(peerId: PeerId, endpoint: nw_endpoint_t, browserGeneration: Int): Lease? {
         val lease = Lease(endpoint, browserGeneration)
-        entries.update { it + (peerId to lease) }
-        return lease
+        while (true) {
+            val current = entries.value
+            if (peerId !in current && current.size >= MAX_TRACKED_LAN_PEERS) return null
+            if (entries.compareAndSet(current, current + (peerId to lease))) return lease
+        }
     }
 
     fun get(peerId: PeerId): nw_endpoint_t = entries.value[peerId]?.endpoint
