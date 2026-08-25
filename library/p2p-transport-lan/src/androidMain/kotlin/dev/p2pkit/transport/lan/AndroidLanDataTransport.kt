@@ -343,7 +343,7 @@ internal class AndroidLanDataTransport(
                     // dropping leaked the fd while the remote believed it had
                     // connected (AUDIT-2026-06 fix).
                     Log.d(TAG, "inbound from ${socket.remoteSocketAddress} -> local ${socket.localSocketAddress}")
-                    if (!isSelectedLanAddress(socket.localAddress)) {
+                    if (!isSelectedLanAddress(socket.localAddress, socket.inetAddress)) {
                         Log.d(
                             TAG,
                             "REJECTED ${socket.remoteSocketAddress} on excluded local " +
@@ -472,11 +472,22 @@ internal class AndroidLanDataTransport(
         }
     }
 
-    private fun isSelectedLanAddress(actual: java.net.InetAddress): Boolean {
+    private fun isSelectedLanAddress(
+        actual: java.net.InetAddress,
+        remote: java.net.InetAddress
+    ): Boolean {
+        // Same-host manual provisioning is safe on loopback: packets from a
+        // remote machine cannot be routed to a loopback destination.
+        if (actual.isLoopbackAddress && remote.isLoopbackAddress) return true
         val state = networkState ?: return true
         val selected = runCatching { state.selectedRoute()?.localAddress }.getOrNull() ?: return false
         return selected.hostAddress == actual.hostAddress
     }
+
+    internal fun isInboundAddressAllowedForTest(
+        actual: java.net.InetAddress,
+        remote: java.net.InetAddress
+    ): Boolean = isSelectedLanAddress(actual, remote)
 
     private companion object {
         const val TAG = "P2pKitLanData"

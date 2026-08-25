@@ -301,7 +301,7 @@ internal class JvmLanDataTransport(
                         "accept",
                         "inbound from ${socket.remoteSocketAddress} -> local ${socket.localSocketAddress}"
                     )
-                    if (!isSelectedLanAddress(socket.localAddress)) {
+                    if (!isSelectedLanAddress(socket.localAddress, socket.inetAddress)) {
                         JvmLanDiag.log(
                             "accept",
                             "REJECTED ${socket.remoteSocketAddress} on excluded local ${socket.localAddress.hostAddress}"
@@ -432,11 +432,20 @@ internal class JvmLanDataTransport(
         }
     }
 
-    private fun isSelectedLanAddress(actual: InetAddress): Boolean {
+    private fun isSelectedLanAddress(actual: InetAddress, remote: InetAddress): Boolean {
+        // Same-host manual provisioning and integration use loopback. A
+        // remote host cannot route traffic to a loopback destination, so this
+        // exception does not reopen the excluded-interface exposure.
+        if (actual.isLoopbackAddress && remote.isLoopbackAddress) return true
         val provider = selectedLanAddress ?: return true
         val selected = runCatching(provider).getOrNull() ?: return false
         return selected.hostAddress == actual.hostAddress
     }
+
+    internal fun isInboundAddressAllowedForTest(
+        actual: InetAddress,
+        remote: InetAddress
+    ): Boolean = isSelectedLanAddress(actual, remote)
 
     private companion object {
         const val NANOS_PER_MILLISECOND: Long = 1_000_000

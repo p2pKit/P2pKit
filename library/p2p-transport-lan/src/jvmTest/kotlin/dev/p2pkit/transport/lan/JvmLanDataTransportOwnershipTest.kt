@@ -20,7 +20,6 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -239,26 +238,30 @@ class JvmLanDataTransportOwnershipTest {
     }
 
     @Test
-    fun wildcardListenerRejectsConnectionsOutsideTheSelectedLanAddress() = runBlocking {
+    fun inboundAddressPolicyRejectsExcludedInterfacesButAllowsSameHostLoopback() = runBlocking {
         val selected = AtomicReference(InetAddress.getByName("192.0.2.1"))
         val transport = JvmLanDataTransport(
             registration = registration("inbound-interface-policy"),
             selectedLanAddress = { selected.get() }
         )
+        assertFalse(
+            transport.isInboundAddressAllowedForTest(
+                actual = InetAddress.getByName("198.51.100.2"),
+                remote = InetAddress.getByName("198.51.100.3")
+            ),
+            "a non-selected externally reachable interface must be rejected"
+        )
         assertTrue(transport.start().isSuccess)
         val accepted = async(Dispatchers.Default) {
             withTimeout(TEST_TIMEOUT_MS) { transport.incomingConnections().first() }
         }
-        val excluded = Socket(InetAddress.getLoopbackAddress(), requireNotNull(transport.tcpPort.value))
-        delay(100)
-        assertFalse(accepted.isCompleted, "an excluded local interface must not reach core")
-
-        selected.set(InetAddress.getLoopbackAddress())
-        val allowed = Socket(InetAddress.getLoopbackAddress(), requireNotNull(transport.tcpPort.value))
+        val allowed = Socket(
+            InetAddress.getLoopbackAddress(),
+            requireNotNull(transport.tcpPort.value)
+        )
         val raw = accepted.await()
 
         raw.close()
-        excluded.close()
         allowed.close()
         transport.close()
     }
