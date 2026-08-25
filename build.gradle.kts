@@ -220,7 +220,7 @@ subprojects {
     dependencies {
         add(androidAbiRuntime.name, "org.ow2.asm:asm:9.9.1")
         add(androidAbiRuntime.name, "org.ow2.asm:asm-tree:9.9.1")
-        add(androidAbiRuntime.name, "org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21")
+        add(androidAbiRuntime.name, "org.jetbrains.kotlin:kotlin-metadata-jvm:2.4.10")
     }
 
     val buildAndroidAbi = tasks.register<KotlinApiBuildTask>("buildAndroidAbi") {
