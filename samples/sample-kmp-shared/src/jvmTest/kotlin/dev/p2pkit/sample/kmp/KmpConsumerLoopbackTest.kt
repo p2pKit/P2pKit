@@ -2,8 +2,10 @@ package dev.p2pkit.sample.kmp
 
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.ExperimentalP2pApi
+import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
+import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.provisioning.desktop.jvm
 import java.io.File
 import java.nio.file.Files
@@ -28,11 +30,11 @@ import kotlin.test.assertNotNull
  * consumer wiring, provisioning sidecar, authenticated manual peer, and
  * message path work end-to-end on JVM without multicast timing.
  *
- * The sample's public factory remains unchanged; [createJvmP2pKit] only lets
- * this same-module test add desktop provisioning. Physical-platform tests
- * retain responsibility for real multicast discovery.
+ * The test explicitly uses the local-test policy because reciprocal loopback
+ * peers are created before either fingerprint is available. The public factory
+ * still defaults to [PeerAuthorizationPolicy.RejectUnknown].
  */
-@OptIn(ExperimentalP2pApi::class)
+@OptIn(ExperimentalP2pApi::class, ExplicitSecurityRisk::class)
 class KmpConsumerLoopbackTest {
 
     private val appId = "kmp-consumer-itest-${System.currentTimeMillis()}"
@@ -50,7 +52,11 @@ class KmpConsumerLoopbackTest {
         tempHomes.add(tempHome)
         System.setProperty("user.home", tempHome.absolutePath)
         return try {
-            createJvmP2pKit(appId, deviceName) { jvm() }
+            createJvmP2pKit(
+                appId = appId,
+                deviceName = deviceName,
+                authorization = PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+            ) { jvm() }
         } finally {
             // clearProperty when originally unset, instead of poisoning
             // user.home to "" (AUDIT-2026-06 fix).
@@ -79,12 +85,15 @@ class KmpConsumerLoopbackTest {
                 val responderInfo = assertNotNull(
                     responder.networkProvisioning.getManualConnectionInfo()
                 )
+                val responderFingerprint = assertNotNull(responderInfo.fingerprint)
                 val responderPeer = greeter.networkProvisioning.createManualPeer(
                     host = "127.0.0.1",
                     port = responderInfo.port,
-                    expectedFingerprint = assertNotNull(responderInfo.fingerprint)
+                    expectedFingerprint = responderFingerprint
                 )
-                val outgoing = withTimeout(10_000) { greeter.connect(responderPeer) }
+                val outgoing = withTimeout(10_000) {
+                    greeter.connect(responderPeer, responderFingerprint)
+                }
                 assertEquals(ConnectionState.Connected, outgoing.state.value)
                 assertEquals(responderInfo.fingerprint, outgoing.peerIdentity.fingerprint)
 

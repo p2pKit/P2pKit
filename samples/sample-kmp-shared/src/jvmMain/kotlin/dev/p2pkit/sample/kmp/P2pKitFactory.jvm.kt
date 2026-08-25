@@ -1,7 +1,6 @@
 package dev.p2pkit.sample.kmp
 
 import dev.p2pkit.core.AppId
-import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.SecurityMode
@@ -9,15 +8,17 @@ import dev.p2pkit.core.dsl.NetworkProvisioningConfigBuilder
 import dev.p2pkit.core.dsl.jvmSecureIdentityStore
 import dev.p2pkit.transport.lan.lan
 
-@OptIn(ExplicitSecurityRisk::class)
-public actual fun createP2pKit(appId: String, deviceName: String): P2pKit =
-    createJvmP2pKit(appId, deviceName)
+public actual fun createP2pKit(
+    appId: String,
+    deviceName: String,
+    authorization: PeerAuthorizationPolicy
+): P2pKit = createJvmP2pKit(appId, deviceName, authorization)
 
 /** JVM-test configuration seam; the public sample factory keeps its defaults. */
-@OptIn(ExplicitSecurityRisk::class)
 internal fun createJvmP2pKit(
     appId: String,
     deviceName: String,
+    authorization: PeerAuthorizationPolicy = PeerAuthorizationPolicy.RejectUnknown,
     configureProvisioning: NetworkProvisioningConfigBuilder.() -> Unit = {}
 ): P2pKit =
     P2pKit.create {
@@ -25,9 +26,7 @@ internal fun createJvmP2pKit(
         this.deviceName = deviceName
         jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
         security {
-            mode = SecurityMode.AuthenticatedV2(
-                PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
-            )
+            mode = SecurityMode.AuthenticatedV2(authorization)
         }
         transports { lan() }
         networkProvisioning(configureProvisioning)

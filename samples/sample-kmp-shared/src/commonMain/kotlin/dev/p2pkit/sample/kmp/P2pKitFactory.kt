@@ -1,6 +1,7 @@
 package dev.p2pkit.sample.kmp
 
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.PeerAuthorizationPolicy
 
 /**
  * Platform-agnostic factory for [P2pKit].
@@ -11,5 +12,13 @@ import dev.p2pkit.core.P2pKit
  *
  * Android consumers must call `initP2pKitAndroid(applicationContext)` from
  * their `Application.onCreate` before the first call to [createP2pKit].
+ *
+ * [authorization] defaults to fail-closed [PeerAuthorizationPolicy.RejectUnknown].
+ * Applications that deliberately choose a weaker policy must pass it at the
+ * call site and satisfy that policy's security opt-in themselves.
  */
-public expect fun createP2pKit(appId: String, deviceName: String): P2pKit
+public expect fun createP2pKit(
+    appId: String,
+    deviceName: String,
+    authorization: PeerAuthorizationPolicy = PeerAuthorizationPolicy.RejectUnknown
+): P2pKit

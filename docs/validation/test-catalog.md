@@ -581,7 +581,10 @@ scripts/check-published-consumers.sh
 For Android, use the sample consumer build that depends on
 `:sample-kmp-shared`, install it, initialize the platform context from
 `Application.onCreate`, call `createP2pKit`, and invoke
-`runDiscoverAndGreet`. For iOS, generate/build the checked-in sample against
+`runUnverifiedDiscoverAndGreetForLocalTestingOnly`. This button deliberately
+passes `AcceptAnyAuthenticatedSameApp` for a local diagnostic; production
+consumers must use `runDiscoverAndGreet` with an out-of-band fingerprint. For
+iOS, generate/build the checked-in sample against
 `P2pKitShared.xcframework`, launch it on the physical device, Start, discover
 the JVM peer, connect, send text, and complete one 200 KiB file transfer.
 
@@ -889,7 +892,7 @@ test, while the missing hardware/infrastructure remains a blocker.
 | Network interruption/reconnect | Wi-Fi/path rotation, reconnect policy in SDK, manual IP | Wi-Fi/path chip, configurable reconnect, hotspot host/join | `reconnect=n,delay`, manual endpoint, trace | Configurable reconnect, manual endpoint |
 | Background/foreground/restart | Real iOS lifecycle and Stop cleanup | Activity rotation; process death is intentionally external | EOF/SIGTERM/quit | Window disposal/Stop |
 | File selection/generation | Deterministic generated presets | Android SAF `OpenDocument` any type/size | Filesystem path | Native file chooser |
-| KMP consumer runtime | Swift/XCFramework consumer plus physical sample | `Run KMP consumer smoke` button calls `initP2pKitAndroid`/`runDiscoverAndGreet` | JVM KMP consumer tests and CLI | Uses published JVM/consumer checks |
+| KMP consumer runtime | Swift/XCFramework consumer plus physical sample | `Run KMP consumer smoke` button calls `initP2pKitAndroid`/`runUnverifiedDiscoverAndGreetForLocalTestingOnly`; production call sites use pinned `runDiscoverAndGreet` | JVM KMP consumer tests and CLI | Uses published JVM/consumer checks |
 | Packet/timeout/fault controls | Logs and OS/network tools; no production fault toggle | Logs and adb/network tools; no production fault toggle | `trace=off|frames`, external process fault wrapper, `diag fault` evidence marker | External headful/fault harness |
 | Structured diagnostic viewer | `Test Diagnostics` sheet: begin session, active IDs/state/progress/hashes, search, session/transfer/severity filters, pause, select/copy, clear-current confirmation | `Diagnostics` screen: same fields and filters, live/paused rows, selected/all copy, clear-current confirmation | `diag start/status/fault/export/complete/clear`; JSONL is also written with `log=<path>` | `Diagnostics` screen: active IDs/state/progress/hashes, search/session/transfer/severity filters, pause, selected/all copy, clear-current confirmation |
 | Evidence export | `Export Test Evidence` presents a ZIP through the iOS share sheet | `Export Test Evidence` launches the Android share sheet for a ZIP | `diag export` writes a ZIP; `log=<path>` writes bounded JSONL | `Export Test Evidence` writes the ZIP and opens the evidence directory |

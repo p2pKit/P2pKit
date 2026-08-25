@@ -54,7 +54,7 @@ import dev.p2pkit.sample.diagnostics.reservedFileDestination
 import dev.p2pkit.sample.diagnostics.StructuredFrameTrace
 import dev.p2pkit.sample.diagnostics.StructuredSdkLogger
 import dev.p2pkit.sample.kmp.createP2pKit
-import dev.p2pkit.sample.kmp.runDiscoverAndGreet
+import dev.p2pkit.sample.kmp.runUnverifiedDiscoverAndGreetForLocalTestingOnly
 import dev.p2pkit.transport.lan.AndroidLanDiag
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CancellationException
@@ -387,15 +387,25 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         reconnectChoice = choice
     }
 
-    /** Physical-device consumer smoke for PS-T09; unavailable while the room kit owns LAN. */
+    /**
+     * Physical-device consumer smoke for PS-T09; unavailable while the room
+     * kit owns LAN. It intentionally exercises the KMP module's explicitly
+     * risky local-test path because this diagnostic screen has no trusted
+     * pairing-fingerprint input. Production consumers must use the factory's
+     * default authorization and pinned [P2pKit.connect] overload instead.
+     */
     fun runKmpConsumerSmoke() {
         if (_isRunning.value || _isStarting.value || _isStopping.value || _kmpSmokeBusy.value) return
         _kmpSmokeBusy.value = true
         _kmpSmokeResult.value = "Running KMP advertise/discover/connect/send/close/stop…"
         viewModelScope.launch {
             val result = runCatchingNonCancel {
-                val smoke = createP2pKit(APP_ID, "Android-KMP-${Build.MODEL.take(16)}")
-                runDiscoverAndGreet(
+                val smoke = createP2pKit(
+                    appId = APP_ID,
+                    deviceName = "Android-KMP-${Build.MODEL.take(16)}",
+                    authorization = PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+                )
+                runUnverifiedDiscoverAndGreetForLocalTestingOnly(
                     p2p = smoke,
                     greetingFrom = "Android KMP consumer",
                     discoveryTimeoutMillis = 10_000

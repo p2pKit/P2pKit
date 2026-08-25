@@ -1,5 +1,7 @@
 package dev.p2pkit.sample.kmp
 
+import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.PeerAuthorizationPolicy
 import kotlin.test.Test
 import kotlin.test.assertNotNull
 
@@ -16,7 +18,9 @@ class KmpCallsiteSmokeTest {
     fun factoryExpectIsResolvable() {
         // Just reference the factory; we don't invoke it because that would
         // bind ports and start network discovery in this unit test.
-        val ref: (String, String) -> dev.p2pkit.core.P2pKit = ::createP2pKit
+        val ref: (String, String, PeerAuthorizationPolicy) -> P2pKit = ::createP2pKit
+        val safeDefault: () -> P2pKit = { createP2pKit("callsite-smoke", "Callsite") }
         assertNotNull(ref)
+        assertNotNull(safeDefault)
     }
 }
