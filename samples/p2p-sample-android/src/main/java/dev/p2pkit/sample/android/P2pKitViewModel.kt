@@ -396,6 +396,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      * pairing-fingerprint input. Production consumers must use the factory's
      * default authorization and pinned [P2pKit.connect] overload instead.
      */
+    @OptIn(ExplicitSecurityRisk::class)
     fun runKmpConsumerSmoke() {
         if (_isRunning.value || _isStarting.value || _isStopping.value || _kmpSmokeBusy.value) return
         _kmpSmokeBusy.value = true
