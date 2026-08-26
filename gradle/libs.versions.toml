@@ -21,7 +21,7 @@ jetbrains-compose = "1.11.1"
 jetbrains-compose-material3 = "1.9.0"
 jetbrains-compose-material-icons = "1.7.3"
 dokka = "2.2.0"
-cyclonedx = "3.3.0"
+cyclonedx = "3.4.1"
 binary-compatibility-validator = "0.18.1"
 
 [libraries]
