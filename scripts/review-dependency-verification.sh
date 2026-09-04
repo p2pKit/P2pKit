@@ -106,9 +106,15 @@ matching_key_fingerprints() {
         }
         $1 == "fpr" {
             fingerprint = toupper($10)
+            if (length(fingerprint) == 40) {
+                derived_key_id = substr(fingerprint, 25, 16)
+            } else if (length(fingerprint) == 64) {
+                derived_key_id = substr(fingerprint, 1, 16)
+            } else {
+                derived_key_id = ""
+            }
             if ((type == "fingerprint" && fingerprint == expected) ||
-                (type == "keyid" && key_id == expected &&
-                    substr(fingerprint, length(fingerprint) - 15) == expected)) {
+                (type == "keyid" && key_id == expected && derived_key_id == expected)) {
                 print fingerprint
             }
             key_id = ""
@@ -257,9 +263,14 @@ while IFS='|' read -r group module version artifact expected_sha; do
         if [[ "$key_id_count" -gt 1 ]]; then
             fail "signature contains conflicting issuer key IDs for $group:$module:$version:$artifact"
         fi
-        if [[ "$key_id_count" -eq 1 &&
-            "$issuer_reference" != *"$issuer_key_ids" ]]; then
-            fail "signature issuer fingerprint and key ID disagree for $group:$module:$version:$artifact"
+        if [[ "$key_id_count" -eq 1 ]]; then
+            if [[ "${#issuer_reference}" -eq 40 ]]; then
+                derived_key_id="${issuer_reference: -16}"
+            else
+                derived_key_id="${issuer_reference:0:16}"
+            fi
+            [[ "$derived_key_id" == "$issuer_key_ids" ]] ||
+                fail "signature issuer fingerprint and key ID disagree for $group:$module:$version:$artifact"
         fi
     elif [[ "$fingerprint_count" -eq 0 && "$key_id_count" -eq 1 &&
         "$issuer_key_ids" =~ ^[0-9A-F]{16}$ ]]; then
@@ -298,7 +309,7 @@ while IFS='|' read -r group module version artifact expected_sha; do
             fi
             if ! import_output="$(GNUPGHOME="$gnupg" gpg --batch --import \
                 "$work/signing-key.asc" 2>&1)"; then
-                fail "could not import the exact signing key $fingerprint: $import_output"
+                fail "could not import the exact signing key $issuer_reference: $import_output"
             fi
             key_downloaded=true
             break

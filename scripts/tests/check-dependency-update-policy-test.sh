@@ -413,23 +413,53 @@ cat >"$review_fixture/mock-bin/gpg" <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
 fingerprint="${MOCK_KEY_FINGERPRINT:-41CD49B4EF5876F9E9F691DABAC30622339994C4}"
+if [[ "${#fingerprint}" -eq 40 ]]; then
+    key_id="${fingerprint: -16}"
+else
+    key_id="${fingerprint:0:16}"
+fi
+packet_key_id="${MOCK_PACKET_KEY_ID:-$key_id}"
 arguments=" $* "
 if [[ "$arguments" == *' --list-packets '* ]]; then
-    cat <<'PACKET'
-:signature packet: algo 1, keyid BAC30622339994C4
- version 4, created 1785364858, md5len 0, sigclass 0x00
- subpkt 16 len 8 (issuer key ID BAC30622339994C4)
-PACKET
+    case "${MOCK_PACKET_MODE:-keyid}" in
+        keyid)
+            printf ':signature packet: algo 1, keyid %s\n' "$packet_key_id"
+            printf ' version 4, created 1785364858, md5len 0, sigclass 0x00\n'
+            printf ' subpkt 16 len 8 (issuer key ID %s)\n' "$packet_key_id"
+            ;;
+        full)
+            printf ':signature packet: algo 1, keyid %s\n' "$packet_key_id"
+            printf ' hashed subpkt 33 len 21 (issuer fpr v%s %s)\n' \
+                "$([[ "${#fingerprint}" -eq 40 ]] && echo 4 || echo 6)" "$fingerprint"
+            printf ' subpkt 16 len 8 (issuer key ID %s)\n' "$packet_key_id"
+            ;;
+        multiple)
+            printf ':signature packet: algo 1, keyid %s\n' "$packet_key_id"
+            printf ':signature packet: algo 1, keyid %s\n' "$packet_key_id"
+            ;;
+        *)
+            echo 'not a signature packet'
+            ;;
+    esac
 elif [[ "$arguments" == *' --show-keys '* ]]; then
-    printf 'pub:-:2048:1:BAC30622339994C4:0:0::-:::scESC::::::23::0:\n'
+    printf 'pub:-:2048:1:%s:0:0::-:::scESC::::::23::0:\n' "$key_id"
     printf 'fpr:::::::::%s:\n' "$fingerprint"
 elif [[ "$arguments" == *' --list-keys '* ]]; then
     exit 2
 elif [[ "$arguments" == *' --import '* ]]; then
+    if [[ "${MOCK_IMPORT_FAIL:-false}" == true ]]; then
+        echo 'gpg: injected import failure' >&2
+        exit 2
+    fi
     echo 'gpg: key imported' >&2
 elif [[ "$arguments" == *' --verify '* ]]; then
+    if [[ "${MOCK_VERIFY_FAIL:-false}" == true ]]; then
+        echo '[GNUPG:] BADSIG injected' >&2
+        exit 1
+    fi
+    valid_fingerprint="${MOCK_VALIDSIG_FINGERPRINT:-$fingerprint}"
     printf '[GNUPG:] VALIDSIG %s 2026-07-29 1785364858 0 4 0 1 10 00 %s\n' \
-        "$fingerprint" "$fingerprint"
+        "$valid_fingerprint" "$valid_fingerprint"
 else
     echo "unexpected gpg invocation: $*" >&2
     exit 2
@@ -445,10 +475,45 @@ chmod +x "$review_fixture/mock-bin/curl" "$review_fixture/mock-bin/gh" \
         scripts/review-dependency-verification.sh "$review_base" >/dev/null
 )
 
+v6_fingerprint="0123456789ABCDEF$(printf 'A%.0s' {1..48})"
+(
+    cd "$review_fixture"
+    PATH="$review_fixture/mock-bin:$PATH" \
+        MOCK_REPOSITORY="$review_fixture/mock-repository" \
+        MOCK_JAR_SHA="$review_jar_sha" \
+        MOCK_PACKET_MODE=full MOCK_KEY_FINGERPRINT="$v6_fingerprint" \
+        scripts/review-dependency-verification.sh "$review_base" >/dev/null
+)
+
 expect_failure "issuer key ID resolving to the wrong key" "could not retrieve one exact signing key" \
     env PATH="$review_fixture/mock-bin:$PATH" \
     MOCK_REPOSITORY="$review_fixture/mock-repository" MOCK_JAR_SHA="$review_jar_sha" \
     MOCK_KEY_FINGERPRINT=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB \
+    MOCK_PACKET_KEY_ID=BAC30622339994C4 \
+    "$review_fixture/scripts/review-dependency-verification.sh" "$review_base"
+
+expect_failure "VALIDSIG fingerprint mismatch" "signature fingerprint mismatch" \
+    env PATH="$review_fixture/mock-bin:$PATH" \
+    MOCK_REPOSITORY="$review_fixture/mock-repository" MOCK_JAR_SHA="$review_jar_sha" \
+    MOCK_VALIDSIG_FINGERPRINT=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB \
+    "$review_fixture/scripts/review-dependency-verification.sh" "$review_base"
+
+expect_failure "multiple detached signatures" "exactly one signature packet" \
+    env PATH="$review_fixture/mock-bin:$PATH" \
+    MOCK_REPOSITORY="$review_fixture/mock-repository" MOCK_JAR_SHA="$review_jar_sha" \
+    MOCK_PACKET_MODE=multiple \
+    "$review_fixture/scripts/review-dependency-verification.sh" "$review_base"
+
+expect_failure "invalid detached signature" "invalid detached signature" \
+    env PATH="$review_fixture/mock-bin:$PATH" \
+    MOCK_REPOSITORY="$review_fixture/mock-repository" MOCK_JAR_SHA="$review_jar_sha" \
+    MOCK_VERIFY_FAIL=true \
+    "$review_fixture/scripts/review-dependency-verification.sh" "$review_base"
+
+expect_failure "signing key import failure" "could not import the exact signing key BAC30622339994C4" \
+    env PATH="$review_fixture/mock-bin:$PATH" \
+    MOCK_REPOSITORY="$review_fixture/mock-repository" MOCK_JAR_SHA="$review_jar_sha" \
+    MOCK_IMPORT_FAIL=true \
     "$review_fixture/scripts/review-dependency-verification.sh" "$review_base"
 
 bad_review_sha="$(printf 'b%.0s' {1..64})"
