@@ -432,6 +432,66 @@ final class TestDiagnosticsTests: XCTestCase {
         XCTAssertNil(secondAbort)
         XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
     }
+
+    func testUniqueDestinationPreservesExistingFileAndUsesSuffix() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "p2pkit-unique-destination-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let first = try XCTUnwrap(
+            claimUniqueDestination(in: root, rawName: "photo.png", fileManager: .default)
+        )
+        let original = Data("first transfer".utf8)
+        try original.write(to: first)
+
+        let second = try XCTUnwrap(
+            claimUniqueDestination(in: root, rawName: "photo.png", fileManager: .default)
+        )
+
+        XCTAssertEqual(first.lastPathComponent, "photo.png")
+        XCTAssertEqual(second.lastPathComponent, "photo (1).png")
+        XCTAssertNotEqual(first, second)
+        XCTAssertEqual(try Data(contentsOf: first), original)
+    }
+
+    func testConcurrentUniqueDestinationClaimsNeverCollide() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "p2pkit-concurrent-destination-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let lock = NSLock()
+        var claimed: [URL] = []
+        DispatchQueue.concurrentPerform(iterations: 32) { _ in
+            let destination = claimUniqueDestination(
+                in: root,
+                rawName: "report.pdf",
+                fileManager: .default
+            )
+            lock.lock()
+            if let destination { claimed.append(destination) }
+            lock.unlock()
+        }
+
+        XCTAssertEqual(claimed.count, 32)
+        XCTAssertEqual(Set(claimed).count, 32)
+    }
+
+    func testUniqueDestinationFailsImmediatelyForMissingDirectory() {
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "p2pkit-missing-destination-\(UUID().uuidString)",
+            isDirectory: true
+        )
+
+        XCTAssertNil(
+            claimUniqueDestination(in: missing, rawName: "photo.png", fileManager: .default)
+        )
+    }
 }
 
 private final class Fixture {

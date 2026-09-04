@@ -3,6 +3,47 @@ import P2pKitShared
 import CryptoKit
 import Darwin
 
+/// Atomically claims a sanitized destination; timestamp suffixes are not
+/// sufficient because concurrent offers can share the same clock tick.
+func claimUniqueDestination(
+    in directory: URL,
+    rawName: String,
+    fileManager: FileManager
+) -> URL? {
+    let cleaned = rawName
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "\\", with: "_")
+        .replacingOccurrences(of: ":", with: "_")
+        .filter { character in
+            character.unicodeScalars.allSatisfy { scalar in
+                scalar.value >= 0x20 && scalar.value != 0x7f
+            }
+        }
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let safeName = cleaned.isEmpty || cleaned == "." || cleaned == ".."
+        ? "incoming.bin"
+        : cleaned
+    let ext = (safeName as NSString).pathExtension
+    let stem = ext.isEmpty ? safeName : String(safeName.dropLast(ext.count + 1))
+    for n in 0...10_000 {
+        let candidateName = n == 0
+            ? safeName
+            : ext.isEmpty ? "\(stem) (\(n))" : "\(stem) (\(n)).\(ext)"
+        let candidate = directory.appendingPathComponent(candidateName)
+        let descriptor = candidate.path.withCString {
+            Darwin.open($0, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR | S_IWUSR)
+        }
+        if descriptor >= 0 {
+            _ = Darwin.close(descriptor)
+            return candidate
+        }
+        if errno != EEXIST {
+            return nil
+        }
+    }
+    return nil
+}
+
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var diagnostics = IOSTestDiagnosticStore()
@@ -1371,38 +1412,6 @@ struct ContentView: View {
             diag("file", "accept THREW for '\(offer.name)': \(error.localizedDescription)")
             appendMessage("accept failed for '\(offer.name)': \(error.localizedDescription)", kind: .error)
         }
-    }
-
-    /// Atomically claims a sanitized destination; timestamp suffixes are not
-    /// sufficient because concurrent offers can share the same clock tick.
-    private func claimUniqueDestination(
-        in directory: URL,
-        rawName: String,
-        fileManager: FileManager
-    ) -> URL? {
-        let cleaned = rawName
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "\\", with: "_")
-            .replacingOccurrences(of: ":", with: "_")
-            .filter { character in
-                character.unicodeScalars.allSatisfy { scalar in
-                    scalar.value >= 0x20 && scalar.value != 0x7f
-                }
-            }
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let safeName = cleaned.isEmpty || cleaned == "." || cleaned == ".."
-            ? "incoming.bin"
-            : cleaned
-        let ext = (safeName as NSString).pathExtension
-        let stem = ext.isEmpty ? safeName : String(safeName.dropLast(ext.count + 1))
-        for n in 0...10_000 {
-            let candidateName = n == 0
-                ? safeName
-                : ext.isEmpty ? "\(stem) (\(n))" : "\(stem) (\(n)).\(ext)"
-            let candidate = directory.appendingPathComponent(candidateName)
-            if fileManager.createFile(atPath: candidate.path, contents: nil) { return candidate }
-        }
-        return nil
     }
 
     /// AUDIT-2026-06 (D-G9-samples-desktop-ios-03): demonstrate the outgoing
