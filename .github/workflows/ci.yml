@@ -94,6 +94,7 @@ jobs:
         run: |
           scripts/check-gradle-wrapper.sh
           scripts/tests/check-gradle-wrapper-test.sh
+          scripts/tests/check-lock-write-policy-test.sh
           scripts/tests/check-release-tag-test.sh
           scripts/tests/check-release-identity-test.sh
           scripts/check-release-metadata.sh

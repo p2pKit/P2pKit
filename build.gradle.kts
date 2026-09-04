@@ -326,38 +326,47 @@ tasks.register("check") {
     dependsOn(verifyBuildPluginSecurityFloors)
 }
 
-val resolveAndLockRequested = gradle.startParameter.taskNames.any {
-    it == "resolveAndLockAll" || it.endsWith(":resolveAndLockAll")
-}
-if (resolveAndLockRequested && !gradle.startParameter.isWriteDependencyLocks) {
-    error("resolveAndLockAll must be invoked with --write-locks")
-}
-
-tasks.register("resolveAndLockAll") {
+val resolveAndLockAll = tasks.register("resolveAndLockAll") {
     group = "build setup"
-    description = "Runs every dependency-consuming gate; invoke only with --write-locks."
+    description = "Resolves every subproject check, library Dokka task, and the aggregate SBOM."
     doFirst {
         check(gradle.startParameter.isWriteDependencyLocks) {
             "resolveAndLockAll must be invoked with --write-locks"
         }
     }
     dependsOn(
-        verifyBuildPluginSecurityFloors,
         "cyclonedxBom",
-        ":p2p-core:check",
-        ":p2p-transport-lan:check",
-        ":p2p-network-provisioning-android:check",
-        ":p2p-network-provisioning-desktop:check",
-        ":p2p-sample-diagnostics:check",
-        ":p2p-sample-android:check",
-        ":p2p-sample-desktop:check",
-        ":p2p-sample-desktop-ui:check",
-        ":sample-kmp-shared:check",
-        ":p2p-core:dokkaGeneratePublicationHtml",
-        ":p2p-transport-lan:dokkaGeneratePublicationHtml",
-        ":p2p-network-provisioning-android:dokkaGeneratePublicationHtml",
-        ":p2p-network-provisioning-desktop:dokkaGeneratePublicationHtml",
     )
+}
+
+// Authorize lock writes from the resolved graph, not the spelling used on the
+// command line. This covers abbreviated, qualified, indirect, and Tooling API
+// task selection, and rejects partial lock rewrites through ordinary tasks.
+gradle.taskGraph.whenReady {
+    val lockRefreshInGraph = hasTask(resolveAndLockAll.get())
+    check(lockRefreshInGraph == gradle.startParameter.isWriteDependencyLocks) {
+        if (lockRefreshInGraph) {
+            "resolveAndLockAll must be invoked with --write-locks"
+        } else {
+            "--write-locks may only be used with resolveAndLockAll"
+        }
+    }
+}
+
+// Keep coverage in sync with the actual project task model. Resolve the task
+// set only after every project has registered its plugins and verification
+// tasks. Projects without either task (currently the native Swift launcher
+// project) are excluded naturally rather than by name.
+gradle.projectsEvaluated {
+    val dependencyConsumerTasks = subprojects.flatMap { subproject ->
+        listOfNotNull(
+            subproject.tasks.findByName("check"),
+            subproject.tasks.findByName("dokkaGeneratePublicationHtml"),
+        )
+    }
+    resolveAndLockAll.configure {
+        dependsOn(dependencyConsumerTasks)
+    }
 }
 
 val aggregateSbomGroup = group.toString()
