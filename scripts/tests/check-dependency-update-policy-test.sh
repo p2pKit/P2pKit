@@ -4,6 +4,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-dependency-policy-test.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
+PYTHON3="${P2PKIT_PYTHON3:-/usr/bin/python3}"
+if [[ ! -x "$PYTHON3" ]] || ! "$PYTHON3" -c 'import json, xml.etree.ElementTree' 2>/dev/null; then
+    PYTHON3="$(command -v python3 || true)"
+fi
+[[ -n "$PYTHON3" ]] && "$PYTHON3" -c 'import json, xml.etree.ElementTree' 2>/dev/null || {
+    echo "FATAL: a working Python 3 with JSON and XML support is required" >&2
+    exit 1
+}
 
 fail() {
     echo "FATAL: $*" >&2
@@ -25,6 +33,9 @@ new_fixture() {
     mkdir -p "$fixture/gradle/wrapper" "$fixture/scripts/tests"
     cp "$ROOT/scripts/check-dependency-verification.sh" "$fixture/scripts/"
     cp "$ROOT/scripts/check-dependency-update.sh" "$fixture/scripts/"
+    cp "$ROOT/scripts/review-dependency-verification.sh" "$fixture/scripts/"
+    cp "$ROOT/scripts/validate-gradle-plugin-marker.sh" "$fixture/scripts/"
+    cp "$ROOT/scripts/validate-gradle-plugin-metadata.py" "$fixture/scripts/"
     cat >"$fixture/gradle/verification-metadata.xml" <<'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <verification-metadata xmlns="https://schema.gradle.org/dependency-verification" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://schema.gradle.org/dependency-verification https://schema.gradle.org/dependency-verification/dependency-verification-1.4.xsd">
@@ -42,6 +53,8 @@ new_fixture() {
 </verification-metadata>
 XML
     printf '[versions]\nfixture = "1.0"\n' >"$fixture/gradle/libs.versions.toml"
+    printf '%s\n' '# group|module|version|repository|workflow|source ref|source digest' \
+        >"$fixture/gradle/plugin-provenance-policy.txt"
     printf 'example:library:1.0=runtimeClasspath\n' >"$fixture/gradle.lockfile"
     cat >"$fixture/build.gradle.kts" <<'KOTLIN'
 buildscript {
@@ -149,6 +162,276 @@ printf 'example:old-utp:1.0=_internal-unified-test-platform-core\n' \
     >>"$stale_lock_fixture/gradle.lockfile"
 expect_failure "stale AGP lock" "removed AGP internal UTP configuration" \
     bash -c "cd '$stale_lock_fixture' && scripts/check-dependency-verification.sh"
+
+marker_fixture="$WORK/marker"
+mkdir -p "$marker_fixture"
+cat >"$marker_fixture/marker.pom" <<'XML'
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>example.plugin</groupId>
+  <artifactId>example.plugin.gradle.plugin</artifactId>
+  <version>1.2.3</version>
+  <packaging>pom</packaging>
+  <dependencies>
+    <dependency>
+      <groupId>example.implementation</groupId>
+      <artifactId>plugin</artifactId>
+      <version>4.5.6</version>
+    </dependency>
+  </dependencies>
+</project>
+XML
+printf '%s\n' \
+    'example.implementation|plugin|4.5.6|plugin-4.5.6.jar|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    >"$marker_fixture/entries"
+printf '%s\n' 'example.implementation:plugin:4.5.6=classpath' >"$marker_fixture/buildscript.lock"
+marker_implementation="$("$ROOT/scripts/validate-gradle-plugin-marker.sh" \
+    "$marker_fixture/marker.pom" example.plugin example.plugin.gradle.plugin 1.2.3 \
+    "$marker_fixture/entries" "$marker_fixture/buildscript.lock")"
+[[ "$marker_implementation" == 'example.implementation|plugin|4.5.6' ]] ||
+    fail "valid plugin marker did not resolve to its implementation"
+
+cp "$marker_fixture/marker.pom" "$marker_fixture/unsafe.pom"
+sed -i.bak '/<dependencies>/i\
+  <repositories><repository><url>https://attacker.invalid</url></repository></repositories>' \
+    "$marker_fixture/unsafe.pom"
+expect_failure "marker with unsupported elements" "unsupported elements" \
+    "$ROOT/scripts/validate-gradle-plugin-marker.sh" \
+    "$marker_fixture/unsafe.pom" example.plugin example.plugin.gradle.plugin 1.2.3 \
+    "$marker_fixture/entries" "$marker_fixture/buildscript.lock"
+
+cp "$marker_fixture/marker.pom" "$marker_fixture/multiple.pom"
+sed -i.bak '/<\/dependencies>/i\
+    <dependency><groupId>other</groupId><artifactId>plugin</artifactId><version>1</version></dependency>' \
+    "$marker_fixture/multiple.pom"
+expect_failure "marker with multiple dependencies" "exactly one dependency" \
+    "$ROOT/scripts/validate-gradle-plugin-marker.sh" \
+    "$marker_fixture/multiple.pom" example.plugin example.plugin.gradle.plugin 1.2.3 \
+    "$marker_fixture/entries" "$marker_fixture/buildscript.lock"
+
+printf '%s\n' 'other:plugin:1=classpath' >"$marker_fixture/wrong.lock"
+expect_failure "marker implementation missing from lock" "absent from the buildscript classpath lock" \
+    "$ROOT/scripts/validate-gradle-plugin-marker.sh" \
+    "$marker_fixture/marker.pom" example.plugin example.plugin.gradle.plugin 1.2.3 \
+    "$marker_fixture/entries" "$marker_fixture/wrong.lock"
+
+expect_failure "noncanonical unsigned marker" "not a canonical Gradle plugin marker" \
+    "$ROOT/scripts/validate-gradle-plugin-marker.sh" \
+    "$marker_fixture/marker.pom" example.plugin arbitrary-module 1.2.3 \
+    "$marker_fixture/entries" "$marker_fixture/buildscript.lock"
+
+module_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+cat >"$marker_fixture/plugin.module" <<JSON
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "example.implementation",
+    "module": "plugin",
+    "version": "4.5.6",
+    "attributes": {"org.gradle.status": "release"}
+  },
+  "createdBy": {"gradle": {"version": "9.7.0"}},
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.version": 17,
+        "org.gradle.usage": "java-api"
+      },
+      "files": [{
+        "name": "plugin-4.5.6.jar",
+        "url": "plugin-4.5.6.jar",
+        "size": 1,
+        "sha512": "$(printf 'a%.0s' {1..128})",
+        "sha256": "$module_sha",
+        "sha1": "$(printf 'a%.0s' {1..40})",
+        "md5": "$(printf 'a%.0s' {1..32})"
+      }]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.version": 17,
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [{
+        "name": "plugin-4.5.6.jar",
+        "url": "plugin-4.5.6.jar",
+        "size": 1,
+        "sha512": "$(printf 'a%.0s' {1..128})",
+        "sha256": "$module_sha",
+        "sha1": "$(printf 'a%.0s' {1..40})",
+        "md5": "$(printf 'a%.0s' {1..32})"
+      }]
+    }
+  ]
+}
+JSON
+module_implementation="$("$PYTHON3" "$ROOT/scripts/validate-gradle-plugin-metadata.py" module \
+    "$marker_fixture/plugin.module" example.implementation plugin 4.5.6 "$module_sha" \
+    "$marker_fixture/entries" "$marker_fixture/buildscript.lock")"
+[[ "$module_implementation" == 'example.implementation|plugin|4.5.6' ]] ||
+    fail "valid plugin module metadata did not bind to its implementation"
+
+sed 's#"url": "plugin-4.5.6.jar"#"url": "https://attacker.invalid/plugin.jar"#' \
+    "$marker_fixture/plugin.module" >"$marker_fixture/remote.module"
+expect_failure "module with remote file" "non-local artifact URL" \
+    "$PYTHON3" "$ROOT/scripts/validate-gradle-plugin-metadata.py" module \
+    "$marker_fixture/remote.module" example.implementation plugin 4.5.6 "$module_sha" \
+    "$marker_fixture/entries" "$marker_fixture/buildscript.lock"
+
+cat >"$marker_fixture/attestation.json" <<JSON
+[
+  {
+    "verificationResult": {
+      "verifiedTimestamps": [{"type": "Tlog"}],
+      "statement": {
+        "predicateType": "https://slsa.dev/provenance/v1",
+        "subject": [{"name": "plugin.jar", "digest": {"sha256": "$module_sha"}}]
+      },
+      "signature": {"certificate": {
+        "subjectAlternativeName": "https://github.com/example/upstream/.github/workflows/release.yml@refs/tags/v4.5.6",
+        "issuer": "https://token.actions.githubusercontent.com",
+        "githubWorkflowRepository": "example/upstream",
+        "githubWorkflowRef": "refs/tags/v4.5.6",
+        "githubWorkflowSHA": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRepositoryDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRepositoryRef": "refs/tags/v4.5.6",
+        "runnerEnvironment": "github-hosted"
+      }}
+    }
+  }
+]
+JSON
+"$PYTHON3" "$ROOT/scripts/validate-gradle-plugin-metadata.py" attestation \
+    "$marker_fixture/attestation.json" "$module_sha" example/upstream \
+    example/upstream/.github/workflows/release.yml refs/tags/v4.5.6 \
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+expect_failure "attestation with wrong source" "trusted build identity" \
+    "$PYTHON3" "$ROOT/scripts/validate-gradle-plugin-metadata.py" attestation \
+    "$marker_fixture/attestation.json" "$module_sha" example/upstream \
+    example/upstream/.github/workflows/release.yml refs/tags/v4.5.6 \
+    bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+
+review_fixture="$(new_fixture provenance-review)"
+review_base="$(git -C "$review_fixture" rev-parse HEAD)"
+mkdir -p "$review_fixture/mock-bin" "$review_fixture/mock-repository"
+cp "$marker_fixture/marker.pom" "$review_fixture/mock-repository/example.plugin.gradle.plugin-1.2.3.pom"
+cp "$marker_fixture/plugin.module" "$review_fixture/mock-repository/plugin-4.5.6.module"
+printf 'attested plugin bytes' >"$review_fixture/mock-repository/plugin-4.5.6.jar"
+review_jar_sha="$(shasum -a 256 "$review_fixture/mock-repository/plugin-4.5.6.jar" | awk '{print $1}')"
+"$PYTHON3" - "$review_fixture/mock-repository/plugin-4.5.6.module" "$module_sha" "$review_jar_sha" <<'PY'
+import sys
+path, old, new = sys.argv[1:]
+data = open(path, encoding="utf-8").read().replace(old, new)
+open(path, "w", encoding="utf-8").write(data)
+PY
+review_module_sha="$(shasum -a 256 "$review_fixture/mock-repository/plugin-4.5.6.module" | awk '{print $1}')"
+review_marker_sha="$(shasum -a 256 \
+    "$review_fixture/mock-repository/example.plugin.gradle.plugin-1.2.3.pom" | awk '{print $1}')"
+sed -i.bak '/<\/components>/i\
+      <component group="example.implementation" name="plugin" version="4.5.6">\
+         <artifact name="plugin-4.5.6.jar">\
+            <sha256 value="'"$review_jar_sha"'" origin="Fixture"/>\
+         </artifact>\
+         <artifact name="plugin-4.5.6.module">\
+            <sha256 value="'"$review_module_sha"'" origin="Fixture"/>\
+         </artifact>\
+      </component>\
+      <component group="example.plugin" name="example.plugin.gradle.plugin" version="1.2.3">\
+         <artifact name="example.plugin.gradle.plugin-1.2.3.pom">\
+            <sha256 value="'"$review_marker_sha"'" origin="Fixture"/>\
+         </artifact>\
+      </component>' "$review_fixture/gradle/verification-metadata.xml"
+printf '%s\n' 'example.implementation:plugin:4.5.6=classpath' \
+    >>"$review_fixture/buildscript-gradle.lockfile"
+cat >"$review_fixture/gradle/plugin-provenance-policy.txt" <<'POLICY'
+# group|module|version|repository|workflow|source ref|source digest
+example.implementation|plugin|4.5.6|example/upstream|example/upstream/.github/workflows/release.yml|refs/tags/v4.5.6|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+POLICY
+cat >"$review_fixture/mock-bin/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+output=""
+url=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o)
+            output="$2"
+            shift 2
+            ;;
+        http*)
+            url="$1"
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+source="$MOCK_REPOSITORY/${url##*/}"
+[[ -n "$output" && -f "$source" ]] || exit 22
+cp "$source" "$output"
+SCRIPT
+cat >"$review_fixture/mock-bin/gh" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+arguments=" $* "
+for expected in \
+    '--hostname github.com' \
+    '--repo example/upstream' \
+    '--signer-workflow example/upstream/.github/workflows/release.yml' \
+    '--source-ref refs/tags/v4.5.6' \
+    '--source-digest aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    '--deny-self-hosted-runners' \
+    '--format json'; do
+    [[ "$arguments" == *" $expected "* ]] || {
+        echo "missing attestation constraint: $expected" >&2
+        exit 1
+    }
+done
+cat <<JSON
+[{"verificationResult":{"verifiedTimestamps":[{"type":"Tlog"}],"statement":{"predicateType":"https://slsa.dev/provenance/v1","subject":[{"name":"plugin-4.5.6.jar","digest":{"sha256":"$MOCK_JAR_SHA"}}]},"signature":{"certificate":{"subjectAlternativeName":"https://github.com/example/upstream/.github/workflows/release.yml@refs/tags/v4.5.6","issuer":"https://token.actions.githubusercontent.com","githubWorkflowRepository":"example/upstream","githubWorkflowRef":"refs/tags/v4.5.6","githubWorkflowSHA":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sourceRepositoryDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sourceRepositoryRef":"refs/tags/v4.5.6","runnerEnvironment":"github-hosted"}}}}]
+JSON
+SCRIPT
+chmod +x "$review_fixture/mock-bin/curl" "$review_fixture/mock-bin/gh"
+(
+    cd "$review_fixture"
+    PATH="$review_fixture/mock-bin:$PATH" \
+        MOCK_REPOSITORY="$review_fixture/mock-repository" \
+        MOCK_JAR_SHA="$review_jar_sha" \
+        scripts/review-dependency-verification.sh "$review_base" >/dev/null
+)
+
+bad_review_sha="$(printf 'b%.0s' {1..64})"
+sed -i.bak "s/$review_jar_sha/$bad_review_sha/" \
+    "$review_fixture/gradle/verification-metadata.xml"
+expect_failure "review with mismatched downloaded checksum" "downloaded bytes disagree" \
+    env PATH="$review_fixture/mock-bin:$PATH" \
+    MOCK_REPOSITORY="$review_fixture/mock-repository" MOCK_JAR_SHA="$review_jar_sha" \
+    "$review_fixture/scripts/review-dependency-verification.sh" "$review_base"
+sed -i.bak "s/$bad_review_sha/$review_jar_sha/" \
+    "$review_fixture/gradle/verification-metadata.xml"
+
+printf 'unsigned executable' >"$review_fixture/mock-repository/other-1.0.jar"
+other_sha="$(shasum -a 256 "$review_fixture/mock-repository/other-1.0.jar" | awk '{print $1}')"
+sed -i.bak '/<\/components>/i\
+      <component group="example" name="other" version="1.0">\
+         <artifact name="other-1.0.jar">\
+            <sha256 value="'"$other_sha"'" origin="Fixture"/>\
+         </artifact>\
+      </component>' "$review_fixture/gradle/verification-metadata.xml"
+expect_failure "unsigned non-plugin artifact" "no detached signature or approved provenance" \
+    env PATH="$review_fixture/mock-bin:$PATH" \
+    MOCK_REPOSITORY="$review_fixture/mock-repository" MOCK_JAR_SHA="$review_jar_sha" \
+    "$review_fixture/scripts/review-dependency-verification.sh" "$review_base"
+
+grep -Fq 'validate-gradle-plugin-marker.sh' "$ROOT/scripts/review-dependency-verification.sh" ||
+    fail "dependency reviewer does not invoke strict plugin-marker validation"
+grep -Fq 'no detached signature or approved provenance' "$ROOT/scripts/review-dependency-verification.sh" ||
+    fail "dependency reviewer no longer fails closed for unsigned non-marker artifacts"
 
 wrapper_fixture="$(new_fixture wrapper)"
 wrapper_base="$(git -C "$wrapper_fixture" rev-parse HEAD)"

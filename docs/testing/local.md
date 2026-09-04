@@ -45,8 +45,9 @@ the Gradle wrapper are grouped into one Dependabot update because they form one
 compatibility unit.
 
 From a dedicated update branch, generate candidates and independently verify
-every newly admitted artifact against its repository bytes and detached OpenPGP
-signature before committing:
+every newly admitted artifact against its repository bytes and publisher
+provenance before committing. This maintainer workflow requires `curl`, `gpg`,
+an authenticated GitHub CLI (`gh`), and Python 3:
 
 ```bash
 scripts/prepare-dependency-update.sh origin/main
@@ -54,10 +55,15 @@ scripts/prepare-dependency-update.sh origin/main
 
 The reviewer also compares an authoritative repository SHA-256 sidecar when
 one is published. Maven Central does not publish such a sidecar consistently,
-so those entries require both an exact match between downloaded bytes and the
-committed SHA-256 and a valid detached signature whose issuer fingerprint
-matches the independently retrieved public key. The script uses an isolated
-temporary keyring and never adds broad artifact/key trust to Gradle metadata.
+so the normal path requires both an exact match between downloaded bytes and
+the committed SHA-256 and a valid detached signature whose issuer fingerprint
+matches the independently retrieved public key. A narrowly pinned entry in
+`gradle/plugin-provenance-policy.txt` may instead authorize a canonical Gradle
+plugin JAR whose GitHub SLSA attestation matches the exact repository, release
+tag, workflow, and source commit. Unsigned plugin marker and module metadata is
+parsed fail closed and must bind to that trusted JAR and the locked dependency
+graph. The script uses an isolated temporary keyring and never adds broad
+artifact/key trust to Gradle metadata.
 
 Before pushing, inspect the complete lock and metadata diff and run:
 

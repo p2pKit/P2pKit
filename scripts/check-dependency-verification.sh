@@ -5,6 +5,7 @@ set -euo pipefail
 
 ROOT="${P2PKIT_ROOT_OVERRIDE:-$(cd "$(dirname "$0")/.." && pwd)}"
 METADATA="$ROOT/gradle/verification-metadata.xml"
+PLUGIN_PROVENANCE="$ROOT/gradle/plugin-provenance-policy.txt"
 
 fail() {
     echo "FATAL: $*" >&2
@@ -12,6 +13,7 @@ fail() {
 }
 
 [[ -f "$METADATA" ]] || fail "missing Gradle verification metadata"
+[[ -f "$PLUGIN_PROVENANCE" ]] || fail "missing Gradle plugin provenance policy"
 [[ "$(grep -Fc 'resolutionStrategy.activateDependencyLocking()' "$ROOT/build.gradle.kts")" == "1" ]] ||
     fail "root build-plugin classpath dependency locking is not activated exactly once"
 [[ -f "$ROOT/buildscript-gradle.lockfile" ]] || fail "missing root build-plugin dependency lock"
@@ -75,6 +77,36 @@ awk -v entries="$entries" '
 [[ -s "$entries" ]] || fail "verification metadata contains no artifact checksums"
 duplicate="$(LC_ALL=C sort "$entries" | uniq -d | head -1)"
 [[ -z "$duplicate" ]] || fail "duplicate verified artifact entry: $duplicate"
+
+policy_components="$(mktemp "${TMPDIR:-/tmp}/p2pkit-plugin-policy.XXXXXX")"
+trap 'rm -f "$entries" "$policy_components"' EXIT
+: >"$policy_components"
+while IFS='|' read -r group module version repository workflow source_ref source_digest extra; do
+    [[ -z "$group" || "$group" == \#* ]] && continue
+    [[ -z "${extra:-}" ]] || fail "malformed Gradle plugin provenance policy"
+    [[ "$group" =~ ^[A-Za-z0-9_.-]+$ &&
+        "$module" =~ ^[A-Za-z0-9_.-]+$ &&
+        "$version" =~ ^[A-Za-z0-9_.-]+$ ]] ||
+        fail "invalid component in Gradle plugin provenance policy"
+    [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+        fail "invalid repository in Gradle plugin provenance policy"
+    [[ "$workflow" =~ ^${repository}/\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$ ]] ||
+        fail "invalid signer workflow in Gradle plugin provenance policy"
+    [[ "$source_ref" =~ ^refs/tags/[A-Za-z0-9._/-]+$ ]] ||
+        fail "plugin provenance policy must pin a release tag"
+    [[ "$source_digest" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] ||
+        fail "plugin provenance policy must pin a source digest"
+    coordinate="$group:$module:$version"
+    jar="$module-$version.jar"
+    grep -Eq "^${group//./\\.}\\|${module//./\\.}\\|${version//./\\.}\\|${jar//./\\.}\\|[0-9a-f]{64}$" \
+        "$entries" || fail "plugin provenance policy JAR is absent from verification metadata: $coordinate"
+    grep -Eq "^${group//./\\.}:${module//./\\.}:${version//./\\.}=([^,]*,)*classpath(,|$)" \
+        "$ROOT/buildscript-gradle.lockfile" ||
+        fail "plugin provenance policy component is absent from the buildscript lock: $coordinate"
+    printf '%s\n' "$coordinate" >>"$policy_components"
+done <"$PLUGIN_PROVENANCE"
+duplicate_policy="$(LC_ALL=C sort "$policy_components" | uniq -d | head -1)"
+[[ -z "$duplicate_policy" ]] || fail "duplicate Gradle plugin provenance policy: $duplicate_policy"
 
 stale_utp="$(find "$ROOT" -name '*gradle.lockfile' -type f -exec \
     grep -H -m1 -E '(^|[=,])_internal-unified-test-platform-' {} + 2>/dev/null | head -1 || true)"

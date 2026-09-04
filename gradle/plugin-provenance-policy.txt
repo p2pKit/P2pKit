@@ -1,0 +1,1 @@
+# group|module|version|GitHub repository|signer workflow|source ref|source digest

@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Independently review every artifact newly admitted to Gradle verification
-# metadata against downloaded bytes and detached OpenPGP signatures. When a
-# repository publishes a SHA-256 sidecar, that independent value must also
-# agree; Maven Central does not consistently publish SHA-256 sidecars.
+# metadata against downloaded bytes and publisher provenance. Detached OpenPGP
+# signatures remain the default. A version-specific checked-in policy may use
+# GitHub artifact attestations for a canonical plugin implementation JAR;
+# unsigned marker/module metadata is accepted only after strict semantic
+# validation binds it to that attested JAR and the locked dependency graph.
+# When a repository publishes a SHA-256 sidecar, it must also agree.
 # This is a maintainer curation tool, not an automatic trust step.
 set -euo pipefail
 
@@ -16,9 +19,18 @@ fail() {
 
 git -C "$ROOT" cat-file -e "$BASE_REF^{commit}" 2>/dev/null ||
     fail "base ref is not an available commit: $BASE_REF"
-for command in curl gpg awk comm sort shasum; do
+for command in curl gh gpg awk comm sort shasum; do
     command -v "$command" >/dev/null 2>&1 || fail "required review tool is missing: $command"
 done
+PYTHON3="${P2PKIT_PYTHON3:-/usr/bin/python3}"
+if [[ ! -x "$PYTHON3" ]] || ! "$PYTHON3" -c 'import json, xml.etree.ElementTree' 2>/dev/null; then
+    PYTHON3="$(command -v python3 || true)"
+fi
+[[ -n "$PYTHON3" ]] && "$PYTHON3" -c 'import json, xml.etree.ElementTree' 2>/dev/null ||
+    fail "a working Python 3 with JSON and XML support is required"
+
+provenance_policy="$ROOT/gradle/plugin-provenance-policy.txt"
+[[ -f "$provenance_policy" ]] || fail "missing Gradle plugin provenance policy"
 
 # Keep GNUPGHOME short enough for the agent's Unix-domain socket on macOS.
 # The system TMPDIR path can already approach the platform socket limit.
@@ -28,6 +40,42 @@ chmod 700 "$work"
 gnupg="$work/gnupg"
 mkdir -p "$gnupg"
 chmod 700 "$gnupg"
+marker_requirements="$work/marker.requirements"
+module_requirements="$work/module.requirements"
+trusted_implementations="$work/trusted.implementations"
+: >"$marker_requirements"
+: >"$module_requirements"
+: >"$trusted_implementations"
+
+lookup_provenance_policy() {
+    local group="$1" module="$2" version="$3" matches
+    matches="$(awk -F'|' -v group="$group" -v module="$module" -v version="$version" '
+        /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+        NF != 7 { print "MALFORMED"; next }
+        $1 == group && $2 == module && $3 == version { print }
+    ' "$provenance_policy")"
+    [[ "$matches" != *MALFORMED* ]] || fail "malformed Gradle plugin provenance policy"
+    [[ "$(printf '%s\n' "$matches" | grep -c . || true)" -eq 1 ]] || return 1
+    printf '%s\n' "$matches"
+}
+
+while IFS='|' read -r policy_group policy_module policy_version policy_repo \
+    policy_workflow policy_ref policy_digest extra; do
+    [[ -z "$policy_group" || "$policy_group" == \#* ]] && continue
+    [[ -z "${extra:-}" ]] || fail "malformed Gradle plugin provenance policy"
+    [[ "$policy_group" =~ ^[A-Za-z0-9_.-]+$ &&
+        "$policy_module" =~ ^[A-Za-z0-9_.-]+$ &&
+        "$policy_version" =~ ^[A-Za-z0-9_.-]+$ ]] ||
+        fail "invalid component in Gradle plugin provenance policy"
+    [[ "$policy_repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+        fail "invalid repository in Gradle plugin provenance policy"
+    [[ "$policy_workflow" =~ ^${policy_repo}/\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$ ]] ||
+        fail "invalid signer workflow in Gradle plugin provenance policy"
+    [[ "$policy_ref" =~ ^refs/tags/[A-Za-z0-9._/-]+$ ]] ||
+        fail "plugin provenance policy must pin a release tag"
+    [[ "$policy_digest" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] ||
+        fail "plugin provenance policy must pin a source digest"
+done <"$provenance_policy"
 
 parse_metadata() {
     local source="$1" destination="$2"
@@ -82,22 +130,18 @@ while IFS='|' read -r group module version artifact expected_sha; do
             -o "$work/artifact" "$candidate/$relative"; then
             continue
         fi
-        if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            --connect-timeout 20 --max-time 120 \
-            -o "$work/artifact.asc" "$candidate/$relative.asc"; then
-            continue
-        fi
         repository="$candidate"
         break
     done
     [[ -n "$repository" ]] ||
-        fail "no repository artifact and detached signature for $group:$module:$version:$artifact"
+        fail "no repository artifact for $group:$module:$version:$artifact"
 
     actual_sha="$(shasum -a 256 "$work/artifact" | awk '{print $1}')"
     [[ "$actual_sha" == "$expected_sha" ]] ||
         fail "downloaded bytes disagree with metadata for $group:$module:$version:$artifact"
 
     checksum_evidence="signature-bound-bytes"
+    rm -f "$work/remote.sha256"
     if curl -fsSL --connect-timeout 20 --max-time 120 \
         -o "$work/remote.sha256" "$repository/$relative.sha256" 2>/dev/null; then
         remote_sha="$(grep -Eo '[0-9a-fA-F]{64}' "$work/remote.sha256" |
@@ -105,6 +149,73 @@ while IFS='|' read -r group module version artifact expected_sha; do
         [[ "$remote_sha" == "$expected_sha" ]] ||
             fail "repository checksum disagrees with metadata for $group:$module:$version:$artifact"
         checksum_evidence="sha256-sidecar+signature"
+    fi
+
+    rm -f "$work/artifact.asc"
+    if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+        --connect-timeout 20 --max-time 120 \
+        -o "$work/artifact.asc" "$repository/$relative.asc"; then
+        expected_marker="$module-$version.pom"
+        expected_jar="$module-$version.jar"
+        expected_module="$module-$version.module"
+        if [[ "$module" == "$group.gradle.plugin" && "$artifact" == "$expected_marker" ]]; then
+            implementation="$("$ROOT/scripts/validate-gradle-plugin-marker.sh" \
+                "$work/artifact" "$group" "$module" "$version" \
+                "$work/current.entries" "$ROOT/buildscript-gradle.lockfile")"
+            printf '%s\n' "$implementation" >>"$marker_requirements"
+            printf 'REVIEWED %s:%s:%s %s sha256=%s signer=none evidence=semantic-marker+trusted-implementation-pending repository=%s\n' \
+                "$group" "$module" "$version" "$artifact" "$expected_sha" "$repository"
+            reviewed=$((reviewed + 1))
+            continue
+        fi
+
+        policy="$(lookup_provenance_policy "$group" "$module" "$version" || true)"
+        [[ -n "$policy" ]] ||
+            fail "no detached signature or approved provenance for $group:$module:$version:$artifact"
+        IFS='|' read -r _ _ _ attestation_repo attestation_workflow \
+            attestation_ref attestation_digest <<<"$policy"
+
+        if [[ "$artifact" == "$expected_jar" ]]; then
+            attestation_json="$work/attestation.json"
+            gh attestation verify "$work/artifact" \
+                --hostname github.com \
+                --repo "$attestation_repo" \
+                --signer-workflow "$attestation_workflow" \
+                --source-ref "$attestation_ref" \
+                --source-digest "$attestation_digest" \
+                --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
+                --deny-self-hosted-runners \
+                --format json >"$attestation_json" ||
+                fail "GitHub provenance verification failed for $group:$module:$version:$artifact"
+            "$PYTHON3" "$ROOT/scripts/validate-gradle-plugin-metadata.py" attestation \
+                "$attestation_json" "$expected_sha" "$attestation_repo" \
+                "$attestation_workflow" "$attestation_ref" "$attestation_digest"
+            printf '%s|%s|%s\n' "$group" "$module" "$version" >>"$trusted_implementations"
+            printf 'REVIEWED %s:%s:%s %s sha256=%s signer=%s evidence=github-slsa-provenance repository=%s\n' \
+                "$group" "$module" "$version" "$artifact" "$expected_sha" \
+                "$attestation_workflow@$attestation_ref" "$repository"
+            reviewed=$((reviewed + 1))
+            continue
+        fi
+
+        if [[ "$artifact" == "$expected_module" ]]; then
+            jar_sha="$(awk -F'|' -v group="$group" -v module="$module" -v version="$version" \
+                -v artifact="$expected_jar" '
+                $1 == group && $2 == module && $3 == version && $4 == artifact { print $5 }
+            ' "$work/current.entries")"
+            [[ "$jar_sha" =~ ^[0-9a-f]{64}$ ]] ||
+                fail "plugin module has no unique implementation JAR checksum: $group:$module:$version"
+            implementation="$("$PYTHON3" "$ROOT/scripts/validate-gradle-plugin-metadata.py" module \
+                "$work/artifact" "$group" "$module" "$version" "$jar_sha" \
+                "$work/current.entries" "$ROOT/buildscript-gradle.lockfile")"
+            printf '%s\n' "$implementation" >>"$module_requirements"
+            printf 'REVIEWED %s:%s:%s %s sha256=%s signer=none evidence=semantic-module+attested-jar-pending repository=%s\n' \
+                "$group" "$module" "$version" "$artifact" "$expected_sha" "$repository"
+            reviewed=$((reviewed + 1))
+            continue
+        fi
+
+        fail "no detached signature or approved provenance for $group:$module:$version:$artifact"
     fi
 
     fingerprint="$(gpg --batch --list-packets "$work/artifact.asc" 2>/dev/null |
@@ -142,10 +253,22 @@ while IFS='|' read -r group module version artifact expected_sha; do
     grep -Fq "[GNUPG:] VALIDSIG $fingerprint " <<<"$verification" ||
         fail "signature fingerprint mismatch for $group:$module:$version:$artifact"
 
+    if [[ "$artifact" == "$module-$version.jar" ]]; then
+        printf '%s|%s|%s\n' "$group" "$module" "$version" >>"$trusted_implementations"
+    fi
+
     printf 'REVIEWED %s:%s:%s %s sha256=%s signer=%s evidence=%s repository=%s\n' \
         "$group" "$module" "$version" "$artifact" "$expected_sha" "$fingerprint" \
         "$checksum_evidence" "$repository"
     reviewed=$((reviewed + 1))
 done <"$work/new.entries"
 
-echo "RESULT: PASS — reviewed $reviewed newly admitted artifacts by exact SHA-256 and OpenPGP signature; repository SHA-256 sidecars also matched wherever published"
+LC_ALL=C sort -u -o "$trusted_implementations" "$trusted_implementations"
+cat "$marker_requirements" "$module_requirements" | LC_ALL=C sort -u |
+    while IFS= read -r implementation; do
+        [[ -z "$implementation" ]] && continue
+        grep -Fxq "$implementation" "$trusted_implementations" ||
+            fail "plugin metadata implementation did not pass JAR provenance review: ${implementation//|/:}"
+    done
+
+echo "RESULT: PASS — reviewed $reviewed newly admitted artifacts by exact SHA-256 and publisher provenance; unsigned Gradle metadata is structurally bound to a trusted implementation JAR"
