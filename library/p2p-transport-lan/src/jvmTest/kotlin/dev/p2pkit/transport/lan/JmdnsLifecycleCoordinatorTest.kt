@@ -67,7 +67,7 @@ class JmdnsLifecycleCoordinatorTest {
 
     private class FakeListenerToken(val handle: FakeHandle) {
         @Volatile
-        var active = true
+        var active = false
     }
 
     private class FakeServiceToken(val localPeer: LocalPeerInfo)
@@ -83,7 +83,9 @@ class JmdnsLifecycleCoordinatorTest {
         val registrations = CopyOnWriteArrayList<Pair<FakeHandle, LocalPeerInfo>>()
         val unregistrations = CopyOnWriteArrayList<Any>()
         val listenersAdded = CopyOnWriteArrayList<FakeListenerToken>()
+        val listenersActivated = CopyOnWriteArrayList<FakeListenerToken>()
         val listenersRemoved = CopyOnWriteArrayList<Any>()
+        val listenerTransitions = CopyOnWriteArrayList<Pair<String, FakeListenerToken>>()
 
         @Volatile
         var lockHeld = false
@@ -263,11 +265,22 @@ class JmdnsLifecycleCoordinatorTest {
                 failNextAddListener = false
                 throw IOException("injected addListener failure")
             }
-            listenersAdded += token as FakeListenerToken
+            val listener = token as FakeListenerToken
+            listenersAdded += listener
+            listenerTransitions += "add" to listener
+        }
+
+        override fun activateListenerBlocking(token: Any) {
+            val listener = token as FakeListenerToken
+            listener.active = true
+            listenersActivated += listener
+            listenerTransitions += "activate" to listener
         }
 
         override fun deactivateListenerToken(token: Any) {
-            (token as FakeListenerToken).active = false
+            val listener = token as FakeListenerToken
+            listener.active = false
+            listenerTransitions += "deactivate" to listener
         }
 
         override fun removeListenerBlocking(handle: FakeHandle, token: Any) {
@@ -277,7 +290,9 @@ class JmdnsLifecycleCoordinatorTest {
                 failNextRemoveListener = false
                 throw IOException("injected listener removal failure")
             }
-            listenersRemoved += token
+            val listener = token as FakeListenerToken
+            listenersRemoved += listener
+            listenerTransitions += "remove" to listener
         }
 
         override fun currentNetwork(): FakeNet? {
@@ -1244,6 +1259,7 @@ class JmdnsLifecycleCoordinatorTest {
         coordinatorTest(ops) { coordinator, _ ->
             coordinator.startDiscovery()
             val original = ops.listenersAdded.single()
+            ops.listenerTransitions.clear()
 
             coordinator.refreshDiscovery { handle ->
                 assertSame(ops.created.single(), handle)
@@ -1254,7 +1270,18 @@ class JmdnsLifecycleCoordinatorTest {
             assertSame(original, ops.listenersRemoved.single())
             assertFalse(original.active, "replaced listener generation must be deactivated")
             assertTrue(replacement.active)
+            assertEquals(
+                listOf(
+                    "add" to replacement,
+                    "deactivate" to original,
+                    "remove" to original,
+                    "activate" to replacement
+                ),
+                ops.listenerTransitions,
+                "fresh callbacks must remain staged until the predecessor is retired"
+            )
 
+            ops.listenerTransitions.clear()
             coordinator.stopDiscovery()
             assertEquals(2, ops.listenersRemoved.size)
             assertSame(replacement, ops.listenersRemoved.last(), "stop must remove the committed token")
@@ -1292,6 +1319,47 @@ class JmdnsLifecycleCoordinatorTest {
             coordinator.stopDiscovery()
             assertSame(original, ops.listenersRemoved.last())
             assertFalse(original.active)
+        }
+    }
+
+    @Test
+    fun cancellationDuringOldListenerRemovalStillCommitsFreshActivation() {
+        val ops = FakeOps().apply { current = FakeNet("wifi0") }
+        coordinatorTest(ops) { coordinator, scope ->
+            coordinator.startDiscovery()
+            val original = ops.listenersAdded.single()
+            ops.listenerTransitions.clear()
+
+            val gate = CountDownLatch(1)
+            ops.removeListenerGate = gate
+            var afterRotationInvoked = false
+            val refresher = scope.launch {
+                coordinator.refreshDiscovery { afterRotationInvoked = true }
+            }
+            awaitBlockingCall(ops.removeListenerEntered, "refresh removeListenerBlocking")
+            val replacement = ops.listenersAdded.last()
+
+            refresher.cancel()
+            gate.countDown()
+            refresher.join()
+
+            assertTrue(refresher.isCancelled)
+            assertFalse(afterRotationInvoked)
+            assertFalse(original.active)
+            assertTrue(replacement.active, "committed replacement must not remain staged")
+            assertEquals(
+                listOf(
+                    "add" to replacement,
+                    "deactivate" to original,
+                    "remove" to original,
+                    "activate" to replacement
+                ),
+                ops.listenerTransitions
+            )
+
+            ops.removeListenerGate = null
+            coordinator.stopDiscovery()
+            assertSame(replacement, ops.listenersRemoved.last())
         }
     }
 

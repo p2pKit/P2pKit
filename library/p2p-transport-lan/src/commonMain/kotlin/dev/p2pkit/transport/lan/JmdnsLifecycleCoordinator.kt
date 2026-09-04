@@ -67,6 +67,15 @@ internal interface JmdnsLifecycleOps<N : Any, H : Any> {
     fun addListenerBlocking(handle: H, token: Any)
 
     /**
+     * Commit a successfully installed listener generation. Implementations
+     * must hold callbacks received during [addListenerBlocking] until this
+     * hook runs, then deliver them in arrival order. This lets add-first
+     * rotation retire the predecessor before any fresh callback is
+     * published.
+     */
+    fun activateListenerBlocking(token: Any)
+
+    /**
      * Prevent callbacks from [token] from publishing after its lifecycle
      * generation has been replaced. Must be idempotent and non-blocking.
      */
@@ -337,6 +346,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
             listenerToken = token
             bindingHealthy = false
             withContext(ioContext) { ops.addListenerBlocking(h, token) }
+            withContext(ioContext) { ops.activateListenerBlocking(token) }
             discoveryIntent = true
             bindingHealthy = bindingMatchesIntents()
             ops.logDebug(
@@ -412,24 +422,32 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
 
         listenerToken = fresh
         bindingHealthy = false
-        // The new generation owns delivery before the old listener is
-        // detached; any queued callback from the old generation is ignored.
-        ops.deactivateListenerToken(old)
-        val removalFailure = try {
-            withContext(NonCancellable) {
+        // Once add succeeds, retiring the predecessor and activating the
+        // staged replacement is one non-cancellable commit. Otherwise a
+        // cancellation delivered after removeListener returns can strand the
+        // only installed listener in its staged state forever.
+        withContext(NonCancellable) {
+            ops.deactivateListenerToken(old)
+            val removalFailure = try {
                 withContext(ioContext) { ops.removeListenerBlocking(h, old) }
+                null
+            } catch (error: Throwable) {
+                if (error !is Exception) throw error
+                error
             }
-            null
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Throwable) {
-            if (error !is Exception) throw error
-            error
+            if (removalFailure != null) {
+                recoverOtherIntentsAfterCleanupFailure("refresh old-listener removal", removalFailure)
+            } else {
+                // addServiceListener may synchronously deliver cached
+                // callbacks. The fresh token staged them until its
+                // predecessor was fully fenced, so an older queued callback
+                // cannot overwrite a newer invalid resolution for an
+                // as-yet-untracked instance.
+                withContext(ioContext) { ops.activateListenerBlocking(fresh) }
+            }
+            bindingHealthy = bindingMatchesIntents()
         }
-        if (removalFailure != null) {
-            recoverOtherIntentsAfterCleanupFailure("refresh old-listener removal", removalFailure)
-        }
-        bindingHealthy = bindingMatchesIntents()
+        currentCoroutineContext().ensureActive()
         val live = handle ?: return@withLock
         afterRotation(live)
     }
@@ -648,6 +666,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
                 val token = ops.createListenerToken(fresh.handle)
                 listenerToken = token
                 withContext(ioContext) { ops.addListenerBlocking(fresh.handle, token) }
+                withContext(ioContext) { ops.activateListenerBlocking(token) }
                 ops.logDebug("rebindNow: addServiceListener completed on fresh JmDNS")
             }
         } catch (error: Throwable) {

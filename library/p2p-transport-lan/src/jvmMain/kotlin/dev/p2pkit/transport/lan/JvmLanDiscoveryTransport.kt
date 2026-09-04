@@ -10,6 +10,7 @@ import java.io.IOException
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
+import java.util.concurrent.atomic.AtomicLong
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
@@ -21,23 +22,72 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 
 /** One callback generation installed in JmDNS by the lifecycle coordinator. */
-internal class JvmListenerLease {
+internal class JvmListenerLease(
+    private val maxStagedInstances: Int = MAX_TRACKED_LAN_PEERS,
+    private val onStagingOverflow: () -> Unit = {}
+) {
+    internal val generation: Long = nextJvmListenerGeneration.incrementAndGet()
+
     private val gate = Any()
 
+    private enum class State { STAGED, ACTIVE, INACTIVE }
+
     @Volatile
-    private var active: Boolean = true
+    private var state: State = State.STAGED
+
+    private val stagedCallbacks = linkedMapOf<String, () -> Unit>()
+    private var stagingOverflowed: Boolean = false
+
+    init {
+        require(maxStagedInstances > 0) { "maxStagedInstances must be > 0" }
+    }
 
     lateinit var listener: ServiceListener
 
     /** Lock-free so a callback never nests two listener-generation locks. */
-    fun isActive(): Boolean = active
+    fun isActive(): Boolean = state != State.INACTIVE
 
-    fun deactivate() = synchronized(gate) { active = false }
-
-    fun publishIfActive(block: () -> Unit) = synchronized(gate) {
-        if (active) block()
+    fun activate() = synchronized(gate) {
+        if (state != State.STAGED) return@synchronized
+        val callbacks = stagedCallbacks.values.toList()
+        stagedCallbacks.clear()
+        val overflowed = stagingOverflowed
+        stagingOverflowed = false
+        state = State.ACTIVE
+        if (overflowed) onStagingOverflow()
+        callbacks.forEach { it() }
     }
+
+    fun deactivate() = synchronized(gate) {
+        state = State.INACTIVE
+        stagedCallbacks.clear()
+        stagingOverflowed = false
+    }
+
+    fun publishIfActive(instanceName: String, block: () -> Unit) = synchronized(gate) {
+        when (state) {
+            State.STAGED -> {
+                // One latest transition per instance is sufficient because
+                // the relay models current state, not callback history.
+                // On distinct-key overflow, activation first clears all old
+                // admissions so an evicted invalid/removal transition cannot
+                // leave stale state behind.
+                stagedCallbacks.remove(instanceName)
+                if (stagedCallbacks.size >= maxStagedInstances) {
+                    stagedCallbacks.remove(stagedCallbacks.keys.first())
+                    stagingOverflowed = true
+                }
+                stagedCallbacks[instanceName] = block
+            }
+            State.ACTIVE -> block()
+            State.INACTIVE -> Unit
+        }
+    }
+
+    internal fun stagedCountForTest(): Int = synchronized(gate) { stagedCallbacks.size }
 }
+
+private val nextJvmListenerGeneration = AtomicLong(0L)
 
 /**
  * Thread-safe ownership for service instances admitted after complete TXT
@@ -45,37 +95,124 @@ internal class JvmListenerLease {
  * peer identity must come from this registry rather than the removal record.
  */
 internal class JvmServiceAdmissions {
+    private sealed interface Entry
+
     private data class Admission(
         val peerId: PeerId,
-        val owner: JvmListenerLease
-    )
+        val owner: JvmListenerLease,
+        val blockedPredecessors: Set<JvmListenerLease>
+    ) : Entry
+
+    /**
+     * Prevents an overlapping older listener from restoring an admission
+     * after a newer listener has invalidated it during add-first rotation.
+     */
+    private data class Invalidated(
+        val owner: JvmListenerLease,
+        val blockedPredecessors: Set<JvmListenerLease>
+    ) : Entry
 
     private val gate = Any()
-    private val entries = mutableMapOf<String, Admission>()
+    private val entries = mutableMapOf<String, Entry>()
 
     /** Retain only a bounded number of unauthenticated DNS-SD identities. */
-    fun admit(instanceName: String, peerId: PeerId, owner: JvmListenerLease): Boolean = synchronized(gate) {
-        if (instanceName !in entries && entries.size >= MAX_TRACKED_LAN_PEERS) return@synchronized false
-        entries[instanceName] = Admission(peerId, owner)
-        true
+    fun admit(instanceName: String, peerId: PeerId, owner: JvmListenerLease): Boolean =
+        admitAndPublish(instanceName, peerId, owner) { true }
+
+    /** Keep registry ownership and relay publication one ordered transition. */
+    fun admitAndPublish(
+        instanceName: String,
+        peerId: PeerId,
+        owner: JvmListenerLease,
+        publish: () -> Boolean
+    ): Boolean = synchronized(gate) {
+        val existing = entries[instanceName]
+        val knownOwners = existing.knownOwners()
+        if (knownOwners.any { it !== owner && it.isActive() && it.generation > owner.generation }) {
+            return@synchronized false
+        }
+        val liveCount = entries.values.count { it is Admission }
+        if (existing !is Admission && liveCount >= MAX_TRACKED_LAN_PEERS) return@synchronized false
+        val admission = Admission(
+            peerId = peerId,
+            owner = owner,
+            blockedPredecessors = knownOwners
+                .filterTo(linkedSetOf()) {
+                    it !== owner && it.isActive() && it.generation < owner.generation
+                }
+        )
+        entries[instanceName] = admission
+        if (publish()) {
+            true
+        } else {
+            if (entries[instanceName] === admission) entries.remove(instanceName)
+            false
+        }
     }
 
-    fun remove(instanceName: String, callbackOwner: JvmListenerLease): PeerId? = synchronized(gate) {
-        val admission = entries[instanceName] ?: return null
-        // A current listener may consume a removal for an entry admitted by
-        // its deactivated predecessor. A stale listener can never withdraw
-        // ownership installed by a newer active listener.
-        if (admission.owner !== callbackOwner && admission.owner.isActive()) return null
-        if (entries.remove(instanceName) === admission) admission.peerId else null
+    fun remove(instanceName: String, callbackOwner: JvmListenerLease): PeerId? =
+        removeAndPublish(instanceName, callbackOwner) {}
+
+    /** Keep registry withdrawal and relay removal one ordered transition. */
+    fun removeAndPublish(
+        instanceName: String,
+        callbackOwner: JvmListenerLease,
+        publish: (PeerId) -> Unit
+    ): PeerId? = synchronized(gate) {
+        val admission = entries[instanceName] as? Admission ?: return null
+        // Add-first listener rotation briefly leaves both generations active.
+        // A newer callback may supersede the old owner immediately, while an
+        // older callback may never mutate state owned by the newer listener.
+        val knownOwners = admission.knownOwners()
+        if (knownOwners.any {
+                it !== callbackOwner && it.isActive() && it.generation > callbackOwner.generation
+            }
+        ) {
+            return null
+        }
+        val activePredecessors = knownOwners.filterTo(linkedSetOf()) {
+            it !== callbackOwner && it.isActive() && it.generation < callbackOwner.generation
+        }
+        if (activePredecessors.isNotEmpty()) {
+            entries[instanceName] = Invalidated(callbackOwner, activePredecessors)
+        } else {
+            entries.remove(instanceName)
+        }
+        publish(admission.peerId)
+        admission.peerId
+    }
+
+    /** Drop overlap-only tombstones once either involved listener retires. */
+    fun listenerDeactivated(owner: JvmListenerLease) = synchronized(gate) {
+        entries.replaceAll { _, entry ->
+            when (entry) {
+                is Admission -> entry.copy(
+                    blockedPredecessors = entry.blockedPredecessors.filterNotTo(linkedSetOf()) { it === owner }
+                )
+                is Invalidated -> entry.copy(
+                    blockedPredecessors = entry.blockedPredecessors.filterNotTo(linkedSetOf()) { it === owner }
+                )
+            }
+        }
+        entries.entries.removeAll { (_, entry) ->
+            entry is Invalidated &&
+                (entry.owner === owner || entry.blockedPredecessors.isEmpty())
+        }
     }
 
     fun drain(): Set<PeerId> = synchronized(gate) {
-        val peers = entries.values.mapTo(mutableSetOf()) { it.peerId }
+        val peers = entries.values.mapNotNullTo(mutableSetOf()) { (it as? Admission)?.peerId }
         entries.clear()
         return peers
     }
 
-    internal fun sizeForTest(): Int = synchronized(gate) { entries.size }
+    internal fun sizeForTest(): Int = synchronized(gate) { entries.values.count { it is Admission } }
+
+    private fun Entry?.knownOwners(): Set<JvmListenerLease> = when (this) {
+        null -> emptySet()
+        is Admission -> blockedPredecessors + owner
+        is Invalidated -> blockedPredecessors + owner
+    }
 }
 
 /** One process-local advertisement accepted by the internal test backend seam. */
@@ -236,7 +373,7 @@ internal class JvmLanDiscoveryTransport(
             return
         }
         val lease = synchronized(testLifecycleLock) {
-            if (testListenerLease != null) null else JvmListenerLease().also {
+            if (testListenerLease != null) null else createListenerLease().also {
                 testListenerLease = it
             }
         } ?: return
@@ -253,6 +390,7 @@ internal class JvmLanDiscoveryTransport(
                 },
                 removed = { instanceName -> processRemovedService(instanceName, lease) }
             )
+            lease.activate()
         } catch (error: Throwable) {
             lease.deactivate()
             synchronized(testLifecycleLock) {
@@ -313,10 +451,22 @@ internal class JvmLanDiscoveryTransport(
         )
 
     private fun buildListenerLease(handle: JmDNS): JvmListenerLease {
-        val lease = JvmListenerLease()
+        val lease = createListenerLease()
         lease.listener = buildServiceListener(handle, lease)
         return lease
     }
+
+    private fun createListenerLease(): JvmListenerLease = JvmListenerLease(
+        onStagingOverflow = {
+            JvmLanDiag.log(
+                "browse",
+                "listener activation replay exceeded $MAX_TRACKED_LAN_PEERS instances; " +
+                    "clearing prior discovery state before applying the bounded latest set"
+            )
+            serviceAdmissions.drain()
+            peerEventRelay.clear()
+        }
+    )
 
     private fun buildServiceListener(
         handle: JmDNS,
@@ -359,66 +509,72 @@ internal class JvmLanDiscoveryTransport(
                             "leaseActive=${lease.isActive()} hasInfo=${event.info != null}"
                     )
                 }
-                if (!lease.isActive()) return
-                val info = event.info ?: return
-                processResolvedService(event.name, info, info.inetAddresses.toList(), lease)
+                val info = event.info
+                processResolvedService(
+                    event.name,
+                    info,
+                    info?.inetAddresses?.toList().orEmpty(),
+                    lease
+                )
             }
     }
 
     private fun processRemovedService(instanceName: String, lease: JvmListenerLease) {
-        lease.publishIfActive {
-            val peerId = serviceAdmissions.remove(instanceName, lease)
-                ?: return@publishIfActive
-            JvmLanDiag.log(
-                "browse",
-                "serviceRemoved instance=$instanceName " +
-                    "pid=${peerId.value.take(8)} — withdrawing peer state"
-            )
-            peerEventRelay.remove(peerId)
+        lease.publishIfActive(instanceName) {
+            serviceAdmissions.removeAndPublish(instanceName, lease) { peerId ->
+                JvmLanDiag.log(
+                    "browse",
+                    "serviceRemoved instance=$instanceName " +
+                        "pid=${peerId.value.take(8)} — withdrawing peer state"
+                )
+                peerEventRelay.remove(peerId)
+            }
         }
     }
 
     private fun processResolvedService(
         instanceName: String,
-        info: ServiceInfo,
+        info: ServiceInfo?,
         candidates: List<InetAddress>,
         lease: JvmListenerLease
     ) {
-        if (!lease.isActive()) return
-        val record = validatedRecord(info) ?: return
-        if (instanceName != record.peerId.value || info.name != record.peerId.value) {
-            JvmLanDiag.log("browse", "serviceResolved: service/TXT identity mismatch — skipping")
-            return
-        }
-        // Issue #2: log every advertised address and the ordered, bounded
-        // candidates retained for fallback. A peer that only advertises
-        // non-routable addresses shows up here as "no routable host".
-        val hosts = selectDiscoveryHosts(
-            candidates = candidates,
-            localAddresses = localJvmLanInterfaceAddresses(),
-            allowTestLoopback = allowTestLoopbackCandidates
-        )
-        if (hosts.isEmpty()) {
-            JvmLanDiag.log(
-                "browse",
-                "serviceResolved pid=${record.peerId.value.take(8)} name=${record.deviceName} " +
-                    "candidates=[${candidates.joinToString(",") { it.hostAddress }}] " +
-                    "— NO routable host, skipping (will re-fire)"
-            )
-            return
-        }
-        val port = info.port
-        if (port !in 1..65_535) return
-        val internalPeer = record.toInternalPeer(lanTransportHints(hosts, port))
-        lease.publishIfActive {
-            if (!serviceAdmissions.admit(instanceName, record.peerId, lease)) {
+        lease.publishIfActive(instanceName) {
+            val resolvedInfo = info
+            if (resolvedInfo == null) {
+                withdrawInvalidResolution(instanceName, lease, "missing service info")
                 return@publishIfActive
             }
-            if (!peerEventRelay.upsert(internalPeer)) {
-                // This admission was new (existing peers are always accepted
-                // by the relay), so retain no TXT-less removal ownership for
-                // a peer that was not published.
-                serviceAdmissions.remove(instanceName, lease)
+            val record = validatedRecord(resolvedInfo)
+            if (record == null) {
+                withdrawInvalidResolution(instanceName, lease, "invalid TXT metadata")
+                return@publishIfActive
+            }
+            if (instanceName != record.peerId.value || resolvedInfo.name != record.peerId.value) {
+                withdrawInvalidResolution(instanceName, lease, "service/TXT identity mismatch")
+                return@publishIfActive
+            }
+            // Issue #2: log every advertised address and the ordered, bounded
+            // candidates retained for fallback. A peer that only advertises
+            // non-routable addresses shows up here as "no routable host".
+            val hosts = selectDiscoveryHosts(
+                candidates = candidates,
+                localAddresses = localJvmLanInterfaceAddresses(),
+                allowTestLoopback = allowTestLoopbackCandidates
+            )
+            if (hosts.isEmpty()) {
+                withdrawInvalidResolution(instanceName, lease, "no routable host")
+                return@publishIfActive
+            }
+            val port = resolvedInfo.port
+            if (port !in 1..65_535) {
+                withdrawInvalidResolution(instanceName, lease, "invalid port")
+                return@publishIfActive
+            }
+            val internalPeer = record.toInternalPeer(lanTransportHints(hosts, port))
+            if (!serviceAdmissions.admitAndPublish(instanceName, record.peerId, lease) {
+                    peerEventRelay.upsert(internalPeer)
+                }
+            ) {
                 return@publishIfActive
             }
             JvmLanDiag.log(
@@ -428,6 +584,22 @@ internal class JvmLanDiscoveryTransport(
                     "candidates=[${candidates.joinToString(",") { it.hostAddress }}] " +
                     "ordered=${hosts.joinToString(",") { "$it:$port" }} — publishing peer state"
             )
+        }
+    }
+
+    /** Called only while [lease]'s publication gate is held. */
+    private fun withdrawInvalidResolution(
+        instanceName: String,
+        lease: JvmListenerLease,
+        reason: String
+    ) {
+        serviceAdmissions.removeAndPublish(instanceName, lease) { peerId ->
+            JvmLanDiag.log(
+                "browse",
+                "serviceResolved instance=${sanitizeLanDiagnostic(instanceName)} became invalid " +
+                    "($reason); withdrawing pid=${peerId.value.take(8)}"
+            )
+            peerEventRelay.remove(peerId)
         }
     }
 
@@ -533,8 +705,14 @@ internal class JvmLanDiscoveryTransport(
                 )
             }
 
+            override fun activateListenerBlocking(token: Any) {
+                (token as JvmListenerLease).activate()
+            }
+
             override fun deactivateListenerToken(token: Any) {
-                (token as JvmListenerLease).deactivate()
+                val lease = token as JvmListenerLease
+                lease.deactivate()
+                serviceAdmissions.listenerDeactivated(lease)
             }
 
             override fun removeListenerBlocking(handle: JmDNS, token: Any) {
