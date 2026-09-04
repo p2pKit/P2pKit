@@ -60,10 +60,15 @@ public object AndroidLanDiag {
 
     /**
      * Retains the bounded replay window for a late in-app collector. Samples
-     * opt in; production defaults to false and clears replay after each line.
+     * opt in; production defaults to false. Setting this to false immediately
+     * clears replay without affecting delivery to active collectors.
      */
     @Volatile
     public var retainHistory: Boolean = false
+        set(value) {
+            field = value
+            if (!value) _events.resetReplayCache()
+        }
 
     /** Per-frame line via logcat; no-op unless [enabled] and [traceFrames]. */
     public fun frame(tag: String, message: String) {

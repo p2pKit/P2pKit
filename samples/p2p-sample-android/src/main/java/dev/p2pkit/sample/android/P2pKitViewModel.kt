@@ -267,6 +267,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     private var foregroundRestoreJob: Job? = null
     private val connectionIds: MutableMap<String, String> = mutableMapOf()
     private var frameTraceLease: FrameTraceLease? = null
+    private var lanDiagnosticsLease: AndroidLanDiagnosticsLease? = null
 
     /**
      * AUDIT-2026-06: A-G8-samples-android-13 — all three per-session
@@ -470,18 +471,17 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // to logcat so they sit alongside the transport's bounded P2pKitLAN
         // lines. Library lifecycle diagnostics are default-off; this official
         // diagnostic harness opts in explicitly.
-        AndroidLanDiag.enabled = true
-        AndroidLanDiag.retainHistory = true
-        frameTraceLease?.release()
-        frameTraceLease = FrameTrace.installSink(enabled = true) {
-            Log.d("P2pKitFrame", it)
-            StructuredFrameTrace.record(
-                recorder = diagnosticRecorder,
-                line = it,
-                correlationForTransfer = diagnostics::correlationForTransfer
-            )
-        }
         val newKit = try {
+            releaseDiagnosticInstrumentation()
+            lanDiagnosticsLease = AndroidLanDiagnosticsLease.acquire()
+            frameTraceLease = FrameTrace.installSink(enabled = true) {
+                Log.d("P2pKitFrame", it)
+                StructuredFrameTrace.record(
+                    recorder = diagnosticRecorder,
+                    line = it,
+                    correlationForTransfer = diagnostics::correlationForTransfer
+                )
+            }
             P2pKit.create {
                 appId = AppId(APP_ID)
                 this.deviceName = this@P2pKitViewModel.deviceName
@@ -535,8 +535,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
         } catch (t: Throwable) {
-            frameTraceLease?.release()
-            frameTraceLease = null
+            releaseDiagnosticInstrumentation()
             _isStarting.value = false
             Log.e(LOG_TAG, "kit create failed", t)
             appendSystemMessage("start failed: ${t.message ?: t::class.simpleName}")
@@ -653,22 +652,24 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 _discovering.value = false
                 Log.e(LOG_TAG, "kit startup failed", t)
                 appendSystemMessage("start failed: ${t.message ?: t::class.simpleName}")
-                runCatchingNonCancel { newKit.stop() }
-                    .onSuccess {
-                        if (kit === newKit) kit = null
-                        _cleanupPending.value = false
-                        frameTraceLease?.release()
-                        frameTraceLease = null
-                        diagnostics.setLocalPeerId(null)
-                    }
-                    .onFailure { cleanupError ->
-                        _cleanupPending.value = true
-                        Log.e(LOG_TAG, "startup cleanup failed; kit ownership retained", cleanupError)
-                        appendSystemMessage(
-                            "startup cleanup failed; tap Retry cleanup: " +
-                                (cleanupError.message ?: cleanupError::class.simpleName)
-                        )
-                    }
+                try {
+                    runCatchingNonCancel { newKit.stop() }
+                        .onSuccess {
+                            if (kit === newKit) kit = null
+                            _cleanupPending.value = false
+                            diagnostics.setLocalPeerId(null)
+                        }
+                        .onFailure { cleanupError ->
+                            _cleanupPending.value = true
+                            Log.e(LOG_TAG, "startup cleanup failed; kit ownership retained", cleanupError)
+                            appendSystemMessage(
+                                "startup cleanup failed; tap Retry cleanup: " +
+                                    (cleanupError.message ?: cleanupError::class.simpleName)
+                            )
+                        }
+                } finally {
+                    releaseDiagnosticInstrumentation()
+                }
                 runScope = null
                 _kitState.value = P2pState.Stopped
                 cancel()
@@ -1687,11 +1688,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     if (kit === toStop) kit = null
                     _cleanupPending.value = false
                     connectionIds.clear()
-                    frameTraceLease?.release()
-                    frameTraceLease = null
                     diagnostics.setLocalPeerId(null)
                 }
             } finally {
+                releaseDiagnosticInstrumentation()
                 _isStopping.value = false
             }
         }
@@ -1699,8 +1699,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         retireForegroundRestore()
-        frameTraceLease?.release()
-        frameTraceLease = null
+        releaseDiagnosticInstrumentation()
         diagnostics.shutdown()
         val offersToReject = pendingFileOffers.toList()
         pendingFileOffers.clear()
@@ -1727,6 +1726,18 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         finalCleanup.invokeOnCompletion { cleanupScope.cancel() }
+    }
+
+    private fun releaseDiagnosticInstrumentation() {
+        val currentFrameTraceLease = frameTraceLease
+        frameTraceLease = null
+        val currentLanDiagnosticsLease = lanDiagnosticsLease
+        lanDiagnosticsLease = null
+        try {
+            currentFrameTraceLease?.release()
+        } finally {
+            currentLanDiagnosticsLease?.release()
+        }
     }
 
     fun notifyForegrounded() {
