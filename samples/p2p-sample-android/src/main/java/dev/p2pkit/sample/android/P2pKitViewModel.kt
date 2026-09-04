@@ -1127,7 +1127,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val opened = withContext(Dispatchers.IO) {
             runCatchingNonCancel {
                 val baseDir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
-                val saveDir = File(baseDir, "p2pkit-incoming/${sanitize(pending.peerName)}")
+                val saveDir = File(
+                    baseDir,
+                    "p2pkit-incoming/${sanitizeIncomingPathComponent(pending.peerName)}",
+                )
                     .also { it.mkdirs() }
                 cleanupStaleTransferPartsOnce(saveDir)
                 val allocatableBytes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1141,7 +1144,6 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     error("insufficient free space")
                 }
                 val saveFile = uniqueDestination(saveDir, pending.name)
-                    ?: error("destination namespace exhausted")
                 saveFile
             }
         }
@@ -1479,32 +1481,6 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val row = fileTransfers.firstOrNull { it.id == id } ?: return
         val scope = runScope ?: return
         scope.launch { runCatchingNonCancel { row.transfer.cancel("user cancelled") } }
-    }
-
-    private fun sanitize(raw: String): String {
-        val cleaned = raw.filterNot { it.isISOControl() }
-            .replace(Regex("""[\\/:*?"<>|]"""), "_")
-            .trim()
-        return cleaned.takeUnless { it.isEmpty() || it == "." || it == ".." } ?: "untitled"
-    }
-
-    /**
-     * AUDIT-2026-06: A-G8-samples-android-04 — pick a destination path that
-     * does not collide with an existing file. Uses [File.createNewFile] so
-     * the claim is atomic even when two offers race; the caller's
-     * transactional destination then replaces the claimed file only after a
-     * verified durable commit, or removes it on abort. Runs on Dispatchers.IO.
-     */
-    private fun uniqueDestination(dir: File, rawName: String): File? {
-        val base = sanitize(rawName)
-        val dot = base.lastIndexOf('.')
-        val stem = if (dot > 0) base.substring(0, dot) else base
-        val ext = if (dot > 0) base.substring(dot) else ""
-        for (n in 0..10_000) {
-            val candidate = if (n == 0) File(dir, base) else File(dir, "$stem ($n)$ext")
-            if (runCatching { candidate.createNewFile() }.getOrDefault(false)) return candidate
-        }
-        return null
     }
 
     fun closeSession(peerId: String) {
