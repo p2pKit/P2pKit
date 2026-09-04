@@ -1,4 +1,5 @@
 import Foundation
+import P2pKitShared
 import XCTest
 @testable import P2pKitSample
 
@@ -404,7 +405,7 @@ final class TestDiagnosticsTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
 
         var rejectFirstTargetRemoval = true
-        let destination = try AtomicFileTransferDestination(target: target) { url in
+        let destination = try AtomicFileTransferDestination(target: target, removeItem: { url in
             if url == target && rejectFirstTargetRemoval {
                 rejectFirstTargetRemoval = false
                 throw NSError(
@@ -414,7 +415,7 @@ final class TestDiagnosticsTests: XCTestCase {
                 )
             }
             try FileManager.default.removeItem(at: url)
-        }
+        })
         let firstAbort = await withCheckedContinuation { continuation in
             destination.abort(cause: nil) { continuation.resume(returning: $0) }
         }
@@ -431,6 +432,116 @@ final class TestDiagnosticsTests: XCTestCase {
         }
         XCTAssertNil(secondAbort)
         XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
+    }
+
+    func testAtomicDestinationPostPublicationFailurePreservesTarget() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "p2pkit-destination-published-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let target = root.appendingPathComponent("reserved")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        XCTAssertTrue(FileManager.default.createFile(atPath: target.path, contents: Data()))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let destination = try AtomicFileTransferDestination(
+            target: target,
+            synchronizeDirectory: { _ in
+                throw NSError(
+                    domain: "dev.p2pkit.sample.tests",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "injected directory sync failure"]
+                )
+            }
+        )
+        let payload = Data("published payload".utf8)
+        writePayload(payload, to: destination)
+        let commitError = await withCheckedContinuation { continuation in
+            destination.commit { continuation.resume(returning: $0) }
+        }
+        XCTAssertNotNil(commitError)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
+        XCTAssertEqual(try Data(contentsOf: target), payload)
+        XCTAssertFalse(destination.temporaryArtifactExists)
+
+        let abortError = await withCheckedContinuation { continuation in
+            destination.abort(cause: nil) { continuation.resume(returning: $0) }
+        }
+        XCTAssertNil(abortError)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
+        XCTAssertEqual(try Data(contentsOf: target), payload)
+    }
+
+    func testAtomicDestinationCancellationAfterPublicationPreservesTarget() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "p2pkit-destination-cancelled-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let target = root.appendingPathComponent("reserved")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        XCTAssertTrue(FileManager.default.createFile(atPath: target.path, contents: Data()))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let destination = try AtomicFileTransferDestination(
+            target: target,
+            synchronizeDirectory: { _ in throw CancellationError() }
+        )
+        let payload = Data("cancelled after publication".utf8)
+        writePayload(payload, to: destination)
+        let commitError = await withCheckedContinuation { continuation in
+            destination.commit { continuation.resume(returning: $0) }
+        }
+        XCTAssertTrue(commitError is CancellationError)
+
+        let abortError = await withCheckedContinuation { continuation in
+            destination.abort(cause: nil) { continuation.resume(returning: $0) }
+        }
+        XCTAssertNil(abortError)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
+        XCTAssertEqual(try Data(contentsOf: target), payload)
+        XCTAssertFalse(destination.temporaryArtifactExists)
+    }
+
+    func testAtomicDestinationRetriesOnlyDurabilityAfterPublication() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "p2pkit-destination-commit-retry-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let target = root.appendingPathComponent("reserved")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        XCTAssertTrue(FileManager.default.createFile(atPath: target.path, contents: Data()))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var syncAttempts = 0
+        let destination = try AtomicFileTransferDestination(
+            target: target,
+            synchronizeDirectory: { _ in
+                syncAttempts += 1
+                if syncAttempts == 1 {
+                    throw NSError(
+                        domain: "dev.p2pkit.sample.tests",
+                        code: 3,
+                        userInfo: [NSLocalizedDescriptionKey: "injected directory sync failure"]
+                    )
+                }
+            }
+        )
+        let payload = Data("retry preserves publication".utf8)
+        writePayload(payload, to: destination)
+
+        let firstCommit = await withCheckedContinuation { continuation in
+            destination.commit { continuation.resume(returning: $0) }
+        }
+        XCTAssertNotNil(firstCommit)
+        let secondCommit = await withCheckedContinuation { continuation in
+            destination.commit { continuation.resume(returning: $0) }
+        }
+
+        XCTAssertNil(secondCommit)
+        XCTAssertEqual(syncAttempts, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
+        XCTAssertEqual(try Data(contentsOf: target), payload)
+        XCTAssertFalse(destination.temporaryArtifactExists)
     }
 
     func testUniqueDestinationPreservesExistingFileAndUsesSuffix() throws {
@@ -492,6 +603,16 @@ final class TestDiagnosticsTests: XCTestCase {
             claimUniqueDestination(in: missing, rawName: "photo.png", fileManager: .default)
         )
     }
+}
+
+private func writePayload(_ payload: Data, to destination: AtomicFileTransferDestination) {
+    let bytes = KotlinByteArray(size: Int32(payload.count))
+    for index in payload.indices {
+        bytes.set(index: Int32(index), value: Int8(bitPattern: payload[index]))
+    }
+    let buffer = Kotlinx_io_coreBuffer()
+    buffer.write(source: bytes, startIndex: 0, endIndex: bytes.size)
+    destination.openSink().write(source: buffer, byteCount: Int64(payload.count))
 }
 
 private final class Fixture {

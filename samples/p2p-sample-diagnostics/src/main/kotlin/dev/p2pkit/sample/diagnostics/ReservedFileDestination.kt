@@ -35,9 +35,10 @@ public fun cleanupStaleTransferPartsOnce(directory: File) {
 
 /**
  * Owns a destination placeholder atomically claimed by [File.createNewFile].
- * Abort remains retryable until both the SDK partial and the sample-owned
- * reservation are gone; a cleanup error is never converted into false
- * terminal success.
+ * Before commit starts, abort remains retryable until both the SDK partial and
+ * the sample-owned reservation are gone. Once commit starts, the reservation
+ * may already have become published data, so abort permanently relinquishes
+ * authority to delete the target and cleans only delegate-owned staging state.
  */
 public fun reservedFileDestination(target: File): FileTransferDestination =
     RetainedReservedFileDestination(target, durableFileDestination(target))
@@ -63,7 +64,13 @@ private class RetainedReservedFileDestination(
     override suspend fun commit() {
         terminalLock.withLock {
             if (state == State.COMMITTED) return
-            check(state == State.ACTIVE) { "Reserved destination is already aborted" }
+            check(state == State.ACTIVE || state == State.COMMITTING) {
+                "Reserved destination is already aborted"
+            }
+            // The delegate may atomically replace the reservation and then
+            // fail its durability barrier. From this point onward the target
+            // may contain received data and must never be deleted by abort.
+            state = State.COMMITTING
             delegate.commit()
             state = State.COMMITTED
         }
@@ -72,15 +79,22 @@ private class RetainedReservedFileDestination(
     override suspend fun abort(cause: P2pError.FileTransferFailed?) {
         terminalLock.withLock {
             if (state == State.COMMITTED || state == State.ABORTED) return
-            check(state == State.ACTIVE || state == State.ABORTING)
-            state = State.ABORTING
+            val removeReservation = when (state) {
+                State.ACTIVE,
+                State.ABORTING_RESERVATION -> true
+                State.COMMITTING,
+                State.ABORTING_AFTER_COMMIT -> false
+                State.COMMITTED,
+                State.ABORTED -> error("terminal destination state changed while locked")
+            }
+            state = if (removeReservation) State.ABORTING_RESERVATION else State.ABORTING_AFTER_COMMIT
             var failure: Throwable? = null
             try {
                 delegate.abort(cause)
             } catch (error: Throwable) {
                 failure = error
             }
-            if (target.exists() && !target.delete()) {
+            if (removeReservation && target.exists() && !target.delete()) {
                 val deletion = IOException("Could not remove aborted destination ${target.absolutePath}")
                 if (failure == null) failure = deletion else failure.addSuppressed(deletion)
             }
@@ -94,5 +108,12 @@ private class RetainedReservedFileDestination(
         }
     }
 
-    private enum class State { ACTIVE, ABORTING, COMMITTED, ABORTED }
+    private enum class State {
+        ACTIVE,
+        COMMITTING,
+        ABORTING_RESERVATION,
+        ABORTING_AFTER_COMMIT,
+        COMMITTED,
+        ABORTED
+    }
 }

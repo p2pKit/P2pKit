@@ -2229,12 +2229,21 @@ final class FileHandleRawSink: NSObject, Kotlinx_io_coreRawSink {
 /// created by `claimUniqueDestination` is a namespace reservation and is
 /// replaced only after verification succeeds.
 final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
-    private enum Phase { case active, committing, committed, aborting, aborted }
+    private enum Phase {
+        case active
+        case committing
+        case published
+        case committed
+        case abortingReservation
+        case abortingAfterCommit
+        case aborted
+    }
 
     private let target: URL
     private let temporary: URL
     private let sink: FileHandleRawSink
     private let removeItem: (URL) throws -> Void
+    private let synchronizeDirectory: (URL) throws -> Void
     private let stateLock = NSLock()
     private var phase: Phase = .active
     private var opened = false
@@ -2245,12 +2254,14 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
 
     init(
         target: URL,
+        synchronizeDirectory: @escaping (URL) throws -> Void = fsyncDirectory,
         removeItem: @escaping (URL) throws -> Void = { url in
             try FileManager.default.removeItem(at: url)
         }
     ) throws {
         self.target = target
         self.removeItem = removeItem
+        self.synchronizeDirectory = synchronizeDirectory
         let directory = target.deletingLastPathComponent()
         var claimed: URL?
         for attempt in 0...100 {
@@ -2294,22 +2305,27 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
             completionHandler(nil)
             return
         }
-        guard phase == .active else {
+        guard phase == .active || phase == .committing || phase == .published else {
             stateLock.unlock()
             completionHandler(destinationError("destination is not commit-ready"))
             return
         }
-        phase = .committing
 
         do {
-            try sink.synchronizeAndClose()
-            _ = try FileManager.default.replaceItemAt(target, withItemAt: temporary)
-            try fsyncDirectory(target.deletingLastPathComponent())
+            if phase != .published {
+                phase = .committing
+                try sink.synchronizeAndClose()
+                _ = try FileManager.default.replaceItemAt(target, withItemAt: temporary)
+                phase = .published
+            }
+            try synchronizeDirectory(target.deletingLastPathComponent())
             phase = .committed
             stateLock.unlock()
             completionHandler(nil)
         } catch {
-            phase = .active
+            // Retain committing/published state so abort can never delete a
+            // possibly published target. A known-published retry performs only
+            // the remaining directory durability barrier.
             stateLock.unlock()
             completionHandler(error)
         }
@@ -2322,21 +2338,33 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
             completionHandler(nil)
             return
         }
-        guard phase == .active || phase == .aborting else {
+        let removeReservation: Bool
+        switch phase {
+        case .active, .abortingReservation:
+            removeReservation = true
+        case .committing, .published, .abortingAfterCommit:
+            removeReservation = false
+        case .committed, .aborted:
             stateLock.unlock()
             completionHandler(destinationError("destination is not abort-ready"))
             return
         }
-        phase = .aborting
+        phase = removeReservation ? .abortingReservation : .abortingAfterCommit
 
         sink.close()
         var cleanupError: Error?
-        for url in [temporary, target] where FileManager.default.fileExists(atPath: url.path) {
+        var cleanupTargets = [temporary]
+        if removeReservation { cleanupTargets.append(target) }
+        for url in cleanupTargets where FileManager.default.fileExists(atPath: url.path) {
             do { try removeItem(url) } catch { cleanupError = error }
         }
         // Cleanup failure remains abort-retryable, but commit/open can never
         // resume after abort begins.
-        phase = cleanupError == nil ? .aborted : .aborting
+        if cleanupError == nil {
+            phase = .aborted
+        } else {
+            phase = removeReservation ? .abortingReservation : .abortingAfterCommit
+        }
         stateLock.unlock()
         completionHandler(cleanupError)
     }

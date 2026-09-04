@@ -1323,7 +1323,6 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
     } catch (error: Throwable) {
         val cleanup = withContext(NonCancellable) {
             val result = runCatching { destination.abort(null) }
-            runCatching { saveFile.delete() }
             runCatching { offer.reject("accept failed: ${error.message}") }
             result
         }
@@ -1410,20 +1409,6 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
                     eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
                     state = "promoted",
                     outcome = DiagnosticOutcome.SUCCESS
-                )
-            } else {
-                val cleanup = runCatching {
-                    if (saveFile.exists() && !saveFile.delete()) {
-                        error("destination reservation cleanup failed")
-                    }
-                }
-                recordTemporaryFileEvent(
-                    peerId = offer.peer.id.value,
-                    transferId = transfer.id,
-                    eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
-                    state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
-                    outcome = if (cleanup.isSuccess) DiagnosticOutcome.SUCCESS else DiagnosticOutcome.FAILURE,
-                    error = cleanup.exceptionOrNull()
                 )
             }
         }

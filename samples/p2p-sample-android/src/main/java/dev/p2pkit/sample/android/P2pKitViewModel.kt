@@ -1188,9 +1188,6 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             val cleanup = withContext(NonCancellable) {
                 val result = runCatching { destination.abort(null) }
                 runCatching { pending.offer.reject("accept failed on receiver") }
-                withContext(Dispatchers.IO) {
-                    runCatching { saveFile.delete() }
-                }
                 result
             }
             recordTemporaryFileEvent(
@@ -1284,8 +1281,9 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     /**
      * Watches one transfer until terminal state, cancels the byte collector,
-     * and closes/deletes an incoming destination from a non-cancellable owner.
-     * A cancelled run scope therefore cannot strand a writer or partial file.
+     * and reports the SDK-owned destination's terminal outcome. Destination
+     * cleanup stays exclusively with the transactional destination: deleting
+     * its target here could remove bytes published before a durability error.
      */
     private fun watchTransfer(
         transfer: P2pFileTransfer,
@@ -1342,24 +1340,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             } finally {
                 withContext(NonCancellable) {
                     bytesJob.cancelAndJoin()
-                    if (!completed && destinationPath != null) {
-                        val cleanup = withContext(Dispatchers.IO) {
-                            runCatching {
-                                val destination = File(destinationPath)
-                                if (destination.exists() && !destination.delete()) {
-                                    error("destination reservation cleanup failed")
-                                }
-                            }
-                        }
-                        recordTemporaryFileEvent(
-                            peerId = transfer.peer.id.value,
-                            transferId = transfer.id,
-                            eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
-                            state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
-                            outcome = if (cleanup.isSuccess) DiagnosticOutcome.SUCCESS else DiagnosticOutcome.FAILURE,
-                            error = cleanup.exceptionOrNull()
-                        )
-                    } else if (completed && destinationPath != null) {
+                    if (completed && destinationPath != null) {
                         recordTemporaryFileEvent(
                             peerId = transfer.peer.id.value,
                             transferId = transfer.id,

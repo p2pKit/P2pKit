@@ -1022,7 +1022,6 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
         } catch (e: Throwable) {
             val cleanup = withContext(NonCancellable) {
                 val result = runCatching { destination.abort(null) }
-                runCatching { saveFile.delete() }
                 runCatching { pending.offer.reject("accept failed on receiver") }
                 result
             }
@@ -1101,24 +1100,10 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
         )
         appendSystemMessage("receiving file '${transfer.name}' from $peerName → $destinationPath")
         // The transactional destination is owned by the SDK and is committed
-        // or aborted even if this UI collector is cancelled.
+        // or aborted even if this UI collector is cancelled. Never delete its
+        // target here: a failed durability barrier can follow publication.
         watchTransfer(transfer, scope) { completed ->
-            if (!completed) {
-                val cleanup = runCatching {
-                    val destination = File(destinationPath)
-                    if (destination.exists() && !destination.delete()) {
-                        error("destination reservation cleanup failed")
-                    }
-                }
-                recordTemporaryFileEvent(
-                    peerId = transfer.peer.id.value,
-                    transferId = transfer.id,
-                    eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
-                    state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
-                    outcome = if (cleanup.isSuccess) DiagnosticOutcome.SUCCESS else DiagnosticOutcome.FAILURE,
-                    error = cleanup.exceptionOrNull()
-                )
-            } else {
+            if (completed) {
                 recordTemporaryFileEvent(
                     peerId = transfer.peer.id.value,
                     transferId = transfer.id,
