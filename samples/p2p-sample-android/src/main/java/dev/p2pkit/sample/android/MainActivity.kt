@@ -57,6 +57,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -72,6 +73,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pSession
@@ -1176,14 +1179,31 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
     val missing by vm.missingPermissions.collectAsState()
     val busy by vm.provisioningBusy.collectAsState()
 
-    // AUDIT-2026-06: C-G8-samples-android-05 — rememberSaveable so the SSID /
-    // passphrase the tester just copied from the host device survive rotation.
+    // The SSID is ordinary form state and may survive recreation. The
+    // passphrase is intentionally held only by this composition and is
+    // cleared when the card leaves the UI or the join succeeds.
     var ssidInput by rememberSaveable { mutableStateOf("") }
-    var passInput by rememberSaveable { mutableStateOf("") }
+    val credentialInput = remember { JoinCredentialInputState() }
     // AUDIT-2026-06: A-G8-samples-android-11 — WPA2/WPA3 selectable so
     // WPA3-SAE-only hotspots can be joined.
     var useWpa3 by rememberSaveable { mutableStateOf(false) }
     val security = if (useWpa3) WifiSecurityType.WPA3 else WifiSecurityType.WPA2
+
+    DisposableEffect(credentialInput) {
+        onDispose { credentialInput.clear() }
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        credentialInput.onHostStopped()
+    }
+    LaunchedEffect(joinResult) {
+        if (joinResult is JoinNetworkResult.Joined) credentialInput.onJoinSucceeded()
+    }
+    LaunchedEffect(credentialInput.isRevealed) {
+        if (credentialInput.isRevealed) {
+            delay(PASSPHRASE_REVEAL_MILLIS)
+            credentialInput.conceal()
+        }
+    }
 
     // Pick the right runtime permission for the device's API level.
     val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -1194,11 +1214,12 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
+        // A permission dialog can stop the Activity, which clears the
+        // credential. Never resume with an empty passphrase because that
+        // would silently change a protected request into an open-network one.
+        credentialInput.onPermissionResult()
         vm.refreshMissingPermissions()
-        // AUDIT-2026-06: A-G8-samples-android-20 — resume the join after the
-        // grant (the host card already did this); previously the user had to
-        // tap the button a second time.
-        if (granted) vm.joinHotspot(ssidInput, passInput, security)
+        if (granted) vm.notifyJoinPermissionGranted()
         else vm.notifyPermissionDenied("hotspot join")
     }
 
@@ -1280,8 +1301,7 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
                     JoinInputs(
                         ssid = ssidInput,
                         onSsidChange = { ssidInput = it },
-                        pass = passInput,
-                        onPassChange = { passInput = it },
+                        credentialInput = credentialInput,
                         useWpa3 = useWpa3,
                         onUseWpa3Change = { useWpa3 = it }
                     )
@@ -1289,7 +1309,7 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
                     Button(
                         onClick = {
                             if (missing.isNotEmpty()) permLauncher.launch(perm)
-                            else vm.joinHotspot(ssidInput, passInput, security)
+                            else vm.joinHotspot(ssidInput, credentialInput.passphrase, security)
                         },
                         enabled = ssidInput.trim().isNotEmpty() && !busy,
                         modifier = Modifier.fillMaxWidth()
@@ -1337,8 +1357,7 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
                     JoinInputs(
                         ssid = ssidInput,
                         onSsidChange = { ssidInput = it },
-                        pass = passInput,
-                        onPassChange = { passInput = it },
+                        credentialInput = credentialInput,
                         useWpa3 = useWpa3,
                         onUseWpa3Change = { useWpa3 = it }
                     )
@@ -1346,7 +1365,7 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
                     Button(
                         onClick = {
                             if (missing.isNotEmpty()) permLauncher.launch(perm)
-                            else vm.joinHotspot(ssidInput, passInput, security)
+                            else vm.joinHotspot(ssidInput, credentialInput.passphrase, security)
                         },
                         enabled = ssidInput.trim().isNotEmpty() && !busy,
                         modifier = Modifier.fillMaxWidth()
@@ -1370,8 +1389,7 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
 private fun JoinInputs(
     ssid: String,
     onSsidChange: (String) -> Unit,
-    pass: String,
-    onPassChange: (String) -> Unit,
+    credentialInput: JoinCredentialInputState,
     useWpa3: Boolean,
     onUseWpa3Change: (Boolean) -> Unit
 ) {
@@ -1384,15 +1402,25 @@ private fun JoinInputs(
     )
     Spacer(Modifier.height(Dimens.SmallGap))
     OutlinedTextField(
-        value = pass,
-        onValueChange = onPassChange,
+        value = credentialInput.passphrase,
+        onValueChange = credentialInput::updatePassphrase,
         label = { Text("Passphrase (blank = open network)") },
         singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        visualTransformation = joinPassphraseVisualTransformation(credentialInput.isRevealed),
+        trailingIcon = {
+            TextButton(
+                onClick = credentialInput::toggleReveal,
+                enabled = credentialInput.passphrase.isNotEmpty()
+            ) {
+                Text(if (credentialInput.isRevealed) "Hide" else "Show")
+            }
+        },
         modifier = Modifier.fillMaxWidth()
     )
     // AUDIT-2026-06: A-G8-samples-android-11 — security type selector (only
     // meaningful for protected networks).
-    if (pass.isNotEmpty()) {
+    if (credentialInput.passphrase.isNotEmpty()) {
         Spacer(Modifier.height(Dimens.SmallGap))
         Row(
             horizontalArrangement = Arrangement.spacedBy(Dimens.ItemGap),

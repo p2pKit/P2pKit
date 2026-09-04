@@ -1037,6 +1037,16 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
+    /**
+     * Permission dialogs can background the Activity, so hotspot credentials
+     * are discarded rather than retained for an automatic retry.
+     */
+    fun notifyJoinPermissionGranted() {
+        appendSystemMessage(
+            "hotspot join: permission granted. Re-enter the passphrase and tap Join hotspot."
+        )
+    }
+
     private fun wireIncomingFiles(session: P2pSession, scope: CoroutineScope): Job {
         return scope.launch {
             var previousIds: Set<String> = emptySet()
