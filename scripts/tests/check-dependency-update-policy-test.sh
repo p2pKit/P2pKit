@@ -321,7 +321,11 @@ mkdir -p "$review_fixture/mock-bin" "$review_fixture/mock-repository"
 cp "$marker_fixture/marker.pom" "$review_fixture/mock-repository/example.plugin.gradle.plugin-1.2.3.pom"
 cp "$marker_fixture/plugin.module" "$review_fixture/mock-repository/plugin-4.5.6.module"
 printf 'attested plugin bytes' >"$review_fixture/mock-repository/plugin-4.5.6.jar"
+printf 'signed library bytes' >"$review_fixture/mock-repository/signed-1.0.jar"
+printf 'issuer-key-id-only signature fixture' >"$review_fixture/mock-repository/signed-1.0.jar.asc"
+printf 'public key fixture' >"$review_fixture/mock-repository/signing-key.asc"
 review_jar_sha="$(shasum -a 256 "$review_fixture/mock-repository/plugin-4.5.6.jar" | awk '{print $1}')"
+signed_jar_sha="$(shasum -a 256 "$review_fixture/mock-repository/signed-1.0.jar" | awk '{print $1}')"
 "$PYTHON3" - "$review_fixture/mock-repository/plugin-4.5.6.module" "$module_sha" "$review_jar_sha" <<'PY'
 import sys
 path, old, new = sys.argv[1:]
@@ -343,6 +347,11 @@ sed -i.bak '/<\/components>/i\
       <component group="example.plugin" name="example.plugin.gradle.plugin" version="1.2.3">\
          <artifact name="example.plugin.gradle.plugin-1.2.3.pom">\
             <sha256 value="'"$review_marker_sha"'" origin="Fixture"/>\
+         </artifact>\
+      </component>\
+      <component group="example.signed" name="signed" version="1.0">\
+         <artifact name="signed-1.0.jar">\
+            <sha256 value="'"$signed_jar_sha"'" origin="Fixture"/>\
          </artifact>\
       </component>' "$review_fixture/gradle/verification-metadata.xml"
 printf '%s\n' 'example.implementation:plugin:4.5.6=classpath' \
@@ -371,7 +380,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-source="$MOCK_REPOSITORY/${url##*/}"
+if [[ "$url" == *keyserver* || "$url" == *keys.openpgp.org* ]]; then
+    source="$MOCK_REPOSITORY/signing-key.asc"
+else
+    source="$MOCK_REPOSITORY/${url##*/}"
+fi
 [[ -n "$output" && -f "$source" ]] || exit 22
 cp "$source" "$output"
 SCRIPT
@@ -396,7 +409,34 @@ cat <<JSON
 [{"verificationResult":{"verifiedTimestamps":[{"type":"Tlog"}],"statement":{"predicateType":"https://slsa.dev/provenance/v1","subject":[{"name":"plugin-4.5.6.jar","digest":{"sha256":"$MOCK_JAR_SHA"}}]},"signature":{"certificate":{"subjectAlternativeName":"https://github.com/example/upstream/.github/workflows/release.yml@refs/tags/v4.5.6","issuer":"https://token.actions.githubusercontent.com","githubWorkflowRepository":"example/upstream","githubWorkflowRef":"refs/tags/v4.5.6","githubWorkflowSHA":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sourceRepositoryDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sourceRepositoryRef":"refs/tags/v4.5.6","runnerEnvironment":"github-hosted"}}}}]
 JSON
 SCRIPT
-chmod +x "$review_fixture/mock-bin/curl" "$review_fixture/mock-bin/gh"
+cat >"$review_fixture/mock-bin/gpg" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+fingerprint="${MOCK_KEY_FINGERPRINT:-41CD49B4EF5876F9E9F691DABAC30622339994C4}"
+arguments=" $* "
+if [[ "$arguments" == *' --list-packets '* ]]; then
+    cat <<'PACKET'
+:signature packet: algo 1, keyid BAC30622339994C4
+ version 4, created 1785364858, md5len 0, sigclass 0x00
+ subpkt 16 len 8 (issuer key ID BAC30622339994C4)
+PACKET
+elif [[ "$arguments" == *' --show-keys '* ]]; then
+    printf 'pub:-:2048:1:BAC30622339994C4:0:0::-:::scESC::::::23::0:\n'
+    printf 'fpr:::::::::%s:\n' "$fingerprint"
+elif [[ "$arguments" == *' --list-keys '* ]]; then
+    exit 2
+elif [[ "$arguments" == *' --import '* ]]; then
+    echo 'gpg: key imported' >&2
+elif [[ "$arguments" == *' --verify '* ]]; then
+    printf '[GNUPG:] VALIDSIG %s 2026-07-29 1785364858 0 4 0 1 10 00 %s\n' \
+        "$fingerprint" "$fingerprint"
+else
+    echo "unexpected gpg invocation: $*" >&2
+    exit 2
+fi
+SCRIPT
+chmod +x "$review_fixture/mock-bin/curl" "$review_fixture/mock-bin/gh" \
+    "$review_fixture/mock-bin/gpg"
 (
     cd "$review_fixture"
     PATH="$review_fixture/mock-bin:$PATH" \
@@ -404,6 +444,12 @@ chmod +x "$review_fixture/mock-bin/curl" "$review_fixture/mock-bin/gh"
         MOCK_JAR_SHA="$review_jar_sha" \
         scripts/review-dependency-verification.sh "$review_base" >/dev/null
 )
+
+expect_failure "issuer key ID resolving to the wrong key" "could not retrieve one exact signing key" \
+    env PATH="$review_fixture/mock-bin:$PATH" \
+    MOCK_REPOSITORY="$review_fixture/mock-repository" MOCK_JAR_SHA="$review_jar_sha" \
+    MOCK_KEY_FINGERPRINT=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB \
+    "$review_fixture/scripts/review-dependency-verification.sh" "$review_base"
 
 bad_review_sha="$(printf 'b%.0s' {1..64})"
 sed -i.bak "s/$review_jar_sha/$bad_review_sha/" \

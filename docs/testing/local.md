@@ -56,8 +56,11 @@ scripts/prepare-dependency-update.sh origin/main
 The reviewer also compares an authoritative repository SHA-256 sidecar when
 one is published. Maven Central does not publish such a sidecar consistently,
 so the normal path requires both an exact match between downloaded bytes and
-the committed SHA-256 and a valid detached signature whose issuer fingerprint
-matches the independently retrieved public key. A narrowly pinned entry in
+the committed SHA-256 and a valid detached signature whose issuer identity
+matches the independently retrieved public key. If a v4 signature supplies
+only its 64-bit issuer key ID, the reviewer requires one exact matching
+primary key or subkey and reports the full fingerprint established by
+cryptographic verification. A narrowly pinned entry in
 `gradle/plugin-provenance-policy.txt` may instead authorize a canonical Gradle
 plugin JAR whose GitHub SLSA attestation matches the exact repository, release
 tag, workflow, and source commit. Unsigned plugin marker and module metadata is

@@ -97,6 +97,25 @@ parse_metadata() {
     ' "$source" | LC_ALL=C sort -u >"$destination"
 }
 
+matching_key_fingerprints() {
+    local listing="$1" reference_type="$2" reference="$3"
+    printf '%s\n' "$listing" | awk -F: -v type="$reference_type" -v expected="$reference" '
+        $1 == "pub" || $1 == "sub" {
+            key_id = toupper($5)
+            next
+        }
+        $1 == "fpr" {
+            fingerprint = toupper($10)
+            if ((type == "fingerprint" && fingerprint == expected) ||
+                (type == "keyid" && key_id == expected &&
+                    substr(fingerprint, length(fingerprint) - 15) == expected)) {
+                print fingerprint
+            }
+            key_id = ""
+        }
+    ' | LC_ALL=C sort -u
+}
+
 git -C "$ROOT" show "$BASE_REF:gradle/verification-metadata.xml" >"$work/base.xml"
 parse_metadata "$work/base.xml" "$work/base.entries"
 parse_metadata "$ROOT/gradle/verification-metadata.xml" "$work/current.entries"
@@ -218,23 +237,63 @@ while IFS='|' read -r group module version artifact expected_sha; do
         fail "no detached signature or approved provenance for $group:$module:$version:$artifact"
     fi
 
-    fingerprint="$(gpg --batch --list-packets "$work/artifact.asc" 2>/dev/null |
-        sed -n 's/.*issuer fpr v[0-9][[:space:]]\([0-9A-F]*\)).*/\1/p' | head -1)"
-    [[ "$fingerprint" =~ ^[0-9A-F]{40}$|^[0-9A-F]{64}$ ]] ||
-        fail "signature has no issuer fingerprint for $group:$module:$version:$artifact"
-    if ! GNUPGHOME="$gnupg" gpg --batch --list-keys "$fingerprint" >/dev/null 2>&1; then
+    packet_output="$(gpg --batch --list-packets "$work/artifact.asc" 2>/dev/null)" ||
+        fail "detached signature packet is malformed for $group:$module:$version:$artifact"
+    [[ "$(grep -c '^:signature packet:' <<<"$packet_output" || true)" -eq 1 ]] ||
+        fail "detached signature must contain exactly one signature packet for $group:$module:$version:$artifact"
+    issuer_fingerprints="$(sed -n \
+        's/.*issuer fpr v[0-9][[:space:]]\([0-9A-Fa-f]*\)).*/\1/p' \
+        <<<"$packet_output" | tr '[:lower:]' '[:upper:]' | LC_ALL=C sort -u)"
+    issuer_key_ids="$(sed -n \
+        -e 's/.*issuer key ID \([0-9A-Fa-f]*\)).*/\1/p' \
+        -e 's/^:signature packet:.* keyid \([0-9A-Fa-f]*\)$/\1/p' \
+        <<<"$packet_output" | tr '[:lower:]' '[:upper:]' | LC_ALL=C sort -u)"
+    fingerprint_count="$(grep -c . <<<"$issuer_fingerprints" || true)"
+    key_id_count="$(grep -c . <<<"$issuer_key_ids" || true)"
+    if [[ "$fingerprint_count" -eq 1 &&
+        "$issuer_fingerprints" =~ ^[0-9A-F]{40}$|^[0-9A-F]{64}$ ]]; then
+        reference_type="fingerprint"
+        issuer_reference="$issuer_fingerprints"
+        if [[ "$key_id_count" -gt 1 ]]; then
+            fail "signature contains conflicting issuer key IDs for $group:$module:$version:$artifact"
+        fi
+        if [[ "$key_id_count" -eq 1 &&
+            "$issuer_reference" != *"$issuer_key_ids" ]]; then
+            fail "signature issuer fingerprint and key ID disagree for $group:$module:$version:$artifact"
+        fi
+    elif [[ "$fingerprint_count" -eq 0 && "$key_id_count" -eq 1 &&
+        "$issuer_key_ids" =~ ^[0-9A-F]{16}$ ]]; then
+        reference_type="keyid"
+        issuer_reference="$issuer_key_ids"
+    else
+        fail "signature has no unambiguous issuer identity for $group:$module:$version:$artifact"
+    fi
+
+    existing_listing="$(GNUPGHOME="$gnupg" gpg --batch --with-colons \
+        --with-subkey-fingerprint --list-keys "$issuer_reference" 2>/dev/null || true)"
+    matching_fingerprints="$(matching_key_fingerprints \
+        "$existing_listing" "$reference_type" "$issuer_reference")"
+    if [[ "$(grep -c . <<<"$matching_fingerprints" || true)" -ne 1 ]]; then
         key_downloaded=false
-        for key_url in \
-            "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x$fingerprint" \
-            "https://keys.openpgp.org/vks/v1/by-fingerprint/$fingerprint"; do
+        key_urls=(
+            "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x$issuer_reference"
+        )
+        if [[ "$reference_type" == "fingerprint" ]]; then
+            key_urls+=("https://keys.openpgp.org/vks/v1/by-fingerprint/$issuer_reference")
+        else
+            key_urls+=("https://keys.openpgp.org/vks/v1/by-keyid/$issuer_reference")
+        fi
+        for key_url in "${key_urls[@]}"; do
             if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
                 --connect-timeout 20 --max-time 120 \
                 -o "$work/signing-key.asc" "$key_url"; then
                 continue
             fi
-            if ! gpg --batch --show-keys --with-colons "$work/signing-key.asc" 2>/dev/null |
-                sed -n 's/^fpr:::::::::\([^:]*\):/\1/p' |
-                grep -Fxq "$fingerprint"; then
+            key_listing="$(gpg --batch --show-keys --with-colons \
+                --with-subkey-fingerprint "$work/signing-key.asc" 2>/dev/null || true)"
+            matching_fingerprints="$(matching_key_fingerprints \
+                "$key_listing" "$reference_type" "$issuer_reference")"
+            if [[ "$(grep -c . <<<"$matching_fingerprints" || true)" -ne 1 ]]; then
                 continue
             fi
             if ! import_output="$(GNUPGHOME="$gnupg" gpg --batch --import \
@@ -245,12 +304,16 @@ while IFS='|' read -r group module version artifact expected_sha; do
             break
         done
         [[ "$key_downloaded" == true ]] ||
-            fail "could not retrieve the exact signing key $fingerprint over HTTPS"
+            fail "could not retrieve one exact signing key for $issuer_reference over HTTPS"
     fi
+    fingerprint="$matching_fingerprints"
     verification="$(GNUPGHOME="$gnupg" gpg --batch --status-fd 1 \
         --verify "$work/artifact.asc" "$work/artifact" 2>&1)" ||
         fail "invalid detached signature for $group:$module:$version:$artifact"
-    grep -Fq "[GNUPG:] VALIDSIG $fingerprint " <<<"$verification" ||
+    valid_fingerprints="$(sed -n 's/^\[GNUPG:\] VALIDSIG \([^ ]*\) .*/\1/p' \
+        <<<"$verification" | tr '[:lower:]' '[:upper:]' | LC_ALL=C sort -u)"
+    [[ "$(grep -c . <<<"$valid_fingerprints" || true)" -eq 1 &&
+        "$valid_fingerprints" == "$fingerprint" ]] ||
         fail "signature fingerprint mismatch for $group:$module:$version:$artifact"
 
     if [[ "$artifact" == "$module-$version.jar" ]]; then
