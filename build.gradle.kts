@@ -76,6 +76,14 @@ plugins {
     alias(libs.plugins.binary.compatibility.validator) apply false
 }
 
+// A lock refresh must configure the complete project model. Configuration on
+// demand can leave subproject check and Dokka tasks unregistered, producing a
+// successful but partial lock rewrite before the graph policy can detect the
+// omission. Reject that mode independently of how the refresh task is named.
+check(!gradle.startParameter.isWriteDependencyLocks || !gradle.startParameter.isConfigureOnDemand) {
+    "--write-locks requires --no-configure-on-demand"
+}
+
 abstract class NetworkIntegrationTestService : BuildService<BuildServiceParameters.None>
 
 val networkIntegrationTestService = gradle.sharedServices.registerIfAbsent(

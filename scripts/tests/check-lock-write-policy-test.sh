@@ -70,6 +70,13 @@ expect_policy_failure ordinary-write \
     '--write-locks may only be used with resolveAndLockAll' \
     help --write-locks --dry-run
 
+# Configuration on demand can omit unevaluated subproject tasks from a
+# dynamically derived refresh graph. Fail before graph execution instead of
+# accepting a partial lock rewrite.
+expect_policy_failure configure-on-demand-write \
+    '--write-locks requires --no-configure-on-demand' \
+    rALl --write-locks --dry-run --configure-on-demand
+
 # The one sanctioned graph remains selectable by any Gradle-supported name.
 if ! run_gradle "$WORK/authorized.log" rALl --write-locks --dry-run; then
     cat "$WORK/authorized.log" >&2

@@ -8,7 +8,8 @@ BASE_REF="${1:-origin/main}"
 
 cd "$ROOT"
 scripts/check-gradle-wrapper.sh
-./gradlew resolveAndLockAll --write-locks --write-verification-metadata sha256 --no-daemon --console=plain
+./gradlew resolveAndLockAll --write-locks --write-verification-metadata sha256 \
+    --no-configure-on-demand --no-daemon --console=plain
 scripts/check-dependency-verification.sh
 ./gradlew verifyBuildPluginSecurityFloors help --dependency-verification=strict --no-daemon --console=plain
 scripts/review-dependency-verification.sh "$BASE_REF"
