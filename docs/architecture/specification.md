@@ -13,6 +13,9 @@ record produced during the 0.7 remediation is preserved in
   provisioning integration.
 - `start()` initializes the instance. Advertising and discovery have separate
   observable feature states and may be controlled independently.
+- A failed feature start settles its bounded rollback once. Cancellation during
+  failure settlement cannot discard the original failure or its retained-cleanup
+  marker; the caller's cancellation carries that failure as suppressed evidence.
 - `stop()` is terminal for the kit and is idempotent. Host collectors and
   sessions should be cancelled/closed before final teardown.
 - Feature-stop cleanup is not infallible: the kit reports incomplete cleanup

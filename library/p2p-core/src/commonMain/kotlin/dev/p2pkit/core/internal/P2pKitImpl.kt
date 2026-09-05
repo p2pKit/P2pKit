@@ -637,9 +637,9 @@ internal class P2pKitImpl(
     ) {
         control.operationMutex.withLock {
             currentCoroutineContext().ensureActive()
-            val lifecycleGeneration = beginLifecycleOperation()
-            val start = lifecycleMutex.withLock {
-                if (!lifecycleIsActiveLocked(lifecycleGeneration)) throw lifecycleStoppedFailure()
+            val generation = beginLifecycleOperation()
+            val claim = lifecycleMutex.withLock {
+                if (!lifecycleIsActiveLocked(generation)) throw lifecycleStoppedFailure()
                 if (control.mutableState.value == FeatureState.Active) return@withLock null
                 val token = ++control.nextStartToken
                 control.activeStartToken = token
@@ -648,246 +648,205 @@ internal class P2pKitImpl(
                 FeatureStart(token, control.cleanupRequired)
             } ?: return
 
-            val attempted = mutableListOf<DiscoveryTransport>()
-            var cancellationSettledByFailureHandler = false
-            try {
-                if (start.cleanupRequired) {
-                    // If cancellation interrupts preparation, the outer
-                    // transaction handler retries every possibly retained
-                    // discovery resource before settling the public state.
-                    attempted += discoveryTransports
-                    val cleanupIssues = stopDiscoveryResources(
-                        "prepare $featureName retry",
-                        preserveCancellation = false,
-                        cleanup = stopTransport
-                    )
-                    if (cleanupIssues.isNotEmpty()) {
-                        val cleanupFailure = cleanupError("prepare $featureName retry", cleanupIssues)
-                        finishFeatureStart(
-                            control,
-                            start.token,
-                            FeatureState.Failed(cleanupFailure),
-                            cleanupRequired = true
-                        )
-                        throw cleanupFailure
-                    }
-                    lifecycleMutex.withLock {
-                        if (control.activeStartToken == start.token) control.cleanupRequired = false
-                    }
-                    attempted.clear()
-                }
+            FeatureStartTransaction(
+                control, claim, generation, featureName, unsupportedReason, startTransport, stopTransport
+            ).execute()
+        }
+    }
 
-                if (
-                    handleRequestedFeatureStop(
-                        control,
-                        start.token,
-                        featureName,
-                        emptyList(),
-                        stopTransport
-                    )
-                ) {
-                    return
-                }
+    /**
+     * Owns one feature-start claim and every resource it may have touched.
+     * Settlement returns an outcome; its error is thrown only outside the
+     * execution catch. Cancellation can therefore never re-enter rollback
+     * after a failure/stop path has already settled this transaction.
+     */
+    private inner class FeatureStartTransaction(
+        private val control: FeatureControl,
+        private val claim: FeatureStart,
+        private val generation: Long,
+        private val featureName: String,
+        private val unsupportedReason: String,
+        private val startTransport: suspend (DiscoveryTransport) -> Unit,
+        private val stopTransport: suspend (DiscoveryTransport) -> Unit
+    ) {
+        private val attempted = mutableListOf<DiscoveryTransport>()
 
-                // Static support is authoritative and does not depend on a
-                // momentary permission/radio state. Report it before querying
-                // runtime availability so an absent provider cannot be mistaken
-                // for a recoverable permission failure.
-                if (discoveryTransports.isEmpty()) {
-                    when (
-                        completeFeatureStart(
-                            control,
-                            start.token,
-                            FeatureState.Unsupported(unsupportedReason)
-                        )
-                    ) {
-                        FeatureCompletion.Applied -> return
-                        FeatureCompletion.StopRequested -> {
-                            handleRequestedFeatureStop(
-                                control,
-                                start.token,
-                                featureName,
-                                emptyList(),
-                                stopTransport
-                            )
-                            return
-                        }
-                        FeatureCompletion.LifecycleStopped -> throw lifecycleStoppedFailure()
-                        FeatureCompletion.Stale -> throw staleFeatureOperation(featureName)
-                    }
-                }
-
-                // Only genuinely runtime-requestable permissions participate.
-                // Install-time manifest declarations remain construction-time
-                // diagnostics and cannot be repaired by a runtime prompt.
-                val missing = try {
-                    permissions.missingPermissions().also {
-                        currentCoroutineContext().ensureActive()
-                    }
-                } catch (error: Throwable) {
-                    cancellationSettledByFailureHandler = error is CancellationException
-                    failFeatureStart(
-                        control,
-                        start.token,
-                        lifecycleGeneration,
-                        featureName,
-                        emptyList(),
-                        stopTransport,
-                        error
-                    )
-                }
-                if (
-                    handleRequestedFeatureStop(
-                        control,
-                        start.token,
-                        featureName,
-                        emptyList(),
-                        stopTransport
-                    )
-                ) {
-                    return
-                }
-                if (missing.isNotEmpty()) {
-                    when (
-                        completeFeatureStart(
-                            control,
-                            start.token,
-                            FeatureState.PermissionRequired(missing)
-                        )
-                    ) {
-                        FeatureCompletion.Applied -> throw P2pError.PermissionMissing(missing)
-                        FeatureCompletion.StopRequested -> {
-                            handleRequestedFeatureStop(
-                                control,
-                                start.token,
-                                featureName,
-                                emptyList(),
-                                stopTransport
-                            )
-                            return
-                        }
-                        FeatureCompletion.LifecycleStopped -> throw lifecycleStoppedFailure()
-                        FeatureCompletion.Stale -> throw staleFeatureOperation(featureName)
-                    }
-                }
-
-                try {
-                    ensureStarted(lifecycleGeneration)
-                    currentCoroutineContext().ensureActive()
-                } catch (error: Throwable) {
-                    cancellationSettledByFailureHandler = error is CancellationException
-                    failFeatureStart(
-                        control,
-                        start.token,
-                        lifecycleGeneration,
-                        featureName,
-                        emptyList(),
-                        stopTransport,
-                        error
-                    )
-                }
-                if (
-                    handleRequestedFeatureStop(
-                        control,
-                        start.token,
-                        featureName,
-                        emptyList(),
-                        stopTransport
-                    )
-                ) {
-                    return
-                }
-
-                for (transport in discoveryTransports) {
-                    if (!isLifecycleActive(lifecycleGeneration)) {
-                        rollbackDiscoveryOperation(featureName, attempted, stopTransport)
-                        throw lifecycleStoppedFailure()
-                    }
-                    if (
-                        handleRequestedFeatureStop(
-                            control,
-                            start.token,
-                            featureName,
-                            attempted,
-                            stopTransport
-                        )
-                    ) {
-                        return
-                    }
-                    attempted += transport
-                    try {
-                        startTransport(transport)
-                        currentCoroutineContext().ensureActive()
-                    } catch (error: Throwable) {
-                        cancellationSettledByFailureHandler = error is CancellationException
-                        failFeatureStart(
-                            control,
-                            start.token,
-                            lifecycleGeneration,
-                            featureName,
-                            attempted,
-                            stopTransport,
-                            error
-                        )
-                    }
-                    if (
-                        handleRequestedFeatureStop(
-                            control,
-                            start.token,
-                            featureName,
-                            attempted,
-                            stopTransport
-                        )
-                    ) {
-                        return
-                    }
-                }
-
-                currentCoroutineContext().ensureActive()
-                when (completeFeatureStart(control, start.token, FeatureState.Active)) {
-                    FeatureCompletion.Applied -> Unit
-                    FeatureCompletion.StopRequested -> {
-                        handleRequestedFeatureStop(
-                            control,
-                            start.token,
-                            featureName,
-                            attempted,
-                            stopTransport
-                        )
-                    }
-                    FeatureCompletion.LifecycleStopped -> {
-                        rollbackDiscoveryOperation(featureName, attempted, stopTransport)
-                        throw lifecycleStoppedFailure()
-                    }
-                    FeatureCompletion.Stale -> {
-                        rollbackDiscoveryOperation(featureName, attempted, stopTransport)
-                        throw staleFeatureOperation(featureName)
-                    }
-                }
-            } catch (cancelled: CancellationException) {
-                if (cancellationSettledByFailureHandler) throw cancelled
-                val startStillOwned = withContext(NonCancellable) {
-                    lifecycleMutex.withLock {
-                        !stopped && control.activeStartToken == start.token
-                    }
-                }
-                if (startStillOwned) {
-                    failFeatureStart(
-                        control = control,
-                        token = start.token,
-                        lifecycleGeneration = lifecycleGeneration,
-                        featureName = featureName,
-                        attempted = attempted,
-                        stopTransport = stopTransport,
-                        error = cancelled
-                    )
-                }
-                val issues = rollbackDiscoveryOperation(featureName, attempted, stopTransport)
-                if (issues.isNotEmpty()) {
-                    cancelled.addSuppressed(cleanupError("cancel stale $featureName startup", issues))
-                }
-                throw cancelled
+        suspend fun execute() {
+            val outcome = try {
+                performStart()
+            } catch (error: Throwable) {
+                fail(error)
             }
+            // Cancellation received while an ordinary failure was settling
+            // still belongs to the caller. Preserve the settled failure as
+            // evidence, without replacing its state or repeating its cleanup.
+            val failure = outcome.exceptionOrNull()
+            if (failure !is CancellationException) {
+                try {
+                    currentCoroutineContext().ensureActive()
+                } catch (cancelled: CancellationException) {
+                    failure?.let(cancelled::addDistinctSuppressed)
+                    throw cancelled
+                }
+            }
+            outcome.getOrThrow()
+        }
+
+        private suspend fun performStart(): Result<Unit> {
+            prepareRetry()?.let { return it }
+            checkpoint()?.let { return it }
+
+            // Static support precedes runtime permissions and lazy kit startup.
+            if (discoveryTransports.isEmpty()) {
+                return complete(FeatureState.Unsupported(unsupportedReason))
+            }
+            val missing = permissions.missingPermissions().also {
+                currentCoroutineContext().ensureActive()
+            }
+            checkpoint()?.let { return it }
+            if (missing.isNotEmpty()) {
+                return complete(FeatureState.PermissionRequired(missing), P2pError.PermissionMissing(missing))
+            }
+
+            ensureStarted(generation)
+            currentCoroutineContext().ensureActive()
+            checkpoint()?.let { return it }
+            for (transport in discoveryTransports) {
+                checkpoint()?.let { return it }
+                attempted += transport
+                startTransport(transport)
+                currentCoroutineContext().ensureActive()
+                checkpoint()?.let { return it }
+            }
+            currentCoroutineContext().ensureActive()
+            return complete(FeatureState.Active)
+        }
+
+        private suspend fun prepareRetry(): Result<Unit>? {
+            if (!claim.cleanupRequired) return null
+            // Cancellation before preparation settles must compensate all
+            // possibly retained resources, not only a fresh start's subset.
+            attempted += discoveryTransports
+            val issues = stopDiscoveryResources(
+                "prepare $featureName retry",
+                preserveCancellation = false,
+                cleanup = stopTransport
+            )
+            if (issues.isNotEmpty()) {
+                val failure = cleanupError("prepare $featureName retry", issues)
+                return withContext(NonCancellable) {
+                    finishFeatureStart(control, claim.token, FeatureState.Failed(failure), cleanupRequired = true)
+                    Result.failure(failure)
+                }
+            }
+            lifecycleMutex.withLock {
+                if (control.activeStartToken == claim.token) control.cleanupRequired = false
+            }
+            attempted.clear()
+            return null
+        }
+
+        /** Null means continue; every other result has already discharged this claim. */
+        private suspend fun checkpoint(): Result<Unit>? {
+            val checkpoint = lifecycleMutex.withLock {
+                when {
+                    stopped -> FeatureStartCheckpoint.LifecycleStopped
+                    control.activeStartToken != claim.token -> FeatureStartCheckpoint.Stale
+                    control.stopRequestedToken == claim.token -> FeatureStartCheckpoint.StopRequested
+                    else -> FeatureStartCheckpoint.Continue
+                }
+            }
+            if (checkpoint == FeatureStartCheckpoint.Continue) return null
+            return settleCheckpoint(checkpoint)
+        }
+
+        private suspend fun complete(state: FeatureState, error: Throwable? = null): Result<Unit> =
+            when (completeFeatureStart(control, claim.token, state)) {
+                FeatureCompletion.Applied -> error?.let { Result.failure(it) } ?: Result.success(Unit)
+                FeatureCompletion.StopRequested -> checkNotNull(checkpoint())
+                FeatureCompletion.LifecycleStopped -> settleCheckpoint(FeatureStartCheckpoint.LifecycleStopped)
+                FeatureCompletion.Stale -> settleCheckpoint(FeatureStartCheckpoint.Stale)
+            }
+
+        private suspend fun settleCheckpoint(checkpoint: FeatureStartCheckpoint): Result<Unit> =
+            withContext(NonCancellable) {
+                val issues = rollbackDiscoveryOperation(featureName, attempted, stopTransport)
+                if (checkpoint == FeatureStartCheckpoint.StopRequested) {
+                    val failure = issues.takeIf { it.isNotEmpty() }
+                        ?.let { cleanupError("stop $featureName during startup", it) }
+                    finishFeatureStart(
+                        control,
+                        claim.token,
+                        failure?.let { FeatureState.Failed(it) } ?: FeatureState.Idle,
+                        cleanupRequired = failure != null
+                    )
+                    failure?.let { Result.failure(it) } ?: Result.success(Unit)
+                } else {
+                    // A terminal kit or bounded stop owns the public state.
+                    // Compensate late resources without replacing that state
+                    // or clearing the stop owner's retained-cleanup marker.
+                    val stale = checkpoint == FeatureStartCheckpoint.Stale
+                    val operation = "${if (stale) "stale" else "terminal"} $featureName startup rollback"
+                    logCleanupIssues(logger, operation, issues)
+                    val failure = if (stale) staleFeatureOperation(featureName) else lifecycleStoppedFailure()
+                    if (issues.isNotEmpty()) failure.addSuppressed(cleanupError(operation, issues))
+                    Result.failure(failure)
+                }
+            }
+
+        /** Bounded rollback and its final state/cleanup marker form one cancellation-atomic settlement. */
+        private suspend fun fail(error: Throwable): Result<Unit> = withContext(NonCancellable) {
+            val issues = rollbackDiscoveryOperation(featureName, attempted, stopTransport)
+            if (!isLifecycleActive(generation)) {
+                val failure = lifecycleStoppedFailure().also { it.addDistinctSuppressed(error) }
+                if (issues.isNotEmpty()) {
+                    failure.addSuppressed(cleanupError("terminal $featureName startup rollback", issues))
+                }
+                return@withContext Result.failure(failure)
+            }
+
+            if (error is CancellationException) {
+                val cleanupFailure = issues.takeIf { it.isNotEmpty() }
+                    ?.let { cleanupError("cancel $featureName startup", it) }
+                finishFeatureStart(
+                    control,
+                    claim.token,
+                    cleanupFailure?.let { FeatureState.Failed(it) } ?: FeatureState.Idle,
+                    cleanupRequired = cleanupFailure != null
+                )
+                cleanupFailure?.let(error::addDistinctSuppressed)
+                return@withContext Result.failure(error)
+            }
+
+            val baseError = if (error is P2pError) {
+                error
+            } else {
+                P2pError.ConnectionFailed(
+                    "start $featureName failed: ${error.message ?: error::class.simpleName}"
+                ).also { it.underlying = error }
+            }
+            val publicError = if (issues.isEmpty()) {
+                baseError
+            } else {
+                P2pError.ConnectionFailed(
+                    "start $featureName failed and rollback left ${issues.size} cleanup failure(s)"
+                ).also {
+                    it.underlying = CleanupAggregateException(
+                        "start $featureName and rollback",
+                        listOf(CleanupIssue("start $featureName", error)) + issues
+                    )
+                }
+            }
+            val stopWasRequested = lifecycleMutex.withLock {
+                control.activeStartToken == claim.token && control.stopRequestedToken == claim.token
+            }
+            finishFeatureStart(
+                control,
+                claim.token,
+                if (stopWasRequested && issues.isEmpty()) FeatureState.Idle else FeatureState.Failed(publicError),
+                cleanupRequired = issues.isNotEmpty()
+            )
+            Result.failure(publicError)
         }
     }
 
@@ -1011,113 +970,6 @@ internal class P2pKitImpl(
                 )
             }
         }
-    }
-
-    private suspend fun handleRequestedFeatureStop(
-        control: FeatureControl,
-        token: Long,
-        featureName: String,
-        attempted: List<DiscoveryTransport>,
-        stopTransport: suspend (DiscoveryTransport) -> Unit
-    ): Boolean {
-        val checkpoint = lifecycleMutex.withLock {
-            when {
-                stopped -> FeatureStartCheckpoint.LifecycleStopped
-                control.activeStartToken != token -> FeatureStartCheckpoint.Stale
-                control.stopRequestedToken == token -> FeatureStartCheckpoint.StopRequested
-                else -> FeatureStartCheckpoint.Continue
-            }
-        }
-        if (checkpoint == FeatureStartCheckpoint.Continue) return false
-
-        val issues = rollbackDiscoveryOperation(featureName, attempted, stopTransport)
-        if (checkpoint == FeatureStartCheckpoint.Stale) {
-            // A bounded explicit stop invalidated this start token while one
-            // transport callback was still running. Never proceed to the next
-            // transport; the public Failed state and cleanupRequired marker
-            // belong to the stop owner and remain authoritative.
-            if (issues.isNotEmpty()) {
-                logCleanupIssues(logger, "stale $featureName startup rollback", issues)
-            }
-            throw staleFeatureOperation(featureName)
-        }
-        if (checkpoint == FeatureStartCheckpoint.LifecycleStopped) {
-            if (issues.isNotEmpty()) {
-                logCleanupIssues(logger, "terminal $featureName startup rollback", issues)
-            }
-            throw lifecycleStoppedFailure()
-        }
-
-        val failure = issues.takeIf { it.isNotEmpty() }
-            ?.let { cleanupError("stop $featureName during startup", it) }
-        finishFeatureStart(
-            control,
-            token,
-            failure?.let { FeatureState.Failed(it) } ?: FeatureState.Idle,
-            cleanupRequired = failure != null
-        )
-        if (failure != null) throw failure
-        return true
-    }
-
-    private suspend fun failFeatureStart(
-        control: FeatureControl,
-        token: Long,
-        lifecycleGeneration: Long,
-        featureName: String,
-        attempted: List<DiscoveryTransport>,
-        stopTransport: suspend (DiscoveryTransport) -> Unit,
-        error: Throwable
-    ): Nothing {
-        val issues = rollbackDiscoveryOperation(featureName, attempted, stopTransport)
-        val lifecycleActive = withContext(NonCancellable) {
-            isLifecycleActive(lifecycleGeneration)
-        }
-        if (!lifecycleActive) throw lifecycleStoppedFailure()
-
-        if (error is CancellationException) {
-            val cleanupFailure = issues.takeIf { it.isNotEmpty() }
-                ?.let { cleanupError("cancel $featureName startup", it) }
-            withContext(NonCancellable) {
-                finishFeatureStart(
-                    control,
-                    token,
-                    cleanupFailure?.let { FeatureState.Failed(it) } ?: FeatureState.Idle,
-                    cleanupRequired = cleanupFailure != null
-                )
-            }
-            throw error
-        }
-
-        val baseError = if (error is P2pError) {
-            error
-        } else {
-            P2pError.ConnectionFailed(
-                "start $featureName failed: ${error.message ?: error::class.simpleName}"
-            ).also { it.underlying = error }
-        }
-        val publicError = if (issues.isEmpty()) {
-            baseError
-        } else {
-            P2pError.ConnectionFailed(
-                "start $featureName failed and rollback left ${issues.size} cleanup failure(s)"
-            ).also {
-                it.underlying = CleanupAggregateException(
-                    "start $featureName and rollback",
-                    listOf(CleanupIssue("start $featureName", error)) + issues
-                )
-            }
-        }
-        val stopWasRequested = lifecycleMutex.withLock {
-            control.activeStartToken == token && control.stopRequestedToken == token
-        }
-        finishFeatureStart(
-            control,
-            token,
-            if (stopWasRequested && issues.isEmpty()) FeatureState.Idle else FeatureState.Failed(publicError),
-            cleanupRequired = issues.isNotEmpty()
-        )
-        throw publicError
     }
 
     private suspend fun completeFeatureStart(
