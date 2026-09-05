@@ -41,6 +41,12 @@ logger delegates omit free-form details rather than trusting regex redaction.
 Hashes support correlation; they do not make observations unlinkable. A local
 send result never establishes remote application processing.
 
+File preparation read failures stop that send with a type-only console error.
+An optional diagnostic hash reread can fail after a successful receive commit;
+that warning does not undo `Completed`, delete published bytes, or replace the
+protocol's integrity and durability checks. Preparation cancellation is not
+reported as an ordinary read failure.
+
 Chat, file selection, and error UI still show the operator their data. The CLI
 uses the displayed peer aliases in `connect`, `to`, `close`, and `sendfile`;
 legacy ID prefixes and exact names also work. Use `offers` for filenames and

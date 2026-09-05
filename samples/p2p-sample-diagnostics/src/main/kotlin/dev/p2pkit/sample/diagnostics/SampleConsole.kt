@@ -23,11 +23,15 @@ public object SampleConsole {
         "sending <text ${sizeBytes}B> to $recipients peer(s) (local send, not remote processing)"
 
     /** A diagnostic summary can contain an arbitrary Failed/Rejected reason after its state name. */
-    public fun stateLabel(value: String?): String = listOf(
-        "Offered", "Accepted", "Sending", "Completed", "Rejected", "Cancelled", "Failed",
-        "Connecting", "Handshaking", "Connected", "Reconnecting", "Closing", "Closed"
-    ).firstOrNull { value == it || value?.startsWith("$it(") == true || value?.startsWith("$it:") == true }
-        ?: "Unknown"
+    public fun stateLabel(value: String?): String {
+        if (value == null) return "pending"
+        DiagnosticOutcome.entries.firstOrNull { it.name == value }?.let { return it.name }
+        return listOf(
+            "Offered", "Accepted", "Sending", "Completed", "Rejected", "Cancelled", "Failed",
+            "Connecting", "Handshaking", "Connected", "Reconnecting", "Closing", "Closed"
+        ).firstOrNull { value == it || value.startsWith("$it(") || value.startsWith("$it:") }
+            ?: "Unknown"
+    }
 
     /** Never call Throwable.toString(), message, cause or stackTrace at a console boundary. */
     public fun failure(error: Throwable): String = error.javaClass.simpleName.ifEmpty { "Throwable" }

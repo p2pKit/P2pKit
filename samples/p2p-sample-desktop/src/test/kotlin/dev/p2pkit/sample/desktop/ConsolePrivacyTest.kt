@@ -9,6 +9,7 @@ import dev.p2pkit.core.Platform
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.sample.diagnostics.SampleConsole
+import dev.p2pkit.sample.diagnostics.DiagnosticOutcome
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream
 import java.nio.file.Files
@@ -47,6 +48,7 @@ class ConsolePrivacyTest {
             session.incoming.emit(P2pMessage.Binary(body.toByteArray()))
             val log = output.toString("UTF-8")
             assertFalse(log.contains(body))
+            assertFalse(log.contains("synthetic private text"))
             assertFalse(log.contains(session.peer.name))
             assertFalse(log.contains(session.peer.id.value))
             val size = body.toByteArray().size
@@ -97,6 +99,24 @@ class ConsolePrivacyTest {
     fun invalidOptionsDoNotEchoArbitraryArguments() {
         for (args in listOf(arrayOf("unknown=private-value"), arrayOf("a", "b", "private-value"))) {
             assertFalse(assertIs<CliParseResult.Error>(parseCliOptions(args)).message.contains("private-value"))
+        }
+    }
+
+    @Test
+    fun diagnosticCompletionStatesKeepTheirFixedLabels() {
+        val home = Files.createTempDirectory("p2pkit-cli-console-test").toFile()
+        try {
+            val options = assertIs<CliParseResult.Success>(parseCliOptions(emptyArray())).options
+            CliDiagnostics.configure(options, home)
+            assertEquals("pending", SampleConsole.stateLabel(CliDiagnostics.recorder.summary().finalState))
+            DiagnosticOutcome.entries.forEach { outcome ->
+                CliDiagnostics.startSession("PS-T05", "both", "synthetic-${outcome.name}")
+                CliDiagnostics.complete(outcome, "synthetic private reason")
+                assertEquals(outcome.name, SampleConsole.stateLabel(CliDiagnostics.recorder.summary().finalState))
+            }
+        } finally {
+            CliDiagnostics.close()
+            home.deleteRecursively()
         }
     }
 }

@@ -957,7 +957,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
         val ctx = getApplication<Application>().applicationContext
         scope.launch {
-            val preparedHash = withContext(Dispatchers.IO) { sha256Uri(ctx, uri) }
+            val preparedHash = TestFileDigests.readSourceHash { ctx.contentResolver.openInputStream(uri) }.getOrElse {
+                Log.w(LOG_TAG, "sendFile preparation failed; errorType=${SampleConsole.failure(it)}")
+                appendSystemMessage("send file failed: ${it.message ?: it::class.simpleName}")
+                return@launch
+            }
             if (preparedHash != null) {
                 val size = runCatching {
                     ctx.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
@@ -1492,11 +1496,6 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun updateRowDigest(key: SessionTransferKey, digest: String?) {
         transferRows.update(key) { it.copy(sha256 = digest) }
-    }
-
-    private fun sha256Uri(context: android.content.Context, uri: Uri): String? {
-        val input = context.contentResolver.openInputStream(uri) ?: return null
-        return input.use { TestFileDigests.sha256(it) }
     }
 
     fun cancelFileTransfer(key: SessionTransferKey) {

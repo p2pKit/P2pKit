@@ -75,6 +75,7 @@ import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.sample.diagnostics.SampleConsole
 import dev.p2pkit.sample.diagnostics.consoleId
 import dev.p2pkit.sample.diagnostics.SampleConsoleLogger
+import dev.p2pkit.sample.diagnostics.readSampleFileDiagnostic
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pState
@@ -860,46 +861,53 @@ internal class DesktopP2pState(
             appendSystemMessage("send file failed: '${file.name}' is empty (0 bytes)")
             return
         }
-        scope.launch {
-            val sourceDigest = withContext(Dispatchers.IO) { testFileSha256(file) }
-            diagnostics.recorder.record(
-                DiagnosticRecord(
-                    peerId = session.peer.id.value,
-                    connectionId = diagnostics.connectionIdFor(session.peer.id.value),
-                    category = "file",
-                    eventName = DiagnosticEventNames.FILE_SELECTED,
-                    payloadSizeBytes = file.length(),
-                    details = mapOf("filename" to file.name, "mimeType" to "test-fixture")
-                )
-            )
-            appendSystemMessage("prepared ${file.name} sha256=$sourceDigest")
-            val transfer = runCatchingCancellable { session.sendFile(file) }
-                .getOrElse {
-                    System.err.println(
-                        "[p2pkit WARN] sendFile failed: ${SampleConsole.failure(it)}"
-                    )
-                    appendSystemMessage("send file '${file.name}' failed: ${it.message ?: it::class.simpleName}")
-                    return@launch
-                }
-            diagnostics.transfer(
-                peerId = session.peer.id.value,
-                transferId = transfer.id,
-                sessionId = session.id,
-                eventName = DiagnosticEventNames.TRANSFER_PREPARED,
-                state = transfer.state.value.toString(),
-                size = transfer.sizeBytes,
-                direction = DiagnosticDirection.SENT
-            )
-            diagnostics.hash(
-                session.peer.id.value,
-                transfer.id,
-                file.length(),
-                sourceDigest,
-                receiver = false,
-                sessionId = session.id
-            )
-            registerOutgoingTransfer(transfer, session.id, session.peer.name, scope)
+        scope.launch { sendSelectedFile(session, file, scope) }
+    }
+
+    /** File-picker prechecks cannot guarantee a later diagnostic read succeeds. */
+    internal suspend fun sendSelectedFile(session: P2pSession, file: File, scope: CoroutineScope) {
+        val sourceDigest = readSampleFileDiagnostic { testFileSha256(file) }.getOrElse {
+            System.err.println("[p2pkit WARN] sendFile preparation failed: ${SampleConsole.failure(it)}")
+            appendSystemMessage("send file '${file.name}' failed: ${it.message ?: it::class.simpleName}")
+            return
         }
+        diagnostics.recorder.record(
+            DiagnosticRecord(
+                peerId = session.peer.id.value,
+                connectionId = diagnostics.connectionIdFor(session.peer.id.value),
+                category = "file",
+                eventName = DiagnosticEventNames.FILE_SELECTED,
+                payloadSizeBytes = file.length(),
+                details = mapOf("filename" to file.name, "mimeType" to "test-fixture")
+            )
+        )
+        appendSystemMessage("prepared ${file.name} sha256=$sourceDigest")
+        val transfer = runCatchingCancellable { session.sendFile(file) }
+            .getOrElse {
+                System.err.println(
+                    "[p2pkit WARN] sendFile failed: ${SampleConsole.failure(it)}"
+                )
+                appendSystemMessage("send file '${file.name}' failed: ${it.message ?: it::class.simpleName}")
+                return
+            }
+        diagnostics.transfer(
+            peerId = session.peer.id.value,
+            transferId = transfer.id,
+            sessionId = session.id,
+            eventName = DiagnosticEventNames.TRANSFER_PREPARED,
+            state = transfer.state.value.toString(),
+            size = transfer.sizeBytes,
+            direction = DiagnosticDirection.SENT
+        )
+        diagnostics.hash(
+            session.peer.id.value,
+            transfer.id,
+            file.length(),
+            sourceDigest,
+            receiver = false,
+            sessionId = session.id
+        )
+        registerOutgoingTransfer(transfer, session.id, session.peer.name, scope)
     }
 
     /**
@@ -1114,13 +1122,13 @@ internal class DesktopP2pState(
         watchTransfer(transfer, sessionId, scope)
     }
 
-    private fun registerIncomingTransfer(
+    internal fun registerIncomingTransfer(
         transfer: P2pFileTransfer,
         sessionId: String,
         peerName: String,
         destinationPath: String,
         scope: CoroutineScope
-    ) {
+    ): Job {
         addRow(
             FileTransferRow(
                 sessionId = sessionId,
@@ -1149,7 +1157,7 @@ internal class DesktopP2pState(
         // The transactional destination is owned by the SDK and is committed
         // or aborted even if this UI collector is cancelled. Never delete its
         // target here: a failed durability barrier can follow publication.
-        watchTransfer(transfer, sessionId, scope) { completed ->
+        return watchTransfer(transfer, sessionId, scope) { completed ->
             if (completed) {
                 recordTemporaryFileEvent(
                     peerId = transfer.peer.id.value,
@@ -1158,18 +1166,6 @@ internal class DesktopP2pState(
                     eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
                     state = "promoted",
                     outcome = DiagnosticOutcome.SUCCESS
-                )
-                val digest = withContext(Dispatchers.IO) {
-                    testFileSha256(File(destinationPath))
-                }
-                updateRowDigest(SessionTransferKey(sessionId, transfer.id), digest)
-                diagnostics.hash(
-                    transfer.peer.id.value,
-                    transfer.id,
-                    File(destinationPath).length(),
-                    digest,
-                    receiver = true,
-                    sessionId = sessionId
                 )
                 diagnostics.transfer(
                     peerId = transfer.peer.id.value,
@@ -1182,7 +1178,27 @@ internal class DesktopP2pState(
                     outcome = DiagnosticOutcome.SUCCESS,
                     details = mapOf("durable" to "true")
                 )
-                appendSystemMessage("received ${transfer.name} sha256=$digest")
+                // The protocol commit already succeeded. A diagnostic reread
+                // cannot change Completed or authorize deleting the destination.
+                val digest = readSampleFileDiagnostic { testFileSha256(File(destinationPath)) }.getOrElse {
+                    System.err.println("[p2pkit WARN] committed file hash unavailable: ${SampleConsole.failure(it)}")
+                    appendSystemMessage(
+                        "received ${transfer.name}; diagnostic hash unavailable: ${it.message ?: it::class.simpleName}"
+                    )
+                    null
+                }
+                updateRowDigest(SessionTransferKey(sessionId, transfer.id), digest)
+                if (digest != null) {
+                    diagnostics.hash(
+                        transfer.peer.id.value,
+                        transfer.id,
+                        transfer.sizeBytes,
+                        digest,
+                        receiver = true,
+                        sessionId = sessionId
+                    )
+                    appendSystemMessage("received ${transfer.name} sha256=$digest")
+                }
             }
         }
     }
@@ -1198,59 +1214,57 @@ internal class DesktopP2pState(
         sessionId: String,
         scope: CoroutineScope,
         onFinally: (suspend (completed: Boolean) -> Unit)? = null
-    ) {
-        scope.launch {
-            var completed = false
-            val key = SessionTransferKey(sessionId, transfer.id)
-            val bytesJob = launch {
-                transfer.bytesTransferred.collect { b -> updateRowBytes(key, b) }
-            }
-            try {
-                transfer.state.first { st ->
-                    updateRowState(key, st)
-                    diagnostics.transfer(
-                        peerId = transfer.peer.id.value,
-                        transferId = transfer.id,
-                        sessionId = sessionId,
-                        eventName = when (st) {
-                            is FileTransferState.Completed -> DiagnosticEventNames.TRANSFER_COMPLETED
-                            is FileTransferState.Failed -> DiagnosticEventNames.TRANSFER_FAILED
-                            is FileTransferState.Cancelled -> DiagnosticEventNames.TRANSFER_CANCELLED
-                            is FileTransferState.Rejected -> DiagnosticEventNames.TRANSFER_OFFER_REJECTED
-                            else -> DiagnosticEventNames.TRANSFER_PROGRESS
-                        },
-                        state = st.toString(),
-                        size = transfer.bytesTransferred.value,
-                        direction = if (transferRows[key]?.direction ==
-                            FileTransferDirection.Outgoing
-                        ) {
-                            DiagnosticDirection.SENT
-                        } else {
-                            DiagnosticDirection.RECEIVED
-                        },
-                        outcome = when (st) {
-                            is FileTransferState.Completed -> DiagnosticOutcome.SUCCESS
-                            is FileTransferState.Failed -> DiagnosticOutcome.FAILURE
-                            is FileTransferState.Cancelled -> DiagnosticOutcome.CANCELLATION
-                            is FileTransferState.Rejected -> DiagnosticOutcome.CANCELLATION
-                            else -> null
-                        },
-                        error = (st as? FileTransferState.Failed)?.error
-                    )
-                    if (st.isTerminal()) {
-                        completed = st is FileTransferState.Completed
-                        true
+    ): Job = scope.launch {
+        var completed = false
+        val key = SessionTransferKey(sessionId, transfer.id)
+        val bytesJob = launch {
+            transfer.bytesTransferred.collect { b -> updateRowBytes(key, b) }
+        }
+        try {
+            transfer.state.first { st ->
+                updateRowState(key, st)
+                diagnostics.transfer(
+                    peerId = transfer.peer.id.value,
+                    transferId = transfer.id,
+                    sessionId = sessionId,
+                    eventName = when (st) {
+                        is FileTransferState.Completed -> DiagnosticEventNames.TRANSFER_COMPLETED
+                        is FileTransferState.Failed -> DiagnosticEventNames.TRANSFER_FAILED
+                        is FileTransferState.Cancelled -> DiagnosticEventNames.TRANSFER_CANCELLED
+                        is FileTransferState.Rejected -> DiagnosticEventNames.TRANSFER_OFFER_REJECTED
+                        else -> DiagnosticEventNames.TRANSFER_PROGRESS
+                    },
+                    state = st.toString(),
+                    size = transfer.bytesTransferred.value,
+                    direction = if (transferRows[key]?.direction ==
+                        FileTransferDirection.Outgoing
+                    ) {
+                        DiagnosticDirection.SENT
                     } else {
-                        false
-                    }
+                        DiagnosticDirection.RECEIVED
+                    },
+                    outcome = when (st) {
+                        is FileTransferState.Completed -> DiagnosticOutcome.SUCCESS
+                        is FileTransferState.Failed -> DiagnosticOutcome.FAILURE
+                        is FileTransferState.Cancelled -> DiagnosticOutcome.CANCELLATION
+                        is FileTransferState.Rejected -> DiagnosticOutcome.CANCELLATION
+                        else -> null
+                    },
+                    error = (st as? FileTransferState.Failed)?.error
+                )
+                if (st.isTerminal()) {
+                    completed = st is FileTransferState.Completed
+                    true
+                } else {
+                    false
                 }
-                // Snap the byte counter to its final value before the collector dies.
-                updateRowBytes(key, transfer.bytesTransferred.value)
-            } finally {
-                withContext(NonCancellable) {
-                    bytesJob.cancelAndJoin()
-                    onFinally?.invoke(completed)
-                }
+            }
+            // Snap the byte counter to its final value before the collector dies.
+            updateRowBytes(key, transfer.bytesTransferred.value)
+        } finally {
+            withContext(NonCancellable) {
+                bytesJob.cancelAndJoin()
+                onFinally?.invoke(completed)
             }
         }
     }

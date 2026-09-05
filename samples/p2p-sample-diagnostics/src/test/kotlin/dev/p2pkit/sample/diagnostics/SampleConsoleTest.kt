@@ -65,6 +65,10 @@ class SampleConsoleTest {
         assertEquals("Failed", SampleConsole.stateLabel("Failed(error=$canary)"))
         assertEquals("Rejected", SampleConsole.stateLabel("Rejected: $canary"))
         assertEquals("Unknown", SampleConsole.stateLabel(canary))
-        assertEquals("Unknown", SampleConsole.stateLabel(null))
+        assertEquals("pending", SampleConsole.stateLabel(null))
+        DiagnosticOutcome.entries.forEach {
+            assertEquals(it.name, SampleConsole.stateLabel(it.name))
+            assertEquals("Unknown", SampleConsole.stateLabel("${it.name}: $canary"))
+        }
     }
 }

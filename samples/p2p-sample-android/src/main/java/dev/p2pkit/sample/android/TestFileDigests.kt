@@ -1,5 +1,6 @@
 package dev.p2pkit.sample.android
 
+import dev.p2pkit.sample.diagnostics.readSampleFileDiagnostic
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
@@ -7,6 +8,11 @@ import java.security.MessageDigest
 
 /** Test-harness SHA-256 helpers. They never participate in production protocol decisions. */
 internal object TestFileDigests {
+    /** Includes provider open/read/close failures; UI decides how to display the failure. */
+    suspend fun readSourceHash(openInput: () -> InputStream?): Result<String?> = readSampleFileDiagnostic {
+        openInput()?.use(::sha256)
+    }
+
     fun sha256(file: File): String = FileInputStream(file).use(::sha256)
 
     fun sha256(input: InputStream): String {

@@ -16,6 +16,7 @@ import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.dsl.jvmSecureIdentityStore
 import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transfer.P2pFileOffer
+import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transfer.sendFile
 import dev.p2pkit.core.protocol.FrameTrace
 import dev.p2pkit.sample.diagnostics.DiagnosticEventNames
@@ -27,6 +28,7 @@ import dev.p2pkit.sample.diagnostics.SampleConsoleLogger
 import dev.p2pkit.sample.diagnostics.SessionTransferKey
 import dev.p2pkit.sample.diagnostics.cleanupStaleTransferPartsOnce
 import dev.p2pkit.sample.diagnostics.reservedFileDestination
+import dev.p2pkit.sample.diagnostics.readSampleFileDiagnostic
 import dev.p2pkit.provisioning.desktop.jvm
 import dev.p2pkit.transport.lan.JvmLanDiag
 import dev.p2pkit.transport.lan.lan
@@ -878,75 +880,7 @@ private suspend fun repl(
                     continue
                 }
                 println("[file → ${session.peer.consoleId}] sending <selected file> (${file.length()}B)")
-                scope.launch {
-                    val sourceDigest = withContext(Dispatchers.IO) { testFileSha256(file) }
-                    CliDiagnostics.recorder.record(
-                        DiagnosticRecord(
-                            peerId = session.peer.id.value,
-                            connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value),
-                            category = "file",
-                            eventName = DiagnosticEventNames.FILE_SELECTED,
-                            payloadSizeBytes = file.length(),
-                            details = mapOf("filename" to file.name, "mimeType" to "test-fixture")
-                        )
-                    )
-                    println("[file → ${session.peer.consoleId}] sha256=$sourceDigest")
-                    runCatching { session.sendFile(file) }
-                        .onSuccess { transfer ->
-                            CliDiagnostics.transfer(
-                                peerId = session.peer.id.value,
-                                transferId = transfer.id,
-                                sessionId = session.id,
-                                eventName = DiagnosticEventNames.TRANSFER_PREPARED,
-                                state = transfer.state.value.toString(),
-                                size = transfer.sizeBytes,
-                                direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.SENT
-                            )
-                            CliDiagnostics.fileHash(
-                                session.peer.id.value,
-                                transfer.id,
-                                file.length(),
-                                sourceDigest,
-                                receiver = false,
-                                sessionId = session.id
-                            )
-                            scope.launch {
-                                transfer.state.first { st ->
-                                    // Peer rejection/error text belongs in neither console nor scrollback.
-                                    println("[file → ${session.peer.consoleId}] ${SampleConsole.transferState(st)}")
-                                    CliDiagnostics.transfer(
-                                        peerId = session.peer.id.value,
-                                        transferId = transfer.id,
-                                        sessionId = session.id,
-                                        eventName = when (st) {
-                                            is FileTransferState.Completed -> DiagnosticEventNames.TRANSFER_COMPLETED
-                                            is FileTransferState.Failed -> DiagnosticEventNames.TRANSFER_FAILED
-                                            is FileTransferState.Cancelled -> DiagnosticEventNames.TRANSFER_CANCELLED
-                                            is FileTransferState.Rejected -> DiagnosticEventNames.TRANSFER_OFFER_REJECTED
-                                            else -> DiagnosticEventNames.TRANSFER_PROGRESS
-                                        },
-                                        state = st.toString(),
-                                        size = transfer.bytesTransferred.value,
-                                        outcome = when (st) {
-                                            is FileTransferState.Completed -> DiagnosticOutcome.SUCCESS
-                                            is FileTransferState.Failed -> DiagnosticOutcome.FAILURE
-                                            is FileTransferState.Cancelled -> DiagnosticOutcome.CANCELLATION
-                                            is FileTransferState.Rejected -> DiagnosticOutcome.CANCELLATION
-                                            else -> null
-                                        },
-                                        error = (st as? FileTransferState.Failed)?.error
-                                    )
-                                    st is FileTransferState.Completed ||
-                                        st is FileTransferState.Failed ||
-                                        st is FileTransferState.Cancelled ||
-                                        st is FileTransferState.Rejected
-                                }
-                            }
-                        }
-                        .onFailure {
-                            System.err.println("sendfile failed: ${SampleConsole.failure(it)}")
-                        }
-                }
+                scope.launch { sendSelectedFile(session, file, scope) }
             }
 
             "offers" -> {
@@ -1247,6 +1181,80 @@ internal fun wireIncoming(
     }
 }
 
+/** Handle the selected file after REPL validation; later open/read races still need a handled failure. */
+internal suspend fun sendSelectedFile(session: P2pSession, file: File, scope: CoroutineScope) {
+    val sourceDigest = readSampleFileDiagnostic { testFileSha256(file) }.getOrElse {
+        System.err.println("sendfile preparation failed: ${SampleConsole.failure(it)}")
+        return
+    }
+    CliDiagnostics.recorder.record(
+        DiagnosticRecord(
+            peerId = session.peer.id.value,
+            connectionId = CliDiagnostics.connectionIdFor(session.peer.id.value),
+            category = "file",
+            eventName = DiagnosticEventNames.FILE_SELECTED,
+            payloadSizeBytes = file.length(),
+            details = mapOf("filename" to file.name, "mimeType" to "test-fixture")
+        )
+    )
+    println("[file → ${session.peer.consoleId}] sha256=$sourceDigest")
+    runCatching { session.sendFile(file) }
+        .onSuccess { transfer ->
+            CliDiagnostics.transfer(
+                peerId = session.peer.id.value,
+                transferId = transfer.id,
+                sessionId = session.id,
+                eventName = DiagnosticEventNames.TRANSFER_PREPARED,
+                state = transfer.state.value.toString(),
+                size = transfer.sizeBytes,
+                direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.SENT
+            )
+            CliDiagnostics.fileHash(
+                session.peer.id.value,
+                transfer.id,
+                file.length(),
+                sourceDigest,
+                receiver = false,
+                sessionId = session.id
+            )
+            scope.launch {
+                transfer.state.first { st ->
+                    // Peer rejection/error text belongs in neither console nor scrollback.
+                    println("[file → ${session.peer.consoleId}] ${SampleConsole.transferState(st)}")
+                    CliDiagnostics.transfer(
+                        peerId = session.peer.id.value,
+                        transferId = transfer.id,
+                        sessionId = session.id,
+                        eventName = when (st) {
+                            is FileTransferState.Completed -> DiagnosticEventNames.TRANSFER_COMPLETED
+                            is FileTransferState.Failed -> DiagnosticEventNames.TRANSFER_FAILED
+                            is FileTransferState.Cancelled -> DiagnosticEventNames.TRANSFER_CANCELLED
+                            is FileTransferState.Rejected -> DiagnosticEventNames.TRANSFER_OFFER_REJECTED
+                            else -> DiagnosticEventNames.TRANSFER_PROGRESS
+                        },
+                        state = st.toString(),
+                        size = transfer.bytesTransferred.value,
+                        outcome = when (st) {
+                            is FileTransferState.Completed -> DiagnosticOutcome.SUCCESS
+                            is FileTransferState.Failed -> DiagnosticOutcome.FAILURE
+                            is FileTransferState.Cancelled -> DiagnosticOutcome.CANCELLATION
+                            is FileTransferState.Rejected -> DiagnosticOutcome.CANCELLATION
+                            else -> null
+                        },
+                        error = (st as? FileTransferState.Failed)?.error
+                    )
+                    st is FileTransferState.Completed ||
+                        st is FileTransferState.Failed ||
+                        st is FileTransferState.Cancelled ||
+                        st is FileTransferState.Rejected
+                }
+            }
+        }
+        .onFailure {
+            System.err.println("sendfile failed: ${SampleConsole.failure(it)}")
+        }
+}
+
 private const val MAX_INCOMING_FILE_BYTES: Long = 50L * 1024L * 1024L
 private const val REQUIRED_FREE_SPACE_RESERVE_BYTES: Long = 1024L * 1024L
 
@@ -1381,27 +1389,7 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer, sessionId: String) {
             when (state) {
                 is FileTransferState.Completed -> {
                     completed = true
-                    val digest = withContext(Dispatchers.IO) { testFileSha256(saveFile) }
-                    CliDiagnostics.fileHash(
-                        offer.peer.id.value,
-                        transfer.id,
-                        saveFile.length(),
-                        digest,
-                        receiver = true,
-                        sessionId = sessionId
-                    )
-                    CliDiagnostics.transfer(
-                        peerId = offer.peer.id.value,
-                        transferId = transfer.id,
-                        sessionId = sessionId,
-                        eventName = DiagnosticEventNames.TRANSFER_DURABLE_COMMITTED,
-                        state = "Completed",
-                        size = saveFile.length(),
-                        direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.RECEIVED,
-                        outcome = DiagnosticOutcome.SUCCESS,
-                        details = mapOf("durable" to "true")
-                    )
-                    println("[file ← $peerName $fileName] durable sha256=$digest")
+                    reportCommittedFile(transfer, sessionId, saveFile)
                     true
                 }
                 is FileTransferState.Failed,
@@ -1444,6 +1432,43 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer, sessionId: String) {
                 )
             }
         }
+    }
+}
+
+/** Optional post-commit evidence; never owns or deletes the already-published destination. */
+internal suspend fun reportCommittedFile(transfer: P2pFileTransfer, sessionId: String, saveFile: File) {
+    val peerName = transfer.peer.consoleId
+    val fileName = SampleConsole.identifier(transfer.id)
+    CliDiagnostics.transfer(
+        peerId = transfer.peer.id.value,
+        transferId = transfer.id,
+        sessionId = sessionId,
+        eventName = DiagnosticEventNames.TRANSFER_DURABLE_COMMITTED,
+        state = "Completed",
+        size = transfer.sizeBytes,
+        direction = dev.p2pkit.sample.diagnostics.DiagnosticDirection.RECEIVED,
+        outcome = DiagnosticOutcome.SUCCESS,
+        details = mapOf("durable" to "true")
+    )
+    // The SDK's commit is authoritative; this optional diagnostic
+    // reread can fail after publication without invalidating it.
+    val digest = readSampleFileDiagnostic { testFileSha256(saveFile) }.getOrElse {
+        System.err.println(
+            "[file ← $peerName $fileName] committed; diagnostic hash unavailable: " +
+                SampleConsole.failure(it)
+        )
+        null
+    }
+    if (digest != null) {
+        CliDiagnostics.fileHash(
+            transfer.peer.id.value,
+            transfer.id,
+            transfer.sizeBytes,
+            digest,
+            receiver = true,
+            sessionId = sessionId
+        )
+        println("[file ← $peerName $fileName] durable sha256=$digest")
     }
 }
 
