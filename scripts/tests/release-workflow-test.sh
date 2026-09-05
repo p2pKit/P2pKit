@@ -25,6 +25,7 @@ ruby "$ROOT/scripts/check-workflow-checkout-policy.rb"
 ruby "$ROOT/scripts/tests/check-dependency-submission-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-jvm-cross-host-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-publication-sbom-policy-test.rb"
+python3 "$ROOT/scripts/tests/check-sbom-test.py"
 while IFS= read -r -d '' workflow; do
     ruby -e 'require "yaml"; YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)' "$workflow"
     while IFS= read -r use; do

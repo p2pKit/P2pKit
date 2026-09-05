@@ -39,6 +39,12 @@ in `maven-central-publication-<tag>`, separately from verification-job evidence.
 This SBOM describes the resolved library dependency graph; it is neither an
 embedded Maven artifact nor a scan of the ZIP's binary contents.
 
+`scripts/check-sbom.sh` requires Python 3. It checks matching release identity,
+component coordinates/hashes and dependency edges in the flat aggregate JSON
+and CycloneDX 1.6 XML, including duplicate/unresolved references and contamination.
+Inputs are limited to 16 MiB each before parsing; XML DTD/entity declarations
+are rejected. This is not a full CycloneDX-schema or vulnerability scan.
+
 Remote byte comparison and isolated consumers run **after** publication; they
 cannot roll back an immutable Central release. XCFramework checks cover a
 separate source-built Apple output, not the Maven bundle. A secret-free dry run

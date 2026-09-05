@@ -164,6 +164,7 @@ cases.each do |mode, expected_error|
     Dir.mktmpdir("p2pkit-publication-sbom-test-") do |dir|
         FileUtils.mkdir_p(File.join(dir, "scripts"))
         FileUtils.cp(File.join(ROOT, "scripts/check-sbom.sh"), File.join(dir, "scripts/check-sbom.sh"))
+        FileUtils.cp(File.join(ROOT, "scripts/validate-sbom.py"), File.join(dir, "scripts/validate-sbom.py"))
         File.write(File.join(dir, "gradle.properties"), "GROUP=#{group}\nVERSION_NAME=#{version}\n")
         data = Marshal.load(Marshal.dump(document))
         data["components"].reject! { |c| c["name"] == "jmdns" } if mode == "missing-component"
