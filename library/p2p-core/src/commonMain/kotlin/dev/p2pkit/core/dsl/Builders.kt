@@ -20,6 +20,7 @@ import dev.p2pkit.core.protocol.HelloPayload
 import dev.p2pkit.core.protocol.validateWireText
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
 import dev.p2pkit.core.provisioning.NetworkProvisioningFactory
+import dev.p2pkit.core.security.PlatformSecurityCryptography
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.RegisteredTransportFactory
 import dev.p2pkit.core.transport.TransportFactory
@@ -80,6 +81,9 @@ public class P2pKitBuilder internal constructor() {
     /** Platform-protected secure-v2 identity store selected by platform DSL. */
     internal var secureIdentityStorage: SecureIdentityStorage? = null
 
+    /** Internal test-only provider decorator; null always selects the real platform provider. */
+    internal var securityCryptographyForTest: PlatformSecurityCryptography? = null
+
     /**
      * Optional host-provided [P2pPermissionManager]. When `null`, the kit uses
      * the platform default ([dev.p2pkit.core.internal.defaultPlatformPermissionManager]):
@@ -106,7 +110,7 @@ public class P2pKitBuilder internal constructor() {
      * [dev.p2pkit.core.internal.newP2pKit] →
      * `P2pKitImpl` → `SessionManager` → `SessionStore`. The production
      * default stays `false` (log-don't-crash); kit-level behavioral suites
-     * opt in through the commonTest `createTestKit` fixture. Not public API.
+     * opt in through commonTest `createTestKit` / `createSecureTestKit`. Not public API.
      */
     internal var strictSessionInvariants: Boolean = false
 
@@ -221,7 +225,8 @@ public class P2pKitBuilder internal constructor() {
             afterSessionSetupResultForTest = afterSessionSetupResultForTest,
             discoveryRefreshTimeoutMillis = discoveryRefreshTimeoutMillisForTest,
             featureOperationSettleTimeoutMillis = featureOperationSettleTimeoutMillisForTest,
-            beforeTerminalWatcherRemovalForTest = beforeTerminalWatcherRemovalForTest
+            beforeTerminalWatcherRemovalForTest = beforeTerminalWatcherRemovalForTest,
+            securityCryptographyForTest = securityCryptographyForTest
         )
     }
 }

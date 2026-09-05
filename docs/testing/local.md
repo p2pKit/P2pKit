@@ -60,6 +60,26 @@ the same assertions under every mode. Run them with
 These are in-process tests, not kernel short-write/backpressure, independent
 interoperability, real filesystem durability, or physical-network evidence.
 
+## Authenticated kit fixtures
+
+Use `commonTest/.../testfixtures/createSecureTestKit` for new secure session
+tests. It uses the production builder, real platform cryptography, synthetic
+in-memory identity storage, explicit peer authorization, and strict session
+invariants. The older `createTestKit` intentionally defaults to plaintext v1;
+it is not representative of the shipped security default. Copy fake raw writes
+with `CopyingRawConnection` so production buffer wiping cannot mutate queued
+fixture bytes. Stop every kit in `finally` and clear stores owned by the test.
+
+`SecureSessionLifecycleTest` gates all four authenticated simultaneous-open
+setups before registration, verifies the surviving wire and actual losing
+cipher-array wipes, and covers cancellation, outgoing-only reconnect, fresh
+epochs, disabled reconnect, and terminal shutdown under all three wire modes.
+`KitStrictInvariantsTest` proves the secure fixture's store invariant net.
+Run these alongside `SecureSessionIntegrationTest` with the core JVM/native
+command above. Provider-internal key erasure, OS identity persistence, physical
+network behavior and independent cryptographic assurance are not established
+by these synthetic tests.
+
 ## Dependency updates
 
 Dependency and wrapper updates remain fail closed. A version-catalog change

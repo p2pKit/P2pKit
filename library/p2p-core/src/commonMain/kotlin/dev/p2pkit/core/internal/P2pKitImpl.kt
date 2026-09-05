@@ -103,7 +103,7 @@ internal class P2pKitImpl(
      * throw instead of `logger.warn`ing. Production default `false`
      * (log-don't-crash); set only through the internal
      * [dev.p2pkit.core.dsl.P2pKitBuilder.strictSessionInvariants] knob,
-     * which the commonTest `createTestKit` fixture enables.
+     * which the commonTest legacy and authenticated kit fixtures enable.
      */
     private val strictSessionInvariants: Boolean = false,
     private val sessionSetupTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
@@ -1650,7 +1650,8 @@ internal fun newP2pKit(
     afterSessionSetupResultForTest: (suspend () -> Unit)? = null,
     discoveryRefreshTimeoutMillis: Long = DEFAULT_DISCOVERY_REFRESH_TIMEOUT_MS,
     featureOperationSettleTimeoutMillis: Long = DEFAULT_FEATURE_OPERATION_SETTLE_TIMEOUT_MS,
-    beforeTerminalWatcherRemovalForTest: (suspend () -> Unit)? = null
+    beforeTerminalWatcherRemovalForTest: (suspend () -> Unit)? = null,
+    securityCryptographyForTest: PlatformSecurityCryptography? = null
 ): P2pKit {
     // Establish the failure-isolating boundary before identity storage,
     // platform factories, transport construction, or any coroutine can log.
@@ -1674,7 +1675,7 @@ internal fun newP2pKit(
                     "Secure v2 AppId UTF-8 length exceeds $SECURE_V2_MAX_APP_ID_UTF8_BYTES bytes"
                 )
             }
-            cryptography = platformSecurityCryptography()
+            cryptography = securityCryptographyForTest ?: platformSecurityCryptography()
             val secureIdentityStorage = secureIdentityStorageOverride
                 ?: defaultSecureIdentityStorage(appId, safeLogger)
             secureIdentityService = SecureIdentityService(cryptography, secureIdentityStorage)

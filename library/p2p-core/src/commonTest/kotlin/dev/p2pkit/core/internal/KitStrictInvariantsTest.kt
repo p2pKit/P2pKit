@@ -7,12 +7,14 @@ import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.RecordingLogger
+import dev.p2pkit.core.testfixtures.createSecureTestKit
 import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
@@ -55,6 +57,47 @@ import kotlin.test.assertTrue
 @OptIn(ExplicitSecurityRisk::class)
 @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
 class KitStrictInvariantsTest {
+
+    @Test
+    fun secureTestKitUsesRealIdentityAndThrowsOnForcedStoreInconsistency() = runBlocking {
+        val kit = createSecureTestKit(
+            appId = AppId("secure.fixture.strict"),
+            name = "Strict secure kit",
+            transport = FakeDataTransport(),
+            authorization = PeerAuthorizationPolicy.RejectUnknown
+        )
+        try {
+            assertTrue(kit.localFingerprint != null, "the fixture must not take the legacy path")
+            val impl = assertIs<P2pKitImpl>(kit)
+            val failure = assertFailsWith<IllegalStateException> {
+                impl.forceSessionStoreInvariantViolationForTest(KitStubSession(syntheticPeer("peer-a", "A")))
+            }
+            assertTrue(failure.message.orEmpty().contains("INVARIANT"))
+        } finally {
+            kit.stop()
+        }
+    }
+
+    @Test
+    fun secureFixtureCannotSilentlyDisableAuthenticationOrStrictInvariants() {
+        for (legacy in listOf(false, true)) {
+            val failure = assertFailsWith<IllegalArgumentException> {
+                createSecureTestKit(
+                    appId = AppId("secure.fixture.validation"),
+                    name = "Invalid secure fixture",
+                    transport = FakeDataTransport(),
+                    authorization = PeerAuthorizationPolicy.RejectUnknown
+                ) {
+                    if (legacy) securityMode = SecurityMode.NoneForMvp else strictSessionInvariants = false
+                }
+            }
+            assertEquals(
+                if (legacy) "Secure fixture must remain authenticated v2"
+                else "Secure fixture must retain strict session invariants",
+                failure.message
+            )
+        }
+    }
 
     @Test
     fun strictTestKitThrowsOnForcedStoreInconsistency() = runBlocking {

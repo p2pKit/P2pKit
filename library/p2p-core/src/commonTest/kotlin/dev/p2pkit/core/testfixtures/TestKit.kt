@@ -5,10 +5,12 @@ import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.dsl.P2pKitBuilder
 
 /**
- * Standard kit-construction path for kit-level behavioral suites (fixture
- * change F6 / TST-9, decision #15a).
+ * **Legacy plaintext-v1** kit fixture for the pre-v2 behavioral suites.
+ * It deliberately diverges from the production authenticated-v2 default.
+ * New secure lifecycle/session tests should use [createSecureTestKit] with
+ * real key material and an explicit authorization policy instead.
  *
- * Identical to [P2pKit.create] except that it enables the internal
+ * Selects [SecurityMode.NoneForMvp] and enables the internal
  * [P2pKitBuilder.strictSessionInvariants] knob **before** applying [block],
  * so the kit's `SessionStore` throws [IllegalStateException] on a detected
  * bookkeeping-invariant violation instead of `logger.warn`ing into the
@@ -17,14 +19,14 @@ import dev.p2pkit.core.dsl.P2pKitBuilder
  * regression fails the suite loudly instead of passing silently.
  *
  * Production behavior is untouched: the knob is `internal`, defaults to
- * `false` (log-don't-crash), and only this fixture sets it. The
+ * `false` (log-don't-crash), and both test fixtures enable it. The
  * `KitStrictInvariantsTest` meta-test (P1-03) proves both dispositions
  * through the full builder → kit → manager → store threading.
  *
- * New kit-level suites should construct kits through this helper, not
- * through [P2pKit.create] directly. A suite that deliberately needs the
- * production warn-only disposition can set `strictSessionInvariants = false`
- * inside its [block] (and should say why in a comment).
+ * Legacy tests may override `securityMode` inside [block], but must then
+ * supply a secure store and authorization; prefer the secure sibling.
+ * A test of production warn-only disposition can deliberately set
+ * `strictSessionInvariants = false` inside [block] and explain why.
  */
 internal fun createTestKit(block: P2pKitBuilder.() -> Unit): P2pKit =
     P2pKit.create {

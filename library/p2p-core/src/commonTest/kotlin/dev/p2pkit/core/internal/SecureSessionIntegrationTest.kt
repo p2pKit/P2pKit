@@ -16,14 +16,15 @@ import dev.p2pkit.core.Platform
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.TransportKind
-import dev.p2pkit.core.security.EncodedIdentityKeyPair
-import dev.p2pkit.core.security.IdentityNamespace
 import dev.p2pkit.core.security.LocalSecureIdentity
 import dev.p2pkit.core.security.SecureIdentityService
 import dev.p2pkit.core.security.platformSecurityCryptography
 import dev.p2pkit.core.internal.security.sha256
+import dev.p2pkit.core.testfixtures.CopyingRawConnection
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.MemorySecureIdentityStorage
+import dev.p2pkit.core.testfixtures.createSecureTestKit
 import dev.p2pkit.core.testfixtures.runWireBlocking
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.PeerAuthenticationHint
@@ -111,7 +112,7 @@ class SecureSessionIntegrationTest {
         val blockedObserved = ObservedRawConnection(blockedPair.a)
         val retryPair = FakeConnectionPair()
         var dial = 0
-        val alice = secureKit(
+        val alice = createSecureTestKit(
             appId,
             "Alice",
             MemorySecureIdentityStorage(),
@@ -121,7 +122,7 @@ class SecureSessionIntegrationTest {
             }),
             PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
         )
-        val bob = secureKit(
+        val bob = createSecureTestKit(
             appId,
             "Bob",
             MemorySecureIdentityStorage(),
@@ -158,7 +159,7 @@ class SecureSessionIntegrationTest {
         val appId = AppId("secure.session.full-setup-timeout")
         val blockedPair = FakeConnectionPair()
         blockedPair.a.writeLatencyMillis = 10_000
-        val alice = secureKit(
+        val alice = createSecureTestKit(
             appId,
             "Alice",
             MemorySecureIdentityStorage(),
@@ -193,7 +194,7 @@ class SecureSessionIntegrationTest {
         val appId = AppId("secure.session.caller-timeout")
         val blockedPair = FakeConnectionPair()
         blockedPair.a.writeLatencyMillis = 10_000
-        val alice = secureKit(
+        val alice = createSecureTestKit(
             appId,
             "Alice",
             MemorySecureIdentityStorage(),
@@ -228,21 +229,21 @@ class SecureSessionIntegrationTest {
         val firstPair = FakeConnectionPair()
         val attackerPair = FakeConnectionPair()
         var dial = 0
-        val bob = secureKit(
+        val bob = createSecureTestKit(
             appId,
             "Bob",
             MemorySecureIdentityStorage(),
             FakeDataTransport(preStagedIncoming = listOf(CopyingRawConnection(firstPair.b))),
             PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
         )
-        val attacker = secureKit(
+        val attacker = createSecureTestKit(
             appId,
             "Attacker",
             MemorySecureIdentityStorage(),
             FakeDataTransport(preStagedIncoming = listOf(CopyingRawConnection(attackerPair.b))),
             PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
         )
-        val alice = secureKit(
+        val alice = createSecureTestKit(
             appId,
             "Alice",
             MemorySecureIdentityStorage(),
@@ -287,14 +288,14 @@ class SecureSessionIntegrationTest {
             val pair = FakeConnectionPair(delivery)
             val aliceRaw = ObservedRawConnection(pair.a)
             val bobRaw = ObservedRawConnection(pair.b)
-            val alice = secureKit(
+            val alice = createSecureTestKit(
                 appId = appId,
                 name = "Alice secret hello name",
                 store = aliceStore,
                 transport = FakeDataTransport(outgoingConnection = { aliceRaw }),
                 authorization = PeerAuthorizationPolicy.PinnedOnly(setOf(bobIdentity.fingerprint))
             )
-            val bob = secureKit(
+            val bob = createSecureTestKit(
                 appId = appId,
                 name = "Bob secret hello name",
                 store = bobStore,
@@ -366,14 +367,14 @@ class SecureSessionIntegrationTest {
     fun securePreparedTransferCompletesAfterReceiverCommit() = runWireBlocking { delivery ->
         val appId = AppId("secure.session.file-commit")
         val pair = FakeConnectionPair(delivery)
-        val alice = secureKit(
+        val alice = createSecureTestKit(
             appId,
             "Alice",
             MemorySecureIdentityStorage(),
             FakeDataTransport(outgoingConnection = { CopyingRawConnection(pair.a) }),
             PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
         )
-        val bob = secureKit(
+        val bob = createSecureTestKit(
             appId,
             "Bob",
             MemorySecureIdentityStorage(),
@@ -405,14 +406,14 @@ class SecureSessionIntegrationTest {
     fun securePreparedSourceGrowthFailsBothPeersBeforeCommit() = runBlocking {
         val appId = AppId("secure.session.file-source-growth")
         val pair = FakeConnectionPair()
-        val alice = secureKit(
+        val alice = createSecureTestKit(
             appId,
             "Alice",
             MemorySecureIdentityStorage(),
             FakeDataTransport(outgoingConnection = { CopyingRawConnection(pair.a) }),
             PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
         )
-        val bob = secureKit(
+        val bob = createSecureTestKit(
             appId,
             "Bob",
             MemorySecureIdentityStorage(),
@@ -465,14 +466,14 @@ class SecureSessionIntegrationTest {
     fun secureReceiverCommitFailureReachesSenderAsTypedTerminalResult() = runWireBlocking { delivery ->
         val appId = AppId("secure.session.file-commit-failure")
         val pair = FakeConnectionPair(delivery)
-        val alice = secureKit(
+        val alice = createSecureTestKit(
             appId,
             "Alice",
             MemorySecureIdentityStorage(),
             FakeDataTransport(outgoingConnection = { CopyingRawConnection(pair.a) }),
             PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
         )
-        val bob = secureKit(
+        val bob = createSecureTestKit(
             appId,
             "Bob",
             MemorySecureIdentityStorage(),
@@ -525,14 +526,14 @@ class SecureSessionIntegrationTest {
         val alicePins = mutableSetOf(bobIdentity.fingerprint)
         val bobPins = mutableSetOf(aliceIdentity.fingerprint)
         val pair = FakeConnectionPair()
-        val alice = secureKit(
+        val alice = createSecureTestKit(
             appId,
             "Alice",
             aliceStore,
             FakeDataTransport(outgoingConnection = { CopyingRawConnection(pair.a) }),
             PeerAuthorizationPolicy.PinnedOnly(alicePins)
         )
-        val bob = secureKit(
+        val bob = createSecureTestKit(
             appId,
             "Bob",
             bobStore,
@@ -565,14 +566,14 @@ class SecureSessionIntegrationTest {
         val aliceIdentity = previewIdentity(appId, aliceStore)
         val bobIdentity = previewIdentity(appId, bobStore)
         val pair = FakeConnectionPair()
-        val alice = secureKit(
+        val alice = createSecureTestKit(
             appId,
             "Alice",
             aliceStore,
             FakeDataTransport(outgoingConnection = { CopyingRawConnection(pair.a) }),
             PeerAuthorizationPolicy.RejectUnknown
         )
-        val bob = secureKit(
+        val bob = createSecureTestKit(
             appId,
             "Bob",
             bobStore,
@@ -601,14 +602,14 @@ class SecureSessionIntegrationTest {
         val aliceStore = MemorySecureIdentityStorage()
         val bobStore = MemorySecureIdentityStorage()
         val pair = FakeConnectionPair()
-        val alice = secureKit(
+        val alice = createSecureTestKit(
             appId,
             "Alice",
             aliceStore,
             FakeDataTransport(outgoingConnection = { CopyingRawConnection(pair.a) }),
             PeerAuthorizationPolicy.RejectUnknown
         )
-        val bob = secureKit(
+        val bob = createSecureTestKit(
             appId,
             "Bob",
             bobStore,
@@ -637,14 +638,14 @@ class SecureSessionIntegrationTest {
         val attackerStore = MemorySecureIdentityStorage()
         val victim = previewIdentity(appId, victimStore)
         val pair = FakeConnectionPair()
-        val alice = secureKit(
+        val alice = createSecureTestKit(
             appId,
             "Alice",
             aliceStore,
             FakeDataTransport(outgoingConnection = { CopyingRawConnection(pair.a) }),
             PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
         )
-        val attacker = secureKit(
+        val attacker = createSecureTestKit(
             appId,
             "Attacker",
             attackerStore,
@@ -691,7 +692,7 @@ class SecureSessionIntegrationTest {
         bobLegacy: Boolean
     ) {
         val pair = FakeConnectionPair()
-        val alice = secureKit(
+        val alice = createSecureTestKit(
             aliceAppId,
             "Alice",
             MemorySecureIdentityStorage(),
@@ -704,7 +705,7 @@ class SecureSessionIntegrationTest {
                 FakeDataTransport(preStagedIncoming = listOf(CopyingRawConnection(pair.b)))
             )
         } else {
-            secureKit(
+            createSecureTestKit(
                 bobAppId,
                 "Bob",
                 MemorySecureIdentityStorage(),
@@ -723,28 +724,6 @@ class SecureSessionIntegrationTest {
             alice.stop()
             bob.stop()
         }
-    }
-
-    private fun secureKit(
-        appId: AppId,
-        name: String,
-        store: SecureIdentityStorage,
-        transport: FakeDataTransport,
-        authorization: PeerAuthorizationPolicy,
-        reconnect: ReconnectPolicy = ReconnectPolicy.Disabled,
-        setupTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS
-    ): P2pKit = P2pKit.create {
-        this.appId = appId
-        deviceName = name
-        secureIdentityStorage = store
-        sessionSetupTimeoutMillis = setupTimeoutMillis
-        security { mode = SecurityMode.AuthenticatedV2(authorization) }
-        lifecycle { reconnectPolicy = reconnect }
-        keepAlive {
-            pingIntervalMillis = 60_000
-            timeoutMillis = 120_000
-        }
-        transports { register(SecureSessionFactory(transport)) }
     }
 
     @Suppress("DEPRECATION")
@@ -781,56 +760,6 @@ private class SecureSessionFactory(
     override val descriptor =
         dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
     override fun build(context: TransportContext): TransportPair = TransportPair(transport)
-}
-
-private class MemorySecureIdentityStorage : SecureIdentityStorage {
-    private val records = mutableMapOf<String, EncodedIdentityKeyPair>()
-
-    override fun loadOrCreate(
-        namespace: IdentityNamespace,
-        fingerprintDigest: (EncodedIdentityKeyPair) -> ByteArray,
-        generate: () -> EncodedIdentityKeyPair
-    ): EncodedIdentityKeyPair = run {
-        records[namespace.storageKey]?.let(::copy)?.also {
-            validateFingerprintCallback(it, fingerprintDigest)
-        } ?: run {
-            val generated = generate()
-            try {
-                validateFingerprintCallback(generated, fingerprintDigest)
-                copy(generated).also { durable -> records[namespace.storageKey] = durable }
-                copy(records.getValue(namespace.storageKey))
-            } finally {
-                generated.clearPrivate()
-            }
-        }
-    }
-
-    override fun reset(namespace: IdentityNamespace) {
-        records.remove(namespace.storageKey)?.clearPrivate()
-    }
-
-    private fun validateFingerprintCallback(
-        pair: EncodedIdentityKeyPair,
-        callback: (EncodedIdentityKeyPair) -> ByteArray
-    ) {
-        val digest = callback(pair)
-        try {
-            require(digest.size == 32)
-        } finally {
-            digest.fill(0)
-        }
-    }
-
-    private fun copy(pair: EncodedIdentityKeyPair): EncodedIdentityKeyPair {
-        val privateKey = pair.privateKeyBytes()
-        val publicKey = pair.publicKeyBytes()
-        return try {
-            EncodedIdentityKeyPair(privateKey, publicKey)
-        } finally {
-            privateKey.fill(0)
-            publicKey.fill(0)
-        }
-    }
 }
 
 @OptIn(ExperimentalAtomicApi::class)
@@ -870,18 +799,6 @@ private class ObservedRawConnection(
         }
         return result
     }
-}
-
-private class CopyingRawConnection(
-    private val delegate: RawConnection
-) : RawConnection {
-    override val state: StateFlow<ConnectionState> get() = delegate.state
-
-    override suspend fun write(bytes: ByteArray) = delegate.write(bytes.copyOf())
-
-    override fun read(): Flow<ByteArray> = delegate.read()
-
-    override suspend fun close() = delegate.close()
 }
 
 private class TestPreparedSource(
