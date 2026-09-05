@@ -80,6 +80,26 @@ command above. Provider-internal key erasure, OS identity persistence, physical
 network behavior and independent cryptographic assurance are not established
 by these synthetic tests.
 
+## Android framework-adapter tests
+
+Run `./gradlew :p2p-network-provisioning-android:verifyAndroidAdapterTests --console=plain`
+for the provisioning adapter tier, also required by the module's `check` task.
+The tests instantiate the production `WifiManagerWrapperImpl`, handles, and
+ownership helpers; Robolectric framework shadows deliver controlled callbacks
+and record native calls. Hotspot credentials and lifecycle run on APIs 26/29
+and 30/35; Wi-Fi joining, cancellation, binding ownership, and cleanup run on
+APIs 29/30/35. The gate rejects missing, empty, failed, or skipped suites and
+missing SDK execution markers.
+
+Framework JARs are pinned in the version catalog, resolved through Gradle's
+locks/checksums, and registered as test inputs. Robolectric's runtime resolver
+is offline; it cannot fetch unverified SDKs. API 35 is the newest selected host
+SDK compatible with the JDK 17 test toolchain (API 36 requires Java 21).
+These are host/shadow tests, not ART, Binder, radio, OEM, permission-revocation,
+or physical-device evidence. The broader runtime/target matrix remains tracked
+in [#157](https://github.com/p2pKit/P2pKit/issues/157); permission-error mapping
+is a separate correction in [#195](https://github.com/p2pKit/P2pKit/issues/195).
+
 ## Dependency updates
 
 Dependency and wrapper updates remain fail closed. A version-catalog change

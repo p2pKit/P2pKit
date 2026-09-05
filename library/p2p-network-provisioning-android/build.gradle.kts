@@ -1,6 +1,7 @@
 import dev.p2pkit.build.P2pPomMetadata
 import kotlinx.validation.KotlinApiBuildTask
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import javax.xml.parsers.DocumentBuilderFactory
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -32,9 +33,89 @@ kotlin {
         getByName("androidHostTest").dependencies {
             implementation(kotlin("test"))
             implementation(libs.kotlinx.coroutines.test)
+            implementation(libs.robolectric.runner)
         }
     }
 }
+
+// Resolve each SDK separately: one configuration would conflict-resolve the
+// four versions of android-all-instrumented to a single (incorrect) SDK. These
+// test-only inputs use the same committed locks/checksums as other artifacts.
+val robolectricSdks = listOf(
+    "26" to libs.robolectric.sdk26,
+    "29" to libs.robolectric.sdk29,
+    "30" to libs.robolectric.sdk30,
+    "35" to libs.robolectric.sdk35,
+).map { (api, artifact) ->
+    configurations.create("robolectricSdk$api") {
+        isCanBeConsumed = false
+        isCanBeResolved = true
+        isTransitive = false
+        dependencies.add(project.dependencies.create(artifact.get()))
+    }
+}
+val prepareRobolectricSdks = tasks.register<Sync>("prepareRobolectricSdks") {
+    from(robolectricSdks)
+    into(layout.buildDirectory.dir("robolectric-sdks"))
+}
+tasks.withType<Test>().configureEach {
+    dependsOn(prepareRobolectricSdks)
+    // Task dependencies alone do not invalidate a cached Test result when an
+    // SDK changes: the framework JAR bytes must also be explicit test inputs.
+    inputs.files(robolectricSdks)
+        .withPropertyName("robolectricFrameworks")
+        .withNormalizer(ClasspathNormalizer::class.java)
+    // Robolectric must not download unchecked runtime JARs outside Gradle.
+    systemProperty("robolectric.offline", "true")
+    systemProperty("robolectric.usePreinstrumentedJars", "true")
+    systemProperty("robolectric.dependency.dir", layout.buildDirectory.dir("robolectric-sdks").get().asFile)
+    val temporaryFiles = layout.buildDirectory.dir("host-test-tmp")
+    systemProperty("java.io.tmpdir", temporaryFiles.get().asFile)
+    doFirst {
+        val directory = temporaryFiles.get().asFile
+        check(directory.isDirectory || directory.mkdirs()) { "Cannot create host-test temporary directory" }
+    }
+    maxParallelForks = 1
+    maxHeapSize = "1g"
+}
+
+val verifyAndroidAdapterTests = tasks.register("verifyAndroidAdapterTests") {
+    group = "verification"
+    description = "Requires executed, non-skipped framework adapter coverage on every pinned host SDK."
+    // AGP registers this host-test task after the module build script runs.
+    dependsOn("testAndroidHostTest")
+    val results = layout.buildDirectory.dir("test-results/testAndroidHostTest")
+    inputs.dir(results)
+    doLast {
+        val factory = DocumentBuilderFactory.newInstance().apply {
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+            setFeature("http://xml.org/sax/features/external-general-entities", false)
+            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+        }
+        val expected = mapOf(
+            "WifiManagerWrapperLegacyHotspotTest" to setOf(26, 29),
+            "WifiManagerWrapperModernHotspotTest" to setOf(30, 35),
+            "WifiManagerWrapperJoinTest" to setOf(29, 30, 35)
+        )
+        expected.forEach { (suite, sdks) ->
+            val report = results.get().file("TEST-dev.p2pkit.provisioning.android.$suite.xml").asFile
+            check(report.isFile) { "Missing Android adapter test results: $suite" }
+            val root = factory.newDocumentBuilder().parse(report).documentElement
+            check(root.getAttribute("tests").toInt() >= sdks.size) { "Empty Android adapter suite: $suite" }
+            for (failure in listOf("failures", "errors", "skipped")) {
+                check(root.getAttribute(failure).toInt() == 0) { "$suite reports $failure" }
+            }
+            val output = root.getElementsByTagName("system-out").item(0)?.textContent.orEmpty()
+            sdks.forEach { sdk ->
+                check(output.lineSequence().any { it == "Android adapter framework SDK=$sdk" }) {
+                    "$suite did not execute framework SDK $sdk"
+                }
+            }
+            logger.lifecycle("Android adapter: $suite executed SDKs ${sdks.sorted()} (host shadows, not ART)")
+        }
+    }
+}
+tasks.named("check") { dependsOn(verifyAndroidAdapterTests) }
 
 // Kotlin's built-in ABI validator excludes Android targets. Feed the
 // supplemental metadata-aware guard from the compiler's declared output;
