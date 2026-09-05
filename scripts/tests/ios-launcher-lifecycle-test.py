@@ -100,8 +100,12 @@ class LauncherLifecycleTest(unittest.TestCase):
                 pass
             process.communicate(timeout=5)
 
-    def start(self, script="run-ios-app.sh", **overrides):
-        process = subprocess.Popen([BASH, str(self.repo / "scripts" / script)],
+    def start(self, script="run-ios-app.sh", cwd=None, absolute=False, **overrides):
+        cwd = cwd or self.repo
+        path = self.repo / "scripts" / script
+        # The default matches Gradle's repository-root, relative-path invocation.
+        argument = str(path) if absolute else os.path.relpath(path, cwd)
+        process = subprocess.Popen([BASH, argument], cwd=cwd,
                                    env=dict(self.env, **overrides), stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True, start_new_session=True)
         self.processes.append(process)
@@ -139,6 +143,35 @@ class LauncherLifecycleTest(unittest.TestCase):
     def test_selection_failure_does_not_create_build_outputs(self):
         self.finish(self.start(SIM_UDID="22222222-2222-2222-2222-222222222222"), expected=1)
         self.assertFalse(self.build.exists())
+
+    def test_absolute_invocation_remains_supported(self):
+        self.finish(self.start(absolute=True))
+        self.assertFalse(self.lock.exists())
+        self.assertEqual([], self.run_dirs())
+
+    def test_relative_launch_from_scripts_directory_repeats(self):
+        for _ in range(2):
+            self.finish(self.start(cwd=self.repo / "scripts"))
+            self.assertFalse(self.lock.exists())
+            self.assertEqual([], self.run_dirs())
+
+    def test_relative_missing_framework_bootstrap_from_scripts_directory(self):
+        shutil.rmtree(self.repo / "library")
+        (self.repo / "gradlew").write_text('''#!/bin/sh
+set -eu
+[ "$1" = :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance ]
+framework=library/p2p-transport-lan/build/XCFrameworks/release/P2pKitShared.xcframework
+for slice in ios-arm64 ios-arm64_x86_64-simulator; do
+    mkdir -p "$framework/$slice/P2pKitShared.framework"
+    : > "$framework/$slice/P2pKitShared.framework/P2pKitShared"
+done
+printf 'invoked\\n' >> fake-gradle-invocations
+''')
+        for _ in range(2):
+            self.finish(self.start(cwd=self.repo / "scripts"))
+            self.assertFalse(self.lock.exists())
+            self.assertEqual([], self.run_dirs())
+        self.assertEqual("invoked\n", (self.repo / "fake-gradle-invocations").read_text())
 
     def test_ui_entry_point_releases_lock_and_owned_outputs(self):
         self.finish(self.start("run-ios-ui-tests.sh"))

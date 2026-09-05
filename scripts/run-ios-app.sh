@@ -14,6 +14,10 @@
 
 set -euo pipefail
 
+# Capture the source location before any helper changes the working directory.
+# Gradle and documented direct calls intentionally use relative script paths.
+IOS_LAUNCH_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ios-run-lock.py"
+
 resolve_simulator_udid() {
     local requested_name="$1"
     local requested_udid="$2"
@@ -160,16 +164,16 @@ ensure_ios_xcframework_present() {
 }
 
 acquire_ios_run_lock() {
-    python3 "$(dirname "${BASH_SOURCE[0]}")/ios-run-lock.py" acquire "$1" "$$"
+    python3 "$IOS_LAUNCH_HELPER" acquire "$1" "$$"
 }
 
 release_ios_run_lock() {
-    python3 "$(dirname "${BASH_SOURCE[0]}")/ios-run-lock.py" release "$1" "$$"
+    python3 "$IOS_LAUNCH_HELPER" release "$1" "$$"
 }
 
 run_ios_mutation() {
     if [[ "${IOS_LAUNCH_OWNS_LOCK:-0}" -eq 1 ]]; then
-        python3 "$(dirname "${BASH_SOURCE[0]}")/ios-run-lock.py" run "$IOS_LAUNCH_LOCK" "$$" "$@"
+        python3 "$IOS_LAUNCH_HELPER" run "$IOS_LAUNCH_LOCK" "$$" "$@"
     else
         # Helpers may also operate on isolated fixtures when sourced by tests.
         "$@"
@@ -196,7 +200,7 @@ cleanup_ios_run() {
     trap '' INT TERM
     # Inspect actual ownership even if a signal arrived between acquisition and
     # the shell flag assignment. An unsuccessful contender never releases a peer.
-    if ! python3 "$(dirname "${BASH_SOURCE[0]}")/ios-run-lock.py" cleanup "$IOS_LAUNCH_LOCK" "$$"; then
+    if ! python3 "$IOS_LAUNCH_HELPER" cleanup "$IOS_LAUNCH_LOCK" "$$"; then
         echo "[ios-run] FATAL: launcher lock cleanup failed; preserving run evidence." >&2
         if [[ "$status" -eq 0 ]]; then status=1; fi
     fi
@@ -225,7 +229,7 @@ main() {
     local run_dir derived_data_dir build_log app_path plist_dump
     local installed_path exec_name built_sha installed_sha
 
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    script_dir="$(dirname "$IOS_LAUNCH_HELPER")"
     repo_root="$(cd "$script_dir/.." && pwd)"
     project_dir="$repo_root/samples/iosApp"
     initialize_ios_run_cleanup "$project_dir" "ios-run"
