@@ -50,3 +50,17 @@ tasks.register<Exec>("checkIosLauncherScripts") {
     )
     commandLine("bash", "scripts/tests/run-ios-app-test.sh")
 }
+
+tasks.register<Exec>("checkIosProjectGeneration") {
+    description = "Verify real XcodeGen schemes and maintained iOS callers in an isolated project."
+    group = "verification"
+    workingDir = rootDir
+    inputs.files(
+        project.file("project.yml"),
+        rootProject.file("scripts/run-ios-app.sh"),
+        rootProject.file("scripts/run-ios-ui-tests.sh"),
+        rootProject.file("scripts/run-release-gate.sh"),
+        rootProject.file("scripts/tests/ios-project-generation-test.py"),
+    )
+    commandLine("python3", "scripts/tests/ios-project-generation-test.py")
+}

@@ -21,6 +21,7 @@ scripts/tests/check-release-identity-test.sh
 scripts/tests/check-kotlin-toolchain-policy-test.sh
 scripts/check-release-metadata.sh
 scripts/check-git-whitespace.sh
+python3 scripts/tests/ios-project-generation-test.py
 ./gradlew check --console=plain
 scripts/check-sbom.sh
 scripts/check-publish-artifacts.sh

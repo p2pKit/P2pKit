@@ -107,6 +107,14 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
 
 schemes:
+  # Explicit schemes disable XcodeGen's implicit per-target schemes. Keep the
+  # app launcher scheme alongside the separate unit/UI-test scheme below.
+  p2pkit-sample:
+    build:
+      targets:
+        p2pkit-sample: all
+    run:
+      config: Debug
   p2pkit-sample-ui:
     build:
       targets:

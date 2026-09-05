@@ -67,6 +67,12 @@ macOS tool boundaries, including repeat runs, failure/signal cleanup, stale/live
 owners, simultaneous recovery, and external output directories. These lifecycle
 tests do not constitute a simulator build, UI execution, or device validation.
 
+On macOS, `./gradlew :iosApp:checkIosProjectGeneration` uses real XcodeGen and
+`xcodebuild -list` in a disposable source fixture. It verifies the application,
+UI-test, and release callers' generated schemes, product names, and load-bearing
+configuration without building or booting a simulator. CI and the release gate
+run this separately from the fake-tool lifecycle tests.
+
 ## Stream-delivery regression matrix
 
 `FakeConnectionPair()` preserves exact write boundaries by default. Opt in to

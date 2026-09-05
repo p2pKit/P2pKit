@@ -331,6 +331,7 @@ grep -Fq 'scripts/tests/classify-ci-scope-test.sh' "$ROOT/scripts/run-release-ga
 for regression in \
     scripts/tests/resolve-ci-scope-test.sh \
     scripts/tests/check-git-whitespace-test.sh \
+    scripts/tests/ios-project-generation-test.py \
     scripts/tests/check-release-identity-test.sh; do
     grep -Fq "$regression" "$CI_WORKFLOW" || {
         echo "FATAL: CI does not run $regression" >&2

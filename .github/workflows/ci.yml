@@ -113,6 +113,7 @@ jobs:
           scripts/tests/resolve-ci-scope-test.sh
           scripts/tests/check-git-whitespace-test.sh
           scripts/tests/check-kotlin-toolchain-policy-test.sh
+          python3 scripts/tests/ios-project-generation-test.py
           source scripts/run-ios-app.sh
           device_json="$(xcrun simctl list -j devices available)"
           SIM_UDID="$(select_latest_available_simulator_udid "iPhone 17" "$device_json")"
