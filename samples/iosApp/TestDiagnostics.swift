@@ -401,7 +401,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
         testId: String,
         requestedSessionId: String?,
         role: String,
-        activeConnections: [TestDiagnosticConnectionSnapshot] = []
+        activeConnections: () -> [TestDiagnosticConnectionSnapshot] = { [] }
     ) -> String {
         activeTestId = Self.normalizedTestId(testId)
         activeSessionId = Self.normalizedSessionId(
@@ -439,7 +439,8 @@ final class IOSTestDiagnosticStore: ObservableObject {
             eventName: TestDiagnosticEventName.testModeActivated,
             currentState: "enabled"
         ))
-        for connection in activeConnections {
+        // Read the live owners in this MainActor turn, not when the sheet was rendered.
+        for connection in activeConnections() where connection.state != "Closed" && connection.state != "Failed" {
             self.connection(
                 peerId: connection.peerId,
                 rawConnectionId: connection.rawConnectionId,
@@ -1356,7 +1357,7 @@ private struct DiagnosticValueRow: View {
 
 struct IOSTestDiagnosticsView: View {
     @ObservedObject var diagnostics: IOSTestDiagnosticStore
-    let activeConnections: [TestDiagnosticConnectionSnapshot]
+    let activeConnections: () -> [TestDiagnosticConnectionSnapshot]
     @Environment(\.dismiss) private var dismiss
     @State private var testId = ""
     @State private var requestedSessionId = ""

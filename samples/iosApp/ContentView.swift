@@ -348,12 +348,14 @@ struct ContentView: View {
         .sheet(isPresented: $showDiagnostics) {
             IOSTestDiagnosticsView(
                 diagnostics: diagnostics,
-                activeConnections: sessions.map { session in
-                    TestDiagnosticConnectionSnapshot(
-                        rawConnectionId: session.id,
-                        peerId: session.peerId,
-                        state: session.state
-                    )
+                activeConnections: {
+                    sessions.map { session in
+                        TestDiagnosticConnectionSnapshot(
+                            rawConnectionId: session.id,
+                            peerId: session.peerId,
+                            state: session.state
+                        )
+                    }
                 }
             )
         }

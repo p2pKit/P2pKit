@@ -4,6 +4,63 @@ import XCTest
 @testable import P2pKitSample
 
 final class TestDiagnosticsTests: XCTestCase {
+    @MainActor
+    func testBeginSessionReadsCurrentOwnersRatherThanSheetCreationSnapshot() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        store.setLocalPeerId("local-peer")
+        var live = TestDiagnosticConnectionSnapshot(
+            rawConnectionId: "old-session", peerId: "peer-a", state: "Connected"
+        )
+        store.connection(peerId: live.peerId, rawConnectionId: live.rawConnectionId, state: live.state, previous: nil)
+        // Keep the same provider passed to the production sheet's Begin Test Session action.
+        let fromSheet = { return [live] }
+        live = TestDiagnosticConnectionSnapshot(
+            rawConnectionId: "new-session", peerId: "peer-a", state: "Connected"
+        )
+        store.connection(peerId: live.peerId, rawConnectionId: live.rawConnectionId, state: live.state, previous: nil)
+        let previous = try XCTUnwrap(store.connectionId(for: "peer-a"))
+
+        store.startSession(
+            testId: "PS-T01", requestedSessionId: "clicked-test", role: "both", activeConnections: fromSheet
+        )
+        _ = store.removeConnection(rawConnectionId: "old-session")
+        let expected = try XCTUnwrap(store.connectionId(for: "peer-a"))
+        XCTAssertNotEqual(previous, expected)
+        store.transfer(
+            TestDiagnosticEventName.transferStarted,
+            peerId: "peer-a", transferId: "first-transfer", sessionId: "new-session",
+            state: "Transferring", size: 64, direction: .sent
+        )
+        XCTAssertEqual(store.events.last?.connectionId, expected)
+        XCTAssertTrue(store.events.contains {
+            $0.connectionId == expected && $0.details["sessionSnapshot"] == "true"
+        })
+    }
+
+    @MainActor
+    func testBeginSessionSkipsTerminalOwnersInCurrentSnapshot() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        store.setLocalPeerId("local-peer")
+        store.startSession(testId: "PS-T01", requestedSessionId: "terminal-snapshot", role: "both") {
+            [
+                TestDiagnosticConnectionSnapshot(rawConnectionId: "new-session", peerId: "peer-a", state: "Connected"),
+                TestDiagnosticConnectionSnapshot(rawConnectionId: "old-session", peerId: "peer-a", state: "Closed"),
+                TestDiagnosticConnectionSnapshot(rawConnectionId: "failed-session", peerId: "peer-a", state: "Failed")
+            ]
+        }
+        let expected = try XCTUnwrap(store.connectionId(for: "peer-a"))
+        store.transfer(
+            TestDiagnosticEventName.transferStarted,
+            peerId: "peer-a", transferId: "first-transfer", sessionId: "new-session",
+            state: "Transferring", size: 64, direction: .sent
+        )
+        XCTAssertEqual(store.events.last?.connectionId, expected)
+    }
+
     func testProductionTransferSelectorsScopeConsentCancelLateUpdatesAndCleanup() {
         final class Handle {
             var actions: [String] = []
