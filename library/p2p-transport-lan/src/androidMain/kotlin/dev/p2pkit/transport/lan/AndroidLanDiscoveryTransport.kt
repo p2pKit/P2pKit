@@ -1097,7 +1097,11 @@ internal class AndroidLanDiscoveryTransport(
      * idle check); the coordinator also cancels any pending debounced
      * rebind/retry in the same step. Both callbacks and the interface watcher
      * are started/stopped as one ownership group to keep the lifecycle
-     * invariant tight.
+     * invariant tight. Failed unregisters remain owned and are rethrown so
+     * the coordinator/kit can report incomplete cleanup and a later stop can
+     * retry. The coordinator still cancels its work and attempts independent
+     * multicast release; swallowing this error would conceal retained native
+     * callbacks from startup repair.
      */
     private fun stopNetworkWatcherNow() {
         var firstFailure: Exception? = null
