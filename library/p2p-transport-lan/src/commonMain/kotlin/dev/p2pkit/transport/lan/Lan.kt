@@ -1,6 +1,7 @@
 package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
@@ -23,8 +24,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * The port is mutable since the v0.3 transport-lifecycle refactor: the data
  * transport binds its server socket lazily in `start()`, then writes the
  * chosen port back into this struct before the discovery transport begins
- * advertising. A zero value means "not bound yet" — discovery transports
- * should not call this with [tcpPort] == 0.
+ * advertising. A zero value means "not bound yet" or "listener detached".
+ * JmDNS advertisements must use [boundTcpPortForAdvertisement] to reject
+ * that state instead of publishing an unusable SRV port.
  *
  * Reads and writes can cross platform callback threads during listener
  * recovery, so the mutable value is backed by [MutableStateFlow]. This keeps
@@ -49,6 +51,23 @@ internal class LanServiceRegistration(
         set(value) {
             tcpPortState.value = value
         }
+
+    /**
+     * Validate one port snapshot before constructing an advertisement. A
+     * detached listener is a typed start failure; the JmDNS coordinator keeps
+     * existing intents and applies its bounded retry policy during rebind.
+     * This does not hold the listener open after taking the snapshot.
+     */
+    fun boundTcpPortForAdvertisement(): Int {
+        val port = tcpPortState.value
+        if (port !in 1..65_535) {
+            throw P2pError.TransportStartFailed(
+                TransportKind.LAN,
+                "LAN advertising requires a bound TCP listener; retry after listener recovery"
+            )
+        }
+        return port
+    }
 
     init {
         require(

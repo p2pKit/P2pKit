@@ -17,6 +17,14 @@ record produced during the 0.7 remediation is preserved in
   sessions should be cancelled/closed before final teardown.
 - Restartable low-level data transports use `stop()` to return to an idle state;
   permanent cleanup is owned by the enclosing kit lifecycle.
+- JVM/Android LAN advertisements require a bound TCP port. Starting advertising
+  while the listener is detached fails with `TransportStartFailed` without
+  clearing independent discovery intent. A detached listener during a JmDNS
+  rebind rejects the new record and retains both feature intents for bounded
+  recovery (five retries, delayed 2/4/6/8/10 seconds). Availability is not
+  guaranteed while detached or after retry exhaustion; a new network target
+  or explicitly stopping and restarting a feature can trigger another binding
+  attempt.
 - Provisioning-manager `close()` is suspending, idempotent, and permanent.
 - Android hotspot hosting and Wi-Fi joining can coexist. `state` describes
   the latest operation/resource publication; `networkState` describes the

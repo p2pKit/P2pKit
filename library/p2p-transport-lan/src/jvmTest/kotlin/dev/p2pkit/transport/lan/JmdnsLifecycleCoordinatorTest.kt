@@ -1,6 +1,7 @@
 package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
@@ -12,6 +13,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import javax.jmdns.ServiceInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +32,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -70,9 +73,11 @@ class JmdnsLifecycleCoordinatorTest {
         var active = false
     }
 
-    private class FakeServiceToken(val localPeer: LocalPeerInfo)
+    private class FakeServiceToken(val localPeer: LocalPeerInfo, val info: ServiceInfo?)
 
-    private class FakeOps : JmdnsLifecycleOps<FakeNet, FakeHandle> {
+    private class FakeOps(
+        private val serviceInfoFactory: ((LocalPeerInfo) -> ServiceInfo)? = null
+    ) : JmdnsLifecycleOps<FakeNet, FakeHandle> {
         val createCalls = AtomicInteger(0)
         val created = CopyOnWriteArrayList<FakeHandle>()
         val createdTargets = CopyOnWriteArrayList<FakeNet?>()
@@ -81,6 +86,7 @@ class JmdnsLifecycleCoordinatorTest {
         var actualCreatedNetwork: FakeNet? = null
         val closed = CopyOnWriteArrayList<FakeHandle>()
         val registrations = CopyOnWriteArrayList<Pair<FakeHandle, LocalPeerInfo>>()
+        val serviceInfos = CopyOnWriteArrayList<ServiceInfo>()
         val unregistrations = CopyOnWriteArrayList<Any>()
         val listenersAdded = CopyOnWriteArrayList<FakeListenerToken>()
         val listenersActivated = CopyOnWriteArrayList<FakeListenerToken>()
@@ -227,7 +233,7 @@ class JmdnsLifecycleCoordinatorTest {
                 failNextServiceTokenCreation = false
                 throw IOException("injected service-token creation failure")
             }
-            return FakeServiceToken(localPeer)
+            return FakeServiceToken(localPeer, serviceInfoFactory?.invoke(localPeer))
         }
 
         override fun registerServiceBlocking(handle: FakeHandle, token: Any) {
@@ -237,7 +243,9 @@ class JmdnsLifecycleCoordinatorTest {
                 failNextRegister = false
                 throw IOException("injected register failure")
             }
-            registrations += handle to (token as FakeServiceToken).localPeer
+            val service = token as FakeServiceToken
+            registrations += handle to service.localPeer
+            service.info?.let(serviceInfos::add)
         }
 
         override fun unregisterServiceBlocking(handle: FakeHandle, token: Any) {
@@ -1068,6 +1076,111 @@ class JmdnsLifecycleCoordinatorTest {
     }
 
     // ── transactional restoration ─────────────────────────────────────
+
+    @Test
+    fun detachedListenerPortRejectsTheRecordAndSelfRetryRestoresBothIntents() {
+        val registration = LanServiceRegistration(
+            localPeer.appId, localPeer.peerId, localPeer.deviceName, localPeer.platform
+        )
+        val data = JvmLanDataTransport(registration)
+        val detachedAttempt = CompletableDeferred<Result<ServiceInfo>>()
+        val retryGate = CountDownLatch(1)
+        lateinit var ops: FakeOps
+        ops = FakeOps { peer ->
+            val result = runCatching { buildJmdnsServiceInfo(registration, peer) }
+            if (registration.tcpPort == 0) {
+                // Park the next handle creation before it consumes another
+                // retry. The producer stays detached until the test restarts it.
+                ops.createGate = retryGate
+                detachedAttempt.complete(result)
+            }
+            result.getOrThrow()
+        }.apply {
+            current = FakeNet("wifi0")
+            observed = current
+        }
+        coordinatorTest(ops) { coordinator, _ ->
+            try {
+                data.start().getOrThrow()
+                val livePort = registration.tcpPort
+                coordinator.startAdvertising(localPeer)
+                coordinator.startDiscovery()
+                assertEquals(listOf(livePort), ops.serviceInfos.map { it.port })
+
+                data.stop()
+                assertEquals(0, registration.tcpPort)
+                ops.observed = FakeNet("wifi1")
+                coordinator.scheduleRebind("listener detached during network rotation")
+                val attempt = withTimeout(5_000) { detachedAttempt.await() }
+                assertTrue(attempt.isFailure, "detached listener produced SRV port ${attempt.getOrNull()?.port}")
+                assertIs<P2pError.TransportStartFailed>(attempt.exceptionOrNull())
+                awaitCondition("self-scheduled retry reaches the gated creator") { ops.createCalls.get() == 3 }
+                assertEquals(listOf(livePort), ops.serviceInfos.map { it.port }, "zero port must never register")
+                assertTrue(ops.watcherActive)
+                assertTrue(ops.lockHeld)
+
+                data.start().getOrThrow()
+                assertEquals(livePort, registration.tcpPort)
+                retryGate.countDown()
+                awaitCondition("retry restores the advertisement and independent discovery listener") {
+                    ops.serviceInfos.size == 2 && ops.listenersActivated.size == 2
+                }
+                assertEquals(listOf(livePort, livePort), ops.serviceInfos.map { it.port })
+                assertEquals(data.tcpPort.value, ops.serviceInfos.last().port)
+                assertTrue(ops.listenersActivated.last().active)
+                assertEquals(3, ops.createCalls.get(), "start + rejected record + successful retry")
+                assertEquals(2, ops.closed.size, "old and rejected fresh handles are both released")
+            } finally {
+                retryGate.countDown()
+                try {
+                    coordinator.stopAdvertising()
+                    coordinator.stopDiscovery()
+                } finally {
+                    data.close()
+                }
+            }
+            assertFalse(ops.watcherActive)
+            assertFalse(ops.lockHeld)
+            assertTrue(ops.created.all { it.closed })
+        }
+    }
+
+    @Test
+    fun unboundAdvertisingFailurePreservesIndependentDiscoveryAndCanRetry() {
+        val registration = LanServiceRegistration(
+            localPeer.appId, localPeer.peerId, localPeer.deviceName, localPeer.platform
+        )
+        val data = JvmLanDataTransport(registration)
+        val ops = FakeOps { peer -> buildJmdnsServiceInfo(registration, peer) }.apply {
+            current = FakeNet("wifi0")
+        }
+        coordinatorTest(ops) { coordinator, _ ->
+            try {
+                coordinator.startDiscovery()
+                assertFailsWith<P2pError.TransportStartFailed> { coordinator.startAdvertising(localPeer) }
+                assertTrue(ops.serviceInfos.isEmpty())
+                assertTrue(ops.listenersActivated.last().active, "failed advertising must restore discovery")
+                assertTrue(ops.watcherActive)
+                assertTrue(ops.lockHeld)
+
+                data.start().getOrThrow()
+                coordinator.startAdvertising(localPeer)
+                assertEquals(data.tcpPort.value, ops.serviceInfos.single().port)
+                coordinator.stopAdvertising()
+                assertTrue(ops.listenersActivated.last().active, "stopping advertising must preserve discovery")
+            } finally {
+                try {
+                    coordinator.stopAdvertising()
+                    coordinator.stopDiscovery()
+                } finally {
+                    data.close()
+                }
+            }
+            assertFalse(ops.watcherActive)
+            assertFalse(ops.lockHeld)
+            assertTrue(ops.created.all { it.closed })
+        }
+    }
 
     @Test
     fun rebindRegisterFailureDoesNotCommitAndSelfRetryRestoresAdvertising() {

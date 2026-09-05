@@ -328,7 +328,7 @@ internal class JvmLanDiscoveryTransport(
             coordinator.startAdvertising(localPeer)
             return
         }
-        val info = buildServiceInfo(localPeer)
+        val info = buildJmdnsServiceInfo(registration, localPeer)
         val shouldAdvertise = synchronized(testLifecycleLock) {
             if (testAdvertising) false else {
                 testAdvertising = true
@@ -418,28 +418,6 @@ internal class JvmLanDiscoveryTransport(
             serviceAdmissions.drain()
             peerEventRelay.clear()
         }
-    }
-
-    private fun buildServiceInfo(localPeer: LocalPeerInfo): ServiceInfo {
-        val properties = buildLanTxtProperties(
-            peerId = registration.localPeerId,
-            appId = registration.appId,
-            deviceName = localPeer.deviceName,
-            platform = localPeer.platform,
-            supportedTransports = localPeer.supportedTransports,
-            protocolVersion = registration.protocolVersion,
-            fingerprint = registration.fingerprint
-        )
-        return ServiceInfo.create(
-            registration.serviceTypeJmdns,
-            // Service instance name — must be unique on the network. Using the
-            // local peer id satisfies that; some browsers display it.
-            registration.localPeerId.value,
-            registration.tcpPort,
-            /* weight = */ 0,
-            /* priority = */ 0,
-            properties
-        )
     }
 
     private fun validatedRecord(info: ServiceInfo): ValidatedLanDiscoveryRecord? =
@@ -676,7 +654,7 @@ internal class JvmLanDiscoveryTransport(
             override fun closeHandleBlocking(handle: JmDNS) = handle.close()
 
             override fun createServiceToken(localPeer: LocalPeerInfo): Any =
-                buildServiceInfo(localPeer)
+                buildJmdnsServiceInfo(registration, localPeer)
 
             override fun registerServiceBlocking(handle: JmDNS, token: Any) {
                 val info = token as ServiceInfo
@@ -685,7 +663,7 @@ internal class JvmLanDiscoveryTransport(
                     JvmLanDiag.log(
                         "advertise",
                         "registered pid=${registration.localPeerId.value.take(8)} " +
-                            "port=${registration.tcpPort} " +
+                            "port=${info.port} " +
                             "publishedAddrs=[${info.inetAddresses.joinToString(",") { it.hostAddress }}]"
                     )
                 }

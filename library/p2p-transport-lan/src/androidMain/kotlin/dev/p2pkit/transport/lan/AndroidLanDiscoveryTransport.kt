@@ -567,7 +567,7 @@ internal class AndroidLanDiscoveryTransport(
             }
 
             override fun createServiceToken(localPeer: LocalPeerInfo): Any =
-                buildServiceInfo(localPeer)
+                buildJmdnsServiceInfo(registration, localPeer)
 
             override fun registerServiceBlocking(handle: JmDNS, token: Any) {
                 handle.registerService(token as ServiceInfo)
@@ -662,28 +662,6 @@ internal class AndroidLanDiscoveryTransport(
     // ──────────────────────────────────────────────────────────────────
     // Service info / listener builders
     // ──────────────────────────────────────────────────────────────────
-
-    private fun buildServiceInfo(localPeer: LocalPeerInfo): ServiceInfo {
-        val properties = buildLanTxtProperties(
-            peerId = registration.localPeerId,
-            appId = registration.appId,
-            deviceName = localPeer.deviceName,
-            platform = localPeer.platform,
-            supportedTransports = localPeer.supportedTransports,
-            protocolVersion = registration.protocolVersion,
-            fingerprint = registration.fingerprint
-        )
-        return ServiceInfo.create(
-            registration.serviceTypeJmdns,
-            // Service instance name — must be unique on the network. Using
-            // the local peer id satisfies that; some browsers display it.
-            registration.localPeerId.value,
-            registration.tcpPort,
-            /* weight = */ 0,
-            /* priority = */ 0,
-            properties
-        )
-    }
 
     /**
      * Builds a fresh [ServiceListener] for [handle]. A new instance is
