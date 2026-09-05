@@ -44,6 +44,36 @@ tests, Android lint/host tests, Apple simulator tests, ABI, strict Dokka,
 publication artifacts, isolated consumers, SBOM, Swift warnings-as-errors, and
 release-XCFramework provenance.
 
+## JVM host coverage
+
+Run the library suites without requesting Apple/Android tasks:
+
+```bash
+./gradlew :p2p-core:jvmTest :p2p-transport-lan:jvmTest \
+  :p2p-network-provisioning-desktop:test --continue --no-build-cache \
+  --dependency-verification strict --max-workers=2 --no-parallel --console=plain
+./gradlew --stop
+```
+
+On Windows PowerShell, use `.\gradlew.bat` and one command line instead of
+Bash continuations. The symlink prerequisites above still apply; do not skip
+tests when a runner lacks them. Stop Gradle after failures as well as success.
+
+`CI` runs these tasks on Ubuntu and Windows for every pull request, main push,
+and manual run. macOS retains the complete `check` gate. Keep `complete-gate`
+required in repository rules: it waits for both JVM hosts and explicitly rejects
+failure, cancellation, or a skipped matrix before running either its lightweight
+or full checks. No new required-check name is needed. The separate Desktop
+matrix remains sample-test/packaging coverage.
+
+Each JVM host uploads XML/HTML reports as
+`jvm-library-tests-<matrix.os>-<run_attempt>` even after a test failure (seven-day
+retention). A setup/compilation failure may have no reports and still fails the
+job. Record the source SHA, OS/JDK, task outcomes, test counts, and any skips;
+a configured workflow or another OS's pass is not host-execution evidence.
+`scripts/tests/release-workflow-test.sh` checks the matrix, actual task command,
+report paths, and fail-closed dependency guard, with negative policy controls.
+
 ## iOS launcher cleanup and recovery
 
 `./gradlew :iosApp:runIosSimulator` and `:iosApp:runIosUiTests` require Python 3

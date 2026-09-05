@@ -18,10 +18,27 @@ The final post-RC3 executable audit tree
 `588421f59efd1bcb4cc7d3b7e1205b1ab28b4f85` (PR #103 head
 `056708dfcda85d6b4aa9073c156ba386e17803b4`) passed complete gate
 [31715657369](https://github.com/p2pKit/P2pKit/actions/runs/31715657369),
-dependency review, both OSV contexts, and macOS/Linux/Windows Desktop checks.
+dependency review, both OSV contexts, and macOS/Linux/Windows Desktop sample
+packaging and sample test checks.
 It merged as `fbba43328df19cf72956df7417886361b335a570` with an identical tree.
-This proves the repository's automated boundary; it is neither a published
-release nor substitute evidence for the campaigns below.
+That historical cross-host task list did not run the library JVM suites on
+Windows/Linux. It is neither a published release nor substitute evidence for
+those library tests or the campaigns below.
+
+## Configured JVM host coverage
+
+The checked-in `CI` workflow runs `:p2p-core:jvmTest`,
+`:p2p-transport-lan:jvmTest`, and `:p2p-network-provisioning-desktop:test` on
+Ubuntu and Windows; the macOS `complete-gate` runs them through `check`.
+`complete-gate` explicitly fails unless both other hosts succeed, including
+for documentation-only changes. The separate `Desktop cross-host` workflow
+continues to cover sample tests and packaging, not these library suites.
+
+This is configured coverage, not evidence that the new hosted jobs have passed.
+No Windows/Linux library result for this revision is recorded here yet. Retain
+per-host results and the exact tested commit before claiming execution; see
+[the local testing guide](local.md#jvm-host-coverage). Deterministic discovery
+callbacks and real loopback TCP do not establish physical mDNS/network coverage.
 
 ## Pending external validation
 
