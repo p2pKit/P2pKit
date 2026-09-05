@@ -7,6 +7,7 @@ import dev.p2pkit.core.security.PlatformSecurityCryptography
 import dev.p2pkit.core.security.platformSecurityCryptography
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeRawConnection
+import dev.p2pkit.core.testfixtures.runWireTest
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
@@ -29,8 +30,8 @@ class SecureV2TransportTest {
     private val driver = SecureV2HandshakeDriver(cryptography)
 
     @Test
-    fun oneRawCollectorCarriesPrefaceHandshakeAndBoundedEncryptedRecords() = runTest {
-        val pair = FakeConnectionPair()
+    fun oneRawCollectorCarriesPrefaceHandshakeAndBoundedEncryptedRecords() = runWireTest { delivery ->
+        val pair = FakeConnectionPair(delivery)
         val initiatorRaw = CopyingRawConnection(pair.a)
         val responderRaw = CopyingRawConnection(pair.b)
         val initiatorPump = SingleCollectorRawPump(initiatorRaw, this)
@@ -85,8 +86,8 @@ class SecureV2TransportTest {
     }
 
     @Test
-    fun queuedTamperedRecordIsClassifiedBeforeSecureStateBecomesTerminal() = runTest {
-        val pair = FakeConnectionPair()
+    fun queuedTamperedRecordIsClassifiedBeforeSecureStateBecomesTerminal() = runWireTest { delivery ->
+        val pair = FakeConnectionPair(delivery)
         val initiatorPump = SingleCollectorRawPump(CopyingRawConnection(pair.a), this)
         val responderPump = SingleCollectorRawPump(CopyingRawConnection(pair.b), this)
         val initiatorStatic = generatedKeyPair()
@@ -130,6 +131,49 @@ class SecureV2TransportTest {
     }
 
     @Test
+    fun truncatedRecordHeaderOrCiphertextFailsWithoutDeliveringPlaintext() =
+        runWireTest { delivery ->
+            for (truncated in listOf(byteArrayOf(0), byteArrayOf(0, 32, 1, 2, 3))) {
+                val pair = FakeConnectionPair(delivery)
+                val initiatorPump = SingleCollectorRawPump(CopyingRawConnection(pair.a), this)
+                val responderPump = SingleCollectorRawPump(CopyingRawConnection(pair.b), this)
+                val initiatorStatic = generatedKeyPair()
+                val responderStatic = generatedKeyPair()
+                var initiator: SecureV2HandshakeOutcome? = null
+                var responder: SecureV2HandshakeOutcome? = null
+                try {
+                    val first = async {
+                        driver.establish(initiatorPump, NoiseRole.Initiator, "secure.test", initiatorStatic) { true }
+                    }
+                    val second = async {
+                        driver.establish(responderPump, NoiseRole.Responder, "secure.test", responderStatic) { true }
+                    }
+                    initiator = first.await()
+                    val secureResponder = second.await().also { responder = it }
+                    pair.a.write(truncated)
+                    pair.a.close()
+                    val delivered = mutableListOf<ByteArray>()
+                    assertFailsWith<NoiseTransportEofException> {
+                        secureResponder.connection.read().collect { delivered += it }
+                    }
+                    assertEquals(0, delivered.size, "an incomplete authenticated record must never publish plaintext")
+                    assertEquals(ConnectionState.Failed, secureResponder.connection.state.value)
+                    assertEquals(ConnectionState.Closed, pair.a.state.value)
+                    assertEquals(ConnectionState.Closed, pair.b.state.value)
+                } finally {
+                    initiator?.clearMetadata()
+                    responder?.clearMetadata()
+                    initiator?.connection?.close()
+                    responder?.connection?.close()
+                    initiatorPump.close()
+                    responderPump.close()
+                    initiatorStatic.destroy()
+                    responderStatic.destroy()
+                }
+            }
+        }
+
+    @Test
     fun malformedRecordHeaderPublishesTerminalProtocolFailure() = runTest {
         val pair = FakeConnectionPair()
         val initiatorPump = SingleCollectorRawPump(CopyingRawConnection(pair.a), this)
@@ -167,8 +211,8 @@ class SecureV2TransportTest {
     }
 
     @Test
-    fun unsupportedPrefaceClosesPumpWithoutNoiseOrPlaintextFallback() = runTest {
-        val pair = FakeConnectionPair()
+    fun unsupportedPrefaceClosesPumpWithoutNoiseOrPlaintextFallback() = runWireTest { delivery ->
+        val pair = FakeConnectionPair(delivery)
         val initiatorRaw = CopyingRawConnection(pair.a)
         val peerRaw = CopyingRawConnection(pair.b)
         val pump = SingleCollectorRawPump(initiatorRaw, this)

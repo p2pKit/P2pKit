@@ -12,7 +12,13 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.runWireBlocking
 import dev.p2pkit.core.protocol.DefaultP2pProtocol
+import dev.p2pkit.core.protocol.Frame
+import dev.p2pkit.core.protocol.FrameCodec
+import dev.p2pkit.core.protocol.FrameFlags
+import dev.p2pkit.core.protocol.MessageId
+import dev.p2pkit.core.protocol.PacketType
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -25,6 +31,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -89,8 +96,8 @@ class SessionFlowTest {
         }
 
     @Test
-    fun outgoingSessionExchangesText() = runBlocking {
-        val pair = FakeConnectionPair()
+    fun outgoingSessionExchangesText() = runWireBlocking { delivery ->
+        val pair = FakeConnectionPair(delivery)
         val alice = outgoingKit("Alice", pair.a)
         val bob = incomingKit("Bob", pair.b)
         try {
@@ -116,8 +123,8 @@ class SessionFlowTest {
     }
 
     @Test
-    fun outgoingSessionExchangesBinary() = runBlocking {
-        val pair = FakeConnectionPair()
+    fun outgoingSessionExchangesBinary() = runWireBlocking { delivery ->
+        val pair = FakeConnectionPair(delivery)
         val alice = outgoingKit("Alice", pair.a)
         val bob = incomingKit("Bob", pair.b)
         try {
@@ -180,8 +187,8 @@ class SessionFlowTest {
     }
 
     @Test
-    fun concurrentSendsDoNotInterleave() = runBlocking {
-        val pair = FakeConnectionPair()
+    fun concurrentSendsDoNotInterleave() = runWireBlocking { delivery ->
+        val pair = FakeConnectionPair(delivery)
         val alice = outgoingKit("Alice", pair.a)
         val bob = incomingKit("Bob", pair.b)
         try {
@@ -225,8 +232,8 @@ class SessionFlowTest {
     }
 
     @Test
-    fun closeTransitionsSessionToClosed() = runBlocking {
-        val pair = FakeConnectionPair()
+    fun closeTransitionsSessionToClosed() = runWireBlocking { delivery ->
+        val pair = FakeConnectionPair(delivery)
         val alice = outgoingKit("Alice", pair.a)
         val bob = incomingKit("Bob", pair.b)
         try {
@@ -262,13 +269,13 @@ class SessionFlowTest {
     }
 
     @Test
-    fun incomingSessionFailsDeterministicallyOnAbruptRemoteTermination() = runBlocking {
+    fun incomingSessionFailsDeterministicallyOnAbruptRemoteTermination() = runWireBlocking { delivery ->
         // AUDIT-2026-07 (SES-1) / P1-01: an incoming session whose wire ends
         // WITHOUT a CLOSE frame (EOF/reset signature — the peer's process went
         // away) must deterministically reach Failed: incoming sessions never
         // reconnect (the remote redials) and a hangup without CLOSE is not a
         // clean close, so the clean-Closed outcome must never appear.
-        val pair = FakeConnectionPair()
+        val pair = FakeConnectionPair(delivery)
         val alice = outgoingKit("Alice", pair.a)
         val bob = incomingKit("Bob", pair.b)
         try {
@@ -300,6 +307,49 @@ class SessionFlowTest {
                 !incomingImpl.runtimeJobIsActiveForTest,
                 "remote failure must terminate the session-wide runtime job"
             )
+        } finally {
+            alice.stop()
+            bob.stop()
+        }
+    }
+
+    @Test
+    fun eofDuringPartialFrameFailsSessionWithoutPublishingAMessage() = runWireBlocking { delivery ->
+        val pair = FakeConnectionPair(delivery)
+        val alice = outgoingKit("Alice", pair.a)
+        val bob = incomingKit("Bob", pair.b)
+        try {
+            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+            val incoming = withTimeout(5_000) { bob.incomingSessions.first() }
+            withTimeout(5_000) { outgoingDeferred.await() }
+            val subscribed = CompletableDeferred<Unit>()
+            val messages = mutableListOf<P2pMessage>()
+            val collector = launch {
+                incoming.incoming.onSubscription { subscribed.complete(Unit) }.collect { messages += it }
+            }
+            try {
+                subscribed.await()
+                val frame = FrameCodec.encode(
+                    Frame(
+                        type = PacketType.DATA,
+                        flags = FrameFlags.LAST_CHUNK.toByte(),
+                        messageId = MessageId(ByteArray(MessageId.SIZE) { it.toByte() }),
+                        chunkIndex = 0,
+                        totalChunks = 1,
+                        payload = ByteArray(2_048) { it.toByte() }
+                    )
+                )
+                pair.a.write(frame.copyOf(frame.size - 17))
+                pair.hangUp(pair.a)
+                val terminal = withTimeout(5_000) { incoming.state.first { it != ConnectionState.Connected } }
+                assertEquals(ConnectionState.Failed, terminal)
+                val implementation = assertIs<P2pSessionImpl>(incoming)
+                withTimeout(5_000) { implementation.awaitRuntimeTermination() }
+                assertTrue(!implementation.runtimeJobIsActiveForTest)
+                assertTrue(messages.isEmpty(), "a partial frame must never be exposed as an application message")
+            } finally {
+                collector.cancelAndJoin()
+            }
         } finally {
             alice.stop()
             bob.stop()

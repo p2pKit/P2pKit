@@ -6,6 +6,7 @@ import dev.p2pkit.core.transport.PeerEvent
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.ClosedSendChannelException
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.toList
@@ -17,6 +18,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -31,6 +33,117 @@ import kotlin.test.assertTrue
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class FixtureContractTest {
+
+    @Test
+    fun defaultWirePreservesWriteBoundaries() = runTest {
+        val pair = FakeConnectionPair()
+        val writes = listOf(byteArrayOf(1), byteArrayOf(), byteArrayOf(2, 3))
+        for (bytes in writes) pair.a.write(bytes)
+        pair.a.close()
+        val reads = pair.b.read().toList()
+        assertEquals(writes.map { it.size }, reads.map { it.size })
+        writes.zip(reads).forEach { (written, read) -> assertContentEquals(written, read) }
+    }
+
+    @Test
+    fun fragmentedWireIsBoundedSeededAndLosslessInBothDirections() = runTest {
+        val payload = ByteArray(200_000) { (it * 31).toByte() }
+        val mode = WireDelivery.Fragmented(seed = 138)
+        var previousSizes: List<Int>? = null
+        repeat(2) {
+            val pair = FakeConnectionPair(mode)
+            pair.a.write(payload)
+            pair.b.write(payload)
+            pair.a.close()
+            val forward = pair.b.read().toList()
+            val reverse = pair.a.read().toList()
+            val sizes = forward.map { it.size }
+            assertTrue(sizes.size > 1, "$mode must fragment the write")
+            assertTrue(sizes.all { it in 1..mode.maxFragmentBytes }, "$mode must bound every fragment")
+            assertContentEquals(payload, concatenate(forward))
+            assertContentEquals(payload, concatenate(reverse))
+            assertEquals(sizes, reverse.map { it.size }, "$mode applies to both directions")
+            previousSizes?.let { assertEquals(it, sizes, "$mode must reproduce its fragment boundaries") }
+            previousSizes = sizes
+            assertEquals(1, pair.a.writtenChunks.size, "read fragmentation must not alter the write log")
+            assertEquals(1, pair.b.writtenChunks.size)
+            assertEquals(ConnectionState.Closed, pair.a.state.value)
+            assertEquals(ConnectionState.Closed, pair.b.state.value)
+        }
+    }
+
+    @Test
+    fun coalescedWireMergesQueuedWritesWithoutWaitingForMore() = runTest {
+        val pair = FakeConnectionPair(WireDelivery.Coalesced())
+        pair.a.write(byteArrayOf(1, 2))
+        pair.a.write(byteArrayOf(3))
+        pair.a.write(byteArrayOf(4, 5))
+        // The wire is still open: the reader must not wait for a full batch.
+        val batch = pair.b.read().first()
+        assertContentEquals(byteArrayOf(1, 2, 3, 4, 5), batch)
+        assertEquals(listOf(2, 1, 2), pair.a.writtenChunks.map { it.size })
+        pair.a.close()
+    }
+
+    @Test
+    fun coalescedWireBoundsReadsAndDrainsLargeWriteRemaindersAtEof() = runTest {
+        val pair = FakeConnectionPair(WireDelivery.Coalesced())
+        val payload = ByteArray(200_000) { it.toByte() }
+        pair.a.write(payload)
+        pair.a.write(byteArrayOf(99))
+        pair.a.close()
+        val reads = pair.b.read().toList()
+        assertTrue(reads.all { it.size in 1..8_192 })
+        assertEquals(25, reads.size)
+        assertContentEquals(payload + byteArrayOf(99), concatenate(reads))
+        assertEquals(ConnectionState.Closed, pair.b.state.value)
+    }
+
+    @Test
+    fun coalescingCapsQueuedWriteWorkAndPreservesEmptyWrites() = runTest {
+        val pair = FakeConnectionPair(WireDelivery.Coalesced(maxReadBytes = 4, maxWritesPerRead = 2))
+        for (bytes in listOf(byteArrayOf(), byteArrayOf(), byteArrayOf(1, 2, 3), byteArrayOf(4, 5))) {
+            pair.a.write(bytes)
+        }
+        pair.a.close()
+        val reads = pair.b.read().toList()
+        assertEquals(listOf(0, 4, 1), reads.map { it.size })
+        assertContentEquals(byteArrayOf(1, 2, 3, 4, 5), concatenate(reads))
+    }
+
+    @Test
+    fun everyDeliveryModeDrainsQueuedBytesBeforeTheOriginalReadFailure() = runTest {
+        forEachWireDelivery { delivery ->
+            val pair = FakeConnectionPair(delivery)
+            val payload = ByteArray(400) { it.toByte() }
+            pair.a.write(payload)
+            // Extra marker state makes this sentinel non-copyable by coroutine
+            // stacktrace recovery, so identity checks are meaningful on JVM.
+            val marker = Any()
+            val failure = FixtureReadFailure(marker)
+            pair.b.breakWithException(failure)
+            val reads = mutableListOf<ByteArray>()
+            val caught = assertFailsWith<FixtureReadFailure> {
+                pair.b.read().collect { reads += it }
+            }
+            assertSame(failure, caught)
+            assertSame(marker, caught.marker)
+            assertContentEquals(payload, concatenate(reads))
+            assertEquals(ConnectionState.Closed, pair.b.state.value)
+            assertFailsWith<ClosedSendChannelException> { pair.b.write(byteArrayOf(1)) }
+        }
+    }
+
+    @Test
+    fun deliveryBoundsRejectInvalidValues() {
+        for (size in listOf(0, -1, 8_193, Int.MAX_VALUE)) {
+            assertFailsWith<IllegalArgumentException> { WireDelivery.Fragmented(seed = 138, maxFragmentBytes = size) }
+            assertFailsWith<IllegalArgumentException> { WireDelivery.Coalesced(maxReadBytes = size) }
+        }
+        for (count in listOf(0, -1, 1_025, Int.MAX_VALUE)) {
+            assertFailsWith<IllegalArgumentException> { WireDelivery.Coalesced(maxWritesPerRead = count) }
+        }
+    }
 
     // ---- F1: remote-termination fidelity -------------------------------
 
@@ -242,4 +355,16 @@ class FixtureContractTest {
         quiet.debug("only debug")
         quiet.assertNoUnexpectedWarnOrError()
     }
+
+    private fun concatenate(chunks: List<ByteArray>): ByteArray {
+        val result = ByteArray(chunks.sumOf { it.size })
+        var offset = 0
+        for (chunk in chunks) {
+            chunk.copyInto(result, offset)
+            offset += chunk.size
+        }
+        return result
+    }
+
+    private class FixtureReadFailure(val marker: Any) : IllegalStateException("defensive read failure")
 }

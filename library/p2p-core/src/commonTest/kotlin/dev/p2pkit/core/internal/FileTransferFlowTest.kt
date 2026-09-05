@@ -29,6 +29,7 @@ import dev.p2pkit.core.internal.security.sha256
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.runWireBlocking
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transfer.FileTransferDestination
 import dev.p2pkit.core.transfer.FileTransferState
@@ -155,8 +156,8 @@ class FileTransferFlowTest {
     )
 
     @Test
-    fun smallFileTransfersEndToEnd() = runBlocking {
-        val pair = FakeConnectionPair()
+    fun smallFileTransfersEndToEnd() = runWireBlocking { delivery ->
+        val pair = FakeConnectionPair(delivery)
         val alice = outgoingKit("Alice", pair.a)
         val bob = incomingKit("Bob", pair.b)
         try {
@@ -350,8 +351,8 @@ class FileTransferFlowTest {
     }
 
     @Test
-    fun cancelMidStreamPropagatesToReceiver() = runBlocking {
-        val pair = FakeConnectionPair()
+    fun cancelMidStreamPropagatesToReceiver() = runWireBlocking { delivery ->
+        val pair = FakeConnectionPair(delivery)
         val alice = outgoingKit("Alice", pair.a)
         val bob = incomingKit("Bob", pair.b)
         try {

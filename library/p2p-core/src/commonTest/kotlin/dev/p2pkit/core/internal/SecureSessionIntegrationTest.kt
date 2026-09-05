@@ -24,6 +24,7 @@ import dev.p2pkit.core.security.platformSecurityCryptography
 import dev.p2pkit.core.internal.security.sha256
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.runWireBlocking
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.PeerAuthenticationHint
 import dev.p2pkit.core.transport.TransportContext
@@ -277,13 +278,13 @@ class SecureSessionIntegrationTest {
 
     @Test
     fun pinnedSecureSessionsAuthenticateBeforeHelloAndExposeOnlyCiphertextOnRawWire() =
-        runBlocking {
+        runWireBlocking { delivery ->
             val appId = AppId("secure.session.pinned")
             val aliceStore = MemorySecureIdentityStorage()
             val bobStore = MemorySecureIdentityStorage()
             val aliceIdentity = previewIdentity(appId, aliceStore)
             val bobIdentity = previewIdentity(appId, bobStore)
-            val pair = FakeConnectionPair()
+            val pair = FakeConnectionPair(delivery)
             val aliceRaw = ObservedRawConnection(pair.a)
             val bobRaw = ObservedRawConnection(pair.b)
             val alice = secureKit(
@@ -327,11 +328,32 @@ class SecureSessionIntegrationTest {
                 outgoing.send(P2pMessage.Text(secret, metadata))
                 assertEquals(P2pMessage.Text(secret, metadata), received.await())
 
+                val binary = ByteArray(34_000) { (it * 17).toByte() }
+                val binarySubscribed = CompletableDeferred<Unit>()
+                val binaryReceived = async {
+                    withTimeout(5_000) {
+                        outgoing.incoming.onSubscription { binarySubscribed.complete(Unit) }.first()
+                    }
+                }
+                binarySubscribed.await()
+                incoming.send(P2pMessage.Binary(binary, mapOf("kind" to "reverse-binary")))
+                val binaryMessage = assertIs<P2pMessage.Binary>(binaryReceived.await())
+                assertContentEquals(binary, binaryMessage.bytes)
+                assertEquals(mapOf("kind" to "reverse-binary"), binaryMessage.metadata)
+
                 val aliceWire = aliceRaw.writtenBytes()
                 assertFalse(aliceWire.containsSubsequence(secret.encodeToByteArray()))
                 assertFalse(aliceWire.containsSubsequence("Alice secret hello name".encodeToByteArray()))
                 assertFalse(aliceWire.containsSubsequence(appId.value.encodeToByteArray()))
                 assertTrue(aliceWire.isNotEmpty())
+
+                outgoing.close()
+                assertEquals(ConnectionState.Closed, outgoing.state.value)
+                assertEquals(
+                    ConnectionState.Closed,
+                    withTimeout(5_000) { incoming.state.first { it != ConnectionState.Connected } }
+                )
+                withTimeout(5_000) { assertIs<P2pSessionImpl>(incoming).awaitRuntimeTermination() }
             } finally {
                 alice.stop()
                 bob.stop()
@@ -341,9 +363,9 @@ class SecureSessionIntegrationTest {
         }
 
     @Test
-    fun securePreparedTransferCompletesAfterReceiverCommit() = runBlocking {
+    fun securePreparedTransferCompletesAfterReceiverCommit() = runWireBlocking { delivery ->
         val appId = AppId("secure.session.file-commit")
-        val pair = FakeConnectionPair()
+        val pair = FakeConnectionPair(delivery)
         val alice = secureKit(
             appId,
             "Alice",
@@ -440,9 +462,9 @@ class SecureSessionIntegrationTest {
     }
 
     @Test
-    fun secureReceiverCommitFailureReachesSenderAsTypedTerminalResult() = runBlocking {
+    fun secureReceiverCommitFailureReachesSenderAsTypedTerminalResult() = runWireBlocking { delivery ->
         val appId = AppId("secure.session.file-commit-failure")
-        val pair = FakeConnectionPair()
+        val pair = FakeConnectionPair(delivery)
         val alice = secureKit(
             appId,
             "Alice",

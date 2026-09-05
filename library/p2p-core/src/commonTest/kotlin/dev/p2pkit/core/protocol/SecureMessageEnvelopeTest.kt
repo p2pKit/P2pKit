@@ -5,6 +5,7 @@ import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.internal.security.Sha256Hasher
 import dev.p2pkit.core.internal.security.sha256
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
+import dev.p2pkit.core.testfixtures.runWireTest
 import kotlinx.coroutines.async
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -67,8 +68,8 @@ class SecureMessageEnvelopeTest {
     }
 
     @Test
-    fun negotiatedEnvelopeRoundTripsTextMetadataOverSecureProtocol() = runTest {
-        val pair = FakeConnectionPair()
+    fun negotiatedEnvelopeRoundTripsTextMetadataOverSecureProtocol() = runWireTest { delivery ->
+        val pair = FakeConnectionPair(delivery)
         val protocol = DefaultP2pProtocol(
             clock = { testScheduler.currentTime },
             version = ProtocolConstants.SECURE_VERSION
@@ -89,8 +90,8 @@ class SecureMessageEnvelopeTest {
     }
 
     @Test
-    fun readerCommitsHelloBeforeDecodingFollowingEnvelope() = runTest {
-        val pair = FakeConnectionPair()
+    fun readerCommitsHelloBeforeDecodingFollowingEnvelope() = runWireTest { delivery ->
+        val pair = FakeConnectionPair(delivery)
         val protocol = DefaultP2pProtocol(
             clock = { 0L },
             version = ProtocolConstants.SECURE_VERSION
@@ -134,8 +135,8 @@ class SecureMessageEnvelopeTest {
     }
 
     @Test
-    fun negotiatedReceiverRejectsRawDataDowngrade() = runTest {
-        val pair = FakeConnectionPair()
+    fun negotiatedReceiverRejectsRawDataDowngrade() = runWireTest { delivery ->
+        val pair = FakeConnectionPair(delivery)
         val protocol = DefaultP2pProtocol(
             clock = { 0L },
             version = ProtocolConstants.SECURE_VERSION

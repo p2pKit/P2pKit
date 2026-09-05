@@ -44,6 +44,22 @@ tests, Android lint/host tests, Apple simulator tests, ABI, strict Dokka,
 publication artifacts, isolated consumers, SBOM, Swift warnings-as-errors, and
 release-XCFramework provenance.
 
+## Stream-delivery regression matrix
+
+`FakeConnectionPair()` preserves exact write boundaries by default. Opt in to
+`WireDelivery.Fragmented(seed = 138)` or `WireDelivery.Coalesced()` for stream
+coverage; `forEachWireDelivery` runs all three and prints the selected mode
+and seed. Coalescing drains only queued writes, never waits for a full batch,
+and caps reads at 8 KiB. Write logs and byte order are unchanged.
+
+Fixture contract tests pin byte conservation, deterministic fragments, queued
+coalescing, bounds, EOF, and error propagation. Selected Noise transport,
+envelope, session, file-transfer, and authenticated kit integration cases run
+the same assertions under every mode. Run them with
+`./gradlew :p2p-core:jvmTest :p2p-core:iosSimulatorArm64Test --console=plain`.
+These are in-process tests, not kernel short-write/backpressure, independent
+interoperability, real filesystem durability, or physical-network evidence.
+
 ## Dependency updates
 
 Dependency and wrapper updates remain fail closed. A version-catalog change

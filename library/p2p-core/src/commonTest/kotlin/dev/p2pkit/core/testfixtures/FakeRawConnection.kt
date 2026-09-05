@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
@@ -22,13 +23,18 @@ import kotlinx.coroutines.withContext
  * Pair of in-memory connections wired to each other. Bytes written to [a]
  * appear in [b]'s read flow, and vice versa. Used to test the protocol and
  * session layers without going over a real socket.
+ *
+ * [delivery] changes read boundaries in both directions, not write logging.
+ * [WireDelivery.Exact] preserves the historical default. Fragmentation is
+ * seeded; coalescing drains only queued writes and caps reads at 8 KiB.
+ * This remains an unbounded in-memory wire, not a kernel/backpressure model.
  */
-internal class FakeConnectionPair {
+internal class FakeConnectionPair(delivery: WireDelivery = WireDelivery.Exact) {
     private val aToB = Channel<ByteArray>(Channel.UNLIMITED)
     private val bToA = Channel<ByteArray>(Channel.UNLIMITED)
 
-    val a: FakeRawConnection = FakeRawConnection(send = aToB, receive = bToA)
-    val b: FakeRawConnection = FakeRawConnection(send = bToA, receive = aToB)
+    val a: FakeRawConnection = FakeRawConnection(send = aToB, receive = bToA, delivery = delivery)
+    val b: FakeRawConnection = FakeRawConnection(send = bToA, receive = aToB, delivery = delivery)
 
     /**
      * Terminate the wire from [side]'s end without a protocol-level CLOSE
@@ -69,7 +75,8 @@ internal class FakeConnectionPair {
 @OptIn(ExperimentalAtomicApi::class)
 internal class FakeRawConnection(
     private val send: Channel<ByteArray>,
-    private val receive: Channel<ByteArray>
+    private val receive: Channel<ByteArray>,
+    private val delivery: WireDelivery = WireDelivery.Exact
 ) : RawConnection {
 
     private val _state = MutableStateFlow(ConnectionState.Connected)
@@ -145,9 +152,7 @@ internal class FakeRawConnection(
     }
 
     override fun read(): Flow<ByteArray> = flow {
-        for (bytes in receive) {
-            emit(bytes)
-        }
+        emitAll(deliverRawBytes(receive, delivery))
         // Channel closed without a cause = the wire ended (local close,
         // partner close, or hang-up). Match the shipped transports: the read
         // flow completes normally and the state flips to Closed
