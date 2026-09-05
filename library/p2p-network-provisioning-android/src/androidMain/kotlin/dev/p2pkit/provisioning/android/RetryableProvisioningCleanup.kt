@@ -160,6 +160,8 @@ internal class RetryableJoinCleanup(
 /**
  * Serializes the currently bound platform network with terminal loss/close.
  * A delayed loss for a superseded network cannot claim the active lease.
+ * This lease's monitor is always outside the retryable-cleanup monitor;
+ * cleanup callbacks must never acquire the lease in the opposite order.
  */
 internal class CurrentNetworkLease<T : Any>(initial: T) {
     private val lock = Any()
@@ -167,6 +169,21 @@ internal class CurrentNetworkLease<T : Any>(initial: T) {
     private var terminal = false
 
     fun snapshot(): T = synchronized(lock) { current }
+
+    /** Linearizes initial binding with terminal close, including pre-delivery cancellation. */
+    fun bindInitial(cleanup: RetryableJoinCleanup, bind: (T) -> Boolean): Boolean = synchronized(lock) {
+        if (terminal) return@synchronized false
+        try {
+            cleanup.bindInitial { bind(current) }.also { bound ->
+                if (!bound) terminal = true
+            }
+        } catch (failure: Throwable) {
+            // The wrapper closes/retains cleanup after this returns. A queued
+            // onAvailable must not bind in the interval before that cleanup.
+            terminal = true
+            throw failure
+        }
+    }
 
     fun rebind(
         next: T,

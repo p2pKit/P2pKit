@@ -1,5 +1,11 @@
 package dev.p2pkit.provisioning.android
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.LockSupport
+import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -147,6 +153,131 @@ class RetryableProvisioningCleanupTest {
     }
 
     @Test
+    fun initialBindingRetainsTheOuterLeaseUntilTheNativeBindCompletes() {
+        val lease = CurrentNetworkLease("network")
+        val owner = JoinCallbackOwner<Any>()
+        val handle = Any()
+        assertTrue(owner.claimInitial())
+        assertTrue(owner.install(handle))
+        val nativeBindEntered = CountDownLatch(1)
+        val releaseNativeBind = CountDownLatch(1)
+        val closeBodyEntered = AtomicBoolean()
+        val bound = AtomicBoolean()
+        val failure = AtomicReference<Throwable?>()
+        var clearCalls = 0
+        var unregisterCalls = 0
+        var tokenReleases = 0
+        val cleanup = RetryableJoinCleanup(
+            clearProcessBinding = { clearCalls += 1; true },
+            unregisterCallback = { unregisterCalls += 1 },
+            releaseBindingToken = { tokenReleases += 1 },
+            report = {}
+        )
+        val binder = checkedThread("initial-bind", failure) {
+            bound.set(lease.bindInitial(cleanup) { network ->
+                assertEquals("network", network)
+                nativeBindEntered.countDown()
+                assertTrue(releaseNativeBind.await(5, TimeUnit.SECONDS), "native bind was not released")
+                true
+            })
+        }
+        var closer: Thread? = null
+        try {
+            assertTrue(nativeBindEntered.await(5, TimeUnit.SECONDS), "native bind was not reached")
+            closer = checkedThread("join-close", failure) {
+                // Same order as continuation cancellation after handle install:
+                // take the callback owner, then close outside its monitor.
+                assertSame(handle, owner.closeAndTake())
+                lease.close {
+                    closeBodyEntered.set(true)
+                    owner.markClosed(handle)
+                    cleanup.close()
+                }
+            }
+            awaitMonitorWait(closer)
+            assertFalse(
+                closeBodyEntered.get(),
+                "close must wait on the outer lease, not hold it while waiting on the cleanup monitor"
+            )
+        } finally {
+            releaseNativeBind.countDown()
+            binder.join(5_000)
+            closer?.join(5_000)
+            assertFalse(binder.isAlive, "initial bind thread leaked")
+            assertFalse(closer?.isAlive == true, "close thread leaked")
+        }
+        failure.get()?.let { throw AssertionError("binding/close worker failed", it) }
+        assertTrue(bound.get())
+        assertTrue(closeBodyEntered.get())
+        assertFalse(owner.tryDeliver(handle) { error("cancelled join was delivered") })
+        assertEquals(1, clearCalls)
+        assertEquals(1, unregisterCalls)
+        assertEquals(1, tokenReleases)
+        lease.close { cleanup.close() }
+        assertFalse(lease.bindInitial(cleanup) { error("terminal lease rebound") })
+        assertFalse(lease.rebind("late", canRebind = { true }, bind = { error("terminal lease rebound") }))
+        assertEquals(1, clearCalls)
+        assertEquals(1, unregisterCalls)
+        assertEquals(1, tokenReleases)
+    }
+
+    @Test
+    fun terminalLeaseRejectsInitialBindingBeforeNativeCleanupRuns() {
+        for (lost in listOf(false, true)) {
+            val lease = CurrentNetworkLease("network")
+            var nativeBinds = 0
+            var tokenReleases = 0
+            val cleanup = RetryableJoinCleanup(
+                clearProcessBinding = { error("no binding was installed") },
+                unregisterCallback = {},
+                releaseBindingToken = { tokenReleases += 1 },
+                report = {}
+            )
+            if (lost) {
+                assertTrue(lease.claimLoss("network", canClaim = { true }, onClaim = {}))
+            }
+            lease.close {
+                // The lease is terminal even while the independently retryable
+                // native cleanup has not begun. Reentrant callbacks must not bind.
+                assertFalse(lease.bindInitial(cleanup) { nativeBinds += 1; true })
+                cleanup.close()
+            }
+            assertEquals(0, nativeBinds)
+            assertEquals(1, tokenReleases)
+        }
+    }
+
+    @Test
+    fun failedInitialBindingSealsTheLeaseBeforeItsCallerCanStartCleanup() {
+        for (throws in listOf(false, true)) {
+            val lease = CurrentNetworkLease("network")
+            var bindCalls = 0
+            var unregisterCalls = 0
+            var tokenReleases = 0
+            val cleanup = RetryableJoinCleanup(
+                clearProcessBinding = { error("rejected binding must not clear an unrelated route") },
+                unregisterCallback = { unregisterCalls += 1 },
+                releaseBindingToken = { tokenReleases += 1 },
+                report = {}
+            )
+            val bind = {
+                lease.bindInitial(cleanup) {
+                    bindCalls += 1
+                    if (throws) throw SecurityException("synthetic permission failure")
+                    false
+                }
+            }
+            if (throws) assertFailsWith<SecurityException> { bind() } else assertFalse(bind())
+            assertFalse(lease.bindInitial(cleanup) { bindCalls += 1; true })
+            assertFalse(lease.rebind("late", canRebind = { true }, bind = { bindCalls += 1; true }))
+            assertEquals(1, bindCalls)
+            lease.close { cleanup.close() }
+            assertEquals(1, unregisterCalls)
+            assertEquals(1, tokenReleases)
+        }
+    }
+
+    @Test
     fun successfulRebindBecomesTheBindingThatTerminalCleanupClears() {
         var clearAttempts = 0
         var tokenReleases = 0
@@ -276,5 +407,25 @@ class RetryableProvisioningCleanupTest {
         assertEquals("network", beforeDelivery.handle)
         assertFalse(lostBeforeDelivery.tryDeliver("network") { deliveries += 1; true })
         assertEquals(1, deliveries, "terminal loss must suppress a late success delivery")
+    }
+
+    private fun checkedThread(
+        name: String,
+        failure: AtomicReference<Throwable?>,
+        block: () -> Unit
+    ): Thread = thread(name = "p2pkit-$name-test", isDaemon = true) {
+        try {
+            block()
+        } catch (caught: Throwable) {
+            failure.compareAndSet(null, caught)
+        }
+    }
+
+    private fun awaitMonitorWait(worker: Thread) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (worker.state != Thread.State.BLOCKED && worker.isAlive && System.nanoTime() < deadline) {
+            LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1))
+        }
+        assertEquals(Thread.State.BLOCKED, worker.state, "worker did not reach the contested monitor")
     }
 }

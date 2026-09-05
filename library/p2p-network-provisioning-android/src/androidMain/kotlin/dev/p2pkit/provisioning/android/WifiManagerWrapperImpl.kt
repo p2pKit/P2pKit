@@ -421,8 +421,8 @@ private class JoinHandleImpl(
         }
     }
 
-    fun bindInitial(): Boolean = cleanup.bindInitial {
-        connectivity.bindProcessToNetwork(networkLease.snapshot())
+    fun bindInitial(): Boolean = networkLease.bindInitial(cleanup) { current ->
+        connectivity.bindProcessToNetwork(current)
     }
 
     fun rebind(next: Network): Boolean {
