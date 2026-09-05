@@ -9,6 +9,11 @@
 # This is a maintainer curation tool, not an automatic trust step.
 set -euo pipefail
 
+# Parse ASCII protocol fields and compare sorted records byte-wise. GPG's
+# human diagnostics may contain non-UTF-8 bytes even beside valid VALIDSIG
+# status records; the caller's locale must not make those signatures fail.
+export LC_ALL=C
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BASE_REF="${1:-origin/main}"
 

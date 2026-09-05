@@ -412,6 +412,10 @@ SCRIPT
 cat >"$review_fixture/mock-bin/gpg" <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${MOCK_REQUIRE_BYTE_LOCALE:-false}" == true && "${LC_ALL:-}" != C ]]; then
+    echo 'gpg fixture: curation must use the byte locale' >&2
+    exit 2
+fi
 fingerprint="${MOCK_KEY_FINGERPRINT:-41CD49B4EF5876F9E9F691DABAC30622339994C4}"
 if [[ "${#fingerprint}" -eq 40 ]]; then
     key_id="${fingerprint: -16}"
@@ -453,6 +457,9 @@ elif [[ "$arguments" == *' --import '* ]]; then
     fi
     echo 'gpg: key imported' >&2
 elif [[ "$arguments" == *' --verify '* ]]; then
+    if [[ "${MOCK_NON_UTF8_DIAGNOSTIC:-false}" == true ]]; then
+        printf 'gpg: synthetic publisher diagnostic byte \351\n' >&2
+    fi
     if [[ "${MOCK_VERIFY_FAIL:-false}" == true ]]; then
         echo '[GNUPG:] BADSIG injected' >&2
         exit 1
@@ -475,6 +482,20 @@ chmod +x "$review_fixture/mock-bin/curl" "$review_fixture/mock-bin/gh" \
         scripts/review-dependency-verification.sh "$review_base" >/dev/null
 )
 
+# macOS sed rejects non-UTF-8 GPG diagnostic bytes under a UTF-8 caller
+# locale. Assert the byte-locale contract too, including on hosts whose sed
+# happens to tolerate those bytes, without replacing signature validation.
+for caller_locale in C.UTF-8 en_US.UTF-8; do
+    (
+        cd "$review_fixture"
+        LC_ALL="$caller_locale" PATH="$review_fixture/mock-bin:$PATH" \
+            MOCK_REPOSITORY="$review_fixture/mock-repository" \
+            MOCK_JAR_SHA="$review_jar_sha" MOCK_REQUIRE_BYTE_LOCALE=true \
+            MOCK_NON_UTF8_DIAGNOSTIC=true \
+            scripts/review-dependency-verification.sh "$review_base" >/dev/null
+    )
+done
+
 v6_fingerprint="0123456789ABCDEF$(printf 'A%.0s' {1..48})"
 (
     cd "$review_fixture"
@@ -494,6 +515,7 @@ expect_failure "issuer key ID resolving to the wrong key" "could not retrieve on
 
 expect_failure "VALIDSIG fingerprint mismatch" "signature fingerprint mismatch" \
     env PATH="$review_fixture/mock-bin:$PATH" \
+    LC_ALL=en_US.UTF-8 MOCK_NON_UTF8_DIAGNOSTIC=true \
     MOCK_REPOSITORY="$review_fixture/mock-repository" MOCK_JAR_SHA="$review_jar_sha" \
     MOCK_VALIDSIG_FINGERPRINT=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB \
     "$review_fixture/scripts/review-dependency-verification.sh" "$review_base"
@@ -506,6 +528,7 @@ expect_failure "multiple detached signatures" "exactly one signature packet" \
 
 expect_failure "invalid detached signature" "invalid detached signature" \
     env PATH="$review_fixture/mock-bin:$PATH" \
+    LC_ALL=en_US.UTF-8 MOCK_NON_UTF8_DIAGNOSTIC=true \
     MOCK_REPOSITORY="$review_fixture/mock-repository" MOCK_JAR_SHA="$review_jar_sha" \
     MOCK_VERIFY_FAIL=true \
     "$review_fixture/scripts/review-dependency-verification.sh" "$review_base"
