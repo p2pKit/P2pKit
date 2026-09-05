@@ -25,7 +25,9 @@ def fail(message: str) -> "NoReturn":
 
 
 def read_bounded(path: str, maximum: int, label: str) -> bytes:
-    data = Path(path).read_bytes()
+    # Bound the allocation itself; a prior stat check can race with file growth.
+    with Path(path).open("rb") as stream:
+        data = stream.read(maximum + 1)
     if not data or len(data) > maximum:
         fail(f"{label} must contain between 1 and {maximum} bytes")
     return data

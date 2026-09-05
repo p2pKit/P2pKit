@@ -593,6 +593,7 @@ grep -Fq -- '- "agp"' "$ROOT/.github/dependabot.yml" ||
 grep -Fq -- '- "gradle-wrapper"' "$ROOT/.github/dependabot.yml" ||
     fail "Dependabot toolchain group omits the Gradle wrapper"
 
+"$PYTHON3" "$ROOT/scripts/tests/check-gradle-plugin-metadata-test.py"
 "$PYTHON3" "$ROOT/scripts/tests/check-gradle-variant-artifact-test.py"
 
 echo "RESULT: PASS — incomplete updates, stale locks, broad trust, and malformed checksums fail before Gradle execution"

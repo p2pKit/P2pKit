@@ -163,6 +163,11 @@ parsed fail closed and must bind to that trusted JAR and the locked dependency
 graph. The script uses an isolated temporary keyring and never adds broad
 artifact/key trust to Gradle metadata.
 
+The plugin validator rejects empty input and reads at most one byte beyond
+each limit before parsing: marker POMs 64 KiB, module metadata 1 MiB, and
+attestation results 8 MiB. The dependency-policy tests cover exact limits,
+oversized/growing files, bounded reads, and stream cleanup on failure.
+
 When a direct artifact lookup finds no file, the reviewer can use that
 component's checksum-listed, detached-signed `.module` as a locator. It accepts
 only an unambiguous local file or sibling-version file within the same
