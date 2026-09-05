@@ -127,6 +127,119 @@ matching_key_fingerprints() {
     ' | LC_ALL=C sort -u
 }
 
+verify_downloaded_checksum() {
+    local data="$1" expected_sha="$2" repository="$3" relative="$4" label="$5"
+    local actual_sha checksum_evidence remote_sha
+    actual_sha="$(shasum -a 256 "$data" | awk '{print $1}')"
+    [[ "$actual_sha" == "$expected_sha" ]] ||
+        fail "downloaded bytes disagree with metadata for $label"
+
+    checksum_evidence="signature-bound-bytes"
+    rm -f "$work/remote.sha256"
+    if curl -fsSL --connect-timeout 20 --max-time 120 \
+        -o "$work/remote.sha256" "$repository/$relative.sha256" 2>/dev/null; then
+        remote_sha="$(grep -Eo '[0-9a-fA-F]{64}' "$work/remote.sha256" |
+            head -1 | tr '[:upper:]' '[:lower:]')"
+        [[ "$remote_sha" == "$expected_sha" ]] ||
+            fail "repository checksum disagrees with metadata for $label"
+        checksum_evidence="sha256-sidecar+signature"
+    fi
+
+    printf '%s\n' "$checksum_evidence"
+}
+
+verify_detached_signature() {
+    local data="$1" signature="$2" label="$3"
+    local packet_output issuer_fingerprints issuer_key_ids fingerprint_count key_id_count
+    local reference_type issuer_reference derived_key_id existing_listing matching_fingerprints
+    local key_downloaded key_urls key_url key_listing import_output fingerprint verification valid_fingerprints
+    packet_output="$(gpg --batch --list-packets "$signature" 2>/dev/null)" ||
+        fail "detached signature packet is malformed for $label"
+    [[ "$(grep -c '^:signature packet:' <<<"$packet_output" || true)" -eq 1 ]] ||
+        fail "detached signature must contain exactly one signature packet for $label"
+    issuer_fingerprints="$(sed -n \
+        's/.*issuer fpr v[0-9][[:space:]]\([0-9A-Fa-f]*\)).*/\1/p' \
+        <<<"$packet_output" | tr '[:lower:]' '[:upper:]' | LC_ALL=C sort -u)"
+    issuer_key_ids="$(sed -n \
+        -e 's/.*issuer key ID \([0-9A-Fa-f]*\)).*/\1/p' \
+        -e 's/^:signature packet:.* keyid \([0-9A-Fa-f]*\)$/\1/p' \
+        <<<"$packet_output" | tr '[:lower:]' '[:upper:]' | LC_ALL=C sort -u)"
+    fingerprint_count="$(grep -c . <<<"$issuer_fingerprints" || true)"
+    key_id_count="$(grep -c . <<<"$issuer_key_ids" || true)"
+    if [[ "$fingerprint_count" -eq 1 &&
+        "$issuer_fingerprints" =~ ^[0-9A-F]{40}$|^[0-9A-F]{64}$ ]]; then
+        reference_type="fingerprint"
+        issuer_reference="$issuer_fingerprints"
+        if [[ "$key_id_count" -gt 1 ]]; then
+            fail "signature contains conflicting issuer key IDs for $label"
+        fi
+        if [[ "$key_id_count" -eq 1 ]]; then
+            if [[ "${#issuer_reference}" -eq 40 ]]; then
+                derived_key_id="${issuer_reference: -16}"
+            else
+                derived_key_id="${issuer_reference:0:16}"
+            fi
+            [[ "$derived_key_id" == "$issuer_key_ids" ]] ||
+                fail "signature issuer fingerprint and key ID disagree for $label"
+        fi
+    elif [[ "$fingerprint_count" -eq 0 && "$key_id_count" -eq 1 &&
+        "$issuer_key_ids" =~ ^[0-9A-F]{16}$ ]]; then
+        reference_type="keyid"
+        issuer_reference="$issuer_key_ids"
+    else
+        fail "signature has no unambiguous issuer identity for $label"
+    fi
+
+    existing_listing="$(GNUPGHOME="$gnupg" gpg --batch --with-colons \
+        --with-subkey-fingerprint --list-keys "$issuer_reference" 2>/dev/null || true)"
+    matching_fingerprints="$(matching_key_fingerprints \
+        "$existing_listing" "$reference_type" "$issuer_reference")"
+    if [[ "$(grep -c . <<<"$matching_fingerprints" || true)" -ne 1 ]]; then
+        key_downloaded=false
+        key_urls=(
+            "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x$issuer_reference"
+        )
+        if [[ "$reference_type" == "fingerprint" ]]; then
+            key_urls+=("https://keys.openpgp.org/vks/v1/by-fingerprint/$issuer_reference")
+        else
+            key_urls+=("https://keys.openpgp.org/vks/v1/by-keyid/$issuer_reference")
+        fi
+        for key_url in "${key_urls[@]}"; do
+            if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+                --connect-timeout 20 --max-time 120 \
+                -o "$work/signing-key.asc" "$key_url"; then
+                continue
+            fi
+            key_listing="$(gpg --batch --show-keys --with-colons \
+                --with-subkey-fingerprint "$work/signing-key.asc" 2>/dev/null || true)"
+            matching_fingerprints="$(matching_key_fingerprints \
+                "$key_listing" "$reference_type" "$issuer_reference")"
+            if [[ "$(grep -c . <<<"$matching_fingerprints" || true)" -ne 1 ]]; then
+                continue
+            fi
+            if ! import_output="$(GNUPGHOME="$gnupg" gpg --batch --import \
+                "$work/signing-key.asc" 2>&1)"; then
+                fail "could not import the exact signing key $issuer_reference: $import_output"
+            fi
+            key_downloaded=true
+            break
+        done
+        [[ "$key_downloaded" == true ]] ||
+            fail "could not retrieve one exact signing key for $issuer_reference over HTTPS"
+    fi
+    fingerprint="$matching_fingerprints"
+    verification="$(GNUPGHOME="$gnupg" gpg --batch --status-fd 1 \
+        --verify "$signature" "$data" 2>&1)" ||
+        fail "invalid detached signature for $label"
+    valid_fingerprints="$(sed -n 's/^\[GNUPG:\] VALIDSIG \([^ ]*\) .*/\1/p' \
+        <<<"$verification" | tr '[:lower:]' '[:upper:]' | LC_ALL=C sort -u)"
+    [[ "$(grep -c . <<<"$valid_fingerprints" || true)" -eq 1 &&
+        "$valid_fingerprints" == "$fingerprint" ]] ||
+        fail "signature fingerprint mismatch for $label"
+
+    printf '%s\n' "$fingerprint"
+}
+
 git -C "$ROOT" show "$BASE_REF:gradle/verification-metadata.xml" >"$work/base.xml"
 parse_metadata "$work/base.xml" "$work/base.entries"
 parse_metadata "$ROOT/gradle/verification-metadata.xml" "$work/current.entries"
@@ -163,28 +276,64 @@ while IFS='|' read -r group module version artifact expected_sha; do
         repository="$candidate"
         break
     done
-    [[ -n "$repository" ]] ||
-        fail "no repository artifact for $group:$module:$version:$artifact"
-
-    actual_sha="$(shasum -a 256 "$work/artifact" | awk '{print $1}')"
-    [[ "$actual_sha" == "$expected_sha" ]] ||
-        fail "downloaded bytes disagree with metadata for $group:$module:$version:$artifact"
-
-    checksum_evidence="signature-bound-bytes"
-    rm -f "$work/remote.sha256"
-    if curl -fsSL --connect-timeout 20 --max-time 120 \
-        -o "$work/remote.sha256" "$repository/$relative.sha256" 2>/dev/null; then
-        remote_sha="$(grep -Eo '[0-9a-fA-F]{64}' "$work/remote.sha256" |
-            head -1 | tr '[:upper:]' '[:lower:]')"
-        [[ "$remote_sha" == "$expected_sha" ]] ||
-            fail "repository checksum disagrees with metadata for $group:$module:$version:$artifact"
-        checksum_evidence="sha256-sidecar+signature"
+    relocated=false
+    if [[ -z "$repository" ]]; then
+        # Gradle component identity is not always the artifact's directory:
+        # e.g. Guava's -jre component also publishes a sibling -android JAR.
+        # Authenticate the checksum-listed locator BEFORE consulting its URLs.
+        locator_artifact="$module-$version.module"
+        [[ "$artifact" != "$locator_artifact" ]] ||
+            fail "no repository artifact for $group:$module:$version:$artifact"
+        locator_sha="$(awk -F'|' -v group="$group" -v module="$module" -v version="$version" \
+            -v artifact="$locator_artifact" '
+            $1 == group && $2 == module && $3 == version && $4 == artifact { print $5 }
+        ' "$work/current.entries")"
+        [[ "$locator_sha" =~ ^[0-9a-f]{64}$ ]] ||
+            fail "no unique checksum-listed module metadata for $group:$module:$version:$artifact"
+        locator_relative="${group//.//}/$module/$version/$locator_artifact"
+        for candidate in "${repositories[@]}"; do
+            if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+                --connect-timeout 20 --max-time 300 --max-filesize 1048576 \
+                -o "$work/variant.module" "$candidate/$locator_relative"; then
+                continue
+            fi
+            locator_evidence="$(verify_downloaded_checksum "$work/variant.module" "$locator_sha" \
+                "$candidate" "$locator_relative" "$group:$module:$version:$locator_artifact")" ||
+                fail "variant metadata checksum review failed"
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+                --connect-timeout 20 --max-time 120 \
+                -o "$work/variant.module.asc" "$candidate/$locator_relative.asc" ||
+                fail "no detached signature for variant metadata: $group:$module:$version:$locator_artifact"
+            locator_fingerprint="$(verify_detached_signature "$work/variant.module" "$work/variant.module.asc" \
+                "$group:$module:$version:$locator_artifact")" || fail "variant metadata signature review failed"
+            relative="$("$PYTHON3" "$ROOT/scripts/resolve-gradle-variant-artifact.py" \
+                "$work/variant.module" "$group" "$module" "$version" "$artifact" "$expected_sha")" ||
+                fail "variant artifact location review failed"
+            # Do not switch repositories or relax provenance for a relocated file.
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+                --connect-timeout 20 --max-time 300 \
+                -o "$work/artifact" "$candidate/$relative" ||
+                fail "no artifact at verified variant location: $candidate/$relative"
+            repository="$candidate"
+            relocated=true
+            printf 'VERIFIED-LOCATOR %s:%s:%s %s sha256=%s signer=%s evidence=%s repository=%s path=%s\n' \
+                "$group" "$module" "$version" "$locator_artifact" "$locator_sha" \
+                "$locator_fingerprint" "$locator_evidence" "$repository" "$relative"
+            break
+        done
+        [[ -n "$repository" ]] ||
+            fail "no repository module metadata for $group:$module:$version:$artifact"
     fi
+
+    checksum_evidence="$(verify_downloaded_checksum "$work/artifact" "$expected_sha" \
+        "$repository" "$relative" "$group:$module:$version:$artifact")" || fail "artifact checksum review failed"
 
     rm -f "$work/artifact.asc"
     if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
         --connect-timeout 20 --max-time 120 \
         -o "$work/artifact.asc" "$repository/$relative.asc"; then
+        [[ "$relocated" == false ]] ||
+            fail "no detached signature for relocated artifact: $group:$module:$version:$artifact"
         expected_marker="$module-$version.pom"
         expected_jar="$module-$version.jar"
         expected_module="$module-$version.module"
@@ -248,89 +397,8 @@ while IFS='|' read -r group module version artifact expected_sha; do
         fail "no detached signature or approved provenance for $group:$module:$version:$artifact"
     fi
 
-    packet_output="$(gpg --batch --list-packets "$work/artifact.asc" 2>/dev/null)" ||
-        fail "detached signature packet is malformed for $group:$module:$version:$artifact"
-    [[ "$(grep -c '^:signature packet:' <<<"$packet_output" || true)" -eq 1 ]] ||
-        fail "detached signature must contain exactly one signature packet for $group:$module:$version:$artifact"
-    issuer_fingerprints="$(sed -n \
-        's/.*issuer fpr v[0-9][[:space:]]\([0-9A-Fa-f]*\)).*/\1/p' \
-        <<<"$packet_output" | tr '[:lower:]' '[:upper:]' | LC_ALL=C sort -u)"
-    issuer_key_ids="$(sed -n \
-        -e 's/.*issuer key ID \([0-9A-Fa-f]*\)).*/\1/p' \
-        -e 's/^:signature packet:.* keyid \([0-9A-Fa-f]*\)$/\1/p' \
-        <<<"$packet_output" | tr '[:lower:]' '[:upper:]' | LC_ALL=C sort -u)"
-    fingerprint_count="$(grep -c . <<<"$issuer_fingerprints" || true)"
-    key_id_count="$(grep -c . <<<"$issuer_key_ids" || true)"
-    if [[ "$fingerprint_count" -eq 1 &&
-        "$issuer_fingerprints" =~ ^[0-9A-F]{40}$|^[0-9A-F]{64}$ ]]; then
-        reference_type="fingerprint"
-        issuer_reference="$issuer_fingerprints"
-        if [[ "$key_id_count" -gt 1 ]]; then
-            fail "signature contains conflicting issuer key IDs for $group:$module:$version:$artifact"
-        fi
-        if [[ "$key_id_count" -eq 1 ]]; then
-            if [[ "${#issuer_reference}" -eq 40 ]]; then
-                derived_key_id="${issuer_reference: -16}"
-            else
-                derived_key_id="${issuer_reference:0:16}"
-            fi
-            [[ "$derived_key_id" == "$issuer_key_ids" ]] ||
-                fail "signature issuer fingerprint and key ID disagree for $group:$module:$version:$artifact"
-        fi
-    elif [[ "$fingerprint_count" -eq 0 && "$key_id_count" -eq 1 &&
-        "$issuer_key_ids" =~ ^[0-9A-F]{16}$ ]]; then
-        reference_type="keyid"
-        issuer_reference="$issuer_key_ids"
-    else
-        fail "signature has no unambiguous issuer identity for $group:$module:$version:$artifact"
-    fi
-
-    existing_listing="$(GNUPGHOME="$gnupg" gpg --batch --with-colons \
-        --with-subkey-fingerprint --list-keys "$issuer_reference" 2>/dev/null || true)"
-    matching_fingerprints="$(matching_key_fingerprints \
-        "$existing_listing" "$reference_type" "$issuer_reference")"
-    if [[ "$(grep -c . <<<"$matching_fingerprints" || true)" -ne 1 ]]; then
-        key_downloaded=false
-        key_urls=(
-            "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x$issuer_reference"
-        )
-        if [[ "$reference_type" == "fingerprint" ]]; then
-            key_urls+=("https://keys.openpgp.org/vks/v1/by-fingerprint/$issuer_reference")
-        else
-            key_urls+=("https://keys.openpgp.org/vks/v1/by-keyid/$issuer_reference")
-        fi
-        for key_url in "${key_urls[@]}"; do
-            if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-                --connect-timeout 20 --max-time 120 \
-                -o "$work/signing-key.asc" "$key_url"; then
-                continue
-            fi
-            key_listing="$(gpg --batch --show-keys --with-colons \
-                --with-subkey-fingerprint "$work/signing-key.asc" 2>/dev/null || true)"
-            matching_fingerprints="$(matching_key_fingerprints \
-                "$key_listing" "$reference_type" "$issuer_reference")"
-            if [[ "$(grep -c . <<<"$matching_fingerprints" || true)" -ne 1 ]]; then
-                continue
-            fi
-            if ! import_output="$(GNUPGHOME="$gnupg" gpg --batch --import \
-                "$work/signing-key.asc" 2>&1)"; then
-                fail "could not import the exact signing key $issuer_reference: $import_output"
-            fi
-            key_downloaded=true
-            break
-        done
-        [[ "$key_downloaded" == true ]] ||
-            fail "could not retrieve one exact signing key for $issuer_reference over HTTPS"
-    fi
-    fingerprint="$matching_fingerprints"
-    verification="$(GNUPGHOME="$gnupg" gpg --batch --status-fd 1 \
-        --verify "$work/artifact.asc" "$work/artifact" 2>&1)" ||
-        fail "invalid detached signature for $group:$module:$version:$artifact"
-    valid_fingerprints="$(sed -n 's/^\[GNUPG:\] VALIDSIG \([^ ]*\) .*/\1/p' \
-        <<<"$verification" | tr '[:lower:]' '[:upper:]' | LC_ALL=C sort -u)"
-    [[ "$(grep -c . <<<"$valid_fingerprints" || true)" -eq 1 &&
-        "$valid_fingerprints" == "$fingerprint" ]] ||
-        fail "signature fingerprint mismatch for $group:$module:$version:$artifact"
+    fingerprint="$(verify_detached_signature "$work/artifact" "$work/artifact.asc" \
+        "$group:$module:$version:$artifact")" || fail "artifact signature review failed"
 
     if [[ "$artifact" == "$module-$version.jar" ]]; then
         printf '%s|%s|%s\n' "$group" "$module" "$version" >>"$trusted_implementations"

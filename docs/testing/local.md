@@ -112,6 +112,14 @@ parsed fail closed and must bind to that trusted JAR and the locked dependency
 graph. The script uses an isolated temporary keyring and never adds broad
 artifact/key trust to Gradle metadata.
 
+When a direct artifact lookup finds no file, the reviewer can use that
+component's checksum-listed, detached-signed `.module` as a locator. It accepts
+only an unambiguous local file or sibling-version file within the same
+repository, group, and module; metadata is limited to 1 MiB. Both the locator
+and the relocated artifact must independently pass checksum and signature
+verification. Remote URLs, redirects, ambiguous paths, and unsigned locators
+are not supported. This does not expand the unsigned-plugin exception above.
+
 Before pushing, inspect the complete lock and metadata diff and run:
 
 ```bash

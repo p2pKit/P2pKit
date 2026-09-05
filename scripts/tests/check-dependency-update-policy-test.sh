@@ -36,6 +36,7 @@ new_fixture() {
     cp "$ROOT/scripts/review-dependency-verification.sh" "$fixture/scripts/"
     cp "$ROOT/scripts/validate-gradle-plugin-marker.sh" "$fixture/scripts/"
     cp "$ROOT/scripts/validate-gradle-plugin-metadata.py" "$fixture/scripts/"
+    cp "$ROOT/scripts/resolve-gradle-variant-artifact.py" "$fixture/scripts/"
     cat >"$fixture/gradle/verification-metadata.xml" <<'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <verification-metadata xmlns="https://schema.gradle.org/dependency-verification" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://schema.gradle.org/dependency-verification https://schema.gradle.org/dependency-verification/dependency-verification-1.4.xsd">
@@ -591,5 +592,7 @@ grep -Fq -- '- "agp"' "$ROOT/.github/dependabot.yml" ||
     fail "Dependabot toolchain group omits AGP"
 grep -Fq -- '- "gradle-wrapper"' "$ROOT/.github/dependabot.yml" ||
     fail "Dependabot toolchain group omits the Gradle wrapper"
+
+"$PYTHON3" "$ROOT/scripts/tests/check-gradle-variant-artifact-test.py"
 
 echo "RESULT: PASS — incomplete updates, stale locks, broad trust, and malformed checksums fail before Gradle execution"
