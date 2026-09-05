@@ -122,8 +122,7 @@ internal class DesktopDiagnosticHarness(
 
     fun frame(line: String) = StructuredFrameTrace.record(
         recorder = recorder,
-        line = line,
-        correlationForTransfer = correlations::correlationForTransfer
+        line = line
     )
 
     fun transport(line: String) {
@@ -180,9 +179,13 @@ internal class DesktopDiagnosticHarness(
 
     fun connectionIdFor(peerId: String): String? = correlations.connectionForPeer(peerId)?.connectionId
 
+    fun transferConnectionId(peerId: String, sessionId: String, transferId: String): String? =
+        correlations.registerTransfer(transferId, peerId, sessionId)?.connectionId
+
     fun transfer(
         peerId: String,
         transferId: String,
+        sessionId: String? = null,
         eventName: String,
         state: String? = null,
         size: Long? = null,
@@ -191,12 +194,13 @@ internal class DesktopDiagnosticHarness(
         error: Throwable? = null,
         details: Map<String, String> = emptyMap()
     ) {
-        val correlation = correlations.registerTransfer(transferId, peerId)
+        val correlation = correlations.registerTransfer(transferId, peerId, sessionId)
         latestTransferId = transferId
         recorder.record(
             DiagnosticRecord(
                 peerId = peerId,
                 connectionId = correlation?.connectionId,
+                sdkSessionId = sessionId ?: correlation?.sdkSessionId,
                 transferId = transferId,
                 category = "transfer",
                 eventName = eventName,
@@ -211,12 +215,20 @@ internal class DesktopDiagnosticHarness(
         )
     }
 
-    fun hash(peerId: String, transferId: String, size: Long, digest: String, receiver: Boolean) {
-        val correlation = correlations.registerTransfer(transferId, peerId)
+    fun hash(
+        peerId: String,
+        transferId: String,
+        size: Long,
+        digest: String,
+        receiver: Boolean,
+        sessionId: String? = null
+    ) {
+        val correlation = correlations.registerTransfer(transferId, peerId, sessionId)
         recorder.record(
             DiagnosticRecord(
                 peerId = peerId,
                 connectionId = correlation?.connectionId,
+                sdkSessionId = sessionId ?: correlation?.sdkSessionId,
                 transferId = transferId,
                 category = "file",
                 eventName = if (receiver) {

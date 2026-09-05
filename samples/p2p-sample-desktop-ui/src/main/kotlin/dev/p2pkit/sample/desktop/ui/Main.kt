@@ -89,6 +89,8 @@ import dev.p2pkit.sample.diagnostics.DiagnosticEventNames
 import dev.p2pkit.sample.diagnostics.DiagnosticOutcome
 import dev.p2pkit.sample.diagnostics.DiagnosticRecord
 import dev.p2pkit.sample.diagnostics.DiagnosticSeverity
+import dev.p2pkit.sample.diagnostics.SessionTransferKey
+import dev.p2pkit.sample.diagnostics.SessionTransferList
 import dev.p2pkit.sample.diagnostics.cleanupStaleTransferPartsOnce
 import dev.p2pkit.sample.diagnostics.reservedFileDestination
 import dev.p2pkit.provisioning.desktop.jvm
@@ -287,6 +289,8 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
     val fileTransfers: SnapshotStateList<FileTransferRow> = mutableStateListOf()
     /** Incoming offers stay pending until explicit user consent. */
     val pendingFileOffers: SnapshotStateList<IncomingFileOffer> = mutableStateListOf()
+    private val transferRows = SessionTransferList(fileTransfers) { it.key }
+    private val transferOffers = SessionTransferList(pendingFileOffers) { it.key }
     var diagnosticRevision: Long by mutableStateOf(0L)
         private set
     val diagnostics = DesktopDiagnosticHarness { diagnosticRevision++ }
@@ -851,6 +855,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
             diagnostics.transfer(
                 peerId = session.peer.id.value,
                 transferId = transfer.id,
+                sessionId = session.id,
                 eventName = DiagnosticEventNames.TRANSFER_PREPARED,
                 state = transfer.state.value.toString(),
                 size = transfer.sizeBytes,
@@ -861,9 +866,10 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
                 transfer.id,
                 file.length(),
                 sourceDigest,
-                receiver = false
+                receiver = false,
+                sessionId = session.id
             )
-            registerOutgoingTransfer(transfer, session.peer.name, scope)
+            registerOutgoingTransfer(transfer, session.id, session.peer.name, scope)
         }
     }
 
@@ -878,12 +884,13 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
         appendSystemMessage("file send to $peerName cancelled (no file chosen)")
     }
 
-    fun cancelFileTransfer(id: String) {
-        val row = fileTransfers.firstOrNull { it.id == id } ?: return
+    fun cancelFileTransfer(key: SessionTransferKey) {
+        val row = transferRows[key] ?: return
         val scope = runScope ?: return
         diagnostics.transfer(
             peerId = row.transfer.peer.id.value,
-            transferId = id,
+            transferId = row.id,
+            sessionId = row.sessionId,
             eventName = DiagnosticEventNames.TRANSFER_CANCELLED,
             state = "Cancelling",
             outcome = DiagnosticOutcome.CANCELLATION
@@ -891,12 +898,12 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
         scope.launch { runCatchingCancellable { row.transfer.cancel("user cancelled") } }
     }
 
-    fun rejectFileOffer(id: String) {
-        val pending = pendingFileOffers.firstOrNull { it.id == id } ?: return
-        pendingFileOffers.remove(pending)
+    fun rejectFileOffer(key: SessionTransferKey) {
+        val pending = transferOffers.take(key) ?: return
         diagnostics.transfer(
             peerId = pending.offer.peer.id.value,
-            transferId = id,
+            transferId = pending.id,
+            sessionId = pending.sessionId,
             eventName = DiagnosticEventNames.TRANSFER_OFFER_REJECTED,
             state = "Rejected",
             size = pending.sizeBytes,
@@ -907,13 +914,13 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
         appScope.launch { runCatchingCancellable { pending.offer.reject("rejected by user") } }
     }
 
-    fun acceptFileOffer(id: String) {
+    fun acceptFileOffer(key: SessionTransferKey) {
         val scope = runScope ?: return
-        val pending = pendingFileOffers.firstOrNull { it.id == id } ?: return
-        pendingFileOffers.remove(pending)
+        val pending = transferOffers.take(key) ?: return
         diagnostics.transfer(
             peerId = pending.offer.peer.id.value,
-            transferId = id,
+            transferId = pending.id,
+            sessionId = pending.sessionId,
             eventName = DiagnosticEventNames.TRANSFER_OFFER_ACCEPTED,
             state = "Accepted",
             size = pending.sizeBytes,
@@ -930,10 +937,11 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
             try {
                 session.pendingFileOffers.collect { offers ->
                     val currentIds = offers.mapTo(mutableSetOf()) { it.id }
-                    pendingFileOffers.removeAll { it.id in previousIds && it.id !in currentIds }
+                    transferOffers.remove(session.id, previousIds - currentIds)
                     for (offer in offers) {
-                        if (pendingFileOffers.none { it.id == offer.id }) {
+                        if (pendingFileOffers.none { it.sessionId == session.id && it.id == offer.id }) {
                             pendingFileOffers += IncomingFileOffer(
+                                sessionId = session.id,
                                 id = offer.id,
                                 name = offer.name,
                                 sizeBytes = offer.sizeBytes,
@@ -946,6 +954,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
                             diagnostics.transfer(
                                 peerId = session.peer.id.value,
                                 transferId = offer.id,
+                                sessionId = session.id,
                                 eventName = DiagnosticEventNames.TRANSFER_OFFER_RECEIVED,
                                 state = "Offered",
                                 size = offer.sizeBytes,
@@ -956,7 +965,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
                     previousIds = currentIds
                 }
             } finally {
-                pendingFileOffers.removeAll { it.id in previousIds }
+                transferOffers.remove(session.id, previousIds)
             }
         }
 
@@ -997,6 +1006,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
             }
         recordTemporaryFileEvent(
             peerId = pending.offer.peer.id.value,
+            sessionId = pending.sessionId,
             transferId = pending.id,
             eventName = DiagnosticEventNames.TEMP_FILE_CREATED,
             state = "prepared"
@@ -1012,6 +1022,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
             }
             recordTemporaryFileEvent(
                 peerId = pending.offer.peer.id.value,
+                sessionId = pending.sessionId,
                 transferId = pending.id,
                 eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
                 state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
@@ -1027,6 +1038,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
             }
             recordTemporaryFileEvent(
                 peerId = pending.offer.peer.id.value,
+                sessionId = pending.sessionId,
                 transferId = pending.id,
                 eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
                 state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
@@ -1036,16 +1048,18 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
             appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
             return
         }
-        registerIncomingTransfer(incoming, pending.peerName, saveFile.absolutePath, scope)
+        registerIncomingTransfer(incoming, pending.sessionId, pending.peerName, saveFile.absolutePath, scope)
     }
 
     private fun registerOutgoingTransfer(
         transfer: P2pFileTransfer,
+        sessionId: String,
         peerName: String,
         scope: CoroutineScope
     ) {
         addRow(
             FileTransferRow(
+                sessionId = sessionId,
                 id = transfer.id,
                 direction = FileTransferDirection.Outgoing,
                 name = transfer.name,
@@ -1061,23 +1075,26 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
         diagnostics.transfer(
             peerId = transfer.peer.id.value,
             transferId = transfer.id,
+            sessionId = sessionId,
             eventName = DiagnosticEventNames.TRANSFER_STARTED,
             state = transfer.state.value.toString(),
             size = transfer.sizeBytes,
             direction = DiagnosticDirection.SENT
         )
         appendSystemMessage("sending file '${transfer.name}' (${transfer.sizeBytes}B) to $peerName")
-        watchTransfer(transfer, scope)
+        watchTransfer(transfer, sessionId, scope)
     }
 
     private fun registerIncomingTransfer(
         transfer: P2pFileTransfer,
+        sessionId: String,
         peerName: String,
         destinationPath: String,
         scope: CoroutineScope
     ) {
         addRow(
             FileTransferRow(
+                sessionId = sessionId,
                 id = transfer.id,
                 direction = FileTransferDirection.Incoming,
                 name = transfer.name,
@@ -1093,6 +1110,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
         diagnostics.transfer(
             peerId = transfer.peer.id.value,
             transferId = transfer.id,
+            sessionId = sessionId,
             eventName = DiagnosticEventNames.TRANSFER_STARTED,
             state = transfer.state.value.toString(),
             size = transfer.sizeBytes,
@@ -1102,10 +1120,11 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
         // The transactional destination is owned by the SDK and is committed
         // or aborted even if this UI collector is cancelled. Never delete its
         // target here: a failed durability barrier can follow publication.
-        watchTransfer(transfer, scope) { completed ->
+        watchTransfer(transfer, sessionId, scope) { completed ->
             if (completed) {
                 recordTemporaryFileEvent(
                     peerId = transfer.peer.id.value,
+                    sessionId = sessionId,
                     transferId = transfer.id,
                     eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
                     state = "promoted",
@@ -1114,17 +1133,19 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
                 val digest = withContext(Dispatchers.IO) {
                     testFileSha256(File(destinationPath))
                 }
-                updateRowDigest(transfer.id, digest)
+                updateRowDigest(SessionTransferKey(sessionId, transfer.id), digest)
                 diagnostics.hash(
                     transfer.peer.id.value,
                     transfer.id,
                     File(destinationPath).length(),
                     digest,
-                    receiver = true
+                    receiver = true,
+                    sessionId = sessionId
                 )
                 diagnostics.transfer(
                     peerId = transfer.peer.id.value,
                     transferId = transfer.id,
+                    sessionId = sessionId,
                     eventName = DiagnosticEventNames.TRANSFER_DURABLE_COMMITTED,
                     state = "Completed",
                     size = transfer.sizeBytes,
@@ -1145,20 +1166,23 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
      */
     private fun watchTransfer(
         transfer: P2pFileTransfer,
+        sessionId: String,
         scope: CoroutineScope,
         onFinally: (suspend (completed: Boolean) -> Unit)? = null
     ) {
         scope.launch {
             var completed = false
+            val key = SessionTransferKey(sessionId, transfer.id)
             val bytesJob = launch {
-                transfer.bytesTransferred.collect { b -> updateRowBytes(transfer.id, b) }
+                transfer.bytesTransferred.collect { b -> updateRowBytes(key, b) }
             }
             try {
                 transfer.state.first { st ->
-                    updateRowState(transfer.id, st)
+                    updateRowState(key, st)
                     diagnostics.transfer(
                         peerId = transfer.peer.id.value,
                         transferId = transfer.id,
+                        sessionId = sessionId,
                         eventName = when (st) {
                             is FileTransferState.Completed -> DiagnosticEventNames.TRANSFER_COMPLETED
                             is FileTransferState.Failed -> DiagnosticEventNames.TRANSFER_FAILED
@@ -1168,7 +1192,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
                         },
                         state = st.toString(),
                         size = transfer.bytesTransferred.value,
-                        direction = if (fileTransfers.firstOrNull { it.id == transfer.id }?.direction ==
+                        direction = if (transferRows[key]?.direction ==
                             FileTransferDirection.Outgoing
                         ) {
                             DiagnosticDirection.SENT
@@ -1192,7 +1216,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
                     }
                 }
                 // Snap the byte counter to its final value before the collector dies.
-                updateRowBytes(transfer.id, transfer.bytesTransferred.value)
+                updateRowBytes(key, transfer.bytesTransferred.value)
             } finally {
                 withContext(NonCancellable) {
                     bytesJob.cancelAndJoin()
@@ -1214,26 +1238,21 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
         }
     }
 
-    private fun updateRowState(id: String, state: FileTransferState) {
-        val idx = fileTransfers.indexOfFirst { it.id == id }
-        if (idx < 0) return
-        fileTransfers[idx] = fileTransfers[idx].copy(state = state)
+    private fun updateRowState(key: SessionTransferKey, state: FileTransferState) {
+        transferRows.update(key) { it.copy(state = state) }
     }
 
-    private fun updateRowBytes(id: String, bytes: Long) {
-        val idx = fileTransfers.indexOfFirst { it.id == id }
-        if (idx < 0) return
-        fileTransfers[idx] = fileTransfers[idx].copy(bytesTransferred = bytes)
+    private fun updateRowBytes(key: SessionTransferKey, bytes: Long) {
+        transferRows.update(key) { it.copy(bytesTransferred = bytes) }
     }
 
-    private fun updateRowDigest(id: String, digest: String?) {
-        val idx = fileTransfers.indexOfFirst { it.id == id }
-        if (idx < 0) return
-        fileTransfers[idx] = fileTransfers[idx].copy(sha256 = digest)
+    private fun updateRowDigest(key: SessionTransferKey, digest: String?) {
+        transferRows.update(key) { it.copy(sha256 = digest) }
     }
 
     private fun recordTemporaryFileEvent(
         peerId: String,
+        sessionId: String,
         transferId: String,
         eventName: String,
         state: String,
@@ -1243,7 +1262,8 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
         diagnostics.recorder.record(
             DiagnosticRecord(
                 peerId = peerId,
-                connectionId = diagnostics.connectionIdFor(peerId),
+                connectionId = diagnostics.transferConnectionId(peerId, sessionId, transferId),
+                sdkSessionId = sessionId,
                 transferId = transferId,
                 category = "storage",
                 eventName = eventName,
@@ -1418,6 +1438,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
 enum class FileTransferDirection { Outgoing, Incoming }
 
 data class FileTransferRow(
+    val sessionId: String,
     val id: String,
     val direction: FileTransferDirection,
     val name: String,
@@ -1428,15 +1449,20 @@ data class FileTransferRow(
     val destinationPath: String?,
     val sha256: String?,
     val transfer: P2pFileTransfer
-)
+) {
+    val key: SessionTransferKey = SessionTransferKey(sessionId, id)
+}
 
 data class IncomingFileOffer(
+    val sessionId: String,
     val id: String,
     val name: String,
     val sizeBytes: Long,
     val peerName: String,
     val offer: P2pFileOffer
-)
+) {
+    val key: SessionTransferKey = SessionTransferKey(sessionId, id)
+}
 
 private fun pickFile(): File? {
     val dialog = FileDialog(null as Frame?, "Select file to send", FileDialog.LOAD)
@@ -1923,8 +1949,8 @@ private fun RoomScreen(state: DesktopP2pState) {
                                 Text("${offer.name} from ${offer.peerName}", maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text("${offer.sizeBytes} bytes — consent required", style = MaterialTheme.typography.labelSmall)
                             }
-                            TextButton(onClick = { state.acceptFileOffer(offer.id) }) { Text("Accept") }
-                            TextButton(onClick = { state.rejectFileOffer(offer.id) }) { Text("Reject") }
+                            TextButton(onClick = { state.acceptFileOffer(offer.key) }) { Text("Accept") }
+                            TextButton(onClick = { state.rejectFileOffer(offer.key) }) { Text("Reject") }
                         }
                     }
                 }
@@ -1941,8 +1967,8 @@ private fun RoomScreen(state: DesktopP2pState) {
                     modifier = Modifier.fillMaxWidth().height(140.dp),
                     verticalArrangement = Arrangement.spacedBy(Dimens.LabelGap)
                 ) {
-                    items(state.fileTransfers.toList(), key = { it.id }) { row ->
-                        FileTransferRowView(row = row, onCancel = { state.cancelFileTransfer(row.id) })
+                    items(state.fileTransfers.toList(), key = { it.key.stableId }) { row ->
+                        FileTransferRowView(row = row, onCancel = { state.cancelFileTransfer(row.key) })
                     }
                 }
             }

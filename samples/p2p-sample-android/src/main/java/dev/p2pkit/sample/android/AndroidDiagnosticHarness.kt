@@ -133,11 +133,11 @@ internal class AndroidDiagnosticHarness(
     fun connectionForPeer(peerId: String): DiagnosticCorrelation? =
         correlations.connectionForPeer(peerId)
 
-    fun registerTransfer(transferId: String, peerId: String): DiagnosticCorrelation? =
-        correlations.registerTransfer(transferId, peerId)
-
-    fun correlationForTransfer(transferId: String): DiagnosticCorrelation? =
-        correlations.correlationForTransfer(transferId)
+    fun registerTransfer(
+        transferId: String,
+        peerId: String,
+        sessionId: String? = null
+    ): DiagnosticCorrelation? = correlations.registerTransfer(transferId, peerId, sessionId)
 
     fun export(): File = DiagnosticEvidenceExporter.export(
         recorder = recorder,

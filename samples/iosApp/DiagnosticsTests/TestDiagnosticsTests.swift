@@ -4,6 +4,47 @@ import XCTest
 @testable import P2pKitSample
 
 final class TestDiagnosticsTests: XCTestCase {
+    func testProductionTransferSelectorsScopeConsentCancelLateUpdatesAndCleanup() {
+        final class Handle {
+            var actions: [String] = []
+            func accept() { actions.append("accept") }
+            func reject() { actions.append("reject") }
+            func cancel() { actions.append("cancel") }
+        }
+        struct Row: Identifiable {
+            let id: TransferKey
+            let handle: Handle
+            var bytes = 0
+            var digest: String?
+            var terminal = false
+        }
+        let first = Handle()
+        let second = Handle()
+        let old = TransferKey(sessionId: "old-session", transferId: "same-id")
+        let current = TransferKey(sessionId: "new-session", transferId: "same-id")
+        var rows = [Row(id: old, handle: first), Row(id: current, handle: second)]
+        var offers = [old: first, current: second]
+        SessionTransferEntries.take(old, from: &offers)?.accept()
+        XCTAssertNil(SessionTransferEntries.take(old, from: &offers))
+        SessionTransferEntries.take(current, from: &offers)?.reject()
+        SessionTransferEntries.row(old, in: rows)?.handle.cancel()
+        XCTAssertEqual(first.actions, ["accept", "cancel"])
+        XCTAssertEqual(second.actions, ["reject"])
+        SessionTransferEntries.update(current, in: &rows) { $0.bytes = 20; $0.digest = "new" }
+        SessionTransferEntries.update(old, in: &rows) {
+            $0.bytes = 10; $0.digest = "late-old"; $0.terminal = true
+        }
+        XCTAssertEqual(SessionTransferEntries.row(current, in: rows)?.bytes, 20)
+        XCTAssertEqual(SessionTransferEntries.row(current, in: rows)?.digest, "new")
+        XCTAssertEqual(SessionTransferEntries.row(current, in: rows)?.terminal, false)
+        rows.removeAll { $0.id == old }
+        SessionTransferEntries.update(old, in: &rows) { _ in XCTFail("must not mutate replacement") }
+        XCTAssertEqual(rows.map(\.id), [current])
+        offers = [old: first, current: second]
+        SessionTransferEntries.remove(sessionId: old.sessionId, transferIds: [old.transferId], from: &offers)
+        XCTAssertEqual(Set(offers.keys), [current])
+    }
+
     @MainActor
     func testMultiPeerCorrelationUsesRealSessionAndTransferOwnership() throws {
         let fixture = try Fixture()
@@ -54,11 +95,17 @@ final class TestDiagnosticsTests: XCTestCase {
         )
         let frame = try XCTUnwrap(store.events.last)
         XCTAssertEqual(frame.transferId, transferA)
-        XCTAssertEqual(frame.connectionId, connectionA)
-        XCTAssertNotEqual(frame.connectionId, connectionB)
+        XCTAssertNil(frame.connectionId)
+        XCTAssertNil(frame.peerId)
+        XCTAssertNil(frame.sdkSessionId)
 
-        // Same transfer ID on two peers is unresolvable in a process-global
-        // frame line, so correlation must become explicitly absent.
+        // B's first colliding FILE_OFFER trace arrives before its structured
+        // offer callback. Even the sole observed owner A is not proof.
+        store.recordFrame("RX type=FILE_OFFER len=64B xfer=\(transferA)")
+        let beforeRegistration = try XCTUnwrap(store.events.last)
+        XCTAssertNil(beforeRegistration.connectionId)
+        XCTAssertNil(beforeRegistration.peerId)
+        XCTAssertNil(beforeRegistration.sdkSessionId)
         store.transfer(
             TestDiagnosticEventName.transferStarted,
             peerId: "peer-b",
@@ -72,6 +119,162 @@ final class TestDiagnosticsTests: XCTestCase {
         XCTAssertEqual(ambiguous.transferId, transferA)
         XCTAssertNil(ambiguous.connectionId)
         XCTAssertNil(ambiguous.peerId)
+        XCTAssertNil(ambiguous.sdkSessionId)
+        XCTAssertEqual(store.events.first { $0.index == beforeRegistration.index }, beforeRegistration)
+        XCTAssertEqual(store.makeSummary(store.events, manual: []).transferSummaries.count, 3)
+    }
+
+    @MainActor
+    func testSameTransferIdOnTwoSessionsKeepsHashesSeparate() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        _ = store.startSession(testId: "PS-T01", requestedSessionId: "collision-test", role: "both")
+        store.setLocalPeerId("local-peer")
+        let transferId = String(repeating: "a", count: 32)
+        let digest = String(repeating: "b", count: 64)
+        let first = TransferKey(sessionId: "session-a", transferId: transferId)
+        let second = TransferKey(sessionId: "session-b", transferId: transferId)
+
+        for (peer, session) in [("peer-a", first.sessionId), ("peer-b", second.sessionId)] {
+            store.connection(peerId: peer, rawConnectionId: session, state: "Connected", previous: nil)
+            store.transfer(
+                TestDiagnosticEventName.transferStarted,
+                peerId: peer,
+                transferId: transferId,
+                sessionId: session,
+                state: "Transferring",
+                size: 64,
+                direction: .local
+            )
+        }
+        store.fileHash(
+            peerId: "peer-a", transferId: transferId, size: 64, digest: digest,
+            receiver: false, sessionId: first.sessionId
+        )
+        store.fileHash(
+            peerId: "peer-b", transferId: transferId, size: 64, digest: digest,
+            receiver: true, sessionId: second.sessionId
+        )
+        XCTAssertNil(store.senderSha256)
+        XCTAssertEqual(store.receiverSha256, digest)
+        XCTAssertNil(store.integrityMatch)
+        let summary = store.makeSummary(store.events, manual: [])
+        XCTAssertEqual(summary.transferSummaries.count, 2)
+        XCTAssertNil(summary.selectedTransferId)
+        XCTAssertNil(summary.integrityMatch)
+        let firstSummary = try XCTUnwrap(summary.transferSummaries.first {
+            $0.connectionIds == [store.connectionId(for: "peer-a")!]
+        })
+        XCTAssertEqual(firstSummary.senderSha256, digest)
+        XCTAssertNil(firstSummary.receiverSha256)
+        let secondSummary = try XCTUnwrap(summary.transferSummaries.first {
+            $0.connectionIds == [store.connectionId(for: "peer-b")!]
+        })
+        XCTAssertNil(secondSummary.senderSha256)
+        XCTAssertEqual(secondSummary.receiverSha256, digest)
+        XCTAssertTrue(summary.transferSummaries.allSatisfy { $0.integrityMatch == nil })
+
+        store.recordFrame("RX type=FILE_COMMIT len=72B xfer=\(transferId)")
+        XCTAssertNil(store.events.last?.connectionId)
+        XCTAssertNil(store.events.last?.peerId)
+    }
+
+    @MainActor
+    func testSamePeerReplacementRetainsSeparateSdkTransferOwners() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        _ = store.startSession(testId: "PS-T01", requestedSessionId: "replacement-test", role: "both")
+        store.setLocalPeerId("local-peer")
+        let transferId = String(repeating: "a", count: 32)
+        for session in ["old-session", "new-session"] {
+            store.connection(peerId: "peer-a", rawConnectionId: session, state: "Connected", previous: nil)
+            store.transfer(
+                TestDiagnosticEventName.transferStarted,
+                peerId: "peer-a",
+                transferId: transferId,
+                sessionId: session,
+                state: "Transferring",
+                size: 64,
+                direction: .sent
+            )
+        }
+        let oldDigest = String(repeating: "b", count: 64)
+        let newDigest = String(repeating: "c", count: 64)
+        store.fileHash(
+            peerId: "peer-a", transferId: transferId, size: 64, digest: oldDigest,
+            receiver: false, sessionId: "old-session"
+        )
+        store.fileHash(
+            peerId: "peer-a", transferId: transferId, size: 64, digest: newDigest,
+            receiver: true, sessionId: "new-session"
+        )
+        XCTAssertNil(store.senderSha256)
+        XCTAssertEqual(store.receiverSha256, newDigest)
+        XCTAssertNil(store.integrityMatch)
+        let initial = store.makeSummary(store.events, manual: [])
+        XCTAssertEqual(initial.transferSummaries.count, 2)
+        XCTAssertNil(initial.selectedTransferId)
+        XCTAssertTrue(initial.transferSummaries.allSatisfy { $0.integrityMatch == nil })
+
+        // A delayed hash for the retired session cannot mutate the active
+        // replacement's hashes or produce a false integrity result for it.
+        store.fileHash(
+            peerId: "peer-a", transferId: transferId, size: 64, digest: oldDigest,
+            receiver: true, sessionId: "old-session"
+        )
+        XCTAssertNil(store.senderSha256)
+        XCTAssertEqual(store.receiverSha256, newDigest)
+        XCTAssertNil(store.integrityMatch)
+        let final = store.makeSummary(store.events, manual: [])
+        XCTAssertEqual(final.transferSummaries.count, 2)
+        XCTAssertEqual(final.connectionIds.count, 1, "public connection ID stays symmetric across reconnects")
+        let old = try XCTUnwrap(final.transferSummaries.first { $0.senderSha256 == oldDigest })
+        let current = try XCTUnwrap(final.transferSummaries.first { $0.receiverSha256 == newDigest })
+        XCTAssertNotEqual(old.sdkSessionId, current.sdkSessionId)
+        XCTAssertNotEqual(old.sdkSessionId, "old-session")
+        XCTAssertNotEqual(current.sdkSessionId, "new-session")
+        XCTAssertEqual(old.receiverSha256, oldDigest)
+        XCTAssertEqual(old.integrityMatch, true)
+        XCTAssertNil(current.senderSha256)
+        XCTAssertNil(current.integrityMatch)
+        XCTAssertNil(final.senderSha256)
+        XCTAssertNil(final.receiverSha256)
+        XCTAssertNil(final.integrityMatch)
+        XCTAssertNil(store.transferConnectionId(
+            peerId: "peer-a", sessionId: "old-session", transferId: "unobserved"
+        ))
+        XCTAssertNotNil(store.transferConnectionId(
+            peerId: "peer-a", sessionId: "old-session", transferId: transferId
+        ))
+        store.recordFrame("TX type=FILE_DATA len=64B chunk=0/1 id=\(transferId) LAST")
+        XCTAssertNil(store.events.last?.connectionId)
+        XCTAssertNil(store.events.last?.peerId)
+        XCTAssertEqual(store.makeSummary(store.events, manual: []).transferSummaries.count, 2)
+    }
+
+    @MainActor
+    func testLegacyOwnerlessEvidenceDecodesButCannotEstablishOwnedSummary() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        store.record(TestDiagnosticRecord(
+            peerId: "peer-a",
+            connectionId: "connection-a",
+            transferId: "same-transfer",
+            category: "file",
+            eventName: TestDiagnosticEventName.senderHash,
+            details: ["sha256": String(repeating: "a", count: 64)]
+        ))
+        let event = try XCTUnwrap(store.events.last)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(event)) as? [String: Any])
+        legacy.removeValue(forKey: "sdkSessionId")
+        let decoded = try JSONDecoder().decode(
+            TestDiagnosticEvent.self, from: JSONSerialization.data(withJSONObject: legacy)
+        )
+        XCTAssertEqual(event, decoded)
+        XCTAssertTrue(store.makeSummary(store.events, manual: []).transferSummaries.isEmpty)
     }
 
     @MainActor
@@ -162,8 +365,11 @@ final class TestDiagnosticsTests: XCTestCase {
         let replacementConnection = try XCTUnwrap(store.connectionId(for: "peer-a"))
 
         XCTAssertNil(store.removeConnection(rawConnectionId: "sdk-session-old"))
+        XCTAssertEqual(store.transferConnectionId(
+            peerId: "peer-a", sessionId: "sdk-session-new", transferId: transferId
+        ), replacementConnection)
         store.recordFrame("TX type=FILE_DATA len=64B chunk=0/1 id=\(transferId) LAST")
-        XCTAssertEqual(store.events.last?.connectionId, replacementConnection)
+        XCTAssertNil(store.events.last?.connectionId)
         XCTAssertEqual(store.events.last?.transferId, transferId)
     }
 
@@ -205,7 +411,13 @@ final class TestDiagnosticsTests: XCTestCase {
             requestedSessionId: "session-truth",
             role: "both"
         )
+        store.setLocalPeerId("local-peer")
+        store.connection(peerId: "peer-a", rawConnectionId: "session-a", state: "Connected", previous: nil)
+        store.connection(peerId: "peer-b", rawConnectionId: "session-b", state: "Connected", previous: nil)
         store.record(TestDiagnosticRecord(
+            peerId: "peer-a",
+            connectionId: store.connectionId(for: "peer-a"),
+            sdkSessionId: "session-a",
             transferId: "transfer-a",
             category: "transfer",
             eventName: TestDiagnosticEventName.transferCompleted,

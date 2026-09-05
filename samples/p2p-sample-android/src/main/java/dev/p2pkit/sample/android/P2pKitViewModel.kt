@@ -49,6 +49,8 @@ import dev.p2pkit.sample.diagnostics.DiagnosticOutcome
 import dev.p2pkit.sample.diagnostics.DiagnosticRecord
 import dev.p2pkit.sample.diagnostics.DiagnosticRecorder
 import dev.p2pkit.sample.diagnostics.DiagnosticSeverity
+import dev.p2pkit.sample.diagnostics.SessionTransferKey
+import dev.p2pkit.sample.diagnostics.SessionTransferList
 import dev.p2pkit.sample.diagnostics.cleanupStaleTransferPartsOnce
 import dev.p2pkit.sample.diagnostics.reservedFileDestination
 import dev.p2pkit.sample.diagnostics.StructuredFrameTrace
@@ -212,6 +214,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     val fileTransfers: SnapshotStateList<FileTransferRow> = mutableStateListOf()
     /** Incoming files remain pending until the user explicitly accepts/rejects them. */
     val pendingFileOffers: SnapshotStateList<IncomingFileOffer> = mutableStateListOf()
+    private val transferRows = SessionTransferList(fileTransfers) { it.key }
+    private val transferOffers = SessionTransferList(pendingFileOffers) { it.key }
 
     // --- diagnostics ------------------------------------------------------
 
@@ -361,6 +365,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun recordTemporaryFileEvent(
         peerId: String,
+        sessionId: String,
         transferId: String,
         eventName: String,
         state: String,
@@ -370,7 +375,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         recordDiagnostic(
             DiagnosticRecord(
                 peerId = peerId,
-                connectionId = diagnostics.registerTransfer(transferId, peerId)?.connectionId,
+                connectionId = diagnostics.registerTransfer(transferId, peerId, sessionId)?.connectionId,
+                sdkSessionId = sessionId,
                 transferId = transferId,
                 category = "storage",
                 eventName = eventName,
@@ -478,8 +484,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 Log.d("P2pKitFrame", it)
                 StructuredFrameTrace.record(
                     recorder = diagnosticRecorder,
-                    line = it,
-                    correlationForTransfer = diagnostics::correlationForTransfer
+                    line = it
                 )
             }
             P2pKit.create {
@@ -973,11 +978,12 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 appendSystemMessage("send file failed: ${it.message ?: it::class.simpleName}")
                 return@launch
             }
-            val transferCorrelation = diagnostics.registerTransfer(transfer.id, peerId)
+            val transferCorrelation = diagnostics.registerTransfer(transfer.id, peerId, session.id)
             recordDiagnostic(
                 DiagnosticRecord(
                     peerId = peerId,
                     connectionId = transferCorrelation?.connectionId,
+                    sdkSessionId = session.id,
                     transferId = transfer.id,
                     category = "transfer",
                     eventName = DiagnosticEventNames.TRANSFER_PREPARED,
@@ -990,6 +996,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     DiagnosticRecord(
                         peerId = peerId,
                         connectionId = transferCorrelation?.connectionId,
+                        sdkSessionId = session.id,
                         transferId = transfer.id,
                         category = "file",
                         eventName = DiagnosticEventNames.FILE_SENDER_HASH,
@@ -999,7 +1006,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 )
             }
-            registerOutgoingTransfer(transfer, session.peer.name, scope)
+            registerOutgoingTransfer(transfer, session.id, session.peer.name, scope)
         }
     }
 
@@ -1053,11 +1060,12 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 session.pendingFileOffers.collect { offers ->
                     val currentIds = offers.mapTo(mutableSetOf()) { it.id }
-                    pendingFileOffers.removeAll { it.id in previousIds && it.id !in currentIds }
+                    transferOffers.remove(session.id, previousIds - currentIds)
                     for (offer in offers) {
-                        if (pendingFileOffers.none { it.id == offer.id }) {
+                        if (pendingFileOffers.none { it.sessionId == session.id && it.id == offer.id }) {
                             pendingFileOffers.add(
                                 IncomingFileOffer(
+                                    sessionId = session.id,
                                     id = offer.id,
                                     name = offer.name,
                                     sizeBytes = offer.sizeBytes,
@@ -1071,7 +1079,12 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                             recordDiagnostic(
                                 DiagnosticRecord(
                                     peerId = session.peer.id.value,
-                                    connectionId = connectionIds[session.id],
+                                    connectionId = diagnostics.registerTransfer(
+                                        offer.id,
+                                        session.peer.id.value,
+                                        session.id
+                                    )?.connectionId,
+                                    sdkSessionId = session.id,
                                     transferId = offer.id,
                                     category = "transfer",
                                     eventName = DiagnosticEventNames.TRANSFER_OFFER_RECEIVED,
@@ -1084,20 +1097,24 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     previousIds = currentIds
                 }
             } finally {
-                pendingFileOffers.removeAll { it.id in previousIds }
+                transferOffers.remove(session.id, previousIds)
             }
         }
     }
 
-    fun rejectFileOffer(id: String) {
-        val pending = pendingFileOffers.firstOrNull { it.id == id } ?: return
-        pendingFileOffers.remove(pending)
+    fun rejectFileOffer(key: SessionTransferKey) {
+        val pending = transferOffers.take(key) ?: return
         cleanupScope.launch { runCatchingNonCancel { pending.offer.reject("rejected by user") } }
         recordDiagnostic(
             DiagnosticRecord(
                 peerId = pending.offer.peer.id.value,
-                connectionId = diagnostics.registerTransfer(id, pending.offer.peer.id.value)?.connectionId,
-                transferId = id,
+                connectionId = diagnostics.registerTransfer(
+                    pending.id,
+                    pending.offer.peer.id.value,
+                    pending.sessionId
+                )?.connectionId,
+                sdkSessionId = pending.sessionId,
+                transferId = pending.id,
                 category = "transfer",
                 eventName = DiagnosticEventNames.TRANSFER_OFFER_REJECTED,
                 currentState = "Rejected",
@@ -1107,18 +1124,19 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    fun acceptFileOffer(id: String) {
+    fun acceptFileOffer(key: SessionTransferKey) {
         val scope = runScope ?: return
-        val pending = pendingFileOffers.firstOrNull { it.id == id } ?: return
-        pendingFileOffers.remove(pending)
+        val pending = transferOffers.take(key) ?: return
         recordDiagnostic(
             DiagnosticRecord(
                 peerId = pending.offer.peer.id.value,
                 connectionId = diagnostics.registerTransfer(
-                    id,
-                    pending.offer.peer.id.value
+                    pending.id,
+                    pending.offer.peer.id.value,
+                    pending.sessionId
                 )?.connectionId,
-                transferId = id,
+                sdkSessionId = pending.sessionId,
+                transferId = pending.id,
                 category = "transfer",
                 eventName = DiagnosticEventNames.TRANSFER_OFFER_ACCEPTED,
                 currentState = "Accepted"
@@ -1173,6 +1191,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             }
         recordTemporaryFileEvent(
             peerId = pending.offer.peer.id.value,
+            sessionId = pending.sessionId,
             transferId = pending.id,
             eventName = DiagnosticEventNames.TEMP_FILE_CREATED,
             state = "prepared"
@@ -1188,6 +1207,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             }
             recordTemporaryFileEvent(
                 peerId = pending.offer.peer.id.value,
+                sessionId = pending.sessionId,
                 transferId = pending.id,
                 eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
                 state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
@@ -1203,6 +1223,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             }
             recordTemporaryFileEvent(
                 peerId = pending.offer.peer.id.value,
+                sessionId = pending.sessionId,
                 transferId = pending.id,
                 eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
                 state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
@@ -1212,17 +1233,19 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
             return
         }
-        registerIncomingTransfer(incoming, pending.peerName, saveFile.absolutePath, scope)
+        registerIncomingTransfer(incoming, pending.sessionId, pending.peerName, saveFile.absolutePath, scope)
     }
 
     private fun registerOutgoingTransfer(
         transfer: P2pFileTransfer,
+        sessionId: String,
         peerName: String,
         scope: CoroutineScope
     ) {
-        val correlation = diagnostics.registerTransfer(transfer.id, transfer.peer.id.value)
+        val correlation = diagnostics.registerTransfer(transfer.id, transfer.peer.id.value, sessionId)
         addRow(
             FileTransferRow(
+                sessionId = sessionId,
                 id = transfer.id,
                 direction = FileTransferDirection.Outgoing,
                 name = transfer.name,
@@ -1239,6 +1262,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             DiagnosticRecord(
                 peerId = transfer.peer.id.value,
                 connectionId = correlation?.connectionId,
+                sdkSessionId = sessionId,
                 transferId = transfer.id,
                 category = "transfer",
                 eventName = DiagnosticEventNames.TRANSFER_PREPARED,
@@ -1248,18 +1272,20 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             )
         )
         appendSystemMessage("sending file '${transfer.name}' (${transfer.sizeBytes}B) to $peerName")
-        watchTransfer(transfer, scope)
+        watchTransfer(transfer, sessionId, scope)
     }
 
     private fun registerIncomingTransfer(
         transfer: P2pFileTransfer,
+        sessionId: String,
         peerName: String,
         destinationPath: String,
         scope: CoroutineScope
     ) {
-        val correlation = diagnostics.registerTransfer(transfer.id, transfer.peer.id.value)
+        val correlation = diagnostics.registerTransfer(transfer.id, transfer.peer.id.value, sessionId)
         addRow(
             FileTransferRow(
+                sessionId = sessionId,
                 id = transfer.id,
                 direction = FileTransferDirection.Incoming,
                 name = transfer.name,
@@ -1276,6 +1302,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             DiagnosticRecord(
                 peerId = transfer.peer.id.value,
                 connectionId = correlation?.connectionId,
+                sdkSessionId = sessionId,
                 transferId = transfer.id,
                 category = "transfer",
                 eventName = DiagnosticEventNames.TRANSFER_STARTED,
@@ -1287,7 +1314,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // The transactional destination is SDK-owned and is committed or
         // aborted even if this UI collector is cancelled.
         appendSystemMessage("receiving file '${transfer.name}' from $peerName → $destinationPath")
-        watchTransfer(transfer, scope, destinationPath)
+        watchTransfer(transfer, sessionId, scope, destinationPath)
     }
 
     /**
@@ -1298,18 +1325,20 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      */
     private fun watchTransfer(
         transfer: P2pFileTransfer,
+        sessionId: String,
         scope: CoroutineScope,
         destinationPath: String? = null
     ) {
         scope.launch {
             var completed = false
+            val key = SessionTransferKey(sessionId, transfer.id)
             val bytesJob = launch {
-                transfer.bytesTransferred.collect { b -> updateRowBytes(transfer.id, b) }
+                transfer.bytesTransferred.collect { b -> updateRowBytes(key, b) }
             }
             try {
                 transfer.state.first { st ->
-                    val previous = fileTransfers.firstOrNull { it.id == transfer.id }?.state?.toString()
-                    updateRowState(transfer.id, st)
+                    val previous = transferRows[key]?.state?.toString()
+                    updateRowState(key, st)
                     val eventName = when (st) {
                         is FileTransferState.Completed -> DiagnosticEventNames.TRANSFER_COMPLETED
                         is FileTransferState.Failed -> DiagnosticEventNames.TRANSFER_FAILED
@@ -1322,8 +1351,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                             peerId = transfer.peer.id.value,
                             connectionId = diagnostics.registerTransfer(
                                 transfer.id,
-                                transfer.peer.id.value
+                                transfer.peer.id.value,
+                                sessionId
                             )?.connectionId,
+                            sdkSessionId = sessionId,
                             transferId = transfer.id,
                             category = "transfer",
                             eventName = eventName,
@@ -1354,6 +1385,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     if (completed && destinationPath != null) {
                         recordTemporaryFileEvent(
                             peerId = transfer.peer.id.value,
+                            sessionId = sessionId,
                             transferId = transfer.id,
                             eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
                             state = "promoted",
@@ -1362,15 +1394,18 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         val digest = withContext(Dispatchers.IO) {
                             runCatching { TestFileDigests.sha256(File(destinationPath)) }.getOrNull()
                         }
-                        updateRowDigest(transfer.id, digest)
+                        updateRowDigest(key, digest)
                         if (digest != null) {
+                            val correlation = diagnostics.registerTransfer(
+                                transfer.id,
+                                transfer.peer.id.value,
+                                sessionId
+                            )
                             recordDiagnostic(
                                 DiagnosticRecord(
                                     peerId = transfer.peer.id.value,
-                                    connectionId = diagnostics.registerTransfer(
-                                        transfer.id,
-                                        transfer.peer.id.value
-                                    )?.connectionId,
+                                    connectionId = correlation?.connectionId,
+                                    sdkSessionId = sessionId,
                                     transferId = transfer.id,
                                     category = "file",
                                     eventName = DiagnosticEventNames.FILE_RECEIVER_HASH,
@@ -1379,11 +1414,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                                     details = mapOf("sha256" to digest)
                                 )
                             )
-                            val senderDigest = diagnosticRecorder.snapshot()
-                                .lastOrNull {
-                                    it.transferId == transfer.id &&
-                                        it.eventName == DiagnosticEventNames.FILE_SENDER_HASH
-                                }?.details?.get("sha256")
+                            val senderDigest = diagnosticRecorder.senderDigestFor(key)
                             // The sender and receiver normally export separate
                             // packages. Never report a local receiver hash as
                             // a cross-peer match when the sender package has
@@ -1393,10 +1424,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                             recordDiagnostic(
                                 DiagnosticRecord(
                                     peerId = transfer.peer.id.value,
-                                    connectionId = diagnostics.registerTransfer(
-                                        transfer.id,
-                                        transfer.peer.id.value
-                                    )?.connectionId,
+                                    connectionId = correlation?.connectionId,
+                                    sdkSessionId = sessionId,
                                     transferId = transfer.id,
                                     category = "file",
                                     eventName = DiagnosticEventNames.FILE_INTEGRITY_CHECKED,
@@ -1446,22 +1475,16 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun updateRowState(id: String, state: FileTransferState) {
-        val idx = fileTransfers.indexOfFirst { it.id == id }
-        if (idx < 0) return
-        fileTransfers[idx] = fileTransfers[idx].copy(state = state)
+    private fun updateRowState(key: SessionTransferKey, state: FileTransferState) {
+        transferRows.update(key) { it.copy(state = state) }
     }
 
-    private fun updateRowBytes(id: String, bytes: Long) {
-        val idx = fileTransfers.indexOfFirst { it.id == id }
-        if (idx < 0) return
-        fileTransfers[idx] = fileTransfers[idx].copy(bytesTransferred = bytes)
+    private fun updateRowBytes(key: SessionTransferKey, bytes: Long) {
+        transferRows.update(key) { it.copy(bytesTransferred = bytes) }
     }
 
-    private fun updateRowDigest(id: String, digest: String?) {
-        val idx = fileTransfers.indexOfFirst { it.id == id }
-        if (idx < 0) return
-        fileTransfers[idx] = fileTransfers[idx].copy(sha256 = digest)
+    private fun updateRowDigest(key: SessionTransferKey, digest: String?) {
+        transferRows.update(key) { it.copy(sha256 = digest) }
     }
 
     private fun sha256Uri(context: android.content.Context, uri: Uri): String? {
@@ -1469,8 +1492,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         return input.use { TestFileDigests.sha256(it) }
     }
 
-    fun cancelFileTransfer(id: String) {
-        val row = fileTransfers.firstOrNull { it.id == id } ?: return
+    fun cancelFileTransfer(key: SessionTransferKey) {
+        val row = transferRows[key] ?: return
         val scope = runScope ?: return
         scope.launch { runCatchingNonCancel { row.transfer.cancel("user cancelled") } }
     }
@@ -2109,6 +2132,7 @@ enum class FileTransferDirection { Outgoing, Incoming }
  * reference so the UI can call cancel on it.
  */
 data class FileTransferRow(
+    val sessionId: String,
     val id: String,
     val direction: FileTransferDirection,
     val name: String,
@@ -2121,16 +2145,21 @@ data class FileTransferRow(
     /** Test-harness verification digest, populated after durable receive commit. */
     val sha256: String?,
     val transfer: P2pFileTransfer
-)
+) {
+    val key: SessionTransferKey = SessionTransferKey(sessionId, id)
+}
 
 /** User-consent queue entry; holding the offer does not allocate a destination file. */
 data class IncomingFileOffer(
+    val sessionId: String,
     val id: String,
     val name: String,
     val sizeBytes: Long,
     val peerName: String,
     val offer: P2pFileOffer
-)
+) {
+    val key: SessionTransferKey = SessionTransferKey(sessionId, id)
+}
 
 /**
  * Sample-level message envelope rendered in the room timeline.

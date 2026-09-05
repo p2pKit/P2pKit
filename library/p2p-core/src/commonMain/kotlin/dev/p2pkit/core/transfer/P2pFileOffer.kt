@@ -21,7 +21,10 @@ import kotlinx.io.RawSink
  */
 public interface P2pFileOffer {
 
-    /** 32-character hex transfer id, matches the eventual [P2pFileTransfer.id]. */
+    /**
+     * 32-character hex transfer id, matches the eventual [P2pFileTransfer.id].
+     * Unique only within the owning [dev.p2pkit.core.P2pSession], not across peers or sessions.
+     */
     public val id: String
 
     /** The peer who sent the offer. */

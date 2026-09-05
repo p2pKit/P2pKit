@@ -3,6 +3,33 @@ import P2pKitShared
 import CryptoKit
 import Darwin
 
+/// UI-thread-only selectors shared by consent, cancellation, and watcher updates.
+/// Always carry the SDK session; never interpret a transfer ID as process-global.
+enum SessionTransferEntries {
+    static func take<Offer>(_ key: TransferKey, from offers: inout [TransferKey: Offer]) -> Offer? {
+        offers.removeValue(forKey: key)
+    }
+
+    static func row<Row: Identifiable>(_ key: TransferKey, in rows: [Row]) -> Row? where Row.ID == TransferKey {
+        rows.first { $0.id == key }
+    }
+
+    static func update<Row: Identifiable>(
+        _ key: TransferKey, in rows: inout [Row], change: (inout Row) -> Void
+    ) where Row.ID == TransferKey {
+        guard let index = rows.firstIndex(where: { $0.id == key }) else { return }
+        change(&rows[index])
+    }
+
+    static func remove<Offer>(
+        sessionId: String, transferIds: Set<String>, from offers: inout [TransferKey: Offer]
+    ) {
+        for id in transferIds {
+            offers.removeValue(forKey: TransferKey(sessionId: sessionId, transferId: id))
+        }
+    }
+}
+
 /// Atomically claims a sanitized destination; timestamp suffixes are not
 /// sufficient because concurrent offers can share the same clock tick.
 func claimUniqueDestination(
@@ -60,7 +87,7 @@ struct ContentView: View {
     @State private var messages: [MessageRow] = []
     @State private var transfers: [TransferRow] = []
     /// Incoming file offers stay pending until the user explicitly accepts or rejects them.
-    @State private var pendingOffers: [String: P2pFileOffer] = [:]
+    @State private var pendingOffers: [TransferKey: PendingOffer] = [:]
     @State private var draft: String = "hi from iPhone"
     @State private var manualHost: String = ""
     @State private var manualPort: String = ""
@@ -93,7 +120,7 @@ struct ContentView: View {
     @State private var fileCollectorTasks: [String: Task<Void, Never>] = [:]
     @State private var fileOfferIdsBySession: [String: Set<String>] = [:]
     @State private var cleanedTransferDirectories: Set<String> = []
-    @State private var transferWatchTasks: [String: Task<Void, Never>] = [:]
+    @State private var transferWatchTasks: [TransferKey: Task<Void, Never>] = [:]
 
     // MARK: - In-flight guards (prevent rapid double-taps from spawning
     // parallel work).
@@ -253,8 +280,13 @@ struct ContentView: View {
     /// one row per file transfer (either direction) so incoming offers and
     /// outgoing sends are visible with live progress instead of silently
     /// timing out after 30 s.
+    struct PendingOffer: Identifiable {
+        let id: TransferKey
+        let offer: P2pFileOffer
+    }
+
     struct TransferRow: Identifiable, Equatable {
-        let id: String                  // transfer.id (32-char hex)
+        let id: TransferKey
         let peerName: String
         let fileName: String
         let direction: Direction
@@ -587,7 +619,8 @@ struct ContentView: View {
     private var transfersSection: some View {
         if !pendingOffers.isEmpty {
             Text("Incoming file offers").font(.headline)
-            ForEach(Array(pendingOffers.values), id: \.id) { offer in
+            ForEach(Array(pendingOffers.values)) { pending in
+                let offer = pending.offer
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(offer.name) from \(offer.peer.name)").font(.caption)
@@ -596,9 +629,9 @@ struct ContentView: View {
                             .foregroundColor(.secondary)
                     }
                     Spacer()
-                    Button("Accept") { Task { await acceptIncomingOffer(offer) } }
+                    Button("Accept") { Task { await acceptIncomingOffer(pending) } }
                         .buttonStyle(.borderedProminent)
-                    Button("Reject") { Task { await rejectIncomingOffer(offer) } }
+                    Button("Reject") { Task { await rejectIncomingOffer(pending) } }
                         .buttonStyle(.bordered)
                 }
             }
@@ -1076,9 +1109,11 @@ struct ContentView: View {
             messageCollectorTasks[prev.id] = nil
             fileCollectorTasks[prev.id]?.cancel()
             fileCollectorTasks[prev.id] = nil
-            for offerId in fileOfferIdsBySession.removeValue(forKey: prev.id) ?? [] {
-                pendingOffers[offerId] = nil
-            }
+            SessionTransferEntries.remove(
+                sessionId: prev.id,
+                transferIds: fileOfferIdsBySession.removeValue(forKey: prev.id) ?? [],
+                from: &pendingOffers
+            )
             collectedSessionIds.remove(prev.id)
         }
 
@@ -1208,9 +1243,9 @@ struct ContentView: View {
     private func reconcileIncomingOffers(_ offers: [P2pFileOffer], sessionId: String) {
         let previous = fileOfferIdsBySession[sessionId] ?? []
         let current = Set(offers.map(\.id))
-        for removedId in previous.subtracting(current) {
-            pendingOffers[removedId] = nil
-        }
+        SessionTransferEntries.remove(
+            sessionId: sessionId, transferIds: previous.subtracting(current), from: &pendingOffers
+        )
         for offer in offers {
             if !previous.contains(offer.id) {
                 diag(
@@ -1222,6 +1257,7 @@ struct ContentView: View {
                     TestDiagnosticEventName.offerReceived,
                     peerId: "\(offer.peer.id)",
                     transferId: offer.id,
+                    sessionId: sessionId,
                     state: "offered",
                     size: offer.sizeBytes,
                     direction: .received,
@@ -1229,18 +1265,22 @@ struct ContentView: View {
                 )
                 appendMessage("incoming file offer '\(offer.name)' — review to accept or reject", kind: .info)
             }
-            pendingOffers[offer.id] = offer
+            let key = TransferKey(sessionId: sessionId, transferId: offer.id)
+            pendingOffers[key] = PendingOffer(id: key, offer: offer)
         }
         fileOfferIdsBySession[sessionId] = current
     }
 
     @MainActor
-    private func rejectIncomingOffer(_ offer: P2pFileOffer) async {
-        pendingOffers[offer.id] = nil
+    private func rejectIncomingOffer(_ pending: PendingOffer) async {
+        guard let pending = SessionTransferEntries.take(pending.id, from: &pendingOffers) else { return }
+        let offer = pending.offer
+        let sessionId = pending.id.sessionId
         diagnostics.transfer(
             TestDiagnosticEventName.offerRejected,
             peerId: "\(offer.peer.id)",
             transferId: offer.id,
+            sessionId: sessionId,
             state: "rejected",
             size: offer.sizeBytes,
             direction: .received,
@@ -1255,8 +1295,10 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func acceptIncomingOffer(_ offer: P2pFileOffer) async {
-        pendingOffers[offer.id] = nil
+    private func acceptIncomingOffer(_ pending: PendingOffer) async {
+        guard let pending = SessionTransferEntries.take(pending.id, from: &pendingOffers) else { return }
+        let offer = pending.offer
+        let sessionId = pending.id.sessionId
         let maxBytes: Int64 = 50 * 1024 * 1024
         guard offer.sizeBytes >= 0 && offer.sizeBytes <= maxBytes else {
             appendMessage("file offer '\(offer.name)' rejected: exceeds 50 MiB sample quota", kind: .error)
@@ -1301,7 +1343,10 @@ struct ContentView: View {
         }
         diagnostics.record(TestDiagnosticRecord(
             peerId: "\(offer.peer.id)",
-            connectionId: diagnostics.connectionId(for: "\(offer.peer.id)"),
+            connectionId: diagnostics.transferConnectionId(
+                peerId: "\(offer.peer.id)", sessionId: sessionId, transferId: offer.id
+            ),
+            sdkSessionId: sessionId,
             transferId: offer.id,
             category: "storage",
             eventName: TestDiagnosticEventName.temporaryFileCreated,
@@ -1315,6 +1360,7 @@ struct ContentView: View {
                 TestDiagnosticEventName.offerAccepted,
                 peerId: "\(offer.peer.id)",
                 transferId: transfer.id,
+                sessionId: sessionId,
                 state: "accepted",
                 size: offer.sizeBytes,
                 direction: .received
@@ -1323,11 +1369,14 @@ struct ContentView: View {
                 "receiving '\(dest.lastPathComponent)' (\(fmtBytes(offer.sizeBytes))) from \(offer.peer.name)",
                 kind: .info
             )
-            watchTransfer(transfer, direction: .receive, detail: dest.lastPathComponent) { completed in
+            watchTransfer(transfer, sessionId: sessionId, direction: .receive, detail: dest.lastPathComponent) { completed in
                 let cleanupComplete = !destination.temporaryArtifactExists
                 self.diagnostics.record(TestDiagnosticRecord(
                     peerId: "\(offer.peer.id)",
-                    connectionId: self.diagnostics.connectionId(for: "\(offer.peer.id)"),
+                    connectionId: self.diagnostics.transferConnectionId(
+                        peerId: "\(offer.peer.id)", sessionId: sessionId, transferId: transfer.id
+                    ),
+                    sdkSessionId: sessionId,
                     transferId: transfer.id,
                     category: "storage",
                     eventName: TestDiagnosticEventName.temporaryFileCleaned,
@@ -1350,12 +1399,14 @@ struct ContentView: View {
                         transferId: transfer.id,
                         size: offer.sizeBytes,
                         digest: digest,
-                        receiver: true
+                        receiver: true,
+                        sessionId: sessionId
                     )
                     diagnostics.transfer(
                         TestDiagnosticEventName.transferDurableCommitted,
                         peerId: "\(offer.peer.id)",
                         transferId: transfer.id,
+                        sessionId: sessionId,
                         state: "durably-persisted",
                         size: offer.sizeBytes,
                         direction: .received,
@@ -1387,7 +1438,10 @@ struct ContentView: View {
             let cleanupComplete = !destination.temporaryArtifactExists
             diagnostics.record(TestDiagnosticRecord(
                 peerId: "\(offer.peer.id)",
-                connectionId: diagnostics.connectionId(for: "\(offer.peer.id)"),
+                connectionId: diagnostics.transferConnectionId(
+                    peerId: "\(offer.peer.id)", sessionId: sessionId, transferId: offer.id
+                ),
+                sdkSessionId: sessionId,
                 transferId: offer.id,
                 category: "storage",
                 eventName: TestDiagnosticEventName.temporaryFileCleaned,
@@ -1403,6 +1457,7 @@ struct ContentView: View {
                 TestDiagnosticEventName.transferFailed,
                 peerId: "\(offer.peer.id)",
                 transferId: offer.id,
+                sessionId: sessionId,
                 state: "failed",
                 size: offer.sizeBytes,
                 direction: .received,
@@ -1454,6 +1509,7 @@ struct ContentView: View {
                 TestDiagnosticEventName.transferPrepared,
                 peerId: row.peerId,
                 transferId: transfer.id,
+                sessionId: row.id,
                 state: "prepared",
                 size: Int64(size),
                 direction: .sent,
@@ -1463,6 +1519,7 @@ struct ContentView: View {
                 TestDiagnosticEventName.transferStarted,
                 peerId: row.peerId,
                 transferId: transfer.id,
+                sessionId: row.id,
                 state: "started",
                 size: Int64(size),
                 direction: .sent
@@ -1472,10 +1529,11 @@ struct ContentView: View {
                 transferId: transfer.id,
                 size: Int64(size),
                 digest: digest,
-                receiver: false
+                receiver: false,
+                sessionId: row.id
             )
             appendMessage("offering file '\(name)' (\(fmtBytes(Int64(size)))) to \(row.peerName)", kind: .sent)
-            watchTransfer(transfer, direction: .send, detail: nil) { completed in
+            watchTransfer(transfer, sessionId: row.id, direction: .send, detail: nil) { completed in
                 if completed {
                     diag("file", "sender completed '\(name)' sha256=\(digest)")
                 }
@@ -1488,6 +1546,7 @@ struct ContentView: View {
                 // sendFile failed before returning an SDK transfer handle, so
                 // there is no truthful transfer id to correlate here.
                 transferId: nil,
+                sessionId: row.id,
                 state: "failed",
                 size: Int64(size),
                 direction: .sent,
@@ -1510,12 +1569,14 @@ struct ContentView: View {
     @MainActor
     private func watchTransfer(
         _ transfer: P2pFileTransfer,
+        sessionId: String,
         direction: TransferRow.Direction,
         detail: String?,
         onTerminal: @escaping (_ completed: Bool) -> String?
     ) {
+        let key = TransferKey(sessionId: sessionId, transferId: transfer.id)
         transfers.append(TransferRow(
-            id: transfer.id,
+            id: key,
             peerName: transfer.peer.name,
             fileName: transfer.name,
             direction: direction,
@@ -1533,16 +1594,16 @@ struct ContentView: View {
                 transfers.removeFirst()
             }
         }
-        transferWatchTasks[transfer.id] = Task { @MainActor in
+        transferWatchTasks[key] = Task { @MainActor in
             var lastLabel = ""
             var cleanupCompleted = false
             while !Task.isCancelled {
                 let (label, terminal) = describeTransferState(transfer.state.value)
                 let bytes = (transfer.bytesTransferred.value as? KotlinLong)?.int64Value ?? 0
-                if let idx = transfers.firstIndex(where: { $0.id == transfer.id }) {
-                    transfers[idx].stateLabel = label
-                    transfers[idx].bytes = bytes
-                    transfers[idx].isTerminal = terminal
+                SessionTransferEntries.update(key, in: &transfers) { row in
+                    row.stateLabel = label
+                    row.bytes = bytes
+                    row.isTerminal = terminal
                 }
                 if label != lastLabel {
                     lastLabel = label
@@ -1550,6 +1611,7 @@ struct ContentView: View {
                     self.diagnostics.transferProgress(
                         peerId: "\(transfer.peer.id)",
                         transferId: transfer.id,
+                        sessionId: sessionId,
                         bytes: bytes,
                         total: transfer.sizeBytes
                     )
@@ -1562,6 +1624,7 @@ struct ContentView: View {
                                     : TestDiagnosticEventName.transferFailed),
                             peerId: "\(transfer.peer.id)",
                             transferId: transfer.id,
+                            sessionId: sessionId,
                             state: label,
                             size: transfer.sizeBytes,
                             direction: direction == .send ? .sent : .received,
@@ -1573,9 +1636,7 @@ struct ContentView: View {
                         let localFailure = onTerminal(label == "Completed")
                         cleanupCompleted = true
                         let finalLabel = localFailure.map { "Failed: \($0)" } ?? label
-                        if let idx = transfers.firstIndex(where: { $0.id == transfer.id }) {
-                            transfers[idx].stateLabel = finalLabel
-                        }
+                        SessionTransferEntries.update(key, in: &transfers) { $0.stateLabel = finalLabel }
                         let arrow = direction == .send ? "→" : "←"
                         appendMessage(
                             "file '\(transfer.name)' \(arrow) \(transfer.peer.name): \(finalLabel)",
@@ -1596,7 +1657,7 @@ struct ContentView: View {
                     )
                 }
             }
-            transferWatchTasks[transfer.id] = nil
+            transferWatchTasks[key] = nil
         }
     }
 
@@ -1627,11 +1688,13 @@ struct ContentView: View {
 
     @MainActor
     private func cancelTransfer(_ row: TransferRow) async {
-        diag("file", "Cancel tapped for transfer \(row.id.prefix(8)) '\(row.fileName)'")
+        guard let row = SessionTransferEntries.row(row.id, in: transfers) else { return }
+        diag("file", "Cancel tapped for transfer \(row.id.transferId.prefix(8)) '\(row.fileName)'")
         diagnostics.transfer(
             TestDiagnosticEventName.transferCancelled,
             peerId: "\(row.transfer.peer.id)",
-            transferId: row.id,
+            transferId: row.id.transferId,
+            sessionId: row.id.sessionId,
             state: "cancelling",
             size: row.totalBytes,
             direction: row.direction == .send ? .sent : .received,
@@ -1921,8 +1984,8 @@ struct ContentView: View {
         fileCollectorTasks = [:]
         fileOfferIdsBySession = [:]
 
-        for offer in pendingOffers.values {
-            try? await offer.reject(reason: "sample stopped before consent")
+        for pending in pendingOffers.values {
+            try? await pending.offer.reject(reason: "sample stopped before consent")
         }
         do {
             try await k.stop()

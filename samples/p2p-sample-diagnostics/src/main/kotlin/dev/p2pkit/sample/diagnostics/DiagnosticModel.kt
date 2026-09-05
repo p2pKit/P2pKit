@@ -47,6 +47,8 @@ public data class DiagnosticEvent(
     val role: String,
     val peerId: String? = null,
     val connectionId: String? = null,
+    /** Anonymized SDK-session owner; absent in older evidence and process-global raw frames. */
+    val sdkSessionId: String? = null,
     val transferId: String? = null,
     val category: String,
     val eventName: String,
@@ -141,7 +143,8 @@ public data class DiagnosticTransferSummary(
     val receiverFileSizeBytes: Long?,
     val senderSha256: String?,
     val receiverSha256: String?,
-    val integrityMatch: Boolean?
+    val integrityMatch: Boolean?,
+    val sdkSessionId: String? = null
 )
 
 @Serializable
@@ -163,7 +166,8 @@ public data class DiagnosticSessionSummary(
     val transferIds: List<String>,
     val peerIds: List<String>,
     /**
-     * Hash and integrity evidence grouped by the exact transfer identifier.
+     * Hash and integrity evidence grouped by SDK session and transfer identifier.
+     * Records without an SDK-session owner cannot establish a transfer summary.
      * Top-level hash fields are populated only when [selectedTransferId]
      * identifies one unambiguous transfer.
      */
@@ -195,6 +199,8 @@ public data class DiagnosticFilter(
 public data class DiagnosticRecord(
     val peerId: String? = null,
     val connectionId: String? = null,
+    /** Raw SDK-session ID, anonymized by the recorder before storage/export. */
+    val sdkSessionId: String? = null,
     val transferId: String? = null,
     val category: String,
     val eventName: String,
@@ -222,17 +228,31 @@ public data class DiagnosticRecord(
 public data class DiagnosticCorrelation(
     val peerId: String,
     val connectionId: String,
-    val transferId: String? = null
+    val transferId: String? = null,
+    val sdkSessionId: String? = null
 )
+
+/** Stable sample-side key for an SDK-session-scoped transfer identifier. */
+public data class SessionTransferKey(
+    val sessionId: String,
+    val transferId: String
+) {
+    init {
+        require(sessionId.isNotBlank()) { "sessionId must not be blank" }
+        require(transferId.isNotBlank()) { "transferId must not be blank" }
+    }
+
+    /** String form suitable for Compose list keys and command-line diagnostics. */
+    public val stableId: String = "${sessionId.length}:$sessionId$transferId"
+}
 
 /**
  * Thread-safe correlation index used by the JVM/Android sample harnesses.
  *
  * It never guesses from a "latest" peer. Connection identifiers are derived
  * only from the active test session and the two real SDK peer identifiers;
- * transfer identifiers are the real SDK identifiers. A frame without a known
- * transfer remains unassigned instead of being attributed to an unrelated
- * concurrent peer.
+ * transfer identifiers are the real SDK identifiers, paired with their SDK
+ * session owner. Process-global raw frame IDs are never ownership evidence.
  */
 public class DiagnosticCorrelationRegistry(
     private val activeSessionId: () -> String,
@@ -242,7 +262,7 @@ public class DiagnosticCorrelationRegistry(
     private var localPeerId: String? = null
     private val connectionsBySession: MutableMap<String, DiagnosticCorrelation> = mutableMapOf()
     private val connectionsByPeer: MutableMap<String, SessionCorrelation> = mutableMapOf()
-    private val transfers: LinkedHashMap<String, TransferOwnership> = linkedMapOf()
+    private val transfers: LinkedHashMap<SessionTransferKey, DiagnosticCorrelation> = linkedMapOf()
 
     init {
         require(maxTransfers > 0)
@@ -272,7 +292,7 @@ public class DiagnosticCorrelationRegistry(
         val testSession = activeSessionId()
         return synchronized(lock) {
             val connectionId = connectionIdLocked(testSession, peerId) ?: return@synchronized null
-            val correlation = DiagnosticCorrelation(peerId, connectionId)
+            val correlation = DiagnosticCorrelation(peerId, connectionId, sdkSessionId = sessionId)
             connectionsBySession.entries.removeAll { (otherSessionId, otherCorrelation) ->
                 otherSessionId != sessionId && otherCorrelation.peerId == peerId
             }
@@ -311,36 +331,28 @@ public class DiagnosticCorrelationRegistry(
         sessionId: String? = null
     ): DiagnosticCorrelation? {
         return synchronized(lock) {
-            val connection = sessionId?.let(connectionsBySession::get)
-                ?: connectionsByPeer[peerId]?.correlation
+            val session = if (sessionId == null) {
+                connectionsByPeer[peerId]
+            } else {
+                // A late callback must not acquire a replacement session's
+                // ownership merely because it belongs to the same peer.
+                val known = connectionsBySession[sessionId]
+                    ?: transfers[SessionTransferKey(sessionId, transferId)]
+                known?.let { SessionCorrelation(sessionId, it) }
+            }
                 ?: return@synchronized null
+            val connection = session.correlation
+            if (connection.peerId != peerId) return@synchronized null
             val correlation = connection.copy(transferId = transferId)
-            val existing = transfers.remove(transferId)
-            transfers[transferId] = TransferOwnership(
-                correlation = if (existing?.ambiguous != true &&
-                    (existing?.correlation == null ||
-                        existing.correlation.connectionId == correlation.connectionId)
-                ) {
-                    correlation
-                } else {
-                    // FrameTrace is process-global and its wire line contains
-                    // no connection handle. A transfer-id collision across
-                    // peers is therefore explicitly ambiguous, never last-wins.
-                    null
-                },
-                ambiguous = existing?.ambiguous == true ||
-                    (existing?.correlation != null &&
-                        existing.correlation.connectionId != correlation.connectionId)
-            )
+            val key = SessionTransferKey(session.sessionId, transferId)
+            transfers.remove(key)
+            transfers[key] = correlation
             while (transfers.size > maxTransfers) {
                 transfers.remove(transfers.keys.first())
             }
             correlation
         }
     }
-
-    public fun correlationForTransfer(transferId: String): DiagnosticCorrelation? =
-        synchronized(lock) { transfers[transferId]?.correlation }
 
     private fun connectionIdLocked(testSessionId: String, remotePeerId: String): String? {
         val local = localPeerId ?: return null
@@ -350,11 +362,6 @@ public class DiagnosticCorrelationRegistry(
     private data class SessionCorrelation(
         val sessionId: String,
         val correlation: DiagnosticCorrelation
-    )
-
-    private data class TransferOwnership(
-        val correlation: DiagnosticCorrelation?,
-        val ambiguous: Boolean
     )
 }
 
@@ -511,6 +518,7 @@ public class DiagnosticRecorder(
                 append(" test=").append(event.testId)
                 append(" session=").append(event.testSessionId)
                 event.connectionId?.let { append(" connection=").append(it) }
+                event.sdkSessionId?.let { append(" sdkSession=").append(it) }
                 event.transferId?.let { append(" transfer=").append(it) }
                 event.packetType?.let { append(" packet=").append(it) }
                 event.currentState?.let { append(" state=").append(it) }
@@ -518,6 +526,15 @@ public class DiagnosticRecorder(
                 event.outcome?.let { append(" outcome=").append(it) }
             }
         }
+
+    /** Finds sender evidence only for this SDK owner in the active diagnostic test session. */
+    public fun senderDigestFor(key: SessionTransferKey): String? {
+        val owner = anonymizeIdentifier(key.sessionId)
+        return snapshot(DiagnosticFilter(sessionId = activeSessionId)).lastOrNull {
+            it.sdkSessionId == owner && it.transferId == key.transferId &&
+                it.eventName == DiagnosticEventNames.FILE_SENDER_HASH
+        }?.details?.get("sha256")
+    }
 
     public fun summary(
         sessionId: String = activeSessionId,
@@ -541,9 +558,14 @@ public class DiagnosticRecorder(
         val start = events.firstOrNull()
         val end = events.lastOrNull()
         val transferSummaries = events.asSequence()
-            .mapNotNull { it.transferId }
+            .mapNotNull { event ->
+                val owner = event.sdkSessionId ?: return@mapNotNull null
+                event.transferId?.let { transferId ->
+                    DiagnosticSummaryTransferKey(owner, event.connectionId, event.peerId, transferId)
+                }
+            }
             .distinct()
-            .map { transferId -> transferSummary(transferId, events) }
+            .map { key -> transferSummary(key, events) }
             .toList()
         val selectedTransfer = when {
             selectedTransferId != null -> transferSummaries.singleOrNull {
@@ -629,6 +651,7 @@ public class DiagnosticRecorder(
                 role = context.role,
                 peerId = record.peerId?.let(::anonymizeIdentifier),
                 connectionId = record.connectionId?.takeIf { it.matches(SAFE_ID) },
+                sdkSessionId = record.sdkSessionId?.takeIf { it.isNotBlank() }?.let(::anonymizeIdentifier),
                 transferId = record.transferId?.takeIf { it.matches(SAFE_ID) },
                 category = stableName(record.category),
                 eventName = stableName(record.eventName),
@@ -736,24 +759,37 @@ public class DiagnosticRecorder(
 }
 
 private fun transferSummary(
-    transferId: String,
+    key: DiagnosticSummaryTransferKey,
     sessionEvents: List<DiagnosticEvent>
 ): DiagnosticTransferSummary {
-    val events = sessionEvents.filter { it.transferId == transferId }
+    val events = sessionEvents.filter {
+        it.transferId == key.transferId &&
+            it.sdkSessionId == key.sdkSessionId &&
+            it.connectionId == key.connectionId &&
+            it.peerId == key.peerId
+    }
     val sender = events.lastOrNull { it.eventName == DiagnosticEventNames.FILE_SENDER_HASH }
     val receiver = events.lastOrNull { it.eventName == DiagnosticEventNames.FILE_RECEIVER_HASH }
     val integrity = events.lastOrNull { it.eventName == DiagnosticEventNames.FILE_INTEGRITY_CHECKED }
     return DiagnosticTransferSummary(
-        transferId = transferId,
+        transferId = key.transferId,
         connectionIds = events.mapNotNull { it.connectionId }.distinct(),
         peerIds = events.mapNotNull { it.peerId }.distinct(),
         senderFileSizeBytes = sender?.payloadSizeBytes,
         receiverFileSizeBytes = receiver?.payloadSizeBytes,
         senderSha256 = sender?.details?.get("sha256"),
         receiverSha256 = receiver?.details?.get("sha256"),
-        integrityMatch = integrity?.details?.get("match")?.toBooleanStrictOrNull()
+        integrityMatch = integrity?.details?.get("match")?.toBooleanStrictOrNull(),
+        sdkSessionId = key.sdkSessionId
     )
 }
+
+private data class DiagnosticSummaryTransferKey(
+    val sdkSessionId: String,
+    val connectionId: String?,
+    val peerId: String?,
+    val transferId: String
+)
 
 public object DiagnosticEventNames {
     public const val APPLICATION_STARTED: String = "application.started"
@@ -817,7 +853,9 @@ public object DiagnosticEventNames {
 /**
  * Converts the SDK's decoded frame trace into stable structured packet
  * events. The trace contains metadata only (type/length/chunk/id), never
- * payload bytes.
+ * payload bytes. The sink is process-global and has no trustworthy SDK-session
+ * context, even when only one transfer owner has been observed so far. Retain
+ * raw metadata unassigned; only session-owned callbacks establish ownership.
  */
 public object StructuredFrameTrace {
     private val frame = Regex(
@@ -826,15 +864,12 @@ public object StructuredFrameTrace {
 
     public fun record(
         recorder: DiagnosticRecorder,
-        line: String,
-        connectionId: String? = null,
-        correlationForTransfer: (String) -> DiagnosticCorrelation? = { null }
+        line: String
     ) {
         val match = frame.matchEntire(line.trim())
         if (match == null) {
             recorder.record(
                 DiagnosticRecord(
-                    connectionId = connectionId,
                     category = "protocol",
                     eventName = DiagnosticEventNames.PROTOCOL_PACKET_REJECTED,
                     severity = DiagnosticSeverity.WARNING,
@@ -848,7 +883,6 @@ public object StructuredFrameTrace {
         val exactTransferId = transferId.ifEmpty {
             messageId.takeIf { packetType == "FILE_DATA" && it.isNotEmpty() }.orEmpty()
         }.ifEmpty { null }
-        val correlation = exactTransferId?.let(correlationForTransfer)
         val direction = if (wireDirection == "TX") DiagnosticDirection.SENT else DiagnosticDirection.RECEIVED
         val eventName = when (packetType) {
             "FILE_COMMIT" -> DiagnosticEventNames.TRANSFER_ACK
@@ -860,8 +894,6 @@ public object StructuredFrameTrace {
         }
         recorder.record(
             DiagnosticRecord(
-                peerId = correlation?.peerId,
-                connectionId = correlation?.connectionId ?: connectionId,
                 transferId = exactTransferId,
                 category = if (packetType.startsWith("FILE_")) "transfer" else "protocol",
                 eventName = eventName,

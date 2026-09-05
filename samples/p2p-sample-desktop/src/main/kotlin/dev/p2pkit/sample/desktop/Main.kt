@@ -21,6 +21,7 @@ import dev.p2pkit.core.protocol.FrameTrace
 import dev.p2pkit.sample.diagnostics.DiagnosticEventNames
 import dev.p2pkit.sample.diagnostics.DiagnosticOutcome
 import dev.p2pkit.sample.diagnostics.DiagnosticRecord
+import dev.p2pkit.sample.diagnostics.SessionTransferKey
 import dev.p2pkit.sample.diagnostics.cleanupStaleTransferPartsOnce
 import dev.p2pkit.sample.diagnostics.reservedFileDestination
 import dev.p2pkit.provisioning.desktop.jvm
@@ -76,8 +77,8 @@ import java.util.concurrent.ConcurrentHashMap
  *                                   a synthetic peer and then dials it
  * - `sendfile <id-or-name> <path>` — stream a file from disk to one peer
  * - `offers`                      — list incoming file offers awaiting consent
- * - `accept <offer-id-prefix>`    — accept an offer if it meets local storage limits
- * - `reject <offer-id-prefix>`    — reject an incoming offer
+ * - `accept <offer-id-prefix-or-selector>` — accept an offer if it meets local storage limits
+ * - `reject <offer-id-prefix-or-selector>` — reject an incoming offer
  * - `help`                        — print this list
  * - `quit` / `exit`               — stop the kit and exit
  *
@@ -172,7 +173,7 @@ fun main(args: Array<String>) {
     // connect attempt for the same peer. The SDK still dedupes either way,
     // but the local guard keeps the CLI output one-clean per session.
     val pendingConnects: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-    val pendingFileOffers = ConcurrentHashMap<String, P2pFileOffer>()
+    val pendingFileOffers = ConcurrentHashMap<SessionTransferKey, P2pFileOffer>()
     // AUDIT-2026-06 (B-G9-samples-desktop-ios-10): session ids whose collectors
     // are already wired. p2p.connect() is idempotent and can return the SAME
     // P2pSession instance (e.g. `connect` typed while that session is still
@@ -344,7 +345,7 @@ private suspend fun repl(
     // AUDIT-2026-06 (B-G9-samples-desktop-ios-10): shared wired-collector set,
     // see registerSession.
     wiredSessionIds: MutableSet<String>,
-    pendingFileOffers: ConcurrentHashMap<String, P2pFileOffer>,
+    pendingFileOffers: ConcurrentHashMap<SessionTransferKey, P2pFileOffer>,
     advertising: StateLatch,
     discovering: StateLatch,
     autoMesh: MutableStateFlow<Boolean>
@@ -881,6 +882,7 @@ private suspend fun repl(
                             CliDiagnostics.transfer(
                                 peerId = session.peer.id.value,
                                 transferId = transfer.id,
+                                sessionId = session.id,
                                 eventName = DiagnosticEventNames.TRANSFER_PREPARED,
                                 state = transfer.state.value.toString(),
                                 size = transfer.sizeBytes,
@@ -891,7 +893,8 @@ private suspend fun repl(
                                 transfer.id,
                                 file.length(),
                                 sourceDigest,
-                                receiver = false
+                                receiver = false,
+                                sessionId = session.id
                             )
                             scope.launch {
                                 transfer.state.first { st ->
@@ -902,6 +905,7 @@ private suspend fun repl(
                                     CliDiagnostics.transfer(
                                         peerId = session.peer.id.value,
                                         transferId = transfer.id,
+                                        sessionId = session.id,
                                         eventName = when (st) {
                                             is FileTransferState.Completed -> DiagnosticEventNames.TRANSFER_COMPLETED
                                             is FileTransferState.Failed -> DiagnosticEventNames.TRANSFER_FAILED
@@ -934,14 +938,15 @@ private suspend fun repl(
             }
 
             "offers" -> {
-                val offers = pendingFileOffers.values.sortedBy { it.id }
+                val offers = pendingFileOffers.entries.sortedBy { it.key.stableId }
                 if (offers.isEmpty()) {
                     println("(no pending file offers)")
                 } else {
-                    offers.forEach { offer ->
+                    offers.forEach { (key, offer) ->
                         println(
                             "  ${offer.id.take(8)}…  ${offer.name.sanitizedForTerminal()} " +
-                                "(${offer.sizeBytes}B) from ${offer.peer.name.sanitizedForTerminal()}"
+                                "(${offer.sizeBytes}B) from ${offer.peer.name.sanitizedForTerminal()} " +
+                                "selector=${key.stableId}"
                         )
                     }
                 }
@@ -949,34 +954,35 @@ private suspend fun repl(
 
             "accept", "reject" -> {
                 if (arg.isEmpty()) {
-                    println("usage: $cmd <offer-id-prefix>")
+                    println("usage: $cmd <offer-id-prefix-or-selector>")
                     continue
                 }
-                val matches = pendingFileOffers.values
-                    .filter { it.id == arg || it.id.startsWith(arg) }
-                    .sortedBy { it.id }
+                val matches = matchingOfferKeys(pendingFileOffers.keys, arg)
                 if (matches.isEmpty()) {
                     println("no pending file offer matching '$arg'")
                     continue
                 }
                 if (matches.size > 1) {
-                    println("ambiguous offer id '$arg': ${matches.joinToString { it.id.take(8) }}")
+                    println("ambiguous offer id '$arg'; use a full selector from `offers`: " +
+                        matches.joinToString { it.stableId })
                     continue
                 }
-                val offer = matches.single()
-                if (!pendingFileOffers.remove(offer.id, offer)) {
-                    println("offer ${offer.id.take(8)} is no longer pending")
+                val key = matches.single()
+                val offer = pendingFileOffers[key]
+                if (offer == null || !pendingFileOffers.remove(key, offer)) {
+                    println("offer ${key.transferId.take(8)} is no longer pending")
                     continue
                 }
                 scope.launch {
                     if (cmd == "accept") {
-                        acceptIncomingFile(offer)
+                        acceptIncomingFile(offer, key.sessionId)
                     } else {
                         runCatching { offer.reject("rejected by receiver") }
                             .onSuccess {
                                 CliDiagnostics.transfer(
                                     peerId = offer.peer.id.value,
                                     transferId = offer.id,
+                                    sessionId = key.sessionId,
                                     eventName = DiagnosticEventNames.TRANSFER_OFFER_REJECTED,
                                     state = "Rejected",
                                     size = offer.sizeBytes,
@@ -1052,8 +1058,8 @@ private fun printHelp() {
           manual <host>:<port>               — connect by IP, no mDNS needed
           sendfile <id-or-name> <path>       — stream a file from disk to one peer
           offers                              — list incoming file offers awaiting consent
-          accept <offer-id-prefix>            — accept an offer within local storage limits
-          reject <offer-id-prefix>            — reject an incoming offer
+          accept <offer-id-prefix-or-selector>            — accept an offer within local storage limits
+          reject <offer-id-prefix-or-selector>            — reject an incoming offer
           close <id-or-name>                 — close a session
           diag                               — diagnostic status
           diag start <TEST-ID> [session] [role]
@@ -1117,7 +1123,7 @@ private fun registerSession(
     scope: CoroutineScope,
     sessions: ConcurrentHashMap<String, P2pSession>,
     wiredSessionIds: MutableSet<String>,
-    pendingFileOffers: ConcurrentHashMap<String, P2pFileOffer>,
+    pendingFileOffers: ConcurrentHashMap<SessionTransferKey, P2pFileOffer>,
 ) {
     sessions[session.peer.id.value] = session
     if (!wiredSessionIds.add(session.id)) return // collectors already wired on this instance
@@ -1150,7 +1156,7 @@ private fun registerSession(
 private fun wireIncoming(
     session: P2pSession,
     scope: CoroutineScope,
-    pendingFileOffers: ConcurrentHashMap<String, P2pFileOffer>,
+    pendingFileOffers: ConcurrentHashMap<SessionTransferKey, P2pFileOffer>,
 ) {
     session.incoming
         .onEach { msg ->
@@ -1194,16 +1200,18 @@ private fun wireIncoming(
         }
         .launchIn(scope)
     scope.launch {
-        var previousIds: Set<String> = emptySet()
+        var previousKeys: Set<SessionTransferKey> = emptySet()
         try {
             session.pendingFileOffers.collect { offers ->
-                val currentIds = offers.mapTo(mutableSetOf()) { it.id }
-                (previousIds - currentIds).forEach(pendingFileOffers::remove)
+                val currentKeys = offers.mapTo(mutableSetOf()) { SessionTransferKey(session.id, it.id) }
+                (previousKeys - currentKeys).forEach(pendingFileOffers::remove)
                 for (offer in offers) {
-                    if (pendingFileOffers.put(offer.id, offer) == null) {
+                    val key = SessionTransferKey(session.id, offer.id)
+                    if (pendingFileOffers.put(key, offer) == null) {
                         CliDiagnostics.transfer(
                             peerId = session.peer.id.value,
                             transferId = offer.id,
+                            sessionId = session.id,
                             eventName = DiagnosticEventNames.TRANSFER_OFFER_RECEIVED,
                             state = "Offered",
                             size = offer.sizeBytes,
@@ -1212,15 +1220,15 @@ private fun wireIncoming(
                         println(
                             "[file ← ${session.peer.name.sanitizedForTerminal()}] offered " +
                                 "${offer.name.sanitizedForTerminal()} (${offer.sizeBytes}B), " +
-                                "id=${offer.id.take(8)}…; use `accept ${offer.id.take(8)}` or " +
-                                "`reject ${offer.id.take(8)}`"
+                                "id=${offer.id.take(8)}…; use `accept ${key.stableId}` or " +
+                                "`reject ${key.stableId}`"
                         )
                     }
                 }
-                previousIds = currentIds
+                previousKeys = currentKeys
             }
         } finally {
-            previousIds.forEach(pendingFileOffers::remove)
+            previousKeys.forEach(pendingFileOffers::remove)
         }
     }
 }
@@ -1228,7 +1236,7 @@ private fun wireIncoming(
 private const val MAX_INCOMING_FILE_BYTES: Long = 50L * 1024L * 1024L
 private const val REQUIRED_FREE_SPACE_RESERVE_BYTES: Long = 1024L * 1024L
 
-private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
+private suspend fun acceptIncomingFile(offer: P2pFileOffer, sessionId: String) {
     val peerName = offer.peer.name.sanitizedForTerminal()
     val fileName = offer.name.sanitizedForTerminal()
     if (offer.sizeBytes < 0L || offer.sizeBytes > MAX_INCOMING_FILE_BYTES) {
@@ -1236,6 +1244,7 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
         CliDiagnostics.transfer(
             peerId = offer.peer.id.value,
             transferId = offer.id,
+            sessionId = sessionId,
             eventName = DiagnosticEventNames.TRANSFER_OFFER_REJECTED,
             state = "Rejected",
             size = offer.sizeBytes,
@@ -1257,6 +1266,7 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
         CliDiagnostics.transfer(
             peerId = offer.peer.id.value,
             transferId = offer.id,
+            sessionId = sessionId,
             eventName = DiagnosticEventNames.TRANSFER_OFFER_REJECTED,
             state = "Rejected",
             size = offer.sizeBytes,
@@ -1304,6 +1314,7 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
     recordTemporaryFileEvent(
         peerId = offer.peer.id.value,
         transferId = offer.id,
+        sessionId = sessionId,
         eventName = DiagnosticEventNames.TEMP_FILE_CREATED,
         state = "prepared"
     )
@@ -1314,6 +1325,7 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
         recordTemporaryFileEvent(
             peerId = offer.peer.id.value,
             transferId = offer.id,
+            sessionId = sessionId,
             eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
             state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
             outcome = if (cleanup.isSuccess) DiagnosticOutcome.SUCCESS else DiagnosticOutcome.FAILURE,
@@ -1329,6 +1341,7 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
         recordTemporaryFileEvent(
             peerId = offer.peer.id.value,
             transferId = offer.id,
+            sessionId = sessionId,
             eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
             state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
             outcome = if (cleanup.isSuccess) DiagnosticOutcome.SUCCESS else DiagnosticOutcome.FAILURE,
@@ -1340,6 +1353,7 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
     CliDiagnostics.transfer(
         peerId = offer.peer.id.value,
         transferId = transfer.id,
+        sessionId = sessionId,
         eventName = DiagnosticEventNames.TRANSFER_OFFER_ACCEPTED,
         state = "Accepted",
         size = transfer.sizeBytes,
@@ -1359,11 +1373,13 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
                         transfer.id,
                         saveFile.length(),
                         digest,
-                        receiver = true
+                        receiver = true,
+                        sessionId = sessionId
                     )
                     CliDiagnostics.transfer(
                         peerId = offer.peer.id.value,
                         transferId = transfer.id,
+                        sessionId = sessionId,
                         eventName = DiagnosticEventNames.TRANSFER_DURABLE_COMMITTED,
                         state = "Completed",
                         size = saveFile.length(),
@@ -1380,6 +1396,7 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
                     CliDiagnostics.transfer(
                         peerId = offer.peer.id.value,
                         transferId = transfer.id,
+                        sessionId = sessionId,
                         eventName = when (state) {
                             is FileTransferState.Failed -> DiagnosticEventNames.TRANSFER_FAILED
                             is FileTransferState.Cancelled -> DiagnosticEventNames.TRANSFER_CANCELLED
@@ -1406,6 +1423,7 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
                 recordTemporaryFileEvent(
                     peerId = offer.peer.id.value,
                     transferId = transfer.id,
+                    sessionId = sessionId,
                     eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
                     state = "promoted",
                     outcome = DiagnosticOutcome.SUCCESS
@@ -1417,6 +1435,7 @@ private suspend fun acceptIncomingFile(offer: P2pFileOffer) {
 
 private fun recordTemporaryFileEvent(
     peerId: String,
+    sessionId: String,
     transferId: String,
     eventName: String,
     state: String,
@@ -1426,7 +1445,8 @@ private fun recordTemporaryFileEvent(
     CliDiagnostics.recorder.record(
         DiagnosticRecord(
             peerId = peerId,
-            connectionId = CliDiagnostics.connectionIdFor(peerId),
+            connectionId = CliDiagnostics.transferConnectionId(peerId, sessionId, transferId),
+            sdkSessionId = sessionId,
             transferId = transferId,
             category = "storage",
             eventName = eventName,
@@ -1446,11 +1466,11 @@ private fun recordTemporaryFileEvent(
 }
 
 private suspend fun rejectPendingOffers(
-    pendingFileOffers: ConcurrentHashMap<String, P2pFileOffer>,
+    pendingFileOffers: ConcurrentHashMap<SessionTransferKey, P2pFileOffer>,
     reason: String,
 ) {
-    pendingFileOffers.values.toList().forEach { offer ->
-        if (pendingFileOffers.remove(offer.id, offer)) {
+    pendingFileOffers.entries.toList().forEach { (key, offer) ->
+        if (pendingFileOffers.remove(key, offer)) {
             runCatching { offer.reject(reason) }
         }
     }

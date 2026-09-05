@@ -65,7 +65,7 @@ class DiagnosticModelTest {
                 "\"buildNumber\":\"42\",\"gitCommitSha\":\"0123456789abcdef0123456789abcdef01234567\"," +
                 "\"safeDeviceId\":\"safe-device\",\"testSessionId\":\"session-1\",\"testId\":\"PS-T05\"," +
                 "\"role\":\"sender\",\"peerId\":\"anon-peer\",\"connectionId\":\"conn-1\"," +
-                "\"transferId\":\"transfer-1\",\"category\":\"transfer\",\"eventName\":\"transfer.completed\"," +
+                "\"sdkSessionId\":null,\"transferId\":\"transfer-1\",\"category\":\"transfer\",\"eventName\":\"transfer.completed\"," +
                 "\"severity\":\"INFO\",\"currentState\":\"completed\",\"previousState\":\"transferring\"," +
                 "\"protocolVersion\":\"secure-v2\",\"packetType\":\"file_commit\",\"direction\":\"RECEIVED\"," +
                 "\"payloadSizeBytes\":1024,\"sequenceNumber\":9,\"chunkNumber\":4,\"chunkCount\":4," +
@@ -158,40 +158,91 @@ class DiagnosticModelTest {
     }
 
     @Test
-    fun frameTraceUsesExactTransferOwnerAndLeavesAmbiguityUnassigned() {
+    fun processGlobalFramesStayUnassignedBeforeAndAfterCollidingOfferRegistration() {
+        val recorder = recorder()
+        recorder.startSession("PS-T01", "both", "shared-session")
+        val registry = DiagnosticCorrelationRegistry(activeSessionId = { recorder.activeSessionId })
+        registry.setLocalPeerId("local-peer")
+        registry.registerConnection("session-a", "peer-a")
+        registry.registerConnection("session-b", "peer-b")
+        val transferId = "a".repeat(32)
+        registry.registerTransfer(transferId, "peer-a", "session-a")
+        recorder.record(
+            DiagnosticRecord(
+                sdkSessionId = "session-a",
+                transferId = transferId,
+                category = "file",
+                eventName = DiagnosticEventNames.FILE_SENDER_HASH,
+                details = mapOf("sha256" to "b".repeat(64))
+            )
+        )
+
+        // Protocol readLoop emits B's RX trace synchronously BEFORE publishing
+        // B's file offer. A is the only observed owner at this point.
+        StructuredFrameTrace.record(recorder, "RX type=FILE_OFFER len=64B xfer=$transferId")
+        val beforeRegistration = recorder.snapshot().last()
+        registry.registerTransfer(transferId, "peer-b", "session-b")
+        StructuredFrameTrace.record(recorder, "RX type=FILE_COMMIT len=72B xfer=$transferId")
+        for (event in listOf(beforeRegistration, recorder.snapshot().last())) {
+            assertEquals(transferId, event.transferId)
+            assertNull(event.peerId)
+            assertNull(event.connectionId)
+            assertNull(event.sdkSessionId)
+        }
+        assertEquals(beforeRegistration, recorder.snapshot().first { it.index == beforeRegistration.index })
+        assertEquals(1, recorder.summary().transferSummaries.size, "raw frames must not add phantom transfers")
+    }
+
+    @Test
+    fun repeatedTransferIdRemainsScopedToItsSdkSession() {
         val recorder = recorder()
         recorder.startSession("PS-T01", "both", "shared-session")
         val registry = DiagnosticCorrelationRegistry(
             activeSessionId = { recorder.activeSessionId }
         )
         registry.setLocalPeerId("local-peer")
-        registry.registerConnection("sdk-session-a", "peer-a")
-        registry.registerConnection("sdk-session-b", "peer-b")
-        val first = assertNotNull(registry.registerTransfer("a".repeat(32), "peer-a"))
-        registry.registerTransfer("b".repeat(32), "peer-b")
+        val peerA = assertNotNull(registry.registerConnection("sdk-session-a", "peer-a"))
+        val peerB = assertNotNull(registry.registerConnection("sdk-session-b", "peer-b"))
 
-        StructuredFrameTrace.record(
-            recorder,
-            "TX type=FILE_DATA len=64B chunk=0/1 id=${"a".repeat(32)} LAST",
-            correlationForTransfer = registry::correlationForTransfer
+        assertEquals(
+            peerA,
+            registry.registerTransfer("same-transfer", "peer-a", "sdk-session-a")
+                ?.copy(transferId = null)
         )
-        val attributed = recorder.snapshot().last()
-        assertEquals("a".repeat(32), attributed.transferId)
-        assertEquals(first.connectionId, attributed.connectionId)
-        assertEquals(anonymizeIdentifier("peer-a"), attributed.peerId)
+        assertEquals(
+            peerB,
+            registry.registerTransfer("same-transfer", "peer-b", "sdk-session-b")
+                ?.copy(transferId = null)
+        )
+        assertNotEquals(peerA.sdkSessionId, peerB.sdkSessionId)
+    }
 
-        // A same transfer id on a different connection cannot be resolved
-        // from a process-global frame line; it must never become last-wins.
-        registry.registerTransfer("a".repeat(32), "peer-b")
-        StructuredFrameTrace.record(
-            recorder,
-            "RX type=FILE_COMMIT len=72B xfer=${"a".repeat(32)}",
-            correlationForTransfer = registry::correlationForTransfer
-        )
-        val ambiguous = recorder.snapshot().last()
-        assertEquals("a".repeat(32), ambiguous.transferId)
-        assertNull(ambiguous.connectionId)
-        assertNull(ambiguous.peerId)
+    @Test
+    fun staleCallbacksCannotAcquireReplacementSessionOwnership() {
+        val registry = DiagnosticCorrelationRegistry(activeSessionId = { "test-session" })
+        registry.setLocalPeerId("local-peer")
+        registry.registerConnection("old-session", "peer-a")
+        val original = assertNotNull(registry.registerTransfer("same-id", "peer-a", "old-session"))
+        registry.registerConnection("new-session", "peer-a")
+        assertEquals(original, registry.registerTransfer("same-id", "peer-a", "old-session"))
+        assertNull(registry.registerTransfer("unobserved", "peer-a", "old-session"))
+        assertNull(registry.registerTransfer("same-id", "peer-b", "new-session"))
+
+        val replacement = assertNotNull(registry.registerTransfer("same-id", "peer-a", "new-session"))
+        assertNotEquals(original.sdkSessionId, replacement.sdkSessionId)
+        assertEquals(original.connectionId, replacement.connectionId)
+    }
+
+    @Test
+    fun evictedRetiredOwnerCannotBorrowReplacementOwnership() {
+        val registry = DiagnosticCorrelationRegistry(activeSessionId = { "test-session" }, maxTransfers = 1)
+        registry.setLocalPeerId("local-peer")
+        registry.registerConnection("old-session", "peer-a")
+        registry.registerTransfer("same-id", "peer-a", "old-session")
+        registry.registerConnection("new-session", "peer-a")
+        val replacement = registry.registerTransfer("same-id", "peer-a", "new-session")
+        assertNull(registry.registerTransfer("same-id", "peer-a", "old-session"))
+        assertEquals(replacement, registry.registerTransfer("same-id", "peer-a", "new-session"))
     }
 
     @Test
@@ -205,7 +256,6 @@ class DiagnosticModelTest {
 
         assertNull(registry.connectionForPeer("peer-a"))
         assertNull(registry.registerTransfer("transfer-a", "peer-a"))
-        assertNull(registry.correlationForTransfer("transfer-a"))
     }
 
     @Test
@@ -247,7 +297,7 @@ class DiagnosticModelTest {
 
         assertNull(registry.removeConnection("sdk-session-old"))
         assertEquals(replacement, registry.connectionForPeer("peer-a"))
-        assertEquals(transfer, registry.correlationForTransfer("transfer-new"))
+        assertEquals(transfer, registry.registerTransfer("transfer-new", "peer-a", "sdk-session-new"))
     }
 
     @Test
@@ -452,6 +502,7 @@ class DiagnosticModelTest {
             recorder.record(
                 DiagnosticRecord(
                     connectionId = "connection-$transferId",
+                    sdkSessionId = "sdk-session",
                     transferId = transferId,
                     category = "file",
                     eventName = if (sender) {
@@ -468,6 +519,8 @@ class DiagnosticModelTest {
         hash("transfer-b", sender = false, digest = "b".repeat(64))
         recorder.record(
             DiagnosticRecord(
+                connectionId = "connection-transfer-b",
+                sdkSessionId = "sdk-session",
                 transferId = "transfer-b",
                 category = "file",
                 eventName = DiagnosticEventNames.FILE_INTEGRITY_CHECKED,
@@ -493,6 +546,120 @@ class DiagnosticModelTest {
         assertNull(second.senderSha256)
         assertEquals("b".repeat(64), second.receiverSha256)
         assertFalse(second.integrityMatch ?: true)
+    }
+
+    @Test
+    fun summariesDoNotMergeTheSameTransferIdAcrossConnections() {
+        val recorder = recorder()
+        recorder.startSession("PS-T01", "both", "session-collision")
+        val transferId = "same-transfer"
+        listOf("connection-a" to "a", "connection-b" to "b").forEach { (connection, digest) ->
+            recorder.record(
+                DiagnosticRecord(
+                    peerId = "peer-$digest",
+                    connectionId = connection,
+                    sdkSessionId = "session-$digest",
+                    transferId = transferId,
+                    category = "file",
+                    eventName = DiagnosticEventNames.FILE_SENDER_HASH,
+                    payloadSizeBytes = 10,
+                    details = mapOf("sha256" to digest.repeat(64))
+                )
+            )
+        }
+
+        val summary = recorder.summary(selectedTransferId = transferId)
+        assertEquals(2, summary.transferSummaries.size)
+        assertEquals(
+            setOf(listOf("connection-a"), listOf("connection-b")),
+            summary.transferSummaries.map { it.connectionIds }.toSet()
+        )
+        assertNull(summary.selectedTransferId)
+        assertNull(summary.senderSha256)
+    }
+
+    @Test
+    fun sessionTransferKeyCannotCollideAtStringBoundaries() {
+        assertNotEquals(
+            SessionTransferKey("ab", "c").stableId,
+            SessionTransferKey("a", "bc").stableId
+        )
+    }
+
+    @Test
+    fun samePeerReplacementKeepsSummaryAndSenderLookupScopedThroughLateCallbacks() {
+        val recorder = recorder()
+        recorder.startSession("PS-T01", "both", "test-session")
+        val registry = DiagnosticCorrelationRegistry(activeSessionId = { recorder.activeSessionId })
+        registry.setLocalPeerId("local-peer")
+        val transferId = "same-transfer"
+        fun hash(session: String, receiver: Boolean, digest: String) {
+            val owner = assertNotNull(registry.registerTransfer(transferId, "peer-a", session))
+            recorder.record(
+                DiagnosticRecord(
+                    peerId = owner.peerId,
+                    connectionId = owner.connectionId,
+                    sdkSessionId = owner.sdkSessionId,
+                    transferId = transferId,
+                    category = "file",
+                    eventName = if (receiver) DiagnosticEventNames.FILE_RECEIVER_HASH
+                    else DiagnosticEventNames.FILE_SENDER_HASH,
+                    payloadSizeBytes = 64,
+                    details = mapOf("sha256" to digest.repeat(64))
+                )
+            )
+        }
+        registry.registerConnection("old-session", "peer-a")
+        hash("old-session", receiver = false, digest = "a")
+        registry.registerConnection("new-session", "peer-a")
+        hash("new-session", receiver = true, digest = "b")
+        val oldKey = SessionTransferKey("old-session", transferId)
+        val newKey = SessionTransferKey("new-session", transferId)
+        // This is the production Android receiver's sender-evidence lookup.
+        assertNull(recorder.senderDigestFor(newKey))
+        assertEquals("a".repeat(64), recorder.senderDigestFor(oldKey))
+        assertNull(recorder.summary(selectedTransferId = transferId).selectedTransferId)
+        assertTrue(recorder.summary().transferSummaries.all { it.integrityMatch == null })
+
+        // A delayed old receiver/hash callback stays with the retired SDK owner.
+        hash("old-session", receiver = true, digest = "a")
+        val summary = recorder.summary()
+        assertEquals(2, summary.transferSummaries.size)
+        assertEquals(1, summary.connectionIds.size, "public connection IDs remain symmetric across reconnects")
+        val old = summary.transferSummaries.single { it.sdkSessionId == anonymizeIdentifier("old-session") }
+        val current = summary.transferSummaries.single { it.sdkSessionId == anonymizeIdentifier("new-session") }
+        assertEquals(old.senderSha256, old.receiverSha256)
+        assertNull(current.senderSha256)
+        assertEquals("b".repeat(64), current.receiverSha256)
+        assertNull(current.integrityMatch)
+        assertNull(summary.senderSha256)
+        assertNull(summary.receiverSha256)
+        assertFalse(recorder.jsonLines().contains("old-session"))
+        assertFalse(recorder.jsonLines().contains("new-session"))
+
+        recorder.startSession("PS-T01", "both", "next-test")
+        assertNull(recorder.senderDigestFor(oldKey), "do not reuse another diagnostic test's hashes")
+    }
+
+    @Test
+    fun legacyOwnerlessEvidenceDecodesButCannotEstablishAnOwnedTransferSummary() {
+        val recorder = recorder()
+        recorder.startSession("PS-T01", "both", "legacy-test")
+        recorder.record(
+            DiagnosticRecord(
+                peerId = "peer-a",
+                connectionId = "connection-a",
+                transferId = "same-transfer",
+                category = "file",
+                eventName = DiagnosticEventNames.FILE_SENDER_HASH,
+                details = mapOf("sha256" to "a".repeat(64))
+            )
+        )
+        val event = recorder.snapshot().last()
+        val legacy = JSON.encodeToString(event).replace("\"sdkSessionId\":null,", "")
+        assertEquals(event, JSON.decodeFromString<DiagnosticEvent>(legacy))
+        assertTrue(recorder.summary().transferSummaries.isEmpty())
+        assertNull(recorder.summary(selectedTransferId = "same-transfer").senderSha256)
     }
 
     @Test
@@ -696,15 +863,13 @@ class DiagnosticModelTest {
         recorder.startSession("ENV-02", "sender", "session-frame")
         StructuredFrameTrace.record(
             recorder,
-            "TX type=FILE_DATA len=65536B chunk=2/4 id=abcd1234",
-            "conn-1"
+            "TX type=FILE_DATA len=65536B chunk=2/4 id=abcd1234"
         )
         StructuredFrameTrace.record(
             recorder,
-            "RX type=FILE_COMMIT len=72B xfer=feedbeef",
-            "conn-1"
+            "RX type=FILE_COMMIT len=72B xfer=feedbeef"
         )
-        StructuredFrameTrace.record(recorder, "not-a-frame", "conn-1")
+        StructuredFrameTrace.record(recorder, "not-a-frame")
         val events = recorder.snapshot().takeLast(3)
         assertEquals("file_data", events[0].packetType)
         assertEquals(2, events[0].chunkNumber)

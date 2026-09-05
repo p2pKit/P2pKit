@@ -585,8 +585,8 @@ private fun RoomScreen(
                             Text("${offer.name} from ${offer.peerName}", maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text("${offer.sizeBytes} bytes — consent required", style = MaterialTheme.typography.labelSmall)
                         }
-                        TextButton(onClick = { vm.acceptFileOffer(offer.id) }) { Text("Accept") }
-                        TextButton(onClick = { vm.rejectFileOffer(offer.id) }) { Text("Reject") }
+                        TextButton(onClick = { vm.acceptFileOffer(offer.key) }) { Text("Accept") }
+                        TextButton(onClick = { vm.rejectFileOffer(offer.key) }) { Text("Reject") }
                     }
                 }
             }
@@ -603,8 +603,8 @@ private fun RoomScreen(
                 modifier = Modifier.fillMaxWidth().height(160.dp),
                 verticalArrangement = Arrangement.spacedBy(Dimens.SmallGap)
             ) {
-                items(vm.fileTransfers, key = { it.id }) { row ->
-                    FileTransferRowView(row = row, onCancel = { vm.cancelFileTransfer(row.id) })
+                items(vm.fileTransfers, key = { it.key.stableId }) { row ->
+                    FileTransferRowView(row = row, onCancel = { vm.cancelFileTransfer(row.key) })
                 }
             }
             Spacer(Modifier.height(Dimens.ItemGap))

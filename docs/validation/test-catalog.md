@@ -955,6 +955,19 @@ For every row, the tester must verify that the ZIP's `testId` and
 run. For two-peer rows, compare `connectionIds`, `transferIds`, and the
 ordered event timestamps before judging the result. `events.jsonl` is the
 machine-readable source of truth; `events.txt` is for quick human review.
+Transfer IDs are scoped to SDK sessions. Sample rows and consent/cancel actions
+use `(session.id, transfer.id)`; never select a process-wide transfer by raw ID
+alone. The CLI accepts an unambiguous ID prefix or the exact scoped `selector`
+printed by `offers`. Structured events and transfer summaries include optional
+`sdkSessionId` (anonymized before storage/export) to distinguish replacement
+sessions to the same peer; the public symmetric `connectionId` stays unchanged.
+Summary groups include this SDK owner and never combine its hashes with another
+session's same transfer ID. Legacy records without this optional field remain
+readable but cannot establish an owned transfer summary or integrity result.
+Process-global raw frames retain type/size/transfer metadata without peer or
+session attribution—even if only one owner has been observed so far, the trace
+can precede another peer's offer callback. Raw frames do not create transfer
+summaries; use session-owned structured events for correlation.
 Packet captures and OS logs are additional evidence, never replacements for
 the application export. When a platform cannot expose a native path detail
 (for example AWDL internals), the event records `network.path.changed` with a

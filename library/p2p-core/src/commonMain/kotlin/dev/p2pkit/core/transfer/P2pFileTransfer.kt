@@ -22,7 +22,11 @@ import kotlinx.coroutines.flow.StateFlow
  */
 public interface P2pFileTransfer {
 
-    /** 32-character hex transfer id, stable for the lifetime of the transfer. */
+    /**
+     * 32-character hex transfer id, stable for the lifetime of the transfer.
+     * Scoped to its owning [dev.p2pkit.core.P2pSession]; use `(session.id, id)`
+     * as the key when retaining transfers from more than one session.
+     */
     public val id: String
 
     /** The remote peer this transfer is to (sender) or from (receiver). */

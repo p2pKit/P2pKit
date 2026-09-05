@@ -8,6 +8,12 @@ import P2pKitShared
 // Test-harness diagnostics only. This file never participates in protocol
 // decisions and never records payload contents, credentials, or raw device IDs.
 
+/// SDK transfer IDs are unique only within the session that owns them.
+struct TransferKey: Hashable {
+    let sessionId: String
+    let transferId: String
+}
+
 enum TestDiagnosticSeverity: String, Codable, CaseIterable {
     case debug = "DEBUG"
     case info = "INFO"
@@ -57,6 +63,8 @@ struct TestDiagnosticEvent: Codable, Identifiable, Equatable {
     let role: String
     let peerId: String?
     let connectionId: String?
+    /// Anonymized SDK owner, absent in older evidence and process-global raw frames.
+    let sdkSessionId: String?
     let transferId: String?
     let category: String
     let eventName: String
@@ -90,6 +98,8 @@ struct TestDiagnosticConnectionSnapshot {
 struct TestDiagnosticRecord {
     var peerId: String?
     var connectionId: String?
+    /// Raw SDK-session ID; the recorder anonymizes it before storage/export.
+    var sdkSessionId: String?
     var transferId: String?
     var category: String
     var eventName: String
@@ -180,6 +190,7 @@ struct TestDiagnosticTransferSummary: Codable, Equatable {
     let senderSha256: String?
     let receiverSha256: String?
     let integrityMatch: Bool?
+    let sdkSessionId: String?
 }
 
 struct TestDiagnosticSummary: Codable {
@@ -278,8 +289,9 @@ final class IOSTestDiagnosticStore: ObservableObject {
     private var localPeerId: String?
     private var connectionsBySession: [String: Correlation] = [:]
     private var connectionsByPeer: [String: SessionCorrelation] = [:]
-    private var transferCorrelations: [String: TransferOwnership] = [:]
-    private var transferEvidence: [String: TransferEvidence] = [:]
+    private var transferCorrelations: [TransferKey: Correlation] = [:]
+    private var transferEvidence: [TransferKey: TransferEvidence] = [:]
+    private var activeTransferKey: TransferKey?
     private let encoder: JSONEncoder
     private let logDirectory: URL
     private let evidenceDirectory: URL
@@ -301,11 +313,14 @@ final class IOSTestDiagnosticStore: ObservableObject {
         let peerId: String
         let connectionId: String
         let transferId: String?
+        let sdkSessionId: String
     }
 
-    private struct TransferOwnership {
-        let correlation: Correlation?
-        let ambiguous: Bool
+    private struct SummaryTransferKey: Hashable {
+        let sdkSessionId: String
+        let connectionId: String?
+        let peerId: String?
+        let transferId: String
     }
 
     private struct SessionCorrelation {
@@ -397,6 +412,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
         activeRole = Self.normalizedRole(role)
         activeConnectionId = nil
         activeTransferId = nil
+        activeTransferKey = nil
         currentConnectionState = "idle"
         currentTransferState = "idle"
         progress = 0
@@ -459,10 +475,17 @@ final class IOSTestDiagnosticStore: ObservableObject {
         connectionsBySession.removeAll()
         connectionsByPeer.removeAll()
         transferCorrelations.removeAll()
+        transferEvidence.removeAll()
+        activeTransferKey = nil
     }
 
     func connectionId(for peerId: String) -> String? {
         connectionsByPeer[peerId]?.correlation.connectionId
+    }
+
+    func transferConnectionId(peerId: String, sessionId: String, transferId: String) -> String? {
+        registerTransfer(peerId: peerId, transferId: transferId, sessionId: sessionId)
+            .flatMap { transferCorrelations[$0]?.connectionId }
     }
 
     @discardableResult
@@ -497,6 +520,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
             role: activeRole,
             peerId: input.peerId.map(Self.anonymized),
             connectionId: input.connectionId.flatMap(Self.safeIdentifier),
+            sdkSessionId: input.sdkSessionId.flatMap { $0.isEmpty ? nil : Self.anonymized($0) },
             transferId: input.transferId.flatMap(Self.safeIdentifier),
             category: Self.stableName(input.category),
             eventName: Self.stableName(input.eventName),
@@ -618,10 +642,9 @@ final class IOSTestDiagnosticStore: ObservableObject {
         let explicitTransfer = match.range(at: 7).location == NSNotFound ? nil :
             Range(match.range(at: 7), in: line).map { String(line[$0]) }
         let transfer = explicitTransfer ?? (packet == "FILE_DATA" ? messageId : nil)
-        let correlation = transfer.flatMap { transferCorrelations[$0]?.correlation }
+        // A raw trace can arrive before its offer callback registers an owner.
+        // A process-global ID cannot establish peer/session attribution.
         record(TestDiagnosticRecord(
-            peerId: correlation?.peerId,
-            connectionId: correlation?.connectionId,
             transferId: transfer,
             category: "protocol",
             eventName: sent ? TestDiagnosticEventName.packetSent : TestDiagnosticEventName.packetReceived,
@@ -640,7 +663,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
         previous: String?,
         sessionSnapshot: Bool = false
     ) {
-        guard let correlation = derivedConnection(peerId: peerId) else { return }
+        guard let correlation = derivedConnection(peerId: peerId, sdkSessionId: rawConnectionId) else { return }
         activeConnectionId = correlation.connectionId
         connectionsBySession = connectionsBySession.filter {
             $0.key == rawConnectionId || $0.value.peerId != peerId
@@ -654,6 +677,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
         record(TestDiagnosticRecord(
             peerId: peerId,
             connectionId: activeConnectionId,
+            sdkSessionId: rawConnectionId,
             category: "connection",
             eventName: TestDiagnosticEventName.connectionStateChanged,
             currentState: state,
@@ -664,6 +688,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
             record(TestDiagnosticRecord(
                 peerId: peerId,
                 connectionId: activeConnectionId,
+                sdkSessionId: rawConnectionId,
                 category: "security",
                 eventName: TestDiagnosticEventName.connectionAuthenticated,
                 currentState: "authenticated"
@@ -671,6 +696,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
             record(TestDiagnosticRecord(
                 peerId: peerId,
                 connectionId: activeConnectionId,
+                sdkSessionId: rawConnectionId,
                 category: "protocol",
                 eventName: TestDiagnosticEventName.protocolNegotiated,
                 currentState: "secure-v2",
@@ -683,6 +709,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
         _ eventName: String,
         peerId: String,
         transferId: String?,
+        sessionId: String? = nil,
         state: String,
         size: Int64?,
         direction: TestDiagnosticDirection,
@@ -690,18 +717,21 @@ final class IOSTestDiagnosticStore: ObservableObject {
         error: String? = nil,
         details: [String: String] = [:]
     ) {
-        let correlation = transferId.flatMap {
-            registerTransfer(peerId: peerId, transferId: $0)
+        let key = transferId.flatMap {
+            registerTransfer(peerId: peerId, transferId: $0, sessionId: sessionId)
         }
+        let correlation = key.flatMap { transferCorrelations[$0] }
         activeTransferId = transferId
+        activeTransferKey = key
         currentTransferState = state
-        let selectedEvidence = transferId.flatMap { transferEvidence[$0] }
+        let selectedEvidence = key.flatMap { transferEvidence[$0] }
         senderSha256 = selectedEvidence?.senderSha256
         receiverSha256 = selectedEvidence?.receiverSha256
         integrityMatch = selectedEvidence?.integrityMatch
         record(TestDiagnosticRecord(
             peerId: peerId,
             connectionId: correlation?.connectionId,
+            sdkSessionId: sessionId ?? correlation?.sdkSessionId,
             transferId: transferId,
             category: "transfer",
             eventName: eventName,
@@ -716,7 +746,13 @@ final class IOSTestDiagnosticStore: ObservableObject {
         ))
     }
 
-    func transferProgress(peerId: String, transferId: String, bytes: Int64, total: Int64) {
+    func transferProgress(
+        peerId: String,
+        transferId: String,
+        sessionId: String? = nil,
+        bytes: Int64,
+        total: Int64
+    ) {
         progress = total > 0 ? min(1, Double(bytes) / Double(total)) : 0
         let percent = Int(progress * 100)
         if percent == 0 || percent == 25 || percent == 50 || percent == 75 || percent == 100 {
@@ -724,6 +760,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
                 TestDiagnosticEventName.transferProgress,
                 peerId: peerId,
                 transferId: transferId,
+                sessionId: sessionId,
                 state: "\(percent)%",
                 size: bytes,
                 direction: .local,
@@ -737,10 +774,12 @@ final class IOSTestDiagnosticStore: ObservableObject {
         transferId: String,
         size: Int64,
         digest: String,
-        receiver: Bool
+        receiver: Bool,
+        sessionId: String? = nil
     ) {
-        let correlation = registerTransfer(peerId: peerId, transferId: transferId)
-        var evidence = transferEvidence[transferId] ?? TransferEvidence()
+        let key = registerTransfer(peerId: peerId, transferId: transferId, sessionId: sessionId)
+        let correlation = key.flatMap { transferCorrelations[$0] }
+        var evidence = key.flatMap { transferEvidence[$0] } ?? TransferEvidence()
         if receiver {
             evidence.receiverFileSizeBytes = size
             evidence.receiverSha256 = digest
@@ -748,8 +787,8 @@ final class IOSTestDiagnosticStore: ObservableObject {
             evidence.senderFileSizeBytes = size
             evidence.senderSha256 = digest
         }
-        transferEvidence[transferId] = evidence
-        if activeTransferId == transferId {
+        if let key { transferEvidence[key] = evidence }
+        if key != nil && activeTransferKey == key {
             senderSha256 = evidence.senderSha256
             receiverSha256 = evidence.receiverSha256
             integrityMatch = evidence.integrityMatch
@@ -757,6 +796,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
         record(TestDiagnosticRecord(
             peerId: peerId,
             connectionId: correlation?.connectionId,
+            sdkSessionId: sessionId ?? correlation?.sdkSessionId,
             transferId: transferId,
             category: "file",
             eventName: receiver ? TestDiagnosticEventName.receiverHash : TestDiagnosticEventName.senderHash,
@@ -768,6 +808,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
             record(TestDiagnosticRecord(
                 peerId: peerId,
                 connectionId: correlation?.connectionId,
+                sdkSessionId: sessionId ?? correlation?.sdkSessionId,
                 transferId: transferId,
                 category: "file",
                 eventName: TestDiagnosticEventName.integrityChecked,
@@ -779,36 +820,40 @@ final class IOSTestDiagnosticStore: ObservableObject {
         }
     }
 
-    private func derivedConnection(peerId: String) -> Correlation? {
+    private func derivedConnection(peerId: String, sdkSessionId: String) -> Correlation? {
         guard let localPeerId else { return nil }
         let peers = [Self.anonymized(localPeerId), Self.anonymized(peerId)].sorted()
         let raw = "\(activeSessionId)|\(peers[0])|\(peers[1])"
         let connectionId = "conn-" + String(Self.sha256(Data(raw.utf8)).prefix(20))
-        return Correlation(peerId: peerId, connectionId: connectionId, transferId: nil)
+        return Correlation(peerId: peerId, connectionId: connectionId, transferId: nil, sdkSessionId: sdkSessionId)
     }
 
-    private func registerTransfer(peerId: String, transferId: String) -> Correlation? {
-        guard let connection = connectionsByPeer[peerId]?.correlation else {
+    private func registerTransfer(
+        peerId: String,
+        transferId: String,
+        sessionId: String?
+    ) -> TransferKey? {
+        guard let ownerSessionId = sessionId ?? connectionsByPeer[peerId]?.rawConnectionId else {
             return nil
         }
+        let key = TransferKey(sessionId: ownerSessionId, transferId: transferId)
+        // Late callbacks may retain an observed owner, but must never fall
+        // back to a replacement SDK session belonging to the same peer.
+        guard let connection = connectionsBySession[ownerSessionId] ?? transferCorrelations[key],
+              connection.peerId == peerId else { return nil }
         let correlation = Correlation(
             peerId: peerId,
             connectionId: connection.connectionId,
-            transferId: transferId
+            transferId: transferId,
+            sdkSessionId: ownerSessionId
         )
-        let existing = transferCorrelations[transferId]
-        let ambiguous = existing?.ambiguous == true || (
-            existing?.correlation != nil &&
-                existing?.correlation?.connectionId != correlation.connectionId
-        )
-        transferCorrelations[transferId] = TransferOwnership(
-            correlation: ambiguous ? nil : correlation,
-            ambiguous: ambiguous
-        )
-        if transferCorrelations.count > 1_024, let oldest = transferCorrelations.keys.first {
-            transferCorrelations[oldest] = nil
+        transferCorrelations[key] = correlation
+        if transferCorrelations.count > 1_024,
+           let evicted = transferCorrelations.keys.first(where: { $0 != key }) {
+            transferCorrelations[evicted] = nil
+            transferEvidence[evicted] = nil
         }
-        return correlation
+        return key
     }
 
     func filtered(
@@ -915,8 +960,21 @@ final class IOSTestDiagnosticStore: ObservableObject {
         manual: [String]
     ) -> TestDiagnosticSummary {
         let transferIds = Self.distinct(selected.compactMap(\.transferId))
-        let transferSummaries = transferIds.map { transferId in
-            Self.transferSummary(transferId: transferId, events: selected)
+        var seenKeys: Set<SummaryTransferKey> = []
+        let transferKeys = selected.compactMap { event -> SummaryTransferKey? in
+            // Legacy/ownerless events remain readable, but cannot establish
+            // session-scoped transfer evidence or an integrity result.
+            guard let transferId = event.transferId, let owner = event.sdkSessionId else { return nil }
+            let key = SummaryTransferKey(
+                sdkSessionId: owner,
+                connectionId: event.connectionId,
+                peerId: event.peerId,
+                transferId: transferId
+            )
+            return seenKeys.insert(key).inserted ? key : nil
+        }
+        let transferSummaries = transferKeys.map { key in
+            Self.transferSummary(key: key, events: selected)
         }
         let selectedTransfer = transferSummaries.count == 1 ? transferSummaries[0] : nil
         let terminal = selected.last {
@@ -959,22 +1017,28 @@ final class IOSTestDiagnosticStore: ObservableObject {
     }
 
     private static func transferSummary(
-        transferId: String,
+        key: SummaryTransferKey,
         events: [TestDiagnosticEvent]
     ) -> TestDiagnosticTransferSummary {
-        let selected = events.filter { $0.transferId == transferId }
+        let selected = events.filter {
+            $0.transferId == key.transferId &&
+                $0.sdkSessionId == key.sdkSessionId &&
+                $0.connectionId == key.connectionId &&
+                $0.peerId == key.peerId
+        }
         let sender = selected.last { $0.eventName == TestDiagnosticEventName.senderHash }
         let receiver = selected.last { $0.eventName == TestDiagnosticEventName.receiverHash }
         let integrity = selected.last { $0.eventName == TestDiagnosticEventName.integrityChecked }
         return TestDiagnosticTransferSummary(
-            transferId: transferId,
+            transferId: key.transferId,
             connectionIds: distinct(selected.compactMap(\.connectionId)),
             peerIds: distinct(selected.compactMap(\.peerId)),
             senderFileSizeBytes: sender?.payloadSizeBytes,
             receiverFileSizeBytes: receiver?.payloadSizeBytes,
             senderSha256: sender?.details["sha256"],
             receiverSha256: receiver?.details["sha256"],
-            integrityMatch: integrity?.details["match"].flatMap(Bool.init)
+            integrityMatch: integrity?.details["match"].flatMap(Bool.init),
+            sdkSessionId: key.sdkSessionId
         )
     }
 
@@ -1250,6 +1314,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
             "session=\(event.testSessionId)"
         ]
         if let connectionId = event.connectionId { parts.append("connection=\(connectionId)") }
+        if let sdkSessionId = event.sdkSessionId { parts.append("sdkSession=\(sdkSessionId)") }
         if let transferId = event.transferId { parts.append("transfer=\(transferId)") }
         if let packetType = event.packetType { parts.append("packet=\(packetType)") }
         if let state = event.currentState { parts.append("state=\(state)") }

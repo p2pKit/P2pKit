@@ -53,6 +53,7 @@ private fun generateExample(output: File, platform: String, succeeds: Boolean) {
         DiagnosticRecord(
             peerId = "synthetic-remote",
             connectionId = connection,
+            sdkSessionId = "synthetic-sdk-session",
             category = "connection",
             eventName = DiagnosticEventNames.CONNECTION_AUTHENTICATED,
             currentState = "Connected",
@@ -64,6 +65,7 @@ private fun generateExample(output: File, platform: String, succeeds: Boolean) {
         DiagnosticRecord(
             peerId = "synthetic-remote",
             connectionId = connection,
+            sdkSessionId = "synthetic-sdk-session",
             transferId = transfer,
             category = "file",
             eventName = DiagnosticEventNames.FILE_SENDER_HASH,
@@ -79,6 +81,7 @@ private fun generateExample(output: File, platform: String, succeeds: Boolean) {
             DiagnosticRecord(
                 peerId = "synthetic-remote",
                 connectionId = connection,
+                sdkSessionId = "synthetic-sdk-session",
                 transferId = transfer,
                 category = "transfer",
                 eventName = DiagnosticEventNames.TRANSFER_DURABLE_COMMITTED,
@@ -92,6 +95,7 @@ private fun generateExample(output: File, platform: String, succeeds: Boolean) {
             DiagnosticRecord(
                 peerId = "synthetic-remote",
                 connectionId = connection,
+                sdkSessionId = "synthetic-sdk-session",
                 transferId = transfer,
                 category = "file",
                 eventName = DiagnosticEventNames.FILE_RECEIVER_HASH,
@@ -104,7 +108,9 @@ private fun generateExample(output: File, platform: String, succeeds: Boolean) {
         )
         recorder.record(
             DiagnosticRecord(
+                peerId = "synthetic-remote",
                 connectionId = connection,
+                sdkSessionId = "synthetic-sdk-session",
                 transferId = transfer,
                 category = "file",
                 eventName = DiagnosticEventNames.FILE_INTEGRITY_CHECKED,
@@ -119,6 +125,7 @@ private fun generateExample(output: File, platform: String, succeeds: Boolean) {
             DiagnosticRecord(
                 peerId = "synthetic-remote",
                 connectionId = connection,
+                sdkSessionId = "synthetic-sdk-session",
                 transferId = transfer,
                 category = "transfer",
                 eventName = DiagnosticEventNames.TRANSFER_FAILED,
