@@ -37,9 +37,10 @@ namespace and is never selected as fallback after a v2 failure.
 ## Discovery availability on hostile networks
 
 Discovery is unauthenticated and **not denial-of-service resistant**. Shipped
-LAN collections have 256-entry bounds; the downstream core discovery budget is
-1,024 peers. These limits bound retained records, not fairness: a hostile
-advertiser can occupy the LAN slots and prevent later legitimate discoveries.
+LAN discovery admission caps live records at 256 per transport; the downstream
+core discovery budget is 1,024 peers. These admission limits establish neither
+fairness nor a bound on every native/resolver allocation: a hostile advertiser
+can occupy the LAN slots and prevent later legitimate discoveries.
 Updates and native removals still work, but continuous advertising can sustain
 the lockout. Secure-v2 authentication does not protect this pre-handshake stage.
 
