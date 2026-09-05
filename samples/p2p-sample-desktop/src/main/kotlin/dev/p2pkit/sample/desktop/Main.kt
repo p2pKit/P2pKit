@@ -74,6 +74,8 @@ import java.util.concurrent.ConcurrentHashMap
  *                                   using a lexicographic tie-break so two peers never race
  *                                   into duplicate sessions)
  * - `connect <id-or-name>`        — open a session
+ * - `pairing`                     — display the full local fingerprint and AppId-bound QR
+ * - `connect-pinned <alias> <QR>` — require an out-of-band QR when dialing a discovered peer
  * - `send <text>`                 — broadcast to every active session
  * - `to <id-or-name> <text>`      — targeted send to one peer
  * - `close <id-or-name>`          — close one session
@@ -482,6 +484,8 @@ private suspend fun repl(
 
             "info", "state" -> printInfo(p2p, sessions, advertising, discovering, autoMesh)
 
+            "pairing" -> printPairingInfo(p2p)
+
             "manual" -> {
                 val manualParts = arg.trim().split(Regex("\\s+"), limit = 2)
                 val endpoint = manualParts.getOrNull(0).orEmpty()
@@ -595,12 +599,18 @@ private suspend fun repl(
                 }
             }
 
-            "connect" -> {
+            "connect", "connect-pinned" -> {
+                val pin = if (cmd == "connect-pinned") parsePinnedConnect(p2p, arg) else null
+                if (cmd == "connect-pinned" && pin == null) {
+                    println(PINNED_CONNECT_USAGE)
+                    println("QR must be canonical and for this AppId; obtain it from the intended peer, not discovery.")
+                    continue
+                }
                 if (arg.isEmpty()) {
                     println("usage: connect <peer-id-prefix-or-name>")
                     continue
                 }
-                val peerMatches = matchingPeers(p2p, arg)
+                val peerMatches = matchingPeers(p2p, pin?.selector ?: arg)
                 if (peerMatches.isEmpty()) {
                     println("no peer matching <input omitted>")
                     continue
@@ -612,7 +622,7 @@ private suspend fun repl(
                 val match = peerMatches.single()
                 val peerId = match.id.value
                 val existing = sessions[peerId]
-                if (existing != null && existing.state.value == ConnectionState.Connected) {
+                if (pin == null && existing != null && existing.state.value == ConnectionState.Connected) {
                     println("already connected to ${match.consoleId}")
                     continue
                 }
@@ -631,7 +641,8 @@ private suspend fun repl(
                                 currentState = "connecting"
                             )
                         )
-                        val session = p2p.connect(match)
+                        // Even an existing session must pass the explicit pin check.
+                        val session = if (pin != null) connectPinnedPeer(p2p, match, pin) else p2p.connect(match)
                         // AUDIT-2026-06 (B-G9-samples-desktop-ios-10): for a peer in
                         // Connecting/Handshaking/Reconnecting, connect() dedupes
                         // onto the SAME session instance; registerSession skips
@@ -639,6 +650,8 @@ private suspend fun repl(
                         // doesn't start printing twice.
                         registerSession(session, scope, sessions, wiredSessionIds, pendingFileOffers)
                         println("connected to ${session.peer.consoleId}")
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
                     } catch (e: Throwable) {
                         System.err.println("connect failed: ${SampleConsole.failure(e)}")
                     } finally {
@@ -966,6 +979,7 @@ private suspend fun printInfo(
     println("auto-mesh        ${autoMesh.value}")
     println("peers known      ${p2p.peers.value.size}")
     println("active sessions  ${sessions.size}")
+    printPairingInfo(p2p)
     // Explicit operator UI: `info` intentionally reveals local endpoints for manual dialing.
     // Do not copy this output into shared diagnostics; automatic logs omit addresses.
     // printInfo is suspend and called from the suspend repl(); calling the
@@ -992,6 +1006,8 @@ private fun printHelp() {
           disc on | disc off                 — toggle discovery
           mesh on | mesh off                 — toggle auto-mesh (auto-connect to discovered peers)
           connect <id-or-name>               — open a session
+          pairing                            — display local pairing QR and full fingerprint
+          connect-pinned <peer-alias> <QR>   — pin a discovered peer with its trusted full QR
           send <text>                        — broadcast to every active session (room)
           to <id-or-name> <text>             — send to one peer
           manual <host>:<port>               — connect by IP, no mDNS needed

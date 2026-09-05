@@ -134,6 +134,12 @@ val session = kit.connect(peer, expectedFingerprint)
 session.send(P2pMessage.Text("hello"))
 ```
 
+For an executable discovered-peer example, the CLI's `pairing` and
+`connect-pinned <peer-alias> <full-pairing-QR>` commands implement this exchange;
+see the [sample pairing walkthrough](docs/guides/samples.md#pairing-with-a-verified-fingerprint).
+The interactive samples' incoming admission remains development-only, not an
+allowlist. The KMP sample separately demonstrates `PinnedOnly` admission.
+
 Subscribe to `incomingSessions` before advertising and attach each
 `session.incoming` collector promptly; these are hot event streams. `send()`
 confirms a local transport write, not remote application processing. Add

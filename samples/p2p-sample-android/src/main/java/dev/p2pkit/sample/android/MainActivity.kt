@@ -392,6 +392,7 @@ private fun RoomScreen(
     val discovering by vm.discovering.collectAsState()
     val autoMesh by vm.autoMesh.collectAsState()
     val localPeerId by vm.localPeerId.collectAsState()
+    val localPairingInfo by vm.localPairingInfo.collectAsState()
     val isStopping by vm.isStopping.collectAsState()
     val networkPathStatus by vm.networkPathStatus.collectAsState()
     // AUDIT-2026-06: C-G8-samples-android-05 — survive configuration changes.
@@ -423,6 +424,8 @@ private fun RoomScreen(
             onStop = vm::stop
         )
         HorizontalDivider(modifier = Modifier.padding(vertical = Dimens.ItemGap))
+
+        localPairingInfo?.let { LocalPairingSection(it) }
 
         Text(
             text = "Discovered peers (${peers.size})",

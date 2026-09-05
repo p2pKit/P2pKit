@@ -19,6 +19,7 @@ import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.sample.diagnostics.SampleConsole
+import dev.p2pkit.sample.diagnostics.LocalPairingInfo
 import dev.p2pkit.sample.diagnostics.consoleId
 import dev.p2pkit.sample.diagnostics.SampleConsoleLogger
 import dev.p2pkit.core.protocol.FrameTrace
@@ -111,6 +112,9 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _localPeerId = MutableStateFlow<String?>(null)
     val localPeerId: StateFlow<String?> = _localPeerId.asStateFlow()
+
+    private val _localPairingInfo = MutableStateFlow<LocalPairingInfo?>(null)
+    val localPairingInfo: StateFlow<LocalPairingInfo?> = _localPairingInfo.asStateFlow()
 
     // --- lifecycle ---------------------------------------------------------
 
@@ -553,6 +557,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         _cleanupPending.value = false
         refreshMissingPermissions()
         _localPeerId.value = newKit.localPeerId.value
+        _localPairingInfo.value = LocalPairingInfo.from(newKit)
         diagnostics.setLocalPeerId(newKit.localPeerId.value)
         Log.i(
             LOG_TAG,
@@ -663,7 +668,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 try {
                     runCatchingNonCancel { newKit.stop() }
                         .onSuccess {
-                            if (kit === newKit) kit = null
+                            if (kit === newKit) {
+                                kit = null
+                                _localPairingInfo.value = null
+                            }
                             _cleanupPending.value = false
                             diagnostics.setLocalPeerId(null)
                         }
@@ -1702,6 +1710,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         pendingFileOffers.clear()
         _hasConnectedSession.value = false
         _localPeerId.value = null
+        _localPairingInfo.value = null
         _hotspotResult.value = null
         _joinResult.value = null
         _missingPermissions.value = emptyList()

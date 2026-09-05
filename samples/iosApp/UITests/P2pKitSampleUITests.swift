@@ -12,7 +12,12 @@ final class P2pKitSampleUITests: XCTestCase {
     }
 
     @MainActor
-    private func runStartStopScenario(dropFirstStartAction: Bool) {
+    func testLocalPairingDisclosureAndStopCleanup() {
+        runStartStopScenario(dropFirstStartAction: false, verifyPairing: true)
+    }
+
+    @MainActor
+    private func runStartStopScenario(dropFirstStartAction: Bool, verifyPairing: Bool = false) {
         continueAfterFailure = false
         let app = XCUIApplication()
         if dropFirstStartAction {
@@ -46,9 +51,33 @@ final class P2pKitSampleUITests: XCTestCase {
         }
         XCTAssertEqual(app.staticTexts["sample-status"].label, "Status: Running")
 
+        if verifyPairing {
+            let show = app.buttons["show-local-pairing"]
+            let qr = app.staticTexts["local-pairing-qr"]
+            XCTAssertTrue(show.exists)
+            XCTAssertFalse(qr.exists, "identity must not be disclosed before an explicit action")
+            show.tap()
+            XCTAssertTrue(qr.waitForExistence(timeout: 5))
+            let text = qr.label
+            XCTAssertEqual(text.count, 125, "show the complete canonical QR, never an ellipsized/prefixed value")
+            XCTAssertTrue(text.hasPrefix("p2pkit:v2:p2a1-"))
+            XCTAssertEqual(text.components(separatedBy: ":").count, 4)
+            XCTAssertTrue(text.components(separatedBy: ":").last?.hasPrefix("p2f1-") == true)
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.name = "synthetic-simulator-pairing-disclosure"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+            show.tap()
+            XCTAssertFalse(qr.exists)
+        }
+
         stop.tap()
         XCTAssertTrue(start.waitForExistence(timeout: 30), "stop should release the kit and restore Start")
         XCTAssertEqual(app.staticTexts["sample-status"].label, "Status: Stopped")
+        if verifyPairing {
+            XCTAssertFalse(app.buttons["show-local-pairing"].exists)
+            XCTAssertFalse(app.staticTexts["local-pairing-qr"].exists)
+        }
     }
 
     /// XCTest can report a successful semantic `tap()` even when a heavily

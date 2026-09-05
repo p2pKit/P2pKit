@@ -72,6 +72,7 @@ import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.sample.diagnostics.SampleConsole
+import dev.p2pkit.sample.diagnostics.LocalPairingInfo
 import dev.p2pkit.sample.diagnostics.consoleId
 import dev.p2pkit.sample.diagnostics.SampleConsoleLogger
 import dev.p2pkit.sample.diagnostics.readSampleFileDiagnostic
@@ -245,6 +246,9 @@ internal class DesktopP2pState(
 
     private val _localPeerId = MutableStateFlow<String?>(null)
     val localPeerId: StateFlow<String?> = _localPeerId.asStateFlow()
+
+    private val _localPairingInfo = MutableStateFlow<LocalPairingInfo?>(null)
+    val localPairingInfo: StateFlow<LocalPairingInfo?> = _localPairingInfo.asStateFlow()
 
     // --- lifecycle flags ---------------------------------------------------
 
@@ -422,6 +426,7 @@ internal class DesktopP2pState(
         kit = newKit
         _cleanupPending.value = false
         _localPeerId.value = newKit.localPeerId.value
+        _localPairingInfo.value = LocalPairingInfo.from(newKit)
         diagnostics.localPeerId = newKit.localPeerId.value
         val startedLine =
             "[p2pkit] kit started: peerId=${SampleConsole.identifier(newKit.localPeerId.value)} " +
@@ -463,7 +468,10 @@ internal class DesktopP2pState(
                 appendSystemMessage(_lifecycleError.value!!)
                 runCatchingCancellable { newKit.stop() }
                     .onSuccess {
-                        if (kit === newKit) kit = null
+                        if (kit === newKit) {
+                            kit = null
+                            _localPairingInfo.value = null
+                        }
                         _cleanupPending.value = false
                         diagnostics.localPeerId = null
                     }
@@ -798,6 +806,7 @@ internal class DesktopP2pState(
         val offersToReject = pendingFileOffers.toList()
         pendingFileOffers.clear()
         _localPeerId.value = null
+        _localPairingInfo.value = null
         _manualConnectionInfo.value = null
         _isManualDialing.value = false
         // appScope (not runScope) so the stop coroutine survives our
@@ -1787,6 +1796,7 @@ private fun RoomScreen(state: DesktopP2pState) {
     val discovering by state.discovering.collectAsState()
     val autoMesh by state.autoMesh.collectAsState()
     val localPeerId by state.localPeerId.collectAsState()
+    val localPairingInfo by state.localPairingInfo.collectAsState()
     val manualInfo by state.manualConnectionInfo.collectAsState()
     val isStopping by state.isStopping.collectAsState()
     val isManualDialing by state.isManualDialing.collectAsState()
@@ -1818,6 +1828,8 @@ private fun RoomScreen(state: DesktopP2pState) {
                 )
             }
             HorizontalDivider(modifier = Modifier.padding(vertical = Dimens.ItemGap))
+
+            localPairingInfo?.let { LocalPairingSection(it) }
 
             Text(
                 text = "Discovered peers (${peers.size})",

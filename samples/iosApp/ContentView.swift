@@ -440,6 +440,11 @@ struct ContentView: View {
                 .textSelection(.enabled)
         }
 
+        if !isStopping, let qr = kit?.localPairingQr {
+            // Bind disclosure state to this exact kit identity; never retain a stale QR after Stop/Start.
+            LocalPairingView(qr: qr).id(qr)
+        }
+
         TextField("Device name", text: $localDeviceName)
             .textFieldStyle(.roundedBorder)
             .disabled(kit != nil || isStarting)

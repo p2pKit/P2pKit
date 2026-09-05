@@ -16,6 +16,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  * no incoming-consumption/file-transfer/provisioning coverage). Useful
  * as a sanity smoke test from any platform: pass in a fresh [P2pKit], a name,
  * and the exact out-of-band fingerprint for the intended peer. The demo will
+ * first call [displayLocalPairingQr] so the host can render its own full QR
+ * in a dedicated pairing UI (not a logger or diagnostic export), then
  * advertise, discover one peer, connect only to that fingerprint, send a
  * greeting, close the session, and stop the kit.
  *
@@ -26,11 +28,13 @@ public suspend fun runDiscoverAndGreet(
     p2p: P2pKit,
     greetingFrom: String,
     expectedFingerprint: PeerFingerprint,
+    displayLocalPairingQr: (String) -> Unit,
     discoveryTimeoutMillis: Long = 10_000
 ): String = runDiscoverAndGreetInternal(
     p2p = p2p,
     greetingFrom = greetingFrom,
     discoveryTimeoutMillis = discoveryTimeoutMillis,
+    beforeStart = { displayLocalPairingQr(requireNotNull(p2p.localPairingQr)) },
     connect = { peer -> p2p.connect(peer, expectedFingerprint) }
 )
 
@@ -50,6 +54,7 @@ public suspend fun runUnverifiedDiscoverAndGreetForLocalTestingOnly(
     p2p = p2p,
     greetingFrom = greetingFrom,
     discoveryTimeoutMillis = discoveryTimeoutMillis,
+    beforeStart = {},
     connect = p2p::connect
 )
 
@@ -57,10 +62,12 @@ private suspend fun runDiscoverAndGreetInternal(
     p2p: P2pKit,
     greetingFrom: String,
     discoveryTimeoutMillis: Long,
+    beforeStart: () -> Unit,
     connect: suspend (Peer) -> P2pSession
 ): String {
     var session: P2pSession? = null
     try {
+        beforeStart()
         p2p.startAdvertising()
         p2p.startDiscovery()
 

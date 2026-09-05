@@ -14,6 +14,48 @@ permissive; the library's default remains fail-closed authenticated v2.
 | `:iosApp` | Swift iOS sender and receiver | Peer/session/file controls, deterministic files, lifecycle, diagnostics/share export |
 | `:p2p-sample-diagnostics` | Shared JVM diagnostics model | Structured event schema, redaction, rotation, and evidence package support |
 
+## Pairing with a verified fingerprint
+
+The CLI's `pairing` (also `info`) displays the **complete** local fingerprint
+and AppId-bound QR text. Android, Desktop UI and iOS have **Show local pairing
+information** in the running screen; reveal and select/copy the full text.
+This is a text payload, not a camera/scanner feature. Exchange it through a
+trusted channel, not a discovery record, chat with an unknown peer, or a
+diagnostic export. Names, aliases and AppId are not trust signals.
+
+To exercise the README's discovered-peer pinning flow using two CLI instances:
+
+1. Run both with the same explicit AppId on a controlled LAN, for example
+   `./gradlew :p2p-sample-desktop:run --args="Alice com.example.pairing"`
+   and the same command with `Bob`. The CLI is a permissive development harness
+   with auto-mesh on; enter `mesh off` in both, then `close <peer-alias>` for
+   any existing connection. Turning off mesh does not reject incoming peers.
+2. On Bob, enter `pairing`; deliver the full `p2pkit:v2:…` value to Alice
+   out of band. On Alice, `peers` lists opaque selectors.
+3. Enter `connect-pinned <bob-alias> <bob-full-pairing-QR>` on Alice.
+   The command validates the exact AppId and calls `connect(peer, fingerprint)`;
+   malformed/other-AppId QR input is refused, and a different proved key fails
+   with `AuthenticatedIdentityMismatch`, including for an existing session.
+4. `to <bob-alias> hello` sends a greeting. A successful send is a local write,
+   not evidence that Bob's application processed it. To test a negative pin,
+   supply a different same-AppId instance's QR for Bob; no new session is admitted
+   by that command. An earlier session, if any, is not disconnected by a failed pin.
+
+This pins **that outgoing connection**, not the whole harness's incoming
+admission. All four interactive apps still use the warned development policy;
+unknown same-AppId peers may connect. The KMP sample's `createPinnedP2pKit`
+demonstrates `PinnedOnly(trustedFingerprints)` for incoming allowlisting, while
+`createP2pKit` defaults to `RejectUnknown`. Its `runDiscoverAndGreet` requires an
+out-of-band fingerprint and a `displayLocalPairingQr` callback for the host's
+pairing UI, then pins the discovered peer. It never silently logs that QR.
+
+JVM sample keys are in-memory per kit: re-exchange the QR after restart or
+Desktop Stop/Start. Android/Apple use their platform secure identity stores;
+storage reset or app removal can also require re-pairing. Manual CLI/Desktop
+dialing consumes the displayed full `p2f1-…` fingerprint; iOS manual dialing
+consumes the whole QR. `info` supplies CLI endpoints. These flows do not provide
+internet signaling, NAT traversal, or automatic fallback to plaintext.
+
 ## Desktop UI security posture
 
 The Desktop UI is a development harness, not a trusted room. Its persistent
@@ -51,7 +93,8 @@ Chat, file selection, and error UI still show the operator their data. The CLI
 uses the displayed peer aliases in `connect`, `to`, `close`, and `sendfile`;
 legacy ID prefixes and exact names also work. Use `offers` for filenames and
 opaque `accept`/`reject` selectors. Explicit `info` output reveals local manual
-endpoints, and `diag export` prints its output path. Do not share those outputs
+endpoints; `info`/`pairing` also deliberately reveal local public pairing identity,
+and `diag export` prints its output path. Do not share those outputs
 unreviewed. Terminal control stripping prevents injection, **not** disclosure.
 
 This policy does not sanitize library-owned LAN/frame traces or guarantee that

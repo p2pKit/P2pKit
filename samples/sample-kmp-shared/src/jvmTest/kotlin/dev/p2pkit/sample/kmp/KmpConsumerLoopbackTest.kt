@@ -2,7 +2,6 @@ package dev.p2pkit.sample.kmp
 
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.ExperimentalP2pApi
-import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.PeerAuthorizationPolicy
@@ -30,11 +29,10 @@ import kotlin.test.assertNotNull
  * consumer wiring, provisioning sidecar, authenticated manual peer, and
  * message path work end-to-end on JVM without multicast timing.
  *
- * The test explicitly uses the local-test policy because reciprocal loopback
- * peers are created before either fingerprint is available. The public factory
- * still defaults to [PeerAuthorizationPolicy.RejectUnknown].
+ * The caller uses default [PeerAuthorizationPolicy.RejectUnknown] plus an
+ * explicit pin, and the responder admits only that caller with PinnedOnly.
  */
-@OptIn(ExperimentalP2pApi::class, ExplicitSecurityRisk::class)
+@OptIn(ExperimentalP2pApi::class)
 class KmpConsumerLoopbackTest {
 
     private val appId = "kmp-consumer-itest-${System.currentTimeMillis()}"
@@ -46,7 +44,10 @@ class KmpConsumerLoopbackTest {
         tempHomes.clear()
     }
 
-    private fun createKit(deviceName: String): P2pKit {
+    private fun createKit(
+        deviceName: String,
+        authorization: PeerAuthorizationPolicy = PeerAuthorizationPolicy.RejectUnknown
+    ): P2pKit {
         val savedHome = System.getProperty("user.home")
         val tempHome = Files.createTempDirectory("p2pkit-kmp-itest-${deviceName}-").toFile()
         tempHomes.add(tempHome)
@@ -55,7 +56,7 @@ class KmpConsumerLoopbackTest {
             createJvmP2pKit(
                 appId = appId,
                 deviceName = deviceName,
-                authorization = PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+                authorization = authorization
             ) { jvm() }
         } finally {
             // clearProperty when originally unset, instead of poisoning
@@ -68,8 +69,10 @@ class KmpConsumerLoopbackTest {
     @Test
     fun sharedFactoryCreatesAKitThatCanGreetAManualPeer() {
         runBlocking {
-            val responder = createKit("Bob")
             val greeter = createKit("Alice")
+            val responder = createKit(
+                "Bob", PeerAuthorizationPolicy.PinnedOnly(setOf(assertNotNull(greeter.localFingerprint)))
+            )
 
             try {
                 val incomingReady = CompletableDeferred<Unit>()
@@ -86,6 +89,10 @@ class KmpConsumerLoopbackTest {
                     responder.networkProvisioning.getManualConnectionInfo()
                 )
                 val responderFingerprint = assertNotNull(responderInfo.fingerprint)
+                assertEquals(
+                    responderFingerprint,
+                    greeter.parsePeerPairingQr(assertNotNull(responder.localPairingQr))
+                )
                 val responderPeer = greeter.networkProvisioning.createManualPeer(
                     host = "127.0.0.1",
                     port = responderInfo.port,

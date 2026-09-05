@@ -2,6 +2,7 @@ package dev.p2pkit.sample.kmp
 
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.PeerAuthorizationPolicy
+import dev.p2pkit.core.PeerFingerprint
 import kotlin.test.Test
 import kotlin.test.assertNotNull
 
@@ -22,5 +23,7 @@ class KmpCallsiteSmokeTest {
         val safeDefault: () -> P2pKit = { createP2pKit("callsite-smoke", "Callsite") }
         assertNotNull(ref)
         assertNotNull(safeDefault)
+        val pinnedFactory: (String, String, Set<PeerFingerprint>) -> P2pKit = ::createPinnedP2pKit
+        assertNotNull(pinnedFactory)
     }
 }
