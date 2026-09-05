@@ -34,6 +34,31 @@ runs its own bounded admission protocol.
 Deprecated `NoneForMvp` is plaintext protocol v1. It has a separate discovery
 namespace and is never selected as fallback after a v2 failure.
 
+## Discovery availability on hostile networks
+
+Discovery is unauthenticated and **not denial-of-service resistant**. Shipped
+LAN collections have 256-entry bounds; the downstream core discovery budget is
+1,024 peers. These limits bound retained records, not fairness: a hostile
+advertiser can occupy the LAN slots and prevent later legitimate discoveries.
+Updates and native removals still work, but continuous advertising can sustain
+the lockout. Secure-v2 authentication does not protect this pre-handshake stage.
+
+Advertised addresses and fingerprints are not trusted responder identities.
+The current discovery callbacks expose neither trustworthy origin accounting
+nor active-session priority. Raising the cap or evicting the oldest record is
+not a security fix; a continuing attacker can consume more memory or evict
+legitimate peers. The admission-policy redesign remains tracked in
+[#120](https://github.com/p2pKit/P2pKit/issues/120).
+
+Use a controlled network when discovery availability matters. For a known,
+reachable peer, an out-of-band endpoint and full trusted fingerprint can be
+registered with `createManualPeer(host, port, expectedFingerprint)` without
+consuming the discovery budget. This bypasses discovery registration, not
+network disruption or connection limits; it does not guarantee connectivity.
+Do not trust a discovered name/address as approval, disable pin checks, or
+downgrade to plaintext to recover. Restarting discovery is not protection
+against an advertiser that immediately refills the slots.
+
 ## Out of scope and limitations
 
 P2pKit does not provide internet signaling, NAT traversal, relay protection,

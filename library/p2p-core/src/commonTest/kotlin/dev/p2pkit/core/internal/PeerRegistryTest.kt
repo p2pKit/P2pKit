@@ -1,6 +1,7 @@
 package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.ExperimentalP2pApi
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
@@ -358,6 +359,55 @@ class PeerRegistryTest {
                 listOf("Rejected a discovery event because peer capacity is exhausted"),
                 logger.warnings
             )
+        } finally {
+            supervisor.cancel()
+        }
+    }
+
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun pinnedManualRegistrationBypassesAnAlreadyFullDiscoveryBudgetWithoutBypassingPinRequirements() {
+        val supervisor = SupervisorJob()
+        try {
+            val fingerprint = PeerFingerprint.parse("p2f1-${"a".repeat(52)}")
+            val trustedPeerId = PeerId("trusted-manual-peer")
+            val registry = PeerRegistry(
+                discoveryTransports = emptyList(),
+                scope = CoroutineScope(Dispatchers.Unconfined + supervisor),
+                clock = { 1_000L },
+                securityProfile = TransportSecurityProfile.AuthenticatedV2,
+                peerIdFromFingerprint = {
+                    assertEquals(fingerprint, it)
+                    trustedPeerId
+                },
+                maxDiscoveredPeers = 2
+            )
+            registry.processEvent(PeerEvent.Found(peer("first-untrusted")))
+            registry.processEvent(PeerEvent.Found(peer("second-untrusted")))
+            registry.processEvent(PeerEvent.Found(peer("overflow")))
+            assertNull(registry.internalPeer(PeerId("overflow")))
+
+            assertFailsWith<P2pError.SecurityConfigurationInvalid> {
+                registry.registerManualPeer("192.0.2.100", 9_100)
+            }
+            assertEquals(2, registry.peers.value.size)
+            val manual = registry.registerManualPeer(
+                host = "192.0.2.100",
+                port = 9_100,
+                expectedFingerprint = fingerprint
+            )
+            val registered = assertNotNull(registry.internalPeer(manual.id))
+            assertEquals(trustedPeerId, manual.id)
+            assertEquals(PeerOrigin.Manual, registered.origin)
+            assertEquals(
+                fingerprint,
+                assertIs<PeerAuthenticationHint.TrustedApplicationPin>(registered.authenticationHint).fingerprint
+            )
+            assertEquals(3, registry.peers.value.size)
+            assertEquals(manual, registry.registerManualPeer("192.0.2.100", 9_100, expectedFingerprint = fingerprint))
+            registry.processEvent(PeerEvent.Found(peer("still-overflow")))
+            assertNull(registry.internalPeer(PeerId("still-overflow")))
+            assertEquals(3, registry.peers.value.size)
         } finally {
             supervisor.cancel()
         }
