@@ -4,7 +4,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-bash -n "$REPO_ROOT/scripts/run-ios-app.sh" "$REPO_ROOT/scripts/tests/run-ios-app-test.sh"
+for script in scripts/run-ios-app.sh scripts/run-ios-ui-tests.sh scripts/tests/run-ios-app-test.sh; do
+    bash -n "$REPO_ROOT/$script"
+done
 sh -n "$REPO_ROOT/samples/iosApp/scripts/check-xcframework.sh"
 # shellcheck source=../run-ios-app.sh
 source "$REPO_ROOT/scripts/run-ios-app.sh"
@@ -84,16 +86,16 @@ trap 'rm -rf -- "$TMP_ROOT"' EXIT
 FAKE_BIN="$TMP_ROOT/fake-bin"
 FAKE_XCRUN_LOG="$TMP_ROOT/xcrun.log"
 mkdir -p "$FAKE_BIN"
-printf '%s\n' \
-    '#!/bin/sh' \
-    'printf '\''%s\n'\'' "$*" >> "$FAKE_XCRUN_LOG"' \
-    '[ "$1" = simctl ] || exit 64' \
-    'case "$2" in' \
-    '  bootstatus) exit "${FAKE_BOOTSTATUS_EXIT:-0}" ;;' \
-    '  list) printf '\''%s\n'\'' "$FAKE_DEVICE_LIST" ;;' \
-    '  *) exit 64 ;;' \
-    'esac' \
-    > "$FAKE_BIN/xcrun"
+cat > "$FAKE_BIN/xcrun" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_XCRUN_LOG"
+[ "$1" = simctl ] || exit 64
+case "$2" in
+    bootstatus) exit "${FAKE_BOOTSTATUS_EXIT:-0}" ;;
+    list) printf '%s\n' "$FAKE_DEVICE_LIST" ;;
+    *) exit 64 ;;
+esac
+EOF
 chmod +x "$FAKE_BIN/xcrun"
 
 run_fake_boot_wait() (
@@ -134,14 +136,14 @@ assert_fails "unsupported run-directory prefix is rejected" create_ios_run_dir "
 
 FAKE_REPO="$TMP_ROOT/fake-repo"
 mkdir -p "$FAKE_REPO"
-printf '%s\n' \
-    '#!/bin/sh' \
-    'framework=library/p2p-transport-lan/build/XCFrameworks/release/P2pKitShared.xcframework' \
-    'mkdir -p "$framework/ios-arm64/P2pKitShared.framework" "$framework/ios-arm64_x86_64-simulator/P2pKitShared.framework"' \
-    ': > "$framework/ios-arm64/P2pKitShared.framework/P2pKitShared"' \
-    ': > "$framework/ios-arm64_x86_64-simulator/P2pKitShared.framework/P2pKitShared"' \
-    'printf '\''invoked\n'\'' >> gradle-invocations.txt' \
-    > "$FAKE_REPO/gradlew"
+cat > "$FAKE_REPO/gradlew" <<'EOF'
+#!/bin/sh
+framework=library/p2p-transport-lan/build/XCFrameworks/release/P2pKitShared.xcframework
+mkdir -p "$framework/ios-arm64/P2pKitShared.framework" "$framework/ios-arm64_x86_64-simulator/P2pKitShared.framework"
+: > "$framework/ios-arm64/P2pKitShared.framework/P2pKitShared"
+: > "$framework/ios-arm64_x86_64-simulator/P2pKitShared.framework/P2pKitShared"
+printf 'invoked\n' >> gradle-invocations.txt
+EOF
 chmod +x "$FAKE_REPO/gradlew"
 ensure_ios_xcframework_present "$FAKE_REPO"
 ensure_ios_xcframework_present "$FAKE_REPO"
@@ -166,3 +168,4 @@ acquire_ios_run_lock "$LOCK_DIR"
 release_ios_run_lock "$LOCK_DIR"
 
 echo "run-ios-app tests: 17 passed"
+python3 "$REPO_ROOT/scripts/tests/ios-launcher-lifecycle-test.py"

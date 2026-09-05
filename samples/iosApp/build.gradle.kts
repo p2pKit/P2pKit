@@ -37,12 +37,15 @@ tasks.register<Exec>("regenerateXcodeProject") {
 }
 
 tasks.register<Exec>("checkIosLauncherScripts") {
-    description = "Run deterministic simulator-selection and isolated-run-directory tests."
+    description = "Test simulator selection, launcher ownership, recovery, and run-directory cleanup."
     group = "verification"
     workingDir = rootDir
     inputs.files(
         rootProject.file("scripts/run-ios-app.sh"),
+        rootProject.file("scripts/run-ios-ui-tests.sh"),
+        rootProject.file("scripts/ios-run-lock.py"),
         rootProject.file("scripts/tests/run-ios-app-test.sh"),
+        rootProject.file("scripts/tests/ios-launcher-lifecycle-test.py"),
         project.file("scripts/check-xcframework.sh"),
     )
     commandLine("bash", "scripts/tests/run-ios-app-test.sh")

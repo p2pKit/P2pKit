@@ -110,7 +110,7 @@ boot_and_wait_for_simulator() {
     # Revalidate afterward so a runtime/device that disappeared during a long
     # framework build fails here with a precise error, never later as a vague
     # xcodebuild destination failure.
-    if ! xcrun simctl bootstatus "$udid" -b; then
+    if ! run_ios_mutation xcrun simctl bootstatus "$udid" -b; then
         echo "[ios-run] FATAL: simulator '$udid' did not reach boot-ready state." >&2
         return 1
     fi
@@ -150,7 +150,7 @@ ensure_ios_xcframework_present() {
     fi
 
     echo "[ios-run] Bootstrapping the missing P2pKitShared XCFramework..."
-    (cd "$repo_root" && sh ./gradlew \
+    (cd "$repo_root" && run_ios_mutation sh ./gradlew \
         :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance \
         --console=plain)
     if [[ ! -f "$device_binary" || ! -f "$simulator_binary" ]]; then
@@ -160,23 +160,60 @@ ensure_ios_xcframework_present() {
 }
 
 acquire_ios_run_lock() {
-    local lock_dir="$1"
-    if ! mkdir -- "$lock_dir" 2>/dev/null; then
-        local owner="unknown"
-        if [[ -f "$lock_dir/pid" ]]; then
-            owner="$(<"$lock_dir/pid")"
-        fi
-        echo "[ios-run] FATAL: another launcher owns $lock_dir (pid $owner)." >&2
-        echo "         Concurrent xcodegen/XCFramework writes are not safe; wait for it to finish." >&2
-        return 1
-    fi
-    printf '%s\n' "$$" > "$lock_dir/pid"
+    python3 "$(dirname "${BASH_SOURCE[0]}")/ios-run-lock.py" acquire "$1" "$$"
 }
 
 release_ios_run_lock() {
-    local lock_dir="$1"
-    rm -f -- "$lock_dir/pid"
-    rmdir -- "$lock_dir"
+    python3 "$(dirname "${BASH_SOURCE[0]}")/ios-run-lock.py" release "$1" "$$"
+}
+
+run_ios_mutation() {
+    if [[ "${IOS_LAUNCH_OWNS_LOCK:-0}" -eq 1 ]]; then
+        python3 "$(dirname "${BASH_SOURCE[0]}")/ios-run-lock.py" run "$IOS_LAUNCH_LOCK" "$$" "$@"
+    else
+        # Helpers may also operate on isolated fixtures when sourced by tests.
+        "$@"
+    fi
+}
+
+initialize_ios_run_cleanup() {
+    # EXIT runs after main's locals have gone out of scope. Ownership belongs
+    # to this launcher process, never to a function frame or a caller's directory.
+    IOS_LAUNCH_PROJECT="$1"
+    IOS_LAUNCH_PREFIX="$2"
+    IOS_LAUNCH_RUN_DIR=""
+    IOS_LAUNCH_OWNS_DIR=0
+    IOS_LAUNCH_LOCK="$IOS_LAUNCH_PROJECT/build/.ios-launch.lock"
+    IOS_LAUNCH_OWNS_LOCK=0
+    trap 'cleanup_ios_run "$?"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+}
+
+cleanup_ios_run() {
+    local status="$1"
+    trap - EXIT
+    trap '' INT TERM
+    # Inspect actual ownership even if a signal arrived between acquisition and
+    # the shell flag assignment. An unsuccessful contender never releases a peer.
+    if ! python3 "$(dirname "${BASH_SOURCE[0]}")/ios-run-lock.py" cleanup "$IOS_LAUNCH_LOCK" "$$"; then
+        echo "[ios-run] FATAL: launcher lock cleanup failed; preserving run evidence." >&2
+        if [[ "$status" -eq 0 ]]; then status=1; fi
+    fi
+    if [[ "$IOS_LAUNCH_OWNS_DIR" -eq 1 && "$status" -eq 0 && "${KEEP_IOS_RUN_ARTIFACTS:-0}" != "1" ]]; then
+        case "$IOS_LAUNCH_RUN_DIR" in
+            "$IOS_LAUNCH_PROJECT"/build/"$IOS_LAUNCH_PREFIX".*)
+                if ! rm -rf -- "$IOS_LAUNCH_RUN_DIR"; then status=1; fi
+                ;;
+            *)
+                echo "[ios-run] Refusing to remove unexpected run directory: $IOS_LAUNCH_RUN_DIR" >&2
+                status=1
+                ;;
+        esac
+    elif [[ -n "$IOS_LAUNCH_RUN_DIR" ]]; then
+        echo "[ios-run] Run artifacts retained at $IOS_LAUNCH_RUN_DIR"
+    fi
+    exit "$status"
 }
 
 main() {
@@ -185,14 +222,13 @@ main() {
     local bundle_id="${BUNDLE_ID:-dev.p2pkit.sample}"
     local scheme="p2pkit-sample"
     local script_dir repo_root project_dir device_list udid
-    local run_dir derived_data_dir build_log app_path plist_dump lock_dir
+    local run_dir derived_data_dir build_log app_path plist_dump
     local installed_path exec_name built_sha installed_sha
-    local owns_run_dir=0
-    local owns_run_lock=0
 
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     repo_root="$(cd "$script_dir/.." && pwd)"
     project_dir="$repo_root/samples/iosApp"
+    initialize_ios_run_cleanup "$project_dir" "ios-run"
 
     echo "[ios-run] Resolving one exact available simulator..."
     device_list="$(xcrun simctl list devices available)"
@@ -207,42 +243,24 @@ main() {
         run_dir="$(cd "$IOS_RUN_DIR" && pwd)"
     else
         run_dir="$(create_ios_run_dir "$project_dir/build")"
-        owns_run_dir=1
+        IOS_LAUNCH_OWNS_DIR=1
     fi
+    IOS_LAUNCH_RUN_DIR="$run_dir"
     derived_data_dir="$run_dir/DerivedData"
     build_log="$run_dir/xcodebuild.log"
-    lock_dir="$project_dir/build/.ios-launch.lock"
 
-    cleanup_ios_run() {
-        local status=$?
-        trap - EXIT
-        if [[ "$owns_run_lock" -eq 1 ]]; then
-            release_ios_run_lock "$lock_dir"
-        fi
-        if [[ "$owns_run_dir" -eq 1 && "$status" -eq 0 && "${KEEP_IOS_RUN_ARTIFACTS:-0}" != "1" ]]; then
-            case "$run_dir" in
-                "$project_dir"/build/ios-run.*) rm -rf -- "$run_dir" ;;
-                *) echo "[ios-run] Refusing to remove unexpected run directory: $run_dir" >&2 ;;
-            esac
-        else
-            echo "[ios-run] Run artifacts retained at $run_dir"
-        fi
-        exit "$status"
-    }
-    trap cleanup_ios_run EXIT
-
-    if ! acquire_ios_run_lock "$lock_dir"; then
+    if ! acquire_ios_run_lock "$IOS_LAUNCH_LOCK"; then
         return 1
     fi
-    owns_run_lock=1
+    IOS_LAUNCH_OWNS_LOCK=1
 
     ensure_ios_xcframework_present "$repo_root"
 
     echo "[ios-run] Regenerating Xcode project (xcodegen)..."
-    (cd "$project_dir" && xcodegen generate) | tail -3
+    (cd "$project_dir" && run_ios_mutation xcodegen generate) | tail -3
 
     echo "[ios-run] Building iOS app for simulator UDID $udid..."
-    if ! xcodebuild \
+    if ! run_ios_mutation xcodebuild \
         -project "$project_dir/p2pkit-sample.xcodeproj" \
         -scheme "$scheme" \
         -configuration Debug \
@@ -280,7 +298,7 @@ main() {
     boot_and_wait_for_simulator "$udid"
 
     echo "[ios-run] Installing app bundle..."
-    xcrun simctl install "$udid" "$app_path"
+    run_ios_mutation xcrun simctl install "$udid" "$app_path"
 
     installed_path="$(xcrun simctl get_app_container "$udid" "$bundle_id" 2>/dev/null || true)"
     if [[ -z "$installed_path" || ! -d "$installed_path" ]]; then
@@ -299,10 +317,10 @@ main() {
     echo "[ios-run] Provenance OK: installed executable matches this build (sha256 $(printf %.12s "$built_sha")…)."
 
     echo "[ios-run] Bringing Simulator.app to the foreground..."
-    open -a Simulator
+    run_ios_mutation open -a Simulator
 
     echo "[ios-run] Launching $bundle_id..."
-    xcrun simctl launch "$udid" "$bundle_id"
+    run_ios_mutation xcrun simctl launch "$udid" "$bundle_id"
     echo "[ios-run] Done."
 }
 

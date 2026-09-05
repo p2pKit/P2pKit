@@ -7,53 +7,34 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROJECT_DIR="$REPO_ROOT/samples/iosApp"
-SCRIPT_NAME="run-ios-ui-tests"
 SIM_NAME="${SIM_NAME:-iPhone 17}"
 SIM_UDID="${SIM_UDID:-}"
 RUN_DIR="${IOS_RUN_DIR:-}"
-OWN_RUN_DIR=0
-LOCK_DIR="$PROJECT_DIR/build/.ios-launch.lock"
-OWN_LOCK=0
 
 # shellcheck source=run-ios-app.sh
 source "$SCRIPT_DIR/run-ios-app.sh"
 
-cleanup() {
-    local status=$?
-    trap - EXIT
-    if [[ "$OWN_LOCK" -eq 1 ]]; then
-        release_ios_run_lock "$LOCK_DIR"
-    fi
-    if [[ "$OWN_RUN_DIR" -eq 1 && "$status" -eq 0 && "${KEEP_IOS_RUN_ARTIFACTS:-0}" != "1" ]]; then
-        case "$RUN_DIR" in
-            "$PROJECT_DIR"/build/ios-ui-run.*) rm -rf -- "$RUN_DIR" ;;
-            *) echo "[$SCRIPT_NAME] Refusing to remove unexpected run directory: $RUN_DIR" >&2 ;;
-        esac
-    elif [[ -n "$RUN_DIR" ]]; then
-        echo "[$SCRIPT_NAME] Run artifacts retained at $RUN_DIR"
-    fi
-    exit "$status"
-}
-trap cleanup EXIT
+initialize_ios_run_cleanup "$PROJECT_DIR" "ios-ui-run"
 
 device_list="$(xcrun simctl list devices available)"
 udid="$(resolve_simulator_udid "$SIM_NAME" "$SIM_UDID" "$device_list")"
 if [[ -z "$RUN_DIR" ]]; then
     RUN_DIR="$(create_ios_run_dir "$PROJECT_DIR/build" "ios-ui-run")"
-    OWN_RUN_DIR=1
+    IOS_LAUNCH_OWNS_DIR=1
 else
     mkdir -p -- "$RUN_DIR"
     RUN_DIR="$(cd "$RUN_DIR" && pwd)"
 fi
+IOS_LAUNCH_RUN_DIR="$RUN_DIR"
 DERIVED_DATA="$RUN_DIR/DerivedData"
 
-acquire_ios_run_lock "$LOCK_DIR"
-OWN_LOCK=1
+acquire_ios_run_lock "$IOS_LAUNCH_LOCK"
+IOS_LAUNCH_OWNS_LOCK=1
 ensure_ios_xcframework_present "$REPO_ROOT"
-(cd "$PROJECT_DIR" && xcodegen generate) | tail -3
+(cd "$PROJECT_DIR" && run_ios_mutation xcodegen generate) | tail -3
 boot_and_wait_for_simulator "$udid"
 
-xcodebuild \
+run_ios_mutation xcodebuild \
     -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
     -scheme p2pkit-sample-ui \
     -configuration Debug \

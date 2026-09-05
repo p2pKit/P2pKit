@@ -44,6 +44,29 @@ tests, Android lint/host tests, Apple simulator tests, ABI, strict Dokka,
 publication artifacts, isolated consumers, SBOM, Swift warnings-as-errors, and
 release-XCFramework provenance.
 
+## iOS launcher cleanup and recovery
+
+`./gradlew :iosApp:runIosSimulator` and `:iosApp:runIosUiTests` require Python 3
+alongside Xcode/XcodeGen. They share a process-owned launcher lock. Successful
+runs remove their automatic `ios-run.*`/`ios-ui-run.*` directories; failures,
+`KEEP_IOS_RUN_ARTIFACTS=1`, and caller-owned `IOS_RUN_DIR` directories retain evidence.
+SIGINT/SIGTERM preserve failure status and release ownership after foreground work
+ends. A signal sent only to Bash is deferred while its foreground command runs;
+it does not release a lock underneath an active build.
+
+Dead launcher locks are reclaimed only after both the recorded launcher and its
+mutating foreground worker have exited. Unknown, malformed, or live owners fail
+closed: stop the relevant launchers/build workers, inspect the records, then remove
+only `samples/iosApp/build/.ios-launch.lock/{pid,worker}` and the empty lock directory.
+The empty `.ios-launch.lock.guard` file is intentional: Python's standard-library
+kernel lock serializes metadata recovery without the nonstandard `flock` command.
+Never unlink that guard or remove the build directory while a launcher is running.
+
+`scripts/tests/run-ios-app-test.sh` drives both real shell entry points with fake
+macOS tool boundaries, including repeat runs, failure/signal cleanup, stale/live
+owners, simultaneous recovery, and external output directories. These lifecycle
+tests do not constitute a simulator build, UI execution, or device validation.
+
 ## Stream-delivery regression matrix
 
 `FakeConnectionPair()` preserves exact write boundaries by default. Opt in to
