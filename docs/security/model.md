@@ -53,8 +53,14 @@ legitimate peers. The admission-policy redesign remains tracked in
 
 Use a controlled network when discovery availability matters. For a known,
 reachable peer, an out-of-band endpoint and full trusted fingerprint can be
-registered with `createManualPeer(host, port, expectedFingerprint)` without
-consuming the discovery budget. This bypasses discovery registration, not
+registered with
+`kit.networkProvisioning.createManualPeer(host, port, expectedFingerprint)`.
+First register the platform factory in `networkProvisioning { ... }`: `jvm()`
+from `p2p-network-provisioning-desktop`, `android(applicationContext)` from
+`p2p-network-provisioning-android`, or `iosManualIp()` from Apple
+`p2p-transport-lan`. Without a factory, the default manager rejects manual
+registration. Manual peers do not consume the discovery budget.
+This bypasses discovery registration, not
 network disruption or connection limits; it does not guarantee connectivity.
 Do not trust a discovered name/address as approval, disable pin checks, or
 downgrade to plaintext to recover. Restarting discovery is not protection
