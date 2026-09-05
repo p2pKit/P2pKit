@@ -65,7 +65,8 @@ class DiagnosticModelTest {
                 "\"buildNumber\":\"42\",\"gitCommitSha\":\"0123456789abcdef0123456789abcdef01234567\"," +
                 "\"safeDeviceId\":\"safe-device\",\"testSessionId\":\"session-1\",\"testId\":\"PS-T05\"," +
                 "\"role\":\"sender\",\"peerId\":\"anon-peer\",\"connectionId\":\"conn-1\"," +
-                "\"sdkSessionId\":null,\"transferId\":\"transfer-1\",\"category\":\"transfer\",\"eventName\":\"transfer.completed\"," +
+                "\"sdkSessionId\":null,\"transferId\":\"transfer-1\",\"category\":\"transfer\"," +
+                "\"eventName\":\"transfer.completed\"," +
                 "\"severity\":\"INFO\",\"currentState\":\"completed\",\"previousState\":\"transferring\"," +
                 "\"protocolVersion\":\"secure-v2\",\"packetType\":\"file_commit\",\"direction\":\"RECEIVED\"," +
                 "\"payloadSizeBytes\":1024,\"sequenceNumber\":9,\"chunkNumber\":4,\"chunkCount\":4," +
