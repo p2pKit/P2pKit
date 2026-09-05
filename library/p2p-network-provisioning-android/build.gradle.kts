@@ -1,6 +1,7 @@
 import dev.p2pkit.build.P2pPomMetadata
 import kotlinx.validation.KotlinApiBuildTask
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import java.time.Duration
 import javax.xml.parsers.DocumentBuilderFactory
 
 plugins {
@@ -77,6 +78,9 @@ tasks.withType<Test>().configureEach {
     }
     maxParallelForks = 1
     maxHeapSize = "1g"
+    // Thread joins/coroutine timeouts cannot recover JVM monitor deadlocks,
+    // including ones in teardown. Gradle owns and terminates the test fork.
+    timeout.set(Duration.ofMinutes(2))
 }
 
 val verifyAndroidAdapterTests = tasks.register("verifyAndroidAdapterTests") {

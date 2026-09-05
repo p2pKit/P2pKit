@@ -89,7 +89,9 @@ ownership helpers; Robolectric framework shadows deliver controlled callbacks
 and record native calls. Hotspot credentials and lifecycle run on APIs 26/29
 and 30/35; Wi-Fi joining, cancellation, binding ownership, and cleanup run on
 APIs 29/30/35. The gate rejects missing, empty, failed, or skipped suites and
-missing SDK execution markers.
+missing SDK execution markers. The host-test task has a two-minute deadline
+enforced by Gradle outside the test JVM; an uninterruptible monitor deadlock
+fails the task and terminates the fork, including stuck coroutine/fixture teardown.
 
 Framework JARs are pinned in the version catalog, resolved through Gradle's
 locks/checksums, and registered as test inputs. Robolectric's runtime resolver
