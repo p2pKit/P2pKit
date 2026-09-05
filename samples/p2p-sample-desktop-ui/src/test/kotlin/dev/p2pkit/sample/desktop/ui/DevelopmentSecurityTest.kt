@@ -6,6 +6,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -92,7 +93,9 @@ class DevelopmentSecurityTest {
                             assertTrue(bounds.left >= 0 && bounds.top >= 0)
                             assertTrue(bounds.right <= width && bounds.bottom <= height)
                             val layout = mutableListOf<TextLayoutResult>()
-                            val getLayout = assertNotNull(warning.config.getOrNull(SemanticsActions.GetTextLayoutResult))
+                            val getLayout = assertNotNull(
+                                warning.config.getOrNull(SemanticsActions.GetTextLayoutResult)
+                            )
                             assertTrue(assertNotNull(getLayout.action).invoke(layout))
                             assertFalse(layout.single().hasVisualOverflow)
                             val diagnostics = nodes.single { it.text() == "Diagnostics" }
@@ -109,6 +112,66 @@ class DevelopmentSecurityTest {
                     }
                 }
             }
+        }
+    }
+
+    @OptIn(ExperimentalComposeUiApi::class)
+    @Test
+    fun compactRoomKeepsSendControlsReachableBelowTheWarning() = withState { state ->
+        state.deviceName = "Synthetic Desktop"
+        ImageComposeScene(
+            width = 980,
+            height = 600,
+            content = {
+                MaterialTheme {
+                    Surface(modifier = Modifier.fillMaxSize()) { DesktopSampleScreen(state, true) {} }
+                }
+            }
+        ).use { scene ->
+            var frameNanos = 0L
+            fun nodes() = scene.semanticsOwners.flatMap { it.unmergedRootSemanticsNode.descendants() }
+            fun sendButton() = nodes().single { node ->
+                node.config.getOrNull(SemanticsProperties.Role) == Role.Button &&
+                    node.descendants().any { it.text() == "No peers connected" }
+            }
+            fun isVisible(node: SemanticsNode): Boolean = with(node.boundsInRoot) {
+                width > 0 && height > 0 && height >= node.size.height && top >= 0 && bottom <= 600
+            }
+            fun capture(name: String) {
+                scene.render(frameNanos).use { image ->
+                    val output = File("build/reports/security-warning", "$name.png")
+                    check(output.parentFile.isDirectory || output.parentFile.mkdirs())
+                    assertNotNull(image.encodeToData()).use { output.writeBytes(it.bytes) }
+                }
+            }
+            capture("compact-room-before-scroll")
+            val warningBounds = nodes().single { it.text().startsWith("DEVELOPMENT MODE:") }.boundsInRoot
+            val button = sendButton()
+            println("Initial send control: bounds=${button.boundsInRoot}, size=${button.size}")
+            if (!isVisible(button)) {
+                val scrollOwner = assertNotNull(nodes().firstOrNull { node ->
+                    node.config.getOrNull(SemanticsActions.ScrollBy) != null &&
+                        node.descendants().any { it.id == button.id }
+                }, "The warning must not make the send controls unreachable")
+                val action = assertNotNull(scrollOwner.config.getOrNull(SemanticsActions.ScrollBy)?.action)
+                val range = assertNotNull(scrollOwner.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange))
+                assertTrue(action.invoke(0f, 600f))
+                // ScrollBy is animated. Advance only the scene's virtual frame clock,
+                // bounded to 120 frames; no wall-clock sleeps or polling timeouts.
+                var frames = 0
+                while (range.value() < range.maxValue() && frames++ < 120) {
+                    frameNanos += 16_666_667
+                    scene.render(frameNanos).close()
+                }
+                assertEquals(range.maxValue(), range.value(), "Scroll action must reach the bottom")
+                capture("compact-room-after-scroll")
+            }
+            assertTrue(isVisible(sendButton()), "Full send control must be visible initially or after scrolling")
+            assertEquals(
+                warningBounds,
+                nodes().single { it.text().startsWith("DEVELOPMENT MODE:") }.boundsInRoot,
+                "The warning must stay visible while room content scrolls"
+            )
         }
     }
 

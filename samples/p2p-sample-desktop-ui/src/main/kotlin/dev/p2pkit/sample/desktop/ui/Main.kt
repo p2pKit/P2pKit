@@ -203,7 +203,8 @@ internal fun DesktopSampleScreen(state: DesktopP2pState, isRunning: Boolean, onO
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "DEVELOPMENT MODE: any authenticated same-AppId peer can connect, even with Auto-mesh off. " +
+                    text = "DEVELOPMENT MODE: any authenticated same-AppId peer can connect, " +
+                        "even with Auto-mesh off. " +
                         "AppId is not a secret. Identity resets when the kit is recreated. " +
                         "Production apps must verify and pin peer fingerprints.",
                     style = MaterialTheme.typography.bodySmall,
@@ -1912,7 +1913,7 @@ private fun RoomScreen(state: DesktopP2pState) {
         Spacer(Modifier.width(Dimens.ScreenPadding))
 
         // ---- Right column: room chips + timeline + input ----
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             val connected = state.connectedSessions.toList()
             // AUDIT-2026-06 (A-G9-samples-desktop-ios-27): collect each session's
             // state exactly once, keyed by session id, instead of calling
