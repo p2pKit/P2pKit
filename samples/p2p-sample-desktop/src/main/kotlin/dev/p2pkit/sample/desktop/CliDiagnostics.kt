@@ -43,6 +43,7 @@ internal object CliDiagnostics {
             if (::correlations.isInitialized) correlations.setLocalPeerId(value)
         }
 
+    @Synchronized
     fun connectionIdFor(peerId: String): String? =
         correlations.connectionForPeer(peerId)?.connectionId
 
@@ -143,12 +144,14 @@ internal object CliDiagnostics {
     }
 
     /** Register only from a newly acquired SDK session or an authoritative session snapshot. */
+    @Synchronized
     fun registerConnection(sessionId: String, peerId: String, state: String) {
         if (state != "Closed" && state != "Failed") correlations.registerConnection(sessionId, peerId)
         connection(sessionId, peerId, state)
     }
 
     /** A delayed state notification must never register a retired SDK session again. */
+    @Synchronized
     fun connection(sessionId: String, peerId: String, state: String, previous: String? = null) {
         val connectionId = correlations.connectionForSession(sessionId)
             ?.takeIf { it.peerId == peerId }?.connectionId
@@ -188,9 +191,11 @@ internal object CliDiagnostics {
         }
     }
 
+    @Synchronized
     fun transferConnectionId(peerId: String, sessionId: String, transferId: String): String? =
         correlations.registerTransfer(transferId, peerId, sessionId)?.connectionId
 
+    @Synchronized
     fun transfer(
         peerId: String,
         transferId: String,
@@ -224,6 +229,7 @@ internal object CliDiagnostics {
         )
     }
 
+    @Synchronized
     fun fileHash(
         peerId: String,
         transferId: String,
@@ -272,16 +278,27 @@ internal object CliDiagnostics {
         }
     }
 
-    fun startSession(testId: String, role: String, sessionId: String?): String =
+    /** Sample live owners inside the registration lock, never before a concurrent replacement. */
+    @Synchronized
+    fun startSession(
+        testId: String,
+        role: String,
+        sessionId: String?,
+        activeConnections: () -> List<CliDiagnosticConnectionSnapshot> = { emptyList() }
+    ): String =
         recorder.startSession(testId, role, sessionId).also {
             correlations.resetSession()
             latestTransferId = null
+            activeConnections().forEach { connection ->
+                registerConnection(connection.sessionId, connection.peerId, connection.state)
+            }
         }
 
     fun complete(outcome: DiagnosticOutcome, reason: String) {
         recorder.completeSession(outcome, reason, outcome.name)
     }
 
+    @Synchronized
     fun close() {
         if (!configured) return
         recorder.record(
@@ -300,3 +317,5 @@ internal object CliDiagnostics {
             "fault <type> [expected-effect] | " +
             "complete <success|failure|cancelled|timeout|interrupted|recovered> | clear]"
 }
+
+internal data class CliDiagnosticConnectionSnapshot(val sessionId: String, val peerId: String, val state: String)

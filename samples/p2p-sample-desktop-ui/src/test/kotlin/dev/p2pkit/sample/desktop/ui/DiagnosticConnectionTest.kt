@@ -37,17 +37,37 @@ class DiagnosticConnectionTest {
     fun newDiagnosticSessionSnapshotRegistersOnlyLiveSdkOwners() = withHarness { harness ->
         harness.registerConnection("new", "peer", "Connected")
         val before = assertNotNull(harness.connectionIdFor("peer"))
-        harness.startSession(
-            "PS-T06", "both", "next-test",
+        harness.startSession("PS-T06", "both", "next-test") {
             listOf(
                 DesktopDiagnosticConnectionSnapshot("new", "peer", "Connected"),
                 DesktopDiagnosticConnectionSnapshot("old", "peer", "Closed")
             )
-        )
+        }
         harness.connection("old", "peer", "Failed")
         val after = assertNotNull(harness.connectionIdFor("peer"))
         assertNotEquals(before, after)
         assertEquals(after, harness.transferConnectionId("peer", "new", "first-transfer"))
+        assertTrue(harness.recorder.snapshot().any {
+            it.sdkSessionId == anonymizeIdentifier("new") && it.details["sessionSnapshot"] == "true"
+        })
+    }
+
+    @Test
+    fun beginTestSamplesOwnersAtClickRatherThanWhenTheUiWasComposed() = withHarness { harness ->
+        var live = DesktopDiagnosticConnectionSnapshot("old", "peer", "Connected")
+        harness.registerConnection(live.sessionId, live.peerId, live.state)
+        // The UI keeps a provider, not an eagerly captured list or state string.
+        val fromComposition = { listOf(live) }
+        live = DesktopDiagnosticConnectionSnapshot("new", "peer", "Connected")
+        harness.registerConnection(live.sessionId, live.peerId, live.state)
+
+        harness.startSession("PS-T06", "both", "clicked-test", fromComposition)
+        harness.connection("old", "peer", "Closed")
+        val expected = assertNotNull(harness.connectionIdFor("peer"))
+        harness.transfer("peer", "first-after-click", "new", DiagnosticEventNames.TRANSFER_STARTED)
+        val transfer = harness.recorder.snapshot().last()
+        assertEquals(expected, transfer.connectionId)
+        assertEquals(anonymizeIdentifier("new"), transfer.sdkSessionId)
         assertTrue(harness.recorder.snapshot().any {
             it.sdkSessionId == anonymizeIdentifier("new") && it.details["sessionSnapshot"] == "true"
         })

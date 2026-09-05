@@ -171,12 +171,14 @@ private fun P2pKitSampleApp() {
         if (showDiagnostics) {
             DesktopDiagnosticsScreen(
                 diagnostics = holder.diagnostics,
-                activeConnections = holder.connectedSessions.map { session ->
-                    DesktopDiagnosticConnectionSnapshot(
-                        sessionId = session.id,
-                        peerId = session.peer.id.value,
-                        state = session.state.value.toString()
-                    )
+                activeConnections = {
+                    holder.connectedSessions.map { session ->
+                        DesktopDiagnosticConnectionSnapshot(
+                            sessionId = session.id,
+                            peerId = session.peer.id.value,
+                            state = session.state.value.toString()
+                        )
+                    }
                 },
                 revision = holder.diagnosticRevision,
                 onBack = { showDiagnostics = false }

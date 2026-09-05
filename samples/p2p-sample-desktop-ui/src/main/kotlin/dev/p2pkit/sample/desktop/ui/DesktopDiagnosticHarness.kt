@@ -83,16 +83,18 @@ internal class DesktopDiagnosticHarness(
         )
     }
 
+    /** Read current owners at the action, under the same lock as registration and notification. */
+    @Synchronized
     fun startSession(
         testId: String,
         role: String,
         sessionId: String?,
-        activeConnections: List<DesktopDiagnosticConnectionSnapshot> = emptyList()
+        activeConnections: () -> List<DesktopDiagnosticConnectionSnapshot> = { emptyList() }
     ): String =
         recorder.startSession(testId, role, sessionId).also {
             correlations.resetSession()
             latestTransferId = null
-            activeConnections.forEach { connection ->
+            activeConnections().forEach { connection ->
                 registerConnection(
                     connection.sessionId,
                     connection.peerId,
@@ -128,6 +130,7 @@ internal class DesktopDiagnosticHarness(
     }
 
     /** Register only from a newly acquired SDK session or an authoritative session snapshot. */
+    @Synchronized
     fun registerConnection(
         sessionId: String,
         peerId: String,
@@ -139,6 +142,7 @@ internal class DesktopDiagnosticHarness(
     }
 
     /** A delayed state notification must never register a retired SDK session again. */
+    @Synchronized
     fun connection(
         sessionId: String,
         peerId: String,
@@ -186,11 +190,14 @@ internal class DesktopDiagnosticHarness(
         return connection
     }
 
+    @Synchronized
     fun connectionIdFor(peerId: String): String? = correlations.connectionForPeer(peerId)?.connectionId
 
+    @Synchronized
     fun transferConnectionId(peerId: String, sessionId: String, transferId: String): String? =
         correlations.registerTransfer(transferId, peerId, sessionId)?.connectionId
 
+    @Synchronized
     fun transfer(
         peerId: String,
         transferId: String,
@@ -224,6 +231,7 @@ internal class DesktopDiagnosticHarness(
         )
     }
 
+    @Synchronized
     fun hash(
         peerId: String,
         transferId: String,
@@ -271,6 +279,7 @@ internal class DesktopDiagnosticHarness(
         return removed
     }
 
+    @Synchronized
     fun shutdown() {
         recorder.record(
             DiagnosticRecord(

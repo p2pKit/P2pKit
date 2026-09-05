@@ -39,7 +39,7 @@ import java.awt.datatransfer.StringSelection
 @Composable
 internal fun DesktopDiagnosticsScreen(
     diagnostics: DesktopDiagnosticHarness,
-    activeConnections: List<DesktopDiagnosticConnectionSnapshot>,
+    activeConnections: () -> List<DesktopDiagnosticConnectionSnapshot>,
     revision: Long,
     onBack: () -> Unit
 ) {

@@ -392,13 +392,14 @@ private suspend fun repl(
                         val session = parts.getOrNull(2)
                         val role = parts.getOrNull(3) ?: "both"
                         runCatching {
-                            CliDiagnostics.startSession(testId, role, session)
-                            sessions.values.forEach { active ->
-                                CliDiagnostics.registerConnection(
-                                    sessionId = active.id,
-                                    peerId = active.peer.id.value,
-                                    state = active.state.value.toString()
-                                )
+                            CliDiagnostics.startSession(testId, role, session) {
+                                sessions.values.map { active ->
+                                    CliDiagnosticConnectionSnapshot(
+                                        sessionId = active.id,
+                                        peerId = active.peer.id.value,
+                                        state = active.state.value.toString()
+                                    )
+                                }
                             }
                             CliDiagnostics.recorder.record(
                                 DiagnosticRecord(
@@ -1125,13 +1126,16 @@ private fun registerSession(
     wiredSessionIds: MutableSet<String>,
     pendingFileOffers: ConcurrentHashMap<SessionTransferKey, P2pFileOffer>,
 ) {
-    sessions[session.peer.id.value] = session
-    if (!wiredSessionIds.add(session.id)) return // collectors already wired on this instance
-    CliDiagnostics.registerConnection(
-        sessionId = session.id,
-        peerId = session.peer.id.value,
-        state = session.state.value.toString()
-    )
+    // Publish the snapshot source and its diagnostic owner atomically with `diag start`.
+    synchronized(CliDiagnostics) {
+        sessions[session.peer.id.value] = session
+        if (!wiredSessionIds.add(session.id)) return // collectors already wired on this instance
+        CliDiagnostics.registerConnection(
+            sessionId = session.id,
+            peerId = session.peer.id.value,
+            state = session.state.value.toString()
+        )
+    }
     wireIncoming(session, scope, pendingFileOffers)
     scope.launch {
         var previous: String? = session.state.value.toString()
