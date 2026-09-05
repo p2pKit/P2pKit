@@ -1318,7 +1318,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
 
         for (session in current) {
             if (sessionJobs.containsKey(session.id)) continue
-            diagnostics.connection(
+            diagnostics.registerConnection(
                 session.id,
                 session.peer.id.value,
                 session.state.value.toString()

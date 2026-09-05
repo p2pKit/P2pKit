@@ -46,8 +46,7 @@ internal object CliDiagnostics {
     fun connectionIdFor(peerId: String): String? =
         correlations.connectionForPeer(peerId)?.connectionId
 
-    fun configure(options: CliLaunchOptions) {
-        val home = File(System.getProperty("user.home") ?: ".")
+    fun configure(options: CliLaunchOptions, home: File = File(System.getProperty("user.home") ?: ".")) {
         rolling = RollingJsonlFileSink(File(home, ".p2pkit/test-diagnostics"))
         evidenceDirectory = File(
             options.evidenceDirectory ?: File(home, ".p2pkit/test-evidence").path
@@ -143,12 +142,21 @@ internal object CliDiagnostics {
         )
     }
 
+    /** Register only from a newly acquired SDK session or an authoritative session snapshot. */
+    fun registerConnection(sessionId: String, peerId: String, state: String) {
+        if (state != "Closed" && state != "Failed") correlations.registerConnection(sessionId, peerId)
+        connection(sessionId, peerId, state)
+    }
+
+    /** A delayed state notification must never register a retired SDK session again. */
     fun connection(sessionId: String, peerId: String, state: String, previous: String? = null) {
-        val connectionId = correlations.registerConnection(sessionId, peerId)?.connectionId
+        val connectionId = correlations.connectionForSession(sessionId)
+            ?.takeIf { it.peerId == peerId }?.connectionId
         recorder.record(
             DiagnosticRecord(
                 peerId = peerId,
                 connectionId = connectionId,
+                sdkSessionId = sessionId,
                 category = "connection",
                 eventName = DiagnosticEventNames.CONNECTION_STATE_CHANGED,
                 previousState = previous,
@@ -167,6 +175,7 @@ internal object CliDiagnostics {
                 DiagnosticRecord(
                     peerId = peerId,
                     connectionId = connectionId,
+                    sdkSessionId = sessionId,
                     category = "protocol",
                     eventName = DiagnosticEventNames.PROTOCOL_NEGOTIATED,
                     currentState = "secure-v2",

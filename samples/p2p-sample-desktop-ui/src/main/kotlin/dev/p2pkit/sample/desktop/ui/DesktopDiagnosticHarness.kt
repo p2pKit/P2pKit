@@ -19,9 +19,9 @@ import java.io.File
 import java.net.InetAddress
 
 internal class DesktopDiagnosticHarness(
+    private val home: File = File(System.getProperty("user.home") ?: "."),
     private val onEvent: () -> Unit
 ) {
-    private val home = File(System.getProperty("user.home") ?: ".")
     private val rolling = RollingJsonlFileSink(File(home, ".p2pkit/desktop-ui-test-diagnostics"))
 
     val recorder = DiagnosticRecorder(
@@ -93,19 +93,11 @@ internal class DesktopDiagnosticHarness(
             correlations.resetSession()
             latestTransferId = null
             activeConnections.forEach { connection ->
-                val correlation = correlations.registerConnection(
+                registerConnection(
                     connection.sessionId,
-                    connection.peerId
-                )
-                recorder.record(
-                    DiagnosticRecord(
-                        peerId = connection.peerId,
-                        connectionId = correlation?.connectionId,
-                        category = "connection",
-                        eventName = DiagnosticEventNames.CONNECTION_STATE_CHANGED,
-                        currentState = connection.state,
-                        details = mapOf("sessionSnapshot" to "true")
-                    )
+                    connection.peerId,
+                    connection.state,
+                    sessionSnapshot = true
                 )
             }
             recorder.record(
@@ -135,17 +127,32 @@ internal class DesktopDiagnosticHarness(
         )
     }
 
+    /** Register only from a newly acquired SDK session or an authoritative session snapshot. */
+    fun registerConnection(
+        sessionId: String,
+        peerId: String,
+        state: String,
+        sessionSnapshot: Boolean = false
+    ): String? {
+        if (state != "Closed" && state != "Failed") correlations.registerConnection(sessionId, peerId)
+        return connection(sessionId, peerId, state, sessionSnapshot = sessionSnapshot)
+    }
+
+    /** A delayed state notification must never register a retired SDK session again. */
     fun connection(
         sessionId: String,
         peerId: String,
         state: String,
-        previous: String? = null
+        previous: String? = null,
+        sessionSnapshot: Boolean = false
     ): String? {
-        val connection = correlations.registerConnection(sessionId, peerId)?.connectionId
+        val connection = correlations.connectionForSession(sessionId)
+            ?.takeIf { it.peerId == peerId }?.connectionId
         recorder.record(
             DiagnosticRecord(
                 peerId = peerId,
                 connectionId = connection,
+                sdkSessionId = sessionId,
                 category = "connection",
                 eventName = DiagnosticEventNames.CONNECTION_STATE_CHANGED,
                 previousState = previous,
@@ -156,7 +163,8 @@ internal class DesktopDiagnosticHarness(
                     "Failed" -> DiagnosticOutcome.FAILURE
                     "Closed" -> DiagnosticOutcome.CANCELLATION
                     else -> null
-                }
+                },
+                details = if (sessionSnapshot) mapOf("sessionSnapshot" to "true") else emptyMap()
             )
         )
         if (state == "Connected") {
@@ -164,6 +172,7 @@ internal class DesktopDiagnosticHarness(
                 DiagnosticRecord(
                     peerId = peerId,
                     connectionId = connection,
+                    sdkSessionId = sessionId,
                     category = "protocol",
                     eventName = DiagnosticEventNames.PROTOCOL_NEGOTIATED,
                     currentState = "secure-v2",

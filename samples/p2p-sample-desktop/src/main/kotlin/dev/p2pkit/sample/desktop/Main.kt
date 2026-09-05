@@ -394,7 +394,7 @@ private suspend fun repl(
                         runCatching {
                             CliDiagnostics.startSession(testId, role, session)
                             sessions.values.forEach { active ->
-                                CliDiagnostics.connection(
+                                CliDiagnostics.registerConnection(
                                     sessionId = active.id,
                                     peerId = active.peer.id.value,
                                     state = active.state.value.toString()
@@ -1127,7 +1127,7 @@ private fun registerSession(
 ) {
     sessions[session.peer.id.value] = session
     if (!wiredSessionIds.add(session.id)) return // collectors already wired on this instance
-    CliDiagnostics.connection(
+    CliDiagnostics.registerConnection(
         sessionId = session.id,
         peerId = session.peer.id.value,
         state = session.state.value.toString()
