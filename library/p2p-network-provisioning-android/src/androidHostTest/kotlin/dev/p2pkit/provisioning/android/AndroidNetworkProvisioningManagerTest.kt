@@ -1289,6 +1289,155 @@ class AndroidNetworkProvisioningManagerTest {
     }
 
     @Test
+    fun cancellingWaitingApiCallersPreservesTheActiveHotspotAcquisition() = runBlocking<Unit> {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.StartSuspends(
+                entered, release, testCreds, listOf("192.168.43.1")
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        val start = async { mgr.startLocalNetwork(LocalNetworkConfig()) }
+        try {
+            withTimeout(5_000) {
+                entered.await()
+                val waitingCalls: List<suspend () -> Unit> = listOf(
+                    { mgr.startLocalNetwork(LocalNetworkConfig()) },
+                    { mgr.joinLocalNetwork(testCreds) },
+                    { mgr.stopLocalNetwork() }
+                )
+                for (call in waitingCalls) {
+                    val waiting = async(start = CoroutineStart.UNDISPATCHED) { call() }
+                    assertFalse(waiting.isCompleted, "active acquisition must keep this caller waiting")
+                    waiting.cancelAndJoin()
+                    assertTrue(waiting.isCancelled)
+                    assertFalse(release.isCompleted, "the active native acquisition is still pending")
+                    assertEquals(NetworkProvisioningState.StartingLocalNetwork, mgr.state.value)
+                    assertEquals(1, wifi.hotspotStartCalls)
+                    assertEquals(0, wifi.joinCalls)
+                }
+                release.complete(Unit)
+                assertIs<LocalNetworkResult.Started>(start.await())
+                assertEquals(NetworkProvisioningState.LocalNetworkRunning, mgr.state.value)
+                assertIs<NetworkState.LocalNetworkHosted>(mgr.networkState.value)
+            }
+        } finally {
+            release.complete(Unit)
+            mgr.close()
+            start.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun cancellingWaitingApiCallersPreservesTheActiveJoinAcquisition() = runBlocking<Unit> {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val network = NetworkState.ConnectedToWifi(null, listOf("192.168.43.55"))
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.JoinSuspends(entered, release, network)
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        val join = async { mgr.joinLocalNetwork(testCreds) }
+        try {
+            withTimeout(5_000) {
+                entered.await()
+                val waitingCalls: List<suspend () -> Unit> = listOf(
+                    { mgr.joinLocalNetwork(testCreds) },
+                    { mgr.startLocalNetwork(LocalNetworkConfig()) },
+                    { mgr.stopLocalNetwork() }
+                )
+                for (call in waitingCalls) {
+                    val waiting = async(start = CoroutineStart.UNDISPATCHED) { call() }
+                    assertFalse(waiting.isCompleted, "active acquisition must keep this caller waiting")
+                    waiting.cancelAndJoin()
+                    assertTrue(waiting.isCancelled)
+                    assertFalse(release.isCompleted, "the active native acquisition is still pending")
+                    assertEquals(NetworkProvisioningState.JoiningNetwork, mgr.state.value)
+                    assertEquals(1, wifi.joinCalls)
+                    assertEquals(0, wifi.hotspotStartCalls)
+                }
+                release.complete(Unit)
+                assertIs<JoinNetworkResult.Joined>(join.await())
+                assertEquals(NetworkProvisioningState.JoinedNetwork, mgr.state.value)
+                assertEquals(network, mgr.networkState.value)
+            }
+        } finally {
+            release.complete(Unit)
+            mgr.close()
+            join.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun callerCancellationAfterHotspotAcquisitionRollsBackItsOwnStateAndResource() = runBlocking<Unit> {
+        val acquired = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.Start(testCreds, listOf("192.168.43.1"))
+        )
+        val mgr = AndroidNetworkProvisioningManager(
+            ctx(), wifi,
+            ProvisioningLifecycleHooks(afterHotspotAcquired = { if (acquired.complete(Unit)) release.await() })
+        )
+        try {
+            withTimeout(5_000) {
+                val start = async { mgr.startLocalNetwork(LocalNetworkConfig()) }
+                acquired.await()
+                val handle = assertNotNull(wifi.lastHandle)
+                assertFalse(handle.isClosed)
+                start.cancelAndJoin()
+                handle.awaitWatcherStopped()
+                assertTrue(start.isCancelled)
+                assertTrue(handle.isClosed)
+                assertEquals(1, handle.closeAttempts)
+                assertEquals(NetworkProvisioningState.Idle, mgr.state.value)
+                assertEquals(NetworkState.Unknown, mgr.networkState.value)
+                assertIs<LocalNetworkResult.Started>(mgr.startLocalNetwork(LocalNetworkConfig()))
+                assertEquals(NetworkProvisioningState.LocalNetworkRunning, mgr.state.value)
+                assertEquals(1, handle.closeAttempts, "a subsequent acquisition must not re-close the old handle")
+            }
+        } finally {
+            release.complete(Unit)
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun callerCancellationAfterJoinAcquisitionRollsBackItsOwnStateAndResource() = runBlocking<Unit> {
+        val acquired = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val network = NetworkState.ConnectedToWifi(null, listOf("192.168.43.55"))
+        val wifi = FakeWifiManagerWrapper(behavior = FakeWifiManagerWrapper.Behavior.JoinSucceeds(network))
+        val mgr = AndroidNetworkProvisioningManager(
+            ctx(), wifi,
+            ProvisioningLifecycleHooks(afterJoinAcquired = { if (acquired.complete(Unit)) release.await() })
+        )
+        try {
+            withTimeout(5_000) {
+                val join = async { mgr.joinLocalNetwork(testCreds) }
+                acquired.await()
+                val handle = assertNotNull(wifi.lastJoinHandle)
+                assertFalse(handle.isClosed)
+                join.cancelAndJoin()
+                handle.awaitWatcherStopped()
+                assertTrue(join.isCancelled)
+                assertTrue(handle.isClosed)
+                assertEquals(1, handle.closeAttempts)
+                assertEquals(NetworkProvisioningState.Idle, mgr.state.value)
+                assertEquals(NetworkState.Unknown, mgr.networkState.value)
+                assertIs<JoinNetworkResult.Joined>(mgr.joinLocalNetwork(testCreds))
+                assertEquals(NetworkProvisioningState.JoinedNetwork, mgr.state.value)
+                assertEquals(network, mgr.networkState.value)
+                assertEquals(1, handle.closeAttempts, "a subsequent acquisition must not re-close the old handle")
+            }
+        } finally {
+            release.complete(Unit)
+            mgr.close()
+        }
+    }
+
+    @Test
     fun closeRacingJoinCancelsAcquisitionAndReturnsOneTerminalFailure() = runBlocking<Unit> {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()

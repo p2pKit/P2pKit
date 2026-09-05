@@ -103,6 +103,9 @@ public class AndroidNetworkProvisioningManager internal constructor(
     private val joinOperation = Any()
     private var stateOwner: Any? = null
     private var networkStateOwner: Any? = null
+    // Unlike the resource/kind owners above, this identifies one API call.
+    // A caller cancelled before acquiring lifecycleLock owns no publication.
+    private var acquisitionStateOwner: Any? = null
     @kotlin.concurrent.Volatile
     private var handle: HotspotHandle? = null
     private var stopWatch: Job? = null
@@ -140,10 +143,13 @@ public class AndroidNetworkProvisioningManager internal constructor(
     // --- NetworkProvisioningManager surface -------------------------------
 
     override suspend fun startLocalNetwork(config: LocalNetworkConfig): LocalNetworkResult =
-        runManagerOperation(::closedLocalNetworkResult) { startLocalNetworkTransaction(config) }
+        runManagerOperation(::closedLocalNetworkResult) { operationOwner ->
+            startLocalNetworkTransaction(config, operationOwner)
+        }
 
     private suspend fun startLocalNetworkTransaction(
-        config: LocalNetworkConfig
+        config: LocalNetworkConfig,
+        operationOwner: Any
     ): LocalNetworkResult = lifecycleLock.withLock {
         if (isClosingOrClosed()) return@withLock closedLocalNetworkResult()
         if (config.preferredSsidPrefix != null) {
@@ -184,7 +190,10 @@ public class AndroidNetworkProvisioningManager internal constructor(
             }
             return@withLock LocalNetworkResult.Failed(error)
         }
-        if (!commitStateIfOpen(hotspotOperation) { _state.value = NetworkProvisioningState.StartingLocalNetwork }) {
+        if (!commitStateIfOpen(hotspotOperation, acquisitionOwner = operationOwner) {
+                _state.value = NetworkProvisioningState.StartingLocalNetwork
+            }
+        ) {
             return@withLock closedLocalNetworkResult()
         }
 
@@ -376,10 +385,13 @@ public class AndroidNetworkProvisioningManager internal constructor(
      * discussion (decision #8c, 2026-07-04; PRM-16).
      */
     override suspend fun joinLocalNetwork(credentials: WifiCredentials): JoinNetworkResult =
-        runManagerOperation(::closedJoinNetworkResult) { joinLocalNetworkTransaction(credentials) }
+        runManagerOperation(::closedJoinNetworkResult) { operationOwner ->
+            joinLocalNetworkTransaction(credentials, operationOwner)
+        }
 
     private suspend fun joinLocalNetworkTransaction(
-        credentials: WifiCredentials
+        credentials: WifiCredentials,
+        operationOwner: Any
     ): JoinNetworkResult = lifecycleLock.withLock {
         if (isClosingOrClosed()) return@withLock closedJoinNetworkResult()
         if (!wifi.isSpecifierJoinSupported) {
@@ -421,7 +433,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
         }
         val ssid = credentials.ssid!!
 
-        if (!commitStateIfOpen(joinOperation) {
+        if (!commitStateIfOpen(joinOperation, acquisitionOwner = operationOwner) {
                 _state.value = NetworkProvisioningState.JoiningNetwork
                 _events.tryEmit(
                     NetworkProvisioningEvent.UserActionRequired(
@@ -824,8 +836,13 @@ public class AndroidNetworkProvisioningManager internal constructor(
         }
     }
 
-    private inline fun commitStateIfOpen(owner: Any, block: () -> Unit): Boolean = commitIfOpen {
+    private inline fun commitStateIfOpen(
+        owner: Any,
+        acquisitionOwner: Any? = null,
+        block: () -> Unit
+    ): Boolean = commitIfOpen {
         stateOwner = owner
+        acquisitionStateOwner = acquisitionOwner
         block()
     }
 
@@ -847,6 +864,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
             joinHandle = null
             stateOwner = null
             networkStateOwner = null
+            acquisitionStateOwner = null
             retainedHotspotCleanup.clear()
             retainedJoinCleanup.clear()
             stopWatch?.cancel()
@@ -947,13 +965,15 @@ public class AndroidNetworkProvisioningManager internal constructor(
      * Attach the complete API transaction, including post-callback handle
      * installation or cleanup, to manager ownership. Terminal close cancels
      * and joins these children; caller cancellation waits for deterministic
-     * cleanup before it is rethrown.
+     * cleanup before it is rethrown. A cancelled caller may roll back only
+     * its own transient acquisition publication, never a queued successor's.
      */
     private suspend fun <T> runManagerOperation(
         closedResult: () -> T,
-        block: suspend () -> T
+        block: suspend (operationOwner: Any) -> T
     ): T {
-        val operation = scope.async { block() }
+        val operationOwner = Any()
+        val operation = scope.async { block(operationOwner) }
         return try {
             operation.await()
         } catch (e: CancellationException) {
@@ -962,11 +982,13 @@ public class AndroidNetworkProvisioningManager internal constructor(
                 closedResult()
             } else {
                 commitIfOpen {
+                    if (acquisitionStateOwner !== operationOwner) return@commitIfOpen
                     when (_state.value) {
                         NetworkProvisioningState.StartingLocalNetwork,
                         NetworkProvisioningState.JoiningNetwork -> {
                             _state.value = NetworkProvisioningState.Idle
                             stateOwner = null
+                            acquisitionStateOwner = null
                         }
                         else -> Unit
                     }
