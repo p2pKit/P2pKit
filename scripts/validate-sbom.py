@@ -135,13 +135,21 @@ def child(parent: ET.Element, name: str, optional: bool = False) -> ET.Element |
     return matches[0] if matches else None
 
 
+def simple_content(node: ET.Element) -> str:
+    if elements(node):
+        invalid("XML", "invalid simple content")
+    # Comments/PIs carry no value, but their tails are part of the element's
+    # string value. Looking only at node.text silently truncates that value.
+    return (node.text or "") + "".join(child.tail or "" for child in node)
+
+
 def leaf(parent: ET.Element, name: str) -> str | None:
     node = child(parent, name, optional=True)
     if node is None:
         return None
     if elements(node) or node.attrib:
         invalid("XML", f"invalid {name} leaf")
-    return node.text or ""
+    return simple_content(node)
 
 
 def xml_component(node: ET.Element) -> dict:
@@ -156,7 +164,7 @@ def xml_component(node: ET.Element) -> dict:
         for digest in elements(hashes):
             if digest.tag != f"{{{NAMESPACE}}}hash" or elements(digest) or set(digest.attrib) != {"alg"}:
                 invalid("XML", "invalid component hash")
-            value["hashes"].append({"alg": digest.get("alg"), "content": digest.text})
+            value["hashes"].append({"alg": digest.get("alg"), "content": simple_content(digest)})
     return value
 
 

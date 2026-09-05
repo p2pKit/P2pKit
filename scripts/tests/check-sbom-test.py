@@ -201,6 +201,63 @@ class SbomTest(unittest.TestCase):
         with self.assertRaisesRegex(VALIDATOR.SbomError, "nested components are not supported"):
             self.validate()
 
+    def check_xml_simple_content(self, equivalent):
+        targets = {
+            "release version": lambda r: root_component(r).find(NS + "version"),
+            "component version": lambda r: component_node(r).find(NS + "version"),
+            "purl": lambda r: component_node(r).find(NS + "purl"),
+            "hash": lambda r: component_node(r).find(NS + "hashes/" + NS + "hash"),
+        }
+        markers = {
+            "comment": lambda: ET.Comment("not part of the value"),
+            "processing instruction": lambda: ET.ProcessingInstruction("split", "not-part-of-the-value"),
+        }
+        for name, target in targets.items():
+            for kind, marker in markers.items():
+                with self.subTest(target=name, marker=kind, equivalent=equivalent):
+                    self.xml = xml_fixture(self.document)
+                    node = target(self.xml)
+                    addition = marker()
+                    if equivalent:
+                        offset = len(node.text) // 2
+                        addition.tail = node.text[offset:]
+                        node.text = node.text[:offset]
+                    else:
+                        addition.tail = "b"  # Also remains syntactically valid hexadecimal in a hash.
+                    node.append(addition)
+                    self.write()
+                    if equivalent:
+                        self.assertEqual(self.validate(), 10)
+                    else:
+                        with self.assertRaisesRegex(VALIDATOR.SbomError, "XML SBOM content gate failed"):
+                            self.validate()
+
+    def test_equivalent_comment_and_processing_instruction_splits(self):
+        self.check_xml_simple_content(equivalent=True)
+
+    def test_comment_and_processing_instruction_tails_cannot_hide_differences(self):
+        self.check_xml_simple_content(equivalent=False)
+
+    def test_multiple_boundary_splits_preserve_text_but_nested_elements_fail(self):
+        for target in (lambda r: root_component(r).find(NS + "version"),
+                       lambda r: component_node(r).find(NS + "hashes/" + NS + "hash")):
+            self.xml = xml_fixture(self.document)
+            node = target(self.xml)
+            value = node.text
+            node.text = None
+            first = ET.Comment("before")
+            first.tail = value[:1]
+            middle = ET.ProcessingInstruction("split", "ignored")
+            middle.tail = value[1:]
+            node.extend([first, middle, ET.Comment("after")])
+            self.write()
+            self.assertEqual(self.validate(), 10)
+
+            ET.SubElement(node, NS + "unexpected")
+            self.write()
+            with self.assertRaisesRegex(VALIDATOR.SbomError, "XML SBOM content gate failed"):
+                self.validate()
+
     def test_dtd_declarations_rejected_in_utf8_and_utf16(self):
         self.write()
         for declaration in ('<!DOCTYPE bom [<!ENTITY x "expanded">]>',
