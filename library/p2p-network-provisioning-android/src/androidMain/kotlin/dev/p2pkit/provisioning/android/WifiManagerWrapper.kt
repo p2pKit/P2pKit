@@ -16,13 +16,11 @@ import kotlinx.coroutines.flow.SharedFlow
  */
 internal interface WifiManagerWrapper {
 
-    fun isWifiEnabled(): Boolean
-
     /**
-     * True when the platform supports LocalOnlyHotspot (API 26+). The manager
-     * returns the contract's `Unsupported` result below that instead of
-     * letting a NoSuchMethodError surface as PlatformError
-     * (AUDIT-2026-06 fix; module minSdk is 24).
+     * True on API 26+ with a WifiManager and declared Wi-Fi hardware. The
+     * manager returns `Unsupported` otherwise (module minSdk is 24).
+     * Radio enablement and permissions are transient state, not capability;
+     * a true result does not guarantee that the OS will accept a start.
      */
     val isLocalOnlyHotspotSupported: Boolean
 

@@ -157,6 +157,23 @@ approved instrumentation seam: the operation must surface a typed cleanup
 failure, retain ownership, and allow a later Stop/close to retry. Capture
 permission dialogs and the final provisioning card.
 
+#### A1.1 — hotspot capability versus radio state
+
+For Issue #194, record the device API level, whether the Wi-Fi service exists,
+and the `android.hardware.wifi` feature reported by PackageManager. On API
+24-25, or a device without the service or declared Wi-Fi hardware, starting a
+hotspot must return `Unsupported` without registering a native start request.
+Include an ethernet-only API 26+ device that exposes a Wi-Fi service but not
+the hardware feature; if unavailable, record this cell as BLOCKED, not passed
+by a host fake.
+
+On ordinary Wi-Fi hardware, repeat with the radio on and off. Radio-off alone
+must not change capability to `Unsupported`: the OS may start successfully or
+return a typed start failure. Capture the actual OEM outcome rather than
+assuming that radio-off always produces a particular reason code. Restore the
+radio afterward. Host policy tests cover the API/service/feature truth table;
+they do not execute these hardware or radio-state cases.
+
 ### A2 — two-manager ownership
 
 Run `PROV-A12 / PS-T02` on a device/OS combination that exposes the real

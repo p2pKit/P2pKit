@@ -55,10 +55,13 @@ internal class WifiManagerWrapperImpl(
         applicationContext.applicationContext
             .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
-    override fun isWifiEnabled(): Boolean = wifi?.isWifiEnabled ?: false
-
     override val isLocalOnlyHotspotSupported: Boolean
-        get() = wifi != null && android.os.Build.VERSION.SDK_INT >= 26
+        get() = supportsLocalOnlyHotspot(
+            deviceSdk = Build.VERSION.SDK_INT,
+            hasWifiManager = wifi != null
+        ) { feature ->
+            applicationContext.applicationContext.packageManager.hasSystemFeature(feature)
+        }
 
     override val isSpecifierJoinSupported: Boolean
         get() = android.os.Build.VERSION.SDK_INT >= 29

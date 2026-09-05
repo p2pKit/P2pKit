@@ -2,6 +2,7 @@
 
 package dev.p2pkit.provisioning.android
 
+import android.content.pm.PackageManager
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.NetworkProvisioningError
@@ -128,17 +129,26 @@ class AndroidNetworkProvisioningManagerTest {
     }
 
     @Test
-    fun unsupportedHotspotReturnsContractResultWithoutCallingPlatformApi() = runBlocking<Unit> {
+    fun hotspotWithoutWifiHardwareReturnsUnsupportedWithoutCallingPlatformApi() = runBlocking<Unit> {
+        val queriedFeatures = mutableListOf<String>()
         val wifi = FakeWifiManagerWrapper(
             behavior = FakeWifiManagerWrapper.Behavior.ThrowSecurity,
-            localOnlyHotspotSupported = false
+            localOnlyHotspotSupported = supportsLocalOnlyHotspot(deviceSdk = 36, hasWifiManager = true) { feature ->
+                queriedFeatures += feature
+                false
+            }
         )
         val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
         try {
-            assertIs<LocalNetworkResult.Unsupported>(
-                mgr.startLocalNetwork(LocalNetworkConfig())
+            val result = assertIs<LocalNetworkResult.Unsupported>(mgr.startLocalNetwork(LocalNetworkConfig()))
+            assertEquals(
+                "LocalOnlyHotspot requires Android 8.0 (API 26) and Wi-Fi hardware",
+                result.reason
             )
+            assertEquals(listOf(PackageManager.FEATURE_WIFI), queriedFeatures)
             assertEquals(0, wifi.hotspotStartCalls)
+            assertEquals(NetworkProvisioningState.Idle, mgr.state.value)
+            assertNull(wifi.lastHandle)
         } finally {
             mgr.close()
         }
@@ -1650,8 +1660,6 @@ private class FakeWifiManagerWrapper(
         data class JoinFails(val reason: String) : Behavior()
         data class JoinThrowsSecurity(val message: String) : Behavior()
     }
-
-    override fun isWifiEnabled(): Boolean = true
 
     override val isLocalOnlyHotspotSupported: Boolean = localOnlyHotspotSupported
     override val isSpecifierJoinSupported: Boolean = specifierJoinSupported

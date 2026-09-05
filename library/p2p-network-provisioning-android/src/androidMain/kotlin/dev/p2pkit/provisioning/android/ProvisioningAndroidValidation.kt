@@ -1,5 +1,6 @@
 package dev.p2pkit.provisioning.android
 
+import android.content.pm.PackageManager
 import dev.p2pkit.core.permission.P2pPermission
 import dev.p2pkit.core.provisioning.NetworkState
 import dev.p2pkit.core.provisioning.WifiCredentials
@@ -11,6 +12,16 @@ internal val provisioningNormalManifestPermissions: List<String> = listOf(
     "android.permission.CHANGE_WIFI_STATE",
     "android.permission.CHANGE_NETWORK_STATE"
 )
+
+/**
+ * Capability, not current radio or permission state. A supported device can
+ * still refuse a request; that failure belongs to the platform start path.
+ */
+internal fun supportsLocalOnlyHotspot(
+    deviceSdk: Int,
+    hasWifiManager: Boolean,
+    hasSystemFeature: (String) -> Boolean
+): Boolean = deviceSdk >= 26 && hasWifiManager && hasSystemFeature(PackageManager.FEATURE_WIFI)
 
 /** Target-aware Android runtime permission policy shared by both entry points. */
 internal fun requiredProvisioningRuntimePermission(
