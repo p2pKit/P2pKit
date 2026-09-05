@@ -767,7 +767,7 @@ struct ContentView: View {
 
     @MainActor
     private func start() async {
-        diag("ui", "Start tapped (deviceName='\(localDeviceName)')")
+        diag("ui", "Start tapped")
         // Re-entry / preconditions.
         guard !isStarting else {
             diag("ui", "Start ignored — isStarting already true")
@@ -887,7 +887,7 @@ struct ContentView: View {
             frameTraceLease = nil
             status = "Create failed: \(error.localizedDescription)"
             errorBanner = "Could not load the secure local identity: \(error.localizedDescription)"
-            diag("kit", "create FAILED: \(error.localizedDescription)")
+            diag("kit", "create FAILED: \(SampleConsole.failure(error))")
             return
         }
         self.kit = built
@@ -899,7 +899,7 @@ struct ContentView: View {
             eventName: TestDiagnosticEventName.peerInitialized,
             currentState: "ready"
         ))
-        diag("kit", "P2pKit constructed (peerId=\(localPeerId.prefix(8)) name='\(name)')")
+        diag("kit", "P2pKit constructed (peerId=\(SampleConsole.identifier(localPeerId)))")
 
         do {
             diag("kit", "calling startAdvertising")
@@ -915,7 +915,7 @@ struct ContentView: View {
             diag("kit", "startDiscovery returned OK")
             status = "Running"
         } catch {
-            diag("kit", "start FAILED: \(error.localizedDescription)")
+            diag("kit", "start FAILED: \(SampleConsole.failure(error))")
             status = "Start failed: \(error.localizedDescription)"
             errorBanner = "Failed to start: \(error.localizedDescription)"
             do {
@@ -932,7 +932,7 @@ struct ContentView: View {
                 status = "Start failed — cleanup pending"
                 errorBanner = "Start failed and cleanup did not complete: " +
                     cleanupError.localizedDescription + ". Tap Stop to retry."
-                diag("kit", "startup cleanup FAILED; ownership retained: \(cleanupError.localizedDescription)")
+                diag("kit", "startup cleanup FAILED; ownership retained: \(SampleConsole.failure(cleanupError))")
             }
             return
         }
@@ -944,14 +944,15 @@ struct ContentView: View {
                 diag("kit", "manual connection info: port=\(info.port)")
             }
         } catch {
-            diag("kit", "getManualConnectionInfo failed: \(error.localizedDescription)")
+            diag("kit", "getManualConnectionInfo failed: \(SampleConsole.failure(error))")
         }
 
         self.incomingSessionsTask = Task { [weak built] in
             let collector = SessionCollector { session in
                 IosLanDebug.shared.log(
                     tag: "ui",
-                    message: "incomingSessions emitted: peer=\(session.peer.id) name=\(session.peer.name) id=\(session.id)"
+                    message: "incomingSessions emitted: peer=\(SampleConsole.identifier("\(session.peer.id)")) " +
+                        "id=\(SampleConsole.identifier(session.id))"
                 )
                 self.attachCollectors(to: session, label: "incoming")
             }
@@ -1067,7 +1068,7 @@ struct ContentView: View {
                 )
                 diag(
                     "session",
-                    "\(row.peerName) (\(row.peerId.prefix(8))) \(prev.state) → \(row.state)"
+                    "peer=\(SampleConsole.identifier(row.peerId)) \(prev.state) → \(row.state)"
                 )
             } else if previousById[row.id] == nil {
                 diagnostics.connection(
@@ -1082,7 +1083,8 @@ struct ContentView: View {
                 )
                 diag(
                     "session",
-                    "new id=\(row.id.prefix(12)) peer=\(row.peerId.prefix(8)) name=\(row.peerName) state=\(row.state)"
+                    "new id=\(SampleConsole.identifier(row.id)) " +
+                        "peer=\(SampleConsole.identifier(row.peerId)) state=\(row.state)"
                 )
             }
         }
@@ -1102,7 +1104,8 @@ struct ContentView: View {
             ))
             diag(
                 "session",
-                "removed id=\(prev.id.prefix(12)) peer=\(prev.peerId.prefix(8)) lastState=\(prev.state)"
+                "removed id=\(SampleConsole.identifier(prev.id)) " +
+                    "peer=\(SampleConsole.identifier(prev.peerId)) lastState=\(prev.state)"
             )
             // AUDIT-2026-06 (A-G9-samples-desktop-ios-09): release the dead
             // session's collector tasks and its dedup entry — they otherwise
@@ -1127,10 +1130,10 @@ struct ContentView: View {
         // a real bug doesn't hide silently behind the PeerRow's isLive filter.
         let groupedByPeer = Dictionary(grouping: sessionRows, by: { $0.peerId })
         for (peerIdKey, rows) in groupedByPeer where rows.count > 1 {
-            let summary = rows.map { "\($0.id.prefix(12))[\($0.state)]" }.joined(separator: ", ")
+            let summary = rows.map { "\(SampleConsole.identifier($0.id))[\($0.state)]" }.joined(separator: ", ")
             diag(
                 "session",
-                "WARN: \(rows.count) sessions for peer=\(peerIdKey.prefix(8)): \(summary)"
+                "WARN: \(rows.count) sessions for peer=\(SampleConsole.identifier(peerIdKey)): \(summary)"
             )
         }
 
@@ -1145,10 +1148,10 @@ struct ContentView: View {
                 // We have sessions but none match THIS peer's id. Worth
                 // logging because the user-reported "shows not connected"
                 // symptom looks like this.
-                let allSessionPeerIds = sessionRows.map { $0.peerId.prefix(8) }
+                let allSessionPeerIds = sessionRows.map { SampleConsole.identifier($0.peerId) }
                     .joined(separator: ",")
                 crossCheckWarnings.append(
-                    "peer \(peerRow.name) id=\(peerRow.id.prefix(8)) " +
+                    "peer \(SampleConsole.identifier(peerRow.id)) " +
                         "has no matching session row (sessions exist with peerIds=[\(allSessionPeerIds)])"
                 )
             }
@@ -1211,6 +1214,9 @@ struct ContentView: View {
                             direction: .received,
                             outcome: .success
                         ))
+                        self.diag("ui", SampleConsole.received(
+                            peerId: "\(session.peer.id)", isText: true, sizeBytes: Int64(text.value.utf8.count)
+                        ))
                         self.appendMessage("\(session.peer.name) -> \(text.value)", kind: .received)
                     } else if let bin = msg as? P2pMessage.Binary {
                         self.appendMessage(
@@ -1252,8 +1258,7 @@ struct ContentView: View {
             if !previous.contains(offer.id) {
                 diag(
                     "file",
-                    "offer id=\(offer.id.prefix(8)) name='\(offer.name)' size=\(offer.sizeBytes) " +
-                        "mime=\(offer.mimeType ?? "-") from \(offer.peer.name)"
+                    "offer id=\(SampleConsole.identifier(offer.id)) size=\(offer.sizeBytes)"
                 )
                 self.diagnostics.transfer(
                     TestDiagnosticEventName.offerReceived,
@@ -1292,7 +1297,7 @@ struct ContentView: View {
         do {
             try await offer.reject(reason: "rejected by user")
         } catch {
-            diag("file", "reject failed for '\(offer.name)': \(error.localizedDescription)")
+            diag("file", "reject failed for selected file: \(SampleConsole.failure(error))")
         }
     }
 
@@ -1414,10 +1419,10 @@ struct ContentView: View {
                         direction: .received,
                         outcome: .success
                     )
-                    diag("file", "durable receive committed '\(dest.lastPathComponent)' sha256=\(digest)")
+                    diag("file", "durable receive committed sha256=\(digest)")
                     appendMessage("sha256 \(dest.lastPathComponent): \(digest)", kind: .info)
                 } catch {
-                    diag("file", "sha256 read failed for '\(dest.lastPathComponent)': \(error.localizedDescription)")
+                    diag("file", "sha256 read failed for selected file: \(SampleConsole.failure(error))")
                     appendMessage(
                         "sha256 unavailable for \(dest.lastPathComponent): \(error.localizedDescription)",
                         kind: .error
@@ -1434,7 +1439,7 @@ struct ContentView: View {
                 diag(
                     "file",
                     "destination cleanup after failed accept also failed: " +
-                        cleanupError.localizedDescription
+                        SampleConsole.failure(cleanupError)
                 )
             }
             let cleanupComplete = !destination.temporaryArtifactExists
@@ -1466,7 +1471,7 @@ struct ContentView: View {
                 outcome: .failure,
                 error: error.localizedDescription
             )
-            diag("file", "accept THREW for '\(offer.name)': \(error.localizedDescription)")
+            diag("file", "accept THREW for selected file: \(SampleConsole.failure(error))")
             appendMessage("accept failed for '\(offer.name)': \(error.localizedDescription)", kind: .error)
         }
     }
@@ -1499,7 +1504,7 @@ struct ContentView: View {
             payloadSizeBytes: Int64(size),
             details: ["name": name, "preset": preset.rawValue]
         ))
-        diag("file", "sendFile '\(name)' (\(size) B) sha256=\(digest) -> \(row.peerName)")
+        diag("file", "sendFile (\(size) B) sha256=\(digest) -> \(SampleConsole.identifier(row.peerId))")
         appendMessage("prepared \(name): sha256 \(digest)", kind: .info)
         do {
             let transfer = try await row.session.sendFile(
@@ -1537,7 +1542,7 @@ struct ContentView: View {
             appendMessage("offering file '\(name)' (\(fmtBytes(Int64(size)))) to \(row.peerName)", kind: .sent)
             watchTransfer(transfer, sessionId: row.id, direction: .send, detail: nil) { completed in
                 if completed {
-                    diag("file", "sender completed '\(name)' sha256=\(digest)")
+                    diag("file", "sender completed sha256=\(digest)")
                 }
                 return nil
             }
@@ -1555,7 +1560,7 @@ struct ContentView: View {
                 outcome: .failure,
                 error: error.localizedDescription
             )
-            diag("file", "sendFile THREW for \(row.peerId.prefix(8)): \(error.localizedDescription)")
+            diag("file", "sendFile THREW for \(SampleConsole.identifier(row.peerId)): \(SampleConsole.failure(error))")
             appendMessage("sendFile failed (\(row.peerName)): \(error.localizedDescription)", kind: .error)
             errorBanner = "Send file to \(row.peerName) failed: \(error.localizedDescription)"
         }
@@ -1609,7 +1614,11 @@ struct ContentView: View {
                 }
                 if label != lastLabel {
                     lastLabel = label
-                    diag("file", "transfer \(transfer.id.prefix(8)) '\(transfer.name)' -> \(label) (\(bytes)/\(transfer.sizeBytes) B)")
+                    diag(
+                        "file",
+                        "transfer \(SampleConsole.identifier(transfer.id)) -> \(SampleConsole.transferState(label)) " +
+                            "(\(bytes)/\(transfer.sizeBytes) B)"
+                    )
                     self.diagnostics.transferProgress(
                         peerId: "\(transfer.peer.id)",
                         transferId: transfer.id,
@@ -1691,7 +1700,7 @@ struct ContentView: View {
     @MainActor
     private func cancelTransfer(_ row: TransferRow) async {
         guard let row = SessionTransferEntries.row(row.id, in: transfers) else { return }
-        diag("file", "Cancel tapped for transfer \(row.id.transferId.prefix(8)) '\(row.fileName)'")
+        diag("file", "Cancel tapped for transfer \(SampleConsole.identifier(row.id.transferId))")
         diagnostics.transfer(
             TestDiagnosticEventName.transferCancelled,
             peerId: "\(row.transfer.peer.id)",
@@ -1711,7 +1720,7 @@ struct ContentView: View {
 
     @MainActor
     private func connect(_ row: PeerRow) async {
-        diag("ui", "Connect tapped: peer=\(row.id.prefix(8)) name=\(row.name)")
+        diag("ui", "Connect tapped: peer=\(SampleConsole.identifier(row.id))")
         diagnostics.record(TestDiagnosticRecord(
             peerId: row.id,
             category: "connection",
@@ -1729,12 +1738,12 @@ struct ContentView: View {
         }
         let pid = row.id
         guard !pendingConnectPeerIds.contains(pid) else {
-            diag("ui", "Connect dedup — pendingConnectPeerIds already has \(pid.prefix(8))")
+            diag("ui", "Connect dedup — pendingConnectPeerIds already has \(SampleConsole.identifier(pid))")
             appendMessage("connect already in progress for \(row.name)", kind: .info)
             return
         }
         if let existing = sessions.first(where: { $0.peerId == pid && $0.isLive }) {
-            diag("ui", "Connect dedup — session already \(existing.state) for \(pid.prefix(8))")
+            diag("ui", "Connect dedup — session already \(existing.state) for \(SampleConsole.identifier(pid))")
             appendMessage(
                 "already \(existing.state.lowercased()) with \(row.name); skipping duplicate connect",
                 kind: .info
@@ -1749,13 +1758,15 @@ struct ContentView: View {
         // after the session later dies.
         defer { pendingConnectPeerIds.remove(pid) }
 
-        diag("ui", "calling kit.connect(\(pid.prefix(8)))")
+        diag("ui", "calling kit.connect(\(SampleConsole.identifier(pid)))")
         appendMessage("connect -> \(row.name)", kind: .info)
         do {
             let session = try await k.connect(peer: row.peer)
             diag(
                 "ui",
-                "kit.connect returned session id=\(session.id) peer=\(session.peer.id) state=\(IosSwiftHelpersKt.stateName(session))"
+                "kit.connect returned session id=\(SampleConsole.identifier(session.id)) " +
+                    "peer=\(SampleConsole.identifier("\(session.peer.id)")) " +
+                    "state=\(IosSwiftHelpersKt.stateName(session))"
             )
             attachCollectors(to: session, label: "outgoing")
         } catch {
@@ -1769,7 +1780,7 @@ struct ContentView: View {
                 errorDescription: error.localizedDescription,
                 outcome: .failure
             ))
-            diag("ui", "kit.connect THREW: \(error.localizedDescription)")
+            diag("ui", "kit.connect THREW: \(SampleConsole.failure(error))")
             appendMessage("connect failed (\(row.name)): \(error.localizedDescription)", kind: .error)
             errorBanner = "Connect to \(row.name) failed: \(error.localizedDescription)"
         }
@@ -1777,7 +1788,7 @@ struct ContentView: View {
 
     @MainActor
     private func dialManual() async {
-        diag("ui", "Dial manual tapped: host='\(manualHost)' port='\(manualPort)'")
+        diag("ui", "Dial manual tapped")
         guard let k = kit else {
             diag("ui", "Dial ABORT — kit not started")
             errorBanner = "Kit not started."
@@ -1796,7 +1807,7 @@ struct ContentView: View {
             return
         }
         guard let portInt = Int32(portStr) else {
-            diag("ui", "Dial ABORT — port not int: '\(portStr)'")
+            diag("ui", "Dial ABORT — port not int:")
             errorBanner = "Port must be a positive integer (got '\(portStr)')."
             return
         }
@@ -1809,7 +1820,7 @@ struct ContentView: View {
             "0123456789.:-_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
         )
         guard host.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
-            diag("ui", "Dial ABORT — invalid chars in host: '\(host)'")
+            diag("ui", "Dial ABORT — invalid chars in host:")
             errorBanner = "Host contains invalid characters."
             return
         }
@@ -1826,21 +1837,25 @@ struct ContentView: View {
         defer { isManualDialing = false }
         errorBanner = nil
         appendMessage("manual: createManualPeer host=\(host) port=\(portInt)", kind: .info)
-        diag("ui", "calling networkProvisioning.createManualPeer(\(host):\(portInt))")
+        diag("ui", "calling networkProvisioning.createManualPeer(<omitted>:\(portInt))")
         do {
             let peer = try await k.networkProvisioning.createManualPeer(
                 host: host,
                 port: portInt,
                 expectedFingerprint: expectedFingerprint
             )
-            diag("ui", "createManualPeer returned: id=\(peer.id) name=\(peer.name)")
+            diag("ui", "createManualPeer returned: id=\(SampleConsole.identifier("\(peer.id)"))")
             appendMessage("manual: created \(peer.name) (\(peer.id))", kind: .info)
-            diag("ui", "calling kit.connect on synthetic peer \(peer.id)")
+            diag("ui", "calling kit.connect on synthetic peer \(SampleConsole.identifier("\(peer.id)"))")
             let session = try await k.connect(peer: peer)
-            diag("ui", "kit.connect (manual) returned session id=\(session.id) state=\(IosSwiftHelpersKt.stateName(session))")
+            diag(
+                "ui",
+                "kit.connect (manual) returned session id=\(SampleConsole.identifier(session.id)) " +
+                    "state=\(IosSwiftHelpersKt.stateName(session))"
+            )
             attachCollectors(to: session, label: "manual")
         } catch {
-            diag("ui", "manual dial THREW: \(error.localizedDescription)")
+            diag("ui", "manual dial THREW: \(SampleConsole.failure(error))")
             appendMessage("manual: failed - \(error.localizedDescription)", kind: .error)
             errorBanner = "Manual connect failed: \(error.localizedDescription)"
         }
@@ -1888,7 +1903,7 @@ struct ContentView: View {
         var successes = 0
         var failures: [String] = []
         for row in liveSessions {
-            diag("ui", "Send → session=\(row.id.prefix(12)) peer=\(row.peerId.prefix(8)) (\(text.count) chars)")
+            diag("ui", SampleConsole.sendingText(recipients: 1, sizeBytes: text.utf8.count))
             do {
                 diagnostics.record(TestDiagnosticRecord(
                     peerId: row.peerId,
@@ -1909,12 +1924,12 @@ struct ContentView: View {
                     payloadSizeBytes: Int64(text.utf8.count),
                     outcome: .success
                 ))
-                diag("ui", "session.send OK for \(row.peerId.prefix(8))")
+                diag("ui", "session.send OK for \(SampleConsole.identifier(row.peerId))")
                 appendMessage("me -> \(row.peerName): \(text)", kind: .sent)
                 successes += 1
             } catch {
                 let msg = error.localizedDescription
-                diag("ui", "session.send THREW for \(row.peerId.prefix(8)): \(msg)")
+                diag("ui", "session.send THREW for \(SampleConsole.identifier(row.peerId)): \(SampleConsole.failure(error))")
                 appendMessage(
                     "send failed (\(row.peerName) state=\(row.state)): \(msg)",
                     kind: .error
@@ -1944,13 +1959,13 @@ struct ContentView: View {
 
     @MainActor
     private func closeSession(_ row: SessionRow) async {
-        diag("ui", "Close tapped: session=\(row.id.prefix(12)) peer=\(row.peerId.prefix(8))")
+        diag("ui", "Close tapped: session=\(SampleConsole.identifier(row.id)) peer=\(SampleConsole.identifier(row.peerId))")
         do {
             try await row.session.close()
-            diag("ui", "session.close OK for \(row.peerId.prefix(8))")
+            diag("ui", "session.close OK for \(SampleConsole.identifier(row.peerId))")
             appendMessage("closed session with \(row.peerName)", kind: .info)
         } catch {
-            diag("ui", "session.close THREW for \(row.peerId.prefix(8)): \(error.localizedDescription)")
+            diag("ui", "session.close THREW for \(SampleConsole.identifier(row.peerId)): \(SampleConsole.failure(error))")
             appendMessage("close failed (\(row.peerName)): \(error.localizedDescription)", kind: .error)
         }
     }
@@ -2050,6 +2065,8 @@ struct ContentView: View {
         }
     }
 
+    /// Only fixed labels, counts, SDK states and SampleConsole fields belong here.
+    /// Never interpolate names, payloads, paths, addresses or error descriptions.
     /// Push a Swift-side diagnostic line into the same `IosLanDebug`
     /// timeline that the Kotlin LAN transport writes to. Lets the on-screen
     /// log show "user tapped Send" interleaved with "nw_connection_send
@@ -2253,7 +2270,7 @@ final class FileHandleRawSink: NSObject, Kotlinx_io_coreRawSink {
                 failure = error.localizedDescription
                 IosLanDebug.shared.log(
                     tag: "file",
-                    message: "sink write FAILED: \(error.localizedDescription)"
+                    message: "sink write FAILED: \(SampleConsole.failure(error))"
                 )
             }
             stateLock.unlock()

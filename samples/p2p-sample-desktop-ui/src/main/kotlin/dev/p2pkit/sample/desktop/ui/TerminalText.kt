@@ -1,4 +1,4 @@
 package dev.p2pkit.sample.desktop.ui
 
-/** Strip ANSI/OSC control bytes before writing SDK or peer data to a terminal. */
+/** Injection defence only: strips ANSI/OSC control bytes; does not redact private content. */
 internal fun String.sanitizedForTerminal(): String = filterNot { it.isISOControl() }

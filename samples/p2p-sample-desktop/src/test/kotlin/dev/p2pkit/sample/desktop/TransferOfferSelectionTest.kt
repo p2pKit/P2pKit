@@ -8,6 +8,17 @@ import kotlin.test.assertTrue
 
 class TransferOfferSelectionTest {
     @Test
+    fun opaqueOfferSelectorsKeepSameIdOffersIndependentlySelectable() {
+        val first = SessionTransferKey("private-session-a", "same-transfer")
+        val second = SessionTransferKey("private-session-b", "same-transfer")
+        val keys = listOf(first, second)
+        assertEquals(listOf(first), matchingOfferKeys(keys, first.consoleSelector))
+        assertEquals(listOf(second), matchingOfferKeys(keys, second.consoleSelector))
+        assertEquals(keys, matchingOfferKeys(keys, "same-transfer"))
+        assertTrue(first.consoleSelector.matches(Regex("anon-[0-9a-f]{16}")))
+    }
+
+    @Test
     fun identicalIdsAcrossSessionsRequireAnExactScopedSelector() {
         val first = SessionTransferKey("session-a", "a".repeat(32))
         val second = SessionTransferKey("session-b", first.transferId)

@@ -18,6 +18,9 @@ import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.sample.diagnostics.SampleConsole
+import dev.p2pkit.sample.diagnostics.consoleId
+import dev.p2pkit.sample.diagnostics.SampleConsoleLogger
 import dev.p2pkit.core.protocol.FrameTrace
 import dev.p2pkit.core.protocol.FrameTraceLease
 import dev.p2pkit.core.P2pMessage
@@ -536,13 +539,13 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 logger = StructuredSdkLogger(
                     recorder = diagnosticRecorder,
-                    delegate = TailLogger(this@P2pKitViewModel)
+                    delegate = TailLogger(this@P2pKitViewModel::recordLog)
                 )
             }
         } catch (t: Throwable) {
             releaseDiagnosticInstrumentation()
             _isStarting.value = false
-            Log.e(LOG_TAG, "kit create failed", t)
+            Log.e(LOG_TAG, "kit create failed; errorType=${SampleConsole.failure(t)}")
             appendSystemMessage("start failed: ${t.message ?: t::class.simpleName}")
             return
         }
@@ -553,8 +556,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         diagnostics.setLocalPeerId(newKit.localPeerId.value)
         Log.i(
             LOG_TAG,
-            "kit started: deviceName=${newKit.localDeviceName} appId=${newKit.appId.value} " +
-                "peerId=${newKit.localPeerId.value} reconnect=$choice"
+            "kit started: deviceName=<omitted> appId=${SampleConsole.identifier(newKit.appId.value)} " +
+                "peerId=${SampleConsole.identifier(newKit.localPeerId.value)} reconnect=$choice"
         )
 
         val supervisor = SupervisorJob(viewModelScope.coroutineContext[Job])
@@ -655,7 +658,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             } catch (t: Throwable) {
                 _advertising.value = false
                 _discovering.value = false
-                Log.e(LOG_TAG, "kit startup failed", t)
+                Log.e(LOG_TAG, "kit startup failed; errorType=${SampleConsole.failure(t)}")
                 appendSystemMessage("start failed: ${t.message ?: t::class.simpleName}")
                 try {
                     runCatchingNonCancel { newKit.stop() }
@@ -666,7 +669,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         }
                         .onFailure { cleanupError ->
                             _cleanupPending.value = true
-                            Log.e(LOG_TAG, "startup cleanup failed; kit ownership retained", cleanupError)
+                            Log.e(
+                                LOG_TAG,
+                                "startup cleanup failed; kit ownership retained; " +
+                                    "errorType=${SampleConsole.failure(cleanupError)}"
+                            )
                             appendSystemMessage(
                                 "startup cleanup failed; tap Retry cleanup: " +
                                     (cleanupError.message ?: cleanupError::class.simpleName)
@@ -711,7 +718,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     if (peer.id.value in sessionPeerIds) continue
                     if (pendingConnectPeerIds.contains(peer.id.value)) continue
                     if (myId < peer.id.value) {
-                        Log.i(LOG_TAG, "auto-mesh: initiating connect to ${peer.name}")
+                        Log.i(LOG_TAG, "auto-mesh: initiating connect to ${peer.consoleId}")
                         connect(peer)
                     }
                 }
@@ -758,7 +765,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                             outcome = DiagnosticOutcome.FAILURE
                         )
                     )
-                    Log.w(LOG_TAG, "connect to ${peer.name} failed", it)
+                    Log.w(LOG_TAG, "connect to ${peer.consoleId} failed; errorType=${SampleConsole.failure(it)}")
                     appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
                 }
             } finally {
@@ -780,7 +787,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 .onFailure {
                     // An exception is not equivalent to "nothing missing";
                     // preserve the last known list and surface the diagnostic.
-                    Log.e(LOG_TAG, "permission check failed", it)
+                    Log.e(LOG_TAG, "permission check failed; errorType=${SampleConsole.failure(it)}")
                     appendSystemMessage("permission check failed: ${it.message ?: it::class.simpleName}")
                 }
         }
@@ -801,7 +808,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 val result = runCatchingNonCancel {
                     currentKit.networkProvisioning.startLocalNetwork(LocalNetworkConfig())
                 }.getOrElse { e ->
-                    Log.w(LOG_TAG, "startHotspot threw", e)
+                    Log.w(LOG_TAG, "startHotspot threw" + "; errorType=${SampleConsole.failure(e)}")
                     LocalNetworkResult.Failed(
                         dev.p2pkit.core.NetworkProvisioningError.PlatformError(e)
                     )
@@ -812,20 +819,20 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 // mirrors it for non-UI diagnostics (adb logcat -s p2pkit).
                 when (result) {
                     is LocalNetworkResult.Started ->
-                        Log.i(LOG_TAG, "hotspot Started: ssid=${result.credentials.ssid} " +
+                        Log.i(LOG_TAG, "hotspot Started: credentials=<omitted> " +
                             "port=${result.manualConnectionInfo?.port} " +
-                            "hosts=${result.manualConnectionInfo?.hostAddresses}")
+                            "hostCount=${result.manualConnectionInfo?.hostAddresses?.size}")
                     is LocalNetworkResult.StartedWithoutCredentials ->
                         Log.i(LOG_TAG, "hotspot StartedWithoutCredentials: " +
                             "port=${result.manualConnectionInfo.port} " +
-                            "hosts=${result.manualConnectionInfo.hostAddresses}")
+                            "hostCount=${result.manualConnectionInfo.hostAddresses.size}")
                     is LocalNetworkResult.Failed ->
                         Log.w(LOG_TAG, "hotspot Failed: ${result.error::class.simpleName} " +
-                            "— ${result.error.message ?: "(no message)"}")
+                            "— <details omitted>")
                     is LocalNetworkResult.Unsupported ->
-                        Log.w(LOG_TAG, "hotspot Unsupported: ${result.reason}")
+                        Log.w(LOG_TAG, "hotspot Unsupported: <details omitted>")
                     is LocalNetworkResult.RequiresUserAction ->
-                        Log.i(LOG_TAG, "hotspot RequiresUserAction: ${result.instruction}")
+                        Log.i(LOG_TAG, "hotspot RequiresUserAction: see provisioning UI")
                 }
             } finally {
                 _provisioningBusy.value = false
@@ -849,7 +856,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         Log.i(LOG_TAG, "hotspot stopped")
                     }
                     .onFailure { e ->
-                        Log.w(LOG_TAG, "stopHotspot failed", e)
+                        Log.w(LOG_TAG, "stopHotspot failed; errorType=${SampleConsole.failure(e)}")
                         appendSystemMessage("stop hotspot failed: ${e.message ?: e::class.simpleName}")
                         _hotspotResult.value = LocalNetworkResult.Failed(
                             dev.p2pkit.core.NetworkProvisioningError.PlatformError(e)
@@ -900,7 +907,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 val result = runCatchingNonCancel {
                     currentKit.networkProvisioning.joinLocalNetwork(creds)
                 }.getOrElse { e ->
-                    Log.w(LOG_TAG, "joinHotspot threw", e)
+                    Log.w(LOG_TAG, "joinHotspot threw" + "; errorType=${SampleConsole.failure(e)}")
                     JoinNetworkResult.Failed(
                         dev.p2pkit.core.NetworkProvisioningError.PlatformError(e)
                     )
@@ -911,11 +918,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         Log.i(LOG_TAG, "join Joined: state=${result.networkState::class.simpleName}")
                     is JoinNetworkResult.Failed ->
                         Log.w(LOG_TAG, "join Failed: ${result.error::class.simpleName} " +
-                            "— ${result.error.message ?: "(no message)"}")
+                            "— <details omitted>")
                     is JoinNetworkResult.Unsupported ->
-                        Log.w(LOG_TAG, "join Unsupported: ${result.reason}")
+                        Log.w(LOG_TAG, "join Unsupported: <details omitted>")
                     is JoinNetworkResult.RequiresUserAction ->
-                        Log.i(LOG_TAG, "join RequiresUserAction: ${result.instruction}")
+                        Log.i(LOG_TAG, "join RequiresUserAction: see provisioning UI")
                     JoinNetworkResult.Pending ->
                         Log.i(LOG_TAG, "join Pending")
                 }
@@ -974,7 +981,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 // can block for seconds → ANR risk).
                 withContext(Dispatchers.IO) { session.sendFile(ctx, uri) }
             }.getOrElse {
-                Log.w(LOG_TAG, "sendFile failed", it)
+                Log.w(LOG_TAG, "sendFile failed; errorType=${SampleConsole.failure(it)}")
                 appendSystemMessage("send file failed: ${it.message ?: it::class.simpleName}")
                 return@launch
             }
@@ -1181,7 +1188,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             appendSystemMessage("rejected '${pending.name}': ${e.message ?: "storage unavailable"}")
             return
         }
-        Log.i(LOG_TAG, "incoming file offer ${pending.name} (${pending.sizeBytes}B) → ${saveFile.absolutePath}")
+        Log.i(LOG_TAG, "incoming file offer <file> (${pending.sizeBytes}B) → <app-private destination>")
         val destination = runCatchingNonCancel { reservedFileDestination(saveFile) }
             .getOrElse { e ->
                 runCatchingNonCancel { pending.offer.reject("destination preparation failed") }
@@ -1507,7 +1514,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
         scope.launch {
             runCatchingNonCancel { target.close() }.onFailure {
-                Log.w(LOG_TAG, "close session to ${target.peer.name} failed", it)
+                Log.w(
+                    LOG_TAG,
+                    "close session to ${target.peer.consoleId} failed; errorType=${SampleConsole.failure(it)}"
+                )
                 appendSystemMessage("close ${target.peer.name} failed: ${it.message ?: it::class.simpleName}")
             }
         }
@@ -1564,11 +1574,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             target = target
         )
         appendRoomMessage(message)
-        Log.i(
-            LOG_TAG,
-            "room: ${if (target is SendTarget.All) "broadcast" else "targeted"} " +
-                "→ ${recipients.size} peer(s): ${trimmed.take(60)}"
-        )
+        Log.i(LOG_TAG, SampleConsole.sendingText(recipients.size, trimmed.toByteArray().size.toLong()))
 
         for (session in recipients) {
             val connectionId = connectionIds[session.id]
@@ -1614,7 +1620,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                                 errorDescription = it.message
                             )
                         )
-                        Log.w(LOG_TAG, "room: send to ${session.peer.name} failed", it)
+                        Log.w(
+                            LOG_TAG,
+                            "room: send to ${session.peer.consoleId} failed; errorType=${SampleConsole.failure(it)}"
+                        )
                         appendSystemMessage("send to ${session.peer.name} failed: ${it.message ?: it::class.simpleName}")
                     }
             }
@@ -1629,11 +1638,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 if (_advertising.value) {
                     runCatchingNonCancel { currentKit.stopAdvertising() }
                         .onSuccess { _advertising.value = false }
-                        .onFailure { Log.w(LOG_TAG, "stopAdvertising failed", it) }
+                        .onFailure { Log.w(LOG_TAG, "stopAdvertising failed; errorType=${SampleConsole.failure(it)}") }
                 } else {
                     runCatchingNonCancel { currentKit.startAdvertising() }
                         .onSuccess { _advertising.value = true }
-                        .onFailure { Log.w(LOG_TAG, "startAdvertising failed", it) }
+                        .onFailure { Log.w(LOG_TAG, "startAdvertising failed; errorType=${SampleConsole.failure(it)}") }
                 }
             }
         }
@@ -1647,11 +1656,11 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 if (_discovering.value) {
                     runCatchingNonCancel { currentKit.stopDiscovery() }
                         .onSuccess { _discovering.value = false }
-                        .onFailure { Log.w(LOG_TAG, "stopDiscovery failed", it) }
+                        .onFailure { Log.w(LOG_TAG, "stopDiscovery failed; errorType=${SampleConsole.failure(it)}") }
                 } else {
                     runCatchingNonCancel { currentKit.startDiscovery() }
                         .onSuccess { _discovering.value = true }
-                        .onFailure { Log.w(LOG_TAG, "startDiscovery failed", it) }
+                        .onFailure { Log.w(LOG_TAG, "startDiscovery failed; errorType=${SampleConsole.failure(it)}") }
                 }
             }
         }
@@ -1709,7 +1718,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 runCatchingNonCancel { toStop.networkProvisioning.stopLocalNetwork() }
                 val stopped = runCatchingNonCancel { toStop.stop() }
                 stopped.onFailure {
-                    Log.e(LOG_TAG, "kit.stop failed; ownership retained", it)
+                    Log.e(LOG_TAG, "kit.stop failed; ownership retained; errorType=${SampleConsole.failure(it)}")
                     // Snapshot-backed UI state remains main-thread confined.
                     withContext(Dispatchers.Main.immediate) {
                         // Keep ownership without presenting a false Running
@@ -1753,7 +1762,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         _cleanupPending.value = false
                     }
                     .onFailure {
-                        Log.e(LOG_TAG, "final ViewModel cleanup failed; ownership retained", it)
+                        Log.e(
+                            LOG_TAG,
+                            "final ViewModel cleanup failed; ownership retained; errorType=${SampleConsole.failure(it)}"
+                        )
                         _cleanupPending.value = true
                     }
             }
@@ -1852,7 +1864,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 .onFailure { error ->
                     _advertising.value = false
-                    Log.w(LOG_TAG, "foreground advertising restore failed", error)
+                    Log.w(LOG_TAG, "foreground advertising restore failed; errorType=${SampleConsole.failure(error)}")
                 }
         }
         discoveryToggleMutex.withLock {
@@ -1885,7 +1897,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 .onFailure { error ->
                     _discovering.value = false
-                    Log.w(LOG_TAG, "foreground discovery restore failed", error)
+                    Log.w(LOG_TAG, "foreground discovery restore failed; errorType=${SampleConsole.failure(error)}")
                 }
         }
     }
@@ -1928,7 +1940,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 connectedSessions.remove(removed)
                 targetedPeerIds.remove(removed.peer.id.value)
                 appendSystemMessage("disconnected from ${removed.peer.name}")
-                Log.i(LOG_TAG, "room: session removed ${removed.peer.name}")
+                Log.i(LOG_TAG, "room: session removed ${removed.peer.consoleId}")
             }
         }
 
@@ -1942,14 +1954,14 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             if (connectionId != null) connectionIds[session.id] = connectionId
             connectedSessions.add(session)
             appendSystemMessage("connected to ${session.peer.name}")
-            Log.i(LOG_TAG, "room: session added ${session.peer.name}")
+            Log.i(LOG_TAG, "room: session added ${session.peer.consoleId}")
             val incomingJob = scope.launch {
                 session.incoming.collect { msg ->
-                    Log.i(LOG_TAG, "room: incoming from ${session.peer.name}")
                     val payloadSize = when (msg) {
                         is P2pMessage.Text -> msg.value.toByteArray().size.toLong()
                         is P2pMessage.Binary -> msg.bytes.size.toLong()
                     }
+                    Log.i(LOG_TAG, SampleConsole.received(session.peer.id.value, msg is P2pMessage.Text, payloadSize))
                     recordDiagnostic(
                         DiagnosticRecord(
                             peerId = session.peer.id.value,
@@ -1988,7 +2000,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             val stateJob = scope.launch {
                 var previousState: ConnectionState? = null
                 session.state.collect { st ->
-                    Log.i(LOG_TAG, "session ${session.peer.name} → $st")
+                    Log.i(LOG_TAG, "session ${session.peer.consoleId} → $st")
                     recordDiagnostic(
                         DiagnosticRecord(
                             peerId = session.peer.id.value,
@@ -2203,22 +2215,19 @@ sealed class ReconnectChoice {
  * Logger that mirrors output to logcat AND to the ViewModel's [P2pKitViewModel.logTail]
  * for in-app diagnostics.
  */
-private class TailLogger(private val vm: P2pKitViewModel) : P2pLogger {
-    private val tag = "p2pkit"
-    override fun debug(message: String) {
-        Log.d(tag, message)
-        vm.recordLog("D", message)
-    }
-    override fun info(message: String) {
-        Log.i(tag, message)
-        vm.recordLog("I", message)
-    }
-    override fun warn(message: String, throwable: Throwable?) {
-        if (throwable != null) Log.w(tag, message, throwable) else Log.w(tag, message)
-        vm.recordLog("W", if (throwable != null) "$message — ${throwable.message ?: throwable::class.simpleName}" else message)
-    }
-    override fun error(message: String, throwable: Throwable?) {
-        if (throwable != null) Log.e(tag, message, throwable) else Log.e(tag, message)
-        vm.recordLog("E", if (throwable != null) "$message — ${throwable.message ?: throwable::class.simpleName}" else message)
+internal class TailLogger(
+    recordLog: (String, String) -> Unit,
+    logcat: (String, String) -> Unit = ::writeConsoleLine
+) : P2pLogger by SampleConsoleLogger({ level, line ->
+    logcat(level, line)
+    recordLog(level, line)
+})
+
+private fun writeConsoleLine(level: String, line: String) {
+    when (level) {
+        "D" -> Log.d("p2pkit", line)
+        "I" -> Log.i("p2pkit", line)
+        "W" -> Log.w("p2pkit", line)
+        "E" -> Log.e("p2pkit", line)
     }
 }

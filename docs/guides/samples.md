@@ -32,6 +32,27 @@ OS-backed `JvmSecureIdentityStore` and `PeerAuthorizationPolicy.PinnedOnly` with
 independently verified fingerprints; see the [security model](../security/model.md).
 Encryption does not by itself establish the peer identity you intended to trust.
 
+## Console privacy
+
+Sample-owned console/logcat lines report message type and UTF-8 byte count,
+opaque `anon-…` peer/transfer aliases, fixed states, and error types/codes—not
+chat bodies, device names, SSIDs, file paths, or exception descriptions. SDK
+logger delegates omit free-form details rather than trusting regex redaction.
+Hashes support correlation; they do not make observations unlinkable. A local
+send result never establishes remote application processing.
+
+Chat, file selection, and error UI still show the operator their data. The CLI
+uses the displayed peer aliases in `connect`, `to`, `close`, and `sendfile`;
+legacy ID prefixes and exact names also work. Use `offers` for filenames and
+opaque `accept`/`reject` selectors. Explicit `info` output reveals local manual
+endpoints, and `diag export` prints its output path. Do not share those outputs
+unreviewed. Terminal control stripping prevents injection, **not** disclosure.
+
+This policy does not sanitize library-owned LAN/frame traces or guarantee that
+every field in a diagnostic export is private. Those are separate test-only
+channels: use synthetic data, synthetic test/session labels and review evidence
+before sharing it. Never copy tracing defaults into a production integration.
+
 ## Running samples
 
 Common build commands:

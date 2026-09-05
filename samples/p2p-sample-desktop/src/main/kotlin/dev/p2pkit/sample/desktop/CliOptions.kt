@@ -87,12 +87,12 @@ internal fun parseCliOptions(args: Array<String>): CliParseResult {
                     ?: return CliParseResult.Error("log file cannot be blank")
             }
             token.startsWith("-") || '=' in token ->
-                return CliParseResult.Error("unknown option '$token'")
+                return CliParseResult.Error("unknown option (value omitted)")
             else -> positional += token
         }
     }
     if (positional.size > 2) {
-        return CliParseResult.Error("too many positional arguments: ${positional.drop(2).joinToString()}")
+        return CliParseResult.Error("too many positional arguments (values omitted)")
     }
     return CliParseResult.Success(
         CliLaunchOptions(

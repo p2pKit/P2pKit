@@ -72,6 +72,9 @@ import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.sample.diagnostics.SampleConsole
+import dev.p2pkit.sample.diagnostics.consoleId
+import dev.p2pkit.sample.diagnostics.SampleConsoleLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pState
@@ -418,7 +421,7 @@ internal class DesktopP2pState(
         } catch (t: Throwable) {
             _isStarting.value = false
             _lifecycleError.value = "start failed: ${t.message ?: t::class.simpleName}"
-            System.err.println("[p2pkit ERROR] ${_lifecycleError.value}".sanitizedForTerminal())
+            System.err.println("[p2pkit ERROR] lifecycle failed: ${SampleConsole.failure(t)}")
             return
         }
         kit = newKit
@@ -426,8 +429,7 @@ internal class DesktopP2pState(
         _localPeerId.value = newKit.localPeerId.value
         diagnostics.localPeerId = newKit.localPeerId.value
         val startedLine =
-            "[p2pkit] kit started: deviceName=${newKit.localDeviceName} " +
-                "appId=${newKit.appId.value} peerId=${newKit.localPeerId.value} " +
+            "[p2pkit] kit started: peerId=${SampleConsole.identifier(newKit.localPeerId.value)} " +
                 "reconnect=${choice.describe()}"
         System.err.println(startedLine.sanitizedForTerminal())
 
@@ -507,7 +509,7 @@ internal class DesktopP2pState(
                     if (peer.id.value in sessionPeerIds) continue
                     if (pendingConnectPeerIds.contains(peer.id.value)) continue
                     if (myId < peer.id.value) {
-                        System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.name.sanitizedForTerminal()}")
+                        System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.consoleId}")
                         connect(peer)
                     }
                 }
@@ -537,7 +539,7 @@ internal class DesktopP2pState(
                 // AUDIT-2026-06 (A-G9-samples-desktop-ios-29): rethrows cancellation.
                 runCatchingCancellable { currentKit.connect(peer) }.onFailure {
                     System.err.println(
-                        "[p2pkit WARN] connect to ${peer.name} failed: ${it.message}".sanitizedForTerminal()
+                        "[p2pkit WARN] connect to ${peer.consoleId} failed: ${SampleConsole.failure(it)}"
                     )
                     appendSystemMessage("failed to connect to ${peer.name}: ${it.message ?: it::class.simpleName}")
                 }
@@ -583,14 +585,14 @@ internal class DesktopP2pState(
                     currentKit.networkProvisioning.createManualPeer(host, port, fingerprint)
                 }.getOrElse {
                     System.err.println(
-                        "[p2pkit WARN] manual createManualPeer failed: ${it.message}".sanitizedForTerminal()
+                        "[p2pkit WARN] manual createManualPeer failed: ${SampleConsole.failure(it)}"
                     )
                     appendSystemMessage("manual: createManualPeer failed: ${it.message ?: it::class.simpleName}")
                     return@launch
                 }
                 runCatchingCancellable { currentKit.connect(synthetic) }.onFailure {
                     System.err.println(
-                        "[p2pkit WARN] manual connect failed: ${it.message}".sanitizedForTerminal()
+                        "[p2pkit WARN] manual connect failed: ${SampleConsole.failure(it)}"
                     )
                     appendSystemMessage("manual: connect to $host:$port failed: ${it.message ?: it::class.simpleName}")
                 }
@@ -610,7 +612,7 @@ internal class DesktopP2pState(
         scope.launch {
             runCatchingCancellable { target.close() }.onFailure {
                 System.err.println(
-                    "[p2pkit WARN] close session to ${target.peer.name} failed: ${it.message}".sanitizedForTerminal()
+                    "[p2pkit WARN] close session to ${target.peer.consoleId} failed: ${SampleConsole.failure(it)}"
                 )
                 appendSystemMessage("close ${target.peer.name} failed: ${it.message ?: it::class.simpleName}")
             }
@@ -666,10 +668,7 @@ internal class DesktopP2pState(
                 target = target
             )
         )
-        System.err.println(
-            "[p2pkit] room: ${if (target is SendTarget.All) "broadcast" else "targeted"} " +
-                "→ ${recipients.size} peer(s): ${trimmed.take(60)}"
-        )
+        System.err.println(SampleConsole.sendingText(recipients.size, trimmed.toByteArray().size.toLong()))
 
         for (session in recipients) {
             val connectionId = diagnostics.connectionIdFor(session.peer.id.value)
@@ -716,7 +715,7 @@ internal class DesktopP2pState(
                             )
                         )
                         System.err.println(
-                            "[p2pkit WARN] send to ${session.peer.name} failed: ${it.message}".sanitizedForTerminal()
+                            "[p2pkit WARN] send to ${session.peer.consoleId} failed: ${SampleConsole.failure(it)}"
                         )
                         appendSystemMessage("send to ${session.peer.name} failed: ${it.message ?: it::class.simpleName}")
                     }
@@ -734,7 +733,7 @@ internal class DesktopP2pState(
                         .onSuccess { _advertising.value = false }
                         .onFailure {
                             System.err.println(
-                                "[p2pkit WARN] stopAdvertising failed: ${it.message}".sanitizedForTerminal()
+                                "[p2pkit WARN] stopAdvertising failed: ${SampleConsole.failure(it)}"
                             )
                         }
                 } else {
@@ -742,7 +741,7 @@ internal class DesktopP2pState(
                         .onSuccess { _advertising.value = true }
                         .onFailure {
                             System.err.println(
-                                "[p2pkit WARN] startAdvertising failed: ${it.message}".sanitizedForTerminal()
+                                "[p2pkit WARN] startAdvertising failed: ${SampleConsole.failure(it)}"
                             )
                         }
                 }
@@ -760,7 +759,7 @@ internal class DesktopP2pState(
                         .onSuccess { _discovering.value = false }
                         .onFailure {
                             System.err.println(
-                                "[p2pkit WARN] stopDiscovery failed: ${it.message}".sanitizedForTerminal()
+                                "[p2pkit WARN] stopDiscovery failed: ${SampleConsole.failure(it)}"
                             )
                         }
                 } else {
@@ -768,7 +767,7 @@ internal class DesktopP2pState(
                         .onSuccess { _discovering.value = true }
                         .onFailure {
                             System.err.println(
-                                "[p2pkit WARN] startDiscovery failed: ${it.message}".sanitizedForTerminal()
+                                "[p2pkit WARN] startDiscovery failed: ${SampleConsole.failure(it)}"
                             )
                         }
                 }
@@ -821,7 +820,7 @@ internal class DesktopP2pState(
                     _cleanupPending.value = true
                     _lifecycleError.value = "stop failed: ${it.message ?: it::class.simpleName}"
                     appendSystemMessage(_lifecycleError.value!!)
-                    System.err.println("[p2pkit ERROR] ${_lifecycleError.value}".sanitizedForTerminal())
+                    System.err.println("[p2pkit ERROR] stop failed: ${SampleConsole.failure(it)}")
                 }.onSuccess {
                     if (kit === toStop) kit = null
                     _cleanupPending.value = false
@@ -877,7 +876,7 @@ internal class DesktopP2pState(
             val transfer = runCatchingCancellable { session.sendFile(file) }
                 .getOrElse {
                     System.err.println(
-                        "[p2pkit WARN] sendFile failed: ${it.message}".sanitizedForTerminal()
+                        "[p2pkit WARN] sendFile failed: ${SampleConsole.failure(it)}"
                     )
                     appendSystemMessage("send file '${file.name}' failed: ${it.message ?: it::class.simpleName}")
                     return@launch
@@ -1323,7 +1322,7 @@ internal class DesktopP2pState(
 
     // --- helpers -----------------------------------------------------------
 
-    private fun reconcileSessions(current: List<P2pSession>, scope: CoroutineScope) {
+    internal fun reconcileSessions(current: List<P2pSession>, scope: CoroutineScope) {
         val currentIds = current.map { it.id }.toSet()
 
         val droppedIds = sessionJobs.keys.toList().filter { it !in currentIds }
@@ -1342,7 +1341,7 @@ internal class DesktopP2pState(
                 connectedSessions.remove(removed)
                 targetedPeerIds.remove(removed.peer.id.value)
                 appendSystemMessage("disconnected from ${removed.peer.name}")
-                System.err.println("[p2pkit] room: session removed ${removed.peer.name.sanitizedForTerminal()}")
+                System.err.println("[p2pkit] room: session removed ${removed.peer.consoleId}")
             }
         }
 
@@ -1355,11 +1354,10 @@ internal class DesktopP2pState(
             )
             connectedSessions.add(session)
             appendSystemMessage("connected to ${session.peer.name}")
-            System.err.println("[p2pkit] room: session added ${session.peer.name.sanitizedForTerminal()}")
+            System.err.println("[p2pkit] room: session added ${session.peer.consoleId}")
             val jobs = mutableListOf<Job>()
             jobs += scope.launch {
                 session.incoming.collect { msg ->
-                    System.err.println("[p2pkit] room: incoming from ${session.peer.name.sanitizedForTerminal()}")
                     // AUDIT-2026-06 (B-G9-samples-desktop-ios-18): keep a size-only
                     // summary of Binary payloads instead of retaining the bytes in
                     // history.
@@ -1371,6 +1369,9 @@ internal class DesktopP2pState(
                         is P2pMessage.Text -> msg.value.toByteArray().size.toLong()
                         is P2pMessage.Binary -> msg.bytes.size.toLong()
                     }
+                    System.err.println(
+                        SampleConsole.received(session.peer.id.value, msg is P2pMessage.Text, payloadSize)
+                    )
                     diagnostics.recorder.record(
                         DiagnosticRecord(
                             peerId = session.peer.id.value,
@@ -1408,7 +1409,7 @@ internal class DesktopP2pState(
             jobs += scope.launch {
                 var previous: String? = null
                 session.state.collect { st ->
-                    System.err.println("[p2pkit] session ${session.peer.name.sanitizedForTerminal()} → $st")
+                    System.err.println("[p2pkit] session ${session.peer.consoleId} → $st")
                     diagnostics.connection(
                         session.id,
                         session.peer.id.value,
@@ -1590,29 +1591,10 @@ private fun ReconnectChoice.describe(): String = when (this) {
  * Logger that mirrors output to stderr AND to the sample's in-app log strip
  * for visual diagnostics.
  */
-private class TailLogger(private val state: DesktopP2pState) : P2pLogger {
-    override fun debug(message: String) {
-        // Debug is too chatty for stderr; only echo to the in-app strip.
-        state.recordLog("D", message)
-    }
-    override fun info(message: String) {
-        val safe = message.sanitizedForTerminal()
-        System.err.println("[p2pkit] $safe")
-        state.recordLog("I", safe)
-    }
-    override fun warn(message: String, throwable: Throwable?) {
-        val rendered = (if (throwable != null) "$message (${throwable.message})" else message)
-            .sanitizedForTerminal()
-        System.err.println("[p2pkit WARN] $rendered")
-        state.recordLog("W", rendered)
-    }
-    override fun error(message: String, throwable: Throwable?) {
-        val rendered = (if (throwable != null) "$message (${throwable.message})" else message)
-            .sanitizedForTerminal()
-        System.err.println("[p2pkit ERROR] $rendered")
-        state.recordLog("E", rendered)
-    }
-}
+internal class TailLogger(state: DesktopP2pState) : P2pLogger by SampleConsoleLogger({ level, line ->
+    if (level != "D") System.err.println("[p2pkit $level] $line")
+    state.recordLog(level, line)
+})
 
 // =====================================================================
 // Setup screen
