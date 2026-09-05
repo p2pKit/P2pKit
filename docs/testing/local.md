@@ -168,6 +168,14 @@ each limit before parsing: marker POMs 64 KiB, module metadata 1 MiB, and
 attestation results 8 MiB. The dependency-policy tests cover exact limits,
 oversized/growing files, bounded reads, and stream cleanup on failure.
 
+Dependency submission explicitly passes `--dependency-verification strict`:
+the pinned Gradle action otherwise disables verification for its entire build.
+The injected graph plugin's JAR, module metadata, and POM are checksum-listed
+after detached-signature review. When updating that action, review its injected
+tooling as well; never disable verification to accommodate new artifacts.
+`scripts/tests/release-workflow-test.sh` enforces the strict argument policy.
+Local graph generation is not evidence of successful GitHub API submission.
+
 When a direct artifact lookup finds no file, the reviewer can use that
 component's checksum-listed, detached-signed `.module` as a locator. It accepts
 only an unambiguous local file or sibling-version file within the same

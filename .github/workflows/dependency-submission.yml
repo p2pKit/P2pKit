@@ -25,3 +25,6 @@ jobs:
         uses: gradle/actions/dependency-submission@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           gradle-home-cache-excludes: caches/build-cache-1
+          # The action defaults to verification=off. Keep the reviewed artifact
+          # allowlist effective, including its injected dependency-graph plugin.
+          additional-arguments: --dependency-verification strict

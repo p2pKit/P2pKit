@@ -22,6 +22,7 @@ RELEASE_METADATA_CHECK="$ROOT/scripts/check-release-metadata.sh"
 [[ -f "$DESKTOP_WORKFLOW" ]] || { echo "FATAL: Desktop cross-host workflow is missing" >&2; exit 1; }
 ruby "$ROOT/scripts/tests/check-workflow-checkout-policy-test.rb"
 ruby "$ROOT/scripts/check-workflow-checkout-policy.rb"
+ruby "$ROOT/scripts/tests/check-dependency-submission-policy-test.rb"
 while IFS= read -r -d '' workflow; do
     ruby -e 'require "yaml"; YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)' "$workflow"
     while IFS= read -r use; do
