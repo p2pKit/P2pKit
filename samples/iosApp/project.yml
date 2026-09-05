@@ -21,6 +21,7 @@ targets:
     sources:
       - P2pKitSampleApp.swift
       - ContentView.swift
+      - IosLanDiagnosticsLease.swift
       - SampleConsole.swift
       - TestDiagnostics.swift
     info:

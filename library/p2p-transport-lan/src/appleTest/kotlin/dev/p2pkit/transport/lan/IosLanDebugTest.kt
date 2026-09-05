@@ -52,6 +52,18 @@ class IosLanDebugTest {
     }
 
     @Test
+    fun disablingHistoryImmediatelyClearsPreviouslyRetainedLines() {
+        IosLanDebug.retainHistory = true
+        IosLanDebug.log("peer", "retained-before-stop")
+        assertTrue(IosLanDebug.events.replayCache.any { "retained-before-stop" in it })
+
+        IosLanDebug.retainHistory = false
+        assertTrue(IosLanDebug.events.replayCache.isEmpty())
+        IosLanDebug.retainHistory = true
+        assertTrue(IosLanDebug.events.replayCache.isEmpty(), "A new run must not revive old history")
+    }
+
+    @Test
     fun disablingReplayDoesNotDropDeliveryToAnActiveSubscriber() = runBlocking {
         val marker = "live-diagnostic"
         val subscribed = CompletableDeferred<Unit>()

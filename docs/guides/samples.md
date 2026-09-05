@@ -59,6 +59,15 @@ every field in a diagnostic export is private. Those are separate test-only
 channels: use synthetic data, synthetic test/session labels and review evidence
 before sharing it. Never copy tracing defaults into a production integration.
 
+The iOS sample enables LAN console mirroring only in **Debug**. Its scoped lease
+retains up to 200 in-app diagnostic lines in both configurations so the startup
+permission probe can see early events. Stop (including failed teardown) and
+create/start failures release that opt-in; the last overlapping owner restores
+the host's previous settings and clears replay if retention was previously off.
+Release builds never change the host's console-mirror setting. The on-screen
+log and structured diagnostic recorder remain available; they are not erased by
+releasing the library's replay buffer.
+
 ## Running samples
 
 Common build commands:

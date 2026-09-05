@@ -48,7 +48,7 @@ public object IosLanDebug {
      * only way to tell whether a stuck button or a stuck send is the
      * upstream problem.
      *
-     * Side effect: also `println`s the line with a `p2pkit:` prefix.
+     * When [mirrorToConsole] is enabled, also `println`s the line with a `p2pkit:` prefix.
      * `println()` from Kotlin/Native on iOS goes through the unified
      * logging system, so the line appears in Xcode's debug console
      * (running from Xcode) and in Console.app (any device, filter on
@@ -80,7 +80,13 @@ public object IosLanDebug {
      * Retain up to 200 recent lines for late subscribers. Disabled by default
      * so a release process does not keep peer-controlled diagnostics merely
      * because console mirroring is off; diagnostic UIs may opt in explicitly.
+     * Setting this to false immediately clears replay without affecting
+     * delivery to active collectors.
      */
     @kotlin.concurrent.Volatile
     public var retainHistory: Boolean = false
+        set(value) {
+            field = value
+            if (!value) _events.resetReplayCache()
+        }
 }

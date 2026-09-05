@@ -110,6 +110,7 @@ struct ContentView: View {
     @State private var debugLogTask: Task<Void, Never>?
     @State private var permissionCheckTask: Task<Void, Never>?
     @State private var frameTraceLease: FrameTraceLease?
+    @State private var lanDiagnosticsLease: IosLanDiagnosticsLease?
 
     // AUDIT-2026-06 (A-G9-samples-desktop-ios-09): per-session and
     // per-transfer collector Tasks are tracked by id so stop() and
@@ -785,7 +786,13 @@ struct ContentView: View {
         }
 
         isStarting = true
-        defer { isStarting = false }
+        var startupCompleted = false
+        defer {
+            isStarting = false
+            // Release even when create/start or the SDK's rollback fails.
+            // Retaining a kit for retry does not require global tracing.
+            if !startupCompleted { releaseSampleTracing() }
+        }
         errorBanner = nil
         status = "Starting..."
         debug = ""
@@ -804,17 +811,14 @@ struct ContentView: View {
         probeEpochSeen = false
         diag("ui", "Start: cleared local state, building kit")
 
-        // Console mirror is opt-in since the audit fix (release builds no
-        // longer println every transport event); the sample is a diagnostic
-        // harness, so turn it on for Console.app / Xcode-console capture.
-        IosLanDebug.shared.mirrorToConsole = true
-        IosLanDebug.shared.retainHistory = true
+        releaseSampleTracing()
+        // The lease mirrors only in Debug and restores settings on teardown.
+        // Bounded in-app replay remains available in both configurations.
+        lanDiagnosticsLease = IosLanDiagnosticsLease.acquire()
 
-        // Decoded frame-type trace (Issue #2/#3). With its default sink, each
-        // TX/RX frame line (PING/PONG/DATA/FILE_*) prints "P2pKitFRAME …" to the
-        // unified log → Xcode console / Console.app (filter "P2pKitFRAME")
-        // and into the owner-scoped in-app diagnostic recorder below.
-        frameTraceLease?.release()
+        // Decoded frame-type trace (Issue #2/#3). Each
+        // TX/RX frame line (PING/PONG/DATA/FILE_*) enters the in-app timeline
+        // and recorder. The LAN lease mirrors that timeline only in Debug.
         frameTraceLease = FrameTrace.shared.installSink(enabled: true) { line in
             IosLanDebug.shared.log(tag: "frame", message: line)
             Task { @MainActor in
@@ -883,8 +887,6 @@ struct ContentView: View {
                 }
             }
         } catch {
-            frameTraceLease?.release()
-            frameTraceLease = nil
             status = "Create failed: \(error.localizedDescription)"
             errorBanner = "Could not load the secure local identity: \(error.localizedDescription)"
             diag("kit", "create FAILED: \(SampleConsole.failure(error))")
@@ -920,11 +922,8 @@ struct ContentView: View {
             errorBanner = "Failed to start: \(error.localizedDescription)"
             do {
                 try await built.stop()
-                frameTraceLease?.release()
-                frameTraceLease = nil
                 diagnostics.setLocalPeerId(nil)
                 self.kit = nil
-                debugLogTask?.cancel()
             } catch let cleanupError {
                 // Keep the only owner and the Stop affordance. Dropping this
                 // reference would allow a second kit to overlap live SDK
@@ -995,6 +994,7 @@ struct ContentView: View {
                 self.errorBanner = Self.localNetworkHint
             }
         }
+        startupCompleted = true
     }
 
     @MainActor
@@ -1978,7 +1978,10 @@ struct ContentView: View {
             return
         }
         isStopping = true
-        defer { isStopping = false }
+        defer {
+            isStopping = false
+            releaseSampleTracing()
+        }
         status = "Stopping..."
         diagnostics.record(TestDiagnosticRecord(
             category: "discovery",
@@ -1988,7 +1991,6 @@ struct ContentView: View {
 
         pollTask?.cancel()
         incomingSessionsTask?.cancel()
-        debugLogTask?.cancel()
         permissionCheckTask?.cancel()
         // AUDIT-2026-06 (A-G9-samples-desktop-ios-09): also cancel the
         // per-session message/file collectors and per-transfer watchers —
@@ -2019,8 +2021,6 @@ struct ContentView: View {
         // file looking complete.
         transferWatchTasks.values.forEach { $0.cancel() }
         transferWatchTasks = [:]
-        frameTraceLease?.release()
-        frameTraceLease = nil
         diagnostics.setLocalPeerId(nil)
         kit = nil
         peers = []
@@ -2043,6 +2043,16 @@ struct ContentView: View {
     }
 
     // MARK: - Helpers
+
+    @MainActor
+    private func releaseSampleTracing() {
+        frameTraceLease?.release()
+        frameTraceLease = nil
+        debugLogTask?.cancel()
+        debugLogTask = nil
+        lanDiagnosticsLease?.release()
+        lanDiagnosticsLease = nil
+    }
 
     @MainActor
     private func appendMessage(_ text: String, kind: MessageRow.Kind) {
