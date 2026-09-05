@@ -20,6 +20,9 @@ record produced during the 0.7 remediation is preserved in
   LAN idle teardown attempts watcher retirement and cancels queued rebind work
   even if native handle cleanup fails. Multicast release is attempted after
   the JmDNS handle closes, independently of watcher unregistration success.
+- JVM/Android rebind probes and lock acquisition remain cancellable; canceled
+  pre-transaction work cannot replace a newer binding. Native close/recreate is
+  protected from cancellation only after lifecycle ownership is acquired.
 - Restartable low-level data transports use `stop()` to return to an idle state;
   permanent cleanup is owned by the enclosing kit lifecycle.
 - JVM/Android LAN advertisements require a bound TCP port. Starting advertising

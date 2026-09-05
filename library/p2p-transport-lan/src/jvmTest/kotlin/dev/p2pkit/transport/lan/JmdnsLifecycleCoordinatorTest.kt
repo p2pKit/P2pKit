@@ -136,6 +136,10 @@ class JmdnsLifecycleCoordinatorTest {
         @Volatile
         var observedNetworkGate: CountDownLatch? = null
 
+        /** Opt in to a result captured before a slow probe returns; existing tests read after the gate. */
+        @Volatile
+        var captureObservedNetworkBeforeGate = false
+
         val observedNetworkEntered = LinkedBlockingQueue<Unit>()
 
         @Volatile
@@ -333,9 +337,12 @@ class JmdnsLifecycleCoordinatorTest {
 
         override fun observedNetwork(): FakeNet? {
             observedNetworkThread = Thread.currentThread().name
+            val captureBeforeGate = captureObservedNetworkBeforeGate
+            val captured = observed
+            val gate = observedNetworkGate
             observedNetworkEntered.put(Unit)
-            observedNetworkGate?.let { awaitNonCancellableGate(it, "observedNetworkGate") }
-            return observed
+            gate?.let { awaitNonCancellableGate(it, "observedNetworkGate") }
+            return if (captureBeforeGate) captured else observed
         }
 
         override fun observedDefaultNetwork(): FakeNet? = observedDefault
@@ -1651,6 +1658,82 @@ class JmdnsLifecycleCoordinatorTest {
     }
 
     @Test
+    fun forcedRebindSurvivesCancellationOfItsPreTransactionProbe() {
+        val net = FakeNet("wifi0")
+        val ops = FakeOps().apply {
+            current = net
+            observed = net
+            observedDefault = net
+        }
+        coordinatorTest(ops) { coordinator, scope ->
+            coordinator.startDiscovery()
+            val gate = CountDownLatch(1)
+            var oldRebind: Job? = null
+            try {
+                ops.observedNetworkGate = gate
+                coordinator.scheduleRebind("address change requiring a forced refresh", force = true)
+                awaitBlockingCall(ops.observedNetworkEntered, "forced rebind sample")
+                oldRebind = scope.coroutineContext[Job]!!.children.single()
+
+                ops.observedNetworkGate = null
+                coordinator.scheduleRebind("ordinary callback overtakes the forced sample")
+                withTimeout(5_000) { coordinator.awaitPendingRebindForTest() }
+                assertTrue(oldRebind.isCancelled)
+                gate.countDown()
+                withTimeout(5_000) { oldRebind.join() }
+
+                assertEquals(2, ops.createCalls.get(), "the cancelled probe must not consume the force request")
+                assertEquals(1, ops.closed.size)
+                assertEquals(2, ops.listenersAdded.size)
+                assertTrue(ops.listenersAdded.last().active)
+            } finally {
+                gate.countDown()
+                ops.observedNetworkGate = null
+                withTimeout(5_000) { oldRebind?.join() }
+                coordinator.stopDiscovery()
+            }
+        }
+    }
+
+    @Test
+    fun forcedCallbackDuringOwnedRebindRemainsPendingForTheNextTransaction() {
+        val net = FakeNet("wifi0")
+        val ops = FakeOps().apply {
+            current = net
+            observed = net
+            observedDefault = net
+        }
+        coordinatorTest(ops) { coordinator, scope ->
+            coordinator.startDiscovery()
+            awaitCreateEntered(ops)
+            val gate = CountDownLatch(1)
+            var oldRebind: Job? = null
+            try {
+                ops.createGate = gate
+                coordinator.scheduleRebind("first forced refresh", force = true)
+                awaitCreateEntered(ops)
+                oldRebind = scope.coroutineContext[Job]!!.children.single()
+
+                coordinator.scheduleRebind("another address change during native create", force = true)
+                assertTrue(oldRebind.isCancelled)
+                gate.countDown()
+                withTimeout(5_000) { coordinator.awaitPendingRebindForTest() }
+                withTimeout(5_000) { oldRebind.join() }
+
+                assertEquals(3, ops.createCalls.get(), "the owned rebind must not steal a later force request")
+                assertEquals(2, ops.closed.size)
+                assertEquals(3, ops.listenersAdded.size)
+                assertTrue(ops.listenersAdded.last().active)
+            } finally {
+                gate.countDown()
+                ops.createGate = null
+                withTimeout(5_000) { oldRebind?.join() }
+                coordinator.stopDiscovery()
+            }
+        }
+    }
+
+    @Test
     fun defaultNetworkSignalTriggersRebindButNeverBecomesBindTarget() {
         val wifi = FakeNet("wifi0")
         val cellularA = FakeNet("cellular-a")
@@ -1949,6 +2032,120 @@ class JmdnsLifecycleCoordinatorTest {
                 assertFalse(ops.watcherActive, "stop must not queue behind an IO-side network probe")
             } finally {
                 probeGate.countDown()
+            }
+        }
+    }
+
+    @Test
+    fun cancelledNetworkSampleCannotReplaceAStoppedAndRestartedBinding() {
+        val wifiA = FakeNet("wifi-a")
+        val wifiB = FakeNet("wifi-b-still-up")
+        val wifiC = FakeNet("wifi-c-preferred")
+        val ops = FakeOps().apply {
+            current = wifiA
+            observed = wifiA
+            captureObservedNetworkBeforeGate = true
+        }
+        coordinatorTest(ops) { coordinator, scope ->
+            coordinator.startAdvertising(localPeer)
+            coordinator.startDiscovery()
+            val gate = CountDownLatch(1)
+            var oldRebind: Job? = null
+            try {
+                ops.current = wifiB
+                ops.observed = wifiB
+                ops.observedNetworkGate = gate
+                val oldLease = ops.watcherLeases.single()
+                coordinator.scheduleRebind("old topology sample", admit = { oldLease.active })
+                awaitBlockingCall(ops.observedNetworkEntered, "old observedNetwork sample")
+                oldRebind = scope.coroutineContext[Job]!!.children.single()
+
+                withTimeout(1_000) {
+                    coordinator.stopAdvertising()
+                    coordinator.stopDiscovery()
+                }
+                assertTrue(oldRebind.isCancelled)
+                assertFalse(oldLease.active)
+
+                ops.current = wifiC
+                ops.observed = wifiC
+                ops.observedNetworkGate = null
+                coordinator.startAdvertising(localPeer)
+                coordinator.startDiscovery()
+                val fresh = ops.created.last()
+                assertEquals(listOf<FakeNet?>(wifiA, wifiC), ops.createdTargets)
+
+                gate.countDown()
+                withTimeout(5_000) { oldRebind.join() }
+
+                assertEquals(
+                    listOf<FakeNet?>(wifiA, wifiC), ops.createdTargets,
+                    "a cancelled old sample must not rebind the restarted features onto B"
+                )
+                assertFalse(fresh.closed, "the current binding must survive a retired sample")
+                assertEquals(2, ops.registrations.size)
+                assertEquals(2, ops.listenersAdded.size)
+                assertTrue(ops.listenersAdded.last().active)
+                assertTrue(ops.watcherLeases.last().active)
+            } finally {
+                gate.countDown()
+                ops.observedNetworkGate = null
+                withTimeout(5_000) { oldRebind?.join() }
+                coordinator.stopAdvertising()
+                coordinator.stopDiscovery()
+            }
+        }
+    }
+
+    @Test
+    fun supersededNetworkSampleCannotOverwriteTheNewerRebind() {
+        val wifiA = FakeNet("wifi-a")
+        val wifiB = FakeNet("wifi-b-still-up")
+        val wifiC = FakeNet("wifi-c-preferred")
+        val ops = FakeOps().apply {
+            current = wifiA
+            observed = wifiA
+            captureObservedNetworkBeforeGate = true
+        }
+        coordinatorTest(ops) { coordinator, scope ->
+            coordinator.startAdvertising(localPeer)
+            coordinator.startDiscovery()
+            val gate = CountDownLatch(1)
+            var oldRebind: Job? = null
+            try {
+                ops.current = wifiB
+                ops.observed = wifiB
+                ops.observedNetworkGate = gate
+                coordinator.scheduleRebind("slow sample of B")
+                awaitBlockingCall(ops.observedNetworkEntered, "old observedNetwork sample")
+                oldRebind = scope.coroutineContext[Job]!!.children.single()
+
+                ops.current = wifiC
+                ops.observed = wifiC
+                ops.observedNetworkGate = null
+                coordinator.scheduleRebind("new sample of C overtakes B")
+                withTimeout(5_000) { coordinator.awaitPendingRebindForTest() }
+                assertTrue(oldRebind.isCancelled)
+                assertEquals(listOf<FakeNet?>(wifiA, wifiC), ops.createdTargets)
+                val fresh = ops.created.last()
+
+                gate.countDown()
+                withTimeout(5_000) { oldRebind.join() }
+
+                assertEquals(
+                    listOf<FakeNet?>(wifiA, wifiC), ops.createdTargets,
+                    "a superseded pre-transaction sample must not overwrite the newer binding"
+                )
+                assertFalse(fresh.closed)
+                assertEquals(2, ops.registrations.size)
+                assertEquals(2, ops.listenersAdded.size)
+                assertTrue(ops.listenersAdded.last().active)
+            } finally {
+                gate.countDown()
+                ops.observedNetworkGate = null
+                withTimeout(5_000) { oldRebind?.join() }
+                coordinator.stopAdvertising()
+                coordinator.stopDiscovery()
             }
         }
     }

@@ -238,12 +238,12 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
 
     /**
      * The most recent debounced rebind job. A superseding callback may cancel
-     * its debounce, but [rebindNow] makes an already-started ownership
+     * its debounce, network probe, or wait for [lock], but [rebindNow] makes an already-started ownership
      * transaction non-cancellable before releasing [lock].
      */
     private var pendingRebindJob: Job? = null
 
-    /** Preserve a same-network address-change request while callbacks coalesce. */
+    /** Preserve a same-network address-change request until a live transaction claims it. */
     private var pendingForcedRebind = false
 
     /**
@@ -486,12 +486,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
                 ops.logDebug("scheduleRebind: $reason (force=$force debounce=${rebindDebounceMillis}ms)")
                 pendingRebindJob = rebindScope.launch {
                     delay(rebindDebounceMillis)
-                    val effectiveForce = scheduleLock.withLock {
-                        val requested = pendingForcedRebind
-                        pendingForcedRebind = false
-                        requested
-                    }
-                    rebindNow(reason, effectiveForce)
+                    rebindNow(reason, consumePendingForce = true)
                 }
             }
         }
@@ -516,15 +511,29 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
      *     case; the authoritative platform selector can still supply an
      *     explicit AP/tether bind target after the debounce window.
      */
-    private suspend fun rebindNow(reason: String, force: Boolean = false) {
-        // A superseding callback cancels the older pending job to reset the
-        // debounce window. Once that job has entered the ownership
-        // transaction, cancellation must not strand a closed handle, an
-        // ambiguously installed token, or a missing replacement. The shared
-        // lifecycle lock still serializes the superseding transaction.
-        withContext(NonCancellable) {
-            val snapshot = sampleObservedNetwork()
-            lock.withLock { rebindNowLocked(reason, force, snapshot) }
+    private suspend fun rebindNow(reason: String, consumePendingForce: Boolean = false) {
+        // Sampling does not own native resources. If stop or a newer callback
+        // cancels this job, its old sample must never replace a new binding.
+        // A blocking probe may still finish on IO, but prompt cancellation
+        // rejects its result before the ownership transaction begins.
+        val snapshot = sampleObservedNetwork()
+        lock.withLock {
+            val force = scheduleLock.withLock {
+                // Check cancellation and claim coalesced force atomically with
+                // callback supersession. A cancelled probe/waiter must leave
+                // force for its replacement; a retry must not consume it.
+                // Mutex acquisition can complete without checking cancellation.
+                currentCoroutineContext().ensureActive()
+                if (consumePendingForce) {
+                    pendingForcedRebind.also { pendingForcedRebind = false }
+                } else {
+                    false
+                }
+            }
+            // Once native close/recreate begins, cancellation must not strand
+            // a closed handle, ambiguous token, or missing replacement. Stop
+            // and superseding transactions remain serialized behind this lock.
+            withContext(NonCancellable) { rebindNowLocked(reason, force, snapshot) }
         }
     }
 
@@ -534,8 +543,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
         snapshot: JmdnsNetworkSnapshot<N>
     ) {
         // Intent, not token/handle presence, owns activity through a failed
-        // rebind. A cancelled rebind may finish a non-cancellable network sample
-        // after stop. Retained native callbacks can still report "active"
+        // rebind. Retained native callbacks can still report "active"
         // after failed unregistration, but no idle work may repopulate the
         // cleared retry bookkeeping or restore a stopped feature.
         val hadAdvertising = advertisingIntent
