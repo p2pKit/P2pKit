@@ -72,7 +72,7 @@ class CliPairingTest {
 
     @OptIn(ExperimentalP2pApi::class)
     @Test
-    fun commandPinsRealTcpAndRechecksAnExistingSessionInsteadOfBypassingThePin() = runBlocking {
+    fun manualTcpPinsAuthenticateAndRejectStoredPinConflictsAndUnapprovedIncomingKeys() = runBlocking {
         val caller = createKit()
         val rejected = CompletableDeferred<Throwable>()
         val receiver = createKit(

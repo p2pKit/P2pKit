@@ -166,11 +166,9 @@ private fun runCli(appId: AppId, deviceName: String, reconnect: ReconnectPolicy)
     val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     val sessions = ConcurrentHashMap<String, P2pSession>()
     // Peers with an in-flight `kit.connect` initiated by either auto-mesh
-    // or the user-typed `connect <name>` command. Both paths consult this
-    // set before launching their own coroutine, so a manual tap during
-    // auto-mesh's in-flight window doesn't kick off a second concurrent
-    // connect attempt for the same peer. The SDK still dedupes either way,
-    // but the local guard keeps the CLI output one-clean per session.
+    // or a user command. Unpinned requests consult this set to suppress
+    // duplicate output. Explicitly pinned requests must still reach the SDK
+    // to join/verify an existing attempt against that caller's required pin.
     val pendingConnects: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     val pendingFileOffers = ConcurrentHashMap<SessionTransferKey, P2pFileOffer>()
     // AUDIT-2026-06 (B-G9-samples-desktop-ios-10): session ids whose collectors
@@ -338,8 +336,8 @@ private suspend fun repl(
     scope: CoroutineScope,
     sessions: ConcurrentHashMap<String, P2pSession>,
     // Shared with the auto-mesh loop in main() so both paths consult the
-    // same in-flight-connect set. The SDK dedupes either way, but routing
-    // both through the same gate keeps the CLI output clean.
+    // same in-flight-connect set. Explicit pins bypass the output-dedup guard,
+    // never the SDK's authentication check.
     pendingConnects: MutableSet<String>,
     // AUDIT-2026-06 (B-G9-samples-desktop-ios-10): shared wired-collector set,
     // see registerSession.
@@ -349,6 +347,26 @@ private suspend fun repl(
     discovering: StateLatch,
     autoMesh: MutableStateFlow<Boolean>
 ) {
+    val connectCommands = CliConnectCommands(
+        kit = p2p,
+        scope = scope,
+        sessions = sessions,
+        pendingConnects = pendingConnects,
+        onAttempt = { peer ->
+            CliDiagnostics.recorder.record(
+                DiagnosticRecord(
+                    peerId = peer.id.value,
+                    connectionId = CliDiagnostics.connectionIdFor(peer.id.value),
+                    category = "connection",
+                    eventName = DiagnosticEventNames.CONNECTION_ATTEMPTED,
+                    currentState = "connecting"
+                )
+            )
+        },
+        onConnected = { session ->
+            registerSession(session, scope, sessions, wiredSessionIds, pendingFileOffers)
+        }
+    )
     val reader = System.`in`.bufferedReader()
     while (true) {
         print("> ")
@@ -599,66 +617,7 @@ private suspend fun repl(
                 }
             }
 
-            "connect", "connect-pinned" -> {
-                val pin = if (cmd == "connect-pinned") parsePinnedConnect(p2p, arg) else null
-                if (cmd == "connect-pinned" && pin == null) {
-                    println(PINNED_CONNECT_USAGE)
-                    println("QR must be canonical and for this AppId; obtain it from the intended peer, not discovery.")
-                    continue
-                }
-                if (arg.isEmpty()) {
-                    println("usage: connect <peer-id-prefix-or-name>")
-                    continue
-                }
-                val peerMatches = matchingPeers(p2p, pin?.selector ?: arg)
-                if (peerMatches.isEmpty()) {
-                    println("no peer matching <input omitted>")
-                    continue
-                }
-                if (peerMatches.size > 1) {
-                    println("ambiguous peer <input omitted>: ${peerMatches.joinToString { "${it.consoleId}" }}")
-                    continue
-                }
-                val match = peerMatches.single()
-                val peerId = match.id.value
-                val existing = sessions[peerId]
-                if (pin == null && existing != null && existing.state.value == ConnectionState.Connected) {
-                    println("already connected to ${match.consoleId}")
-                    continue
-                }
-                if (!pendingConnects.add(peerId)) {
-                    println("already connecting to ${match.consoleId}")
-                    continue
-                }
-                scope.launch {
-                    try {
-                        CliDiagnostics.recorder.record(
-                            DiagnosticRecord(
-                                peerId = peerId,
-                                connectionId = CliDiagnostics.connectionIdFor(peerId),
-                                category = "connection",
-                                eventName = DiagnosticEventNames.CONNECTION_ATTEMPTED,
-                                currentState = "connecting"
-                            )
-                        )
-                        // Even an existing session must pass the explicit pin check.
-                        val session = if (pin != null) connectPinnedPeer(p2p, match, pin) else p2p.connect(match)
-                        // AUDIT-2026-06 (B-G9-samples-desktop-ios-10): for a peer in
-                        // Connecting/Handshaking/Reconnecting, connect() dedupes
-                        // onto the SAME session instance; registerSession skips
-                        // re-wiring collectors on an already-wired id so output
-                        // doesn't start printing twice.
-                        registerSession(session, scope, sessions, wiredSessionIds, pendingFileOffers)
-                        println("connected to ${session.peer.consoleId}")
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (e: Throwable) {
-                        System.err.println("connect failed: ${SampleConsole.failure(e)}")
-                    } finally {
-                        pendingConnects.remove(peerId)
-                    }
-                }
-            }
+            "connect", "connect-pinned" -> connectCommands.execute(cmd, arg)
 
             "send" -> {
                 if (arg.isEmpty()) {
@@ -1038,9 +997,6 @@ private fun printHelp() {
 private fun printPeer(peer: Peer) {
     println("  ${peer.consoleId}  [${peer.platform}]")
 }
-
-private fun matchingPeers(p2p: P2pKit, query: String): List<Peer> =
-    p2p.peers.value.filter { matches(it, query) }
 
 private fun matchingSessions(
     sessions: ConcurrentHashMap<String, P2pSession>,
