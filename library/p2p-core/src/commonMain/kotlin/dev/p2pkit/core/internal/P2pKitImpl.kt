@@ -798,7 +798,15 @@ internal class P2pKitImpl(
         private suspend fun fail(error: Throwable): Result<Unit> = withContext(NonCancellable) {
             val issues = rollbackDiscoveryOperation(featureName, attempted, stopTransport)
             if (!isLifecycleActive(generation)) {
-                val failure = lifecycleStoppedFailure().also { it.addDistinctSuppressed(error) }
+                val stoppedFailure = lifecycleStoppedFailure()
+                // Select cancellation as the primary outcome before linking
+                // evidence. Wrapping it here would let execute() suppress the
+                // wrapper back onto the same cancellation, creating a cycle.
+                val failure = if (error is CancellationException) {
+                    error.also { it.addDistinctSuppressed(stoppedFailure) }
+                } else {
+                    stoppedFailure.also { it.addDistinctSuppressed(error) }
+                }
                 if (issues.isNotEmpty()) {
                     failure.addSuppressed(cleanupError("terminal $featureName startup rollback", issues))
                 }

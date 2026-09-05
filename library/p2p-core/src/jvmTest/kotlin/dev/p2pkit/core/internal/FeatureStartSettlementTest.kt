@@ -23,6 +23,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
@@ -32,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -253,6 +255,90 @@ class FeatureStartSettlementTest {
         }
     }
 
+    @Test
+    fun advertisingCancellationAfterTerminalStopKeepsAcyclicEvidence() =
+        cancellationAfterTerminalStop(advertising = true, failLateCleanup = false)
+
+    @Test
+    fun discoveryCancellationAfterTerminalStopKeepsAcyclicEvidence() =
+        cancellationAfterTerminalStop(advertising = false, failLateCleanup = false)
+
+    @Test
+    fun advertisingCancellationAfterTerminalStopRetainsFailedLateCleanup() =
+        cancellationAfterTerminalStop(advertising = true, failLateCleanup = true)
+
+    @Test
+    fun discoveryCancellationAfterTerminalStopRetainsFailedLateCleanup() =
+        cancellationAfterTerminalStop(advertising = false, failLateCleanup = true)
+
+    private fun cancellationAfterTerminalStop(advertising: Boolean, failLateCleanup: Boolean) = runBlocking {
+        val transport = FailingFeatureTransport(
+            advertising,
+            cleanupFailureCalls = if (failLateCleanup) setOf(2) else emptySet()
+        ).apply {
+            failStart = false
+            gateStart = true
+            nonCancellableStart = true
+        }
+        val kit = createTestKit {
+            appId = AppId("feature-terminal-cancellation-test")
+            deviceName = "Terminal cancellation test"
+            peerIdStorage = InMemoryPeerIdStorage()
+            networkPathObserver = FakeNetworkPathObserver()
+            transports { register(FailingFeatureFactory(transport)) }
+        }
+        var operation: Job? = null
+        var observedFailure: Throwable? = null
+        try {
+            if (advertising) kit.startDiscovery() else kit.startAdvertising()
+            operation = launch {
+                try {
+                    kit.startFeature(advertising)
+                } catch (failure: Throwable) {
+                    observedFailure = failure
+                }
+            }
+            withTimeout(5_000) { transport.startEntered.await() }
+            kit.stop()
+            assertEquals(P2pState.Stopped, kit.state.value)
+            assertEquals(FeatureState.Idle, kit.featureState(advertising))
+            assertEquals(FeatureState.Idle, kit.featureState(!advertising))
+            assertEquals(1, transport.stopCalls.get(), "terminal stop owns the first cleanup")
+
+            val cancellation = CancellationException("caller canceled after terminal stop")
+            operation.cancel(cancellation)
+            // Return from the non-cancellable provider, so the core's explicit
+            // ensureActive throws this exact caller cancellation object.
+            transport.releaseStart.complete(Unit)
+            withTimeout(5_000) { operation.join() }
+
+            assertSame(cancellation, observedFailure)
+            assertAcyclicFailureGraph(cancellation)
+            assertTrue(cancellation.suppressedExceptions.any { it is IllegalStateException })
+            val cleanupFailures = cancellation.suppressedExceptions
+                .mapNotNull { it.cause as? CleanupAggregateException }
+            assertEquals(if (failLateCleanup) 1 else 0, cleanupFailures.size)
+            if (failLateCleanup) {
+                assertSame(transport.cleanupFailure, cleanupFailures.single().issues.single().cause)
+            }
+            assertEquals(2, transport.stopCalls.get(), "the late start owns exactly one compensation")
+            assertEquals(P2pState.Stopped, kit.state.value)
+            assertEquals(FeatureState.Idle, kit.featureState(advertising))
+            assertEquals(FeatureState.Idle, kit.featureState(!advertising))
+        } finally {
+            transport.releaseStart.complete(Unit)
+            operation?.cancelAndJoin()
+            kit.stop()
+        }
+    }
+
+    private fun assertAcyclicFailureGraph(failure: Throwable, ancestors: List<Throwable> = emptyList()) {
+        assertTrue(ancestors.none { it === failure }, "failure evidence must not contain an identity cycle")
+        val nextAncestors = ancestors + failure
+        failure.cause?.let { assertAcyclicFailureGraph(it, nextAncestors) }
+        failure.suppressedExceptions.forEach { assertAcyclicFailureGraph(it, nextAncestors) }
+    }
+
     private suspend fun P2pKit.startFeature(advertising: Boolean) {
         if (advertising) startAdvertising() else startDiscovery()
     }
@@ -272,6 +358,7 @@ class FeatureStartSettlementTest {
         val stopCalls = AtomicInteger()
         var failStart = true
         var gateStart = false
+        var nonCancellableStart = false
         var gateSecondStop = false
         val startEntered = CompletableDeferred<Unit>()
         val releaseStart = CompletableDeferred<Unit>()
@@ -297,7 +384,13 @@ class FeatureStartSettlementTest {
         private suspend fun start() {
             startCalls.incrementAndGet()
             startEntered.complete(Unit)
-            if (gateStart) releaseStart.await()
+            if (gateStart) {
+                if (nonCancellableStart) {
+                    withContext(NonCancellable) { releaseStart.await() }
+                } else {
+                    releaseStart.await()
+                }
+            }
             if (failStart) throw startFailure
         }
 
