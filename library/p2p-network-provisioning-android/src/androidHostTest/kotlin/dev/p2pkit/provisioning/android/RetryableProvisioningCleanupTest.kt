@@ -5,6 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class RetryableProvisioningCleanupTest {
@@ -190,6 +191,67 @@ class RetryableProvisioningCleanupTest {
         assertFalse(lease.claimLoss("network-a", canClaim = { false }, onClaim = {}))
         assertTrue(lease.rebind("network-b", canRebind = { true }, bind = { true }))
         assertEquals("network-b", lease.snapshot())
+    }
+
+    @Test
+    fun rejectedRebindCannotResurrectTheJoinWhileManagerCleanupIsPending() {
+        for (throws in listOf(false, true)) {
+            val lease = CurrentNetworkLease("network-a")
+            val owner = JoinCallbackOwner<Any>()
+            val handle = Any()
+            var bindAttempts = 0
+            var clearAttempts = 0
+            var unregisterAttempts = 0
+            var tokenReleases = 0
+            val cleanup = RetryableJoinCleanup(
+                clearProcessBinding = { clearAttempts += 1; true },
+                unregisterCallback = { unregisterAttempts += 1 },
+                releaseBindingToken = { tokenReleases += 1 },
+                report = {}
+            )
+            assertTrue(owner.claimInitial())
+            assertTrue(owner.install(handle))
+            assertTrue(cleanup.bindInitial { true })
+
+            assertFalse(
+                lease.rebind("network-b", canRebind = { owner.current() === handle }, bind = {
+                    cleanup.rebind {
+                        bindAttempts += 1
+                        if (throws) throw SecurityException("synthetic binding rejection")
+                        false
+                    }
+                })
+            )
+            // The wrapper emits `released` now. The manager may be waiting
+            // behind another OS acquisition, but a new onAvailable must not bind.
+            assertFalse(
+                lease.rebind("network-c", canRebind = { owner.current() === handle }, bind = {
+                    cleanup.rebind { bindAttempts += 1; true }
+                })
+            )
+            assertEquals(1, bindAttempts)
+            assertEquals("network-a", lease.snapshot())
+            assertEquals(0, clearAttempts, "notification is not a native cleanup acknowledgement")
+            assertSame(handle, owner.current(), "pre-delivery cancellation must still own the handle")
+
+            lease.close {
+                assertSame(handle, owner.closeAndTake())
+                cleanup.close()
+            }
+            assertEquals(1, clearAttempts)
+            assertEquals(1, unregisterAttempts)
+            assertEquals(1, tokenReleases)
+        }
+    }
+
+    @Test
+    fun rejectedRebindOwnershipIsTerminalWithoutCallingThePlatform() {
+        val lease = CurrentNetworkLease("network-a")
+        var bindAttempts = 0
+        assertFalse(lease.rebind("network-b", canRebind = { false }, bind = { bindAttempts += 1; true }))
+        assertFalse(lease.rebind("network-c", canRebind = { true }, bind = { bindAttempts += 1; true }))
+        assertEquals(0, bindAttempts)
+        assertEquals("network-a", lease.snapshot())
     }
 
     @Test

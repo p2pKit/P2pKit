@@ -173,10 +173,18 @@ internal class CurrentNetworkLease<T : Any>(initial: T) {
         canRebind: () -> Boolean,
         bind: () -> Boolean
     ): Boolean = synchronized(lock) {
-        if (terminal || !canRebind()) return@synchronized false
-        bind().also { rebound ->
-            if (rebound) current = next
+        if (terminal) return@synchronized false
+        val rebound = canRebind() && bind()
+        if (rebound) {
+            current = next
+        } else {
+            // JoinHandleImpl emits its terminal release on rejection. Seal
+            // this lease before that signal, not when manager cleanup finally
+            // gets the lifecycle lock. Keep the callback owner's handle intact
+            // so pre-delivery cancellation can still claim and clean it up.
+            terminal = true
         }
+        rebound
     }
 
     fun claimLoss(
