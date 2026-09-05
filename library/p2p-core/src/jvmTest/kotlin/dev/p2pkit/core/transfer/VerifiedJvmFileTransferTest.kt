@@ -84,7 +84,17 @@ class VerifiedJvmFileTransferTest {
                 val substitute = File(directory, "symlink-target.bin").also { it.writeBytes(changedPayload) }
                 Files.delete(file.toPath())
                 // A real symlink, not a path-stat mock. Creating it is required, never silently skipped.
-                Files.createSymbolicLink(file.toPath(), substitute.toPath())
+                try {
+                    Files.createSymbolicLink(file.toPath(), substitute.toPath())
+                } catch (cause: Exception) {
+                    throw AssertionError(
+                        "This regression requires a real symbolic link in java.io.tmpdir. " +
+                            "Use a symlink-capable filesystem (e.g. NTFS on Windows). Windows/JDK 17 " +
+                            "also requires a test-process token with SeCreateSymbolicLinkPrivilege; " +
+                            "Developer Mode alone is insufficient. See docs/testing/local.md.",
+                        cause
+                    )
+                }
             }
         }
     }

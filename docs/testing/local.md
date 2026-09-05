@@ -3,6 +3,14 @@
 Use JDK 17 and the checked-in Gradle wrapper. macOS with the configured Xcode
 toolchain is required for Apple targets and the complete release gate.
 
+JVM file-transfer regressions require real symbolic links in `java.io.tmpdir`.
+Use a symlink-capable temporary filesystem. On Windows/JDK 17, use NTFS and a
+test-process token with `SeCreateSymbolicLinkPrivilege` (for example, an elevated
+console for an account granted the **Create symbolic links** right). Developer
+Mode alone is insufficient with JDK 17. Missing prerequisites fail the required
+test with the original platform cause; they must not be treated as passed or
+silently skipped coverage.
+
 Fast project checks:
 
 ```bash

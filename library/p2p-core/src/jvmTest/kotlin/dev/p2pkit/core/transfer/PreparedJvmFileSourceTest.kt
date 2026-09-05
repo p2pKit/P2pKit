@@ -6,6 +6,7 @@ import kotlinx.io.readByteArray
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.nio.file.FileSystemException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import kotlin.test.Test
@@ -65,10 +66,23 @@ class PreparedJvmFileSourceTest {
         val file = File(directory, "source.bin").also { it.writeBytes(original) }
         val replacement = File(directory, "replacement.bin").also { it.writeBytes(substitute) }
         val prepared = prepareJvmFileSource(file)
+        val windows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
         prepared.open().use { source ->
-            Files.move(replacement.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            if (windows) {
+                // Classic JDK 17 FileInputStream does not share deletion on Windows.
+                // The same move must succeed after closing, ruling out an unrelated I/O failure.
+                assertFailsWith<FileSystemException> {
+                    Files.move(replacement.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                }
+                assertContentEquals(original, file.readBytes())
+                assertContentEquals(substitute, replacement.readBytes())
+            } else {
+                Files.move(replacement.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                assertContentEquals(substitute, file.readBytes())
+            }
             assertContentEquals(original, readAll(source))
         }
+        if (windows) Files.move(replacement.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
         assertFailsWith<PreparedSourceChangedException> { prepared.open() }
     }
 

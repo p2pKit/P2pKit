@@ -16,8 +16,8 @@ import java.io.FileInputStream
  * stream while the offer is pending, and reopen [file] only after acceptance.
  * Before sending any payload, the reopened descriptor's size and SHA-256 are
  * verified against preparation, then that same descriptor is rewound. A path
- * substitution or edit already present at reopen fails as `SOURCE_CHANGED`
- * without transmitting the substituted content. This adds a full read before
+ * substitution or edit whose changed content is present at reopen fails as
+ * `SOURCE_CHANGED` without transmitting it. This adds a full read before
  * transmission, within the configured `offerTimeoutMillis` source-open budget.
  * Verification reads at most the prepared length plus one byte, even if the
  * source grows. Slow or large-file reads may require a higher timeout.

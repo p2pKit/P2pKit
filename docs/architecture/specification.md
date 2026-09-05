@@ -58,11 +58,12 @@ record produced during the 0.7 remediation is preserved in
   parent directory; the public JDK exposes no equivalent directory barrier on
   Windows, so that platform cannot guarantee the rename survives sudden power
   loss.
-- JVM `sendFile(File)` retains no descriptor while its offer is pending. After
-  acceptance it rechecks the reopened descriptor's length and SHA-256 before any
-  payload is sent, then rewinds that same descriptor for streaming. This adds a
-  full read within the source-open `offerTimeoutMillis` budget. It is not an
-  immutable snapshot: in-place edits after verification can be transmitted
+- For authenticated SDK sessions, JVM `sendFile(File)` retains no descriptor
+  while its offer is pending. After acceptance it rechecks the reopened
+  descriptor's length and SHA-256 before sending any payload, then rewinds that
+  same descriptor for streaming. This adds a full read within the source-open
+  `offerTimeoutMillis` budget. It is not an immutable snapshot: in-place edits
+  after verification can be transmitted
   before the streaming digest check rejects them. Keep sources immutable when
   disclosure of concurrent edits is unacceptable.
 - Duplicate/retry handling is transfer-ID based and must not create multiple
