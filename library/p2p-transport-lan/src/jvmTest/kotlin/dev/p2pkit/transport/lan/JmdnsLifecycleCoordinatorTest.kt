@@ -84,6 +84,11 @@ class JmdnsLifecycleCoordinatorTest {
 
     private class FakeServiceToken(val localPeer: LocalPeerInfo, val info: ServiceInfo?)
 
+    private class FakeWatcherLease {
+        @Volatile
+        var active = true
+    }
+
     private class FakeOps(
         private val serviceInfoFactory: ((LocalPeerInfo) -> ServiceInfo)? = null
     ) : JmdnsLifecycleOps<FakeNet, FakeHandle> {
@@ -93,6 +98,7 @@ class JmdnsLifecycleCoordinatorTest {
 
         @Volatile
         var actualCreatedNetwork: FakeNet? = null
+        val closeAttempts = AtomicInteger(0)
         val closed = CopyOnWriteArrayList<FakeHandle>()
         val registrations = CopyOnWriteArrayList<Pair<FakeHandle, LocalPeerInfo>>()
         val serviceInfos = CopyOnWriteArrayList<ServiceInfo>()
@@ -104,7 +110,10 @@ class JmdnsLifecycleCoordinatorTest {
         val multicastReleaseAttempts = AtomicInteger(0)
         val multicastReleases = AtomicInteger(0)
         val watcherStopAttempts = AtomicInteger(0)
+        val watcherLeases = CopyOnWriteArrayList<FakeWatcherLease>()
         val warnings = CopyOnWriteArrayList<Pair<String, Throwable?>>()
+
+        private var watcherLease: FakeWatcherLease? = null
 
         @Volatile
         var lockHeld = false
@@ -231,6 +240,7 @@ class JmdnsLifecycleCoordinatorTest {
         }
 
         override fun closeHandleBlocking(handle: FakeHandle) {
+            closeAttempts.incrementAndGet()
             closeEntered.put(Unit)
             closeGate?.let { awaitNonCancellableGate(it, "closeGate") }
             if (closeFailuresRemaining.get() > 0) {
@@ -353,6 +363,12 @@ class JmdnsLifecycleCoordinatorTest {
         }
 
         override fun startNetworkWatcher(boundNetwork: FakeNet?) {
+            // Mirror Android's distinction between retained native callback
+            // ownership and retired publication rights after unregister failure.
+            if (watcherLease?.active == false) stopNetworkWatcher()
+            if (watcherLease == null) {
+                watcherLease = FakeWatcherLease().also { watcherLeases += it }
+            }
             watcherBoundNetwork = boundNetwork
             watcherActive = true
             if (failNextWatcherStart) {
@@ -363,12 +379,14 @@ class JmdnsLifecycleCoordinatorTest {
 
         override fun stopNetworkWatcher() {
             watcherStopAttempts.incrementAndGet()
+            watcherLease?.active = false
             if (failNextWatcherStop) {
                 failNextWatcherStop = false
                 throw IOException("injected watcher cleanup failure")
             }
             watcherActive = false
             watcherBoundNetwork = null
+            watcherLease = null
         }
 
         override fun logDebug(message: String) = Unit
@@ -543,22 +561,40 @@ class JmdnsLifecycleCoordinatorTest {
 
     @Test
     fun failedFallbackCloseRetainsOwnershipAndARepeatedStopRetriesCleanup() {
-        val ops = FakeOps().apply { current = FakeNet("wifi0") }
-        coordinatorTest(ops) { coordinator, _ ->
-            coordinator.startAdvertising(localPeer)
-            val original = ops.created.single()
-            ops.failNextUnregister = true
-            ops.closeFailuresRemaining.set(1)
+        for (advertising in listOf(true, false)) {
+            val ops = FakeOps().apply { current = FakeNet("wifi0") }
+            coordinatorTest(ops) { coordinator, _ ->
+                if (advertising) coordinator.startAdvertising(localPeer) else coordinator.startDiscovery()
+                suspend fun stop() {
+                    if (advertising) coordinator.stopAdvertising() else coordinator.stopDiscovery()
+                }
+                val original = ops.created.single()
+                ops.failNextUnregister = advertising
+                ops.failNextRemoveListener = !advertising
+                ops.closeFailuresRemaining.set(1)
 
-            assertFailsWith<IOException> { coordinator.stopAdvertising() }
-            assertFalse(original.closed)
-            assertTrue(ops.lockHeld, "live handle keeps multicast ownership after failed close")
-            assertTrue(ops.watcherActive, "watcher ownership is retained for retry")
+                try {
+                    assertFailsWith<IOException> { stop() }
+                    assertFalse(original.closed)
+                    assertEquals(1, ops.closeAttempts.get(), "do not repeat native close in one stop")
+                    assertTrue(ops.lockHeld, "live handle keeps multicast ownership after failed close")
+                    assertFalse(ops.watcherActive, "watcher retirement does not depend on native close")
+                    assertFalse(ops.watcherLeases.single().active)
+                    assertEquals(1, ops.watcherStopAttempts.get())
+                    assertEquals(0, ops.multicastReleaseAttempts.get())
 
-            coordinator.stopAdvertising()
-            assertTrue(original.closed)
-            assertFalse(ops.lockHeld)
-            assertFalse(ops.watcherActive)
+                    stop()
+                    assertTrue(original.closed)
+                    assertEquals(2, ops.closeAttempts.get())
+                    assertEquals(1, ops.closed.size)
+                    assertFalse(ops.lockHeld)
+                    assertFalse(ops.watcherActive)
+                    assertEquals(1, ops.watcherStopAttempts.get(), "retired watcher needs no second stop")
+                    assertEquals(1, ops.multicastReleases.get())
+                } finally {
+                    stop()
+                }
+            }
         }
     }
 
@@ -672,29 +708,157 @@ class JmdnsLifecycleCoordinatorTest {
     }
 
     @Test
-    fun closeFailureStillCancelsIdleWorkWithoutReleasingLiveHandle() = runTest {
-        val ops = FakeOps().apply { current = FakeNet("wifi0") }
-        val coordinator = virtualCoordinator(ops)
-        try {
-            coordinator.startAdvertising(localPeer)
-            coordinator.scheduleRebind("pending work before failed native close")
-            runCurrent()
-            val pending = backgroundScope.coroutineContext[Job]!!.children.single()
-            ops.closeFailuresRemaining.set(1)
+    fun closeFailureRetiresIdleWatcherAndCancelsWorkWithoutReleasingLiveHandle() = runTest {
+        for (advertising in listOf(true, false)) {
+            val ops = FakeOps().apply { current = FakeNet("wifi0") }
+            val coordinator = virtualCoordinator(ops)
+            suspend fun stop() {
+                if (advertising) coordinator.stopAdvertising() else coordinator.stopDiscovery()
+            }
+            try {
+                if (advertising) coordinator.startAdvertising(localPeer) else coordinator.startDiscovery()
+                val lease = ops.watcherLeases.single()
+                coordinator.scheduleRebind("pending work before failed native close", admit = { lease.active })
+                runCurrent()
+                val pending = backgroundScope.coroutineContext[Job]!!.children.single()
+                ops.closeFailuresRemaining.set(1)
 
-            assertFailsWith<IOException> { coordinator.stopAdvertising() }
-            assertTrue(pending.isCancelled, "close failure must not leave queued idle work")
-            assertFalse(ops.created.single().closed)
-            assertTrue(ops.watcherActive, "retain native ownership until handle close can be retried")
-            assertTrue(ops.lockHeld, "do not release multicast while a native handle is still owned")
-            assertEquals(0, ops.multicastReleaseAttempts.get())
+                assertFailsWith<IOException> { stop() }
+                assertTrue(pending.isCancelled, "close failure must not leave queued idle work")
+                assertFalse(ops.created.single().closed)
+                assertFalse(ops.watcherActive, "idle watchers must retire despite failed handle close")
+                assertFalse(lease.active)
+                assertEquals(1, ops.watcherStopAttempts.get())
+                assertTrue(ops.lockHeld, "do not release multicast while a native handle is still owned")
+                assertEquals(0, ops.multicastReleaseAttempts.get())
 
-            coordinator.stopAdvertising()
-            assertTrue(ops.created.single().closed)
-            assertFalse(ops.watcherActive)
-            assertFalse(ops.lockHeld)
-        } finally {
-            coordinator.stopAdvertising()
+                coordinator.scheduleRebind("queued callback delivered after idle stop", admit = { lease.active })
+                runCurrent()
+                advanceTimeBy(1_000)
+                runCurrent()
+                assertTrue(ops.observedNetworkEntered.isEmpty(), "retired callbacks must not enqueue new probes")
+                assertEquals(1, ops.createCalls.get())
+
+                stop()
+                assertTrue(ops.created.single().closed)
+                assertFalse(ops.watcherActive)
+                assertFalse(ops.lockHeld)
+                assertEquals(2, ops.closeAttempts.get())
+                assertEquals(1, ops.closed.size)
+                assertEquals(1, ops.watcherStopAttempts.get())
+                assertEquals(1, ops.multicastReleases.get())
+                stop()
+                assertEquals(2, ops.closeAttempts.get())
+                assertEquals(1, ops.multicastReleases.get(), "repeated idle stop must not double-release")
+            } finally {
+                stop()
+            }
+        }
+    }
+
+    @Test
+    fun closeAndWatcherFailuresRetirePublicationAndRetryOwnedResources() = runTest {
+        for (advertising in listOf(true, false)) {
+            val ops = FakeOps().apply { current = FakeNet("wifi0") }
+            val coordinator = virtualCoordinator(ops)
+            suspend fun start() {
+                if (advertising) coordinator.startAdvertising(localPeer) else coordinator.startDiscovery()
+            }
+            suspend fun stop() {
+                if (advertising) coordinator.stopAdvertising() else coordinator.stopDiscovery()
+            }
+            try {
+                start()
+                val retired = ops.watcherLeases.single()
+                ops.closeFailuresRemaining.set(1)
+                ops.failNextWatcherStop = true
+
+                val failure = assertFailsWith<IOException> { stop() }
+                assertEquals("injected close failure", failure.message)
+                assertEquals(
+                    listOf("injected watcher cleanup failure"), failure.suppressedExceptions.map { it.message }
+                )
+                assertTrue(ops.watcherActive, "failed native unregistration must remain owned")
+                assertFalse(retired.active, "native ownership must not preserve callback publication rights")
+                assertFalse(ops.created.single().closed)
+                assertTrue(ops.lockHeld)
+                assertEquals(1, ops.closeAttempts.get())
+                assertEquals(1, ops.watcherStopAttempts.get())
+                assertEquals(0, ops.multicastReleaseAttempts.get())
+                coordinator.scheduleRebind(
+                    "retired callback with native ownership retained", admit = { retired.active }
+                )
+                runCurrent()
+                advanceTimeBy(1_000)
+                runCurrent()
+                assertTrue(ops.observedNetworkEntered.isEmpty())
+
+                stop()
+                assertTrue(ops.created.single().closed)
+                assertFalse(ops.watcherActive)
+                assertFalse(ops.lockHeld)
+                assertEquals(2, ops.closeAttempts.get())
+                assertEquals(2, ops.watcherStopAttempts.get())
+                assertEquals(1, ops.multicastReleases.get())
+
+                start()
+                assertTrue(ops.watcherLeases.last().active)
+                assertFalse(retired.active, "restart must never revive the retired lease")
+                assertEquals(2, ops.watcherLeases.size)
+                coordinator.scheduleRebind("old callback delivered after restart", admit = { retired.active })
+                runCurrent()
+                advanceTimeBy(1_000)
+                runCurrent()
+                assertTrue(ops.observedNetworkEntered.isEmpty())
+                assertEquals(2, ops.createCalls.get(), "stale callback must not replace the new binding")
+            } finally {
+                ops.failNextWatcherStop = false
+                stop()
+            }
+            assertEquals(2, ops.multicastReleases.get())
+        }
+    }
+
+    @Test
+    fun failedStartRetiresWatcherEvenWhenRollbackHandleCloseFails() = runTest {
+        for (advertising in listOf(true, false)) {
+            val ops = FakeOps().apply {
+                current = FakeNet("wifi0")
+                failNextWatcherStart = true
+                closeFailuresRemaining.set(1)
+            }
+            val coordinator = virtualCoordinator(ops)
+            suspend fun stop() {
+                if (advertising) coordinator.stopAdvertising() else coordinator.stopDiscovery()
+            }
+            try {
+                val failure = assertFailsWith<IOException> {
+                    if (advertising) coordinator.startAdvertising(localPeer) else coordinator.startDiscovery()
+                }
+                assertEquals("injected watcher start failure", failure.message)
+                assertEquals(listOf("injected close failure"), failure.suppressedExceptions.map { it.message })
+                val lease = ops.watcherLeases.single()
+                assertFalse(lease.active)
+                assertFalse(ops.watcherActive)
+                assertEquals(1, ops.watcherStopAttempts.get())
+                assertFalse(ops.created.single().closed)
+                assertTrue(ops.lockHeld)
+                assertEquals(0, ops.multicastReleaseAttempts.get())
+                coordinator.scheduleRebind("callback after failed start rollback", admit = { lease.active })
+                runCurrent()
+                advanceTimeBy(1_000)
+                runCurrent()
+                assertTrue(ops.observedNetworkEntered.isEmpty())
+
+                stop()
+                assertTrue(ops.created.single().closed)
+                assertEquals(2, ops.closeAttempts.get())
+                assertEquals(1, ops.watcherStopAttempts.get())
+                assertEquals(1, ops.multicastReleases.get())
+                assertFalse(ops.lockHeld)
+            } finally {
+                stop()
+            }
         }
     }
 

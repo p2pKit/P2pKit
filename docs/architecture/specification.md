@@ -17,8 +17,9 @@ record produced during the 0.7 remediation is preserved in
   sessions should be cancelled/closed before final teardown.
 - Feature-stop cleanup is not infallible: the kit reports incomplete cleanup
   as `ConnectionFailed` and retains failed ownership for retry. JVM/Android
-  LAN idle teardown cancels queued rebind work even if watcher cleanup fails;
-  it still attempts multicast release once the native JmDNS handle is closed.
+  LAN idle teardown attempts watcher retirement and cancels queued rebind work
+  even if native handle cleanup fails. Multicast release is attempted after
+  the JmDNS handle closes, independently of watcher unregistration success.
 - Restartable low-level data transports use `stop()` to return to an idle state;
   permanent cleanup is owned by the enclosing kit lifecycle.
 - JVM/Android LAN advertisements require a bound TCP port. Starting advertising

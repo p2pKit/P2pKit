@@ -854,7 +854,7 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
     /**
      * Attempt dependent handle/token cleanup once, then independently finish
      * idle watcher/work and multicast cleanup. A retained handle still guards
-     * native watcher/lock release; failed watcher unregistration does not.
+     * multicast release, but never prevents independent watcher retirement.
      * Never discard secondary failures or turn a failed native release into
      * success. The enclosing kit maps transport failures to typed P2pErrors.
      */
@@ -920,12 +920,12 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
     private suspend fun stopNetworkWatcherIfIdle() {
         if (advertisingIntent || discoveryIntent) return
         try {
-            if (handle == null && ops.isWatcherActive()) ops.stopNetworkWatcher()
+            if (ops.isWatcherActive()) ops.stopNetworkWatcher()
         } finally {
             // Callback retirement happens before queue cancellation. This
             // finalization is also required when the platform watcher is
-            // already absent or its native cleanup failed. If close failed,
-            // retain native ownership but never keep idle retry work alive.
+            // already absent or its native cleanup failed. A failed handle
+            // close must not keep idle callback publication or retries alive.
             scheduleLock.withLock {
                 pendingRebindJob?.cancel()
                 pendingRebindJob = null
