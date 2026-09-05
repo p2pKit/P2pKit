@@ -140,6 +140,17 @@ jobs:
           VERSION="$(sed -n 's/^VERSION_NAME=//p' gradle.properties | tr -d '[:space:]')"
           scripts/build-central-portal-bundle.sh "build/central/p2pkit-$VERSION-central-bundle.zip"
 
+      - name: Generate and verify publication-build SBOM
+        id: publication-sbom
+        # This describes the publisher's resolved graph, not the verification
+        # job's build or a binary-content scan of the Central ZIP.
+        run: |
+          set -euo pipefail
+          trap './gradlew --stop' EXIT
+          ./gradlew --no-daemon --no-build-cache --rerun-tasks \
+            --dependency-verification strict --max-workers=2 --no-parallel --console=plain cyclonedxBom
+          scripts/check-sbom.sh build/reports/cyclonedx/bom.json build/reports/cyclonedx/bom.xml
+
       - name: Upload once and wait for publication
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
@@ -167,5 +178,7 @@ jobs:
             build/central/*.zip
             build/central/*.sha256
             build/central/*.json
+            build/reports/cyclonedx/bom.json
+            build/reports/cyclonedx/bom.xml
             build/reports/maven-central/**
           if-no-files-found: warn
