@@ -65,7 +65,6 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import dev.p2pkit.core.AppId
-import dev.p2pkit.core.protocol.FrameTrace
 import dev.p2pkit.transport.lan.JvmLanDiag
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.ExperimentalP2pApi
@@ -129,10 +128,8 @@ import java.io.File
 // =====================================================================
 
 fun main() {
-    // LAN forensic trace (Issue #2) + decoded frame-type trace: emit every
-    // P2pKitLAN / P2pKitFRAME line to stdout of the terminal that launched the
-    // UI. Harmless in a test harness; the library defaults stay off.
-    JvmLanDiag.enabled = true
+    // Keep the library's default-off LAN trace. Operators can explicitly opt
+    // in with -Ddev.p2pkit.lan.trace=true; see docs/guides/samples.md.
     application {
         Window(
             onCloseRequest = ::exitApplication,
@@ -161,12 +158,9 @@ private fun P2pKitSampleApp() {
     val holder = remember { DesktopP2pState(appScope) }
     var showDiagnostics by remember { mutableStateOf(false) }
     DisposableEffect(holder) {
-        val frameTraceLease = FrameTrace.installSink(enabled = true) {
-            println("P2pKitFRAME $it")
-            holder.diagnostics.frame(it)
-        }
+        val frameTraceLease = installDesktopFrameTracing(holder.diagnostics::frame)
         onDispose {
-            frameTraceLease.release()
+            frameTraceLease?.release()
             holder.shutdownIfRunning()
             // The stop coroutine above is owned by appScope; cancellation is
             // intentionally deferred to process/window teardown by the host.

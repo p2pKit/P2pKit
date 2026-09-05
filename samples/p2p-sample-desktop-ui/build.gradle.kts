@@ -10,6 +10,22 @@ kotlin {
     jvmToolchain(17)
 }
 
+// Gradle -D properties are not automatically inherited by the sample JVM.
+// Forward explicit operator opt-ins without changing packaged-app defaults.
+tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach {
+    for (property in listOf("dev.p2pkit.lan.trace", "dev.p2pkit.lan.traceFrames")) {
+        providers.systemProperty(property).orNull?.let { systemProperty(property, it) }
+    }
+}
+
+tasks.withType<Test>().configureEach {
+    doFirst {
+        // Forked property probes need the declared runtime classpath, not
+        // Gradle worker ClassLoader implementation details.
+        systemProperty("dev.p2pkit.sample.test.runtimeClasspath", classpath.asPath)
+    }
+}
+
 val supportedDesktopLockTargets = setOf(
     "linux-arm64",
     "linux-x64",

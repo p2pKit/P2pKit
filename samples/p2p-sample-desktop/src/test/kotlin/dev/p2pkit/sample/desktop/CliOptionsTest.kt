@@ -33,6 +33,17 @@ class CliOptionsTest {
     }
 
     @Test
+    fun tracingDefaultsToNoOptInAndAcceptsExplicitOn() {
+        assertNull(assertIs<CliParseResult.Success>(parseCliOptions(emptyArray())).options.traceMode)
+        val on = assertIs<CliParseResult.Success>(parseCliOptions(arrayOf("trace=on", "desk"))).options
+        assertEquals("on", on.traceMode)
+        assertEquals("desk", on.deviceName)
+        assertNull(on.appId)
+        assertIs<CliParseResult.Error>(parseCliOptions(arrayOf("trace=on", "trace=off")))
+        assertIs<CliParseResult.Error>(parseCliOptions(arrayOf("trace=unknown")))
+    }
+
+    @Test
     fun unknownAndDuplicateOptionsAreRejected() {
         assertIs<CliParseResult.Error>(parseCliOptions(arrayOf("--unknown")))
         assertIs<CliParseResult.Error>(parseCliOptions(arrayOf("future=value")))

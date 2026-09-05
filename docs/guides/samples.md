@@ -68,6 +68,31 @@ Release builds never change the host's console-mirror setting. The on-screen
 log and structured diagnostic recorder remain available; they are not erased by
 releasing the library's replay buffer.
 
+Both JVM samples leave raw LAN/frame tracing **off by default**. The CLI accepts
+`trace=on` for LAN events and decoded frame metadata, or `trace=frames` to add
+socket byte-chunk counts; `trace=off` (the default) adds no sample opt-in. CLI LAN
+leases restore previous switches on exit/failure, combine active requests and
+preserve the host flags captured when the first lease starts. Frame sinks have
+single-current-owner semantics: release never detaches a newer sink, but does
+not restore an older sink. Previously recorded diagnostics are not erased.
+No trace contains file/message bytes, but topology, names and
+traffic metadata still require private handling.
+
+For the Desktop UI, opt in at process startup (no UI toggle is required):
+
+```bash
+./gradlew :p2p-sample-desktop:run --args="Desk trace=on"
+./gradlew :p2p-sample-desktop-ui:run -Ddev.p2pkit.lan.trace=true
+# Optional additional socket byte-chunk counts:
+./gradlew :p2p-sample-desktop-ui:run -Ddev.p2pkit.lan.trace=true -Ddev.p2pkit.lan.traceFrames=true
+```
+
+The UI run task forwards these properties to the child JVM. A packaged UI can
+use `JAVA_TOOL_OPTIONS='-Ddev.p2pkit.lan.trace=true'` when launching instead.
+The UI does not overwrite LAN switches; those explicit properties belong to
+the host process. Structured application diagnostics remain available without
+enabling raw tracing. Never share trace output without reviewing it.
+
 ## Running samples
 
 Common build commands:

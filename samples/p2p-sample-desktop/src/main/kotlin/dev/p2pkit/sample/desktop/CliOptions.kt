@@ -1,7 +1,7 @@
 package dev.p2pkit.sample.desktop
 
 internal const val CLI_USAGE: String =
-    "Usage: <deviceName> [<appId>] [reconnect=<attempts>,<delayMs>] [trace=off|frames] " +
+    "Usage: <deviceName> [<appId>] [reconnect=<attempts>,<delayMs>] [trace=off|on|frames] " +
         "[test=<ID>] [session=<shared-id>] [role=sender|receiver|both] " +
         "[evidence=<directory>] [log=<jsonl-file>]"
 
@@ -46,8 +46,8 @@ internal fun parseCliOptions(args: Array<String>): CliParseResult {
             token.startsWith("trace=") -> {
                 if (traceMode != null) return CliParseResult.Error("trace specified more than once")
                 traceMode = token.substringAfter('=')
-                if (traceMode !in setOf("off", "frames")) {
-                    return CliParseResult.Error("trace must be 'off' or 'frames'")
+                if (traceMode !in setOf("off", "on", "frames")) {
+                    return CliParseResult.Error("trace must be 'off', 'on' or 'frames'")
                 }
             }
             token.startsWith("test=") -> {

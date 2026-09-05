@@ -118,51 +118,43 @@ fun main(args: Array<String>) {
     val reconnect = parseReconnect(launch.reconnectArg)
     CliDiagnostics.configure(launch)
 
-    // LAN forensic trace (Issue #2). ON by default in this harness — every
-    // P2pKitLAN line goes to stdout (greppable). Pass `trace=off` to silence,
-    // or `trace=frames` to additionally log every byte chunk on the data socket.
-    val frameTraceEnabled = launch.traceMode != "off"
-    when (launch.traceMode) {
-        "off" -> JvmLanDiag.enabled = false
-        "frames" -> {
-            JvmLanDiag.enabled = true; JvmLanDiag.traceFrames = true
+    // No sample tracing without an explicit opt-in. The lexical lease covers
+    // creation, startup, cancellation and teardown failures, not just the REPL.
+    try {
+        CliTracingLease.acquire(launch.traceMode, CliDiagnostics::frame).use {
+            runCli(appId, deviceName, reconnect)
         }
-        else -> JvmLanDiag.enabled = true
+    } finally {
+        CliDiagnostics.close()
     }
-    val frameTraceLease = FrameTrace.installSink(enabled = frameTraceEnabled) {
-        println("P2pKitFRAME $it")
-        CliDiagnostics.frame(it)
-    }
+}
 
+@OptIn(ExplicitSecurityRisk::class)
+private fun runCli(appId: AppId, deviceName: String, reconnect: ReconnectPolicy) {
     println("[P2pKit CLI] app=${SampleConsole.identifier(appId.value)} reconnect=${reconnect.describe()}")
     println(
         "[P2pKit CLI] trace: lan(interfaces/conn)=${JvmLanDiag.enabled} " +
             "frameTypes=${FrameTrace.enabled} bytes=${JvmLanDiag.traceFrames} " +
-            "(grep 'P2pKitLAN' + 'P2pKitFRAME'; pass trace=off / trace=frames to change)"
+            "(opt in with trace=on / trace=frames; trace=off leaves other owners unchanged)"
     )
     System.err.println(
         "[P2pKit CLI] DEVELOPMENT SECURITY: accepting any authenticated same-AppId peer; " +
             "identity storage is process-local and must be replaced in production."
     )
 
-    val p2p = try {
-        P2pKit.create {
-            this.appId = appId
-            this.deviceName = deviceName
-            jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
-            security {
-                mode = SecurityMode.AuthenticatedV2(
-                    PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
-                )
-            }
-            transports { lan() }
-            lifecycle { reconnectPolicy = reconnect }
-            networkProvisioning { jvm() }
-            logger = CliDiagnostics.logger()
+    val p2p = P2pKit.create {
+        this.appId = appId
+        this.deviceName = deviceName
+        jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
+        security {
+            mode = SecurityMode.AuthenticatedV2(
+                PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+            )
         }
-    } catch (failure: Throwable) {
-        frameTraceLease.release()
-        throw failure
+        transports { lan() }
+        lifecycle { reconnectPolicy = reconnect }
+        networkProvisioning { jvm() }
+        logger = CliDiagnostics.logger()
     }
     CliDiagnostics.localPeerId = p2p.localPeerId.value
     val advertising = StateLatch()
@@ -308,11 +300,9 @@ fun main(args: Array<String>) {
             runCatching { p2p.stop() }.onFailure {
                 System.err.println("kit.stop() failed: ${SampleConsole.failure(it)}")
             }
-            frameTraceLease.release()
             if (CliDiagnostics.recorder.summary().finalOutcome == null) {
                 CliDiagnostics.complete(DiagnosticOutcome.CANCELLATION, "CLI terminated by operator")
             }
-            CliDiagnostics.close()
         }
     }
 }

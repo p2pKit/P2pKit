@@ -136,7 +136,7 @@ and the exact safety cutoff.
 Launch two isolated instances or one UI plus the CLI:
 
 ```bash
-./gradlew :p2p-sample-desktop-ui:run
+./gradlew :p2p-sample-desktop-ui:run -Ddev.p2pkit.lan.trace=true -Ddev.p2pkit.lan.traceFrames=true
 ```
 
 On **Setup**, enter a unique **Device name**, the same **App ID**, and reconnect
