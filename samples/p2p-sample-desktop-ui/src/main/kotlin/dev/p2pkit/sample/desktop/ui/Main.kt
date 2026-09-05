@@ -16,10 +16,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AssistChip
@@ -167,34 +169,51 @@ private fun P2pKitSampleApp() {
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        if (showDiagnostics) {
-            DesktopDiagnosticsScreen(
-                diagnostics = holder.diagnostics,
-                activeConnections = {
-                    holder.connectedSessions.map { session ->
-                        DesktopDiagnosticConnectionSnapshot(
-                            sessionId = session.id,
-                            peerId = session.peer.id.value,
-                            state = session.state.value.toString()
-                        )
-                    }
-                },
-                revision = holder.diagnosticRevision,
-                onBack = { showDiagnostics = false }
-            )
-        } else if (!holder.isRunning) {
-            SetupScreen(holder)
-        } else {
-            RoomScreen(holder)
-        }
-        if (!showDiagnostics) {
-            Button(
-                onClick = { showDiagnostics = true },
-                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+    if (showDiagnostics) {
+        DesktopDiagnosticsScreen(
+            diagnostics = holder.diagnostics,
+            activeConnections = {
+                holder.connectedSessions.map { session ->
+                    DesktopDiagnosticConnectionSnapshot(
+                        sessionId = session.id,
+                        peerId = session.peer.id.value,
+                        state = session.state.value.toString()
+                    )
+                }
+            },
+            revision = holder.diagnosticRevision,
+            onBack = { showDiagnostics = false }
+        )
+    } else {
+        DesktopSampleScreen(holder, holder.isRunning) { showDiagnostics = true }
+    }
+}
+
+/** The warning stays outside either screen's scrollable content and cannot be dismissed. */
+@Composable
+internal fun DesktopSampleScreen(state: DesktopP2pState, isRunning: Boolean, onOpenDiagnostics: () -> Unit) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Surface(
+            color = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(Dimens.ItemGap),
+                horizontalArrangement = Arrangement.spacedBy(Dimens.ItemGap),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Diagnostics")
+                Text(
+                    text = "DEVELOPMENT MODE: any authenticated same-AppId peer can connect, even with Auto-mesh off. " +
+                        "AppId is not a secret. Identity resets when the kit is recreated. " +
+                        "Production apps must verify and pin peer fingerprints.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f)
+                )
+                Button(onClick = onOpenDiagnostics) { Text("Diagnostics") }
             }
+        }
+        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            if (isRunning) RoomScreen(state) else SetupScreen(state)
         }
     }
 }
@@ -214,8 +233,10 @@ private fun P2pKitSampleApp() {
  * live [connectedSessions] snapshot; targeted sends use any subset of
  * peer ids in [targetedPeerIds].
  */
-@OptIn(ExplicitSecurityRisk::class)
-internal class DesktopP2pState(private val appScope: CoroutineScope) {
+internal class DesktopP2pState(
+    private val appScope: CoroutineScope,
+    diagnosticHome: File = File(System.getProperty("user.home") ?: ".")
+) {
 
     // --- identity / config -------------------------------------------------
 
@@ -243,11 +264,12 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
     /**
      * Auto-mesh: when ON, auto-connects to every discovered peer using
      * a lexicographic tie-break (only initiate if our [localPeerId] is
-     * less than the peer's) so both sides never race into duplicate
-     * sessions. Default ON — makes the three-device room work without
-     * any manual Connect taps.
+     * less than the peer's) to avoid simultaneous sample-initiated connections.
+     * Default OFF: enabling this initiates unpinned connections to unverified
+     * same-AppId peers. This only controls outgoing initiation; the development
+     * authorization policy still admits incoming same-AppId peers when OFF.
      */
-    private val _autoMesh = MutableStateFlow(true)
+    private val _autoMesh = MutableStateFlow(false)
     val autoMesh: StateFlow<Boolean> = _autoMesh.asStateFlow()
 
     private val _manualConnectionInfo = MutableStateFlow<ManualConnectionInfo?>(null)
@@ -295,7 +317,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
     private val transferOffers = SessionTransferList(pendingFileOffers) { it.key }
     var diagnosticRevision: Long by mutableStateOf(0L)
         private set
-    val diagnostics = DesktopDiagnosticHarness { diagnosticRevision++ }
+    val diagnostics = DesktopDiagnosticHarness(diagnosticHome) { diagnosticRevision++ }
 
     // --- internals ---------------------------------------------------------
 
@@ -346,6 +368,7 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
         System.err.println("[p2pkit] auto-mesh = ${_autoMesh.value}")
     }
 
+    @OptIn(ExplicitSecurityRisk::class)
     fun start() {
         if (isRunning || _isStarting.value || _isStopping.value) return  // idempotent + re-entry safe
         if (kit != null) {
@@ -368,6 +391,10 @@ internal class DesktopP2pState(private val appScope: CoroutineScope) {
             P2pKit.create {
                 appId = AppId(effectiveAppId)
                 this.deviceName = this@DesktopP2pState.deviceName
+                // Test-only convenience: every new kit gets a new identity, and any
+                // authenticated same-AppId peer is admitted (AppId is not a secret).
+                // Production hosts need durable OS-backed storage and PinnedOnly
+                // with independently verified fingerprints, not this opt-in policy.
                 jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
                 security {
                     mode = SecurityMode.AuthenticatedV2(
@@ -1598,7 +1625,7 @@ private fun SetupScreen(state: DesktopP2pState) {
     val lifecycleError by state.lifecycleError.collectAsState()
     Column(
         // AUDIT-2026-06 (C-G9-samples-desktop-ios-29): same screen padding as RoomScreen.
-        modifier = Modifier.fillMaxSize().padding(Dimens.ScreenPadding),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(Dimens.ScreenPadding),
         verticalArrangement = Arrangement.spacedBy(Dimens.SectionGap)
     ) {
         Text(
@@ -1777,7 +1804,7 @@ private fun RoomScreen(state: DesktopP2pState) {
 
     Row(modifier = Modifier.fillMaxSize().padding(Dimens.ScreenPadding)) {
         // ---- Left column: header + peers + connected chips + logs ----
-        Column(modifier = Modifier.width(360.dp).fillMaxHeight()) {
+        Column(modifier = Modifier.width(360.dp).fillMaxHeight().verticalScroll(rememberScrollState())) {
             StatusHeader(
                 appId = state.appIdInput.ifBlank { DesktopP2pState.DEFAULT_APP_ID },
                 deviceName = state.deviceName,

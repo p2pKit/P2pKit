@@ -47,7 +47,11 @@ internal class DesktopDiagnosticHarness(
                 "diagnosticBytes" to 5L * 1024L * 1024L
             ),
             faultInjection = mapOf("enabled" to "false"),
-            values = mapOf("testMode" to "true")
+            values = mapOf(
+                "testMode" to "true",
+                "securityPolicy" to "authenticated-same-app-test-only",
+                "identityStorage" to "in-memory-per-kit"
+            )
         ),
         eventSink = { json ->
             try {

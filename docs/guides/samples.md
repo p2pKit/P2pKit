@@ -1,8 +1,9 @@
 # Samples and diagnostic applications
 
 All samples live under `samples/` and are excluded from Maven publication.
-Their detailed diagnostics are explicit test functionality and do not relax
-production authentication, wire protocol, or secret handling.
+Their detailed diagnostics are explicit test functionality, not production
+configuration recommendations. Sample admission policies can be deliberately
+permissive; the library's default remains fail-closed authenticated v2.
 
 | Project | Role | Main test capabilities |
 | --- | --- | --- |
@@ -12,6 +13,26 @@ production authentication, wire protocol, or secret handling.
 | `:sample-kmp-shared` | KMP consumer smoke | Common call-site and Android/JVM runtime consumer coverage |
 | `:iosApp` | Swift iOS sender and receiver | Peer/session/file controls, deterministic files, lifecycle, diagnostics/share export |
 | `:p2p-sample-diagnostics` | Shared JVM diagnostics model | Structured event schema, redaction, rotation, and evidence package support |
+
+## Desktop UI security posture
+
+The Desktop UI is a development harness, not a trusted room. Its persistent
+warning discloses `AcceptAnyAuthenticatedSameApp`: any authenticated same-AppId
+peer may connect. AppId is a public scope identifier, not an authorization secret.
+Auto-mesh defaults **off**; enabling it explicitly starts unpinned outgoing
+connections. Turning it off does **not** block incoming same-AppId connections.
+Manual Connect to a discovered peer is also unpinned; the manual-endpoint flow
+requires a full fingerprint.
+
+Each new kit uses a new in-memory identity store, so identity changes on kit
+recreation, including Stop/Start. Diagnostic exports record
+`securityPolicy=authenticated-same-app-test-only` and
+`identityStorage=in-memory-per-kit`. Production integrations must use a durable
+OS-backed `JvmSecureIdentityStore` and `PeerAuthorizationPolicy.PinnedOnly` with
+independently verified fingerprints; see the [security model](../security/model.md).
+Encryption does not by itself establish the peer identity you intended to trust.
+
+## Running samples
 
 Common build commands:
 
