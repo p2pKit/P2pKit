@@ -1,5 +1,6 @@
 package dev.p2pkit.core.protocol
 
+import dev.p2pkit.core.transfer.PreparedSourceChangedException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.io.EOFException
@@ -90,4 +91,4 @@ internal fun streamFileData(
 internal class PreparedSourceLengthChangedException(
     message: String,
     cause: Throwable? = null
-) : Exception(message, cause)
+) : PreparedSourceChangedException(message, cause)

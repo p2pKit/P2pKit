@@ -12,7 +12,6 @@ import dev.p2pkit.core.protocol.FileResultCode
 import dev.p2pkit.core.protocol.Frame
 import dev.p2pkit.core.protocol.MessageId
 import dev.p2pkit.core.protocol.P2pProtocol
-import dev.p2pkit.core.protocol.PreparedSourceLengthChangedException
 import dev.p2pkit.core.protocol.ProtocolConstants
 import dev.p2pkit.core.protocol.ProtocolFeatures
 import dev.p2pkit.core.protocol.ProtocolSessionState
@@ -28,6 +27,7 @@ import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transfer.PreparedFileSource
+import dev.p2pkit.core.transfer.PreparedSourceChangedException
 import dev.p2pkit.core.transfer.Sha256Digest
 import dev.p2pkit.core.transfer.StorageCapacityCheckingFileTransferDestination
 import dev.p2pkit.core.transfer.acceptedIdleTimeoutMillis
@@ -1603,10 +1603,10 @@ internal class FileTransferDispatcher(
         } catch (e: CancellationException) {
             currentCoroutineContext().ensureActive()
             failOutgoingPayload(entry, e, connectionWriteFailure)
-        } catch (e: PreparedSourceLengthChangedException) {
+        } catch (e: PreparedSourceChangedException) {
             failPreparedSourceChanged(
                 entry = entry,
-                reason = e.message ?: "Prepared source length changed before or during streaming",
+                reason = e.message ?: "Prepared source changed before or during streaming",
                 cause = e
             )
         } catch (e: Throwable) {
