@@ -18,6 +18,7 @@ import dev.p2pkit.core.provisioning.ManualPeerRegistrar
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
 import dev.p2pkit.core.provisioning.NetworkProvisioningEvent
 import dev.p2pkit.core.provisioning.NetworkProvisioningState
+import dev.p2pkit.core.provisioning.NetworkState
 import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.WifiCredentials
 import dev.p2pkit.core.provisioning.WifiPassword
@@ -36,6 +37,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
@@ -489,15 +492,15 @@ class AndroidNetworkProvisioningManagerTest {
         val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
         try {
             val failedEvent = async(start = CoroutineStart.UNDISPATCHED) {
-                mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().first()
+                mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().take(2).toList()
             }
             assertIs<LocalNetworkResult.Started>(mgr.startLocalNetwork(LocalNetworkConfig()))
             assertEquals(1, wifi.lastHandle?.stopSubscriberCount)
             wifi.lastHandle?.simulateSystemStop("OEM policy")
 
-            assertIs<NetworkProvisioningError.CleanupFailed>(
-                withTimeout(2_000) { failedEvent.await() }.error
-            )
+            val failures = withTimeout(2_000) { failedEvent.await() }
+            assertIs<NetworkProvisioningError.HotspotStopped>(failures[0].error)
+            assertIs<NetworkProvisioningError.CleanupFailed>(failures[1].error)
             assertEquals(1, wifi.lastHandle?.closeAttempts)
             withTimeout(2_000) { wifi.lastHandle?.awaitWatcherStopped() }
             mgr.stopLocalNetwork()
@@ -505,6 +508,273 @@ class AndroidNetworkProvisioningManagerTest {
             assertEquals(NetworkProvisioningState.Idle, mgr.state.value)
         } finally {
             mgr.close()
+        }
+    }
+
+    @Test
+    fun hotspotStopDuringJoinCannotOverwriteTheJoinedNetwork() = runBlocking<Unit> {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val network = NetworkState.ConnectedToWifi(null, listOf("192.168.43.55"))
+        val wifi = FakeWifiManagerWrapper(
+            FakeWifiManagerWrapper.Behavior.StartAndJoin(
+                testCreds, listOf("192.168.43.1"), network,
+                joinEntered = entered, joinRelease = release
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        try {
+            assertIs<LocalNetworkResult.Started>(mgr.startLocalNetwork())
+            val hotspot = assertNotNull(wifi.lastHandle)
+            val failure = async(start = CoroutineStart.UNDISPATCHED) {
+                mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().first()
+            }
+            val join = async { mgr.joinLocalNetwork(testCreds) }
+            withTimeout(2_000) { entered.await() }
+            hotspot.simulateSystemStop("hotspot stopped during join")
+            assertIs<NetworkProvisioningError.HotspotStopped>(withTimeout(2_000) { failure.await() }.error)
+            assertEquals(NetworkProvisioningState.JoiningNetwork, mgr.state.value)
+            assertEquals(NetworkState.Unknown, mgr.networkState.value)
+            assertFalse(hotspot.isClosed, "cleanup is still serialized behind the OS join wait")
+            release.complete(Unit)
+            assertIs<JoinNetworkResult.Joined>(withTimeout(2_000) { join.await() })
+            withTimeout(2_000) { hotspot.firstCloseAttempt.await() }
+            // An already-active join is refused without publishing state. It
+            // also waits behind the callback's complete lifecycle transaction.
+            assertIs<JoinNetworkResult.Failed>(mgr.joinLocalNetwork(testCreds))
+            assertEquals(NetworkProvisioningState.JoinedNetwork, mgr.state.value)
+            assertEquals(network, mgr.networkState.value)
+            assertTrue(hotspot.isClosed)
+            assertEquals(1, hotspot.closeAttempts)
+            assertFalse(assertNotNull(wifi.lastJoinHandle).isClosed)
+        } finally {
+            release.complete(Unit)
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun joinReleaseDuringHotspotStartCannotOverwriteTheHostedNetwork() = runBlocking<Unit> {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val wifi = FakeWifiManagerWrapper(
+            FakeWifiManagerWrapper.Behavior.StartAndJoin(
+                testCreds, listOf("192.168.43.1"),
+                NetworkState.ConnectedToWifi(null, listOf("192.168.43.55")),
+                startEntered = entered, startRelease = release
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        try {
+            assertIs<JoinNetworkResult.Joined>(mgr.joinLocalNetwork(testCreds))
+            val joined = assertNotNull(wifi.lastJoinHandle)
+            val failure = async(start = CoroutineStart.UNDISPATCHED) {
+                mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().first()
+            }
+            val start = async { mgr.startLocalNetwork() }
+            withTimeout(2_000) { entered.await() }
+            joined.simulateRelease("join released during hotspot start")
+            assertIs<NetworkProvisioningError.JoinFailed>(withTimeout(2_000) { failure.await() }.error)
+            assertEquals(NetworkProvisioningState.StartingLocalNetwork, mgr.state.value)
+            assertEquals(NetworkState.Unknown, mgr.networkState.value)
+            assertFalse(joined.isClosed, "cleanup is still serialized behind the OS hotspot wait")
+            release.complete(Unit)
+            assertIs<LocalNetworkResult.Started>(withTimeout(2_000) { start.await() })
+            val hosted = assertIs<NetworkState.LocalNetworkHosted>(mgr.networkState.value)
+            withTimeout(2_000) { joined.firstCloseAttempt.await() }
+            // Repeated start observes the existing reservation without a new
+            // publication, and settles the preceding callback transaction.
+            assertIs<LocalNetworkResult.Started>(mgr.startLocalNetwork())
+            assertEquals(NetworkProvisioningState.LocalNetworkRunning, mgr.state.value)
+            assertEquals(hosted, mgr.networkState.value)
+            assertTrue(joined.isClosed)
+            assertEquals(1, joined.closeAttempts)
+            assertFalse(assertNotNull(wifi.lastHandle).isClosed)
+        } finally {
+            release.complete(Unit)
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun explicitHotspotStopPreservesTheNewerJoinedNetwork() = runBlocking<Unit> {
+        val network = NetworkState.ConnectedToWifi(null, listOf("192.168.43.55"))
+        val wifi = FakeWifiManagerWrapper(
+            FakeWifiManagerWrapper.Behavior.StartAndJoin(testCreds, listOf("192.168.43.1"), network)
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        try {
+            assertIs<LocalNetworkResult.Started>(mgr.startLocalNetwork())
+            assertIs<JoinNetworkResult.Joined>(mgr.joinLocalNetwork(testCreds))
+            mgr.stopLocalNetwork()
+            assertTrue(assertNotNull(wifi.lastHandle).isClosed)
+            assertFalse(assertNotNull(wifi.lastJoinHandle).isClosed)
+            assertEquals(NetworkProvisioningState.JoinedNetwork, mgr.state.value)
+            assertEquals(network, mgr.networkState.value)
+            mgr.stopLocalNetwork()
+            assertEquals(1, wifi.lastHandle?.closeAttempts)
+            assertEquals(NetworkProvisioningState.JoinedNetwork, mgr.state.value)
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun failedHotspotPublicationDoesNotClearAnExistingJoinedNetwork() = runBlocking<Unit> {
+        val network = NetworkState.ConnectedToWifi(null, listOf("192.168.43.55"))
+        val wifi = FakeWifiManagerWrapper(
+            FakeWifiManagerWrapper.Behavior.StartAndJoin(null, emptyList(), network)
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(lanTcpPort = null), wifi)
+        try {
+            assertIs<JoinNetworkResult.Joined>(mgr.joinLocalNetwork(testCreds))
+            assertIs<LocalNetworkResult.Failed>(mgr.startLocalNetwork())
+            assertEquals(network, mgr.networkState.value)
+            assertFalse(assertNotNull(wifi.lastJoinHandle).isClosed)
+            assertTrue(assertNotNull(wifi.lastHandle).isClosed)
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun olderHotspotCleanupFailureRemainsVisibleWithoutErasingTheNewerJoin() = runBlocking<Unit> {
+        val network = NetworkState.ConnectedToWifi(null, listOf("192.168.43.55"))
+        val wifi = FakeWifiManagerWrapper(
+            FakeWifiManagerWrapper.Behavior.StartAndJoin(
+                testCreds, listOf("192.168.43.1"), network, hotspotCloseFailures = 1
+            )
+        )
+        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+        try {
+            assertIs<LocalNetworkResult.Started>(mgr.startLocalNetwork())
+            assertIs<JoinNetworkResult.Joined>(mgr.joinLocalNetwork(testCreds))
+            val failures = async(start = CoroutineStart.UNDISPATCHED) {
+                mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().take(2).toList()
+            }
+            val hotspot = assertNotNull(wifi.lastHandle)
+            hotspot.simulateSystemStop("older hotspot ended")
+            val events = withTimeout(2_000) { failures.await() }
+            assertIs<NetworkProvisioningError.HotspotStopped>(events[0].error)
+            assertIs<NetworkProvisioningError.CleanupFailed>(events[1].error)
+            assertEquals(NetworkProvisioningState.JoinedNetwork, mgr.state.value)
+            assertEquals(network, mgr.networkState.value)
+            assertEquals(1, hotspot.closeAttempts)
+            assertFalse(hotspot.isClosed)
+            mgr.stopLocalNetwork()
+            assertTrue(hotspot.isClosed)
+            assertEquals(2, hotspot.closeAttempts)
+            assertEquals(NetworkProvisioningState.JoinedNetwork, mgr.state.value)
+            assertEquals(network, mgr.networkState.value)
+            assertFalse(assertNotNull(wifi.lastJoinHandle).isClosed)
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun shutdownOwnsTerminalHotspotCleanupWhileAnotherAcquisitionIsPending() = runBlocking<Unit> {
+        for (cancelParent in listOf(false, true)) {
+            val parent = Job()
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val wifi = FakeWifiManagerWrapper(
+                FakeWifiManagerWrapper.Behavior.StartAndJoin(
+                    testCreds, listOf("192.168.43.1"),
+                    NetworkState.ConnectedToWifi(null, listOf("192.168.43.55")),
+                    joinEntered = entered, joinRelease = release
+                )
+            )
+            val mgr = AndroidNetworkProvisioningManager(ctx(parentJob = parent), wifi)
+            try {
+                assertIs<LocalNetworkResult.Started>(mgr.startLocalNetwork())
+                val hotspot = assertNotNull(wifi.lastHandle)
+                val failure = async(start = CoroutineStart.UNDISPATCHED) {
+                    mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().first()
+                }
+                val join = async { mgr.joinLocalNetwork(testCreds) }
+                withTimeout(2_000) { entered.await() }
+                hotspot.simulateSystemStop("pending cleanup at shutdown")
+                assertIs<NetworkProvisioningError.HotspotStopped>(withTimeout(2_000) { failure.await() }.error)
+                assertFalse(hotspot.isClosed)
+                if (cancelParent) parent.cancelAndJoin() else mgr.close()
+                val result = assertIs<JoinNetworkResult.Failed>(withTimeout(2_000) { join.await() })
+                assertIs<NetworkProvisioningError.ManagerClosed>(result.error)
+                assertTrue(hotspot.isClosed)
+                assertEquals(1, hotspot.closeAttempts)
+                assertNull(wifi.lastJoinHandle)
+                assertEquals(NetworkProvisioningState.Closed, mgr.state.value)
+                assertEquals(NetworkState.Unknown, mgr.networkState.value)
+            } finally {
+                release.complete(Unit)
+                mgr.close()
+                parent.cancelAndJoin()
+            }
+        }
+    }
+
+    @Test
+    fun replayedAndImmediateHotspotStopsWaitForTheirOwnPublication() = runBlocking<Unit> {
+        for (replayed in listOf(false, true)) {
+            val reason = "stopped before installation"
+            val wifi = FakeWifiManagerWrapper(
+                FakeWifiManagerWrapper.Behavior.Start(
+                    testCreds, listOf("192.168.43.1"), replayedStop = reason.takeIf { replayed }
+                )
+            )
+            val mgr = AndroidNetworkProvisioningManager(
+                ctx(), wifi, ProvisioningLifecycleHooks(afterHotspotAcquired = {
+                    if (!replayed) assertNotNull(wifi.lastHandle).simulateSystemStop(reason)
+                })
+            )
+            try {
+                val failure = async(start = CoroutineStart.UNDISPATCHED) {
+                    mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().first()
+                }
+                assertIs<LocalNetworkResult.Started>(mgr.startLocalNetwork())
+                assertIs<NetworkProvisioningError.HotspotStopped>(withTimeout(2_000) { failure.await() }.error)
+                val hotspot = assertNotNull(wifi.lastHandle)
+                withTimeout(2_000) { hotspot.firstCloseAttempt.await() }
+                assertTrue(hotspot.isClosed)
+                assertEquals(1, hotspot.closeAttempts)
+                assertIs<NetworkProvisioningState.Failed>(mgr.state.value)
+                assertEquals(NetworkState.Unknown, mgr.networkState.value)
+            } finally {
+                mgr.close()
+            }
+        }
+    }
+
+    @Test
+    fun replayedAndImmediateJoinReleasesWaitForTheirOwnPublication() = runBlocking<Unit> {
+        for (replayed in listOf(false, true)) {
+            val reason = "released before installation"
+            val wifi = FakeWifiManagerWrapper(
+                FakeWifiManagerWrapper.Behavior.JoinSucceeds(
+                    NetworkState.ConnectedToWifi(null, listOf("192.168.43.55")),
+                    replayedRelease = reason.takeIf { replayed }
+                )
+            )
+            val mgr = AndroidNetworkProvisioningManager(
+                ctx(), wifi, ProvisioningLifecycleHooks(afterJoinAcquired = {
+                    if (!replayed) assertNotNull(wifi.lastJoinHandle).simulateRelease(reason)
+                })
+            )
+            try {
+                val failure = async(start = CoroutineStart.UNDISPATCHED) {
+                    mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().first()
+                }
+                assertIs<JoinNetworkResult.Joined>(mgr.joinLocalNetwork(testCreds))
+                assertIs<NetworkProvisioningError.JoinFailed>(withTimeout(2_000) { failure.await() }.error)
+                val joined = assertNotNull(wifi.lastJoinHandle)
+                withTimeout(2_000) { joined.firstCloseAttempt.await() }
+                assertTrue(joined.isClosed)
+                assertEquals(1, joined.closeAttempts)
+                assertIs<NetworkProvisioningState.Failed>(mgr.state.value)
+                assertEquals(NetworkState.Unknown, mgr.networkState.value)
+            } finally {
+                mgr.close()
+            }
         }
     }
 
@@ -699,10 +969,9 @@ class AndroidNetworkProvisioningManagerTest {
             val ev = withTimeout(2_000) { failedEventDeferred.await() }
             val err = assertIs<NetworkProvisioningError.JoinFailed>(ev.error)
             assertTrue(err.reason.contains("MIUI battery policy"))
-            // 2026-07 review P1-28 (A09 §3 r3): the release handler must
-            // close() the JoinHandle before dropping it — close() is the only
-            // path that clears the process-network binding and unregisters
-            // the NetworkCallback (close-before-drop, AUDIT-2026-06 fix).
+            withTimeout(2_000) { assertNotNull(wifi.lastJoinHandle).firstCloseAttempt.await() }
+            // Notification precedes cleanup, but the released handle stays
+            // manager-owned until close clears the process binding and callback.
             assertTrue(
                 wifi.lastJoinHandle?.isClosed == true,
                 "System-initiated join release must close the JoinHandle"
@@ -730,15 +999,15 @@ class AndroidNetworkProvisioningManagerTest {
         )
         val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
         val failedEvent = async(start = CoroutineStart.UNDISPATCHED) {
-            mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().first()
+            mgr.events.filterIsInstance<NetworkProvisioningEvent.Failed>().take(2).toList()
         }
         assertIs<JoinNetworkResult.Joined>(mgr.joinLocalNetwork(testCreds))
         assertEquals(1, wifi.lastJoinHandle?.releaseSubscriberCount)
         wifi.lastJoinHandle?.simulateRelease("network vanished")
 
-        assertIs<NetworkProvisioningError.CleanupFailed>(
-            withTimeout(2_000) { failedEvent.await() }.error
-        )
+        val failures = withTimeout(2_000) { failedEvent.await() }
+        assertIs<NetworkProvisioningError.JoinFailed>(failures[0].error)
+        assertIs<NetworkProvisioningError.CleanupFailed>(failures[1].error)
         assertEquals(1, wifi.lastJoinHandle?.closeAttempts)
         withTimeout(2_000) { wifi.lastJoinHandle?.awaitWatcherStopped() }
         mgr.close()
@@ -1197,7 +1466,8 @@ private class FakeWifiManagerWrapper(
             val apHosts: List<String>,
             val closeFailures: Int = 0,
             val closeEntered: CountDownLatch? = null,
-            val closeRelease: CountDownLatch? = null
+            val closeRelease: CountDownLatch? = null,
+            val replayedStop: String? = null
         ) : Behavior()
         data class StartSuspends(
             val entered: CompletableDeferred<Unit>,
@@ -1208,7 +1478,8 @@ private class FakeWifiManagerWrapper(
         ) : Behavior()
         data class JoinSucceeds(
             val networkState: dev.p2pkit.core.provisioning.NetworkState,
-            val closeFailures: Int = 0
+            val closeFailures: Int = 0,
+            val replayedRelease: String? = null
         ) : Behavior()
         data class JoinSuspends(
             val entered: CompletableDeferred<Unit>,
@@ -1221,7 +1492,11 @@ private class FakeWifiManagerWrapper(
             val apHosts: List<String>,
             val networkState: dev.p2pkit.core.provisioning.NetworkState,
             val hotspotCloseFailures: Int = 0,
-            val joinCloseFailures: Int = 0
+            val joinCloseFailures: Int = 0,
+            val startEntered: CompletableDeferred<Unit>? = null,
+            val startRelease: CompletableDeferred<Unit>? = null,
+            val joinEntered: CompletableDeferred<Unit>? = null,
+            val joinRelease: CompletableDeferred<Unit>? = null
         ) : Behavior()
         data class JoinFails(val reason: String) : Behavior()
         data class JoinThrowsSecurity(val message: String) : Behavior()
@@ -1248,7 +1523,8 @@ private class FakeWifiManagerWrapper(
                     apHosts = b.apHosts,
                     closeFailures = b.closeFailures,
                     closeEntered = b.closeEntered,
-                    closeRelease = b.closeRelease
+                    closeRelease = b.closeRelease,
+                    replayedStop = b.replayedStop
                 )
                 lastHandle = h
                 HotspotStartResult.Started(h)
@@ -1261,6 +1537,8 @@ private class FakeWifiManagerWrapper(
                 HotspotStartResult.Started(h)
             }
             is Behavior.StartAndJoin -> {
+                b.startEntered?.complete(Unit)
+                b.startRelease?.await()
                 val h = FakeHotspotHandle(b.credentials, b.apHosts, b.hotspotCloseFailures)
                 lastHandle = h
                 HotspotStartResult.Started(h)
@@ -1276,7 +1554,7 @@ private class FakeWifiManagerWrapper(
         joinCalls += 1
         return when (val b = behavior) {
             is Behavior.JoinSucceeds -> {
-                val h = FakeJoinHandle(b.networkState, b.closeFailures)
+                val h = FakeJoinHandle(b.networkState, b.closeFailures, b.replayedRelease)
                 lastJoinHandle = h
                 JoinResult.Joined(h)
             }
@@ -1288,6 +1566,8 @@ private class FakeWifiManagerWrapper(
                 JoinResult.Joined(h)
             }
             is Behavior.StartAndJoin -> {
+                b.joinEntered?.complete(Unit)
+                b.joinRelease?.await()
                 val h = FakeJoinHandle(b.networkState, b.joinCloseFailures)
                 lastJoinHandle = h
                 JoinResult.Joined(h)
@@ -1318,11 +1598,12 @@ private class FakeHotspotHandle(
     private val apHosts: List<String>,
     closeFailures: Int = 0,
     private val closeEntered: CountDownLatch? = null,
-    private val closeRelease: CountDownLatch? = null
+    private val closeRelease: CountDownLatch? = null,
+    replayedStop: String? = null
 ) : HotspotHandle {
 
     private val _stopped: MutableSharedFlow<HotspotStopReason> = MutableSharedFlow(
-        replay = 0,
+        replay = if (replayedStop == null) 0 else 1,
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
@@ -1334,22 +1615,31 @@ private class FakeHotspotHandle(
         private set
     private var closeFailuresRemaining: Int = closeFailures
     val stopSubscriberCount: Int get() = _stopped.subscriptionCount.value
+    val firstCloseAttempt = CompletableDeferred<Unit>()
+
+    init {
+        replayedStop?.let { _stopped.tryEmit(HotspotStopReason(it)) }
+    }
 
     override fun getCredentials(): WifiCredentials? = credentials
     override fun apHostAddresses(): List<String> = apHosts
     override fun close() {
-        closeAttempts += 1
-        closeEntered?.countDown()
-        if (closeRelease != null) {
-            check(closeRelease.await(2, TimeUnit.SECONDS)) {
-                "test did not release blocked hotspot cleanup"
+        try {
+            closeAttempts += 1
+            closeEntered?.countDown()
+            if (closeRelease != null) {
+                check(closeRelease.await(2, TimeUnit.SECONDS)) {
+                    "test did not release blocked hotspot cleanup"
+                }
             }
+            if (closeFailuresRemaining > 0) {
+                closeFailuresRemaining -= 1
+                throw IllegalStateException("simulated hotspot close failure")
+            }
+            isClosed = true
+        } finally {
+            firstCloseAttempt.complete(Unit)
         }
-        if (closeFailuresRemaining > 0) {
-            closeFailuresRemaining -= 1
-            throw IllegalStateException("simulated hotspot close failure")
-        }
-        isClosed = true
     }
 
     fun simulateSystemStop(reason: String) {
@@ -1363,11 +1653,12 @@ private class FakeHotspotHandle(
 
 private class FakeJoinHandle(
     private val state: dev.p2pkit.core.provisioning.NetworkState,
-    closeFailures: Int = 0
+    closeFailures: Int = 0,
+    replayedRelease: String? = null
 ) : JoinHandle {
 
     private val _released: MutableSharedFlow<String> = MutableSharedFlow(
-        replay = 0,
+        replay = if (replayedRelease == null) 0 else 1,
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
@@ -1378,15 +1669,24 @@ private class FakeJoinHandle(
         private set
     private var closeFailuresRemaining: Int = closeFailures
     val releaseSubscriberCount: Int get() = _released.subscriptionCount.value
+    val firstCloseAttempt = CompletableDeferred<Unit>()
+
+    init {
+        replayedRelease?.let { _released.tryEmit(it) }
+    }
 
     override fun snapshotNetworkState(): dev.p2pkit.core.provisioning.NetworkState = state
     override fun close() {
-        closeAttempts += 1
-        if (closeFailuresRemaining > 0) {
-            closeFailuresRemaining -= 1
-            throw IllegalStateException("simulated join close failure")
+        try {
+            closeAttempts += 1
+            if (closeFailuresRemaining > 0) {
+                closeFailuresRemaining -= 1
+                throw IllegalStateException("simulated join close failure")
+            }
+            isClosed = true
+        } finally {
+            firstCloseAttempt.complete(Unit)
         }
-        isClosed = true
     }
 
     fun simulateRelease(reason: String) {

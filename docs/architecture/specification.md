@@ -18,6 +18,15 @@ record produced during the 0.7 remediation is preserved in
 - Restartable low-level data transports use `stop()` to return to an idle state;
   permanent cleanup is owned by the enclosing kit lifecycle.
 - Provisioning-manager `close()` is suspending, idempotent, and permanent.
+- Android hotspot hosting and Wi-Fi joining can coexist. `state` describes
+  the latest operation/resource publication; `networkState` describes the
+  latest successfully published network resource, not a combined inventory.
+  An OS stop/release invalidates only snapshots owned by that resource and
+  emits a failure event without waiting for another OS acquisition to finish.
+  The event does not acknowledge native cleanup: serialized cleanup may emit
+  a subsequent `CleanupFailed`, and failed cleanup remains owned for retry.
+  `stopLocalNetwork()` releases hotspots only and preserves a joined network's
+  snapshots; joined bindings are released by system loss or manager/kit close.
 
 ## Peer and session contract
 
