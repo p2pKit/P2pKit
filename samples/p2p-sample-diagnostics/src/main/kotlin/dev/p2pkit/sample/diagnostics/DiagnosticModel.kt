@@ -11,17 +11,12 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.net.InetAddress
 import java.nio.charset.StandardCharsets
-import java.nio.file.AtomicMoveNotSupportedException
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
+import kotlin.time.Clock
 
 /**
  * Test-harness-only diagnostic event schema shared by the Android, JVM CLI,
@@ -1059,10 +1054,6 @@ public object DiagnosticEvidenceExporter {
         "manual-evidence-required.txt",
         "checksums.sha256"
     )
-    private val filenameTimestamp = DateTimeFormatter
-        .ofPattern("yyyy-MM-dd'T'HHmmss")
-        .withZone(ZoneId.of("UTC"))
-
     public fun export(
         recorder: DiagnosticRecorder,
         directory: File,
@@ -1111,20 +1102,7 @@ public object DiagnosticEvidenceExporter {
                     zip.closeEntry()
                 }
             }
-            try {
-                Files.move(
-                    temporary.toPath(),
-                    target.toPath(),
-                    StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING
-                )
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(
-                    temporary.toPath(),
-                    target.toPath(),
-                    StandardCopyOption.REPLACE_EXISTING
-                )
-            }
+            replaceDiagnosticFile(temporary, target)
             recorder.record(
                 DiagnosticRecord(
                     category = "evidence",
@@ -1158,11 +1136,10 @@ public object DiagnosticEvidenceExporter {
         timestamp: String,
         sessionId: String
     ): String {
-        val instant = runCatching { Instant.parse(timestamp) }.getOrElse { Instant.EPOCH }
         return listOf(
             filenameComponent(testId),
             filenameComponent(platform.lowercase()),
-            filenameTimestamp.format(instant),
+            diagnosticFilenameTimestamp(timestamp),
             filenameComponent(sessionId)
         ).joinToString("_") + ".zip"
     }
@@ -1418,7 +1395,8 @@ public fun correlationConnectionId(
     return "conn-" + sha256("$testSessionId|${peers[0]}|${peers[1]}".toByteArray()).take(20)
 }
 
-public fun isoTimestampNow(): String = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
+// Kotlin's pinned Clock has an Android SDK guard and uses currentTimeMillis before API26.
+public fun isoTimestampNow(): String = Clock.System.now().toString()
 
 public fun sha256(bytes: ByteArray): String =
     MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }

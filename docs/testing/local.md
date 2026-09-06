@@ -185,6 +185,31 @@ command above. Provider-internal key erasure, OS identity persistence, physical
 network behavior and independent cryptographic assurance are not established
 by these synthetic tests.
 
+## Android diagnostic compatibility
+
+The shared sample diagnostics use the pinned Kotlin clock's API-24/25 fallback,
+not unguarded `java.time`. UTC evidence naming uses Kotlin's ISO parser while
+preserving leap-second/end-of-day normalization and the invalid-input epoch fallback.
+NIO file APIs are isolated behind an availability check. Android 24/25 replaces
+same-directory evidence through checked POSIX-backed `File.renameTo`, without
+deleting the original first; JVM/API-26+ retains the existing NIO provider policy.
+No extra desugaring dependency or higher minimum SDK is required. Diagnostic ZIPs
+do not promise power-loss durability or atomic publication on every NIO provider.
+
+```bash
+./gradlew :p2p-sample-diagnostics:test :p2p-sample-android:lintDebug \
+  :p2p-sample-android:assembleDebug --console=plain
+```
+
+Missing-class tests exercise actual recorder/export code, failures and repeated replacement;
+classloader-local SDK stubs also execute the pinned Kotlin clock's 24/25 branches.
+These are host models, not ART. POSIX rename replacement is exercised on supporting
+hosts; other hosts assert failure preserves existing bytes rather than skipping.
+Inspect packaged call sites and the API guard when changing this boundary. On a
+real API24/25 runtime, enable test diagnostics, record a session, export twice and
+verify both ZIP checksums and the second export's new events. Repeat on API26+.
+Keep that runtime/device validation pending until actually executed.
+
 ## Android framework-adapter tests
 
 Run `./gradlew :p2p-network-provisioning-android:verifyAndroidAdapterTests --console=plain`
