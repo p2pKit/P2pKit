@@ -1,0 +1,37 @@
+{
+    "remove": [
+        "{\"testSessionId\":\"selected\"}",
+        "{ \"testSession\\u0049d\" : \"selec\\u0074ed\" }",
+        "{\"extra\":{\"testSessionId\":\"other\"},\"testSessionId\":\"selected\"}",
+        "{\"testSessionId\":\"selected\",\"extra\":\"a\\tb\\u0000c\\\"d\"}",
+        "{\"testSessionId\":\"selected\",\"extra\":[true,false,null,0,-0,1,-1,0.25,-1e-2,1E+4]}",
+        "{\"testSessionId\":\"selected\",\"other\":0,\"other\":1}"
+    ],
+    "retain": [
+        "{\"testSessionId\":\"other\"}",
+        "{\"testSessionId\":\"other\",\"extra\":{\"testSessionId\":\"selected\"}}",
+        "{\"testSessionId\":null}",
+        "{\"testSessionId\":\"selected\",\"broken\":not_json}",
+        "{\"testSessionId\":\"selected\",\"broken\":01}",
+        "{\"testSessionId\":\"selected\",\"broken\":1e}",
+        "{\"testSessionId\":\"selected\",\"broken\":+1}",
+        "{\"testSessionId\":\"selected\",\"broken\":NaN}",
+        "{\"testSessionId\":\"selected\",\"broken\":Infinity}",
+        "{\"testSessionId\":\"selected\",\"broken\":trueX}",
+        "{\"testSessionId\":\"selected\",\"broken\":nullX}",
+        "{\"testSessionId\":\"selected\",\"broken\":\"a\tb\"}",
+        "{\"testSessionId\":\"selected\",\"broken\":\"a\u0000b\"}",
+        "{\"testSessionId\":\"selected\",\"broken\":\"a\u001fb\"}",
+        "{\"testSessionId\":\"selected\",\"broken\":not_json,\"broken\":0}",
+        "{\"testSessionId\":\"other\",\"testSessionId\":\"selected\"}",
+        "{\"testSessionId\":\"selected\",\"testSessionId\":\"other\"}",
+        "{\"testSessionId\":\"selected\",\"testSessionId\":\"selected\"}",
+        "{\"testSessionId\":\"other\",\"testSession\\u0049d\":\"selected\"}",
+        "{\"testSession\\u0049d\":\"selected\",\"testSessionId\":\"other\"}",
+        "{\"testSessionId\":\"selected\",}",
+        "{\"testSessionId\":\"selected\"}{}",
+        "{\"testSessionId\":\"selected\",\"broken\":\"bad\\q\"}",
+        "{\"testSessionId\":\"selected\",\"broken\":\"bad\\u00XX\"}",
+        "not-json: \"testSessionId\":\"selected\""
+    ]
+}

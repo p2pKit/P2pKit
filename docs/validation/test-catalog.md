@@ -1004,10 +1004,11 @@ Partial rotation can already have discarded older history, and an interrupted
 append can leave a partial record in an older generation. These restart logs are
 bounded best-effort diagnostics, not crash-atomic or power-loss-durable storage.
 
-**Selective clear:** the sample clear buttons and `diag clear` remove exact decoded
-top-level `testSessionId` matches, not raw text/nested-field matches. Other-session
-records and malformed/unattributable lines retain their original bytes. Each file
-is replaced using checked same-directory atomic replacement, never delete-then-rename;
+**Selective clear:** the sample clear buttons and `diag clear` remove valid JSON with
+exactly one decoded top-level `testSessionId` key matching the selected session, not
+raw text/nested-field matches. Other-session records, malformed/unattributable lines,
+and duplicate session keys (even with identical values) retain their original bytes.
+Each file is replaced using checked same-directory atomic replacement, never delete-then-rename;
 selective clear fails instead of using a non-atomic replacement fallback. Oversized
 records (JVM/Android's configured record limit) or files (Swift's 2 MiB file limit)
 fail clearing without replacing that file. These limits also bound rewrite memory.
@@ -1022,8 +1023,8 @@ Failure preserves memory and the viewer's selection/paused snapshot, with a gene
 error instead of a crashed callback or false success. Some selected history may
 already be removed from earlier files/destinations before a later failure; retry
 after resolving storage/ownership errors. No multi-file, multi-process, secure-erasure
-or power-loss durability guarantee is made. Malformed records cannot be attributed
-reliably and are not promised to be removed by a session-specific clear.
+or power-loss durability guarantee is made. Malformed or ambiguous records cannot be
+attributed reliably and are not promised to be removed by a session-specific clear.
 
 Packet captures and OS logs are additional evidence, never replacements for
 the application export. When a platform cannot expose a native path detail

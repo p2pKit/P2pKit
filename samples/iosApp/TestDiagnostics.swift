@@ -1088,9 +1088,13 @@ final class IOSTestDiagnosticStore: ObservableObject {
     }
 
     private func rewritePersistentLogsExcluding(sessionId: String) throws {
+        // Foundation URL resource values are cached. Retry must inspect today's path,
+        // not a previously observed obstruction (or previously valid directory).
+        var currentDirectory = logDirectory
+        currentDirectory.removeAllCachedResourceValues()
         let directory: URLResourceValues
         do {
-            directory = try logDirectory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            directory = try currentDirectory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         } catch CocoaError.fileReadNoSuchFile {
             return
         }
@@ -1118,9 +1122,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
                 let line = contents[start..<end]
                 // Preserve exact bytes for malformed/foreign records, blank lines, CRLF,
                 // and truncated final lines. A nested/raw marker is not a session match.
-                let selected = String(data: line, encoding: .utf8) != nil &&
-                    (try? JSONDecoder().decode(TestDiagnosticSessionSelection.self, from: line))?
-                        .testSessionId == sessionId
+                let selected = TestDiagnosticSessionSelection.belongsToSession(line, sessionId: sessionId)
                 if !selected { retained.append(line) }
                 start = end
             }
@@ -1394,6 +1396,73 @@ private struct DiagnosticValueRow: View {
 
 private struct TestDiagnosticSessionSelection: Decodable {
     let testSessionId: String
+
+    /// Mirror the JVM token/unique-key guard; Foundation's decoder checks document structure.
+    static func belongsToSession(_ line: Data, sessionId: String) -> Bool {
+        guard String(data: line, encoding: .utf8) != nil, hasStrictTokensAndOneSessionKey(Array(line)) else { return false }
+        return (try? JSONDecoder().decode(Self.self, from: line))?.testSessionId == sessionId
+    }
+
+    private static func hasStrictTokensAndOneSessionKey(_ bytes: [UInt8]) -> Bool {
+        var index = 0
+        var depth = 0
+        var sessionKeys = 0
+        while index < bytes.count {
+            switch bytes[index] {
+            case 0x20, 0x09, 0x0d, 0x0a: index += 1
+            case 0x7b, 0x5b: depth += 1; index += 1
+            case 0x7d, 0x5d: depth -= 1; index += 1
+            case 0x3a, 0x2c: index += 1
+            case 0x22:
+                let start = index
+                index += 1
+                var closed = false
+                while index < bytes.count {
+                    let value = bytes[index]
+                    index += 1
+                    if value == 0x22 { closed = true; break }
+                    if value < 0x20 { return false }
+                    if value == 0x5c {
+                        guard index < bytes.count else { return false }
+                        let escape = bytes[index]
+                        index += 1
+                        switch escape {
+                        case 0x22, 0x5c, 0x2f, 0x62, 0x66, 0x6e, 0x72, 0x74: break
+                        case 0x75:
+                            for _ in 0..<4 {
+                                guard index < bytes.count, hex.contains(bytes[index]) else { return false }
+                                index += 1
+                            }
+                        default: return false
+                        }
+                    }
+                }
+                guard closed else { return false }
+                var next = index
+                while next < bytes.count && whitespace.contains(bytes[next]) { next += 1 }
+                if depth == 1 && next < bytes.count && bytes[next] == 0x3a,
+                   (try? JSONDecoder().decode(String.self, from: Data(bytes[start..<index]))) == "testSessionId" {
+                    sessionKeys += 1
+                    if sessionKeys > 1 { return false }
+                }
+            default:
+                if bytes[index] < 0x20 { return false }
+                let start = index
+                while index < bytes.count && !delimiters.contains(bytes[index]) { index += 1 }
+                let token = String(decoding: bytes[start..<index], as: UTF8.self)
+                let range = NSRange(location: 0, length: token.utf16.count)
+                if !["true", "false", "null"].contains(token) &&
+                    number.firstMatch(in: token, range: range)?.range != range { return false }
+            }
+            if depth < 0 { return false }
+        }
+        return depth == 0 && sessionKeys == 1
+    }
+
+    private static let whitespace = Array(" \t\r\n".utf8)
+    private static let delimiters = Array(" \t\r\n{}[]:,\"".utf8)
+    private static let hex = Array("0123456789abcdefABCDEF".utf8)
+    private static let number = try! NSRegularExpression(pattern: #"-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?"#)
 }
 
 private enum TestDiagnosticClearError: Error {

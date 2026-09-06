@@ -4,6 +4,29 @@ import XCTest
 
 final class TestDiagnosticClearTests: XCTestCase {
     @MainActor
+    func testSharedSelectionFixtureRequiresStrictSyntaxAndAnUnambiguousTopLevelId() throws {
+        let fixture = try ClearFixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        store.startSession(testId: "PS-T01", requestedSessionId: "selected", role: "both")
+        let url = try XCTUnwrap(Bundle(for: type(of: self)).url(
+            forResource: "diagnostic-session-selection", withExtension: "json"
+        ))
+        let cases = try JSONDecoder().decode([String: [String]].self, from: Data(contentsOf: url))
+        XCTAssertEqual(Set(cases.keys), Set(["remove", "retain"]))
+        let file = fixture.logs.appendingPathComponent("events.jsonl")
+        for (disposition, lines) in cases {
+            for (index, line) in lines.enumerated() {
+                let bytes = Data((line + "\n").utf8)
+                try bytes.write(to: file)
+                _ = try store.clearCurrentSession()
+                let expected = disposition == "remove" ? Data() : bytes
+                XCTAssertEqual(try Data(contentsOf: file), expected, "\(disposition)[\(index)]")
+            }
+        }
+    }
+
+    @MainActor
     func testExactDecodedSessionSelectionPreservesEveryUnrelatedByte() throws {
         let fixture = try ClearFixture()
         defer { fixture.cleanup() }
@@ -172,6 +195,27 @@ final class TestDiagnosticClearTests: XCTestCase {
         try Data("not a directory".utf8).write(to: fixture.logs)
         XCTAssertThrowsError(try store.clearCurrentSession())
         XCTAssertEqual(store.events, before)
+        try FileManager.default.removeItem(at: fixture.logs)
+        XCTAssertEqual(try store.clearCurrentSession(), 2)
+
+        store.startSession(testId: "PS-T01", requestedSessionId: "selected", role: "both")
+        let recreatedLog = fixture.logs.appendingPathComponent("events.jsonl")
+        XCTAssertFalse(try Data(contentsOf: recreatedLog).isEmpty)
+        XCTAssertEqual(try store.clearCurrentSession(), 2, "retry must also recognize a recreated directory")
+        XCTAssertEqual(try Data(contentsOf: recreatedLog), Data())
+
+        store.startSession(testId: "PS-T01", requestedSessionId: "selected", role: "both")
+        let beforeSymlink = store.events
+        let otherDirectory = fixture.root.appendingPathComponent("other-directory", isDirectory: true)
+        try FileManager.default.createDirectory(at: otherDirectory, withIntermediateDirectories: false)
+        let otherFile = otherDirectory.appendingPathComponent("events.jsonl")
+        let otherBytes = Data("preserve unrelated directory".utf8)
+        try otherBytes.write(to: otherFile)
+        try FileManager.default.removeItem(at: fixture.logs)
+        try FileManager.default.createSymbolicLink(at: fixture.logs, withDestinationURL: otherDirectory)
+        XCTAssertThrowsError(try store.clearCurrentSession(), "a formerly valid directory can become a symlink")
+        XCTAssertEqual(store.events, beforeSymlink)
+        XCTAssertEqual(try Data(contentsOf: otherFile), otherBytes)
         try FileManager.default.removeItem(at: fixture.logs)
         XCTAssertEqual(try store.clearCurrentSession(), 2)
     }

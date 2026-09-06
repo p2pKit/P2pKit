@@ -102,6 +102,8 @@ targets:
       - DiagnosticsTests
       - path: ../p2p-sample-diagnostics/src/test/resources/diagnostic-detail-policy.json
         buildPhase: resources
+      - path: ../p2p-sample-diagnostics/src/test/resources/diagnostic-session-selection.json
+        buildPhase: resources
     dependencies:
       - target: p2pkit-sample
     settings:

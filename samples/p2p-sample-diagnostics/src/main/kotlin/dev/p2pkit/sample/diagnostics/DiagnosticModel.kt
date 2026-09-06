@@ -6,8 +6,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -1315,7 +1313,8 @@ public class RollingJsonlFileSink internal constructor(
     }
 
     /**
-     * Removes exact decoded top-level session matches, preserving malformed/unrelated lines.
+     * Removes valid JSON with exactly one decoded top-level session key matching [sessionId].
+     * Malformed, duplicate-session-key and unrelated lines retain their original bytes.
      * Each replacement is atomic or fails without deleting the original; there is no
      * non-atomic provider fallback. Earlier generations may be cleared before a later failure.
      * A record exceeding the configured [maxBytes] fails clearing before replacement.
@@ -1329,10 +1328,7 @@ public class RollingJsonlFileSink internal constructor(
                     var failure: Throwable? = null
                     try {
                         files.rewrite(file, temporary, maxBytes) { line ->
-                            val id = runCatching {
-                                (JSON.parseToJsonElement(line) as? JsonObject)?.get("testSessionId") as? JsonPrimitive
-                            }.getOrNull()
-                            id?.isString != true || id.content != sessionId
+                            !diagnosticLineBelongsToSession(line, sessionId)
                         }
                         files.replace(temporary, file)
                     } catch (error: Throwable) {

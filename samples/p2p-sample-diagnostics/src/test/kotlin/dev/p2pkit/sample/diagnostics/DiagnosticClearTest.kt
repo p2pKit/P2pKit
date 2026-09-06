@@ -1,5 +1,6 @@
 package dev.p2pkit.sample.diagnostics
 
+import kotlinx.serialization.decodeFromString
 import java.io.File
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
@@ -16,6 +17,24 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class DiagnosticClearTest {
+    @Test
+    fun sharedSelectionFixtureRequiresStrictSyntaxAndAnUnambiguousTopLevelId() = withDirectory { directory ->
+        val fixture = requireNotNull(javaClass.getResource("/diagnostic-session-selection.json")).readText()
+        val cases = JSON.decodeFromString<Map<String, List<String>>>(fixture)
+        assertEquals(setOf("remove", "retain"), cases.keys)
+        val file = File(directory, "diagnostic-events.jsonl")
+        val mismatches = mutableListOf<String>()
+        for ((disposition, lines) in cases) {
+            lines.forEachIndexed { index, line ->
+                file.writeText(line + "\n")
+                RollingJsonlFileSink(directory).clearSession("selected")
+                val expected = if (disposition == "remove") "" else line + "\n"
+                if (file.readText() != expected) mismatches += "$disposition[$index]"
+            }
+        }
+        assertEquals(emptyList(), mismatches, "every fixture case must follow strict, unambiguous attribution")
+    }
+
     @Test
     fun replacementNeverDeletesTheOnlyCopyOfAnotherSession() = withDirectory { directory ->
         val original = object : File(directory, "diagnostic-events.jsonl") {
