@@ -93,9 +93,11 @@ During handshake, idle connection, and 49 MiB transfer separately:
 Record `diag fault` immediately before steps 1–3 with the exact signal/action.
 
 Use `ps`, `jcmd`, or the OS equivalent to retain PID/process-tree evidence.
-Graceful termination must execute teardown once. Crash must be surfaced as
-interruption/failure, never completion. Reconnect is bounded by five attempts
-at the configured delay and identity reset follows the authorization policy.
+Graceful termination must execute teardown once. Record crashes explicitly;
+never infer transfer completion from a crash or locally submitted bytes. Apply
+D3's acknowledgment and reconciliation rules to in-flight transfers and
+previously committed receiver files. Reconnect is bounded by five attempts at
+the configured delay and identity reset follows the authorization policy.
 
 ### D3 — socket and network failures
 
@@ -103,8 +105,25 @@ Use the [hostile-network handbook](hostile-network.md) for approved firewall and
 interface controls. Inject connection reset, silent drop, blocked discovery,
 blocked data port, interface down/up, and repeated reconnect. Correlate every
 OS action with a timestamped `network.path.changed`, timeout/retry, and terminal
-event where observable. A missing acknowledgment or partial stream must not
-commit a transfer.
+event where observable. For authenticated-v2 file transfers, distinguish:
+
+- **Incomplete or integrity-invalid data:** the receiver must not commit it;
+  uncommitted staging files must be cleaned up.
+- **Acknowledgment lost after receiver commit:** the receiver commits before
+  sending `FILE_COMMIT`. If that acknowledgment never reaches the sender, the
+  sender must time out/fail rather than report completion, but a complete
+  committed receiver target may remain. Missing acknowledgment is not proof
+  that no receiver output exists.
+
+Use transfer-unique destinations. Correlate both peers' session/transfer IDs,
+terminal states, fixture hashes, and the receiver's filesystem evidence before
+retrying. Preserve a published target for reconciliation; never delete it merely
+because the sender failed or acknowledge before commit to satisfy this campaign.
+Do not assume retries across sessions automatically reconcile existing files.
+Apply the [destination contract](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/transfer/FileTransferResources.kt#L45)
+and [platform durability limits](../architecture/specification.md#file-transfer),
+including possible late publication after a commit timeout and Windows' lack
+of a directory-entry power-loss guarantee.
 
 ### D4 — malformed and corrupted input
 
@@ -178,14 +197,16 @@ baseline, midpoint, and end.
 ## Pass/fail and evidence
 
 Pass requires the documented outcomes (including logged inbound refusals in
-D5), matching UI and structured events where exposed, correct hashes for
-success, no partial output for failure, bounded retries and resources, one
-teardown, no orphan process, and three repeat runs of each mandatory fault on
-every target OS. A logged refusal is not evidence that a typed admission API
-exists.
+D5), matching UI and structured events on each peer where exposed, correct hashes for
+success, no partial/corrupt committed output, cleanup of uncommitted staging,
+bounded retries and resources, one teardown, no orphan process, and three
+repeat runs of each mandatory fault on every target OS. In D3's lost-ack case,
+sender failure and a complete receiver target are compatible: record each
+side's outcome separately and retain the target for reconciliation. A logged
+refusal is not evidence that a typed admission API exists.
 
-Fail on crash outside an intentional kill, freeze, false success, ambiguous
-terminal state, mixed transfer IDs, unsanitized control text, secret/payload
+Fail on crash outside an intentional kill, freeze, false success, contradictory
+local terminal states, mixed transfer IDs, unsanitized control text, secret/payload
 logging, unbounded growth, leaked process/resource, lost consent, stale active
 row, corrupt/partial commit, or missing/crossed evidence.
 
