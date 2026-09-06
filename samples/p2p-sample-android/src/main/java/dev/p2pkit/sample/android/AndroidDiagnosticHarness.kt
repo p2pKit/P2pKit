@@ -157,7 +157,10 @@ internal class AndroidDiagnosticHarness(
         // session's restart preferences. A failed commit is a reported storage failure.
         val removed = recorder.clearCurrentSession { current ->
             rollingSink.clearSession(current)
-            if (!preferences.edit().clear().commit()) {
+            // Keep the Editor explicit: the KTX edit helper discards commit's success value.
+            val editor = preferences.edit()
+            editor.clear()
+            if (!editor.commit()) {
                 throw IOException("Could not clear diagnostic session preferences")
             }
         }
