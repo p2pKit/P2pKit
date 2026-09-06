@@ -15,7 +15,8 @@ internal fun diagnosticLineBelongsToSession(line: String, sessionId: String): Bo
 /**
  * The JSON library checks document structure, but its tree reader admits non-JSON bare
  * primitives/raw controls and overwrites duplicate keys. Check every token before parsing,
- * including values hidden by duplicate unrelated keys. This is iterative and input-bounded.
+ * including values hidden by duplicate unrelated keys. The trailing-comma guard is mirrored
+ * on Swift, where Foundation accepts that non-JSON syntax. This is iterative and input-bounded.
  */
 private fun hasStrictTokensAndOneSessionKey(line: String): Boolean {
     var index = 0
@@ -32,7 +33,13 @@ private fun hasStrictTokensAndOneSessionKey(line: String): Boolean {
                 depth--
                 index++
             }
-            ':', ',' -> index++
+            ':' -> index++
+            ',' -> {
+                var next = index + 1
+                while (next < line.length && line[next] in JSON_WHITESPACE) next++
+                if (next == line.length || line[next] == '}' || line[next] == ']') return false
+                index++
+            }
             '"' -> {
                 val start = index++
                 var closed = false

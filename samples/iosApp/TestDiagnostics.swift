@@ -1397,7 +1397,8 @@ private struct DiagnosticValueRow: View {
 private struct TestDiagnosticSessionSelection: Decodable {
     let testSessionId: String
 
-    /// Mirror the JVM token/unique-key guard; Foundation's decoder checks document structure.
+    /// Mirror the JVM token/unique-key guard. Also reject trailing commas explicitly:
+    /// Foundation accepts them, even though its decoder otherwise checks document structure.
     static func belongsToSession(_ line: Data, sessionId: String) -> Bool {
         guard String(data: line, encoding: .utf8) != nil, hasStrictTokensAndOneSessionKey(Array(line)) else { return false }
         return (try? JSONDecoder().decode(Self.self, from: line))?.testSessionId == sessionId
@@ -1412,7 +1413,12 @@ private struct TestDiagnosticSessionSelection: Decodable {
             case 0x20, 0x09, 0x0d, 0x0a: index += 1
             case 0x7b, 0x5b: depth += 1; index += 1
             case 0x7d, 0x5d: depth -= 1; index += 1
-            case 0x3a, 0x2c: index += 1
+            case 0x3a: index += 1
+            case 0x2c:
+                var next = index + 1
+                while next < bytes.count && whitespace.contains(bytes[next]) { next += 1 }
+                if next == bytes.count || bytes[next] == 0x7d || bytes[next] == 0x5d { return false }
+                index += 1
             case 0x22:
                 let start = index
                 index += 1

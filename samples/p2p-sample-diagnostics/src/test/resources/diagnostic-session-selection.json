@@ -5,7 +5,9 @@
         "{\"extra\":{\"testSessionId\":\"other\"},\"testSessionId\":\"selected\"}",
         "{\"testSessionId\":\"selected\",\"extra\":\"a\\tb\\u0000c\\\"d\"}",
         "{\"testSessionId\":\"selected\",\"extra\":[true,false,null,0,-0,1,-1,0.25,-1e-2,1E+4]}",
-        "{\"testSessionId\":\"selected\",\"other\":0,\"other\":1}"
+        "{\"testSessionId\":\"selected\",\"other\":0,\"other\":1}",
+        "{\"testSessionId\":\"selected\",\"extra\":{\"items\":[{},[],{\"message\":\",] ,} : \\\"\"},-300000000000000.0]}}",
+        "{\"testSessionId\":\"selected\",\"extra\":[true,\r\t false, null]}"
     ],
     "retain": [
         "{\"testSessionId\":\"other\"}",
@@ -32,6 +34,25 @@
         "{\"testSessionId\":\"selected\"}{}",
         "{\"testSessionId\":\"selected\",\"broken\":\"bad\\q\"}",
         "{\"testSessionId\":\"selected\",\"broken\":\"bad\\u00XX\"}",
-        "not-json: \"testSessionId\":\"selected\""
+        "not-json: \"testSessionId\":\"selected\"",
+        "{\"testSessionId\":\"selected\",\r\t }",
+        "{\"testSessionId\":\"selected\",\"extra\":[1,]}",
+        "{\"testSessionId\":\"selected\",\"extra\":[1,\r\t ]}",
+        "{\"testSessionId\":\"selected\",\"extra\":{\"value\":true,}}",
+        "{\"testSessionId\":\"selected\",\"extra\":{\"value\":true,\r\t }}",
+        "{\"testSessionId\":\"selected\",\"extra\":[1,],\"extra\":0}",
+        "{\"testSessionId\":\"selected\" \"extra\":0}",
+        "{,\"testSessionId\":\"selected\"}",
+        "{\"testSessionId\":\"selected\",,\"extra\":0}",
+        "{\"testSessionId\":\"selected\",\"extra\":[,1]}",
+        "{\"testSessionId\":\"selected\",\"extra\":[1,,2]}",
+        "{\"testSessionId\" \"selected\"}",
+        "{\"testSessionId\":\"selected\",\"extra\"::0}",
+        "{testSessionId:\"selected\"}",
+        "{\"testSessionId\":\"selected\",true:0}",
+        "{\"testSessionId\":\"selected\",1:0}",
+        "{\"testSessionId\":\"selected\",/*comment*/\"extra\":0}",
+        "{\"testSessionId\":\"selected\",\"extra\":[}}",
+        "[{\"testSessionId\":\"selected\"}]"
     ]
 }
