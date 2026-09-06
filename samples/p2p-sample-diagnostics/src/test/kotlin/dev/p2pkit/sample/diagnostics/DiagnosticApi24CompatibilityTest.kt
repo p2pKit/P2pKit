@@ -99,10 +99,17 @@ class DiagnosticApi24CompatibilityTest {
             "2026-09-06T12:34:56.Z",
             "2026-09-06T00:30:00+02:00",
             "2026-09-06T23:30:00-02:00",
+            "2026-09-06T00:30:00+00:00",
+            "2026-09-06T00:30:00-00:00",
+            "2026-09-06T00:30:00+02:30:15",
+            "2026-09-06T00:30:00-00:00:15",
             "2000-02-29T12:00:00Z",
             "1500-02-28T12:00:00Z",
             "0000-01-01T00:00:00Z",
             "-0001-01-01T00:00:00Z",
+            "-00001-01-01T00:00:00Z",
+            "+00001-01-01T00:00:00Z",
+            "+00000-01-01T00:00:00Z",
             "+10000-01-01T00:00:00Z",
             "2016-12-31T23:59:60Z",
             "2016-12-31T23:59:60.123+01:00",
@@ -122,6 +129,27 @@ class DiagnosticApi24CompatibilityTest {
                 timestamp
             )
         }
+    }
+
+    @Test
+    fun filenameNormalizationRejectsNegativeZeroYearAndIncompleteOffsets() {
+        val timestamps = listOf(
+            "2026-09-06T00:30:00+02",
+            "2026-09-06T00:30:00-02",
+            "2026-09-06T00:30:00+00",
+            "2026-09-06T00:30:00-00",
+            "-0000-01-01T00:00:00Z",
+            "-00000-01-01T00:00:00Z"
+        )
+        timestamps.forEach { timestamp ->
+            assertTrue(runCatching { Instant.parse(timestamp) }.isFailure, timestamp)
+        }
+        assertEquals(
+            timestamps.associateWith { "test_android_1970-01-01T000000_session.zip" },
+            timestamps.associateWith {
+                DiagnosticEvidenceExporter.evidenceFilename("test", "android", it, "session")
+            }
+        )
     }
 
     private fun invokeWithoutApi26(

@@ -8,9 +8,14 @@ private val exceptionalIsoTime = Regex(
     RegexOption.IGNORE_CASE
 )
 private val emptyIsoFraction = Regex("\\.(?=Z$|[+-]\\d{2}:\\d{2}(?::\\d{2})?$)", RegexOption.IGNORE_CASE)
+private val negativeZeroIsoYear = Regex("^-0{4,10}-")
+private val incompleteIsoOffset = Regex("[+-]\\d{2}$")
 
 /** Preserves the previous ISO_INSTANT parser's leap-second/end-of-day normalization. */
 private fun parseDiagnosticTimestamp(timestamp: String): Instant {
+    // Kotlin also accepts these forms, but ISO_INSTANT rejected them. Keep the
+    // existing invalid-input epoch fallback rather than silently changing filenames.
+    require(!negativeZeroIsoYear.containsMatchIn(timestamp) && !incompleteIsoOffset.containsMatchIn(timestamp))
     val exceptional = exceptionalIsoTime.find(timestamp)
     val endOfDay = exceptional?.groupValues?.get(1) == "24:00:00"
     val normalized = if (exceptional == null) timestamp else {
