@@ -19,10 +19,12 @@ scripts/tests/resolve-ci-scope-test.sh
 scripts/tests/check-git-whitespace-test.sh
 scripts/tests/check-release-identity-test.sh
 scripts/tests/check-kotlin-toolchain-policy-test.sh
+ruby scripts/tests/check-platform-test-policy-test.rb
+python3 scripts/tests/run-platform-tests-test.py
 scripts/check-release-metadata.sh
 scripts/check-git-whitespace.sh
 python3 scripts/tests/ios-project-generation-test.py
-./gradlew check --console=plain
+python3 scripts/run-platform-tests.py full
 scripts/check-sbom.sh
 scripts/check-publish-artifacts.sh
 scripts/check-published-consumers.sh

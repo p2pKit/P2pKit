@@ -207,8 +207,24 @@ jobs:
           retention-days: 7
 
       - name: Run complete module and platform checks
+        id: platform-tests
         if: steps.scope.outputs.full == 'true'
-        run: ./gradlew check --console=plain
+        run: python3 scripts/run-platform-tests.py full
+
+      - name: Stop Gradle after platform tests
+        id: stop-platform-gradle
+        if: ${{ always() && steps.scope.outputs.full == 'true' }}
+        run: ./gradlew --stop
+
+      - name: Upload platform test execution evidence
+        id: platform-reports
+        if: ${{ always() && steps.scope.outputs.full == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: platform-test-execution-${{ github.run_attempt }}
+          path: build/reports/platform-tests/**
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Verify API, documentation, and SBOM
         if: steps.scope.outputs.full == 'true'

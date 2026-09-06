@@ -8,6 +8,11 @@ a tag or Maven Central publication.
    remote publication is verified.
 2. Confirm a clean worktree and exact ancestry from `origin/main`.
 3. Run all script tests, `git diff --check`, and `scripts/run-release-gate.sh`.
+   Retain its source-bound `build/reports/platform-tests/` execution report and
+   a same-source native Intel `ios-x64` profile result (local or the manual/weekly
+   Intel workflow). The arm64 gate cannot verify the published `iosX64` slice;
+   no Intel execution may be inferred from cross-compilation. See the
+   [platform coverage guide](../testing/local.md#platform-execution-evidence).
 4. Run OSV, dependency submission, ABI, strict Dokka, SBOM, publication shape,
    isolated consumers, Swift warnings-as-errors, and XCFramework provenance.
 5. Confirm `scripts/check-release-tag.sh v<VERSION_NAME>` and

@@ -1,0 +1,91 @@
+// Invocation-local evidence. Only scripts/run-platform-tests.py supplies the
+// fresh token/output path; included builds must not overwrite the root report.
+import groovy.json.JsonOutput
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+import org.gradle.api.tasks.testing.AbstractTestTask
+import org.gradle.api.tasks.testing.TestDescriptor
+import org.gradle.api.tasks.testing.TestListener
+import org.gradle.api.tasks.testing.TestResult
+
+gradle.projectsLoaded {
+    def root = gradle.rootProject
+    def properties = gradle.startParameter.projectProperties
+    if (root.rootDir.absolutePath != properties['p2pkit.testCoverageRoot']) return
+    def token = properties['p2pkit.testCoverageToken']
+    if (!(token ==~ /[0-9a-f]{32}/)) throw new GradleException('Missing test-coverage invocation token')
+    def output = new File(root.rootDir, "build/reports/platform-tests/${token}/execution.json")
+    def model = [:]
+    def records = new ConcurrentHashMap()
+    def counts = new ConcurrentHashMap()
+    def graph = Collections.synchronizedSet(new HashSet())
+
+    root.allprojects { project ->
+        project.tasks.withType(AbstractTestTask).configureEach { task ->
+            def counters = ['SUCCESS', 'FAILURE', 'SKIPPED'].collectEntries { [(it): new AtomicLong()] }
+            counts[task.path] = counters
+            task.addTestListener(new TestListener() {
+                void beforeSuite(TestDescriptor descriptor) {}
+                void afterSuite(TestDescriptor descriptor, TestResult result) {}
+                void beforeTest(TestDescriptor descriptor) {}
+                void afterTest(TestDescriptor descriptor, TestResult result) {
+                    counters[result.resultType.toString()].incrementAndGet()
+                }
+            })
+        }
+    }
+
+    gradle.projectsEvaluated {
+        root.allprojects { project ->
+            def kotlin = project.extensions.findByName('kotlin')
+            def targets = [:]
+            if (kotlin != null) {
+                if (kotlin.hasProperty('targets')) {
+                    kotlin.targets.each { targets[it.name] = it.platformType.toString() }
+                } else if (kotlin.hasProperty('target')) {
+                    def platform = kotlin.target.platformType.toString()
+                    targets[platform == 'androidJvm' ? 'android' : platform] = platform
+                } else {
+                    targets['UNCLASSIFIED'] = kotlin.class.name
+                }
+            }
+            def tests = project.tasks.withType(AbstractTestTask).collect { it.path }.sort()
+            model[project.path] = [targets: targets, tests: tests]
+        }
+    }
+    gradle.taskGraph.whenReady { taskGraph ->
+        graph.addAll(taskGraph.allTasks.collect { it.path })
+    }
+    gradle.taskGraph.afterTask { task, state ->
+        if (!(task instanceof AbstractTestTask)) return
+        records[task.path] = state.failure != null ? 'FAILED' :
+            state.noSource ? 'NO_SOURCE' :
+            state.skipped ? (state.skipMessage ?: 'SKIPPED') : 'EXECUTED'
+    }
+    gradle.buildFinished { result ->
+        def tests = [:]
+        root.allprojects { project ->
+            project.tasks.withType(AbstractTestTask).each { task ->
+                def counters = counts[task.path]
+                tests[task.path] = [
+                    outcome: records[task.path] ?: (graph.contains(task.path) ? 'NOT_COMPLETED' : 'NOT_REQUESTED'),
+                    enabled: task.enabled,
+                    inGraph: graph.contains(task.path),
+                    passed: counters?.get('SUCCESS')?.get() ?: 0,
+                    failed: counters?.get('FAILURE')?.get() ?: 0,
+                    skipped: counters?.get('SKIPPED')?.get() ?: 0,
+                ]
+            }
+        }
+        def report = [schema: 1, token: token, buildFailed: result.failure != null,
+                      dryRun: gradle.startParameter.dryRun,
+                      host: [os: System.getProperty('os.name'), arch: System.getProperty('os.arch')],
+                      model: model, tests: tests]
+        output.parentFile.mkdirs()
+        def temporary = new File(output.parentFile, 'execution.json.tmp')
+        temporary.setText(JsonOutput.prettyPrint(JsonOutput.toJson(report)) + '\n', 'UTF-8')
+        Files.move(temporary.toPath(), output.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }
+}

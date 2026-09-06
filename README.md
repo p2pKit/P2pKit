@@ -253,6 +253,14 @@ consumer, SBOM, signing, provenance, Swift warnings-as-errors, and XCFramework
 gates passed for the published `0.7.0-rc3` commit. This does not replace
 external evidence.
 
+Current CI reports actual Kotlin test-task execution and skipped targets;
+`check` success alone is not an all-runtime result. The published `iosX64`
+slice cannot be natively tested on the default arm64 runner: a weekly/manual
+Intel simulator job is configured, but its passing run must be recorded for
+the tested commit. `iosArm64` device execution needs external hardware.
+No Android instrumented/device test suite is authored; Android host JVM
+tests (including Robolectric shadows) are not ART or physical-device evidence.
+
 These areas remain explicitly pending:
 
 1. Android physical-device validation.

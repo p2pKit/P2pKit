@@ -76,6 +76,7 @@ jobs:
           name: release-evidence-${{ env.RELEASE_TAG }}
           path: |
             build/reports/release/**
+            build/reports/platform-tests/**
             build/reports/cyclonedx/bom.*
             library/p2p-transport-lan/build/XCFrameworks/release/BUILD_*.txt
             library/p2p-core/api/**

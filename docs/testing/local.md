@@ -74,6 +74,49 @@ a configured workflow or another OS's pass is not host-execution evidence.
 `scripts/tests/release-workflow-test.sh` checks the matrix, actual task command,
 report paths, and fail-closed dependency guard, with negative policy controls.
 
+## Platform execution evidence
+
+On macOS with JDK 17, Xcode, and the configured Android SDKs, use:
+
+```bash
+python3 scripts/run-platform-tests.py full
+# Native Intel Mac only; not an arm64/Rosetta substitute:
+python3 scripts/run-platform-tests.py ios-x64
+```
+
+The full profile runs `./gradlew check --console=plain` with strict dependency
+verification, task reruns, caches disabled, two workers, and no parallel tasks.
+Both simulator architectures share the network-test serialization service.
+The Intel profile requests only core and LAN `iosX64Test` tasks. CI uses the
+full profile; `ios-x64-tests.yml` provides a secret-free weekly/manual Intel job.
+Keep failures blocking; a configured workflow is not hosted execution evidence.
+
+Reports live in `build/reports/platform-tests/<invocation-token>/`:
+`invocation.json` binds the command to the commit/tree and complete tracked diff;
+`execution.json` records Gradle task outcomes and actual passed/failed/skipped
+test events; `summary.json` includes the final verdict, source recheck and
+per-target limitations. Review and stage new source files before invoking the
+gate: untracked nonignored inputs or source changes during execution fail it.
+CI, release verification and dry-run uploads retain this directory. Each required
+task must freshly execute nonzero successful cases; old XML, cache hits,
+no-source results and dry-runs cannot satisfy the gate. Skipped case counts
+remain visible, including the intentionally ignored Apple LAN diagnostic.
+
+Review changes to `gradle/platform-test-policy.json` together with target/task
+changes; never remove an entry to silence a missing suite. The script regressions
+exercise model/outcome mutations and fake-wrapper failure/cancellation paths,
+not Kotlin execution. The driver stops Gradle in `finally` and forwards signals
+to its owned build group. Preserve evidence and any outputs needed by dependent
+consumer validation before deleting disposable build directories.
+
+The report distinguishes the other-host simulator slice, device-only
+`iosArm64`, compilation-only metadata, and separately run Swift tests. Android
+host/shadow tests do not run ART; no instrumented suite is authored. Core's
+intentional `*AndroidHostTest` filter still excludes its common suite because
+host stubs are not an Android runtime. JVM/native common-test passes do not
+substitute for the missing Android runtime tier. See
+[validation status](validation-status.md#kotlin-target-execution-and-structural-gaps).
+
 ## iOS launcher cleanup and recovery
 
 `./gradlew :iosApp:runIosSimulator` and `:iosApp:runIosUiTests` require Python 3

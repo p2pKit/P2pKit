@@ -24,6 +24,8 @@ ruby "$ROOT/scripts/tests/check-workflow-checkout-policy-test.rb"
 ruby "$ROOT/scripts/check-workflow-checkout-policy.rb"
 ruby "$ROOT/scripts/tests/check-dependency-submission-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-jvm-cross-host-policy-test.rb"
+ruby "$ROOT/scripts/tests/check-platform-test-policy-test.rb"
+python3 "$ROOT/scripts/tests/run-platform-tests-test.py"
 ruby "$ROOT/scripts/tests/check-publication-sbom-policy-test.rb"
 python3 "$ROOT/scripts/tests/check-sbom-test.py"
 while IFS= read -r -d '' workflow; do

@@ -174,8 +174,14 @@ the Android sample. No account or secret is needed.
 
 Preparation and commands:
 
+First complete the Android [build and installation baseline](#13-build-and-installation-baseline).
+There is no authored Android instrumented/device suite, so there is no
+`connectedDebugAndroidTest` execution to invoke. The following commands collect
+evidence for the physical-device actions below; they do not run instrumentation.
+Host/Robolectric tests are a separate automated tier, not a replacement for
+this permission, callback, binding, and radio campaign.
+
 ```sh
-./gradlew :p2p-sample-android:connectedDebugAndroidTest
 adb -s "$ANDROID_SERIAL" logcat -c
 adb -s "$ANDROID_SERIAL" shell dumpsys package dev.p2pkit.sample.android \
   > "$EVIDENCE/metadata/package-dumpsys.txt"

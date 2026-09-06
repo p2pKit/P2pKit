@@ -461,7 +461,7 @@ subprojects {
     }
 
     tasks.matching {
-        it.name == "iosSimulatorArm64Test" ||
+        it.name in setOf("iosSimulatorArm64Test", "iosX64Test") ||
             it.name in serializedJvmNetworkTestTasks[sub.path].orEmpty()
     }.configureEach {
         usesService(networkIntegrationTestService)

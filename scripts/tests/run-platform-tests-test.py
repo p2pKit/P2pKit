@@ -1,0 +1,333 @@
+#!/usr/bin/env python3
+"""Policy mutations and fake-Gradle lifecycle tests; these do not execute Kotlin tests."""
+
+import contextlib
+import copy
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from unittest import mock
+
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parents[2]
+SPEC = importlib.util.spec_from_file_location("platform_gate", ROOT / "scripts/run-platform-tests.py")
+GATE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(GATE)
+POLICY = GATE.read_json(ROOT / "gradle/platform-test-policy.json")
+TOKEN = "a" * 32
+
+
+def example_report(profile="full", arch="arm64"):
+    required = GATE.required_tasks(POLICY, profile, arch)
+    tasks = {name for entry in POLICY["model"].values() for name in entry["tests"]}
+    unavailable = "iosX64Test" if arch == "arm64" else "iosSimulatorArm64Test"
+    return {
+        "schema": 1, "token": TOKEN, "buildFailed": False, "dryRun": False,
+        "host": {"os": "Mac OS X", "arch": "aarch64" if arch == "arm64" else "x86_64"},
+        "model": copy.deepcopy(POLICY["model"]),
+        "tests": {name: {
+            "outcome": "EXECUTED" if name in required else "SKIPPED" if profile == "full" else "NOT_REQUESTED",
+            "enabled": not name.endswith(":" + unavailable), "inGraph": profile == "full" or name in required,
+            "passed": 1 if name in required else 0, "failed": 0, "skipped": 0,
+        } for name in tasks},
+    }
+
+
+class CoveragePolicyTest(unittest.TestCase):
+    def assess(self, report, profile="full", arch="arm64"):
+        return GATE.assess(report, POLICY, profile, arch, TOKEN)
+
+    def test_current_executed_set_is_not_empty_or_sample_only(self):
+        arm = self.assess(example_report())
+        intel = self.assess(example_report(arch="x64"), arch="x64")
+        x64_only = self.assess(example_report("ios-x64", "x64"), "ios-x64", "x64")
+        self.assertEqual(14, len(arm))
+        self.assertEqual(14, len(intel))
+        self.assertEqual({":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test"}, x64_only)
+        self.assertIn(":sample-kmp-shared:testAndroidHostTest", arm)
+        self.assertIn(":p2p-core:testAndroidHostTest", arm)
+        self.assertIn(":p2p-core:iosSimulatorArm64Test", arm)
+        self.assertNotIn(":p2p-core:iosX64Test", arm)
+        self.assertNotIn(":p2p-core:iosSimulatorArm64Test", intel)
+
+    def test_every_expected_task_must_execute_fresh_successful_cases(self):
+        for profile, arch in (("full", "arm64"), ("full", "x64"), ("ios-x64", "x64")):
+            baseline = example_report(profile, arch)
+            for name in GATE.required_tasks(POLICY, profile, arch):
+                changes = [("outcome", outcome) for outcome in (
+                    "SKIPPED", "UP-TO-DATE", "FROM-CACHE", "NO_SOURCE", "NOT_COMPLETED", "NOT_REQUESTED", "FAILED")]
+                changes += [("enabled", False), ("inGraph", False), ("passed", 0), ("failed", 1)]
+                for key, value in changes:
+                    with self.subTest(profile=profile, arch=arch, task=name, field=key, value=value):
+                        report = copy.deepcopy(baseline)
+                        report["tests"][name][key] = value
+                        with self.assertRaises(ValueError):
+                            self.assess(report, profile, arch)
+                report = copy.deepcopy(baseline)
+                del report["tests"][name]
+                with self.assertRaises(ValueError):
+                    self.assess(report, profile, arch)
+
+    def test_every_target_and_task_is_guarded_against_model_drift(self):
+        for project, entry in POLICY["model"].items():
+            for target in entry["targets"]:
+                report = example_report()
+                del report["model"][project]["targets"][target]
+                with self.subTest(project=project, missing_target=target), self.assertRaises(ValueError):
+                    self.assess(report)
+            for task in entry["tests"]:
+                report = example_report()
+                report["model"][project]["tests"].remove(task)
+                del report["tests"][task]
+                with self.subTest(missing_task=task), self.assertRaises(ValueError):
+                    self.assess(report)
+        report = example_report()
+        report["model"][":p2p-core"]["targets"]["newNative"] = "native"
+        with self.assertRaises(ValueError):
+            self.assess(report)
+
+    def test_stale_failed_dry_run_wrong_host_and_malformed_reports_fail(self):
+        for key, value in (
+            ("schema", 2), ("schema", True), ("token", "b" * 32), ("dryRun", True), ("buildFailed", True),
+            ("host", []), ("host", {"os": "Linux", "arch": "aarch64"}),
+            ("host", {"os": "Mac OS X", "arch": "amd64"}), ("host", {"os": "Mac OS X", "arch": 1}),
+            ("tests", []), ("tests", {}), ("model", None),
+        ):
+            report = example_report()
+            report[key] = value
+            with self.subTest(field=key, value=value), self.assertRaises(ValueError):
+                self.assess(report)
+        for report in (None, [], 1, "invalid"):
+            with self.assertRaises(ValueError):
+                self.assess(report)
+
+    def test_malformed_task_states_and_counts_fail(self):
+        name = ":p2p-core:jvmTest"
+        for key, value in (
+            ("enabled", 1), ("inGraph", "true"), ("outcome", "INVENTED"),
+            ("passed", -1), ("passed", True), ("passed", "1"), ("passed", 1.5),
+            ("failed", None), ("skipped", -1),
+        ):
+            report = example_report()
+            report["tests"][name][key] = value
+            with self.subTest(field=key, value=value), self.assertRaises(ValueError):
+                self.assess(report)
+        report = example_report()
+        report["tests"][name] = None
+        with self.assertRaises(ValueError):
+            self.assess(report)
+
+    def test_skip_counts_and_all_nonexecution_limits_are_visible(self):
+        report = example_report()
+        report["tests"][":p2p-transport-lan:iosSimulatorArm64Test"]["skipped"] = 1
+        self.assess(report)
+        rows = {row["target"]: row for row in GATE.target_rows(report)}
+        self.assertEqual(1, rows[":p2p-transport-lan/iosSimulatorArm64"]["skipped"])
+        self.assertEqual("SKIPPED", rows[":p2p-core/iosX64"]["status"])
+        self.assertIn("architecture disabled", rows[":p2p-core/iosX64"]["reason"])
+        self.assertEqual("NOT_CONFIGURED", rows[":p2p-core/iosArm64"]["status"])
+        self.assertEqual("COMPILATION_ONLY", rows[":p2p-core/metadata"]["status"])
+        self.assertIn("no ART/instrumented", rows[":p2p-core/android"]["reason"])
+        self.assertIn("commonTest is excluded", rows[":p2p-core/android"]["reason"])
+        self.assertEqual("OUTSIDE_THIS_INVOCATION", rows[":iosApp/Swift"]["status"])
+        # An unclassified future target must not disappear from failure evidence.
+        report["model"][":p2p-core"]["targets"]["newTarget"] = "native"
+        self.assertIn("NO_TEST_TASK", [row["status"] for row in GATE.target_rows(report)])
+
+    def test_bounded_json_reader_rejects_duplicates_and_invalid_inputs(self):
+        with tempfile.TemporaryDirectory(prefix="p2pkit-coverage-json-") as temp:
+            path = Path(temp) / "input.json"
+            for content in (b"", b"{}" * (512 * 1024 + 1), b'{"schema":1,"schema":1}', b'{"v":NaN}', b"\xff"):
+                path.write_bytes(content)
+                with self.subTest(size=len(content)), self.assertRaises(ValueError):
+                    GATE.read_json(path)
+            path.write_text('{"schema":1}')
+            self.assertEqual({"schema": 1}, GATE.read_json(path))
+
+    def test_malformed_policy_and_wrong_profile_fail_before_build(self):
+        for policy in (None, [], {"schema": True}, {"schema": 1, "model": {}},
+                       {"schema": 1, "model": {":bad": {"targets": {}, "tests": [False]}}}):
+            with self.assertRaises(ValueError):
+                GATE.required_tasks(policy, "full", "arm64")
+        for profile, arch in (("ios-x64", "arm64"), ("full", "unknown"), ("other", "x64")):
+            with self.assertRaises(ValueError):
+                GATE.required_tasks(POLICY, profile, arch)
+
+
+FAKE_GRADLE = r'''
+import json, os, pathlib, signal, subprocess, sys, time
+root = pathlib.Path.cwd()
+with (root / "trace.jsonl").open("a") as stream:
+    stream.write(json.dumps(sys.argv[1:]) + "\n")
+mode = os.environ.get("P2PKIT_FAKE_PLATFORM_MODE", "pass")
+if sys.argv[1:] == ["--stop"]:
+    sys.exit(7 if mode == "stop-failure" else 0)
+if mode == "wait":
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(90)"])
+    def terminated(signum, frame):
+        child.wait(timeout=10)
+        sys.exit(143)
+    signal.signal(signal.SIGTERM, terminated)
+    (root / "worker.pid").write_text(str(child.pid))
+    time.sleep(90)
+    sys.exit(8)
+token = next(arg.split("=", 1)[1] for arg in sys.argv if arg.startswith("-Pp2pkit.testCoverageToken="))
+if mode == "no-report":
+    sys.exit(0)
+report = json.loads((root / "fixture.json").read_text())
+report["token"] = "0" * 32 if mode == "stale-token" else token
+if mode == "build-failure":
+    report["buildFailed"] = True
+if mode == "source-change":
+    (root / "tracked.txt").write_text("changed during execution\n")
+path = root / "build/reports/platform-tests" / token / "execution.json"
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text("[]" if mode == "malformed" else json.dumps(report))
+sys.exit(9 if mode in ("exit-failure", "build-failure") else 0)
+'''
+
+
+class DriverLifecycleTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="p2pkit-platform-driver-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        (self.root / "gradle").mkdir()
+        shutil.copy2(ROOT / "gradle/platform-test-policy.json", self.root / "gradle/platform-test-policy.json")
+        (self.root / "gradlew").write_text("#!" + sys.executable + "\n" + FAKE_GRADLE)
+        (self.root / "gradlew").chmod(0o755)
+        (self.root / "fixture.json").write_text(json.dumps(example_report()))
+        (self.root / "tracked.txt").write_text("unchanged\n")
+        (self.root / ".gitignore").write_text("build/\ntrace.jsonl\nworker.pid\n")
+        for args in (("init", "-q"), ("add", "."),
+                     ("-c", "user.name=Test Fixture", "-c", "user.email=fixture@example.invalid",
+                      "-c", "commit.gpgsign=false", "commit", "-qm", "Synthetic input")):
+            subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True)
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(GATE, "ROOT", self.root).start()
+        mock.patch.object(GATE, "POLICY", self.root / "gradle/platform-test-policy.json").start()
+        mock.patch.object(GATE.platform, "system", return_value="Darwin").start()
+        mock.patch.object(GATE.platform, "machine", return_value="arm64").start()
+
+    def invoke(self, mode):
+        with mock.patch.dict(os.environ, {"P2PKIT_FAKE_PLATFORM_MODE": mode}), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return GATE.run("full")
+
+    def summaries(self):
+        return [json.loads(path.read_text()) for path in self.root.glob("build/reports/platform-tests/*/summary.json")]
+
+    def calls(self):
+        return [json.loads(line) for line in (self.root / "trace.jsonl").read_text().splitlines()]
+
+    def test_success_uses_strict_fresh_bounded_command_and_stops(self):
+        self.assertEqual(0, self.invoke("pass"))
+        calls = self.calls()
+        self.assertEqual(2, len(calls))
+        self.assertEqual(["--stop"], calls[-1])
+        self.assertEqual(["check", "--no-daemon", "--no-build-cache", "--no-configuration-cache", "--rerun-tasks",
+                          "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain"],
+                         calls[0][:10])
+        self.assertIn("--init-script", calls[0])
+        summary = self.summaries()[0]
+        self.assertEqual("PASS", summary["result"])
+        self.assertEqual([], summary["errors"])
+        self.assertEqual(summary["commit"], summary["sourceAfter"]["commit"])
+        self.assertEqual(summary["diffSha256"], summary["sourceAfter"]["diffSha256"])
+
+    def test_failure_modes_cannot_pass_and_always_stop(self):
+        for mode in ("no-report", "stale-token", "malformed", "exit-failure", "build-failure", "stop-failure"):
+            with self.subTest(mode=mode):
+                self.assertNotEqual(0, self.invoke(mode))
+                self.assertEqual(["--stop"], self.calls()[-1])
+        self.assertEqual(6, len(self.summaries()))
+        self.assertTrue(all(report["result"] == "FAIL" and report["errors"] for report in self.summaries()))
+
+    def test_previous_success_report_cannot_mask_missing_current_execution(self):
+        self.assertEqual(0, self.invoke("pass"))
+        self.assertNotEqual(0, self.invoke("no-report"))
+        summaries = self.summaries()
+        self.assertEqual({"PASS", "FAIL"}, {report["result"] for report in summaries})
+        self.assertEqual(2, len({report["token"] for report in summaries}))
+
+    def test_source_mutation_fails_despite_successful_tests(self):
+        self.assertNotEqual(0, self.invoke("source-change"))
+        self.assertIn("Source state changed", " ".join(self.summaries()[0]["errors"]))
+        self.assertEqual(["--stop"], self.calls()[-1])
+
+    def test_untracked_input_is_rejected_before_starting_gradle(self):
+        (self.root / "untracked.kt").write_text("// not evidence-bound\n")
+        with self.assertRaisesRegex(ValueError, "untracked"):
+            self.invoke("pass")
+        self.assertFalse((self.root / "trace.jsonl").exists())
+
+    def test_missing_wrapper_still_records_failure_and_cleanup_attempt(self):
+        (self.root / "gradlew").unlink()
+        self.assertNotEqual(0, self.invoke("pass"))
+        summary = self.summaries()[0]
+        self.assertEqual("FAIL", summary["result"])
+        self.assertNotEqual(0, summary["stopExitCode"])
+
+    def test_stop_timeout_is_failure_and_terminates_its_owned_process(self):
+        process = mock.Mock(pid=123)
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired("gradlew --stop", 90), 0]
+        with mock.patch.object(GATE.subprocess, "Popen", return_value=process), \
+                mock.patch.object(GATE.os, "killpg") as kill, contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(124, GATE.stop_gradle())
+        kill.assert_called_once_with(123, signal.SIGTERM)
+
+    def test_cancellation_signals_owned_gradle_group_stops_and_reports_failure(self):
+        # A separate Python driver plus a real fake-wrapper/worker process tests
+        # signal propagation. No Gradle, Kotlin, simulator or device is launched.
+        bootstrap = (
+            "import importlib.util, pathlib, sys; sys.dont_write_bytecode=True; "
+            f"s=importlib.util.spec_from_file_location('gate', {str(ROOT / 'scripts/run-platform-tests.py')!r}); "
+            "g=importlib.util.module_from_spec(s); s.loader.exec_module(g); "
+            f"g.ROOT=pathlib.Path({str(self.root)!r}); g.POLICY=g.ROOT/'gradle/platform-test-policy.json'; "
+            "g.platform.system=lambda:'Darwin'; g.platform.machine=lambda:'arm64'; sys.exit(g.run('full'))"
+        )
+        process = subprocess.Popen([sys.executable, "-c", bootstrap], cwd=self.root,
+                                   env={**os.environ, "P2PKIT_FAKE_PLATFORM_MODE": "wait"},
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+        worker = None
+        try:
+            deadline = time.monotonic() + 10
+            while not (self.root / "worker.pid").exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue((self.root / "worker.pid").exists(), "Fake build never reached worker start")
+            worker = int((self.root / "worker.pid").read_text())
+            process.send_signal(signal.SIGTERM)
+            output = process.communicate(timeout=20)[0].decode()
+            self.assertEqual(130, process.returncode, output)
+            self.assertEqual(["--stop"], self.calls()[-1])
+            self.assertEqual("FAIL", self.summaries()[0]["result"])
+            with self.assertRaises(ProcessLookupError):
+                os.kill(worker, 0)
+        finally:
+            if process.poll() is None:
+                process.send_signal(signal.SIGTERM)
+                try:
+                    process.communicate(timeout=20)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.communicate()
+            if worker is not None:
+                try:
+                    os.kill(worker, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

@@ -1,0 +1,60 @@
+name: Intel iOS simulator tests
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "27 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-x64-tests-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ios-x64:
+    runs-on: macos-15-intel
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Configure Java 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Validate wrapper and configure Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          gradle-home-cache-excludes: caches/build-cache-1
+
+      - name: Install Android SDKs for project configuration
+        run: |
+          "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
+
+      - name: Execute Intel simulator suites
+        id: platform-tests
+        run: python3 scripts/run-platform-tests.py ios-x64
+
+      - name: Stop Gradle after tests
+        id: stop-platform-gradle
+        if: ${{ always() }}
+        run: ./gradlew --stop
+
+      - name: Upload Intel test evidence
+        id: platform-reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ios-x64-tests-${{ github.run_attempt }}
+          path: |
+            build/reports/platform-tests/**
+            library/p2p-core/build/test-results/iosX64Test/**
+            library/p2p-transport-lan/build/test-results/iosX64Test/**
+          if-no-files-found: warn
+          retention-days: 7

@@ -40,11 +40,36 @@ per-host results and the exact tested commit before claiming execution; see
 [the local testing guide](local.md#jvm-host-coverage). Deterministic discovery
 callbacks and real loopback TCP do not establish physical mDNS/network coverage.
 
+## Kotlin target execution and structural gaps
+
+The current full macOS gate uses `scripts/run-platform-tests.py full` around
+`check`. It requires fresh, nonzero test events for each host-executable task
+in `gradle/platform-test-policy.json`, and reports every configured Kotlin
+target. Cached XML, a dry-run, disabled tasks, and compilation are not execution.
+
+| Target / suite | Configured coverage and limitation |
+| --- | --- |
+| JVM | Full macOS gate; required Ubuntu/Windows library matrix described above. |
+| Android | Host JVM only: framework stubs and provisioning Robolectric shadows. Core's `*AndroidHostTest` filter excludes its common suite; there is no authored instrumented/device suite or ART runner. |
+| `iosSimulatorArm64` | Expected execution on the default Apple Silicon macOS runner. |
+| `iosX64` | Published simulator slice; task is registered but disabled on arm64. Weekly/manual `Intel iOS simulator tests` uses `macos-15-intel` and requires both library suites to execute. No hosted Intel pass for this revision is recorded here. |
+| `iosArm64` | Device target has no configured device-test execution task. GitHub-hosted simulators cannot establish physical-device coverage; external hardware/runner integration is required. |
+| KMP metadata | Compilation-only; not a runtime test target. |
+| Swift sample | Unit/UI simulator tests run separately through Xcode in CI, outside Gradle `check`. The local release gate builds the sample with warnings-as-errors; that build is not Swift test execution. |
+
+Intel runner configuration is not a claim of execution or a decision to ship
+untested. Retain a same-source Intel result before claiming that slice tested;
+runner availability must be rechecked rather than assuming an end-of-support
+date. Android instrumentation requires new test authoring before any emulator
+job can supply evidence. These structural gaps differ from an existing physical
+test procedure that has not yet been performed. See
+[platform execution evidence](local.md#platform-execution-evidence).
+
 ## Pending external validation
 
 The following remain pending and must not be described as verified:
 
-1. Android instrumentation and physical-device validation.
+1. Android instrumented-suite authoring, ART execution, and physical-device validation.
 2. Apple physical-device, AWDL, path-rotation, background, and process-restart validation.
 3. Two-machine hostile-network validation.
 4. CLI fault injection and headful Desktop observation.

@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "model": {
+    ":": {
+      "targets": {},
+      "tests": []
+    },
+    ":iosApp": {
+      "targets": {},
+      "tests": []
+    },
+    ":p2p-core": {
+      "targets": {
+        "android": "androidJvm",
+        "iosArm64": "native",
+        "iosSimulatorArm64": "native",
+        "iosX64": "native",
+        "jvm": "jvm",
+        "metadata": "common"
+      },
+      "tests": [
+        ":p2p-core:iosSimulatorArm64Test",
+        ":p2p-core:iosX64Test",
+        ":p2p-core:jvmTest",
+        ":p2p-core:testAndroidHostTest"
+      ]
+    },
+    ":p2p-network-provisioning-android": {
+      "targets": {
+        "android": "androidJvm",
+        "metadata": "common"
+      },
+      "tests": [
+        ":p2p-network-provisioning-android:testAndroidHostTest"
+      ]
+    },
+    ":p2p-network-provisioning-desktop": {
+      "targets": {
+        "jvm": "jvm"
+      },
+      "tests": [
+        ":p2p-network-provisioning-desktop:test"
+      ]
+    },
+    ":p2p-sample-android": {
+      "targets": {
+        "android": "androidJvm"
+      },
+      "tests": [
+        ":p2p-sample-android:testDebugUnitTest"
+      ]
+    },
+    ":p2p-sample-desktop": {
+      "targets": {
+        "jvm": "jvm"
+      },
+      "tests": [
+        ":p2p-sample-desktop:test"
+      ]
+    },
+    ":p2p-sample-desktop-ui": {
+      "targets": {
+        "jvm": "jvm"
+      },
+      "tests": [
+        ":p2p-sample-desktop-ui:test"
+      ]
+    },
+    ":p2p-sample-diagnostics": {
+      "targets": {
+        "jvm": "jvm"
+      },
+      "tests": [
+        ":p2p-sample-diagnostics:test"
+      ]
+    },
+    ":p2p-transport-lan": {
+      "targets": {
+        "android": "androidJvm",
+        "iosArm64": "native",
+        "iosSimulatorArm64": "native",
+        "iosX64": "native",
+        "jvm": "jvm",
+        "metadata": "common"
+      },
+      "tests": [
+        ":p2p-transport-lan:iosSimulatorArm64Test",
+        ":p2p-transport-lan:iosX64Test",
+        ":p2p-transport-lan:jvmTest",
+        ":p2p-transport-lan:testAndroidHostTest"
+      ]
+    },
+    ":sample-kmp-shared": {
+      "targets": {
+        "android": "androidJvm",
+        "jvm": "jvm",
+        "metadata": "common"
+      },
+      "tests": [
+        ":sample-kmp-shared:jvmTest",
+        ":sample-kmp-shared:testAndroidHostTest"
+      ]
+    }
+  }
+}
