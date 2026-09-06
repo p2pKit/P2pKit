@@ -44,9 +44,16 @@ requires `maxAttempts > 0` and `retryDelayMillis >= 0`; only the outgoing owner
 retries, and a satisfied network-path transition can wake a parked retry early.
 Clean close never reconnects. A delay is not an overall retry/connection deadline.
 
-The accepted-transfer overall deadline is `20 × offerTimeoutMillis` (default
-600 s). The sender's unanswered-offer watchdog starts after writing the offer
-and adds `max(1,000 ms, offerTimeoutMillis / 4)` (default total 37.5 s), avoiding
+The accepted/streaming-phase overall timer is `20 × offerTimeoutMillis`
+(default 600 s). In secure v2 it stops when the
+[receiver enters finalization](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/FileTransferDispatcher.kt#L2041)
+or the [sender enters COMMIT_WAIT](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/FileTransferDispatcher.kt#L1544).
+FILE_FINISH writing, receiver verification/commit, sender acknowledgement and
+cleanup use separate phase waits. This is **not an end-to-end transfer or
+resource-release deadline**, even with cooperative callbacks.
+
+The sender's unanswered-offer watchdog starts after writing the offer and adds
+`max(1,000 ms, offerTimeoutMillis / 4)` (default total 37.5 s), avoiding
 a race with the receiver's decision timer. Both calculations saturate at
 `Long.MAX_VALUE`. Source/sink callbacks have separate bounded waits; these are
 not a universal deadline for application-side source preparation. A timed-out
@@ -64,7 +71,7 @@ These are **not** supported mesh-size or whole-process memory guarantees.
 | Policy or setting | Current value | Scope and observable consequence | Source |
 | --- | --- | --- | --- |
 | `MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS` | `16` setups | Per kit, inbound pre-handshake work only. At capacity, new inbound connections are warned about and closed; outgoing setups are exempt. | [SessionManager.kt:1825](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1825) |
-| `MAX_TOTAL_ACTIVE_SESSIONS` | `64` active sessions | Refuses net-new inbound registration when active-session count reaches this threshold. Outgoing connects, terminal entries and simultaneous-open replacement are exempt; not a hard total-session ceiling. Warn and close; no required typed local application error. | [SessionManager.kt:1883](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1883) |
+| `MAX_TOTAL_ACTIVE_SESSIONS` | `64` active sessions | Only active entries count. Net-new inbound registration at capacity is refused, including replacement of a terminal entry. Outgoing registrations and no-growth simultaneous-open arbitration are exempt; not a hard total-session ceiling. Warn and close; no required typed local application error. | [SessionManager.kt:1883](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1883) |
 | `MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE` | `2` connections/source | Per LAN transport, held until handshake settlement/close. A further connection from that source is refused before core admission; source address is not authenticated identity. | [PerSourceAdmissionLimiter.kt:89](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/PerSourceAdmissionLimiter.kt#L89) |
 | `MAX_TRACKED_PRE_HANDSHAKE_SOURCES` | `96` sources | Per LAN transport, bounds distinct keys with outstanding admission leases. A new source is refused at capacity; this does not authorize 192 concurrent core setups. | [PerSourceAdmissionLimiter.kt:92](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/PerSourceAdmissionLimiter.kt#L92) |
 | `MAX_BUFFERED_INBOUND_CONNECTIONS` | `16` connections | Apple-only accepted-connection queue, distinct from active sessions. A connection that cannot be queued is cancelled. | [IosLanDataTransport.kt:1256](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosLanDataTransport.kt#L1256) |
@@ -131,8 +138,14 @@ Secure records fragment the byte stream independently of DATA chunks.
 | `MAX_METADATA_BYTES` | `32,768` bytes (32 KiB) | Sum of UTF-8 key/value bytes per message, excluding their wire length prefixes. Excess is rejected even if each entry fits. | [AppMessageEnvelope.kt:17](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/AppMessageEnvelope.kt#L17) |
 | `SECURE_RECORD_MAX_PLAINTEXT_BYTES` | `16,384` bytes (16 KiB) | Per encrypted record plaintext, not a message limit. The SDK splits larger writes into records. | [NoiseRecordCodec.kt:3](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/security/noise/NoiseRecordCodec.kt#L3) |
 | `SECURE_RECORD_MAX_CIPHERTEXT_BYTES` | `16,400` bytes | Record ciphertext including the 16-byte authentication tag; invalid declared length terminates secure transport. | [NoiseRecordCodec.kt:5](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/security/noise/NoiseRecordCodec.kt#L5) |
-| `SECURE_V2_MAX_HANDSHAKE_MESSAGE_BYTES` | `4,192` bytes | Framed Noise handshake message ceiling (96 bytes + 4 KiB payload allowance); excess is rejected without downgrade. | [SecureProtocolV2Wire.kt:7](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/security/noise/SecureProtocolV2Wire.kt#L7) |
+| `SECURE_V2_MAX_HANDSHAKE_MESSAGE_BYTES` | `4,192` bytes | Generic framing-helper ceiling, not a production payload allowance. Current secure-v2 flights require exactly 32/96/64-byte bodies with empty Noise payloads; other lengths are rejected without downgrade. See enforcement below. | [SecureProtocolV2Wire.kt:7](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/security/noise/SecureProtocolV2Wire.kt#L7) |
 | `SECURE_V2_MAX_APP_ID_UTF8_BYTES` | `1,024` bytes (1 KiB) | Secure AppId binding ceiling. create() rejects excess with SecurityConfigurationInvalid; HELLO and LAN TXT constraints can be tighter. | [SecureProtocolV2Wire.kt:5](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/security/noise/SecureProtocolV2Wire.kt#L5) |
+
+The [production handshake driver](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/security/noise/SecureV2HandshakeDriver.kt#L158)
+checks each declared body length before reading it and requires an empty decoded
+payload. The [exact flight definitions](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/security/noise/SecureProtocolV2Wire.kt#L142)
+are tighter than the generic helper ceiling; staying under 4,192 bytes does not
+make a handshake flight valid.
 
 ## Discovery and peer registry
 
@@ -150,7 +163,7 @@ to fit their TXT entry; an AppId is not silently truncated.
 | `MAX_TRACKED_LAN_PEERS` | `256` peers | Earlier per-LAN-transport live-peer relay ceiling. New identities are ignored at capacity; it can bind before the core registry ceiling. | [ReliablePeerEventRelay.kt:118](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/ReliablePeerEventRelay.kt#L118) |
 | `DEFAULT_STALE_TIMEOUT_MS` | `15,000` ms (15 s) | Unrefreshed discovery contributions older than this are removed unless transport-managed. LAN uses transport-managed lifetime; manual entries are exempt. Not a universal LAN peer TTL. | [PeerRegistry.kt:624](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L624) |
 | `DEFAULT_EVICTION_POLL_MS` | `1,000` ms (1 s) | Core stale-eviction polling interval. Eligible stale contributions disappear on a later poll, not at an exact wall-clock instant. | [PeerRegistry.kt:625](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L625) |
-| `MAX_DISCOVERY_HINTS` | `32` hints | Per discovered peer. A claim with more routing hints is rejected. | [PeerRegistry.kt:633](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L633) |
+| `MAX_DISCOVERY_HINTS` | `32` hints | Per individual discovery claim/contribution. More routing hints reject that claim; merging distinct hints from multiple contributions can exceed this number for one peer. | [PeerRegistry.kt:633](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L633) |
 | `MAX_DISCOVERY_METADATA_ENTRIES` | `16` entries/hint | Per discovery transport hint; a claim exceeding this metadata count is rejected. | [PeerRegistry.kt:634](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L634) |
 | `MAX_DISCOVERY_METADATA_KEY_CHARS` | `64` characters | Discovery metadata key length; the claim is rejected if exceeded (and its UTF-8 bound also applies). | [PeerRegistry.kt:635](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L635) |
 | `MAX_DISCOVERY_METADATA_KEY_UTF8_BYTES` | `256` bytes | Discovery metadata key UTF-8 ceiling; exceeding it rejects the claim. | [PeerRegistry.kt:636](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L636) |
@@ -186,15 +199,17 @@ A write completing locally is still not remote processing acknowledgement.
 ## Shutdown and recovery waits
 
 These bound **individual waits**, not a single aggregate `session.close()` or
-`kit.stop()` duration. Cleanup phases can compose. A deadline reports incomplete
-cleanup; it is not proof that an OS resource or non-cooperative worker is gone.
-The kit retains failed ownership where supported. Keep callbacks prompt and
-cancellation-cooperative, inspect cleanup errors, and do not interpret a deadline
-as a successful release of storage, radios, identity leases or sockets.
+`kit.stop()` duration. Cleanup phases can compose. Expiring a best-effort CLOSE
+opportunity can simply proceed to teardown; other waits report the resource
+or operation failure described below. A timeout alone never proves that an OS
+resource or non-cooperative worker is gone. The kit retains failed ownership
+where supported. Keep callbacks prompt and cancellation-cooperative, inspect
+cleanup errors, and do not interpret a deadline as a successful release of
+storage, radios, identity leases or sockets.
 
 | Policy or setting | Current value | Scope and observable consequence | Source |
 | --- | --- | --- | --- |
-| `HANDSHAKE_CLEANUP_TIMEOUT_MS` | `2,000` ms (2 s) | Per resource during incomplete-handshake rollback, including best-effort clean-close work. Expiry retains/reports cleanup failure rather than waiting indefinitely. | [SessionManager.kt:1828](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1828) |
+| `HANDSHAKE_CLEANUP_TIMEOUT_MS` | `2,000` ms (2 s) | Per resource/join during incomplete-handshake rollback; expiry reports incomplete cleanup. Also the best-effort CLOSE opportunity: its expiry proceeds to transport teardown without necessarily creating a cleanup issue. | [SessionManager.kt:1828](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1828) |
 | `SESSION_COMMIT_CLEANUP_TIMEOUT_MS` | `2,000` ms (2 s) | Per raw connection during failed session-publication rollback. Expiry reports incomplete cleanup. | [SessionManager.kt:1831](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1831) |
 | `DEFAULT_DISCOVERY_REFRESH_TIMEOUT_MS` | `6,000` ms (6 s) | One reconnect discovery-refresh callback. Timeout is logged and does not itself exhaust the reconnect policy. | [SessionManager.kt:1834](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1834) |
 | `SESSION_CLOSE_TIMEOUT_MS` | `10,000` ms (10 s) | Manager wait for each session/setup during background or terminal cleanup; direct public close can compose several phases. Expiry is a cleanup issue, not a clean-close guarantee. | [SessionManager.kt:1837](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1837) |
