@@ -997,7 +997,8 @@ changing history. Rotation/listing/deletion errors do not permit further append.
 Cooperating owners lock each log family; competing owners fail fast, while calls
 to one sink serialize. Keep log families and their `.filename.lock` coordination
 files disjoint, and do not edit/delete them while an owner is active. The empty
-lock file survives clearing. Sink failures increment the recorder's dropped-event
+lock file survives clearing. Use regular log files, not symbolic/hard-link aliases.
+Sink failures increment the recorder's dropped-event
 counter without interrupting protocol work; the in-memory event may still exist.
 Partial rotation can already have discarded older history, and an interrupted
 append can leave a partial record in an older generation. These restart logs are

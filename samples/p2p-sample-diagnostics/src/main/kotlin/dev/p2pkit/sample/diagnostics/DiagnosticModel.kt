@@ -1205,6 +1205,7 @@ public fun diagnosticJson(event: DiagnosticEvent): String = JSON.encodeToString(
  * `.diagnostic-events.jsonl.lock` coordination file is retained even after clearing. Calls to one
  * sink serialize; distinct owners fail fast on contention. Filesystem failures throw [IOException]
  * instead of appending after failed rotation.
+ * Log entries must be regular files, not symbolic links; hard-linked log/lock aliases are unsupported.
  * Rotation can discard old generations before a later step fails; it is not a multi-file transaction
  * or a durability guarantee. A failed append is rolled back when possible; after an interrupted
  * write, an incomplete active generation is rotated rather than joined to the next record.
@@ -1243,7 +1244,7 @@ public class RollingJsonlFileSink internal constructor(
         val recordBytes = bytes.size.toLong() + 1
         require(recordBytes <= maxBytes) { "Diagnostic record exceeds the log file limit" }
         inDirectory(create = true, ifMissing = Unit) {
-            managedFiles().filter { it.name !in retainedNames || it.length() > maxBytes }.forEach(files::delete)
+            managedFiles().filter { !isRetained(it) || it.length() > maxBytes }.forEach(files::delete)
             val active = generation(0)
             if (active.length() > maxBytes - recordBytes || !files.endsWithNewline(active)) rotate()
             val before = active.length()
@@ -1340,10 +1341,37 @@ public class RollingJsonlFileSink internal constructor(
     private fun generation(index: Int): File =
         File(directory, if (index == 0) activeFileName else "$activeFileName.$index")
 
-    private fun managedFiles(): List<File> = files.list(directory)
-        .filter { it.name.matches(managedName) }
-        .onEach { if (!it.isFile) throw IOException("Diagnostic log path is not a regular file") }
-        .sortedBy { it.name }
+    private fun managedFiles(): List<File> {
+        val canonicalDirectory = directory.canonicalFile
+        return files.list(directory)
+            .filter { it.name.matches(managedName) || isManagedAlias(it) }
+            .onEach {
+                // The enumerated name is the filesystem's actual spelling. Do not expand
+                // authority to a differently named symlink just because its target is ours.
+                if (!it.isFile || it.canonicalPath != File(canonicalDirectory, it.name).path) {
+                    throw IOException("Diagnostic log path is not a regular file")
+                }
+            }
+            .sortedBy { it.name }
+    }
+
+    private fun isManagedAlias(file: File): Boolean {
+        // Directory-entry spelling can differ from the requested filename on case-insensitive
+        // or normalization-insensitive filesystems. Do not guess their rules with ignoreCase:
+        // that would delete genuinely distinct families on case-sensitive volumes.
+        val actual = file.canonicalPath
+        if (actual == generation(0).canonicalPath) return true
+        val suffix = file.name.substringAfterLast('.', missingDelimiterValue = "")
+        return suffix.isNotEmpty() && suffix.all { it in '0'..'9' } &&
+            actual == File(directory, "$activeFileName.$suffix").canonicalPath
+    }
+
+    private fun isRetained(file: File): Boolean {
+        if (file.name.matches(managedName)) return file.name in retainedNames
+        val actual = file.canonicalPath
+        // Compare canonical strings, not File.equals (which is case-insensitive on Windows).
+        return retainedNames.any { actual == File(directory, it).canonicalPath }
+    }
 
     private fun <T> inDirectory(create: Boolean = false, ifMissing: T, action: () -> T): T = synchronized(lock) {
         if (!directory.exists()) {

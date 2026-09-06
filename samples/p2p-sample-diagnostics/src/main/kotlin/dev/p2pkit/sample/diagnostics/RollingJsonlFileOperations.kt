@@ -60,9 +60,14 @@ internal object RollingJsonlFileLock {
     private val entries: MutableMap<String, Entry> = mutableMapOf()
 
     fun <T> withLock(coordinationFile: File, action: () -> T): T {
-        val path = coordinationFile.canonicalPath
-        val entry = synchronized(entries) {
-            entries.getOrPut(path) { Entry() }.also { it.references++ }
+        val (path, entry) = synchronized(entries) {
+            // Canonical spelling is reliable only after the coordination entry exists.
+            // Serialize its exclusive creation, including cold case aliases. createNewFile
+            // never opens/closes an existing file, so it cannot release an owner's OS lock.
+            if (!coordinationFile.exists()) coordinationFile.createNewFile()
+            if (!coordinationFile.isFile) throw IOException("Could not create diagnostic coordination file")
+            val path = coordinationFile.canonicalPath
+            path to entries.getOrPut(path) { Entry() }.also { it.references++ }
         }
         val acquired = entry.permit.tryAcquire()
         try {
