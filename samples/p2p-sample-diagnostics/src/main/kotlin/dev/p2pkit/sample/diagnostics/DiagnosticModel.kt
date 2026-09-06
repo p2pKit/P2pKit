@@ -8,6 +8,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.InetAddress
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
@@ -1196,31 +1197,66 @@ public object DiagnosticEvidenceExporter {
 public fun diagnosticJson(event: DiagnosticEvent): String = JSON.encodeToString(event)
 
 /**
- * Bounded process-restart trail for test builds. The sink rotates before a
- * file exceeds [maxBytes] and keeps at most [maxFiles]. It is intentionally
- * opt-in and stores already-redacted JSON only.
+ * Bounded process-restart trail for test builds. Each accepted UTF-8 record, including its
+ * newline, fits [maxBytes]; at most [maxFiles] JSONL generations are retained. Reducing the
+ * limits removes obsolete/oversized generations on the next write. Unrelated files are untouched.
+ *
+ * Cooperating sink owners and nonoverlapping log families are required. The empty
+ * `.diagnostic-events.jsonl.lock` coordination file is retained even after clearing. Calls to one
+ * sink serialize; distinct owners fail fast on contention. Filesystem failures throw [IOException]
+ * instead of appending after failed rotation.
+ * Rotation can discard old generations before a later step fails; it is not a multi-file transaction
+ * or a durability guarantee. A failed append is rolled back when possible; after an interrupted
+ * write, an incomplete active generation is rotated rather than joined to the next record.
+ * Stores already-redacted JSON only; callers must not write the log family outside this sink.
  */
-public class RollingJsonlFileSink(
+public class RollingJsonlFileSink internal constructor(
     private val directory: File,
-    private val maxBytes: Long = 2L * 1024L * 1024L,
-    private val maxFiles: Int = 4
+    private val maxBytes: Long,
+    private val maxFiles: Int,
+    private val files: RollingJsonlFileOperations,
+    private val activeFileName: String = ACTIVE_FILE
 ) : (String) -> Unit {
     private val lock: Any = Any()
+
+    public constructor(
+        directory: File,
+        maxBytes: Long = 2L * 1024L * 1024L,
+        maxFiles: Int = 4
+    ) : this(directory, maxBytes, maxFiles, RollingJsonlFileOperations())
 
     init {
         require(maxBytes >= 4_096L)
         require(maxFiles in 1..32)
+        require(activeFileName.isNotEmpty() && activeFileName !in setOf(".", ".."))
+        require(File(activeFileName).name == activeFileName)
     }
 
+    private val retainedNames: Set<String> = (0 until maxFiles).map { generation(it).name }.toSet()
+    private val managedName: Regex = Regex("${Regex.escape(activeFileName)}(?:\\.\\d+)?")
+
     override fun invoke(line: String) {
-        synchronized(lock) {
-            check(directory.isDirectory || directory.mkdirs()) {
-                "Could not create diagnostic log directory"
+        // UTF-8 cannot be shorter than the UTF-16 code-unit count here. Reject obviously
+        // oversized input before encoding, and count multibyte text plus its newline exactly.
+        require(line.length.toLong() + 1 <= maxBytes) { "Diagnostic record exceeds the log file limit" }
+        val bytes = line.toByteArray(StandardCharsets.UTF_8)
+        val recordBytes = bytes.size.toLong() + 1
+        require(recordBytes <= maxBytes) { "Diagnostic record exceeds the log file limit" }
+        inDirectory(create = true, ifMissing = Unit) {
+            managedFiles().filter { it.name !in retainedNames || it.length() > maxBytes }.forEach(files::delete)
+            val active = generation(0)
+            if (active.length() > maxBytes - recordBytes || !files.endsWithNewline(active)) rotate()
+            val before = active.length()
+            try {
+                files.append(active, bytes)
+            } catch (failure: Exception) {
+                try {
+                    files.truncate(active, before)
+                } catch (rollback: Exception) {
+                    failure.addSuppressed(rollback)
+                }
+                throw failure
             }
-            val active = File(directory, ACTIVE_FILE)
-            val bytes = (line + "\n").toByteArray(StandardCharsets.UTF_8)
-            if (active.length() + bytes.size > maxBytes) rotate()
-            FileOutputStream(active, true).use { it.write(bytes) }
         }
     }
 
@@ -1228,48 +1264,44 @@ public class RollingJsonlFileSink(
      * Returns only persisted records belonging to the selected test session.
      * Reapply the current detail policy to older records without rewriting the local originals.
      */
-    public fun evidenceFiles(sessionId: String): Map<String, ByteArray> = synchronized(lock) {
+    public fun evidenceFiles(sessionId: String): Map<String, ByteArray> {
         require(sessionId.matches(SAFE_ID))
-        if (!directory.isDirectory) return@synchronized emptyMap()
-        directory.listFiles()
-            .orEmpty()
-            .filter { it.isFile && it.name.matches(ROTATED_NAME) }
-            .sortedBy { it.name }
-            .mapNotNull { file ->
-                val selected = file.useLines { lines ->
-                    lines.mapNotNull { line ->
-                        runCatching { JSON.decodeFromString<DiagnosticEvent>(line) }
-                            .getOrNull()
-                            ?.takeIf { it.testSessionId == sessionId }
-                            ?.let { event ->
-                                val redacted = DiagnosticRedactor.redact(event.details)
-                                JSON.encodeToString(
-                                    event.copy(
-                                        details = redacted.values,
-                                        redactedFields = (event.redactedFields + redacted.redactedFields)
-                                            .distinct().sorted()
+        return inDirectory(ifMissing = emptyMap()) {
+            managedFiles()
+                .mapNotNull { file ->
+                    val selected = file.useLines { lines ->
+                        lines.mapNotNull { line ->
+                            runCatching { JSON.decodeFromString<DiagnosticEvent>(line) }
+                                .getOrNull()
+                                ?.takeIf { it.testSessionId == sessionId }
+                                ?.let { event ->
+                                    val redacted = DiagnosticRedactor.redact(event.details)
+                                    JSON.encodeToString(
+                                        event.copy(
+                                            details = redacted.values,
+                                            redactedFields = (event.redactedFields + redacted.redactedFields)
+                                                .distinct().sorted()
+                                        )
                                     )
-                                )
-                            }
-                    }.toList()
+                                }
+                        }.toList()
+                    }
+                    if (selected.isEmpty()) {
+                        null
+                    } else {
+                        "process-${file.name}" to
+                            (selected.joinToString(separator = "\n", postfix = "\n"))
+                                .toByteArray(StandardCharsets.UTF_8)
+                    }
                 }
-                if (selected.isEmpty()) {
-                    null
-                } else {
-                    "process-${file.name}" to
-                        (selected.joinToString(separator = "\n", postfix = "\n"))
-                            .toByteArray(StandardCharsets.UTF_8)
-                }
-            }
-            .toMap()
+                .toMap()
+        }
     }
 
+    /** Clear only this log family; failures are explicit and an earlier generation may already be removed. */
     public fun clear() {
-        synchronized(lock) {
-            directory.listFiles()
-                .orEmpty()
-                .filter { it.isFile && it.name.matches(ROTATED_NAME) }
-                .forEach { it.delete() }
+        inDirectory(ifMissing = Unit) {
+            managedFiles().forEach(files::delete)
         }
     }
 
@@ -1277,10 +1309,8 @@ public class RollingJsonlFileSink(
     public fun clearSession(sessionId: String) {
         require(sessionId.matches(SAFE_ID))
         val marker = "\"testSessionId\":\"$sessionId\""
-        synchronized(lock) {
-            directory.listFiles()
-                .orEmpty()
-                .filter { it.isFile && it.name.matches(ROTATED_NAME) }
+        inDirectory(ifMissing = Unit) {
+            managedFiles()
                 .forEach { file ->
                     val retained = file.useLines { lines ->
                         lines.filterNot { marker in it }.toList()
@@ -1300,20 +1330,51 @@ public class RollingJsonlFileSink(
     }
 
     private fun rotate() {
-        File(directory, "$ACTIVE_FILE.${maxFiles - 1}").delete()
+        files.delete(generation(maxFiles - 1))
         for (index in (maxFiles - 2) downTo 0) {
-            val source = if (index == 0) {
-                File(directory, ACTIVE_FILE)
-            } else {
-                File(directory, "$ACTIVE_FILE.$index")
-            }
-            if (source.exists()) source.renameTo(File(directory, "$ACTIVE_FILE.${index + 1}"))
+            val source = generation(index)
+            if (source.exists()) files.move(source, generation(index + 1))
         }
     }
 
-    private companion object {
-        const val ACTIVE_FILE: String = "diagnostic-events.jsonl"
-        val ROTATED_NAME: Regex = Regex("""diagnostic-events\.jsonl(?:\.\d+)?""")
+    private fun generation(index: Int): File =
+        File(directory, if (index == 0) activeFileName else "$activeFileName.$index")
+
+    private fun managedFiles(): List<File> = files.list(directory)
+        .filter { it.name.matches(managedName) }
+        .onEach { if (!it.isFile) throw IOException("Diagnostic log path is not a regular file") }
+        .sortedBy { it.name }
+
+    private fun <T> inDirectory(create: Boolean = false, ifMissing: T, action: () -> T): T = synchronized(lock) {
+        if (!directory.exists()) {
+            if (!create) return@synchronized ifMissing
+            if (!directory.mkdirs() && !directory.isDirectory) {
+                throw IOException("Could not create diagnostic log directory")
+            }
+        }
+        if (!directory.isDirectory) throw IOException("Diagnostic log directory is not a directory")
+        RollingJsonlFileLock.withLock(File(directory, ".$activeFileName.lock"), action)
+    }
+
+    public companion object {
+        private const val ACTIVE_FILE: String = "diagnostic-events.jsonl"
+
+        /**
+         * Uses [file] as the active log, `file.name.N` as its older generations, and
+         * `.file.name.lock` for coordination. The family must not overlap another writer's
+         * files or coordination file. Other names in the parent directory are untouched.
+         */
+        public fun forFile(
+            file: File,
+            maxBytes: Long = 2L * 1024L * 1024L,
+            maxFiles: Int = 2
+        ): RollingJsonlFileSink {
+            val absolute = file.absoluteFile
+            val parent = requireNotNull(absolute.parentFile) { "Diagnostic log must name a file" }
+            return RollingJsonlFileSink(
+                parent, maxBytes, maxFiles, RollingJsonlFileOperations(), absolute.name
+            )
+        }
     }
 }
 

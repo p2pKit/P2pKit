@@ -16,7 +16,6 @@ import dev.p2pkit.sample.diagnostics.StructuredFrameTrace
 import dev.p2pkit.sample.diagnostics.StructuredSdkLogger
 import dev.p2pkit.sample.diagnostics.anonymizeIdentifier
 import java.io.File
-import java.io.FileOutputStream
 import java.net.InetAddress
 
 /**
@@ -30,9 +29,8 @@ internal object CliDiagnostics {
     private lateinit var rolling: RollingJsonlFileSink
     private lateinit var evidenceDirectory: File
     private lateinit var correlations: DiagnosticCorrelationRegistry
-    private var directJsonl: File? = null
+    private var directSink: Lazy<RollingJsonlFileSink>? = null
     private var configured = false
-    private val directLock = Any()
 
     @Volatile
     var latestTransferId: String? = null
@@ -52,7 +50,9 @@ internal object CliDiagnostics {
         evidenceDirectory = File(
             options.evidenceDirectory ?: File(home, ".p2pkit/test-evidence").path
         )
-        directJsonl = options.jsonlFile?.let(::File)
+        // Invalid/unavailable log destinations belong to the recorder's failure boundary,
+        // not CLI startup. Lazy initialization also retries after a setup failure.
+        directSink = options.jsonlFile?.let { path -> lazy { RollingJsonlFileSink.forFile(File(path)) } }
         recorder = DiagnosticRecorder(
             environment = DiagnosticEnvironment(
                 platform = "jvm-cli",
@@ -75,21 +75,12 @@ internal object CliDiagnostics {
                 values = mapOf("testMode" to "true")
             ),
             eventSink = { line ->
-                runCatching { rolling(line) }
-                directJsonl?.let { file ->
-                    runCatching {
-                        synchronized(directLock) {
-                            file.parentFile?.mkdirs()
-                            if (file.exists() && file.length() + line.toByteArray().size + 1 > 2L * 1024L * 1024L) {
-                                val rotated = File(file.parentFile, "${file.name}.1")
-                                rotated.delete()
-                                file.renameTo(rotated)
-                            }
-                            FileOutputStream(file, true).bufferedWriter().use { writer ->
-                                writer.appendLine(line)
-                            }
-                        }
-                    }
+                // Attempt both destinations; let the recorder count a persistence failure
+                // without taking down the CLI or losing the in-memory diagnostic event.
+                try {
+                    rolling(line)
+                } finally {
+                    directSink?.value?.invoke(line)
                 }
             }
         )
@@ -109,7 +100,7 @@ internal object CliDiagnostics {
                 currentState = "started",
                 details = mapOf(
                     "testMode" to "true",
-                    "directJsonl" to (directJsonl != null).toString()
+                    "directJsonl" to (directSink != null).toString()
                 )
             )
         )
@@ -268,14 +259,7 @@ internal object CliDiagnostics {
         val session = recorder.activeSessionId
         recorder.clearCurrentSession()
         rolling.clearSession(session)
-        directJsonl?.let { file ->
-            synchronized(directLock) {
-                if (file.exists()) {
-                    val retained = file.readLines().filterNot { "\"testSessionId\":\"$session\"" in it }
-                    file.writeText(if (retained.isEmpty()) "" else retained.joinToString("\n") + "\n")
-                }
-            }
-        }
+        directSink?.value?.clearSession(session)
     }
 
     /** Sample live owners inside the registration lock, never before a concurrent replacement. */

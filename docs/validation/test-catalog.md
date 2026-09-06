@@ -990,6 +990,19 @@ text still receives best-effort pattern scrubbing, not an anonymity guarantee;
 callers must avoid sensitive text there. Manually review attachments, operator
 notes, OS logs, and captures before sharing—they are not sanitized by this policy.
 
+JVM/Android restart logs retain up to four 2 MiB JSONL files; the CLI's optional
+`log=<file>` retains the requested file and one older generation of the same
+size. Limits include the UTF-8 newline; oversized records are rejected before
+changing history. Rotation/listing/deletion errors do not permit further append.
+Cooperating owners lock each log family; competing owners fail fast, while calls
+to one sink serialize. Keep log families and their `.filename.lock` coordination
+files disjoint, and do not edit/delete them while an owner is active. The empty
+lock file survives clearing. Sink failures increment the recorder's dropped-event
+counter without interrupting protocol work; the in-memory event may still exist.
+Partial rotation can already have discarded older history, and an interrupted
+append can leave a partial record in an older generation. These restart logs are
+bounded best-effort diagnostics, not crash-atomic or power-loss-durable storage.
+
 Packet captures and OS logs are additional evidence, never replacements for
 the application export. When a platform cannot expose a native path detail
 (for example AWDL internals), the event records `network.path.changed` with a
