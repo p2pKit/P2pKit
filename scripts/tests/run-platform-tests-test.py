@@ -278,14 +278,21 @@ class DriverLifecycleTest(unittest.TestCase):
         self.assertEqual("FAIL", summary["result"])
         self.assertNotEqual(0, summary["stopExitCode"])
 
+    def test_undrained_owned_group_fails_gate_but_still_attempts_gradle_stop(self):
+        with mock.patch.object(GATE, "terminate_process", return_value=False):
+            self.assertNotEqual(0, self.invoke("pass"))
+        self.assertEqual("FAIL", self.summaries()[0]["result"])
+        self.assertEqual(["--stop"], self.calls()[-1])
+
     def test_stop_timeout_is_failure_and_terminates_its_owned_process(self):
         process = mock.Mock(pid=123)
         process.poll.return_value = None
         process.wait.side_effect = [subprocess.TimeoutExpired("gradlew --stop", 90), 0]
         with mock.patch.object(GATE.subprocess, "Popen", return_value=process), \
-                mock.patch.object(GATE.os, "killpg") as kill, contextlib.redirect_stderr(io.StringIO()):
+                mock.patch.object(GATE.os, "killpg", side_effect=[None, ProcessLookupError]) as kill, \
+                contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(124, GATE.stop_gradle())
-        kill.assert_called_once_with(123, signal.SIGTERM)
+        self.assertEqual([mock.call(123, signal.SIGTERM), mock.call(123, 0)], kill.call_args_list)
 
     def test_cancellation_signals_owned_gradle_group_stops_and_reports_failure(self):
         # A separate Python driver plus a real fake-wrapper/worker process tests
@@ -327,6 +334,67 @@ class DriverLifecycleTest(unittest.TestCase):
                     os.kill(worker, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+
+
+class OwnedProcessGroupTest(unittest.TestCase):
+    def test_unterminated_group_fails_after_both_bounded_deadlines(self):
+        process = mock.Mock(pid=123)
+        with mock.patch.object(GATE, "TERMINATION_GRACE_SECONDS", 0), \
+                mock.patch.object(GATE, "TERMINATION_KILL_SECONDS", 0), \
+                mock.patch.object(GATE.os, "killpg") as kill, contextlib.redirect_stderr(io.StringIO()):
+            self.assertFalse(GATE.terminate_process(process))
+        self.assertEqual([mock.call(123, signal.SIGTERM), mock.call(123, 0),
+                          mock.call(123, signal.SIGKILL), mock.call(123, 0)], kill.call_args_list)
+
+    def resistant_worker_control(self, leader_exits_first):
+        with tempfile.TemporaryDirectory(prefix="p2pkit-owned-group-") as temporary:
+            ready = Path(temporary) / "worker.pid"
+            worker_code = (
+                "import os,pathlib,signal,sys,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+                "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(90)"
+            )
+            leader_code = (
+                "import pathlib,subprocess,sys,time; "
+                f"subprocess.Popen([sys.executable,'-c',{worker_code!r},sys.argv[1]]); "
+                "ready=pathlib.Path(sys.argv[1]); "
+                "\nwhile not ready.exists(): time.sleep(0.01)\n"
+                + ("sys.exit(0)" if leader_exits_first else "time.sleep(90)")
+            )
+            leader = subprocess.Popen([sys.executable, "-c", leader_code, str(ready)], start_new_session=True)
+            unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(90)"], start_new_session=True)
+            try:
+                deadline = time.monotonic() + 10
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(ready.exists(), "TERM-resistant worker never reached ready state")
+                worker = int(ready.read_text())
+                if leader_exits_first:
+                    self.assertEqual(0, leader.wait(timeout=10))
+                # Bound a deterministic control's grace period without lengthening
+                # production timeouts or changing assertions. R1 has no constant.
+                with mock.patch.object(GATE, "TERMINATION_GRACE_SECONDS", 0.2, create=True):
+                    drained = GATE.terminate_process(leader)
+                with self.assertRaises(ProcessLookupError, msg="Owned resistant worker survived cleanup"):
+                    os.kill(worker, 0)
+                with self.assertRaises(ProcessLookupError, msg="Owned process group was not drained"):
+                    os.killpg(leader.pid, 0)
+                self.assertTrue(drained)
+                self.assertIsNone(unrelated.poll(), "Cleanup touched an unrelated process group")
+            finally:
+                # A red control must not leave its intentionally resistant child.
+                try:
+                    os.killpg(leader.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                leader.wait(timeout=10)
+                unrelated.terminate()
+                unrelated.wait(timeout=10)
+
+    def test_term_resistant_worker_is_killed_after_leader_exits_on_term(self):
+        self.resistant_worker_control(leader_exits_first=False)
+
+    def test_surviving_group_is_drained_even_when_leader_already_exited(self):
+        self.resistant_worker_control(leader_exits_first=True)
 
 
 if __name__ == "__main__":

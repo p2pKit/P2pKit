@@ -13,6 +13,7 @@ import platform
 import signal
 import subprocess
 import sys
+import time
 import uuid
 
 
@@ -24,6 +25,8 @@ PROFILES = {
 }
 FLAGS = ["--no-daemon", "--no-build-cache", "--no-configuration-cache", "--rerun-tasks",
          "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain"]
+TERMINATION_GRACE_SECONDS = 15
+TERMINATION_KILL_SECONDS = 5
 
 
 def require(condition, reason):
@@ -170,36 +173,47 @@ def source_state():
 
 
 def terminate_process(process):
-    """Terminate only this invocation's process group, including on cancellation."""
-    if process is None or process.poll() is not None:
-        return
+    """Drain an owned process group even after its leader exits; never kill other groups."""
+    if process is None:
+        return True
+    # Every caller uses start_new_session=True, so this PID is the owned PGID.
+    # Leader completion alone says nothing about workers still in that group.
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        for sig, timeout in ((signal.SIGTERM, TERMINATION_GRACE_SECONDS), (signal.SIGKILL, TERMINATION_KILL_SECONDS)):
+            os.killpg(process.pid, sig)
+            deadline = time.monotonic() + timeout
+            while True:
+                process.poll()  # Reap the leader too; a zombie can keep the group present.
+                os.killpg(process.pid, 0)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(0.05, remaining))
     except ProcessLookupError:
-        pass
-    try:
-        process.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
+        process.poll()
+        return True
+    except OSError as error:
+        print(f"FATAL: Could not drain owned process group {process.pid}: {error}", file=sys.stderr)
+        return False
+    print(f"FATAL: Owned process group {process.pid} survived TERM/KILL deadlines", file=sys.stderr)
+    return False
 
 
 def stop_gradle():
     process = None
+    code = 1
     try:
         process = subprocess.Popen([str(ROOT / "gradlew"), "--stop"], cwd=ROOT, start_new_session=True)
-        return process.wait(timeout=90)
+        code = process.wait(timeout=90)
     except subprocess.TimeoutExpired:
         print("FATAL: Gradle stop timed out", file=sys.stderr)
-        return 124
+        code = 124
     except OSError as error:
         print(f"FATAL: Could not stop Gradle: {error}", file=sys.stderr)
-        return 1
     finally:
-        terminate_process(process)
+        if not terminate_process(process):
+            code = code or 1
+    return code
 
 
 def run(profile):
@@ -239,7 +253,8 @@ def run(profile):
         for sig in previous:
             signal.signal(sig, signal.SIG_IGN)
         try:
-            terminate_process(process)
+            if not terminate_process(process):
+                errors.append("Owned Gradle process group did not exit")
             stop_code = stop_gradle()
         finally:
             for sig, handler in previous.items():

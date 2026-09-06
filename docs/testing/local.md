@@ -85,7 +85,8 @@ python3 scripts/run-platform-tests.py ios-x64
 ```
 
 The full profile runs `./gradlew check --console=plain` with strict dependency
-verification, task reruns, caches disabled, two workers, and no parallel tasks.
+verification, task reruns, build/configuration caches disabled, two workers,
+and no parallel tasks. Shared dependency caches remain available.
 Both simulator architectures share the network-test serialization service.
 The Intel profile requests only core and LAN `iosX64Test` tasks. CI uses the
 full profile; `ios-x64-tests.yml` provides a secret-free weekly/manual Intel job.
@@ -105,9 +106,11 @@ remain visible, including the intentionally ignored Apple LAN diagnostic.
 Review changes to `gradle/platform-test-policy.json` together with target/task
 changes; never remove an entry to silence a missing suite. The script regressions
 exercise model/outcome mutations and fake-wrapper failure/cancellation paths,
-not Kotlin execution. The driver stops Gradle in `finally` and forwards signals
-to its owned build group. Preserve evidence and any outputs needed by dependent
-consumer validation before deleting disposable build directories.
+not Kotlin execution. The driver stops Gradle in `finally` and uses bounded
+TERM/KILL escalation to drain its owned process groups, even if a wrapper exits
+before its workers. Separately detached helpers are outside that group guarantee;
+callers must track and stop their own survivors. Preserve evidence and any outputs
+needed by dependent consumer validation before deleting disposable build directories.
 
 The report distinguishes the other-host simulator slice, device-only
 `iosArm64`, compilation-only metadata, and separately run Swift tests. Android
