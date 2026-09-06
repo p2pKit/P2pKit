@@ -7,12 +7,44 @@ import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.channels.OverlappingFileLockException
 import java.nio.charset.CharacterCodingException
+import java.text.Normalizer
 import java.util.concurrent.Semaphore
 
 /** Narrow fault-injection seam; the defaults execute real, Android API24-compatible file operations. */
 internal open class RollingJsonlFileOperations {
     open fun list(directory: File): Array<File> =
         directory.listFiles() ?: throw IOException("Could not list diagnostic log directory")
+
+    /**
+     * File.exists() conflates absence with failed lookup. Before reporting empty history,
+     * prove that its first missing component is absent from a readable/searchable parent.
+     * A listed entry or possible spelling alias is uncertainty, never successful clearing.
+     * Keep this on java.io APIs available on Android24/25; do not create a missing store.
+     */
+    fun requireMissingDirectory(directory: File) {
+        var component = directory.absoluteFile
+        while (true) {
+            val parent = component.parentFile ?: throw IOException("Could not inspect diagnostic log directory")
+            if (!parent.exists()) {
+                component = parent
+                continue
+            }
+            if (!parent.isDirectory || !parent.canRead() || !parent.canExecute()) {
+                throw IOException("Could not inspect diagnostic log directory parent")
+            }
+            val expectedName = Normalizer.normalize(component.name, Normalizer.Form.NFC)
+            val canonicalComponent = component.canonicalPath
+            val listed = list(parent)
+            if (listed.any {
+                    Normalizer.normalize(it.name, Normalizer.Form.NFC).equals(expectedName, ignoreCase = true) ||
+                        it.canonicalPath == canonicalComponent
+                }
+            ) {
+                throw IOException("Could not establish that diagnostic log directory is missing")
+            }
+            return
+        }
+    }
 
     open fun delete(file: File) {
         if (file.exists() && !file.delete()) throw IOException("Could not delete diagnostic log")

@@ -58,6 +58,34 @@ class CliDiagnosticStorageTest {
     }
 
     @Test
+    fun invalidAncestorDoesNotReportSuccessfulClearAndTheActualCommandCanRetry() = withHome { home ->
+        val direct = File(home, "cli.jsonl")
+        configure(home, direct)
+        val before = CliDiagnostics.recorder.snapshot()
+        val directBefore = direct.readBytes()
+        val logRoot = File(home, ".p2pkit")
+        val retained = File(home, "retained-history")
+        assertTrue(logRoot.renameTo(retained))
+        logRoot.writeText("synthetic ancestor obstruction")
+        val messages = mutableListOf<String>()
+
+        CliDiagnostics.clearCommand(messages::add)
+
+        assertEquals(listOf(DiagnosticClearAction.FAILURE_MESSAGE), messages)
+        assertEquals(before, CliDiagnostics.recorder.snapshot())
+        assertTrue(directBefore.contentEquals(direct.readBytes()))
+        assertTrue("synthetic-storage" in File(retained, "test-diagnostics/diagnostic-events.jsonl").readText())
+        assertTrue(logRoot.delete())
+        assertTrue(retained.renameTo(logRoot))
+        CliDiagnostics.clearCommand(messages::add)
+        assertEquals(2, messages.size)
+        assertTrue(messages.last().startsWith("cleared session history"))
+        assertTrue(CliDiagnostics.recorder.snapshot().isEmpty())
+        assertTrue("synthetic-storage" !in direct.readText())
+        assertTrue("synthetic-storage" !in File(logRoot, "test-diagnostics/diagnostic-events.jsonl").readText())
+    }
+
+    @Test
     fun failedDirectLogRotationDoesNotGrowAndIsReportedToRecorder() = withHome { home ->
         val direct = File(home, "cli.jsonl")
         val original = "a".repeat(2 * 1024 * 1024 - 1) + "\n"

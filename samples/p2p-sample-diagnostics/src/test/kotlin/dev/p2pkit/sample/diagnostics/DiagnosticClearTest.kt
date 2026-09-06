@@ -244,6 +244,92 @@ class DiagnosticClearTest {
         assertEquals(0L, recorder.droppedEventCount())
     }
 
+    @Test
+    fun failedDirectoryStatDoesNotClearMemoryWhenTheEntryIsStillPresent() = withDirectory { root ->
+        var statUnavailable = false
+        val directory = object : File(root, "logs") {
+            override fun exists(): Boolean = !statUnavailable && super.exists()
+        }
+        val sink = RollingJsonlFileSink(directory)
+        val recorder = recorder(sink)
+        recorder.startSession("PS-T01", "both", "other")
+        recorder.startSession("PS-T01", "both", "selected")
+        val before = recorder.snapshot()
+        val file = File(directory, "diagnostic-events.jsonl")
+        val persisted = file.readBytes()
+        statUnavailable = true
+
+        assertFailsWith<IOException> { recorder.clearCurrentSession(sink::clearSession) }
+        assertFailsWith<IOException> { sink.clear() }
+        assertFailsWith<IOException> { sink.evidenceFiles("selected") }
+
+        assertEquals(before, recorder.snapshot())
+        assertContentEquals(persisted, file.readBytes())
+        statUnavailable = false
+        assertTrue(recorder.clearCurrentSession(sink::clearSession) > 0)
+        assertEquals(before.filter { it.testSessionId == "other" }, recorder.snapshot())
+        assertFalse("selected" in file.readText())
+        assertTrue("other" in file.readText())
+    }
+
+    @Test
+    fun invalidAncestorIsAnErrorButGenuinelyMissingAncestorsAreEmpty() = withDirectory { root ->
+        val ancestor = File(root, "ancestor").apply { writeText("not a directory") }
+        val directory = File(ancestor, "nested/logs")
+        val sink = RollingJsonlFileSink(directory)
+        val recorder = recorder()
+        recorder.startSession("PS-T01", "both", "selected")
+        val before = recorder.snapshot()
+
+        assertFailsWith<IOException> { recorder.clearCurrentSession(sink::clearSession) }
+
+        assertEquals(before, recorder.snapshot())
+        assertEquals("not a directory", ancestor.readText())
+        assertTrue(ancestor.delete())
+        assertTrue(recorder.clearCurrentSession(sink::clearSession) > 0)
+        assertTrue(recorder.snapshot().isEmpty())
+        assertFalse(ancestor.exists(), "verifying empty history must not create its missing ancestors")
+    }
+
+    @Test
+    fun parentListingFailureMustNotBeInterpretedAsAnAbsentChild() = withDirectory { root ->
+        val directory = File(root, "missing")
+        val failure = IOException("synthetic parent listing failure")
+        val operations = object : RollingJsonlFileOperations() {
+            override fun list(directory: File): Array<File> = throw failure
+        }
+        val sink = RollingJsonlFileSink(directory, 4_096, 2, operations)
+        val recorder = recorder()
+        recorder.startSession("PS-T01", "both", "selected")
+        val before = recorder.snapshot()
+
+        assertSame(failure, assertFailsWith<IOException> { recorder.clearCurrentSession(sink::clearSession) })
+
+        assertEquals(before, recorder.snapshot())
+        assertFalse(directory.exists())
+    }
+
+    @Test
+    fun uncertainCaseOrUnicodeAliasesNeverAuthorizeMissingDirectorySuccess() {
+        for ((actual, requested) in listOf("Logs" to "logs", "lo\u00e9gs" to "loe\u0301gs")) {
+            withDirectory { root ->
+                val directory = File(root, actual).apply { assertTrue(mkdir()) }
+                val retained = File(directory, "diagnostic-events.jsonl").apply {
+                    writeText("{\"testSessionId\":\"selected\"}\n")
+                }
+                val lookup = object : File(root, requested) {
+                    override fun exists(): Boolean = false
+                }
+                val sink = RollingJsonlFileSink(lookup)
+
+                assertFailsWith<IOException> { sink.clearSession("selected") }
+
+                assertEquals("{\"testSessionId\":\"selected\"}\n", retained.readText())
+                assertEquals(listOf(retained.name), directory.list()!!.toList())
+            }
+        }
+    }
+
     private fun recorder(sink: (String) -> Unit = {}): DiagnosticRecorder = DiagnosticRecorder(
         environment = DiagnosticEnvironment("test", "synthetic", "test", "test", "test", "synthetic"),
         timestamp = { "2026-09-06T00:00:00Z" },

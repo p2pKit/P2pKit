@@ -1012,6 +1012,10 @@ Each file is replaced using checked same-directory atomic replacement, never del
 selective clear fails instead of using a non-atomic replacement fallback. Oversized
 records (JVM/Android's configured record limit) or files (Swift's 2 MiB file limit)
 fail clearing without replacing that file. These limits also bound rewrite memory.
+Missing history is a no-op only when absence can be established. Failed directory
+lookups, invalid ancestors, and unreadable/unsearchable parents are storage errors,
+not empty history. JVM/Android conservatively fail on ambiguous listed case/Unicode
+aliases rather than guessing that a log directory is absent; fix access and retry.
 
 JVM/Android recorder clearing fences queued and in-flight sink writes. A busy or
 reentrant clear fails immediately; stop active logging and retry. Persistence runs

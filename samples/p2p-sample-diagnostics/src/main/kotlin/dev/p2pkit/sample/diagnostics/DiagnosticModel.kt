@@ -1391,7 +1391,10 @@ public class RollingJsonlFileSink internal constructor(
 
     private fun <T> inDirectory(create: Boolean = false, ifMissing: T, action: () -> T): T = synchronized(lock) {
         if (!directory.exists()) {
-            if (!create) return@synchronized ifMissing
+            if (!create) {
+                files.requireMissingDirectory(directory)
+                return@synchronized ifMissing
+            }
             if (!directory.mkdirs() && !directory.isDirectory) {
                 throw IOException("Could not create diagnostic log directory")
             }

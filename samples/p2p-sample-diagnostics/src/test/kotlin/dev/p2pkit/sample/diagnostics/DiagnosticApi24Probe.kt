@@ -66,6 +66,35 @@ object DiagnosticApi24Probe {
     }
 
     @JvmStatic
+    fun clearUnknownDirectory(root: File): String {
+        var statUnavailable = false
+        val directory = object : File(root, "logs") {
+            override fun exists(): Boolean = !statUnavailable && super.exists()
+        }
+        val sink = RollingJsonlFileSink(directory)
+        val selected = "{\"testSessionId\":\"selected\"}"
+        sink(selected)
+        val file = File(directory, "diagnostic-events.jsonl")
+        val recorder = recorder()
+        recorder.startSession("test", "sender", "selected")
+        val before = recorder.snapshot()
+        statUnavailable = true
+        val failure = runCatching { recorder.clearCurrentSession(sink::clearSession) }.exceptionOrNull()
+        check(failure is IOException)
+        check(recorder.snapshot() == before)
+        check(file.readText() == "$selected\n")
+        statUnavailable = false
+        // No replacement is needed after proving genuinely absent history. This works
+        // even on a host whose File.renameTo cannot model Android's POSIX replacement.
+        check(file.delete())
+        check(directory.deleteRecursively())
+        check(recorder.clearCurrentSession(sink::clearSession) > 0)
+        check(recorder.snapshot().isEmpty())
+        check(!directory.exists())
+        return "preserved-and-retried"
+    }
+
+    @JvmStatic
     fun failedExport(directory: File): String {
         val recorder = recorder()
         recorder.startSession("test", "sender", "session")
