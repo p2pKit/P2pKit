@@ -1,10 +1,12 @@
 package dev.p2pkit.sample.android
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.edit
 import dev.p2pkit.core.BuildInfo
+import dev.p2pkit.sample.diagnostics.DiagnosticClearAction
 import dev.p2pkit.sample.diagnostics.DiagnosticConfiguration
 import dev.p2pkit.sample.diagnostics.DiagnosticCorrelation
 import dev.p2pkit.sample.diagnostics.DiagnosticCorrelationRegistry
@@ -17,32 +19,35 @@ import dev.p2pkit.sample.diagnostics.DiagnosticRecorder
 import dev.p2pkit.sample.diagnostics.RollingJsonlFileSink
 import dev.p2pkit.sample.diagnostics.anonymizeIdentifier
 import java.io.File
+import java.io.IOException
 
 /**
  * Explicit test-mode diagnostics owner for the Android sample. Only redacted
  * JSONL is persisted, under a bounded four-file rotation in no-backup storage.
  */
 internal class AndroidDiagnosticHarness(
-    context: Context,
+    private val preferences: SharedPreferences,
+    logDirectory: File,
+    private val evidenceDirectory: File,
+    environment: DiagnosticEnvironment,
     onEvent: () -> Unit
 ) {
-    private val appContext = context.applicationContext
-    private val preferences = appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+    constructor(context: Context, onEvent: () -> Unit) : this(
+        preferences = context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE),
+        logDirectory = File(context.applicationContext.noBackupFilesDir, "test-diagnostics"),
+        evidenceDirectory = File(context.applicationContext.cacheDir, "test-evidence"),
+        environment = androidDiagnosticEnvironment(context.applicationContext),
+        onEvent = onEvent
+    )
+
     private val rollingSink = RollingJsonlFileSink(
-        File(appContext.noBackupFilesDir, "test-diagnostics"),
+        logDirectory,
         maxBytes = 2L * 1024L * 1024L,
         maxFiles = 4
     )
 
     val recorder: DiagnosticRecorder = DiagnosticRecorder(
-        environment = DiagnosticEnvironment(
-            platform = "android",
-            operatingSystem = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
-            applicationVersion = BuildConfig.VERSION_NAME,
-            buildNumber = BuildConfig.VERSION_CODE.toString(),
-            gitCommitSha = BuildInfo.COMMIT,
-            safeDeviceId = safeDeviceId(appContext)
-        ),
+        environment = environment,
         configuration = DiagnosticConfiguration(
             protocolVersion = "secure-v2",
             timeoutsMillis = mapOf(
@@ -99,6 +104,7 @@ internal class AndroidDiagnosticHarness(
         }
     }
 
+    @Synchronized
     fun beginSession(testId: String, role: String, requestedSessionId: String?): String {
         val sessionId = recorder.startSession(testId, role, requestedSessionId)
         correlations.resetSession()
@@ -141,18 +147,26 @@ internal class AndroidDiagnosticHarness(
 
     fun export(): File = DiagnosticEvidenceExporter.export(
         recorder = recorder,
-        directory = File(appContext.cacheDir, "test-evidence"),
+        directory = evidenceDirectory,
         additionalFiles = rollingSink.evidenceFiles(recorder.activeSessionId)
     )
 
+    @Synchronized
     fun clearCurrentSession(): Int {
-        val current = recorder.activeSessionId
-        val removed = recorder.clearCurrentSession()
-        rollingSink.clearSession(current)
-        preferences.edit { clear() }
+        // Serialize with beginSession so clearing old history cannot erase a newer
+        // session's restart preferences. A failed commit is a reported storage failure.
+        val removed = recorder.clearCurrentSession { current ->
+            rollingSink.clearSession(current)
+            if (!preferences.edit().clear().commit()) {
+                throw IOException("Could not clear diagnostic session preferences")
+            }
+        }
         correlations.resetSession()
         return removed
     }
+
+    fun confirmClearCurrentSession(onCleared: (Int) -> Unit, onFailure: (String) -> Unit) =
+        DiagnosticClearAction.confirm(::clearCurrentSession, onCleared, onFailure)
 
     fun shutdown() {
         recorder.record(
@@ -183,6 +197,15 @@ internal class AndroidDiagnosticHarness(
         const val KEY_ROLE = "role"
     }
 }
+
+private fun androidDiagnosticEnvironment(context: Context): DiagnosticEnvironment = DiagnosticEnvironment(
+    platform = "android",
+    operatingSystem = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+    applicationVersion = BuildConfig.VERSION_NAME,
+    buildNumber = BuildConfig.VERSION_CODE.toString(),
+    gitCommitSha = BuildInfo.COMMIT,
+    safeDeviceId = safeDeviceId(context)
+)
 
 private fun safeDeviceId(context: Context): String {
     // The value is used only as an in-package correlation input and is

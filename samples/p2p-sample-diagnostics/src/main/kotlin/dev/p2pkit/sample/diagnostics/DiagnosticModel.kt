@@ -6,6 +6,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -13,6 +15,7 @@ import java.net.InetAddress
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.Semaphore
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -385,7 +388,7 @@ public class DiagnosticRecorder(
     private var nextIndex: Long = 1L
     private var encodedBytes: Int = 0
     private var droppedEvents: Long = 0L
-    private var sinkDraining: Boolean = false
+    private val sinkPermit: Semaphore = Semaphore(1)
     private var sessionContext: SessionContext = SessionContext(
         testId = "UNASSIGNED",
         sessionId = "session-unassigned",
@@ -619,13 +622,38 @@ public class DiagnosticRecorder(
         displayPaused = false
     }
 
-    /** Clears only the active test session. Callers provide confirmation in their UI. */
-    public fun clearCurrentSession(): Int = synchronized(lock) {
-        val activeSessionId = sessionContext.sessionId
-        val before = entries.size
-        entries.removeAll { it.event.testSessionId == activeSessionId }
-        encodedBytes = entries.sumOf { it.bytes }
-        before - entries.size
+    /** Clears active-session memory after fencing sink delivery. Busy/reentrant clears fail explicitly. */
+    public fun clearCurrentSession(): Int = clearCurrentSession {}
+
+    /**
+     * Clears persisted history before changing memory or pending writes. [clearPersisted] runs
+     * outside the recorder state lock, with sink delivery excluded. It receives the session
+     * captured at the clear boundary; later records/session changes are retained. A busy sink
+     * or reentrant clear fails fast with [IOException], so callers can report failure and retry.
+     * Persistence failure preserves memory/queued writes, but storage spanning several files
+     * may have partially completed. No multi-file or crash-atomic transaction is promised.
+     */
+    public fun clearCurrentSession(clearPersisted: (String) -> Unit): Int {
+        if (Thread.holdsLock(lock) || !sinkPermit.tryAcquire()) {
+            throw IOException("Diagnostic sink is busy; retry clearing after the current operation")
+        }
+        try {
+            val (sessionId, throughIndex) = synchronized(lock) { sessionContext.sessionId to (nextIndex - 1) }
+            clearPersisted(sessionId)
+            return synchronized(lock) {
+                val before = entries.size
+                entries.removeAll { it.event.testSessionId == sessionId && it.event.index <= throughIndex }
+                encodedBytes = entries.sumOf { it.bytes }
+                pendingSinkLines.removeAll { it.sessionId == sessionId && it.index <= throughIndex }
+                pendingSinkBytes = pendingSinkLines.sumOf { it.bytes }
+                before - entries.size
+            }
+        } finally {
+            synchronized(lock) { sinkPermit.release() }
+            // Records created by a concurrent caller or the storage callback could not
+            // drain while the clear owned the permit. Do not strand those newer records.
+            drainSinkIfOwner(true)
+        }
     }
 
     public fun droppedEventCount(): Long = synchronized(lock) { droppedEvents }
@@ -685,14 +713,9 @@ public class DiagnosticRecorder(
                 droppedEvents++
                 return false
             }
-            pendingSinkLines.addLast(PendingSinkLine(json, stored.bytes))
+            pendingSinkLines.addLast(PendingSinkLine(json, stored.bytes, event.testSessionId, event.index))
             pendingSinkBytes += stored.bytes
-            if (!sinkDraining) {
-                sinkDraining = true
-                true
-            } else {
-                false
-            }
+            true
         } catch (_: Throwable) {
             droppedEvents++
             false
@@ -705,21 +728,29 @@ public class DiagnosticRecorder(
      * recorder or reorder persisted JSONL.
      */
     private fun drainSinkIfOwner(owner: Boolean) {
-        if (!owner) return
-        while (true) {
-            val line = synchronized(lock) {
-                if (pendingSinkLines.isEmpty()) {
-                    sinkDraining = false
-                    null
-                } else {
-                    pendingSinkLines.removeFirst().also { pendingSinkBytes -= it.bytes }
+        if (!owner || !sinkPermit.tryAcquire()) return
+        var held = true
+        try {
+            while (true) {
+                val line = synchronized(lock) {
+                    if (pendingSinkLines.isEmpty()) {
+                        // Release under the append lock: a racing append either joins this
+                        // drainer or can acquire the released permit itself, never neither.
+                        sinkPermit.release()
+                        held = false
+                        null
+                    } else {
+                        pendingSinkLines.removeFirst().also { pendingSinkBytes -= it.bytes }
+                    }
+                } ?: return
+                try {
+                    eventSink(line.json)
+                } catch (_: Throwable) {
+                    synchronized(lock) { droppedEvents++ }
                 }
-            } ?: return
-            try {
-                eventSink(line.json)
-            } catch (_: Throwable) {
-                synchronized(lock) { droppedEvents++ }
             }
+        } finally {
+            if (held) synchronized(lock) { sinkPermit.release() }
         }
     }
 
@@ -751,7 +782,7 @@ public class DiagnosticRecorder(
     )
 
     private data class StoredEvent(val event: DiagnosticEvent, val json: String, val bytes: Int)
-    private data class PendingSinkLine(val json: String, val bytes: Int)
+    private data class PendingSinkLine(val json: String, val bytes: Int, val sessionId: String, val index: Long)
 }
 
 private fun transferSummary(
@@ -1283,25 +1314,37 @@ public class RollingJsonlFileSink internal constructor(
         }
     }
 
-    /** Removes only records carrying the exact already-validated session ID. */
+    /**
+     * Removes exact decoded top-level session matches, preserving malformed/unrelated lines.
+     * Each replacement is atomic or fails without deleting the original; there is no
+     * non-atomic provider fallback. Earlier generations may be cleared before a later failure.
+     * A record exceeding the configured [maxBytes] fails clearing before replacement.
+     */
     public fun clearSession(sessionId: String) {
         require(sessionId.matches(SAFE_ID))
-        val marker = "\"testSessionId\":\"$sessionId\""
         inDirectory(ifMissing = Unit) {
             managedFiles()
                 .forEach { file ->
-                    val retained = file.useLines { lines ->
-                        lines.filterNot { marker in it }.toList()
-                    }
-                    val temporary = File(file.parentFile, ".${file.name}.rewrite")
-                    FileOutputStream(temporary, false).bufferedWriter().use { writer ->
-                        retained.forEach {
-                            writer.appendLine(it)
+                    val temporary = files.createRewrite(file)
+                    var failure: Throwable? = null
+                    try {
+                        files.rewrite(file, temporary, maxBytes) { line ->
+                            val id = runCatching {
+                                (JSON.parseToJsonElement(line) as? JsonObject)?.get("testSessionId") as? JsonPrimitive
+                            }.getOrNull()
+                            id?.isString != true || id.content != sessionId
                         }
-                    }
-                    if (!file.delete() || !temporary.renameTo(file)) {
-                        temporary.delete()
-                        error("Could not clear diagnostic session")
+                        files.replace(temporary, file)
+                    } catch (error: Throwable) {
+                        failure = error
+                        throw error
+                    } finally {
+                        try {
+                            files.delete(temporary)
+                        } catch (cleanup: Exception) {
+                            if (failure == null) throw cleanup
+                            failure.addSuppressed(cleanup)
+                        }
                     }
                 }
         }

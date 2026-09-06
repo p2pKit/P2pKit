@@ -2,6 +2,7 @@ package dev.p2pkit.sample.desktop
 
 import dev.p2pkit.core.BuildInfo
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.sample.diagnostics.DiagnosticClearAction
 import dev.p2pkit.sample.diagnostics.DiagnosticConfiguration
 import dev.p2pkit.sample.diagnostics.DiagnosticCorrelationRegistry
 import dev.p2pkit.sample.diagnostics.DiagnosticDirection
@@ -255,12 +256,16 @@ internal object CliDiagnostics {
         additionalFiles = rolling.evidenceFiles(recorder.activeSessionId)
     )
 
-    fun clearCurrent() {
-        val session = recorder.activeSessionId
-        recorder.clearCurrentSession()
+    fun clearCurrent(): Int = recorder.clearCurrentSession { session ->
         rolling.clearSession(session)
         directSink?.value?.clearSession(session)
     }
+
+    fun clearCommand(printLine: (String) -> Unit) = DiagnosticClearAction.confirm(
+        clear = ::clearCurrent,
+        onCleared = { count -> printLine("cleared session history ($count in-memory events and bounded files)") },
+        onFailure = printLine
+    )
 
     /** Sample live owners inside the registration lock, never before a concurrent replacement. */
     @Synchronized

@@ -25,6 +25,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.p2pkit.sample.diagnostics.DiagnosticEvent
@@ -54,6 +57,7 @@ internal fun DesktopDiagnosticsScreen(
     var pausedEvents by remember { mutableStateOf<List<DiagnosticEvent>>(emptyList()) }
     var showClearConfirmation by remember { mutableStateOf(false) }
     var exportStatus by remember { mutableStateOf<String?>(null) }
+    var clearRevision by remember { mutableStateOf(0L) }
     val selected = remember { mutableStateListOf<Long>() }
 
     val filter = DiagnosticFilter(
@@ -63,7 +67,7 @@ internal fun DesktopDiagnosticsScreen(
         minimumSeverity = severity,
         search = search.trim().takeIf(String::isNotEmpty)
     )
-    val liveEvents = remember(revision, filter) { diagnostics.recorder.snapshot(filter) }
+    val liveEvents = remember(revision, clearRevision, filter) { diagnostics.recorder.snapshot(filter) }
     val events = if (paused) pausedEvents else liveEvents
     val summary = diagnostics.summary()
 
@@ -209,7 +213,13 @@ internal fun DesktopDiagnosticsScreen(
             }) { Text("Export Test Evidence") }
             TextButton(onClick = { showClearConfirmation = true }) { Text("Clear session") }
         }
-        exportStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        exportStatus?.let {
+            Text(
+                it,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
 
         Text(
             "${events.size} event(s)${if (paused) " — display paused" else ""}; tap rows to select",
@@ -239,9 +249,15 @@ internal fun DesktopDiagnosticsScreen(
             text = { Text("Only ${summary.testSessionId} will be removed.") },
             confirmButton = {
                 TextButton(onClick = {
-                    diagnostics.clearCurrent()
-                    selected.clear()
-                    pausedEvents = emptyList()
+                    diagnostics.confirmClearCurrent(
+                        onCleared = {
+                            selected.clear()
+                            pausedEvents = emptyList()
+                            clearRevision++
+                            exportStatus = "Session history cleared"
+                        },
+                        onFailure = { exportStatus = it }
+                    )
                     showClearConfirmation = false
                 }) { Text("Clear current session") }
             },

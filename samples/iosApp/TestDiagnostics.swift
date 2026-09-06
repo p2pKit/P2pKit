@@ -883,14 +883,22 @@ final class IOSTestDiagnosticStore: ObservableObject {
         }.joined(separator: "\n") + "\n"
     }
 
-    func clearCurrentSession() -> Int {
+    /// MainActor excludes appends/session changes during synchronous clearing. Disk commits
+    /// precede the memory transition; multiple files are not one crash-atomic transaction.
+    func clearCurrentSession() throws -> Int {
+        try rewritePersistentLogsExcluding(sessionId: activeSessionId)
         let before = events.count
         events.removeAll { $0.testSessionId == activeSessionId }
         encodedBytes = events.reduce(0) {
             $0 + ((try? encoder.encode($1).count) ?? 0) + 1
         }
-        rewritePersistentLogsExcluding(sessionId: activeSessionId)
         return before - events.count
+    }
+
+    func confirmClearCurrentSession(onCleared: (Int) -> Void, onFailure: (String) -> Void) throws {
+        try TestDiagnosticClearAction.confirm(
+            clear: clearCurrentSession, onCleared: onCleared, onFailure: onFailure
+        )
     }
 
     func exportEvidence() throws -> URL {
@@ -1079,17 +1087,50 @@ final class IOSTestDiagnosticStore: ObservableObject {
         }
     }
 
-    private func rewritePersistentLogsExcluding(sessionId: String) {
+    private func rewritePersistentLogsExcluding(sessionId: String) throws {
+        let directory: URLResourceValues
+        do {
+            directory = try logDirectory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        } catch CocoaError.fileReadNoSuchFile {
+            return
+        }
+        guard directory.isDirectory == true, directory.isSymbolicLink != true else {
+            throw TestDiagnosticClearError.invalidLogPath
+        }
         for name in ["events.jsonl", "events.1.jsonl", "events.2.jsonl", "events.3.jsonl"] {
             let url = logDirectory.appendingPathComponent(name)
-            guard let contents = try? String(contentsOf: url) else { continue }
-            let retained = contents.split(separator: "\n").filter {
-                !$0.contains("\"testSessionId\":\"\(sessionId)\"")
-            }.joined(separator: "\n")
-            try? Data((retained.isEmpty ? "" : retained + "\n").utf8).write(
-                to: url,
-                options: .atomic
-            )
+            let metadata: URLResourceValues
+            do {
+                metadata = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            } catch CocoaError.fileReadNoSuchFile {
+                continue
+            }
+            guard metadata.isRegularFile == true, metadata.isSymbolicLink != true else {
+                throw TestDiagnosticClearError.invalidLogPath
+            }
+            guard let size = metadata.fileSize, size >= 0, UInt64(size) <= Self.maxPersistedFileBytes else {
+                throw TestDiagnosticClearError.oversizedLog
+            }
+            let contents = try Data(contentsOf: url)
+            var retained = Data()
+            var start = contents.startIndex
+            func retain(_ end: Data.Index) {
+                let line = contents[start..<end]
+                // Preserve exact bytes for malformed/foreign records, blank lines, CRLF,
+                // and truncated final lines. A nested/raw marker is not a session match.
+                let selected = String(data: line, encoding: .utf8) != nil &&
+                    (try? JSONDecoder().decode(TestDiagnosticSessionSelection.self, from: line))?
+                        .testSessionId == sessionId
+                if !selected { retained.append(line) }
+                start = end
+            }
+            for index in contents.indices where contents[index] == 0x0a {
+                retain(contents.index(after: index))
+            }
+            if start < contents.endIndex { retain(contents.endIndex) }
+            // Foundation owns/cleans its sibling staging. Never remove the original first.
+            // No multi-file, cross-process or power-loss durability guarantee is made.
+            try retained.write(to: url, options: .atomic)
         }
     }
 
@@ -1351,6 +1392,38 @@ private struct DiagnosticValueRow: View {
     }
 }
 
+private struct TestDiagnosticSessionSelection: Decodable {
+    let testSessionId: String
+}
+
+private enum TestDiagnosticClearError: Error {
+    case invalidLogPath
+    case oversizedLog
+}
+
+@MainActor
+enum TestDiagnosticClearAction {
+    static let failureMessage =
+        "Could not clear diagnostic history. Memory was retained; some log files may already be cleared. " +
+        "Stop active logging, check storage, and retry."
+
+    static func confirm(
+        clear: () throws -> Int, onCleared: (Int) -> Void, onFailure: (String) -> Void
+    ) throws {
+        try Task.checkCancellation()
+        let removed: Int
+        do {
+            removed = try clear()
+        } catch let cancellation as CancellationError {
+            throw cancellation
+        } catch {
+            onFailure(failureMessage)
+            return
+        }
+        onCleared(removed)
+    }
+}
+
 struct IOSTestDiagnosticsView: View {
     @ObservedObject var diagnostics: IOSTestDiagnosticStore
     let activeConnections: () -> [TestDiagnosticConnectionSnapshot]
@@ -1366,6 +1439,7 @@ struct IOSTestDiagnosticsView: View {
     @State private var confirmClear = false
     @State private var exportURL: URL?
     @State private var exportError: String?
+    @State private var clearError: String?
 
     private var visible: [TestDiagnosticEvent] {
         diagnostics.filtered(
@@ -1477,6 +1551,12 @@ struct IOSTestDiagnosticsView: View {
                 if let exportError {
                     Section("Export error") { Text(exportError).foregroundColor(.red) }
                 }
+                if let clearError {
+                    Section("Clear error") {
+                        Text(clearError).foregroundColor(.red)
+                            .accessibilityIdentifier("diagnostic-clear-error")
+                    }
+                }
 
                 Section("Live structured events (\(visible.count))") {
                     if diagnostics.displayPaused {
@@ -1528,8 +1608,20 @@ struct IOSTestDiagnosticsView: View {
                 titleVisibility: .visible
             ) {
                 Button("Clear Current Session", role: .destructive) {
-                    _ = diagnostics.clearCurrentSession()
-                    selected.removeAll()
+                    do {
+                        try diagnostics.confirmClearCurrentSession(
+                            onCleared: { _ in
+                                selected.removeAll()
+                                clearError = nil
+                            },
+                            onFailure: { clearError = $0 }
+                        )
+                    } catch is CancellationError {
+                        // This synchronous button is the terminal presentation boundary.
+                        // Cancellation is not reported as success/failure or a selection change.
+                    } catch {
+                        clearError = TestDiagnosticClearAction.failureMessage
+                    }
                 }
                 Button("Cancel", role: .cancel) {}
             }

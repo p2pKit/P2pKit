@@ -476,11 +476,7 @@ private suspend fun repl(
                             println("diagnostics completed: ${outcome.name}")
                         }
                     }
-                    "clear" -> {
-                        val session = CliDiagnostics.recorder.activeSessionId
-                        CliDiagnostics.clearCurrent()
-                        println("cleared current session $session (memory and bounded files)")
-                    }
+                    "clear" -> CliDiagnostics.clearCommand(::println)
                     else -> println(CliDiagnostics.helpLine())
                 }
             }

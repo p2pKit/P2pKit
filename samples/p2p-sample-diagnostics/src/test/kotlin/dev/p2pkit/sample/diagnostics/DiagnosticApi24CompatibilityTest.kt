@@ -49,6 +49,19 @@ class DiagnosticApi24CompatibilityTest {
     }
 
     @Test
+    fun selectiveClearUsesTheGuardedReplacementWithoutApi26Classes() {
+        for (sdk in listOf(24, 25)) {
+            val directory = Files.createTempDirectory("p2pkit-api24-clear").toFile()
+            try {
+                assertTrue(invokeWithoutApi26("clear", directory, sdk = sdk) in exportResults)
+                assertTrue(directory.listFiles().orEmpty().none { it.name.startsWith(".p2pkit-clear-") })
+            } finally {
+                assertTrue(directory.deleteRecursively())
+            }
+        }
+    }
+
+    @Test
     fun failedOlderAndroidRenamePreservesBothFiles() {
         val directory = Files.createTempDirectory("p2pkit-api24-rename-failure").toFile()
         try {

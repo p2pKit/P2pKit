@@ -2,6 +2,7 @@ package dev.p2pkit.sample.desktop.ui
 
 import dev.p2pkit.core.BuildInfo
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.sample.diagnostics.DiagnosticClearAction
 import dev.p2pkit.sample.diagnostics.DiagnosticConfiguration
 import dev.p2pkit.sample.diagnostics.DiagnosticCorrelationRegistry
 import dev.p2pkit.sample.diagnostics.DiagnosticDirection
@@ -276,12 +277,10 @@ internal class DesktopDiagnosticHarness(
         additionalFiles = rolling.evidenceFiles(recorder.activeSessionId)
     )
 
-    fun clearCurrent(): Int {
-        val sessionId = recorder.activeSessionId
-        val removed = recorder.clearCurrentSession()
-        rolling.clearSession(sessionId)
-        return removed
-    }
+    fun clearCurrent(): Int = recorder.clearCurrentSession(rolling::clearSession)
+
+    fun confirmClearCurrent(onCleared: (Int) -> Unit, onFailure: (String) -> Unit) =
+        DiagnosticClearAction.confirm(::clearCurrent, onCleared, onFailure)
 
     @Synchronized
     fun shutdown() {

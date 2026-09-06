@@ -46,6 +46,26 @@ object DiagnosticApi24Probe {
     fun replace(source: File, target: File) = replaceDiagnosticFile(source, target)
 
     @JvmStatic
+    fun clear(directory: File): String {
+        val sink = RollingJsonlFileSink(directory)
+        val file = File(directory, "diagnostic-events.jsonl")
+        val selected = "{\"testSessionId\" : \"selected\"}\n"
+        val other = "{\"testSessionId\":\"other\"}\r\n"
+        file.writeText(selected + other)
+        if (!renameCanReplace(directory)) {
+            val failure = runCatching { sink.clearSession("selected") }.exceptionOrNull()
+            check(failure is IOException)
+            check(file.readText() == selected + other)
+            return "verified-preserved-failure"
+        }
+        sink.clearSession("selected")
+        check(file.readText() == other)
+        sink.clearSession("selected")
+        check(file.readText() == other)
+        return "verified-replacement"
+    }
+
+    @JvmStatic
     fun failedExport(directory: File): String {
         val recorder = recorder()
         recorder.startSession("test", "sender", "session")

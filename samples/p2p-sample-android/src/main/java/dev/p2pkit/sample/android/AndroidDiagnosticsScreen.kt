@@ -34,6 +34,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
@@ -67,6 +70,7 @@ internal fun AndroidDiagnosticsScreen(
     var paused by rememberSaveable { mutableStateOf(false) }
     var pausedEvents by remember { mutableStateOf<List<DiagnosticEvent>>(emptyList()) }
     var showClearConfirmation by remember { mutableStateOf(false) }
+    var clearStatus by remember { mutableStateOf<String?>(null) }
     val selected = remember { mutableStateListOf<Long>() }
 
     val filter = DiagnosticFilter(
@@ -235,6 +239,13 @@ internal fun AndroidDiagnosticsScreen(
             }) { Text("Export Test Evidence") }
             TextButton(onClick = { showClearConfirmation = true }) { Text("Clear session") }
         }
+        clearStatus?.let {
+            Text(
+                it,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
 
         Text(
             "${events.size} event(s)${if (paused) " — display paused" else ""}; " +
@@ -265,9 +276,14 @@ internal fun AndroidDiagnosticsScreen(
             text = { Text("Only ${summary.testSessionId} will be removed. Other sessions remain.") },
             confirmButton = {
                 TextButton(onClick = {
-                    vm.clearCurrentDiagnosticSession()
-                    selected.clear()
-                    pausedEvents = emptyList()
+                    vm.clearCurrentDiagnosticSession(
+                        onCleared = {
+                            selected.clear()
+                            pausedEvents = emptyList()
+                            clearStatus = "Session history cleared"
+                        },
+                        onFailure = { clearStatus = it }
+                    )
                     showClearConfirmation = false
                 }) { Text("Clear current session") }
             },

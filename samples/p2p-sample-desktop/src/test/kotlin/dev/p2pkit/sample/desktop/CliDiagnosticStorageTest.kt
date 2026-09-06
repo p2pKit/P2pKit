@@ -1,14 +1,62 @@
 package dev.p2pkit.sample.desktop
 
 import dev.p2pkit.sample.diagnostics.DiagnosticRecord
+import dev.p2pkit.sample.diagnostics.DiagnosticClearAction
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class CliDiagnosticStorageTest {
+    @Test
+    fun actualClearCommandReportsPartialStorageFailureAndRemainsUsableForRetry() = withHome { home ->
+        val direct = File(home, "cli.jsonl")
+        configure(home, direct)
+        CliDiagnostics.startSession("PS-T05", "both", "other-session")
+        CliDiagnostics.startSession("PS-T05", "both", "synthetic-storage")
+        val before = CliDiagnostics.recorder.snapshot()
+        val directBefore = direct.readText()
+        val dropsBefore = CliDiagnostics.recorder.droppedEventCount()
+        val obstruction = File(home, "cli.jsonl.1").apply { assertTrue(mkdir()) }
+        val messages = mutableListOf<String>()
+
+        CliDiagnostics.clearCommand(messages::add)
+
+        assertEquals(listOf(DiagnosticClearAction.FAILURE_MESSAGE), messages)
+        assertEquals(before, CliDiagnostics.recorder.snapshot())
+        assertEquals(directBefore, direct.readText())
+        val rolling = File(home, ".p2pkit/test-diagnostics/diagnostic-events.jsonl")
+        assertTrue("other-session" in rolling.readText())
+        assertTrue("synthetic-storage" !in rolling.readText(), "first sink already committed; report partial failure")
+        assertEquals(dropsBefore, CliDiagnostics.recorder.droppedEventCount())
+
+        assertTrue(obstruction.delete())
+        CliDiagnostics.clearCommand(messages::add)
+        assertEquals(2, messages.size)
+        assertTrue(messages.last().startsWith("cleared session history"))
+        assertEquals(before.filter { it.testSessionId == "other-session" }, CliDiagnostics.recorder.snapshot())
+        assertTrue("synthetic-storage" !in direct.readText())
+        assertTrue("other-session" in direct.readText())
+    }
+
+    @Test
+    fun clearStorageFailurePreservesRecorderUntilRetrySucceeds() = withHome { home ->
+        configure(home, File(home, "cli.jsonl"))
+        val before = CliDiagnostics.recorder.snapshot()
+        val obstruction = File(home, ".p2pkit/test-diagnostics/diagnostic-events.jsonl.1")
+        assertTrue(obstruction.mkdir())
+
+        assertFailsWith<IOException> { CliDiagnostics.clearCurrent() }
+        assertEquals(before, CliDiagnostics.recorder.snapshot())
+        assertTrue(obstruction.delete())
+        CliDiagnostics.clearCurrent()
+        assertTrue(CliDiagnostics.recorder.snapshot().isEmpty())
+    }
+
     @Test
     fun failedDirectLogRotationDoesNotGrowAndIsReportedToRecorder() = withHome { home ->
         val direct = File(home, "cli.jsonl")

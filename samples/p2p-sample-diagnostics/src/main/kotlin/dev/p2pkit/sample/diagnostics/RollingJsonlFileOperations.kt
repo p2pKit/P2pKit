@@ -1,10 +1,12 @@
 package dev.p2pkit.sample.diagnostics
 
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.channels.OverlappingFileLockException
+import java.nio.charset.CharacterCodingException
 import java.util.concurrent.Semaphore
 
 /** Narrow fault-injection seam; the defaults execute real, Android API24-compatible file operations. */
@@ -35,6 +37,56 @@ internal open class RollingJsonlFileOperations {
 
     open fun truncate(file: File, length: Long) {
         if (file.exists()) RandomAccessFile(file, "rw").use { it.setLength(length) }
+    }
+
+    open fun createRewrite(original: File): File =
+        File.createTempFile(".p2pkit-clear-", ".tmp", original.parentFile)
+
+    open fun rewrite(original: File, staged: File, maxRecordBytes: Long, retain: (String) -> Boolean) {
+        // Keep each retained line's original bytes, including CRLF, invalid UTF-8 and
+        // an incomplete final line. Bound staging memory by the configured record limit.
+        staged.outputStream().buffered().use { output ->
+            original.inputStream().buffered().use { input ->
+                val line = ByteArrayOutputStream()
+                fun emit() {
+                    val bytes = line.toByteArray()
+                    val text = try {
+                        bytes.decodeToString(throwOnInvalidSequence = true)
+                    } catch (_: CharacterCodingException) {
+                        null
+                    }
+                    if (text == null || retain(text)) output.write(bytes)
+                    line.reset()
+                }
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    var start = 0
+                    for (index in 0 until count) {
+                        if (buffer[index] == '\n'.code.toByte()) {
+                            val size = index + 1 - start
+                            if (size > maxRecordBytes - line.size()) {
+                                throw IOException("Diagnostic record exceeds the log file limit")
+                            }
+                            line.write(buffer, start, size)
+                            emit()
+                            start = index + 1
+                        }
+                    }
+                    val remaining = count - start
+                    if (remaining > maxRecordBytes - line.size()) {
+                        throw IOException("Diagnostic record exceeds the log file limit")
+                    }
+                    line.write(buffer, start, remaining)
+                }
+                if (line.size() > 0) emit()
+            }
+        }
+    }
+
+    open fun replace(staged: File, original: File) {
+        replaceDiagnosticFile(staged, original, requireAtomic = true)
     }
 
     fun endsWithNewline(file: File): Boolean {

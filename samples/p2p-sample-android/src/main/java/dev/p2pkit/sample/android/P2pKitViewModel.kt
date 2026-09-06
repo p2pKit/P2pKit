@@ -357,7 +357,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             .onFailure { appendSystemMessage("evidence export failed: ${it.message ?: it::class.simpleName}") }
             .getOrNull()
 
-    fun clearCurrentDiagnosticSession(): Int = diagnostics.clearCurrentSession()
+    fun clearCurrentDiagnosticSession(onCleared: (Int) -> Unit, onFailure: (String) -> Unit) =
+        diagnostics.confirmClearCurrentSession(onCleared, onFailure)
 
     fun diagnosticEvents(filter: DiagnosticFilter = DiagnosticFilter()) =
         diagnosticRecorder.snapshot(filter)
