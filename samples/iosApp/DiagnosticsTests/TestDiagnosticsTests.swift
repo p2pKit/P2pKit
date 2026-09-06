@@ -531,6 +531,163 @@ final class TestDiagnosticsTests: XCTestCase {
     }
 
     @MainActor
+    func testRawTransportAndFrameTextCannotEscapeMemoryPersistenceOrExport() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        store.startSession(testId: "ENV-02", requestedSessionId: "redaction-session", role: "receiver")
+        let lines = [
+            "P2pKitLAN [1][browse] serviceAdded callback: instance=SYNTHETIC-PEER leaseActive=true",
+            "P2pKitLAN [1][browse] serviceRemoved callback: instance=SYNTHETIC-PEER hasPeerId=true",
+            "P2pKitLAN [1][browse] serviceResolved callback: instance=SYNTHETIC-PEER hasInfo=true",
+            "P2pKitLAN [1][browse] serviceRemoved instance=SYNTHETIC-PEER pid=12345678",
+            "P2pKitLAN [1][nic] local interfaces: test0 \"SYNTHETIC-ADAPTER\" addrs=[192.0.2.10]",
+            "P2pKitLAN [1][dial] connect peer=12345678 -> 192.0.2.10:5000 (timeout=1000ms)",
+            "P2pKitLAN [1][accept] accepted /192.0.2.10:5000",
+            "P2pKitLAN [1][conn] opened SYNTHETIC-LABEL/[fe80::1%test0]:5000",
+            "[AndroidLanDiscoveryTransport] serviceAdded instance=SYNTHETIC-PEER",
+            "[browse] resolved instance=\"SYNTHETIC Private Device\"",
+            "[future-format] unrelatedLabel=SYNTHETIC-UNRECOGNIZED",
+            "[browse] instance=😀 SYNTHETIC-UNICODE\nsecond-line=SYNTHETIC-SECOND"
+        ]
+        for line in lines {
+            store.recordTransport(line)
+            let event = try XCTUnwrap(store.events.last)
+            XCTAssertEqual(event.details["line"], "<redacted>")
+            XCTAssertEqual(event.redactedFields, ["line"])
+        }
+        store.recordLegacy(tag: "synthetic", message: "unlabelled SYNTHETIC-PEER")
+        XCTAssertEqual(store.events.last?.details["message"], "<redacted>")
+        store.recordFrame("invalid frame SYNTHETIC-PEER")
+        XCTAssertEqual(store.events.last?.details["frame"], "<redacted>")
+        store.recordFrame("TX type=TEXT len=64B futureLabel=SYNTHETIC-PEER")
+        let frame = try XCTUnwrap(store.events.last)
+        XCTAssertEqual(frame.details["rawFrameRedacted"], "<redacted>")
+        XCTAssertEqual(frame.packetType, "text")
+        XCTAssertEqual(frame.payloadSizeBytes, 64)
+        XCTAssertEqual(frame.direction, .sent)
+
+        var outputs = [try JSONEncoder().encode(store.events)]
+        outputs += store.persistedEvidenceFiles(sessionId: store.activeSessionId).values
+        let logs = try FileManager.default.contentsOfDirectory(
+            at: fixture.root.appendingPathComponent("logs"), includingPropertiesForKeys: nil
+        )
+        outputs += try logs.map { try Data(contentsOf: $0) }
+        let archive = try store.exportEvidence()
+        outputs.append(try Data(contentsOf: archive))
+        for data in outputs {
+            let text = String(decoding: data, as: UTF8.self)
+            XCTAssertFalse(text.contains("SYNTHETIC-"))
+            XCTAssertFalse(text.contains("SYNTHETIC Private"))
+            XCTAssertFalse(text.contains("192.0.2.10"))
+            XCTAssertFalse(text.contains("fe80::1"))
+        }
+    }
+
+    @MainActor
+    func testDetailPolicyRejectsUnknownFieldsAndMalformedKnownValues() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        let invalid = [
+            ("line", "instance=SYNTHETIC-PEER"),
+            ("message", "unlabelled SYNTHETIC-PEER"),
+            ("frame", "future SYNTHETIC-PEER"),
+            ("rawFrameRedacted", "TX type=TEXT len=1B instance=SYNTHETIC-PEER"),
+            ("futureField", "SYNTHETIC-PEER"),
+            ("testMode", "true SYNTHETIC-PEER"),
+            ("authenticated", "TRUE"),
+            ("sha256", String(repeating: "a", count: 63)),
+            ("sha256", String(repeating: "a", count: 65)),
+            ("messageId", String(repeating: "a", count: 31)),
+            ("platform", "SYNTHETIC-PEER"),
+            ("totalBytes", "9223372036854775808"),
+            ("totalBytes", "-1"),
+            ("progressPercent", "101"),
+            ("futureField", String(repeating: "a", count: 64))
+        ]
+        for (key, value) in invalid {
+            store.record(TestDiagnosticRecord(category: "test", eventName: "test.policy", details: [key: value]))
+            let event = try XCTUnwrap(store.events.last)
+            XCTAssertEqual(event.details, [key: "<redacted>"], key)
+            XCTAssertEqual(event.redactedFields, [key], key)
+        }
+    }
+
+    @MainActor
+    func testTypedDetailEvidenceRemainsAvailable() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        let values = [
+            "authenticated": "true", "testMode": "false", "contentsExported": "false",
+            "operatorDeclared": "true", "sessionSnapshot": "true", "senderDigestAvailable": "false",
+            "sha256": String(repeating: "a", count: 64), "packageSha256": String(repeating: "b", count: 64),
+            "messageId": String(repeating: "c", count: 32), "match": "unknown",
+            "totalBytes": String(Int64.max), "progressPercent": "100", "platform": "JVM_DESKTOP",
+            "location": "app-private", "source": "android-content-uri",
+            "securityPolicy": "authenticated-same-app-test-only", "identityStorage": "in-memory-per-kit",
+            "feature": "file-commit-sha256-v1", "messageType": "binary"
+        ]
+        store.record(TestDiagnosticRecord(category: "test", eventName: "test.policy", details: values))
+        let event = try XCTUnwrap(store.events.last)
+        XCTAssertEqual(event.details, values)
+        XCTAssertTrue(event.redactedFields.isEmpty)
+    }
+
+    @MainActor
+    func testSharedDetailPolicyFixture() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        let url = try XCTUnwrap(Bundle(for: type(of: self)).url(
+            forResource: "diagnostic-detail-policy", withExtension: "json"
+        ))
+        let cases = try JSONDecoder().decode([String: [String: [String]]].self, from: Data(contentsOf: url))
+        XCTAssertEqual(Set(cases.keys), Set(["accepted", "rejected"]))
+        for (disposition, fields) in cases {
+            for (key, values) in fields {
+                for value in values {
+                    store.record(TestDiagnosticRecord(category: "test", eventName: "test.policy", details: [key: value]))
+                    let event = try XCTUnwrap(store.events.last)
+                    let accepted = disposition == "accepted"
+                    XCTAssertEqual(event.details, [key: accepted ? value : "<redacted>"], "\(key): \(value)")
+                    XCTAssertEqual(event.redactedFields, accepted ? [] : [key], "\(key): \(value)")
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testLegacyRawDetailsAreSanitizedWithoutChangingSourceOrCorrelation() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        store.startSession(testId: "ENV-02", requestedSessionId: "redaction-session", role: "receiver")
+        store.record(TestDiagnosticRecord(
+            peerId: "SYNTHETIC-PEER", sdkSessionId: "SYNTHETIC-SDK-SESSION",
+            transferId: String(repeating: "a", count: 32), category: "transport",
+            eventName: TestDiagnosticEventName.transportLog
+        ))
+        var legacy = try XCTUnwrap(store.events.last)
+        legacy.details = ["line": "instance=SYNTHETIC-PEER", "sha256": String(repeating: "b", count: 64)]
+        legacy.redactedFields = ["peerName"]
+        let original = try JSONEncoder().encode(legacy) + Data([0x0a])
+        let file = fixture.root.appendingPathComponent("logs/events.jsonl")
+        try original.write(to: file)
+        let bytes = try XCTUnwrap(store.persistedEvidenceFiles(sessionId: store.activeSessionId)["process-events.jsonl"])
+        let event = try JSONDecoder().decode(TestDiagnosticEvent.self, from: bytes)
+        XCTAssertEqual(event.details["line"], "<redacted>")
+        XCTAssertEqual(event.details["sha256"], legacy.details["sha256"])
+        XCTAssertEqual(event.redactedFields, ["line", "peerName"])
+        legacy.details = event.details
+        legacy.redactedFields = event.redactedFields
+        XCTAssertEqual(event, legacy)
+        XCTAssertEqual(try Data(contentsOf: file), original)
+        XCTAssertEqual(store.persistedEvidenceFiles(sessionId: store.activeSessionId)["process-events.jsonl"], bytes)
+    }
+
+    @MainActor
     func testRedactionCoversCredentialsNamesAddressesAndMacs() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

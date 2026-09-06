@@ -915,7 +915,8 @@ public object StructuredFrameTrace {
 /**
  * SDK logger adapter that keeps the original sink while adding bounded,
  * redacted structured events. Known failure/retry lines receive stable event
- * names; all other SDK lines are retained as `sdk.log`.
+ * names; all other SDK lines produce `sdk.log`. Raw detail messages are not exported;
+ * details must satisfy the closed structured-value policy.
  */
 public class StructuredSdkLogger(
     private val recorder: DiagnosticRecorder,
@@ -985,11 +986,6 @@ public class StructuredSdkLogger(
 }
 
 public object DiagnosticRedactor {
-    private val sensitiveKey = Regex(
-        "(?i)(password|passphrase|credential|secret|token|private.?key|signing|authorization|" +
-            "cookie|ssid|bssid|payload|content|file.?name|peer.?name|device.?name|display.?name|" +
-            "host(?:name)?|ip(?:v[46])?.?address|address|(?:^|[_.-])name(?:$|[_.-]))"
-    )
     private val credentialValue = Regex(
         """(?i)\b(bearer\s+[A-Za-z0-9._~+/=-]+|gh[pousr]_[A-Za-z0-9_]+|AKIA[A-Z0-9]{16})\b"""
     )
@@ -1009,19 +1005,21 @@ public object DiagnosticRedactor {
 
     public data class Result(val values: Map<String, String>, val redactedFields: List<String>)
 
+    /** Unknown keys, raw text and invalid value shapes fail closed; keys must be trusted field names. */
     public fun redact(values: Map<String, String>): Result {
         val redacted = mutableListOf<String>()
         val safe = values.toSortedMap().mapValues { (key, value) ->
-            if (sensitiveKey.containsMatchIn(key)) {
+            if (!DiagnosticDetailPolicy.accepts(key, value)) {
                 redacted += key
                 "<redacted>"
             } else {
-                redactText(value)
+                value
             }
         }
         return Result(safe, redacted.sorted())
     }
 
+    /** Best-effort display/error scrubbing, not an admission policy for arbitrary shareable details. */
     public fun redactText(value: String): String {
         val bounded = value.replace(control, "�").take(1_024)
         val credentialsRemoved = credentialValue.replace(bounded, "<redacted-credential>")
@@ -1226,7 +1224,10 @@ public class RollingJsonlFileSink(
         }
     }
 
-    /** Returns only persisted records belonging to the selected test session. */
+    /**
+     * Returns only persisted records belonging to the selected test session.
+     * Reapply the current detail policy to older records without rewriting the local originals.
+     */
     public fun evidenceFiles(sessionId: String): Map<String, ByteArray> = synchronized(lock) {
         require(sessionId.matches(SAFE_ID))
         if (!directory.isDirectory) return@synchronized emptyMap()
@@ -1240,7 +1241,16 @@ public class RollingJsonlFileSink(
                         runCatching { JSON.decodeFromString<DiagnosticEvent>(line) }
                             .getOrNull()
                             ?.takeIf { it.testSessionId == sessionId }
-                            ?.let { line }
+                            ?.let { event ->
+                                val redacted = DiagnosticRedactor.redact(event.details)
+                                JSON.encodeToString(
+                                    event.copy(
+                                        details = redacted.values,
+                                        redactedFields = (event.redactedFields + redacted.redactedFields)
+                                            .distinct().sorted()
+                                    )
+                                )
+                            }
                     }.toList()
                 }
                 if (selected.isEmpty()) {

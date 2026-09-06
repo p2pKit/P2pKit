@@ -85,8 +85,8 @@ struct TestDiagnosticEvent: Codable, Identifiable, Equatable {
     let errorCode: String?
     let errorDescription: String?
     let outcome: TestDiagnosticOutcome?
-    let details: [String: String]
-    let redactedFields: [String]
+    var details: [String: String]
+    var redactedFields: [String]
 }
 
 struct TestDiagnosticConnectionSnapshot {
@@ -1094,7 +1094,8 @@ final class IOSTestDiagnosticStore: ObservableObject {
     }
 
     /// Returns restart-spanning JSONL with only exact decoded session matches.
-    /// Malformed or older-schema lines are not copied into a shareable package.
+    /// Malformed lines are not copied; older valid records receive the current detail policy.
+    /// Export never rewrites local originals or re-anonymizes correlation fields.
     func persistedEvidenceFiles(sessionId: String) -> [String: Data] {
         let names = ["events.jsonl", "events.1.jsonl", "events.2.jsonl", "events.3.jsonl"]
         var result: [String: Data] = [:]
@@ -1103,9 +1104,12 @@ final class IOSTestDiagnosticStore: ObservableObject {
             guard let contents = try? Data(contentsOf: source), !contents.isEmpty else { continue }
             let selected = contents.split(separator: 0x0a).compactMap { line -> Data? in
                 let data = Data(line)
-                guard let event = try? JSONDecoder().decode(TestDiagnosticEvent.self, from: data),
+                guard var event = try? JSONDecoder().decode(TestDiagnosticEvent.self, from: data),
                       event.testSessionId == sessionId else { return nil }
-                return data
+                let redacted = Self.redact(event.details)
+                event.details = redacted.values
+                event.redactedFields = Array(Set(event.redactedFields + redacted.fields)).sorted()
+                return try? encoder.encode(event)
             }
             guard !selected.isEmpty else { continue }
             var filtered = Data()
@@ -1179,28 +1183,20 @@ final class IOSTestDiagnosticStore: ObservableObject {
         values: [String: String],
         fields: [String]
     ) {
-        let sensitive = [
-            "password", "passphrase", "credential", "secret", "token",
-            "privatekey", "signing", "authorization", "cookie", "ssid", "bssid",
-            "payload", "content", "filename", "peername", "devicename", "displayname",
-            "hostname", "ipaddress", "ipv4address", "ipv6address", "address", "name"
-        ]
         var safe: [String: String] = [:]
         var fields: [String] = []
         for (key, value) in values {
-            let normalizedKey = key.lowercased().filter { $0.isLetter || $0.isNumber }
-            if sensitive.contains(where: {
-                normalizedKey.contains($0)
-            }) {
+            if !TestDiagnosticDetailPolicy.accepts(key: key, value: value) {
                 safe[key] = "<redacted>"
                 fields.append(key)
             } else {
-                safe[key] = redactText(value)
+                safe[key] = value
             }
         }
         return (safe, fields.sorted())
     }
 
+    /// Best-effort display/error scrubbing, not admission of arbitrary shareable detail text.
     static func redactText(_ value: String) -> String {
         var result = String(value.unicodeScalars.filter {
             $0.value >= 0x20 && $0.value != 0x7f

@@ -320,11 +320,11 @@ class DiagnosticModelTest {
         val event = recorder.snapshot().last()
         assertEquals("<redacted>", event.details["password"])
         assertEquals("<redacted>", event.details["ssid"])
-        assertTrue(event.details.getValue("note").contains("<redacted-ip:"))
+        assertEquals("<redacted>", event.details.getValue("note"))
         assertFalse(event.errorDescription.orEmpty().contains("abc.def"))
         assertFalse(event.errorDescription.orEmpty().contains("private-bytes"))
         assertFalse(event.details.getValue("note").contains("private-text"))
-        assertEquals(listOf("password", "ssid"), event.redactedFields)
+        assertEquals(listOf("note", "password", "ssid"), event.redactedFields)
     }
 
     @Test
@@ -355,9 +355,10 @@ class DiagnosticModelTest {
         assertEquals("<redacted>", event.details["peerName"])
         assertEquals("<redacted>", event.details["device_name"])
         assertEquals("<redacted>", event.details["ipv6Address"])
-        assertTrue(event.details.getValue("mac").contains("<redacted-mac:"))
-        assertTrue(event.details.getValue("safeNote").contains("<redacted-ip:"))
-        assertTrue(event.details.getValue("safeNote").contains("<redacted-mac:"))
+        assertEquals("<redacted>", event.details.getValue("mac"))
+        assertEquals("<redacted>", event.details.getValue("safeNote"))
+        assertTrue(event.errorDescription.orEmpty().contains("<redacted-ip:"))
+        assertTrue(event.errorDescription.orEmpty().contains("<redacted-mac:"))
         val exportedText = buildString {
             append(event.errorDescription)
             append(event.details.values.joinToString())

@@ -24,6 +24,7 @@ targets:
       - LocalPairingView.swift
       - IosLanDiagnosticsLease.swift
       - SampleConsole.swift
+      - TestDiagnosticDetailPolicy.swift
       - TestDiagnostics.swift
     info:
       path: Info.plist
@@ -99,6 +100,8 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - DiagnosticsTests
+      - path: ../p2p-sample-diagnostics/src/test/resources/diagnostic-detail-policy.json
+        buildPhase: resources
     dependencies:
       - target: p2pkit-sample
     settings:

@@ -974,6 +974,22 @@ Process-global raw frames retain type/size/transfer metadata without peer or
 session attribution—even if only one owner has been observed so far, the trace
 can precede another peer's offer callback. Raw frames do not create transfer
 summaries; use session-owned structured events for correlation.
+
+Shareable `details` (and JVM diagnostic configuration string maps) use a closed
+allowlist of reviewed keys **and value shapes**, mirrored by the Swift sample.
+Raw `line`, `message`, `frame`, and `rawFrameRedacted` values, unknown fields,
+and malformed allowed values become `<redacted>`; event `redactedFields` lists
+the omitted keys. Free-form notes/reasons, fault descriptions, and metadata
+key lists are deliberately omitted. Typed event names, states, correlation,
+packet sizes, counts, booleans, and valid SHA-256 values remain available.
+Persisted older JSONL receives the current detail policy during export without
+rewriting local originals or changing correlation fields. Add new detail keys
+only with reviewed shapes and the shared JVM/Swift policy fixture.
+Field names must be application-owned literals, not peer input. Error/state
+text still receives best-effort pattern scrubbing, not an anonymity guarantee;
+callers must avoid sensitive text there. Manually review attachments, operator
+notes, OS logs, and captures before sharing—they are not sanitized by this policy.
+
 Packet captures and OS logs are additional evidence, never replacements for
 the application export. When a platform cannot expose a native path detail
 (for example AWDL internals), the event records `network.path.changed` with a
