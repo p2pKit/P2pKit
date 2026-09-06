@@ -15,9 +15,11 @@ import kotlinx.io.RawSink
  * [FileTransferDestination], the deprecated legacy [RawSink] overload, or
  * [reject]. If neither is called within the
  * configured `offerTimeoutMillis` (default 30 s), the offer is auto-rejected
- * with reason `"timeout"`; both sides terminalize as
- * [FileTransferState.Rejected]. A later sender watchdog exists only for an
- * unresponsive/non-conforming receiver that sends no decision.
+ * with reason `"timeout"` and the receiver becomes [FileTransferState.Rejected].
+ * Notification is best-effort: the sender observes that rejection only if it
+ * receives it before another terminal outcome wins. The later sender watchdog
+ * also covers a lost decision from a conforming receiver, not just a peer that
+ * never responds; its local outcome is [FileTransferState.Failed].
  */
 public interface P2pFileOffer {
 
@@ -77,7 +79,10 @@ public interface P2pFileOffer {
         )
 
     /**
-     * Decline the offer. The sender observes [FileTransferState.Rejected].
+     * Decline locally and attempt best-effort peer notification. The sender
+     * observes [FileTransferState.Rejected] only if it receives the rejection
+     * before another terminal outcome wins. Returning does not guarantee
+     * remote delivery.
      *
      * Throws [IllegalStateException] if another accept/reject/cancel/timeout
      * transition already won.

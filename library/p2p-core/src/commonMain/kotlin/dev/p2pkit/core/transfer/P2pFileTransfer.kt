@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
  * [P2pFileOffer.accept]).
  *
  * Observe [state] and [bytesTransferred] to render progress. Call [cancel] to
- * abort; both sides observe the resulting `Cancelled` state.
+ * request local cancellation; remote notification is best-effort.
  *
  * The handle's identity is stable for the lifetime of the transfer. After
  * the transfer reaches a terminal state ([FileTransferState.Completed],
@@ -48,8 +48,16 @@ public interface P2pFileTransfer {
     public val bytesTransferred: StateFlow<Long>
 
     /**
-     * Abort the transfer. Sends a `FILE_CANCEL` to the peer; both sides
-     * transition to [FileTransferState.Cancelled].
+     * Request local cancellation. If it wins the terminal transition, [state]
+     * becomes [FileTransferState.Cancelled] and the SDK attempts to notify the
+     * peer. Returning does not confirm remote receipt or processing: the peer
+     * may continue or already have a different terminal outcome.
+     *
+     * Cancellation does not roll back a published receiver destination. For
+     * example, the receiver may be [FileTransferState.Completed] while the
+     * sender cancels before receiving its commit acknowledgement. A destination
+     * commit already in progress can also publish after local cancellation;
+     * see [FileTransferDestination] for late-publication and cleanup ownership.
      *
      * No-op if the transfer is already in a terminal state.
      */

@@ -36,7 +36,10 @@ import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transfer.PreparedFileSource
 import dev.p2pkit.core.transfer.Sha256Digest
 import dev.p2pkit.core.transfer.StorageCapacityCheckingFileTransferDestination
+import dev.p2pkit.core.transfer.acceptedIdleTimeoutMillis
+import dev.p2pkit.core.transfer.commitTimeoutMillis
 import dev.p2pkit.core.transfer.isTerminal
+import dev.p2pkit.core.transfer.outgoingOfferWatchdogMillis
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -66,6 +69,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -2702,6 +2706,168 @@ class FileTransferFlowTest {
     }
 
     @Test
+    fun senderCancellationWithoutCommitAckDoesNotRollBackCompletedReceiver() = runTest {
+        val config = FileTransferConfig(chunkSizeBytes = 2, offerTimeoutMillis = 1_000)
+        val pair = controlledSecureTransfers(backgroundScope, config)
+        val bytes = byteArrayOf(1, 2, 3, 4)
+        val opened = CloseTrackingSource(Buffer().apply { write(bytes) })
+        val source = HookedPreparedSource(bytes, opened) {}
+        val destination = RecordingDestination()
+        try {
+            val outgoing = pair.sender.sendPreparedFile("committed-before-cancel.bin", null, source)
+            val offer = pair.receiveOffer()
+            val incoming = offer.accept(destination)
+            pair.sender.onFileAccept(pair.senderProtocol.secureOffers.single().transferId)
+            runCurrent()
+
+            // The fixture forwards actual data/finish calls, but withholds the
+            // receiver's recorded FILE_COMMIT. No socket or filesystem is used.
+            val commit = pair.receiverProtocol.fileCommits.single()
+            assertIs<FileTransferState.Completed>(incoming.state.value)
+            assertFalse(outgoing.state.value.isTerminal())
+            assertEquals(1, destination.commitCount)
+            assertEquals(1, opened.closeCount)
+
+            outgoing.cancel("operator cancelled")
+            val cancel = pair.senderProtocol.fileCancels.single()
+            assertEquals(commit.transferId, cancel.first)
+            pair.receiver.onFileCancel(cancel.first, cancel.second)
+
+            // Late acknowledgements, duplicate notices and terminal cancel()
+            // calls cannot rewrite either independently committed outcome.
+            pair.sender.onFileCommit(commit)
+            pair.receiver.onFileCancel(cancel.first, cancel.second)
+            outgoing.cancel("again")
+            incoming.cancel("too late")
+            advanceTimeBy(config.commitTimeoutMillis)
+            runCurrent()
+
+            assertEquals(FileTransferState.Cancelled("operator cancelled"), outgoing.state.value)
+            assertIs<FileTransferState.Completed>(incoming.state.value)
+            assertEquals(1, pair.senderProtocol.cancelAttempts)
+            assertTrue(pair.receiverProtocol.fileCancels.isEmpty())
+            assertEquals(1, destination.commitCount)
+            assertEquals(0, destination.abortCount)
+            assertContentEquals(bytes, destination.buffer.readByteArray())
+            assertEquals(1, opened.closeCount)
+        } finally {
+            pair.close()
+        }
+    }
+
+    @Test
+    fun deliveredCancellationCancelsBothActiveSecureTransfers() = runTest {
+        assertActiveSecureCancellation(noticeFails = false)
+    }
+
+    @Test
+    fun failedCancelNotificationLeavesReceiverActiveUntilItsOwnTimeout() = runTest {
+        assertActiveSecureCancellation(noticeFails = true)
+    }
+
+    private suspend fun TestScope.assertActiveSecureCancellation(noticeFails: Boolean) {
+        val config = FileTransferConfig(chunkSizeBytes = 2, offerTimeoutMillis = 1_000)
+        val pair = controlledSecureTransfers(backgroundScope, config)
+        pair.senderProtocol.gateDataFrames = true
+        if (noticeFails) pair.senderProtocol.cancelFailure = IOException("injected cancel notification failure")
+        val destination = RecordingDestination()
+        val opened = CloseTrackingSource(Buffer().apply { write(byteArrayOf(1, 2, 3, 4)) })
+        val source = HookedPreparedSource(byteArrayOf(1, 2, 3, 4), opened) {}
+        try {
+            val outgoing = pair.sender.sendPreparedFile("cancel-active.bin", null, source)
+            val incoming = pair.receiveOffer().accept(destination)
+            pair.sender.onFileAccept(pair.senderProtocol.secureOffers.single().transferId)
+            runCurrent()
+            assertEquals(1, pair.senderProtocol.fileData.size)
+            assertIs<FileTransferState.Sending>(incoming.state.value)
+
+            outgoing.cancel("operator cancelled")
+            assertEquals(FileTransferState.Cancelled("operator cancelled"), outgoing.state.value)
+            assertEquals(1, pair.senderProtocol.cancelAttempts)
+            assertEquals(1, opened.closeCount)
+            assertEquals(0, destination.commitCount)
+
+            if (noticeFails) {
+                assertTrue(pair.senderProtocol.fileCancels.isEmpty())
+                assertIs<FileTransferState.Sending>(incoming.state.value)
+                assertEquals(0, destination.abortCount)
+            } else {
+                val cancel = pair.senderProtocol.fileCancels.single()
+                pair.receiver.onFileCancel(cancel.first, cancel.second)
+                assertEquals(FileTransferState.Cancelled("operator cancelled"), incoming.state.value)
+            }
+            advanceTimeBy(config.acceptedIdleTimeoutMillis)
+            runCurrent()
+            if (noticeFails) {
+                val failure = assertIs<P2pError.FileTransferFailed>(
+                    assertIs<FileTransferState.Failed>(incoming.state.value).error
+                )
+                assertEquals(FileTransferFailureKind.TIMEOUT, failure.kind)
+                assertEquals(FileTransferPhase.RECEIVE, failure.phase)
+            } else {
+                assertEquals(FileTransferState.Cancelled("operator cancelled"), incoming.state.value)
+            }
+            assertEquals(1, destination.abortCount)
+            assertEquals(0, destination.commitCount)
+            outgoing.cancel("again")
+            assertEquals(1, pair.senderProtocol.cancelAttempts)
+        } finally {
+            pair.close()
+        }
+    }
+
+    @Test
+    fun lostExplicitRejectionDoesNotGuaranteeSenderRejected() = runTest {
+        assertLostRejection(autoReject = false)
+    }
+
+    @Test
+    fun lostTimeoutRejectionFromConformingReceiverCanFailSenderWatchdog() = runTest {
+        assertLostRejection(autoReject = true)
+    }
+
+    private suspend fun TestScope.assertLostRejection(autoReject: Boolean) {
+        val config = FileTransferConfig(chunkSizeBytes = 2, offerTimeoutMillis = 1_000)
+        val pair = controlledSecureTransfers(backgroundScope, config)
+        val source = ByteArrayPreparedSource(byteArrayOf(1, 2))
+        try {
+            val outgoing = pair.sender.sendPreparedFile("lost-rejection.bin", null, source)
+            val incoming = pair.receiveOffer()
+            val reason = if (autoReject) "timeout" else "declined"
+            if (autoReject) {
+                advanceTimeBy(config.offerTimeoutMillis)
+                runCurrent()
+            } else {
+                incoming.reject(reason)
+            }
+            val rejection = pair.receiverProtocol.fileRejectReasons.single()
+            assertEquals(outgoing.id, rejection.first.toString())
+            assertEquals(reason, rejection.second)
+            assertEquals(FileTransferState.Rejected(reason), incoming.state.value)
+            assertIs<FileTransferState.Offered>(outgoing.state.value)
+
+            // The conforming receiver attempted FILE_REJECT, but this fixture
+            // drops it. The sender's later local watchdog is independent.
+            val elapsed = if (autoReject) config.offerTimeoutMillis else 0L
+            advanceTimeBy(config.outgoingOfferWatchdogMillis - elapsed)
+            runCurrent()
+            val failure = assertIs<P2pError.FileTransferFailed>(
+                assertIs<FileTransferState.Failed>(outgoing.state.value).error
+            )
+            assertEquals(FileTransferFailureKind.TIMEOUT, failure.kind)
+            assertEquals(FileTransferPhase.OFFER, failure.phase)
+            assertEquals(Retryability.RETRY_SAME_SESSION, failure.retryability)
+            val cancel = pair.senderProtocol.fileCancels.single()
+            pair.receiver.onFileCancel(cancel.first, cancel.second)
+            assertEquals(FileTransferState.Rejected(reason), incoming.state.value)
+            assertEquals(0, source.openCount)
+            assertFalse((outgoing as OutgoingFileTransferImpl).retainsPreparedSource())
+        } finally {
+            pair.close()
+        }
+    }
+
+    @Test
     fun rejectedPreparedOfferNeverOpensSource() = runTest {
         val protocol = RecordingFileProtocol()
         val dispatcher = directDispatcher(
@@ -3982,6 +4148,29 @@ class FileTransferFlowTest {
         assertEquals(FileTransferPhase.FLUSH, senderError.phase)
     }
 
+    /** Dispatcher-level fixture: forward data/finish, manually deliver or drop all control notifications. */
+    private fun controlledSecureTransfers(
+        scope: CoroutineScope,
+        config: FileTransferConfig
+    ): ControlledSecureTransfers {
+        val senderProtocol = RecordingFileProtocol()
+        val receiverProtocol = RecordingFileProtocol()
+        val receiver = directDispatcher(scope, receiverProtocol, config, protocolState = secureProtocolState())
+        val forwardingProtocol = object : P2pProtocol by senderProtocol {
+            override suspend fun sendFileDataFrame(connection: RawConnection, frame: Frame) {
+                receiver.onFileData(frame)
+                senderProtocol.sendFileDataFrame(connection, frame)
+            }
+
+            override suspend fun sendFileFinish(connection: RawConnection, finish: SecureFileFinish) {
+                senderProtocol.sendFileFinish(connection, finish)
+                receiver.onFileFinish(finish)
+            }
+        }
+        val sender = directDispatcher(scope, forwardingProtocol, config, protocolState = secureProtocolState())
+        return ControlledSecureTransfers(sender, receiver, senderProtocol, receiverProtocol)
+    }
+
     private fun directDispatcher(
         scope: CoroutineScope,
         protocol: P2pProtocol,
@@ -4029,6 +4218,31 @@ class FileTransferFlowTest {
         totalChunks = 1,
         payload = bytes
     )
+}
+
+private class ControlledSecureTransfers(
+    val sender: FileTransferDispatcher,
+    val receiver: FileTransferDispatcher,
+    val senderProtocol: RecordingFileProtocol,
+    val receiverProtocol: RecordingFileProtocol
+) {
+    suspend fun receiveOffer(): IncomingFileSession {
+        val offer = senderProtocol.secureOffers.single()
+        receiver.onFileOffer(
+            offer.transferId,
+            FileOfferPayload(offer.name, offer.sizeBytes, offer.mimeType),
+            offer
+        )
+        return assertIs<IncomingFileSession>(receiver.pendingFileOffers.value.single())
+    }
+
+    suspend fun close() {
+        try {
+            sender.closeAll("controlled fixture shutdown")
+        } finally {
+            receiver.closeAll("controlled fixture shutdown")
+        }
+    }
 }
 
 private class GatedSink : RawSink {
@@ -4424,6 +4638,8 @@ private class RecordingFileProtocol : P2pProtocol {
     var dataFailure: Throwable? = null
     var doneFailure: Throwable? = null
     var cancelFailure: Throwable? = null
+    var cancelAttempts: Int = 0
+        private set
     var gateOffer: Boolean = false
     var offerIgnoresCancellation: Boolean = false
     val offerStarted = CompletableDeferred<Unit>()
@@ -4583,6 +4799,7 @@ private class RecordingFileProtocol : P2pProtocol {
     }
 
     override suspend fun sendFileCancel(connection: RawConnection, transferId: MessageId, reason: String?) {
+        cancelAttempts++
         cancelFailure?.let { throw it }
         fileCancels.add(transferId to reason)
         if (gateCancel) {

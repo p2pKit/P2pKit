@@ -3,7 +3,8 @@ package dev.p2pkit.core.transfer
 import dev.p2pkit.core.P2pError
 
 /**
- * Lifecycle of one file transfer.
+ * Local lifecycle of one file transfer. The two peers can reach different
+ * terminal states when a notification is lost or races another outcome.
  *
  * **Sender:** `Offered` → `Accepted` → `Sending(progress)` → `Completed`,
  * or short-circuited to `Rejected`, `Cancelled`, or `Failed` at any point.
@@ -11,12 +12,13 @@ import dev.p2pkit.core.P2pError
  * **Receiver:** `Offered` → `Accepted` → `Sending(progress)` → `Completed`.
  * `Rejected` is reached if the receiver calls [P2pFileOffer.reject] or the
  * offer goes unanswered past `offerTimeoutMillis` (reason `"timeout"`);
- * `Cancelled` if either side aborts the transfer in flight.
+ * `Cancelled` if a local or received cancellation wins the terminal transition.
  *
- * A conforming receiver is the unanswered-offer timeout authority: both sides
- * reach `Rejected("timeout")`. The sender also has a later safety watchdog for
- * an unresponsive/non-conforming peer; that local-only path is [Failed] with a
- * typed `TIMEOUT` failure in the `OFFER` phase.
+ * A conforming receiver is the unanswered-offer timeout authority and becomes
+ * `Rejected("timeout")`. The sender observes the same rejection only if its
+ * notification arrives before another terminal outcome. The sender's later
+ * safety watchdog also covers lost notifications from conforming peers; that
+ * local-only path is [Failed] with a typed `TIMEOUT` failure in the `OFFER` phase.
  *
  * Progress in [Sending] is `bytesTransferred / sizeBytes` clamped to `0.0..1.0`.
  */
@@ -44,13 +46,15 @@ public sealed class FileTransferState {
     /**
      * Receiver declined the offer — explicitly via [P2pFileOffer.reject], or
      * by the receive-side auto-reject when the offer goes unanswered past
-     * `offerTimeoutMillis` (reason `"timeout"`). A conforming sender observes
-     * the same rejection.
+     * `offerTimeoutMillis` (reason `"timeout"`). The sender observes the same
+     * rejection only after receiving the notification while still nonterminal.
      */
     public data class Rejected(val reason: String?) : FileTransferState()
 
     /**
-     * Either side intentionally cancelled mid-transfer.
+     * Local cancellation won, or a peer cancellation was received and applied.
+     * This does not confirm that the other peer is also cancelled or that no
+     * receiver output exists; see [P2pFileTransfer.cancel].
      */
     public data class Cancelled(val reason: String?) : FileTransferState()
 
