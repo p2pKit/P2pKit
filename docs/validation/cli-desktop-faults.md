@@ -122,14 +122,21 @@ Cryptographic invalid-input cases also belong to the
 
 Set explicit host safety limits before execution. Use a small temporary quota or
 dedicated filesystem for receiver storage, lower file-descriptor/process limits
-only for the child process, open connections up to the documented admission
-bound, and send repeated legal messages/transfers within a preapproved byte
-budget. Never fill the system disk or induce host-wide memory pressure.
+only for the child process, and select the specific
+[admission/backlog bound](../reference/limits.md#admission-and-application-receive-backlog)
+under test. Distinguish per-source LAN admission, core concurrent handshakes,
+and net-new inbound session registration; a single source is limited before
+it can occupy all core handshake slots. Use only authorized synthetic peers,
+and send legal messages/transfers within a preapproved byte budget. Never fill
+the system disk or induce host-wide memory pressure.
 
-Expected behavior is a typed storage/admission/resource failure, bounded logs
-and history, cleanup of `.part`/reservation files, and continued service for a
-subsequent valid operation. Record heap, CPU, descriptors, threads, disk usage,
-and the exact safety cutoff.
+Expect the limit-specific outcome in that reference, not a universal typed
+admission error: an inbound refusal is logged and the connection is closed;
+application-backlog overload fails the session. Storage/transfer operations
+report their structured failures. Require bounded logs/history and cleanup of
+uncommitted `.part`/reservation files, then release test pressure and verify a
+subsequent valid operation (using a new session if necessary). Record heap,
+CPU, descriptors, threads, disk usage, the tested limit and the safety cutoff.
 
 ## Headful Desktop UI campaign
 
@@ -170,10 +177,12 @@ baseline, midpoint, and end.
 
 ## Pass/fail and evidence
 
-Pass requires deterministic typed outcomes, matching UI and structured events,
-correct hashes for success, no partial output for failure, bounded retries and
-resources, one teardown, no orphan process, and three repeat runs of each
-mandatory fault on every target OS.
+Pass requires the documented outcomes (including logged inbound refusals in
+D5), matching UI and structured events where exposed, correct hashes for
+success, no partial output for failure, bounded retries and resources, one
+teardown, no orphan process, and three repeat runs of each mandatory fault on
+every target OS. A logged refusal is not evidence that a typed admission API
+exists.
 
 Fail on crash outside an intentional kill, freeze, false success, ambiguous
 terminal state, mixed transfer IDs, unsanitized control text, secret/payload

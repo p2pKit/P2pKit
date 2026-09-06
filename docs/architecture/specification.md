@@ -98,6 +98,15 @@ record produced during the 0.7 remediation is preserved in
   committed outputs. SHA-256 detects corruption but is not authentication; the
   authenticated-v2 transport supplies authenticity.
 
+## Operational limits
+
+The [operational limits reference](../reference/limits.md) records current
+values, source locations, scope and observable consequences for admission,
+message/framing/reassembly, receive backlog, discovery and lifecycle deadlines.
+It also distinguishes public configuration from internal policy. These bounds
+do not promise a supported mesh size, total heap ceiling, aggregate shutdown
+deadline or acknowledgement of remote application processing.
+
 ## Compatibility
 
 The published `0.7.0-rc3` API and wire protocol are immutable. Later commits

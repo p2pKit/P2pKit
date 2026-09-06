@@ -242,6 +242,10 @@ content and atomically publishes it; POSIX hosts also fsync the parent
 directory. The public JDK exposes no equivalent parent-directory barrier on
 Windows, so sudden power loss may lose the renamed directory entry there.
 
+Use the [operational limits reference](docs/reference/limits.md) for current
+admission, receive-backlog, framing, discovery and timeout policies, their
+observable failures, and the settings applications can configure.
+
 Read the [security model](docs/security/model.md),
 [compatibility policy](docs/compatibility.md), and
 [0.6-to-0.7 migration guide](docs/guides/migrating-to-0.7.md).

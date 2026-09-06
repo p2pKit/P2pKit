@@ -7,6 +7,7 @@ remediation records. Start with the repository [README](../README.md).
 
 - [Architecture overview](architecture/overview.md)
 - [Current API and protocol specification](architecture/specification.md)
+- [Operational limits and configuration](reference/limits.md)
 - [Security model](security/model.md)
 - [Compatibility policy](compatibility.md)
 - [Versioning policy](versioning.md)
