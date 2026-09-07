@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T13:36:22.174561+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T15:10:23.480200+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -2117,16 +2117,27 @@
       "relatedIssuesAndDependencies": [
         108,
         144,
-        225
+        225,
+        228,
+        334,
+        335,
+        343,
+        344,
+        345
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Complete four-file correction f085dc8 independently approved and pushed to the audit branch, not merged/released. Artifacts honor TMPDIR with no silent fallback; a separate documented GPG root preserves the measured 102-byte physical socket limit. Partial setup, failure, handled signals and scoped GPG shutdown are covered; failed shutdown retains a quoted retry path and returns nonzero. The old random-directory cleanup already worked; no noexec failure or signature bypass was established. Final policy includes14 real synthetic-GPG tests;13 red controls and13 static/caller gates pass. Full check/Android assembly passes2276/0 failures/0 errors/1 unchanged manual skip. No production/API/ABI/dependency/lock/workflow/protected-file changes. Ambient packet/key inspection is a separate unconfirmed follow-up. Issue OPEN; final release/external acceptance pending; audit NOT READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "f085dc8a59f6cf17a72be0924ccb10f8d91c2f6f"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_226_r1 APPROVE at f085dc8/tree23127ee3, no actionable findings. Complete four-file diff, surrounding implementation/callers/contracts independently inspected;1644 sealed entries,278 XMLs(2276 passes,0 failure/error,1 unchanged skip) and37 finalized cleanup receipts verified. No reviewer builds/tests/workers. Report SHA256 1670434e93996546e58a45f4c71786d802365af93b85e42ffcec71f9cb72b6c2.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/226#issuecomment-5406163531"
-      ]
+        "https://github.com/p2pKit/P2pKit/issues/226#issuecomment-5406163531",
+        "https://github.com/p2pKit/P2pKit/issues/226#issuecomment-5571862604",
+        "https://github.com/p2pKit/P2pKit/issues/226#issuecomment-5572682691"
+      ],
+      "repositoryScopeStatus": "APPROVED"
     },
     {
       "number": 228,
@@ -4277,5 +4288,5 @@
       ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T13:53:18.252498+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T15:20:14.583878+00:00"
 }

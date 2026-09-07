@@ -52,3 +52,15 @@ executable path containing spaces is supported. Use synthetic archives, not a li
 This is **unverified**, not a new issue or a #225 approval claim. Check complete issue histories before tracking an
 independent defect. The caller still verifies a reviewed archive checksum; do not infer checksum bypass or attacker
 control over that archive. #225 intentionally changed fixture inputs/policies, not the real installer.
+
+## Dependency curator ambient GPG packet and key inspection
+
+During #226 review, unchanged `gpg --list-packets` and `gpg --show-keys` invocations in
+`scripts/review-dependency-verification.sh` were noted to omit the explicit temporary-home selection used by its
+list/import/verify calls. Reproduce with a synthetic HOME/GNUPGHOME and controlled configuration whether those read-side
+operations create ambient files/workers or allow unrelated local configuration to disrupt curation. Never probe a
+personal keyring or infer disclosure from source alone.
+
+This is **unconfirmed**, independently trackable if verified, and not folded into #226's workspace/socket correction.
+Read complete related issue/closed-fix histories before filing anything new. #226's regression suite deliberately isolates
+ambient operations in a synthetic home; its passing result is not proof that every production GPG call selects that home.

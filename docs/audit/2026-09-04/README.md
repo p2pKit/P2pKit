@@ -11,13 +11,19 @@ Start with the root [continuation checkpoint](../../../AUDIT_CHECKPOINT.md). Clo
 - [Coverage ledger](coverage.tsv): inherited per-path review claims, provenance revisions and reopened work.
 - [Unverified follow-ups](followups.md): hypotheses needing reproduction and deduplication, not confirmed bug claims.
 
-The inventory snapshot is a continuation aid, not GitHub's live state. It contains 57 repository repairs with recorded
-independent approval, 90 pending repairs, 21 external-validation items and one architecture decision: **33.7% reviewed
-repository repairs, 66.3% remaining issue rows**. These percentages do not count external acceptance still attached
+The inventory snapshot is a continuation aid, not GitHub's live state. It contains 58 repository repairs with recorded
+independent approval, 89 pending repairs, 21 external-validation items and one architecture decision: **34.3% reviewed
+repository repairs, 65.7% remaining issue rows**. These percentages do not count external acceptance still attached
 to approved rows (including #133); independent interoperability remains separately pending. Thirty-six entries
 originated in the audit. Branch availability does not imply merge/release or a new verification result.
 
-#225's complete seven-file correction is independently approved/pushed through `46ed124`: persistent consumer/Netty
+#226's complete four-file correction is independently approved/pushed at `f085dc8`: artifacts honor TMPDIR while a
+separate GPG root preserves the measured 102-byte physical socket bound. Partial/error/signal cleanup stops only owned
+keyring workers; failed shutdown retains an explicit retry path. Fourteen real synthetic-GPG tests, thirteen red controls,
+thirteen final static gates and the full check/Android assembly pass: 2,276 passes, zero failures/errors, one unchanged
+manual skip. See the [#226 report](repairs/226.md). No production/API/ABI, dependency/lock, workflow or protected-file change.
+
+Earlier #225's complete seven-file correction is independently approved/pushed through `46ed124`: persistent consumer/Netty
 policies replace historical denylists, independent approval tripwires remain, and XcodeGen fixtures use current and
 synthetic inputs. Fourteen final static gates and the full check/Android assembly pass: 2,276 passes, zero failures/errors,
 one unchanged manual skip. Twenty-four actual-caller controls stay bound to `82be9c5`; only one documentation line
@@ -41,8 +47,8 @@ See the [#187 compiled-constant guard/verification report](repairs/187.md),
 [#190 documentation/bytecode verification report](repairs/190.md),
 [#325 repair/verification summary](repairs/325.md), [#317 report](repairs/317.md),
 [#354 report](repairs/354.md) and [earlier #337 report](repairs/337.md). Whole-audit final/release verification remains
-pending; #226 is next. Its complete history was refreshed/read; reproduction and remediation have not started.
-Preserve the macOS GPG socket-length requirement and earlier provenance fixes while investigating TMPDIR policy. #325's feasible correction
+pending; #229 is next, with remediation unstarted. Refresh its full history and revalidate TXT decoding through
++actual JVM/Android and Apple callers. Preserve the #226 macOS GPG socket bound and all earlier provenance fixes. #325's feasible correction
 preserves `AGENTS.md:9` by owner instruction; literal alignment of that SDK prerequisite requires new authorization.
 
 ## Provenance and scope
@@ -58,8 +64,8 @@ artifacts are necessary, request the private backup; otherwise run fresh, scoped
 
 Coverage rows preserve the last recorded scoped assessment at their recorded revisions. This is not complete current
 coverage: later changes invalidate affected paths/callers; the original full audit must be corroborated before final
-completion. The #225, #208, #152, #133, #355, #187, #190 and #325 paths have scoped final review records; other domains still need current
-corroboration. The ledger inventories 1,008 tracked paths; inventory is not equivalent to completed review.
+completion. The #226, #225, #208, #152, #133, #355, #187, #190 and #325 paths have scoped final review records; other domains still need current
+corroboration. The ledger inventories 1,010 tracked paths; inventory is not equivalent to completed review.
 Added handoff documents are inventory entries, not runtime-verification claims.
 
 ## Maintaining cloneable progress
