@@ -1,16 +1,16 @@
 # Issue disposition index
 
-Checkpoint inventory: **168 issues; 47 reviewed repairs (28.0%), 121 remaining (72.0%)**.
+Checkpoint inventory: **168 issues; 48 reviewed repairs (28.6%), 120 remaining (71.4%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #337 is reviewed;
-the newly filed #354 is next. Read [the full records](issues.json) for scope, dependencies, commits and outcome links.
+refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #354 is reviewed;
+#317 is next. Read [the full records](issues.json) for scope, dependencies, commits and outcome links.
 Read [the root handoff](../../../AUDIT_CHECKPOINT.md) for exact evidence limits and mandatory review/cleanup.
 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (47)
+## Repairs with recorded independent approval (48)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -62,7 +62,9 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#352: [AUDIT] Selective diagnostic clearing can lose other-session history and misreport storage failures](https://github.com/p2pKit/P2pKit/issues/352) | low | New audit | `32dc5c036581` |
 | [#353: [AUDIT] Android API24/25 diagnostics use API26 java.time and NIO without core-library desugaring](https://github.com/p2pKit/P2pKit/issues/353) | low | New audit | `44fdfeeb66a6` |
 
-## Pending remediation (99)
+| [#354: [AUDIT] Android hotspot Retry restarts instead of retrying failed cleanup](https://github.com/p2pKit/P2pKit/issues/354) | low | New audit | `b6af5b8b78bd` |
+
+## Pending remediation (98)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -164,7 +166,6 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#341: iOS sample groups the local TCP port, breaking copy/paste into manual dialing](https://github.com/p2pKit/P2pKit/issues/341) | low | New audit | — |
 | [#342: [Low] Discovery test fixture falsely claims current LAN delivery and acknowledgement semantics](https://github.com/p2pKit/P2pKit/issues/342) | low | New audit | — |
 | [#347: [AUDIT] CLI identityProfile comment promises persistence that the in-memory store does not provide](https://github.com/p2pKit/P2pKit/issues/347) | low | New audit | — |
-| [#354: [AUDIT] Android hotspot Retry restarts instead of retrying failed cleanup](https://github.com/p2pKit/P2pKit/issues/354) | low | New audit | — |
 
 ## External validation pending (21)
 

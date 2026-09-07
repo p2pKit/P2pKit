@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T02:43:09.050791+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T04:07:03.813705+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -3393,7 +3393,7 @@
       ],
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
+      "assessmentAtCheckpoint": "Next sequential repair. Full #317/#294/#315/#316 issue/comment/timeline histories refreshed. Current source still collects diagnosticRevision into an unused by delegate, without the intended snapshot read. No implementation/verification performed. Preserve pause/filter/session/disposal and #352 selective clearing; Android clear currently does not bump diagnosticRevision. Closed #294 performance allegation and #315 polling decision remain invalid/separate; #316 is separate structural work.",
       "recordedFixCommitsOrFinalRevision": [],
       "recordedIndependentReview": "No completed local repair/review cycle recorded",
       "publicInvestigationAndOutcomeUrls": [
@@ -4184,13 +4184,17 @@
         324,
         337
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Confirmed pre-existing UI-to-manager execution trace at 32dc5c0 and filed separately from #337. No physical-device or native-leak claim. Next sequential repair: preserve cleanup retry intent, route the actual card action to stop without acquisition permissions, and test recovery/coexistence/cancellation before independent review.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Complete correction through b6af5b8 is pushed to the audit branch, not merged/released. Explicit unconfirmed stop intent retries Stop without acquisition permission or disturbing an independent join. R1 stale permission callback finding corrected; fresh R2 APPROVE of full 10b0fba..b6af5b8 range. Final focused inputs: 87 sample +144 provisioning tests passed; assembly/lint/ABI/static gates passed. Earlier integrated check at 12e6cfa: 2225 passed, 0 failed, 1 unchanged manual skip; NOT a final b6af5b8 full check. Physical/rendered UI/external assurance pending.",
+      "recordedFixCommitsOrFinalRevision": [
+        "12e6cfac9ccd510b31b52945fbfd39ce04aaa457",
+        "b6af5b8b78bd846be9f456438ef0586aa10569bc"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_354_r2 APPROVE at exact b6af5b8 after R1 REQUEST_CHANGES/correction. Whole source range and 1901 evidence-manifest entries independently corroborated; report SHA256 79a5ab673868d5969f6c2a2b1a124249908a7d8a5183c880d0ef92c09cd4f356.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/354"
+        "https://github.com/p2pKit/P2pKit/issues/354",
+        "https://github.com/p2pKit/P2pKit/issues/354#issuecomment-5564873197"
       ]
     }
   ],

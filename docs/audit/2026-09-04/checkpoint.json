@@ -5,22 +5,22 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "170cc86b652d421b9d3118735c63cdf4a5530a66",
-  "sourceCheckpointTree": "23d44d3a59f0051b4475b637930263f84aed7c8a",
+  "sourceCheckpointCommit": "b6af5b8b78bd846be9f456438ef0586aa10569bc",
+  "sourceCheckpointTree": "909690f39b071971c566a792b462a7362c95580e",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
-  "activeIssue": 354,
+  "activeIssue": 317,
   "activeIssueState": "PENDING_REMEDIATION",
   "issueCountDenominator": 168,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
-    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 47,
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 48,
     "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
-    "PENDING_REMEDIATION": 99
+    "PENDING_REMEDIATION": 98
   },
-  "completedIssueCount": 47,
-  "remainingIssueCount": 121,
+  "completedIssueCount": 48,
+  "remainingIssueCount": 120,
   "percentageMeaning": "Issue-count progress only, not engineering effort or production readiness",
-  "githubIssueListRefreshedUtc": "2026-09-07T02:43:09.050791+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T04:07:03.813705+00:00",
   "githubTotalIssuesAtRefresh": 275,
   "githubOpenIssuesAtRefresh": 168,
   "newAuditIssueCount": 35,
@@ -29,5 +29,14 @@
   "scope": "Branch continuation only; not a merge, release, independent crypto assurance, or physical-device completion.",
   "preservedDraftCommit": "eb564e9487f2887f83f519575c82d4e7657864cb",
   "preservedDraftTree": "69161ac65e02bbf33d390bde2575d3131a9d7996",
-  "lastReviewedIssue": 337
+  "lastReviewedIssue": 354,
+  "lastIntegratedCheck": {
+    "commit": "12e6cfac9ccd510b31b52945fbfd39ce04aaa457",
+    "tree": "ce493e395ce5a6c26a1f20a88c87907089462b9f",
+    "passed": 2225,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1,
+    "scope": "Before the final #354 permission-admission correction. Does not verify sourceCheckpointCommit. Fresh final combined-tree integrated/release verification pending."
+  }
 }

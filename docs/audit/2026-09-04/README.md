@@ -11,11 +11,12 @@ Start with the root [continuation checkpoint](../../../AUDIT_CHECKPOINT.md). Clo
 - [Coverage ledger](coverage.tsv): inherited per-path review claims, provenance revisions and reopened work.
 - [Unverified follow-ups](followups.md): hypotheses needing reproduction and deduplication, not confirmed bug claims.
 
-The inventory snapshot is a continuation aid, not GitHub's live state. It contains 47 repairs with recorded independent
-approval, 99 pending repairs, 21 external-validation items and one architecture decision: 28.0% completed by issue count,
-72.0% remaining. Thirty-five entries originated in the audit. Availability on this branch does not imply merge/release
-or a new verification result. #337 now has final independent approval at `170cc86`; the separate #354 is next.
-See the [#337 repair/verification summary](repairs/337.md).
+The inventory snapshot is a continuation aid, not GitHub's live state. It contains 48 repairs with recorded independent
+approval, 98 pending repairs, 21 external-validation items and one architecture decision: 28.6% completed by issue count,
+71.4% remaining. Thirty-five entries originated in the audit. Availability on this branch does not imply merge/release
+or a new verification result. #354 now has final independent approval at `b6af5b8`; #317 is next.
+See the [#354 repair/verification summary](repairs/354.md) and [earlier #337 report](repairs/337.md).
+The last integrated check ran at earlier `12e6cfa`; final combined-tree integrated/release verification remains pending.
 
 ## Provenance and scope
 
@@ -30,7 +31,7 @@ artifacts are necessary, request the private backup; otherwise run fresh, scoped
 
 Coverage rows preserve the last recorded scoped assessment at their recorded revisions. This is not complete current
 coverage: later changes invalidate affected paths/callers; the original full audit must be corroborated before final
-completion. The #337 paths have scoped final review records; other domains still need current corroboration. Added handoff
+completion. The #354 paths have scoped final review records; other domains still need current corroboration. Added handoff
 documents are inventory entries, not runtime-verification claims.
 
 ## Maintaining cloneable progress
