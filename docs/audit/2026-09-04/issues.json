@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T15:10:23.480200+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T19:01:06.372937+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -2178,16 +2178,27 @@
       "relatedIssuesAndDependencies": [
         23,
         124,
-        201
+        201,
+        231,
+        332,
+        356,
+        357
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Complete 14-file correction bf34f70 independently approved at combined 6d9cd3c after separately reviewed test-only prerequisite #357; both pushed to audit branch, not merged/released. Actual JmDNS3.6.3 normalizes both property APIs; original textBytes now feed bounded strict parsing. Valid U+FFFD remains valid, unknown fields remain ignored, every consumed duplicate is validated and #332 JVM/Android withdrawal stays intact. Baseline5 intended failures+1 valid control; focused426 passes /0 failure/error/1 unchanged manual skip;8 negative controls. Final full check/Android assembly2333 passes /0 failure/error/1 manual skip,285 XMLs,246 executed tasks;13 static gates pass. Canonical known-key VALUE parity only; Apple key aliasing #356 pending and Apple invalid re-resolution unconfirmed. Admission tightening reserved for0.8.0+; not an authentication bypass. IssueOPEN; overallNOT READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "bf34f70b13ceab1549741b09647fec0b603b15c0",
+        "6d9cd3c7472415af5166f25864db17b659901c3c"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_229_r1 APPROVE at6d9cd3c/tree5f6b6d4. Complete diff/callers/platforms, 3513 sealed entries,285 raw XMLs,34 finalized cleanup receipts and separate #357 approval independently verified; no actionable findings or reviewer builds/workers. Report SHA256 e3f21bc2540d3dc9f38cd7cb49e69db880c7b23096fc23f67be013a29e329282.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/229#issuecomment-5406163824"
-      ]
+        "https://github.com/p2pKit/P2pKit/issues/229#issuecomment-5406163824",
+        "https://github.com/p2pKit/P2pKit/issues/229#issuecomment-5574019166",
+        "https://github.com/p2pKit/P2pKit/issues/229#issuecomment-5574486981",
+        "https://github.com/p2pKit/P2pKit/issues/229#issuecomment-5574771448"
+      ],
+      "repositoryScopeStatus": "APPROVED"
     },
     {
       "number": 230,
@@ -4286,7 +4297,58 @@
         "https://github.com/p2pKit/P2pKit/issues/355",
         "https://github.com/p2pKit/P2pKit/issues/355#issuecomment-5569027807"
       ]
+    },
+    {
+      "number": 356,
+      "title": "[AUDIT][Low] Apple Bonjour aliases NUL-containing TXT keys into canonical fields",
+      "url": "https://github.com/p2pKit/P2pKit/issues/356",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "githubStateAtListRefresh": "open",
+      "reportedProblemExcerpt": "Network.framework exposes raw TXT keys as NUL-terminated C strings; name\\0suffix aliases to name before exact key selection and can overwrite/supply canonical metadata.",
+      "affectedComponentsExcerpt": "Apple IosBonjour decoding, IosLanDiscoveryTransport admission/removal and common LAN semantic validation. iosArm64,iosSimulatorArm64,iosX64; secure-v2 and opted-in legacy.",
+      "relatedIssuesAndDependencies": [
+        23,
+        124,
+        229,
+        231,
+        332
+      ],
+      "status": "PENDING_REMEDIATION",
+      "assessmentAtCheckpoint": "Confirmed pre-existing low discovery-correctness defect, not authentication bypass. 14-case actual macOS Network.framework probe and first-party caller trace independently corroborated during #229 review. Created/refetched issue; remediation NOT_STARTED. Evaluate original bounded nw_txt_record_access_bytes before C-key normalization, first proving raw/dictionary representation behavior. Preserve0.8.0+ restriction. Not iOS device/multicast evidence.",
+      "recordedFixCommitsOrFinalRevision": [],
+      "recordedIndependentReview": "No completed repair/review cycle; discovery evidence independently corroborated by #229 reviewer, not fix approval.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/356"
+      ]
+    },
+    {
+      "number": 357,
+      "title": "[AUDIT][Low] LAN watcher test races a real executor against a virtual timeout",
+      "url": "https://github.com/p2pKit/P2pKit/issues/357",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "githubStateAtListRefresh": "open",
+      "reportedProblemExcerpt": "Unchanged watcher test waits for a real executor using runTest virtual timeout; a correct dispatcher can fail in0.003 wall seconds before external work runs.",
+      "affectedComponentsExcerpt": "JvmLanNetworkWatcherTest and LAN/root verification; production snapshotContext dispatching from closed#159 remains correct and unchanged.",
+      "relatedIssuesAndDependencies": [
+        159,
+        205,
+        220,
+        229
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "repositoryScopeStatus": "APPROVED",
+      "assessmentAtCheckpoint": "One-file test-only6d9cd3c independently approved/pushed. Real Default timeout retains1s bound/thread assertion; FIFO gate proves virtual1001ms advancement cannot expire external wait. Finally retires watcher/releases gate/closes executor/asserts termination. Focused6/6; dirty patch proven identical to commit;2 intended negative controls restored; original failed run and control-driver classification error retained. Shared final check/Android2333 pass/0 failure/error/1 unchanged manual skip;13 static gates pass. No production/API/ABI/protocol change. IssueOPEN; NOT READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "6d9cd3c7472415af5166f25864db17b659901c3c"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_357_r1 APPROVE at6d9cd3c/tree5f6b6d4. Complete one-file diff/callers/history,3077 sealed own/shared entries and22 finalized own/shared cleanup receipts independently verified; no actionable findings/builds/workers. Report SHA256 493d10022c10170c4a8c05f7cd72f1cf226922773cc8ca0c2ee90fda6d928c06.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/357",
+        "https://github.com/p2pKit/P2pKit/issues/357#issuecomment-5574770193"
+      ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T15:20:14.583878+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T19:17:26.909955+00:00"
 }

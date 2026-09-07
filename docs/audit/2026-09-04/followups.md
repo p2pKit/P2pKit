@@ -64,3 +64,20 @@ personal keyring or infer disclosure from source alone.
 This is **unconfirmed**, independently trackable if verified, and not folded into #226's workspace/socket correction.
 Read complete related issue/closed-fix histories before filing anything new. #226's regression suite deliberately isolates
 ambient operations in a synthetic home; its passing result is not proof that every production GPG call selects that home.
+
+## Apple same-generation invalid re-resolution
+
+During #229 review, `IosLanDiscoveryTransport.emitPeer` was observed returning on malformed/invalid TXT or mismatched
+service identity without withdrawing previously admitted cache/relay/endpoint ownership. The reconciliation function
+keeps same-generation entries. This is **unconfirmed at the cross-component transition boundary**: no bounded actual
+caller regression has been run and no new fix/disposition is claimed.
+
+Read/update existing [#332](https://github.com/p2pKit/P2pKit/issues/332) if the same invalid-record-withdrawal cause is
+confirmed on Apple; do not duplicate it merely because the current title names JVM/Android. #23 and merged #24/#72/
+#101/#102 histories were read: their generation/path/failed-dial corrections are not clear proof of this transition.
+Use an owned native endpoint and synthetic TXT, verify Found-to-invalid-to-Lost, late subscribers, retained dial
+leases, stale generations, recovery, repeated invalid records and shutdown. Preserve the existing JVM/Android repair.
+
+Separately, the Apple NUL-key alias mechanism was **confirmed and filed as
+[#356](https://github.com/p2pKit/P2pKit/issues/356)** using actual macOS Network.framework plus a first-party caller
+trace. It is a tracked pending repair, not this unconfirmed lifecycle mechanism and not part of #229's value approval.

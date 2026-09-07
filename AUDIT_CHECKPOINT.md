@@ -1,9 +1,9 @@
 # P2pKit audit continuation checkpoint
 
 **Updated: 7 September 2026. Work in progress, not a release approval.** The owner authorized pushing the local
-audit work and continuing remediation. #226 now has independent approval for its temporary-directory correction;
-the full check and Android sample assembly pass at its final source. #133's external interoperability acceptance is NOT STARTED.
-#229 is next. This tracked handoff replaces the earlier private archive-only instructions.
+audit work and continuing remediation. #229's original-byte TXT decoder and #357's test-clock correction are now
+independently approved/pushed. The combined full check and Android assembly pass. #356 is the next confirmed repair;
+an Apple invalid re-resolution follow-up remains unconfirmed. #133's independent interoperability is NOT STARTED.
 Read it together with the unchanged `AGENTS.md` and `CLAUDE.md`.
 
 ## Resume from a fresh clone
@@ -29,13 +29,13 @@ not an account login, a native chat export, running agents or build processes.
 
 - Repository: <https://github.com/p2pKit/P2pKit>.
 - Audit branch: `audit/complete-2026-09-04`; not merged into `main`.
-- Latest independently reviewed source: **`f085dc8a59f6cf17a72be0924ccb10f8d91c2f6f`** (#226, maintainer tooling/tests and documentation).
-- Its tree: **`23127ee3b2accfc61446b76b3614eca384061694`**; clean at final verification/review.
-- Latest full `check` plus Android sample assembly at **`f085dc8`**: **PASS**, 2,276 passes, zero failures/errors and one unchanged
-  manual LAN interop skip; 278 XML reports, 246 executed tasks. #226's final dependency policy, fourteen real-GPG tests,
-  thirteen red controls and thirteen static/caller gates pass at the same source. #225's older caller controls remain
-  bound to `82be9c5`. Earlier #133 generator/publication/isolated-consumer evidence remains bound to `7127616`, not rerun
-  for this maintainer-tooling fix. The historical #355-era #133 draft lint failure remains superseded.
+- Latest independently reviewed combined source: **`6d9cd3c7472415af5166f25864db17b659901c3c`** (#229 plus test-only #357).
+- Its tree: **`5f6b6d437cc695ae2912a281663290ee625d2b8f`**; clean at final verification/review.
+- #229's fourteen-file correction is `bf34f70b13ceab1549741b09647fec0b603b15c0`; all fourteen blobs are unchanged in the combined tree.
+- Latest full `check` plus Android sample assembly at **`6d9cd3c`**: **PASS**, **2,333 passes**, zero failures/errors and
+  one unchanged manual LAN interop skip; 285 XMLs, 246 executed tasks. Thirteen final static/caller gates pass.
+  The first full run at `bf34f70` FAILED on the unchanged watcher test; #357 corrected its cause before this pass.
+- Earlier #133 publication/isolated-consumer evidence remains bound to `7127616`, not rerun for these two corrections.
 - This is not whole-audit final combined-tree/release approval. Independent interoperability and other external
   acceptance remain pending, including obligations on already approved repository-repair rows.
 - Source is pushed to the audit branch. `main` remains `eb444cccfc290be5435c5c10629c24183293606f`.
@@ -45,22 +45,22 @@ not an account login, a native chat export, running agents or build processes.
 - Documentation commits can follow the reviewed source; record actual `HEAD`, tree and working changes before checks.
 - Machine-readable state: [checkpoint.json](docs/audit/2026-09-04/checkpoint.json).
 
-| Disposition at this checkpoint | Count | Percentage of 169 inventoried issues |
+| Disposition at this checkpoint | Count | Percentage of 171 inventoried issues |
 | --- | ---: | ---: |
-| Repository repairs with independent approval | **58** | **34.3%** |
-| Pending repairs | 89 | 52.7% |
-| External/platform validation | 21 | 12.4% |
+| Repository repairs with independent approval | **60** | **35.1%** |
+| Pending repairs | 89 | 52.0% |
+| External/platform validation | 21 | 12.3% |
 | Architecture/product decision (#120) | 1 | 0.6% |
-| **Total remaining issue rows** | **111** | **65.7%** |
+| **Total remaining issue rows** | **111** | **64.9%** |
 
 These percentages count repository-repair rows, not effort, file coverage, issue closure or production readiness.
 They do **not** count completion of external acceptance still attached to approved rows (including #133); independent
-interoperability remains separately pending and is not implied complete by 58/169. The 7 September GitHub list refresh
-found 276 issues across all states and 169 open issues. The ledger identifies **36 new-audit findings**, including
-newly filed #355. Refresh complete issue bodies, comments, timelines and linked work before relying on any entry.
+interoperability remains separately pending and is not implied complete by 60/171. The 7 September GitHub list refresh
+found 278 issues across all states and 171 open issues. The ledger identifies **38 new-audit findings**, including
+newly filed #356 and #357. Refresh complete issue bodies, comments, timelines and linked work before relying on any entry.
 Historical assessment wording records its original local phase; branch availability does not imply a merge.
 
-All 58 recorded repository repairs are in this branch's history. #325's protected-file exception is recorded below.
+All 60 recorded repository repairs are in this branch's history. #325's protected-file exception is recorded below.
 Issues remain OPEN under the completion policy; nothing has
 been merged, closed or released by these pushes. See [every disposition](docs/audit/2026-09-04/issues.md) and
 [scope, dependencies, commits and public outcomes](docs/audit/2026-09-04/issues.json).
@@ -71,7 +71,22 @@ Recorded cycles include dependency/provenance/publication gates, coroutine cance
 secure-v2 tests, provisioning callbacks, sample pairing/privacy, file source/destination safeguards, diagnostics,
 Android API24/25 diagnostics and iOS integration. These are scoped repairs, not proof of complete subsystem correctness.
 
-Latest #226 separates artifact placement from the GPG socket constraint: artifacts honor `TMPDIR`; a documented
+Latest #229 fixes JVM/Android TXT decoding at the original byte boundary; both JmDNS property APIs were already lossy.
+Bounded raw parsing preserves valid Unicode/empty/NUL semantics, rejects malformed consumed occurrences and leaves
+#332's existing JVM/Android ownership withdrawal intact. Eight negative controls, actual dependency/native probes,
+baseline red/positive controls and the focused LAN check pass. Fresh `/root/review_229_r1` **APPROVED** the complete
+correction at `6d9cd3c`, independently checking 3,513 sealed entries and 34 cleanup receipts. This is canonical known-key
+**value** parity only; Apple key aliasing [#356](https://github.com/p2pKit/P2pKit/issues/356) remains pending. Admission
+tightening is reserved for **0.8.0+**, not the unchanged snapshot label. See the [#229 report](docs/audit/2026-09-04/repairs/229.md)
+and [verified outcome](https://github.com/p2pKit/P2pKit/issues/229#issuecomment-5574771448).
+
+Its first integrated run exposed distinct test defect #357: a virtual timeout outran a real executor. The one-file
+correction retains the one-second bound/thread assertion, deliberately gates the executor and always retires resources.
+Focused 6/6 and both negative controls pass; fresh `/root/review_357_r1` **APPROVED**, verifying 3,077 own/shared entries
+and 22 own/shared cleanup receipts. Both issues share the final **2,333-pass** integrated run, not additive executions.
+See the [#357 report](docs/audit/2026-09-04/repairs/357.md) and [verified outcome](https://github.com/p2pKit/P2pKit/issues/357#issuecomment-5574770193).
+
+Earlier #226 separates artifact placement from the GPG socket constraint: artifacts honor `TMPDIR`; a documented
 `P2PKIT_GPG_TMPDIR` selects the short keyring root. The complete physical socket path is limited to the measured
 102 bytes before downloads/GPG. Partial setup, errors and handled signals clean both resources; scoped worker
 shutdown precedes socket deletion, and failure retains a quoted retry path with nonzero exit. Fourteen real synthetic-GPG
@@ -163,7 +178,8 @@ Read the [safe repair report](docs/audit/2026-09-04/repairs/325.md) and
 
 | Evidence | Result and limitation |
 | --- | --- |
-| Latest clean `check` plus Android assembly at **`f085dc8`** | **2,276 passes**, zero failures/errors, one unchanged manual skip; 278 XMLs, 246 executed tasks. Actual ABI/constants, lint and Android assembly pass |
+| Latest clean `check` plus Android assembly at **`6d9cd3c`** | **2,333 passes**, zero failures/errors, one unchanged manual skip; 285 XMLs, 246 executed tasks. Actual ABI/constants, lint and Android assembly pass |
+| #229 and #357 scoped regression checks | 426 LAN passes/one manual skip, eight TXT controls, six focused watcher passes and two watcher controls; 13 final static gates. Shared final results above are not additional executions |
 | #226 tooling regression checks at **`f085dc8`** | Complete dependency policy including 14 real synthetic-GPG tests, 13 intended red controls and 13 static/caller gates pass. Measured 102-byte physical socket bound; no live curation or hosted-CI claim |
 | #225 static/caller controls | Four baseline invalid cases reproduced; 24 final actual-caller controls at `82be9c5` have expected outcomes. Fourteen final gates at `46ed124`, including 39 negative input/lock controls and 14 installer assertions, pass. Independent approval tripwires retained |
 | #208 documentation/static checks at **`3a96a77`** | Three blocks byte-identical; baseline regression fails; five static gates plus Mac Ruby/scope smoke checks pass. No full-build rerun |
@@ -184,9 +200,9 @@ Read the [safe repair report](docs/audit/2026-09-04/repairs/325.md) and
 
 The latest successful integrated run includes JVM, Android host and Kotlin/Native arm64 iOS simulator tests,
 **not Swift XCTest**, Intel execution, ART/OEM or physical devices. #133 publication/isolated-consumer checks executed
-at `7127616`, not rerun for #226; complete release/XCFramework/Swift gates remain pending. Exploratory harness/environment
-failures are preserved separately, not acceptance evidence. #226's 37 cleanup receipts, #225's 101, #208's ten, #152's 33 and #133's earlier
-54 receipts are finalized, including failed and negative attempts; required evidence remains.
+at `7127616`, not rerun for #229/#357; complete release/XCFramework/Swift gates remain pending. Exploratory harness/environment
+failures are preserved separately, not acceptance evidence. #229's 34 cleanup receipts and #357's six additional own
+receipts, plus #226's 37, #225's 101, #208's ten, #152's 33 and #133's earlier 54 receipts are finalized, including failed and negative attempts; required evidence remains.
 Do not add overlapping test totals. Controller/fake-manager tests and source wiring assertions are not rendered
 Android UI, restoration, ART/OEM or physical-device proof. Final audit/release gates need the eventual combined tree;
 whole-repository corroboration, eventual combined-tree release/consumer gates and external validation remain incomplete.
@@ -194,10 +210,10 @@ whole-repository corroboration, eventual combined-tree release/consumer gates an
 Earlier #317 corrected the diagnostic revision subscription and successful-clear invalidation through `f273b1b`.
 Its [report](docs/audit/2026-09-04/repairs/317.md) preserves the real Compose regression evidence and the correction
 to test-runtime wording: actual sample executor JDK21.0.7, not inferred from the JDK17 launcher. The latest passing integrated
-tests at `f085dc8` include those regressions; host snapshots are not rendered/device performance measurements.
+tests at `6d9cd3c` include those regressions; host snapshots are not rendered/device performance measurements.
 Earlier #354 corrected the hotspot Failed card's cleanup retry and stale permission-admission callbacks through
 `b6af5b8`; its [review report](docs/audit/2026-09-04/repairs/354.md) retains exact historical evidence. The latest passing
-integrated run at `f085dc8` also includes that correction; earlier `12e6cfa` results alone did not.
+integrated run at `6d9cd3c` also includes that correction; earlier `12e6cfa` results alone did not.
 Earlier #337 corrected independent provisioning-card lifetimes and dismissal identity through `170cc86`:
 [repair summary](docs/audit/2026-09-04/repairs/337.md). Its earlier full-check results are not a new run.
 Inherited #352 corrected selective diagnostic clearing and truthful storage failures, ending at
@@ -223,26 +239,24 @@ diagnostic trace experiment is intentionally private and is not required for cur
 dropped or pushed; do not blindly apply either over reviewed code. Authenticate GitHub and the coding agent normally
 on the new device rather than copying token stores or SSH keys.
 
-## Next: #229, then the remaining queue
+## Next: Apple discovery follow-up and #356, then the remaining queue
 
-[#133](https://github.com/p2pKit/P2pKit/issues/133) is **repository-scope approved**, not an unfinished draft. Its full
-range through `7127616` was reviewed; do not recreate/discard those fixtures or repeat the resolved lint-producer repair.
-#355's runtime correction remains intact. #133's external interoperability acceptance is still **NOT STARTED**; leave it OPEN.
+1. #229 and prerequisite #357 are reviewed/pushed; do not repeat their repairs or misreport the superseded failed run.
+   Preserve strict original-byte decoding, valid literal U+FFFD, generation-owned withdrawal and the real-clock test.
+2. Refresh/read [#356](https://github.com/p2pKit/P2pKit/issues/356) completely. Its Apple C-string key-alias cause is
+   confirmed, but its correction is **NOT STARTED**. First prove `nw_txt_record_access_bytes` preserves original
+   raw/dictionary records; bound length before copying/conversion and never retain callback pointers. Maintain 0.8.0+ scope.
+3. Investigate Apple same-generation invalid re-resolution against [#332](https://github.com/p2pKit/P2pKit/issues/332),
+   [#23](https://github.com/p2pKit/P2pKit/issues/23) and merged #24/#72/#101/#102. Current return paths appear to retain
+   old cache/relay/endpoint ownership, but no transition regression has been run. Deduplicate by cause and update #332
+   if confirmed; reassess priority/counts then. Do not silently expand the prior JVM/Android approval or call this fixed.
+4. Continue every actionable issue sequentially: **89 pending repair rows (88 low, one informational #333)**,
+   21 external-validation rows and #120's architecture decision. Resolve precise external/product blockers honestly.
+5. Investigate the other [unverified follow-ups](docs/audit/2026-09-04/followups.md); do not invent findings from suspicions.
 
-1. #152, #208, #225 and #226 are approved and pushed; do not repeat their completed repairs. Preserve the explicit ABI
-   graph calls, actual-constant guards, independent version/checksum tripwires and separate temporary-directory ownership.
-2. Refresh/read [#229](https://github.com/p2pKit/P2pKit/issues/229) completely, including related #124/#201/#332 decisions.
-   Revalidate reported JVM/Android TXT UTF-8 decoding against actual JmDNS callers and strict Apple behavior, then fix/review
-   the confirmed current scope. #229 remediation has not started at this checkpoint. Reassess dependencies/priorities across
-   the **89 pending repairs: 88 low, one informational (#333)**. Continue every actionable issue sequentially.
-3. Investigate the explicitly unverified follow-ups before claiming or filing distinct defects. The ambient GPG operations
-   noted during #226 review are unchanged and are not established secret exposure or part of that approval.
-4. Continue feasible work on the 21 external-validation rows and #120's architecture/product decision without manufacturing
-   hardware/access or deciding product scope silently. Document precise blockers and owners.
-
-Preserve #317's subscription regression, #325's protected-instruction caveat and all previous reviewed repairs.
-Record new independently trackable defects only after reproduction and deduplication; update existing issues for new
-evidence of the same underlying problem.
+#133's repository scope is approved; its independent interoperability remains **NOT STARTED**. Preserve #325's
+protected-instruction caveat, #317's subscription regression, independent dependency approval tripwires, #226's short
+GPG-socket ownership and all previous reviewed repairs. Whole-repository corroboration and final release gates remain.
 
 ## Continue the full audit and repair queue
 
@@ -250,7 +264,7 @@ evidence of the same underlying problem.
    [unverified follow-ups](docs/audit/2026-09-04/followups.md). Preserve all existing user changes.
 2. Record exact branch/commit/tree/status and refresh full GitHub issues/comments/linked PRs. Reconcile new evidence
    by underlying cause, not similar titles. Use exact local drafts if access is unavailable; never claim remote writes.
-3. Continue all actionable issues sequentially, prioritizing severity/dependencies. #229 is next; refresh the
+3. Continue all actionable issues sequentially, prioritizing severity/dependencies. #356 is the next confirmed repair; refresh the
    remaining queue and its dependencies rather than relying only on historical issue titles.
 4. Track verified distinct discoveries with severity, platforms, paths/lines, reproduction, root cause, impact,
    correction and regression plan. Respect `SECURITY.md`. Keep suspicions separate; do not duplicate existing issues.
@@ -302,15 +316,16 @@ verification scope, blockers, cleanup and practical readiness limits at each han
 
 > Continue the complete P2pKit audit from AUDIT_CHECKPOINT.md and docs/audit/2026-09-04/. Verify the audit branch,
 > current commit/tree/status, read repository instructions and full GitHub issue histories, and preserve user work.
-> This checkpoint has 58/169 independently reviewed repository repairs (34.3%) and 111 remaining issue rows (65.7%).
-> These percentages exclude completion of external acceptance on approved rows, including #133. #226 is approved/pushed
-> at f085dc8 (tree 23127ee3b2accfc61446b76b3614eca384061694). Full check+Android assembly passes 2,276/zero failures/one manual
-> skip; final policy (14 real synthetic-GPG tests), 13 red controls and 13 static gates pass. Artifacts honor TMPDIR while
-> a separate GPG root preserves the measured 102-byte physical socket limit and scoped worker cleanup. #133 publication/
-> consumer evidence remains bound to 7127616; independent interoperability stays NOT STARTED. Next: refresh/read/revalidate
-> #229, then the remaining queue; its remediation is unstarted. Track unverified GPG/installer follow-ups without inventing
-> defects. Preserve independent approval tripwires, protected instructions, published constants and all prior repairs.
-> Read full issues; fix sequentially, create a fresh independent reviewer after every fix, resolve and re-review findings,
-> serialize bounded builds and always stop owned workers/clean disposable outputs. Update safe Git/GitHub handoffs and push
-> only the audit branch; no force-push, merge, release or issue closure is authorized. Full release/XCFramework/Swift,
-> whole-repository corroboration and external/device/crypto validation remain pending. Overall NOT READY.
+> This checkpoint has 60/171 independently reviewed repository repairs (35.1%) and 111 remaining rows (64.9%).
+> Percentages exclude external acceptance still attached to approved rows, including #133 (independent interoperability
+> NOT_STARTED). #229 and #357 are approved/pushed through6d9cd3c/tree5f6b6d437cc695ae2912a281663290ee625d2b8f; full
+> check+Android assembly passes2333/0 failures/errors/1 unchanged manual skip;13 static gates pass. All builds stopped
+> owned workers/removed disposable module outputs; private evidence/shared caches/stashes/protected files preserved.
+> Next confirmed repair#356 is unstarted. Investigate Apple invalid re-resolution against#332 before expanding its
+> scope; track by underlying cause and reprioritize if confirmed. Preserve0.8.0+ TXT-admission restriction, valid U+FFFD,
+> strict byte limits, prior ownership fixes and independent approval tripwires. Read full issues, repair sequentially,
+> create a fresh independent reviewer after each fix, address findings and review the final revision. Serialize bounded
+> builds with unconditional scoped cleanup. Push safe summaries only to the audit branch; no force-push, main merge,
+> issue closure, tags or release. Complete all remaining repairs and whole-repository/final release/consumer/Swift/
+> XCFramework checks. Physical devices, hostile networks, independent interoperability/crypto assurance remain pending.
+> Overall NOT READY. A clone transfers these source/context records, not accounts, private logs or a running chat session.
