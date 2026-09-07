@@ -9,6 +9,21 @@ audits, trackers, and implementation evidence remain under `docs/archive/`.
 The six real-world, independent-interoperability, and professional-audit areas
 remain pending; no stable-release readiness claim is implied.
 
+### Audit-branch discovery tightening — reserved for 0.8.0+
+
+- #229: JVM/Android decode original DNS-SD TXT bytes rather than JmDNS's
+  normalized property map. Malformed UTF-8 in a consumed field rejects the
+  complete record, including earlier duplicate values; empty/boolean values
+  stay empty and trailing NULs reach the existing semantic rejection checks.
+  Unknown fields remain ignored, and correctly encoded Unicode (including
+  literal U+FFFD) remains valid. Valid peers, security profiles and the wire
+  format are unchanged. Invalid re-resolutions still withdraw their old route.
+- This is an unmerged audit-branch change, **not** part of published RC3 and
+  **not approved for a 0.7 release**. The current snapshot version label does
+  not override #229's 0.8.0+ requirement. A release must honor that target or
+  obtain an explicit owner decision before changing it; no version/tag or
+  publication authorization is implied here.
+
 ## 0.7.0-rc3 — release candidate (2026-08-09)
 
 This candidate preserves the RC2 public API and secure-v2 wire format while

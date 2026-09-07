@@ -3,6 +3,12 @@
 This checklist applies to a future non-snapshot release. It does not authorize
 a tag or Maven Central publication.
 
+Before selecting a version, review the unreleased behavior notes. The audit
+branch's [#229 discovery-admission tightening](https://github.com/p2pKit/P2pKit/issues/229)
+is reserved for **0.8.0+**, despite the current snapshot label. Do not include
+it in a 0.7 release without a new explicit owner decision. This checkpoint
+neither changes the release version nor authorizes a merge/publication.
+
 1. Update `VERSION_NAME` to the exact non-snapshot version and update current
    docs/changelog. Keep `LATEST_PUBLISHED_VERSION` at the previous release until
    remote publication is verified.

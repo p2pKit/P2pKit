@@ -3,6 +3,20 @@ package dev.p2pkit.transport.lan
 import dev.p2pkit.core.transport.LocalPeerInfo
 import javax.jmdns.ServiceInfo
 
+/** Read raw TXT, not JmDNS's already-normalized string or byte property map. */
+internal fun validateJmdnsDiscoveryRecord(
+    info: ServiceInfo,
+    registration: LanServiceRegistration
+): ValidatedLanDiscoveryRecord? {
+    val properties = decodeLanTxtRecord(info.textBytes) ?: return null
+    return validateLanDiscoveryRecord(
+        properties = properties,
+        expectedAppId = registration.appId,
+        localPeerId = registration.localPeerId,
+        securityProfile = registration.securityProfile
+    )
+}
+
 /** Production service-token construction, separate from native handle ownership. */
 internal fun buildJmdnsServiceInfo(registration: LanServiceRegistration, localPeer: LocalPeerInfo): ServiceInfo {
     val port = registration.boundTcpPortForAdvertisement()

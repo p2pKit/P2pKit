@@ -490,7 +490,9 @@ internal class AndroidLanDiscoveryTransport(
         }
         var forced = 0
         cached.forEach { info ->
-            val pid = info.getPropertyString(LanConstants.TXT_PEER_ID) ?: info.name
+            val pid = validDiscoveryPeerIdOrNull(
+                decodeLanTxtRecord(info.textBytes)?.get(LanConstants.TXT_PEER_ID)
+            ) ?: info.name
             if (pid == registration.localPeerId.value) return@forEach
             val cachedPort = info.port
             Log.d(
@@ -720,7 +722,9 @@ internal class AndroidLanDiscoveryTransport(
             if (Log.enabled) {
                 val eventInfo = runCatching { event.info }.getOrNull()
                 val hasPeerId = runCatching {
-                    !eventInfo?.getPropertyString(LanConstants.TXT_PEER_ID).isNullOrBlank()
+                    validDiscoveryPeerIdOrNull(
+                        eventInfo?.let { decodeLanTxtRecord(it.textBytes) }?.get(LanConstants.TXT_PEER_ID)
+                    ) != null
                 }.getOrDefault(false)
                 Log.d(
                     TAG,
@@ -755,7 +759,7 @@ internal class AndroidLanDiscoveryTransport(
                     withdrawInvalidResolution(event.name, lease, "missing service info")
                     return@publishIfActive
                 }
-                val record = validatedRecord(info)
+                val record = validateJmdnsDiscoveryRecord(info, registration)
                 if (record == null) {
                     withdrawInvalidResolution(event.name, lease, "invalid TXT metadata")
                     return@publishIfActive
@@ -811,14 +815,6 @@ internal class AndroidLanDiscoveryTransport(
             peerEventRelay.remove(peerId)
         }
     }
-
-    private fun validatedRecord(info: ServiceInfo): ValidatedLanDiscoveryRecord? =
-        validateLanDiscoveryRecord(
-            properties = LanConstants.DISCOVERY_TXT_KEYS.associateWith(info::getPropertyString),
-            expectedAppId = registration.appId,
-            localPeerId = registration.localPeerId,
-            securityProfile = registration.securityProfile
-        )
 
     // ──────────────────────────────────────────────────────────────────
     // Multicast lock

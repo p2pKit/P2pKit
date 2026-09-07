@@ -222,6 +222,8 @@ internal val TransportContext.lanProtocolVersion: Int
  * and free of protocol/log controls), or `null` when the record must be
  * skipped. Values are deliberately NOT trimmed or otherwise normalized —
  * identity handling for conforming peers is unchanged.
+ * Callers must first decode the original TXT bytes strictly: a String cannot
+ * distinguish a literal U+FFFD from a lossy decoder's replacement character.
  */
 internal fun validDiscoveryPeerIdOrNull(rawPid: String?): String? =
     validLanTxtValueOrNull(LanConstants.TXT_PEER_ID, rawPid)

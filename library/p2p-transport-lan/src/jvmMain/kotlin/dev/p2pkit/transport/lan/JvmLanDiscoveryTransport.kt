@@ -420,14 +420,6 @@ internal class JvmLanDiscoveryTransport(
         }
     }
 
-    private fun validatedRecord(info: ServiceInfo): ValidatedLanDiscoveryRecord? =
-        validateLanDiscoveryRecord(
-            properties = LanConstants.DISCOVERY_TXT_KEYS.associateWith(info::getPropertyString),
-            expectedAppId = registration.appId,
-            localPeerId = registration.localPeerId,
-            securityProfile = registration.securityProfile
-        )
-
     private fun buildListenerLease(handle: JmDNS): JvmListenerLease {
         val lease = createListenerLease()
         lease.listener = buildServiceListener(handle, lease)
@@ -467,7 +459,9 @@ internal class JvmLanDiscoveryTransport(
                 if (JvmLanDiag.enabled) {
                     val eventInfo = runCatching { event.info }.getOrNull()
                     val hasPeerId = runCatching {
-                        !eventInfo?.getPropertyString(LanConstants.TXT_PEER_ID).isNullOrBlank()
+                        validDiscoveryPeerIdOrNull(
+                            eventInfo?.let { decodeLanTxtRecord(it.textBytes) }?.get(LanConstants.TXT_PEER_ID)
+                        ) != null
                     }.getOrDefault(false)
                     JvmLanDiag.log(
                         "browse",
@@ -522,7 +516,7 @@ internal class JvmLanDiscoveryTransport(
                 withdrawInvalidResolution(instanceName, lease, "missing service info")
                 return@publishIfActive
             }
-            val record = validatedRecord(resolvedInfo)
+            val record = validateJmdnsDiscoveryRecord(resolvedInfo, registration)
             if (record == null) {
                 withdrawInvalidResolution(instanceName, lease, "invalid TXT metadata")
                 return@publishIfActive
@@ -611,7 +605,9 @@ internal class JvmLanDiscoveryTransport(
                 .getOrDefault(emptyArray())
         }
         cached.forEach { info ->
-            val pid = info.getPropertyString(LanConstants.TXT_PEER_ID) ?: info.name
+            val pid = validDiscoveryPeerIdOrNull(
+                decodeLanTxtRecord(info.textBytes)?.get(LanConstants.TXT_PEER_ID)
+            ) ?: info.name
             if (pid == registration.localPeerId.value) return@forEach
             withContext(Dispatchers.IO) {
                 runCatching { handle.requestServiceInfo(info.type, info.name, true) }
