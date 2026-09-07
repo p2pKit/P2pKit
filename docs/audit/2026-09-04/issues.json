@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T01:22:35.221022+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T02:43:09.050791+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -3752,18 +3752,26 @@
       "origin": "NEW_AUDIT_FINDING",
       "severityAtCheckpoint": "medium",
       "reportedProblemExcerpt": "**Medium — sample correctness/integration.** Android sample, `samples/p2p-sample-android`. No authentication bypass or native leak is claimed.",
-      "affectedComponentsExcerpt": "",
+      "affectedComponentsExcerpt": "Android sample presenter, ViewModel and provisioning/credential Compose cards; Android manager contracts unchanged.",
       "relatedIssuesAndDependencies": [
         198,
         317,
-        324
+        324,
+        354
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Unfinished draft committed unchanged as eb564e9487f2887f83f519575c82d4e7657864cb for cloneable continuation. Two extracted pre-correction regressions failed as expected; the later draft has not been compiled, tested or independently reviewed. Read AUDIT_CHECKPOINT.md before continuing.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
-      "publicInvestigationAndOutcomeUrls": []
+      "assessmentAtCheckpoint": "Full correction through 170cc86 on the pushed audit branch (not merged/released). Independent R1 dismissal-identity finding reproduced by two actual assertion failures and corrected; fresh R2 APPROVE of full 32dc5c0..170cc86 range. Final clean integrated check: 2216 passed, 0 failed, 1 unchanged manual skip. Scoped Android: 75 sample +144 provisioning tests, assembly/lint/ABI passed. Native cleanup ownership, independent resources, cancellation and #324 credential clearing preserved. Physical/rendered UI/external assurance pending; #354 recovery action remains separate.",
+      "recordedFixCommitsOrFinalRevision": [
+        "eb564e9487f2887f83f519575c82d4e7657864cb",
+        "5f454a92c7e83496bce6d30721026abc2cfc5814",
+        "170cc86b652d421b9d3118735c63cdf4a5530a66"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_337_r2 APPROVE at exact 170cc86 after REQUEST_CHANGES/correction. Full source range and evidence independently corroborated; report SHA256 6721e2f9748d87e9fcf3f47552d380329110d51316a03a2a1d4e4f55efd0906a.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/337#issuecomment-5563954190",
+        "https://github.com/p2pKit/P2pKit/issues/337#issuecomment-5564403296"
+      ]
     },
     {
       "number": 338,
@@ -4159,6 +4167,32 @@
         "https://github.com/p2pKit/P2pKit/issues/353#issuecomment-5560857978",
         "https://github.com/p2pKit/P2pKit/issues/353#issuecomment-5560460762"
       ]
+    },
+    {
+      "number": 354,
+      "title": "[AUDIT] Android hotspot Retry restarts instead of retrying failed cleanup",
+      "url": "https://github.com/p2pKit/P2pKit/issues/354",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "After native hotspot stop/cleanup fails, the sample Failed card offers Retry but starts hosting instead of retrying retained cleanup. Repeated starts refuse retained ownership, so recovery through that card cannot succeed. Whole-kit Stop is a workaround.",
+      "affectedComponentsExcerpt": "Android sample hotspot Failed card, ViewModel retry routing and provisioning manager retained-hotspot cleanup contract.",
+      "relatedIssuesAndDependencies": [
+        187,
+        198,
+        283,
+        284,
+        324,
+        337
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": "open",
+      "assessmentAtCheckpoint": "Confirmed pre-existing UI-to-manager execution trace at 32dc5c0 and filed separately from #337. No physical-device or native-leak claim. Next sequential repair: preserve cleanup retry intent, route the actual card action to stop without acquisition permissions, and test recovery/coexistence/cancellation before independent review.",
+      "recordedFixCommitsOrFinalRevision": [],
+      "recordedIndependentReview": "No completed repair/review cycle recorded",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/354"
+      ]
     }
-  ]
+  ],
+  "lastDispositionUpdateUtc": "2026-09-07T03:02:25.741276+00:00"
 }

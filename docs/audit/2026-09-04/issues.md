@@ -1,16 +1,16 @@
 # Issue disposition index
 
-Checkpoint inventory: **167 issues; 46 reviewed repairs (27.5%), 121 remaining (72.5%)**.
+Checkpoint inventory: **168 issues; 47 reviewed repairs (28.0%), 121 remaining (72.0%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #337 is unfinished.
-Read [the full records](issues.json) for dependencies, scope, recorded commits and public investigation/outcome links.
-Read [the root handoff](../../../AUDIT_CHECKPOINT.md) for exact evidence limitations and mandatory review/cleanup.
+refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #337 is reviewed;
+the newly filed #354 is next. Read [the full records](issues.json) for scope, dependencies, commits and outcome links.
+Read [the root handoff](../../../AUDIT_CHECKPOINT.md) for exact evidence limits and mandatory review/cleanup.
 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with inherited independent approval (46)
+## Repairs with recorded independent approval (47)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -47,6 +47,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#334: [AUDIT] Dependency verifier cannot approve Gradle plugin marker updates](https://github.com/p2pKit/P2pKit/issues/334) | medium | New audit | `d1a93d025485` |
 | [#335: [AUDIT] Dependency verifier rejects valid issuer-key-ID-only OpenPGP signatures](https://github.com/p2pKit/P2pKit/issues/335) | medium | New audit | `d6d8585e39a2` |
 | [#336: [AUDIT] Late terminal diagnostic callbacks retire replacement SDK sessions](https://github.com/p2pKit/P2pKit/issues/336) | medium | New audit | `df4c042f3e90` |
+| [#337: [AUDIT] Android provisioning cards retain success after system stop or network release](https://github.com/p2pKit/P2pKit/issues/337) | medium | New audit | `170cc86b652d` |
 | [#338: [AUDIT] Cancelling a queued provisioning operation clears another acquisition’s state](https://github.com/p2pKit/P2pKit/issues/338) | medium | New audit | `5ac5f1ef7350` |
 | [#339: [AUDIT] Initial Wi-Fi binding and cancellation close acquire native monitors in opposite order](https://github.com/p2pKit/P2pKit/issues/339) | high | New audit | `9a694307a6a9` |
 | [#340: [AUDIT] Canceled JmDNS network samples can replace newer or restarted bindings](https://github.com/p2pKit/P2pKit/issues/340) | medium | New audit | `ffea091775ce` |
@@ -160,10 +161,10 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#330: [AUDIT] iOS history cap can evict an active transfer row](https://github.com/p2pKit/P2pKit/issues/330) | low | New audit | — |
 | [#331: [AUDIT] Android base-LAN KDoc requires provisioning-only runtime permissions](https://github.com/p2pKit/P2pKit/issues/331) | low | New audit | — |
 | [#333: [AUDIT] Maintenance index gives the GitHub audit the wrong date](https://github.com/p2pKit/P2pKit/issues/333) | informational | New audit | — |
-| [#337: [AUDIT] Android provisioning cards retain success after system stop or network release](https://github.com/p2pKit/P2pKit/issues/337) | medium | New audit | — |
 | [#341: iOS sample groups the local TCP port, breaking copy/paste into manual dialing](https://github.com/p2pKit/P2pKit/issues/341) | low | New audit | — |
 | [#342: [Low] Discovery test fixture falsely claims current LAN delivery and acknowledgement semantics](https://github.com/p2pKit/P2pKit/issues/342) | low | New audit | — |
 | [#347: [AUDIT] CLI identityProfile comment promises persistence that the in-memory store does not provide](https://github.com/p2pKit/P2pKit/issues/347) | low | New audit | — |
+| [#354: [AUDIT] Android hotspot Retry restarts instead of retrying failed cleanup](https://github.com/p2pKit/P2pKit/issues/354) | low | New audit | — |
 
 ## External validation pending (21)
 

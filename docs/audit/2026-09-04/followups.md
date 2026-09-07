@@ -33,3 +33,11 @@ infer native or physical-device behavior from these suspicions.
 
 Historical notes predating these dispositions must not be mistaken for still-unfiled new findings. See the issue ledger
 and GitHub outcomes for scope and remaining hosted/platform validation.
+
+## Future provisioning producers returning Pending
+
+The Android manager currently never returns `JoinNetworkResult.Pending`. #337's presenter tests include synthetic
+Pending behavior, but generic failure events have no operation/resource identifier. Before reusing that presenter
+with a different Pending-producing adapter, specify failure attribution during concurrent hotspot work and test the
+actual producer. This is a future-adapter applicability concern from independent #337 review, **not a verified current
+Android defect**, a lossless/replay guarantee, or a new issue claim.
