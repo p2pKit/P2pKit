@@ -44,4 +44,6 @@ grep -Fq 'library/p2p-transport-lan/build/XCFrameworks/release' "$ROOT/scripts/r
 grep -Fq 'samples/iosApp/p2pkit-sample.xcodeproj' "$ROOT/scripts/run-release-gate.sh" ||
     fail "release gate does not build the relocated iOS project"
 
+ruby "$ROOT/scripts/tests/check-android-setup-policy-test.rb"
+
 echo "RESULT: PASS — 10 Gradle projects use the canonical library/ and samples/ layout"

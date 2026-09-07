@@ -44,6 +44,43 @@ tests, Android lint/host tests, Apple simulator tests, ABI, strict Dokka,
 publication artifacts, isolated consumers, SBOM, Swift warnings-as-errors, and
 release-XCFramework provenance.
 
+## Android SDK setup
+
+The compile SDKs are separate inputs in [the version catalog](../../gradle/libs.versions.toml).
+Install **both** for `./gradlew check` or Android sample builds; installing only the library platform is insufficient.
+
+| Consumer | Catalog key | Compile platform | SDK Manager package |
+| --- | --- | --- | --- |
+| Libraries and shared KMP sample | `android-compileSdk` | Android SDK Platform 36 | `platforms;android-36` |
+| Android app sample | `android-sample-compileSdk` | Android SDK Platform 37 | `platforms;android-37.0` |
+
+The runtime minimum remains **Android API 24+** (`android-minSdk`); a compile SDK is not a device minimum.
+The preserved [agent guide](../../AGENTS.md) names only the library platform, not the complete sample prerequisites.
+Use this table for sample and repository-wide checks. The device/emulator validation matrix is separate from these
+build requirements; installing a platform does not verify that Android runtime.
+
+Install Android SDK Command-line Tools (latest) through Android Studio's SDK Manager or the Android command-line
+tools distribution. Set `ANDROID_HOME` to that SDK directory, then review/accept the licenses and install the platforms:
+
+```bash
+export ANDROID_HOME="/absolute/path/to/Android/sdk"
+"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" --licenses
+"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" \
+    "platforms;android-36" "platforms;android-37.0" "platform-tools"
+```
+
+In Windows PowerShell, set `$env:ANDROID_HOME` and invoke `sdkmanager.bat` with `&`; do not paste Bash continuations.
+AGP selects the Build Tools version and can install it with accepted licenses and network access. Preinstall those
+tools before an offline build. The sample's package ID is `platforms;android-37.0`, not `platforms;android-37`;
+no manual directory rename or symlink is required. Keep `sdk.dir` in untracked `local.properties`, if present, pointed
+at the same SDK; it takes precedence over `ANDROID_HOME`. Remove conflicting deprecated `ANDROID_SDK_ROOT` settings.
+Do not commit machine-specific SDK paths or copy another device's credentials/caches.
+
+Verify with `./gradlew :p2p-sample-android:assembleDebug --console=plain`; run `./gradlew --stop` afterward,
+including on failure. `scripts/tests/check-repository-layout.sh` also checks the setup table, installation command,
+and contributor/validation links against the catalog and CI installer. This documentation-consistency check does
+not replace the independent dependency/toolchain approval tripwires.
+
 ## JVM host coverage
 
 Run the library suites without requesting Apple/Android tasks:

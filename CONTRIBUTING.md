@@ -15,7 +15,8 @@ published metadata, and the wire protocol.
 ## Development setup
 
 - JDK 17 and the checked-in Gradle wrapper.
-- Android SDK Platform 36 for Android builds.
+- Android SDKs from the [canonical Android setup](docs/testing/local.md#android-sdk-setup).
+  Both the library/shared-module and Android app sample platforms are required for repository-wide checks.
 - macOS/Xcode and the pinned XcodeGen installer for Apple checks.
 
 Run the fast local gate:

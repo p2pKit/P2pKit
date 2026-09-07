@@ -27,8 +27,8 @@ The baseline workstation must have:
   `xcrun`, `simctl`, `dns-sd`, `log`, `Console.app`, and XcodeGen.
 * JDK 17, Gradle wrapper from this repository, Kotlin/Native toolchains
   resolved by Gradle, and Git.
-* Android SDK Platform 36, build-tools, platform-tools, an API-26 through
-  API-36 emulator, and at least one physical Android device. Install
+* Both Android compile platforms in the [canonical Android setup](../testing/local.md#android-sdk-setup),
+  build-tools, platform-tools, an API-26 through API-36 emulator, and at least one physical Android device. Install
   `adb`, `apkanalyzer`, and Android Studio Logcat or `adb logcat`.
 * Two independent network interfaces where possible: Wi-Fi and Ethernet or
   a USB Ethernet adapter. The hostile-network tests additionally need a
