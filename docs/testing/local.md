@@ -226,8 +226,10 @@ clear tests preserve failure/retry behavior; source assertions connect the bridg
 to the actual screen. Do not substitute an unread delegated local for the revision
 key or cache history without invalidating successful clears.
 
-Robolectric supplies API35 tracing/snapshot services under JDK17. The framework is
-locked/checksummed, an explicit test input, and resolved offline at test runtime;
+Robolectric supplies API35 tracing/snapshot services in the Android unit-test JVM.
+These tests use the configured Gradle daemon JVM; Java17 source/target compatibility
+does not select the test fork's runtime. Add `--info` to inspect the actual test-executor
+command. The framework is locked/checksummed, an explicit test input, and resolved offline at test runtime;
 the test fork is bounded to 1 GiB with a two-minute task deadline. This is host
 Compose/snapshot evidence, **not rendered Android UI, ART, physical-device behavior
 or frame timing**. On a device, leave the viewer untouched while traffic arrives,
