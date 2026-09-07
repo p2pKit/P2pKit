@@ -35,7 +35,6 @@ import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.permission.P2pPermission
 import dev.p2pkit.core.provisioning.JoinNetworkResult
-import dev.p2pkit.core.provisioning.LocalNetworkConfig
 import dev.p2pkit.core.provisioning.LocalNetworkResult
 import dev.p2pkit.core.provisioning.WifiCredentials
 import dev.p2pkit.core.provisioning.WifiPassword
@@ -144,8 +143,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      * in-flight, so the UI can disable the relevant buttons and prevent the
      * user from spawning parallel provisioning attempts via rapid taps.
      */
-    private val _provisioningBusy = MutableStateFlow(false)
-    val provisioningBusy: StateFlow<Boolean> = _provisioningBusy.asStateFlow()
+    private val provisioningUi = ProvisioningUiState()
+    val provisioningBusy: StateFlow<Boolean> = provisioningUi.busy
 
     /**
      * Mirror of [P2pKit.networkPathStatus]. Surfaced in the room screen as
@@ -249,8 +248,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      * `LocalNetworkResult.Started` or `StartedWithoutCredentials` while the
      * hotspot is up; `Failed` when start failed or the system stopped it.
      */
-    private val _hotspotResult = MutableStateFlow<LocalNetworkResult?>(null)
-    val hotspotResult: StateFlow<LocalNetworkResult?> = _hotspotResult.asStateFlow()
+    val hotspotResult: StateFlow<LocalNetworkResult?> = provisioningUi.hotspotResult
 
     /** Missing perms reported by [AndroidP2pPermissionManager]; sample requests them. */
     private val _missingPermissions = MutableStateFlow<List<P2pPermission>>(emptyList())
@@ -262,8 +260,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      * `Failed` when the user declined, the network couldn't be reached,
      * or the system released the join.
      */
-    private val _joinResult = MutableStateFlow<JoinNetworkResult?>(null)
-    val joinResult: StateFlow<JoinNetworkResult?> = _joinResult.asStateFlow()
+    val joinResult: StateFlow<JoinNetworkResult?> = provisioningUi.joinResult
 
     // --- internals --------------------------------------------------------
 
@@ -569,6 +566,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         val supervisor = SupervisorJob(viewModelScope.coroutineContext[Job])
         val scope = CoroutineScope(viewModelScope.coroutineContext + supervisor)
         runScope = scope
+        provisioningUi.attach(newKit.networkProvisioning, scope)
 
         scope.launch {
             newKit.state.collect { _kitState.value = it }
@@ -662,6 +660,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (t: Throwable) {
+                provisioningUi.detach()
                 _advertising.value = false
                 _discovering.value = false
                 Log.e(LOG_TAG, "kit startup failed; errorType=${SampleConsole.failure(t)}")
@@ -802,82 +801,44 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    @OptIn(ExperimentalP2pApi::class)
     fun startHotspot() {
-        val currentKit = kit ?: return
-        val scope = runScope ?: return
-        if (_provisioningBusy.value) {
+        if (kit == null || runScope == null) return
+        if (provisioningBusy.value) {
             Log.i(LOG_TAG, "startHotspot ignored: provisioning busy")
             return
         }
         refreshMissingPermissions()
-        _provisioningBusy.value = true
-        scope.launch {
-            try {
-                val result = runCatchingNonCancel {
-                    currentKit.networkProvisioning.startLocalNetwork(LocalNetworkConfig())
-                }.getOrElse { e ->
-                    Log.w(LOG_TAG, "startHotspot threw" + "; errorType=${SampleConsole.failure(e)}")
-                    LocalNetworkResult.Failed(
-                        dev.p2pkit.core.NetworkProvisioningError.PlatformError(e)
-                    )
-                }
-                _hotspotResult.value = result
-                // Log the full result detail so logcat is self-sufficient. The
-                // HotspotCard on-screen already shows error class + message; this
-                // mirrors it for non-UI diagnostics (adb logcat -s p2pkit).
-                when (result) {
-                    is LocalNetworkResult.Started ->
-                        Log.i(LOG_TAG, "hotspot Started: credentials=<omitted> " +
-                            "port=${result.manualConnectionInfo?.port} " +
-                            "hostCount=${result.manualConnectionInfo?.hostAddresses?.size}")
-                    is LocalNetworkResult.StartedWithoutCredentials ->
-                        Log.i(LOG_TAG, "hotspot StartedWithoutCredentials: " +
-                            "port=${result.manualConnectionInfo.port} " +
-                            "hostCount=${result.manualConnectionInfo.hostAddresses.size}")
-                    is LocalNetworkResult.Failed ->
-                        Log.w(LOG_TAG, "hotspot Failed: ${result.error::class.simpleName} " +
-                            "— <details omitted>")
-                    is LocalNetworkResult.Unsupported ->
-                        Log.w(LOG_TAG, "hotspot Unsupported: <details omitted>")
-                    is LocalNetworkResult.RequiresUserAction ->
-                        Log.i(LOG_TAG, "hotspot RequiresUserAction: see provisioning UI")
-                }
-            } finally {
-                _provisioningBusy.value = false
+        provisioningUi.startHotspot { result ->
+            when (result) {
+                is LocalNetworkResult.Started ->
+                    Log.i(LOG_TAG, "hotspot Started: credentials=<omitted> " +
+                        "port=${result.manualConnectionInfo?.port} " +
+                        "hostCount=${result.manualConnectionInfo?.hostAddresses?.size}")
+                is LocalNetworkResult.StartedWithoutCredentials ->
+                    Log.i(LOG_TAG, "hotspot StartedWithoutCredentials: " +
+                        "port=${result.manualConnectionInfo.port} " +
+                        "hostCount=${result.manualConnectionInfo.hostAddresses.size}")
+                is LocalNetworkResult.Failed ->
+                    Log.w(LOG_TAG, "hotspot Failed: ${result.error::class.simpleName} — <details omitted>")
+                is LocalNetworkResult.Unsupported ->
+                    Log.w(LOG_TAG, "hotspot Unsupported: <details omitted>")
+                is LocalNetworkResult.RequiresUserAction ->
+                    Log.i(LOG_TAG, "hotspot RequiresUserAction: see provisioning UI")
             }
         }
     }
 
     fun stopHotspot() {
-        val currentKit = kit ?: return
-        val scope = runScope ?: return
-        if (_provisioningBusy.value) return
-        _provisioningBusy.value = true
-        scope.launch {
-            try {
-                // AUDIT-2026-06: D-G8-samples-android-08 — a failed stop no
-                // longer clears the card to idle / logs success; the failure
-                // is surfaced so the tester knows the hotspot may still be up.
-                runCatchingNonCancel { currentKit.networkProvisioning.stopLocalNetwork() }
-                    .onSuccess {
-                        _hotspotResult.value = null
-                        Log.i(LOG_TAG, "hotspot stopped")
-                    }
-                    .onFailure { e ->
-                        Log.w(LOG_TAG, "stopHotspot failed; errorType=${SampleConsole.failure(e)}")
-                        appendSystemMessage("stop hotspot failed: ${e.message ?: e::class.simpleName}")
-                        _hotspotResult.value = LocalNetworkResult.Failed(
-                            dev.p2pkit.core.NetworkProvisioningError.PlatformError(e)
-                        )
-                    }
-            } finally {
-                _provisioningBusy.value = false
+        provisioningUi.stopHotspot { result ->
+            result.onSuccess {
+                Log.i(LOG_TAG, "hotspot stopped")
+            }.onFailure { failure ->
+                Log.w(LOG_TAG, "stopHotspot failed; errorType=${SampleConsole.failure(failure)}")
+                appendSystemMessage("stop hotspot failed: ${failure.message ?: failure::class.simpleName}")
             }
         }
     }
 
-    @OptIn(ExperimentalP2pApi::class)
     fun joinHotspot(
         ssid: String,
         passphrase: String,
@@ -885,9 +846,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // (WPA2 default, WPA3 for SAE-only hotspots) instead of hardcoded WPA2.
         security: WifiSecurityType = WifiSecurityType.WPA2
     ) {
-        val currentKit = kit ?: return
-        val scope = runScope ?: return
-        if (_provisioningBusy.value) {
+        if (kit == null || runScope == null) return
+        if (provisioningBusy.value) {
             Log.i(LOG_TAG, "joinHotspot ignored: provisioning busy")
             return
         }
@@ -905,44 +865,29 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             appendSystemMessage("join failed: passphrase must be 8+ chars (got ${pass.length})")
             return
         }
-        _provisioningBusy.value = true
         val creds = WifiCredentials(
             ssid = trimmedSsid,
             password = pass?.let { WifiPassword(it) },
             securityType = if (pass != null) security else WifiSecurityType.OPEN
         )
-        scope.launch {
-            try {
-                val result = runCatchingNonCancel {
-                    currentKit.networkProvisioning.joinLocalNetwork(creds)
-                }.getOrElse { e ->
-                    Log.w(LOG_TAG, "joinHotspot threw" + "; errorType=${SampleConsole.failure(e)}")
-                    JoinNetworkResult.Failed(
-                        dev.p2pkit.core.NetworkProvisioningError.PlatformError(e)
-                    )
-                }
-                _joinResult.value = result
-                when (result) {
-                    is JoinNetworkResult.Joined ->
-                        Log.i(LOG_TAG, "join Joined: state=${result.networkState::class.simpleName}")
-                    is JoinNetworkResult.Failed ->
-                        Log.w(LOG_TAG, "join Failed: ${result.error::class.simpleName} " +
-                            "— <details omitted>")
-                    is JoinNetworkResult.Unsupported ->
-                        Log.w(LOG_TAG, "join Unsupported: <details omitted>")
-                    is JoinNetworkResult.RequiresUserAction ->
-                        Log.i(LOG_TAG, "join RequiresUserAction: see provisioning UI")
-                    JoinNetworkResult.Pending ->
-                        Log.i(LOG_TAG, "join Pending")
-                }
-            } finally {
-                _provisioningBusy.value = false
+        provisioningUi.joinHotspot(creds) { result ->
+            when (result) {
+                is JoinNetworkResult.Joined ->
+                    Log.i(LOG_TAG, "join Joined: state=${result.networkState::class.simpleName}")
+                is JoinNetworkResult.Failed ->
+                    Log.w(LOG_TAG, "join Failed: ${result.error::class.simpleName} — <details omitted>")
+                is JoinNetworkResult.Unsupported ->
+                    Log.w(LOG_TAG, "join Unsupported: <details omitted>")
+                is JoinNetworkResult.RequiresUserAction ->
+                    Log.i(LOG_TAG, "join RequiresUserAction: see provisioning UI")
+                JoinNetworkResult.Pending ->
+                    Log.i(LOG_TAG, "join Pending")
             }
         }
     }
 
     fun clearJoinResult() {
-        _joinResult.value = null
+        provisioningUi.dismissJoin()
     }
 
     // --- file transfer (v0.2.2) -------------------------------------------
@@ -1677,6 +1622,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     fun stop() {
         val toStop = kit ?: return
         if (_isStopping.value) return
+        provisioningUi.detach()
         retireForegroundRestore()
         recordDiagnostic(
             DiagnosticRecord(
@@ -1712,10 +1658,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         _hasConnectedSession.value = false
         _localPeerId.value = null
         _localPairingInfo.value = null
-        _hotspotResult.value = null
-        _joinResult.value = null
         _missingPermissions.value = emptyList()
-        _provisioningBusy.value = false
         _networkPathStatus.value = NetworkPathStatus.Unknown
         // Best-effort tear down the hotspot too. Cleared via cleanupScope
         // (not runScope, which we just cancelled) so the stop call survives.
@@ -1749,6 +1692,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     override fun onCleared() {
+        provisioningUi.detach()
         retireForegroundRestore()
         releaseDiagnosticInstrumentation()
         diagnostics.shutdown()
