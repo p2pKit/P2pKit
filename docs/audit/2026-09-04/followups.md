@@ -80,4 +80,6 @@ leases, stale generations, recovery, repeated invalid records and shutdown. Pres
 
 Separately, the Apple NUL-key alias mechanism was **confirmed and filed as
 [#356](https://github.com/p2pKit/P2pKit/issues/356)** using actual macOS Network.framework plus a first-party caller
-trace. It is a tracked pending repair, not this unconfirmed lifecycle mechanism and not part of #229's value approval.
+trace. Its complete six-file correction is independently approved/pushed at `183b6c9`; see the [repair report](repairs/356.md).
+That fixes the original-key/native-representation/byte boundary, not this unconfirmed lifecycle mechanism and not an
+expansion of #229's value approval. Investigate the transition after #356, using the corrected native decoder.

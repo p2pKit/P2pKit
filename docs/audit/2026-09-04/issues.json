@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T19:01:06.372937+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T20:30:08.595524+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -2186,7 +2186,7 @@
       ],
       "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Complete 14-file correction bf34f70 independently approved at combined 6d9cd3c after separately reviewed test-only prerequisite #357; both pushed to audit branch, not merged/released. Actual JmDNS3.6.3 normalizes both property APIs; original textBytes now feed bounded strict parsing. Valid U+FFFD remains valid, unknown fields remain ignored, every consumed duplicate is validated and #332 JVM/Android withdrawal stays intact. Baseline5 intended failures+1 valid control; focused426 passes /0 failure/error/1 unchanged manual skip;8 negative controls. Final full check/Android assembly2333 passes /0 failure/error/1 manual skip,285 XMLs,246 executed tasks;13 static gates pass. Canonical known-key VALUE parity only; Apple key aliasing #356 pending and Apple invalid re-resolution unconfirmed. Admission tightening reserved for0.8.0+; not an authentication bypass. IssueOPEN; overallNOT READY.",
+      "assessmentAtCheckpoint": "Complete 14-file correction bf34f70 independently approved at combined 6d9cd3c after separately reviewed test-only prerequisite #357; both pushed to audit branch, not merged/released. Actual JmDNS3.6.3 normalizes both property APIs; original textBytes now feed bounded strict parsing. Valid U+FFFD remains valid, unknown fields remain ignored, every consumed duplicate is validated and #332 JVM/Android withdrawal stays intact. Baseline5 intended failures+1 valid control; focused426 passes /0 failure/error/1 unchanged manual skip;8 negative controls. Final full check/Android assembly2333 passes /0 failure/error/1 manual skip,285 XMLs,246 executed tasks;13 static gates pass. Canonical known-key VALUE parity only; separate Apple key correction #356 subsequently approved at183b6c9 and Apple invalid re-resolution unconfirmed. Admission tightening reserved for0.8.0+; not an authentication bypass. IssueOPEN; overallNOT READY.",
       "recordedFixCommitsOrFinalRevision": [
         "bf34f70b13ceab1549741b09647fec0b603b15c0",
         "6d9cd3c7472415af5166f25864db17b659901c3c"
@@ -4314,13 +4314,18 @@
         231,
         332
       ],
-      "status": "PENDING_REMEDIATION",
-      "assessmentAtCheckpoint": "Confirmed pre-existing low discovery-correctness defect, not authentication bypass. 14-case actual macOS Network.framework probe and first-party caller trace independently corroborated during #229 review. Created/refetched issue; remediation NOT_STARTED. Evaluate original bounded nw_txt_record_access_bytes before C-key normalization, first proving raw/dictionary representation behavior. Preserve0.8.0+ restriction. Not iOS device/multicast evidence.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed repair/review cycle; discovery evidence independently corroborated by #229 reviewer, not fix approval.",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "assessmentAtCheckpoint": "Complete six-file correction183b6c9 independently approved/pushed; not merged/released. Apple now uses original bounded native TXT bytes before exact-key/strict-value parsing, covering dictionary and buffer representations, unsigned pre-copy bound, failed/short copy and framing rejection. Baseline7 intended assertion failures+5 controls; focused460 passes/1 unchanged manual skip;4 exact negative controls. Final clean full check+Android assembly2367 passes/0 failure/error/1 manual skip,289 XMLs,246 tasks;14 static gates pass. No public API/ABI, dependency, wire format, authentication or lifecycle ownership change. Admission change reserved for0.8.0+. Apple#332 transition remains unconfirmed. IssueOPEN; overallNOT READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "183b6c917faf989cb7c15372cda33829a58d3b57"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_356_r1 APPROVE at183b6c9/treed93f93f. Complete diff/native API/callers/platform/security/compatibility review;1955 sealed entries,289 XMLs,28 finalized cleanup receipts independently verified. No actionable findings or reviewer builds/workers. Report SHA256 2bb0d0c47e33d0ad8612d6e64f0f3b45bdd827018c96ac33f8ccf2ef688c4da7.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/356"
-      ]
+        "https://github.com/p2pKit/P2pKit/issues/356",
+        "https://github.com/p2pKit/P2pKit/issues/356#issuecomment-5575133102",
+        "https://github.com/p2pKit/P2pKit/issues/356#issuecomment-5575458398"
+      ],
+      "repositoryScopeStatus": "APPROVED"
     },
     {
       "number": 357,
@@ -4350,5 +4355,5 @@
       ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T19:17:26.909955+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T20:50:35.183026+00:00"
 }

@@ -11,18 +11,25 @@ Start with the root [continuation checkpoint](../../../AUDIT_CHECKPOINT.md). Clo
 - [Coverage ledger](coverage.tsv): inherited per-path review claims, provenance revisions and reopened work.
 - [Unverified follow-ups](followups.md): hypotheses needing reproduction and deduplication, not confirmed bug claims.
 
-The inventory snapshot is a continuation aid, not GitHub's live state. It contains 60 repository repairs with recorded
-independent approval, 89 pending repairs, 21 external-validation items and one architecture decision: **35.1% reviewed
-repository repairs, 64.9% remaining issue rows**. These percentages do not count external acceptance still attached
+The inventory snapshot is a continuation aid, not GitHub's live state. It contains 61 repository repairs with recorded
+independent approval, 88 pending repairs, 21 external-validation items and one architecture decision: **35.7% reviewed
+repository repairs, 64.3% remaining issue rows**. These percentages do not count external acceptance still attached
 to approved rows (including #133); independent interoperability remains separately pending. Thirty-eight entries
 originated in the audit. Branch availability does not imply merge/release or a new verification result.
 
-#229's complete original-byte TXT correction and #357's independent test-clock prerequisite are approved/pushed
+#356's complete six-file Apple original-key/byte-boundary correction is approved/pushed at `183b6c9`, tree
+`d93f93f05f63a9933e0ab894327f94a995f28b36`. Full check/Android assembly: **2,367 passes, zero failures/errors,
+one unchanged manual skip; 289 XMLs, 246 tasks**. Fourteen static gates, four mutation controls and 460 focused LAN
+passes/one manual skip establish the correction; 1,955 sealed entries and 28 finalized cleanup receipts were independently
+verified. See [#356](repairs/356.md). No cache-lifecycle correction or authentication bypass is claimed.
+
+Earlier #229's complete original-byte TXT correction and #357's independent test-clock prerequisite are approved/pushed
 through `6d9cd3c` (tree `5f6b6d437cc695ae2912a281663290ee625d2b8f`). Full check/Android assembly: **2,333 passes, zero
 failures/errors, one unchanged manual skip; 285 XMLs, 246 tasks**. Thirteen static gates pass. #229's fourteen source
-blobs remain unchanged from `bf34f70`; eight TXT controls and two watcher controls detect the original defects.
+blobs were unchanged from `bf34f70` at `6d9cd3c`; #356 subsequently changed some of those files. Eight TXT controls and
+two watcher controls detect the original defects.
 The initial full failure is retained, not relabeled. See [#229](repairs/229.md) and [#357](repairs/357.md).
-Only canonical known-key value parity is approved; #356's Apple key aliasing remains pending. Admission tightening
+That earlier approval covers canonical known-key value parity only; #356's separate key-boundary approval is above. Admission tightening
 is reserved for **0.8.0+**. Physical devices, independent interoperability/crypto and final release gates remain pending.
 
 Earlier #226's complete four-file correction is independently approved/pushed at `f085dc8`: artifacts honor TMPDIR while a
@@ -55,7 +62,7 @@ See the [#187 compiled-constant guard/verification report](repairs/187.md),
 [#190 documentation/bytecode verification report](repairs/190.md),
 [#325 repair/verification summary](repairs/325.md), [#317 report](repairs/317.md),
 [#354 report](repairs/354.md) and [earlier #337 report](repairs/337.md). Whole-audit final/release verification remains
-pending. #356 is the next confirmed repair, with remediation unstarted. Investigate the unconfirmed Apple
+pending. Investigate the unconfirmed Apple
 invalid re-resolution follow-up against #332 and reprioritize if confirmed; do not duplicate or silently expand prior
 approval. Preserve the #226 macOS GPG socket bound and all earlier provenance fixes. #325's feasible correction
 preserves `AGENTS.md:9` by owner instruction; literal alignment of that SDK prerequisite requires new authorization.
@@ -73,8 +80,8 @@ artifacts are necessary, request the private backup; otherwise run fresh, scoped
 
 Coverage rows preserve the last recorded scoped assessment at their recorded revisions. This is not complete current
 coverage: later changes invalidate affected paths/callers; the original full audit must be corroborated before final
-completion. The #229, #357, #226, #225, #208, #152, #133, #355, #187, #190 and #325 paths have scoped final review records; other domains still need current
-corroboration. The ledger inventories 1,019 tracked paths; inventory is not equivalent to completed review.
+completion. The #356, #229, #357, #226, #225, #208, #152, #133, #355, #187, #190 and #325 paths have scoped final review records; other domains still need current
+corroboration. The ledger inventories 1,022 tracked paths with 320 recorded blob bindings; inventory is not equivalent to completed review.
 Added handoff documents are inventory entries, not runtime-verification claims.
 
 ## Maintaining cloneable progress

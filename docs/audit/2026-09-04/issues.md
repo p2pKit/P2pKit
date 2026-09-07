@@ -1,10 +1,10 @@
 # Issue disposition index
 
-Checkpoint inventory: **171 issues; 60 reviewed repository repairs (35.1%), 111 remaining issue rows (64.9%)**.
+Checkpoint inventory: **171 issues; 61 reviewed repository repairs (35.7%), 110 remaining issue rows (64.3%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed fixes are in the audit branch, not merged/released. #229 and prerequisite #357 are independently
-approved through `6d9cd3c`; #356 is the next confirmed repair. Investigate the unconfirmed Apple invalid re-resolution
+refresh. Reviewed fixes are in the audit branch, not merged/released. #356 is independently approved through `183b6c9`,
+following the earlier #229/#357 approvals. Investigate the unconfirmed Apple invalid re-resolution
 follow-up against #332 before expanding that issue's scope. #133's independent interoperability remains NOT STARTED.
 Percentages do not count completion of external acceptance attached to approved rows, including #133.
 The #325 protected-AGENTS exception remains recorded. Read [the full records](issues.json) for scope, dependencies,
@@ -13,7 +13,7 @@ commits and outcome links, and [the root handoff](../../../AUDIT_CHECKPOINT.md) 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (60)
+## Repairs with recorded independent approval (61)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -76,9 +76,10 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#353: [AUDIT] Android API24/25 diagnostics use API26 java.time and NIO without core-library desugaring](https://github.com/p2pKit/P2pKit/issues/353) | low | New audit | `44fdfeeb66a6` |
 | [#354: [AUDIT] Android hotspot Retry restarts instead of retrying failed cleanup](https://github.com/p2pKit/P2pKit/issues/354) | low | New audit | `b6af5b8b78bd` |
 | [#355: [AUDIT][Low] Terminal kit shutdown misreports inbound completion and retries closed acceptance](https://github.com/p2pKit/P2pKit/issues/355) | low | New audit | `182063131438` |
+| [#356: [AUDIT][Low] Apple Bonjour aliases NUL-containing TXT keys into canonical fields](https://github.com/p2pKit/P2pKit/issues/356) | low | New audit | `183b6c917faf` |
 | [#357: [AUDIT][Low] LAN watcher test races a real executor against a virtual timeout](https://github.com/p2pKit/P2pKit/issues/357) | low | New audit | `6d9cd3c74724` |
 
-## Pending remediation (89)
+## Pending remediation (88)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -170,7 +171,6 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#341: iOS sample groups the local TCP port, breaking copy/paste into manual dialing](https://github.com/p2pKit/P2pKit/issues/341) | low | New audit | — |
 | [#342: [Low] Discovery test fixture falsely claims current LAN delivery and acknowledgement semantics](https://github.com/p2pKit/P2pKit/issues/342) | low | New audit | — |
 | [#347: [AUDIT] CLI identityProfile comment promises persistence that the in-memory store does not provide](https://github.com/p2pKit/P2pKit/issues/347) | low | New audit | — |
-| [#356: [AUDIT][Low] Apple Bonjour aliases NUL-containing TXT keys into canonical fields](https://github.com/p2pKit/P2pKit/issues/356) | low | New audit | — |
 
 ## External/platform validation pending (21)
 
