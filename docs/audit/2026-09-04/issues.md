@@ -1,9 +1,10 @@
 # Issue disposition index
 
-Checkpoint inventory: **169 issues; 54 reviewed repository repairs (32.0%), 115 remaining issue rows (68.0%)**.
+Checkpoint inventory: **169 issues; 55 reviewed repository repairs (32.5%), 114 remaining issue rows (67.5%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #133 is
+refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #152 is approved
+at `27fec6a`; #208 is next. #133 is
 repository-scope approved at `7127616`; its independent interoperability acceptance remains NOT STARTED.
 Percentages do not count completion of external acceptance attached to approved rows, including #133.
 The #325 protected-AGENTS exception remains recorded. Read [the full records](issues.json) for scope, dependencies,
@@ -13,7 +14,7 @@ Read [the root handoff](../../../AUDIT_CHECKPOINT.md) for exact evidence limits 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (54)
+## Repairs with recorded independent approval (55)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -25,6 +26,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#143: [BUILD-13] Four workflows persist GITHUB_TOKEN in .git/config (persist-credentials missing)](https://github.com/p2pKit/P2pKit/issues/143) | medium | Existing | `d18500c939bf` |
 | [#146: [WSG-04] Shared createTestKit fixture leaves most kit-level tests on the legacy plaintext path](https://github.com/p2pKit/P2pKit/issues/146) | medium | Existing | `ee75358d1a74` |
 | [#151: [BUILD-53] SBOM content gate never runs against the bytes uploaded to Maven Central](https://github.com/p2pKit/P2pKit/issues/151) | medium | Existing | `79ec60f50419` |
+| [#152: [BUILD-64] Android-ABI task-graph dry-run has one unasserted caller; removable with a green CI](https://github.com/p2pKit/P2pKit/issues/152) | low | Existing | `27fec6a2268ac` |
 | [#157: [BUILD-65] iosX64Test and Android instrumented tests never execute; the skip is silent](https://github.com/p2pKit/P2pKit/issues/157) | medium | Existing | `3889e44c1152` |
 | [#160: [F-15] LAN advertisement can publish SRV port 0 when read mid listener-detach](https://github.com/p2pKit/P2pKit/issues/160) | medium | Existing | `6d92bde87b5a` |
 | [#161: [F-16] stopNetworkWatcherNow() throws out of idle teardown, stranding the Wi-Fi multicast lock](https://github.com/p2pKit/P2pKit/issues/161) | medium | Existing | `11a44c6bb70c` |
@@ -72,7 +74,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#354: [AUDIT] Android hotspot Retry restarts instead of retrying failed cleanup](https://github.com/p2pKit/P2pKit/issues/354) | low | New audit | `b6af5b8b78bd` |
 | [#355: [AUDIT][Low] Terminal kit shutdown misreports inbound completion and retries closed acceptance](https://github.com/p2pKit/P2pKit/issues/355) | low | New audit | `182063131438` |
 
-## Pending remediation (93)
+## Pending remediation (92)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -80,7 +82,6 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#137: [WSD-02] Four P2pError variants expose a mutable non-volatile `underlying` slot behind `cause`](https://github.com/p2pKit/P2pKit/issues/137) | low | Existing | — |
 | [#144: [BUILD-18] Docs-only CI shortcut reuses main-merge results from graph shape, not check evidence](https://github.com/p2pKit/P2pKit/issues/144) | low | Existing | — |
 | [#145: [WSA1-05] Receive-backlog byte cap allocates a full payload copy to measure and under-counts heap](https://github.com/p2pKit/P2pKit/issues/145) | low | Existing | — |
-| [#152: [BUILD-64] Android-ABI task-graph dry-run has one unasserted caller; removable with a green CI](https://github.com/p2pKit/P2pKit/issues/152) | low | Existing | — |
 | [#156: [F-07] TCP_NODELAY is unset and transport liveness relies on core deadlines](https://github.com/p2pKit/P2pKit/issues/156) | low | Existing | — |
 | [#158: [F-11] Inbound buffer depth diverges: 64 on JVM/Android (framework default) vs 16 on iOS](https://github.com/p2pKit/P2pKit/issues/158) | low | Existing | — |
 | [#167: [WSA2-03] Discovery claim overwrites a pinned manual peer's display name (UI spoof, not auth bypass)](https://github.com/p2pKit/P2pKit/issues/167) | low | Existing | — |

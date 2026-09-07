@@ -11,13 +11,18 @@ Start with the root [continuation checkpoint](../../../AUDIT_CHECKPOINT.md). Clo
 - [Coverage ledger](coverage.tsv): inherited per-path review claims, provenance revisions and reopened work.
 - [Unverified follow-ups](followups.md): hypotheses needing reproduction and deduplication, not confirmed bug claims.
 
-The inventory snapshot is a continuation aid, not GitHub's live state. It contains 54 repository repairs with recorded
-independent approval, 93 pending repairs, 21 external-validation items and one architecture decision: **32.0% reviewed
-repository repairs, 68.0% remaining issue rows**. These percentages do not count external acceptance still attached
+The inventory snapshot is a continuation aid, not GitHub's live state. It contains 55 repository repairs with recorded
+independent approval, 92 pending repairs, 21 external-validation items and one architecture decision: **32.5% reviewed
+repository repairs, 67.5% remaining issue rows**. These percentages do not count external acceptance still attached
 to approved rows (including #133); independent interoperability remains separately pending. Thirty-six entries
 originated in the audit. Branch availability does not imply merge/release or a new verification result.
 
-#133's complete repository correction is independently approved at `7127616`: the full check and Android sample
+#152's complete six-file graph-caller correction is independently approved and pushed at `27fec6a`: the full check
+and Android sample assembly pass with 2,276 passes, zero failures/errors and one unchanged manual skip. All 21 policy
+mutation cases and twelve static/graph gates pass. See the [#152 report](repairs/152.md). No production/ABI change;
+publication/isolated-consumer/Swift/XCFramework checks were not rerun for this policy-only correction.
+
+Earlier #133's complete repository correction is independently approved at `7127616`: the full check and Android sample
 assembly pass with 2,276 passes, zero failures/errors and one unchanged manual skip. The same frozen source passed
 coordinated mutation/generator/publication-exclusion controls, local publications and 23 isolated consumer tasks.
 See the [#133 scope, evidence and remaining acceptance](repairs/133.md). The earlier
@@ -26,7 +31,7 @@ See the [#187 compiled-constant guard/verification report](repairs/187.md),
 [#190 documentation/bytecode verification report](repairs/190.md),
 [#325 repair/verification summary](repairs/325.md), [#317 report](repairs/317.md),
 [#354 report](repairs/354.md) and [earlier #337 report](repairs/337.md). Whole-audit final/release verification remains
-pending; #152 is next. #325's feasible correction
+pending; #208 is next, then #225. #325's feasible correction
 preserves `AGENTS.md:9` by owner instruction; literal alignment of that SDK prerequisite requires new authorization.
 
 ## Provenance and scope
@@ -42,8 +47,8 @@ artifacts are necessary, request the private backup; otherwise run fresh, scoped
 
 Coverage rows preserve the last recorded scoped assessment at their recorded revisions. This is not complete current
 coverage: later changes invalidate affected paths/callers; the original full audit must be corroborated before final
-completion. The #133, #355, #187, #190 and #325 paths have scoped final review records; other domains still need current
-corroboration. The ledger inventories 1,003 tracked paths; inventory is not equivalent to completed review.
+completion. The #152, #133, #355, #187, #190 and #325 paths have scoped final review records; other domains still need current
+corroboration. The ledger inventories 1,004 tracked paths; inventory is not equivalent to completed review.
 Added handoff documents are inventory entries, not runtime-verification claims.
 
 ## Maintaining cloneable progress

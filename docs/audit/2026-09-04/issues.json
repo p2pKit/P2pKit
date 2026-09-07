@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T11:13:04.511982+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T12:18:39.959416+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -872,16 +872,24 @@
         110,
         141,
         149,
-        151
+        151,
+        157,
+        187,
+        221
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Complete six-file correction27fec6a independently approved and pushed on the audit branch, not merged/released. The real Android ABI graph probe already ran; baseline deletion/downgrade left all six exercised policy invocations green. One explicit unflagged command in each complete gate and a protected static-only nested caller close the removal-resistance gap without a duplicate Gradle probe.21 final mutation controls, four actual outer-policy rejections, one real strict graph probe, twelve static/policy gates and full check plus Android assembly pass (2276 passes, one unchanged manual skip;278 XMLs,246 tasks). Production, ABI baselines/registration, dependencies and #187 constants unchanged. No hosted-CI/full-release/publication/consumer/Swift/XCFramework or external acceptance claim; issue remains OPEN and audit NOT READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "27fec6a2268acf7a5b0246168ddc55315a5fc27f"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_152_r1 APPROVE at27fec6a/tree1e728fd: complete six-file diff and surrounding callers/platform/build contracts; no actionable findings. Independently verified1600 evidence entries,278 XMLs and33 finalized cleanup receipts. Report SHA256 fead8edcd2239b509761f8d3d5973abb95346a4517dd54169c06af4b17e6f0fe.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/152#issuecomment-5406154331"
-      ]
+        "https://github.com/p2pKit/P2pKit/issues/152#issuecomment-5406154331",
+        "https://github.com/p2pKit/P2pKit/issues/152#issuecomment-5570219558",
+        "https://github.com/p2pKit/P2pKit/issues/152#issuecomment-5570568984"
+      ],
+      "repositoryScopeStatus": "APPROVED"
     },
     {
       "number": 156,
@@ -4257,5 +4265,5 @@
       ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T11:38:47.969579+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T12:25:53.669258+00:00"
 }
