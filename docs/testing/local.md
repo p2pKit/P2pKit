@@ -3,6 +3,10 @@
 Use JDK 17 and the checked-in Gradle wrapper. macOS with the configured Xcode
 toolchain is required for Apple targets and the complete release gate.
 
+The shell checks require Bash, Git, and Ruby with its standard library (`ruby --version`).
+Ruby is used by both the Markdown-link and repository-layout policy checks. Install it if absent on Linux/Windows;
+run `.sh` commands in Bash (for example, Git Bash on Windows), with Ruby available on `PATH`.
+
 JVM file-transfer regressions require real symbolic links in `java.io.tmpdir`.
 Use a symlink-capable temporary filesystem. On Windows/JDK 17, use NTFS and a
 test-process token with `SeCreateSymbolicLinkPrivilege` (for example, an elevated
@@ -16,9 +20,17 @@ Fast project checks:
 ```bash
 scripts/tests/check-repository-layout.sh
 scripts/tests/check-osv-lockfile-coverage.sh
+scripts/tests/check-markdown-links.sh
 scripts/check-release-metadata.sh
 ./gradlew check --console=plain
+git diff --check
 ```
+
+Keep this six-command list aligned with `CONTRIBUTING.md` and the protected `CLAUDE.md` core commands.
+The link checker resolves relative file targets in tracked, non-archived Markdown; it does not validate external
+URLs, anchors, or fenced code. `git diff --check` checks unstaged changes; also use `git diff --cached --check`
+when reviewing staged changes. Run `./gradlew --stop` after checks, including failure, and preserve reports before cleaning
+only your disposable generated outputs.
 
 Release-shape checks:
 
