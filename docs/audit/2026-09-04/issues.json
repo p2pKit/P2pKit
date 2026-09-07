@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T22:45:14.872707+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T23:37:19.844911+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -516,23 +516,31 @@
       "origin": "PRE_EXISTING",
       "severityAtCheckpoint": "low",
       "reportedProblemExcerpt": "Both provisioning sidecar modules ship a test fake, `RecordingRegistrar`, that implements `ManualPeerRegistrar.registerManualPeer(...)`, **accepts `expectedFingerprint`, and then discards it** — the recorded `Call` data class has no field for it. As a consequence, no unit test in either module can observe the fingerprint pin at all.",
-      "affectedComponentsExcerpt": "Audit line numbers were **accurate** — no drift. Both fakes are byte-identical apart from the surrounding package.",
+      "affectedComponentsExcerpt": "Private RecordingRegistrar.Call and manual-peer delegation tests in Desktop JvmNetworkProvisioningManagerTest and Android AndroidNetworkProvisioningManagerTest; production sidecar overloads and core pin enforcement remain unchanged.",
       "relatedIssuesAndDependencies": [
         9,
         47,
         110,
         127,
         128,
-        129
+        129,
+        139,
+        192,
+        154
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Low-severity test fake fidelity/regression gap corrected and independently approved at1847ed3, pushed to audit branch, not merged/released. Both fakes retain nullable expectedFingerprint; two distinct remote pins are compared with every ordered forwarded argument, separately from local identity. Deprecated calls assert null despite a non-null local pin. Exact value is the inline-class contract, not boxed reference identity. Selected old unit classes accepted omitted pins:67passes; compensating Desktop integration intentionally excluded. Corrected focused4/module161passes; eight individual omission/local/constant/legacy-invention controls each fail at the intended assertion and restore source. Clean full check+Android assembly2389passes/0failures/errors/1unchanged manual skip, 290XMLs/246tasks;14static gates. No production/API/ABI/security/legacy/dependency change. Host/fake provisioning coverage, not ART/OEM/device Wi-Fi or independent cryptographic assurance. IssueOPEN; whole-audit/external/final release gates pending; overallNOT READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "1847ed330e3a15212982994a84a55d2b9e3ae49d"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_130_r1 APPROVE at1847ed3/tree3fe527a:complete two-file correction, surrounding production/platform/core/integration contracts, raw regressions and complete sealed evidence reviewed.1930sealed entries,290finalXMLs,30finalized cleanup receipts. No actionable findings or reviewer builds/workers. Report SHA256 3b57e2b49efa08dfd57150d4dd58fefa09bcf8e1537f860abc8522a0a4416101.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/130#issuecomment-5406151584"
-      ]
+        "https://github.com/p2pKit/P2pKit/issues/130#issuecomment-5406151584",
+        "https://github.com/p2pKit/P2pKit/issues/130#issuecomment-5576541032",
+        "https://github.com/p2pKit/P2pKit/issues/130#issuecomment-5576902316"
+      ],
+      "repositoryScopeStatus": "APPROVED"
     },
     {
       "number": 133,
@@ -4371,5 +4379,5 @@
       ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T22:45:30.841586+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T23:50:23.277652+00:00"
 }

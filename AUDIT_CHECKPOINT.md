@@ -1,10 +1,11 @@
 # P2pKit audit continuation checkpoint
 
 **Updated: 8 September 2026. Work in progress, not a release approval.** The owner authorized pushing the local
-audit work and continuing remediation. #332's Apple invalid-re-resolution follow-up is now independently approved/pushed,
-retaining its prior JVM/Android approval and the #229/#356 parser and #357 test-clock corrections. The combined full
-check and Android assembly pass. The reopened #332 row returns to approved; #130 is the planned next issue and must
-be read completely before repair. #133's independent interoperability is NOT STARTED.
+audit work and continuing remediation. #130's two-file fingerprint-delegation test correction is independently
+approved/pushed, retaining the #332 Apple, #229/#356 parser and #357 test-clock corrections. Production pin forwarding
+was already correct; #130 closes a Low-severity regression-coverage gap. The combined full check and Android assembly
+pass. #137 is the planned next issue and must be read completely before repair. #133's independent interoperability
+is NOT STARTED.
 Read it together with the unchanged `AGENTS.md` and `CLAUDE.md`.
 
 ## Resume from a fresh clone
@@ -30,11 +31,11 @@ not an account login, a native chat export, running agents or build processes.
 
 - Repository: <https://github.com/p2pKit/P2pKit>.
 - Audit branch: `audit/complete-2026-09-04`; not merged into `main`.
-- Latest independently reviewed source: **`78ef36142fe79b4ff9672656c6f4c97f049678d0`** (#332 Apple follow-up).
-- Its tree: **`0f8ab1465d257baac8110e3bd1ecf95859abe93c`**; clean at final verification/review.
+- Latest independently reviewed source: **`1847ed330e3a15212982994a84a55d2b9e3ae49d`** (#130 test correction).
+- Its tree: **`3fe527a16a52e536dedad610aebff53a7a026cdb`**; clean at final verification/review.
 - #229's fourteen-file correction is `bf34f70b13ceab1549741b09647fec0b603b15c0`; all fourteen blobs were unchanged
   at combined revision `6d9cd3c`, not at current HEAD: #356 subsequently changed the common parser and release docs.
-- Latest full `check` plus Android sample assembly at **`78ef361`**: **PASS**, **2,387 passes**, zero failures/errors and
+- Latest full `check` plus Android sample assembly at **`1847ed3`**: **PASS**, **2,389 passes**, zero failures/errors and
   one unchanged manual LAN interop skip; 290 XMLs, 246 executed tasks. Fourteen final static/caller gates pass.
   The first full run at `bf34f70` FAILED on the unchanged watcher test; #357 corrected its cause before this pass.
 - Earlier #133 publication/isolated-consumer evidence remains bound to `7127616`, not rerun for these corrections.
@@ -49,21 +50,21 @@ not an account login, a native chat export, running agents or build processes.
 
 | Disposition at this checkpoint | Count | Percentage of 171 inventoried issues |
 | --- | ---: | ---: |
-| Repository repairs with independent approval | **61** | **35.7%** |
-| Pending repairs | 88 | 51.5% |
+| Repository repairs with independent approval | **62** | **36.3%** |
+| Pending repairs | 87 | 50.9% |
 | External/platform validation | 21 | 12.3% |
 | Architecture/product decision (#120) | 1 | 0.6% |
-| **Total remaining issue rows** | **110** | **64.3%** |
+| **Total remaining issue rows** | **109** | **63.7%** |
 
 These percentages count repository-repair rows, not effort, file coverage, issue closure or production readiness.
-#332 returned to approved after its separately verified Apple repair; it is not a newly counted duplicate issue.
+#130 adds one reviewed repair; #332's separately verified Apple approval remains intact, not a duplicate issue.
 They do **not** count completion of external acceptance still attached to approved rows (including #133); independent
-interoperability remains separately pending and is not implied complete by 61/171. The 7 September 22:45 UTC GitHub list refresh
+interoperability remains separately pending and is not implied complete by 62/171. The 7 September 23:37 UTC GitHub list refresh
 found 278 issues across all states and 171 open issues. The ledger identifies **38 new-audit findings**, including
 newly filed #356 and #357. Refresh complete issue bodies, comments, timelines and linked work before relying on any entry.
 Historical assessment wording records its original local phase; branch availability does not imply a merge.
 
-All 61 currently approved repository-repair rows are in this branch's history. #325's protected-file exception is recorded below.
+All 62 currently approved repository-repair rows are in this branch's history. #325's protected-file exception is recorded below.
 Issues remain OPEN under the completion policy; nothing has
 been merged, closed or released by these pushes. See [every disposition](docs/audit/2026-09-04/issues.md) and
 [scope, dependencies, commits and public outcomes](docs/audit/2026-09-04/issues.json).
@@ -74,7 +75,21 @@ Recorded cycles include dependency/provenance/publication gates, coroutine cance
 secure-v2 tests, provisioning callbacks, sample pairing/privacy, file source/destination safeguards, diagnostics,
 Android API24/25 diagnostics and iOS integration. These are scoped repairs, not proof of complete subsystem correctness.
 
-Latest #332 Apple follow-up withdraws a previously admitted native service after malformed, semantically invalid or
+Latest #130 makes both provisioning test registrars retain nullable fingerprint pins. Each platform now checks two
+distinct remote pins against every ordered forwarded argument, with a different local identity; deprecated calls
+assert null even with a local pin present. Exact value equality is the inline-class contract, not boxed identity.
+No production, API/ABI, security, legacy behavior or dependency change was needed.
+
+Fresh `/root/review_130_r1` **APPROVED** the complete two-file correction at `1847ed3`, independently checking
+1,930 sealed entries, 310 retained XMLs (290 final), eight intended assertion-red controls and 30 finalized cleanup
+receipts. The selected old manager unit classes accepted omitted pins (67 passes; Desktop integration excluded).
+Corrected focused tests pass 4/4 and module checks pass 161/161. Full check plus Android assembly passes
+2,389/zero failures/errors/one unchanged manual skip; fourteen static gates pass. Source was pushed and the
+[verified outcome](https://github.com/p2pKit/P2pKit/issues/130#issuecomment-5576902316) posted; the issue remains OPEN,
+not merged/released. See [the repair report](docs/audit/2026-09-04/repairs/130.md). Host fakes/Robolectric do not
+establish physical Wi-Fi, ART/OEM or independent cryptographic assurance.
+
+Earlier #332 Apple follow-up withdraws a previously admitted native service after malformed, semantically invalid or
 identity-mismatched re-resolution. Admission and withdrawal share the current-browser/generation/host-intent fence and
 cache lock; the existing lost path removes cache, endpoint registry and relay ownership together. Rejected TXT cannot
 select another peer; stale callbacks, manual hints, existing dial leases/sessions and independent advertising retain
@@ -208,7 +223,9 @@ Read the [safe repair report](docs/audit/2026-09-04/repairs/325.md) and
 
 | Evidence | Result and limitation |
 | --- | --- |
-| Latest clean `check` plus Android assembly at **`78ef361`** | **2,387 passes**, zero failures/errors, one unchanged manual skip; 290 XMLs, 246 executed tasks. Actual ABI/constants, lint and Android assembly pass |
+| Latest clean `check` plus Android assembly at **`1847ed3`** | **2,389 passes**, zero failures/errors, one unchanged manual skip; 290 XMLs, 246 executed tasks. Actual ABI/constants, lint and Android assembly pass |
+| #130 scoped regression checks | Selected old unit suites accepted omitted pins (67 passes); corrected focused 4 and module 161 passes; eight mutations rejected at the intended assertions. Fourteen static gates pass. Test coverage, not a production security correction |
+| Earlier clean `check` plus Android assembly at **`78ef361`** | **2,387 passes**, zero failures/errors, one unchanged manual skip; 290 XMLs, 246 executed tasks. Actual ABI/constants, lint and Android assembly pass |
 | #332 Apple transition regression checks | Ten intended baseline failures/four controls; 20 final methods/both profiles; 480 focused LAN passes/one manual skip; eight mutations detected. Fourteen final static gates pass. Native-input/control-state evidence, not live multicast/TCP-handshake proof |
 | Earlier clean `check` plus Android assembly at **`183b6c9`** | **2,367 passes**, zero failures/errors, one unchanged manual skip; 289 XMLs, 246 executed tasks. Actual ABI/constants, lint and Android assembly pass |
 | #356 scoped regression checks | Actual 25-case native accessor probe; seven intended baseline failures/five controls; 460 focused LAN passes/one manual skip; four mutations detected. Fourteen final static gates pass. Native/simulator evidence, not physical discovery or #332 lifecycle proof |
@@ -234,8 +251,8 @@ Read the [safe repair report](docs/audit/2026-09-04/repairs/325.md) and
 
 The latest successful integrated run includes JVM, Android host and Kotlin/Native arm64 iOS simulator tests,
 **not Swift XCTest**, Intel execution, ART/OEM or physical devices. #133 publication/isolated-consumer checks executed
-at `7127616`, not rerun for #332 Apple; complete release/XCFramework/Swift gates remain pending. Exploratory harness/environment
-failures are preserved separately, not acceptance evidence. #332 Apple's 28 and #356's 28 cleanup receipts, #229's 34 and #357's six additional own
+at `7127616`, not rerun for #130; complete release/XCFramework/Swift gates remain pending. Exploratory harness/environment
+failures are preserved separately, not acceptance evidence. #130's 30, #332 Apple's 28 and #356's 28 cleanup receipts, #229's 34 and #357's six additional own
 receipts, plus #226's 37, #225's 101, #208's ten, #152's 33 and #133's earlier 54 receipts are finalized, including failed and negative attempts; required evidence remains.
 Do not add overlapping test totals. Controller/fake-manager tests and source wiring assertions are not rendered
 Android UI, restoration, ART/OEM or physical-device proof. Final audit/release gates need the eventual combined tree;
@@ -244,10 +261,10 @@ whole-repository corroboration, eventual combined-tree release/consumer gates an
 Earlier #317 corrected the diagnostic revision subscription and successful-clear invalidation through `f273b1b`.
 Its [report](docs/audit/2026-09-04/repairs/317.md) preserves the real Compose regression evidence and the correction
 to test-runtime wording: actual sample executor JDK21.0.7, not inferred from the JDK17 launcher. The latest passing integrated
-tests at `78ef361` include those regressions; host snapshots are not rendered/device performance measurements.
+tests at `1847ed3` include those regressions; host snapshots are not rendered/device performance measurements.
 Earlier #354 corrected the hotspot Failed card's cleanup retry and stale permission-admission callbacks through
 `b6af5b8`; its [review report](docs/audit/2026-09-04/repairs/354.md) retains exact historical evidence. The latest passing
-integrated run at `78ef361` also includes that correction; earlier `12e6cfa` results alone did not.
+integrated run at `1847ed3` also includes that correction; earlier `12e6cfa` results alone did not.
 Earlier #337 corrected independent provisioning-card lifetimes and dismissal identity through `170cc86`:
 [repair summary](docs/audit/2026-09-04/repairs/337.md). Its earlier full-check results are not a new run.
 Inherited #352 corrected selective diagnostic clearing and truthful storage failures, ending at
@@ -273,16 +290,16 @@ diagnostic trace experiment is intentionally private and is not required for cur
 dropped or pushed; do not blindly apply either over reviewed code. Authenticate GitHub and the coding agent normally
 on the new device rather than copying token stores or SSH keys.
 
-## Next: read #130 completely, then continue the remaining queue
+## Next: read #137 completely, then continue the remaining queue
 
-1. #332 Apple, #356, #229 and prerequisite #357 are reviewed/pushed; do not repeat their repairs or misreport historical failures.
+1. #130, #332 Apple, #356, #229 and prerequisite #357 are reviewed/pushed; do not repeat repairs or misreport historical failures.
    Preserve strict original-byte/exact-key decoding, valid literal U+FFFD, unsigned byte bounds, generation-owned
    JVM/Android and Apple withdrawal and the real-clock test. Maintain 0.8.0+ admission scope.
-2. The planned next issue is [#130](https://github.com/p2pKit/P2pKit/issues/130). Refresh/read its full body, comments,
+2. The planned next issue is [#137](https://github.com/p2pKit/P2pKit/issues/137). Refresh/read its full body, comments,
    linked work and relevant closed decisions; verify current behavior and dependencies before implementing a fix.
-   No #130 repair is included in this checkpoint. The #332 Apple row is approved again, retaining prior JVM/Android
-   approval; neither that return nor the extra regression file increases the issue denominator.
-3. Continue every actionable issue sequentially: **88 pending repair rows (87 low, one informational #333)**,
+   The complete #130 two-test-file correction is approved/pushed at `1847ed3`; it changes no production forwarding.
+   The #332 Apple row remains approved, retaining prior JVM/Android approval; the issue denominator is unchanged.
+3. Continue every actionable issue sequentially: **87 pending repair rows (86 low, one informational #333)**,
    21 external-validation rows and #120's architecture decision. Resolve precise external/product blockers honestly.
 4. Investigate the other [unverified follow-ups](docs/audit/2026-09-04/followups.md); do not invent findings from suspicions.
 
@@ -296,7 +313,7 @@ GPG-socket ownership and all previous reviewed repairs. Whole-repository corrobo
    [unverified follow-ups](docs/audit/2026-09-04/followups.md). Preserve all existing user changes.
 2. Record exact branch/commit/tree/status and refresh full GitHub issues/comments/linked PRs. Reconcile new evidence
    by underlying cause, not similar titles. Use exact local drafts if access is unavailable; never claim remote writes.
-3. Continue all actionable issues sequentially, prioritizing severity/dependencies. Read the planned next issue #130
+3. Continue all actionable issues sequentially, prioritizing severity/dependencies. Read the planned next issue #137
    completely; refresh the remaining queue rather than relying only on historical issue titles.
 4. Track verified distinct discoveries with severity, platforms, paths/lines, reproduction, root cause, impact,
    correction and regression plan. Respect `SECURITY.md`. Keep suspicions separate; do not duplicate existing issues.
@@ -348,13 +365,14 @@ verification scope, blockers, cleanup and practical readiness limits at each han
 
 > Continue the complete P2pKit audit from AUDIT_CHECKPOINT.md and docs/audit/2026-09-04/. Verify the audit branch,
 > current commit/tree/status, read repository instructions and full GitHub issue histories, and preserve user work.
-> This checkpoint has 61/171 independently reviewed repository repairs (35.7%) and 110 remaining rows (64.3%).
+> This checkpoint has 62/171 independently reviewed repository repairs (36.3%) and 109 remaining rows (63.7%).
 > Percentages exclude external acceptance still attached to approved rows, including #133 (independent interoperability
-> NOT_STARTED). #332 Apple is approved/pushed at78ef361/tree0f8ab1465d257baac8110e3bd1ecf95859abe93c; full
-> check+Android assembly passes2387/0 failures/errors/1 unchanged manual skip;14 static gates pass. All builds stopped
+> NOT_STARTED). #130 is approved/pushed at1847ed3/tree3fe527a16a52e536dedad610aebff53a7a026cdb; full
+> check+Android assembly passes2389/0 failures/errors/1 unchanged manual skip;14 static gates pass. All builds stopped
 > owned workers/removed disposable module outputs; private evidence/shared caches/stashes/protected files preserved.
-> The #332 Apple follow-up is complete for repository scope, not live multicast/TCP-handshake/external proof; its
-> prior JVM/Android approval remains intact. Read planned next issue#130 completely before repair. Preserve0.8.0+ TXT-admission restriction, valid U+FFFD,
+> #130 closes a test-fidelity gap; production pin forwarding/secure null rejection/legacy compatibility are unchanged.
+> Prior #332 Apple/JVM/Android approval remains intact, not live multicast/TCP-handshake/external proof. Read planned
+> next issue#137 completely before repair. Preserve0.8.0+ TXT-admission restriction, valid U+FFFD,
 > strict byte limits, prior ownership fixes and independent approval tripwires. Read full issues, repair sequentially,
 > create a fresh independent reviewer after each fix, address findings and review the final revision. Serialize bounded
 > builds with unconditional scoped cleanup. Push safe summaries only to the audit branch; no force-push, main merge,

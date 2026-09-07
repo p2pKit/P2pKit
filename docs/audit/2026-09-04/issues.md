@@ -1,22 +1,23 @@
 # Issue disposition index
 
-Checkpoint inventory: **171 issues; 61 reviewed repository repairs (35.7%), 110 remaining issue rows (64.3%)**.
+Checkpoint inventory: **171 issues; 62 reviewed repository repairs (36.3%), 109 remaining issue rows (63.7%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed fixes are in the audit branch, not merged/released. #332's Apple follow-up is independently approved
-through `78ef361`, retaining the prior JVM/Android approval and the earlier #229/#356/#357 corrections. Its reopened row
-returns to approved; it is not a newly counted duplicate issue. #133's independent interoperability remains NOT STARTED.
-Percentages do not count external acceptance attached to approved rows. The #325 protected-AGENTS exception remains.
+refresh. Reviewed fixes are in the audit branch, not merged/released. #130's two-file test correction is independently
+approved at `1847ed3`; production pin forwarding was already correct. The #332 Apple follow-up and earlier approvals
+remain intact. #133's independent interoperability remains NOT STARTED. Percentages do not count external acceptance
+attached to approved rows. The #325 protected-AGENTS exception remains.
 Read [the full records](issues.json) for scope, dependencies, commits and public outcomes, and [the root handoff](../../../AUDIT_CHECKPOINT.md)
 for evidence limits and cleanup rules. Historical assessment text retains its original review-time scope.
 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (61)
+## Repairs with recorded independent approval (62)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
+| [#130: [WSE-02] Both provisioning test registrars discard expectedFingerprint — pin propagation is untested](https://github.com/p2pKit/P2pKit/issues/130) | low | Existing | `1847ed330e3a` |
 | [#133: [WSG-02] No cross-implementation or cross-version interop test exists anywhere](https://github.com/p2pKit/P2pKit/issues/133) | medium | Existing | `71276169a7d0` |
 | [#135: [WSF-04] Desktop UI sample uses the risky policy and auto-mesh with zero warning anywhere](https://github.com/p2pKit/P2pKit/issues/135) | medium | Existing | `2386057d5721` |
 | [#138: [WSG-01] Kit/session integration tests do not exercise fragmented raw reads](https://github.com/p2pKit/P2pKit/issues/138) | medium | Existing | `02acee835200` |
@@ -79,11 +80,10 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#356: [AUDIT][Low] Apple Bonjour aliases NUL-containing TXT keys into canonical fields](https://github.com/p2pKit/P2pKit/issues/356) | low | New audit | `183b6c917faf` |
 | [#357: [AUDIT][Low] LAN watcher test races a real executor against a virtual timeout](https://github.com/p2pKit/P2pKit/issues/357) | low | New audit | `6d9cd3c74724` |
 
-## Pending remediation (88)
+## Pending remediation (87)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
-| [#130: [WSE-02] Both provisioning test registrars discard expectedFingerprint — pin propagation is untested](https://github.com/p2pKit/P2pKit/issues/130) | low | Existing | — |
 | [#137: [WSD-02] Four P2pError variants expose a mutable non-volatile `underlying` slot behind `cause`](https://github.com/p2pKit/P2pKit/issues/137) | low | Existing | — |
 | [#144: [BUILD-18] Docs-only CI shortcut reuses main-merge results from graph shape, not check evidence](https://github.com/p2pKit/P2pKit/issues/144) | low | Existing | — |
 | [#145: [WSA1-05] Receive-backlog byte cap allocates a full payload copy to measure and under-counts heap](https://github.com/p2pKit/P2pKit/issues/145) | low | Existing | — |
