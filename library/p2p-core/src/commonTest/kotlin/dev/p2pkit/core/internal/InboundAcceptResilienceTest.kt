@@ -266,14 +266,8 @@ class InboundAcceptResilienceTest {
             // an inbound-acceptance failure.
             withTimeout(5_000) { bob.stop() }
             assertTrue(bobTransport.isClosed, "stop() must close the transport")
-            assertTrue(
-                bobLogger.warnings.none { it.contains(acceptLoopEndedFragment) },
-                "clean shutdown must not be reported as an accept-loop failure"
-            )
-            assertTrue(
-                bobLogger.errors.isEmpty(),
-                "clean shutdown must not surface kit-scope errors, got: ${bobLogger.errors}"
-            )
+            // Also reject normal-completion warnings, not just the exception branch's wording.
+            bobLogger.assertNoUnexpectedWarnOrError()
         } finally {
             runCatching { bob.stop() }
         }

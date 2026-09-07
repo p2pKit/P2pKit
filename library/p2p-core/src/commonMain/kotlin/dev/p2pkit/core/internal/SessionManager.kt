@@ -258,7 +258,10 @@ internal class SessionManager(
 
     private suspend fun collectIncomingWithRecovery(transport: DataTransport) {
         var consecutiveFailures = 0
-        while (currentCoroutineContext().isActive) {
+        // Terminal shutdown seals setups before closing transports, but keeps
+        // the parent alive for session/resource cleanup. Coroutine liveness
+        // alone must not diagnose or retry that intentional source completion.
+        while (currentCoroutineContext().isActive && setupRegistry.value.accepting) {
             var acceptedAny = false
             try {
                 transport.incomingConnections().collect { connection ->
@@ -267,6 +270,7 @@ internal class SessionManager(
                     handleIncoming(connection)
                 }
                 currentCoroutineContext().ensureActive()
+                if (!setupRegistry.value.accepting) return
                 logger.warn("inbound acceptance completed unexpectedly for ${transport.type}")
             } catch (cancelled: CancellationException) {
                 // A transport flow can throw CancellationException while this
@@ -274,8 +278,11 @@ internal class SessionManager(
                 // not structural cancellation; genuine scope cancellation is
                 // rethrown by ensureActive().
                 currentCoroutineContext().ensureActive()
+                if (!setupRegistry.value.accepting) return
                 logger.warn("inbound acceptance ended for ${transport.type}", cancelled)
             } catch (failure: Throwable) {
+                currentCoroutineContext().ensureActive()
+                if (!setupRegistry.value.accepting) return
                 logger.warn("inbound acceptance ended for ${transport.type}", failure)
             }
             if (!acceptedAny) consecutiveFailures += 1
