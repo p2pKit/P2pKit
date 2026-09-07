@@ -25,6 +25,12 @@ remain pending; no stable-release readiness claim is implied.
   Failed access, truncated framing and malformed consumed values reject the
   whole record. Absent records and valid Unicode/empty/duplicate-value behavior
   stay compatible. This decoder change does not change discovery cache lifecycle.
+- #332 (Apple follow-up): a non-admissible current-browser re-resolution now
+  withdraws that native service's prior cache, endpoint and relay ownership.
+  Invalid TXT cannot select another peer for removal; retired callbacks cannot
+  delete replacement ownership. Repeated rejection is idempotent and valid
+  recovery publishes a fresh Found lifecycle. Existing dial/session ownership,
+  manual endpoints and independent advertising remain unaffected.
 - This is an unmerged audit-branch change, **not** part of published RC3 and
   **not approved for a 0.7 release**. The current snapshot version label does
   not override #229's 0.8.0+ requirement. A release must honor that target or

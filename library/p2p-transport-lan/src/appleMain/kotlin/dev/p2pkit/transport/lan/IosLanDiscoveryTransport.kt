@@ -51,6 +51,7 @@ import platform.Network.nw_browser_state_ready
 import platform.Network.nw_browser_state_waiting
 import platform.Network.nw_browser_t
 import platform.Network.nw_endpoint_get_bonjour_service_name
+import platform.Network.nw_endpoint_t
 import platform.Network.nw_error_get_error_code
 import platform.Network.nw_listener_set_advertise_descriptor
 import platform.Network.nw_listener_t
@@ -60,6 +61,7 @@ import platform.Network.nw_parameters_iterate_prohibited_interface_types
 import platform.Network.nw_parameters_prohibit_interface_type
 import platform.Network.nw_parameters_set_include_peer_to_peer
 import platform.Network.nw_parameters_t
+import platform.Network.nw_txt_record_t
 import platform.Network.nw_interface_type_cellular
 import platform.Foundation.NSLock
 
@@ -89,10 +91,11 @@ internal fun appleLanBrowserProhibitsCellularForTest(parameters: nw_parameters_t
  * Browsing uses `nw_browser_t`; advertising rides on the listener inside
  * [IosLanDataTransport] via `nw_listener_set_advertise_descriptor`.
  *
- * NWBrowser owns DNS-SD TTL expiry: a result remains live until its matching
- * native removal callback. Core therefore does not require cache-derived
- * heartbeat events. A small reconciliation loop exists only to retire entries
- * owned by a replaced browser generation that can no longer send removals.
+ * NWBrowser owns DNS-SD TTL expiry. An admitted service remains live until a
+ * matching native removal or a non-admissible re-resolution withdraws it.
+ * Core therefore does not require cache-derived heartbeat events. A small
+ * reconciliation loop retires entries owned by a replaced browser generation
+ * that can no longer send removals.
  *
  * **Diagnostics:** every browser state change, every result-change call,
  * every TXT decode, and every filter outcome is appended to
@@ -225,7 +228,8 @@ internal class IosLanDiscoveryTransport(
         logAppleLanPackagingIssues(transportContext.lanServiceTypeBonjour, "startAdvertising")
         IosLanDebug.log(
             "advertise",
-            "starting: peerId=${localPeer.peerId.value.take(8)} app=${localPeer.appId.value} name=${localPeer.deviceName}"
+            "starting: peerId=${localPeer.peerId.value.take(8)} " +
+                "app=${localPeer.appId.value} name=${localPeer.deviceName}"
         )
         val descriptor = buildAdvertiseDescriptor(localPeer)
         // Listener may be null in the rebind rebuild window (or after a
@@ -261,7 +265,8 @@ internal class IosLanDiscoveryTransport(
         logAppleLanPackagingIssues(transportContext.lanServiceTypeBonjour, "startDiscovery")
         IosLanDebug.log(
             "browse",
-            "startDiscovery: type=${transportContext.lanServiceTypeBonjour} app=${transportContext.appId.value} localPid=${transportContext.localPeerId.value.take(8)}"
+            "startDiscovery: type=${transportContext.lanServiceTypeBonjour} " +
+                "app=${transportContext.appId.value} localPid=${transportContext.localPeerId.value.take(8)}"
         )
         discoveryStartedByHost = true
         try {
@@ -825,7 +830,8 @@ internal class IosLanDiscoveryTransport(
 
         IosLanDebug.log(
             "browse",
-            "result change: added=$added removed=$removed txtChanged=$txtChanged batchComplete=$batchComplete oldNull=${old == null} newNull=${new == null}"
+            "result change: added=$added removed=$removed txtChanged=$txtChanged " +
+                "batchComplete=$batchComplete oldNull=${old == null} newNull=${new == null}"
         )
 
         if (added && new != null) {
@@ -844,9 +850,25 @@ internal class IosLanDiscoveryTransport(
             return
         }
         val txt = nw_browse_result_copy_txt_record_object(result)
+        emitResolvedPeer(endpoint, txt, isUpdate, generation)
+    }
+
+    /** Shared native-input boundary for browse callbacks and deterministic transition tests. */
+    internal fun emitResolvedPeer(
+        endpoint: nw_endpoint_t,
+        txt: nw_txt_record_t,
+        isUpdate: Boolean,
+        generation: Int
+    ) {
+        // A rejected record can contradict/omit its TXT pid. Only the native
+        // service name identifies which previously admitted ownership to revoke.
+        val servicePid = endpoint?.let {
+            validDiscoveryPeerIdOrNull(nw_endpoint_get_bonjour_service_name(it)?.toKString())
+        }
         val decoded = IosBonjour.decodeTxtRecord(txt)
         if (decoded.malformed) {
-            IosLanDebug.log("browse", "emitPeer: malformed TXT record — skip")
+            IosLanDebug.log("browse", "emitPeer: malformed TXT record — reject")
+            withdrawInvalidResolution(servicePid, generation)
             return
         }
         val attrs = decoded.properties
@@ -859,16 +881,15 @@ internal class IosLanDiscoveryTransport(
             securityProfile = transportContext.securityProfile
         ) ?: run {
             IosLanDebug.log("browse", "emitPeer: filter — invalid/bounded TXT schema")
+            withdrawInvalidResolution(servicePid, generation)
             return
         }
-        val servicePid = validDiscoveryPeerIdOrNull(
-            nw_endpoint_get_bonjour_service_name(endpoint)?.toKString()
-        )
         if (servicePid != record.peerId.value) {
             IosLanDebug.log(
                 "browse",
                 "emitPeer: filter — Bonjour service identity does not match TXT peer id"
             )
+            withdrawInvalidResolution(servicePid, generation)
             return
         }
         val peerId = record.peerId
@@ -884,9 +905,7 @@ internal class IosLanDiscoveryTransport(
                 // A generation can become stale between native callback entry
                 // and parsing. Never let that queued result replace current
                 // ownership.
-                discoveryStartedByHost &&
-                    generation == browserGeneration &&
-                    browser?.generation == generation
+                isCurrentBrowserGeneration(generation)
             },
             onConfirmed = {
                 checkNotNull(endpointRegistry.put(peerId, endpoint, browserGeneration = generation)) {
@@ -903,6 +922,23 @@ internal class IosLanDiscoveryTransport(
             "emitPeer: ACCEPTED ${if (isUpdate) "Updated" else "Found"} " +
                 "${record.deviceName} pid=${peerId.value.take(8)}"
         )
+    }
+
+    /** Called inside [announceCacheLock] at either admission or withdrawal. */
+    private fun isCurrentBrowserGeneration(generation: Int): Boolean =
+        discoveryStartedByHost && generation == browserGeneration && browser?.generation == generation
+
+    /**
+     * Validation is an ownership transition, not just an insertion filter.
+     * Fence and withdraw cache/endpoint/relay state in the same transaction as
+     * admission. Never use untrusted TXT identity to remove a different peer.
+     * Already leased endpoints/connections remain owned by their dial/session.
+     */
+    private fun withdrawInvalidResolution(servicePid: String?, generation: Int) = withAnnounceCacheLock {
+        if (!isCurrentBrowserGeneration(generation) || servicePid == null || servicePid !in announceCache) {
+            return@withAnnounceCacheLock
+        }
+        emitLostByIdLocked(servicePid, removeCacheEntry = true)
     }
 
     private fun emitLost(result: nw_browse_result_t, generation: Int) {
@@ -980,11 +1016,10 @@ internal class IosLanDiscoveryTransport(
         get() = pendingNudgeJob?.isActive == true
 
     /**
-     * Shared lost-emission path: browse `result_removed` callbacks land here
-     * via [emitLost], and the announce loop's generation prune
-     * (AUDIT-2026-06 #8) calls it directly with the cached peer id. The
-     * cache removal is idempotent — the prune path has already dropped the
-     * entry via [reconcileAnnounceCache]'s updated map.
+     * Native `result_removed` callbacks land here via [emitLost]. Invalid
+     * re-resolution and generation pruning call [emitLostByIdLocked] under
+     * the same cache lock. Removal is idempotent: the prune path has already
+     * dropped the entry via [reconcileAnnounceCache]'s updated map.
      */
     private fun emitLostById(
         pid: String,
@@ -1003,10 +1038,9 @@ internal class IosLanDiscoveryTransport(
     /** Caller holds [announceCacheLock]. */
     private fun emitLostByIdLocked(pid: String, removeCacheEntry: Boolean) {
         if (pid == transportContext.localPeerId.value) return
-        // AUDIT-2026-07 (RBS-1): both callers validate their input (emitLost
-        // from the raw TXT record, the announce-loop prune from entries that
-        // were validated on insert), but a blank pid must never reach the
-        // throwing PeerId constructor from this shared path.
+        // All callers validate their input: native removal and invalid
+        // re-resolution use service identity, and reconciliation uses entries
+        // validated on insert. Keep the constructor guard at this shared path.
         if (validDiscoveryPeerIdOrNull(pid) == null) return
         val peerId = PeerId(pid)
         if (removeCacheEntry) announceCache = announceCache - pid
