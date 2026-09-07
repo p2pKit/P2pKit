@@ -341,7 +341,7 @@ Counterparts are named by stable keys/sections, not line numbers that drift duri
 | `scripts/check-gradle-wrapper.sh` | `gradle/wrapper/gradle-wrapper.properties`: URL/distribution checksum; reviewed wrapper JAR and both launchers |
 | `scripts/tests/release-workflow-test.sh` | `scripts/install-xcodegen.sh`: version/archive checksum; `build.gradle.kts`: Netty and both jsoup floors; Android sample's Netty lock |
 
-The release gate's Netty lock check examines every active `io.netty` entry, not a list of historical bad versions.
+`scripts/tests/release-workflow-test.sh` checks every active `io.netty` lock entry, not a list of historical bad versions.
 It compares numeric `major.minor.patch.Final` values with an independently supplied floor; unknown qualifiers fail
 closed for review. The separate positive HTTP pin still requires the reviewed version in the lock.
 
