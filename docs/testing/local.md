@@ -328,6 +328,33 @@ is a separate correction in [#195](https://github.com/p2pKit/P2pKit/issues/195).
 
 ## Dependency updates
 
+### Independent pin expectations versus fixture inputs
+
+Positive version/checksum literals in policy gates are deliberate **tripwires**, not stale copies. A source-only
+bump must fail until the maintainer independently reviews the new artifacts and updates the matching expectation.
+Never calculate an expected value from the file being checked; that would turn the approval check into a tautology.
+Counterparts are named by stable keys/sections, not line numbers that drift during updates:
+
+| Independent gate | Counterpart to review and update together |
+| --- | --- |
+| `scripts/tests/check-kotlin-toolchain-policy-test.sh` | `gradle/libs.versions.toml`: `kotlin`, `binary-compatibility-validator` |
+| `scripts/check-gradle-wrapper.sh` | `gradle/wrapper/gradle-wrapper.properties`: URL/distribution checksum; reviewed wrapper JAR and both launchers |
+| `scripts/tests/release-workflow-test.sh` | `scripts/install-xcodegen.sh`: version/archive checksum; `build.gradle.kts`: Netty and both jsoup floors; Android sample's Netty lock |
+
+The release gate's Netty lock check examines every active `io.netty` entry, not a list of historical bad versions.
+It compares numeric `major.minor.patch.Final` values with an independently supplied floor; unknown qualifiers fail
+closed for review. The separate positive HTTP pin still requires the reviewed version in the lock.
+
+Consumer generation and fake XcodeGen binaries instead use versions as **inputs**. The consumer guard recognizes the
+maintained expanding root-build heredoc and requires Kotlin/AGP input variables, rejecting numeric plugin pins elsewhere
+too. Review the guard when changing that generator's shape. XcodeGen's normal fixture input follows the sourced installer;
+a second synthetic version exercises the same assertions without today's pin. Its independent release tripwires remain
+in the release-workflow test. Run `ruby scripts/tests/check-version-input-policy-test.rb`
+for deterministic future-version/negative controls (also called by the toolchain policy); it performs no Gradle build.
+These are static source/lock and synthetic installer checks, not dependency resolution or publisher authentication.
+
+### Reviewed update workflow
+
 Dependency and wrapper updates remain fail closed. A version-catalog change
 must carry reviewed SHA-256 verification metadata; a wrapper change must carry
 the complete wrapper plus its pinned distribution and file checksums. AGP and

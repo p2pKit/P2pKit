@@ -22,7 +22,11 @@ fail() {
     exit 1
 }
 
+# Tripwire: gradle/libs.versions.toml [versions].kotlin; review both on updates,
+# never derive this expectation from its subject. See docs/testing/local.md.
 grep -Fq 'kotlin = "2.4.10"' "$CATALOG" || fail "Kotlin 2.4.10 is not the catalog toolchain"
+# Tripwire: gradle/libs.versions.toml [versions].binary-compatibility-validator.
+# This independent metadata-reader expectation must move only after review.
 grep -Fq 'binary-compatibility-validator = "0.18.1"' "$CATALOG" ||
     fail "the Android ABI metadata reader is not pinned"
 grep -Fqx 'IOS_MIN_VERSION=14.0' "$PROPERTIES" || fail "the iOS 14 floor is not canonical"
@@ -85,9 +89,10 @@ grep -Fq './gradlew --no-daemon --console=plain publishToMavenLocal' "$CONSUMER_
     fail "the isolated publication fixture may leave a Gradle daemon racing cleanup"
 grep -Fq './gradlew --no-daemon --console=plain -p "$FIXTURE_DIR"' "$CONSUMER_GATE" ||
     fail "the isolated consumer fixture may leave a Gradle daemon racing cleanup"
-if grep -Fq 'version "2.3.21"' "$CONSUMER_GATE"; then
-    fail "the isolated consumer retains a stale hardcoded Kotlin version"
-fi
+# Consumer versions are inputs, unlike the catalog tripwires above. Enforce
+# the variable-based recipe rather than banning one historical Kotlin pin.
+ruby "$ROOT/scripts/check-version-input-policy.rb" consumer "$CONSUMER_GATE"
+ruby "$ROOT/scripts/tests/check-version-input-policy-test.rb"
 
 # Kotlin 2.4.10 intentionally embeds the preceding ABI-tools release in its
 # isolated kotlinInternalAbiValidation configuration. The Android-only ABI

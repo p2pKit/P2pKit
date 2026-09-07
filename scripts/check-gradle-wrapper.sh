@@ -9,7 +9,11 @@ WRAPPER_JAR="$ROOT/gradle/wrapper/gradle-wrapper.jar"
 GRADLEW="$ROOT/gradlew"
 GRADLEW_BAT="$ROOT/gradlew.bat"
 
+# Tripwire: gradle/wrapper/gradle-wrapper.properties distributionUrl. Review
+# official Gradle release material on updates; never derive from that property.
 EXPECTED_URL='https\://services.gradle.org/distributions/gradle-9.7.0-bin.zip'
+# Tripwire: the same file's distributionSha256Sum, independently reviewed.
+# Change URL, distribution digest and all three component digests together.
 EXPECTED_DISTRIBUTION_SHA='84fbba45c7f4c64abc77460e1c00f541e9f960e3c7ed2538f1ede19eacd873ae'
 EXPECTED_WRAPPER_JAR_SHA='7a9ce74cff467ca1bf60a4fcd9f05185acceda4d0f382434d393e17864262c5d'
 EXPECTED_GRADLEW_SHA='a5a5c199ba02189ae8c46a334223371a20599d9c298ef65e7540ede4a3f72d59'
@@ -39,6 +43,8 @@ for file in "$PROPERTIES" "$WRAPPER_JAR" "$GRADLEW" "$GRADLEW_BAT"; do
     [[ -f "$file" ]] || fail "missing wrapper component: $file"
 done
 
+# These assertions deliberately compare wrapper properties with independent
+# expectations above, not with values re-read from the file being validated.
 [[ "$(property distributionUrl)" == "$EXPECTED_URL" ]] || fail "unexpected Gradle distribution URL"
 [[ "$(property distributionSha256Sum)" == "$EXPECTED_DISTRIBUTION_SHA" ]] || fail "unexpected Gradle distribution checksum"
 [[ "$(property validateDistributionUrl)" == "true" ]] || fail "distribution URL validation is not enabled"

@@ -281,6 +281,8 @@ raise "XCFramework provenance evidence does not include sidecars" unless
   xc_evidence.fetch("with").fetch("path").include?("XCFrameworks/release/BUILD_*.txt")
 RUBY
 
+# Tripwire: scripts/install-xcodegen.sh XCODEGEN_VERSION; review the release
+# and archive checksum together. Do not read the expected pin from the installer.
 grep -Fq 'XCODEGEN_VERSION="2.45.4"' "$XCODEGEN_INSTALLER" || {
     echo "FATAL: XcodeGen installer version is not pinned" >&2
     exit 1
@@ -366,27 +368,34 @@ grep -Fq 'scripts/tests/check-markdown-links.sh' "$ROOT/scripts/run-release-gate
     echo "FATAL: release gate does not validate active Markdown links" >&2
     exit 1
 }
+# Tripwire: scripts/install-xcodegen.sh XCODEGEN_SHA256; this independently
+# reviewed archive digest moves with the version above, never by derivation.
 grep -Fq 'XCODEGEN_SHA256="090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef"' "$XCODEGEN_INSTALLER" || {
     echo "FATAL: XcodeGen installer checksum is not pinned" >&2
     exit 1
 }
 
+# Tripwire: build.gradle.kts allprojects io.netty advisory floor. Review its
+# locks/provenance and the independent lock expectations below when updating.
 grep -Fq '"io.netty" -> "4.1.137.Final"' "$ROOT/build.gradle.kts" || {
     echo "FATAL: Netty advisory floor is not 4.1.137.Final" >&2
     exit 1
 }
+# Tripwire: build.gradle.kts root buildscript AND advisoryMinimumVersions
+# jsoup floors. Both sites are intentional; do not derive the version or count.
 [[ "$(grep -Fc '"org.jsoup:jsoup" to "1.23.1"' "$ROOT/build.gradle.kts")" == "2" ]] || {
     echo "FATAL: root and project build-tool jsoup advisory floors are not 1.23.1" >&2
     exit 1
 }
+# Tripwire: samples/p2p-sample-android/gradle.lockfile netty-codec-http pin.
+# Keep this independent expectation with the reviewed build.gradle.kts floor.
 grep -Fq 'io.netty:netty-codec-http:4.1.137.Final=' "$ANDROID_LOCK" || {
     echo "FATAL: Android test tooling is not locked to patched Netty" >&2
     exit 1
 }
-if grep -Eq 'io.netty:netty-codec-http:4\.1\.(135|136)\.Final=' "$ANDROID_LOCK"; then
-    echo "FATAL: vulnerable Netty remains in the Android test-tooling lock" >&2
-    exit 1
-fi
+# Independent minimum for every io.netty row in that lock, not a historical
+# denylist. Review/update with build.gradle.kts above; never derive from the lock.
+ruby "$ROOT/scripts/check-version-input-policy.rb" netty "$ANDROID_LOCK" '4.1.137.Final'
 
 for module in \
     library/p2p-core \
