@@ -818,9 +818,26 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun retryHotspot() {
-        if (kit == null || runScope == null || provisioningBusy.value) return
-        if (!hotspotStopPending.value) refreshMissingPermissions()
-        provisioningUi.retryHotspot(::onHotspotResult, ::onHotspotStopResult)
+        retryHotspot(requestPermission = null)
+    }
+
+    fun retryHotspot(requestPermission: (() -> Unit)?) {
+        if (kit == null || runScope == null) return
+        provisioningUi.retryHotspot(
+            onStartResult = ::onHotspotResult,
+            onStopResult = ::onHotspotStopResult,
+            beforeStart = {
+                // Decide from current intent/permissions, not the card's last composition.
+                // A stale acquisition callback must not prompt after Stop was admitted.
+                refreshMissingPermissions()
+                if (requestPermission != null && _missingPermissions.value.isNotEmpty()) {
+                    requestPermission()
+                    false
+                } else {
+                    true
+                }
+            }
+        )
     }
 
     private fun onHotspotResult(result: LocalNetworkResult) {

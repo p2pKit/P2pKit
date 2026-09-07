@@ -1124,7 +1124,7 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                         Spacer(Modifier.height(Dimens.ItemGap))
                         Button(
                             onClick = {
-                                if (missing.isNotEmpty()) launcher.launch(perm) else vm.retryHotspot()
+                                vm.retryHotspot { launcher.launch(perm) }
                             },
                             enabled = !busy,
                             modifier = Modifier.fillMaxWidth()
@@ -1197,7 +1197,7 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                     Spacer(Modifier.height(Dimens.ItemGap))
                     Button(
                         onClick = {
-                            if (missing.isNotEmpty()) launcher.launch(perm) else vm.retryHotspot()
+                            vm.retryHotspot { launcher.launch(perm) }
                         },
                         enabled = !busy,
                         modifier = Modifier.fillMaxWidth()

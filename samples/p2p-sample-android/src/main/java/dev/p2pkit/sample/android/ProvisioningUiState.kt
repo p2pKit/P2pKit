@@ -204,11 +204,21 @@ internal class ProvisioningUiState(
             onResult(result)
         }
 
-    /** The card's retry action preserves stop intent; it never starts hosting after an unconfirmed stop. */
+    /**
+     * The card's retry action preserves stop intent. [beforeStart] may request permission
+     * and return false to defer acquisition; it never runs for busy, retired or stop intent.
+     */
     fun retryHotspot(
         onStartResult: (LocalNetworkResult) -> Unit = {},
-        onStopResult: (Result<Unit>) -> Unit = {}
-    ): Boolean = if (_hotspotStopPending.value) stopHotspot(onStopResult) else startHotspot(onStartResult)
+        onStopResult: (Result<Unit>) -> Unit = {},
+        beforeStart: () -> Boolean = { true }
+    ): Boolean {
+        val owner = run ?: return false
+        reconcile(owner)
+        if (!isCurrent(owner) || owner.operation != null) return false
+        if (_hotspotStopPending.value) return stopHotspot(onStopResult)
+        return beforeStart() && startHotspot(onStartResult)
+    }
 
     fun joinHotspot(credentials: WifiCredentials, onResult: (JoinNetworkResult) -> Unit = {}): Boolean =
         launchOperation(Operation.JOIN) { owner ->

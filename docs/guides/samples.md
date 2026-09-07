@@ -68,9 +68,11 @@ later successful join (even to the same SSID). A later genuine release is shown 
 a failure; a refused repeat join does not release the binding.
 
 A failed or cancelled hotspot stop keeps **Retry hotspot stop** available without
-requesting acquisition permissions. Retry does not restart hosting; only a
-successful stop call clears that intent, and it leaves an independent join intact.
-Startup failures still retry startup. A startup `CleanupFailed` may describe
+requesting acquisition permissions. Retry does not restart hosting; a successful
+stop call clears that intent and leaves an independent join intact. Kit retirement
+clears its presentation without acknowledging native cleanup. Permission requests
+also check current intent, so a stale acquisition button cannot prompt after Stop
+was admitted. Startup failures still retry startup. A startup `CleanupFailed` may describe
 different native owners: the card also offers explicit hotspot stop, with whole-kit
 Stop as the fallback for all retained cleanup. Untagged cleanup events are not
 treated as proof that a live hotspot ended or that its cleanup succeeded.

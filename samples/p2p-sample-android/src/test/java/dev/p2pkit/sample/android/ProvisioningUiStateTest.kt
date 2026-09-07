@@ -534,18 +534,85 @@ class ProvisioningUiStateTest {
     }
 
     @Test
+    fun staleAcquisitionRetryCannotRequestPermissionAfterStopIsAdmitted() = withHarness { h ->
+        h.startAndJoin()
+        h.manager.stopFailure = NetworkProvisioningError.CleanupFailed("synthetic close failure")
+        var permissionRequests = 0
+        // Captured by a previously rendered acquisition card, before Stop changes the UI.
+        val oldCardAction = {
+            h.ui.retryHotspot(beforeStart = { permissionRequests++; false })
+        }
+
+        assertTrue(h.ui.stopHotspot())
+        // Busy is set synchronously, even before the stop coroutine runs or Compose renders.
+        assertFalse(oldCardAction())
+        assertEquals(0, permissionRequests)
+        h.drain()
+        assertTrue(h.ui.hotspotStopPending.value)
+
+        h.manager.stopFailure = null
+        assertTrue(oldCardAction())
+        h.drain()
+
+        assertEquals(0, permissionRequests)
+        assertEquals(2, h.manager.stopCalls)
+        assertEquals(1, h.manager.startCalls)
+        assertFalse(h.ui.hotspotStopPending.value)
+        assertIs<JoinNetworkResult.Joined>(h.ui.joinResult.value)
+        assertTrue(h.manager.joinActive)
+    }
+
+    @Test
+    fun acquisitionPermissionRequestDefersStartUntilTheGrantCallbackRetries() = withHarness { h ->
+        var permissionRequests = 0
+        assertFalse(h.ui.retryHotspot(beforeStart = { permissionRequests++; false }))
+        h.drain()
+
+        assertEquals(1, permissionRequests)
+        assertEquals(0, h.manager.startCalls)
+        assertEquals(0, h.manager.stopCalls)
+        assertFalse(h.ui.busy.value)
+        assertNull(h.ui.hotspotResult.value)
+
+        assertTrue(h.ui.retryHotspot())
+        h.drain()
+        assertIs<LocalNetworkResult.Started>(h.ui.hotspotResult.value)
+        assertEquals(1, h.manager.startCalls)
+        assertEquals(1, permissionRequests)
+    }
+
+    @Test
+    fun managerRetirementPreventsAStaleAcquisitionPermissionRequestBeforeRendering() = withHarness { h ->
+        h.startAndJoin()
+        h.manager.closeFromSystem()
+        var permissionRequests = 0
+        assertFalse(h.ui.retryHotspot(beforeStart = { permissionRequests++; false }))
+        h.drain()
+
+        assertEquals(0, permissionRequests)
+        assertEquals(1, h.manager.startCalls)
+        assertEquals(0, h.manager.stopCalls)
+        assertFalse(h.ui.busy.value)
+    }
+
+    @Test
     fun hotspotFailureCardInvokesTheSameRetryActionAsTheControllerTests() {
         val vm = sampleSource("P2pKitViewModel.kt")
         val card = sampleSource("MainActivity.kt").substringAfter("private fun HotspotCard(")
             .substringBefore("private fun JoinHotspotCard(")
         val failedCard = card.substringAfter("r is LocalNetworkResult.Failed ->")
             .substringBefore("r is LocalNetworkResult.Unsupported ->")
-        assertTrue(failedCard.contains("vm.retryHotspot()"))
+        assertTrue(failedCard.contains("vm.retryHotspot { launcher.launch(perm) }"))
         assertTrue(failedCard.contains("onClick = vm::retryHotspot"))
         assertFalse(failedCard.contains("vm.startHotspot"))
-        assertTrue(vm.substringAfter("fun retryHotspot() {").substringBefore("private fun onHotspotResult(")
-            .contains("provisioningUi.retryHotspot("))
-        assertTrue(vm.contains("if (!hotspotStopPending.value) refreshMissingPermissions()"))
+        val retry = vm.substringAfter("fun retryHotspot(requestPermission: (() -> Unit)?) {")
+            .substringBefore("private fun onHotspotResult(")
+        assertTrue(retry.contains("provisioningUi.retryHotspot("))
+        assertTrue(retry.contains("beforeStart = {"))
+        assertTrue(retry.substringAfter("beforeStart = {").contains("requestPermission()"))
+        assertTrue(retry.contains("requestPermission != null && _missingPermissions.value.isNotEmpty()"))
+        assertFalse(card.contains("if (missing.isNotEmpty()) launcher.launch(perm)"))
+        assertEquals(2, Regex(Regex.escape("vm.retryHotspot { launcher.launch(perm) }")).findAll(card).count())
         assertTrue(card.contains("val stopPending by vm.hotspotStopPending.collectAsState()"))
         val stopCard = card.substringAfter("stopPending -> {").substringBefore("r is LocalNetworkResult.Started ->")
         assertTrue(stopCard.contains("onClick = vm::retryHotspot"))
