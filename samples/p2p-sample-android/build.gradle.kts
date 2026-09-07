@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -66,4 +68,38 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.compose.material3)
     testImplementation(kotlin("test-junit"))
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric.runner)
+}
+
+// Compose runtime host tests need Android tracing/snapshot classes, not a device.
+// Resolve the framework through the same locks/checksums as the adapter tests;
+// Robolectric must never download an unchecked SDK at test runtime.
+val robolectricSdk35 = configurations.create("robolectricSdk35") {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+    dependencies.add(project.dependencies.create(libs.robolectric.sdk35.get()))
+}
+val prepareRobolectricSdk = tasks.register<Sync>("prepareRobolectricSdk") {
+    from(robolectricSdk35)
+    into(layout.buildDirectory.dir("robolectric-sdks"))
+}
+tasks.withType<Test>().configureEach {
+    dependsOn(prepareRobolectricSdk)
+    inputs.files(robolectricSdk35)
+        .withPropertyName("robolectricFramework")
+        .withNormalizer(ClasspathNormalizer::class.java)
+    systemProperty("robolectric.offline", "true")
+    systemProperty("robolectric.usePreinstrumentedJars", "true")
+    systemProperty("robolectric.dependency.dir", layout.buildDirectory.dir("robolectric-sdks").get().asFile)
+    val temporaryFiles = layout.buildDirectory.dir("host-test-tmp")
+    systemProperty("java.io.tmpdir", temporaryFiles.get().asFile)
+    doFirst {
+        val directory = temporaryFiles.get().asFile
+        check(directory.isDirectory || directory.mkdirs()) { "Cannot create host-test temporary directory" }
+    }
+    maxParallelForks = 1
+    maxHeapSize = "1g"
+    timeout.set(Duration.ofMinutes(2))
 }

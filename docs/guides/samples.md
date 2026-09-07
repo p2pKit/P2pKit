@@ -93,6 +93,20 @@ release or dismissal prevents a `Joined` card from being rendered. Passphrases
 remain non-saveable, obscured by default, and cleared on stop/disposal; a permission
 grant never silently resubmits a cleared credential.
 
+## Android diagnostic viewer
+
+The diagnostic viewer observes the recorder's revision as a real Compose snapshot
+dependency: new events refresh the list and summary without touching a control.
+Its cached list is keyed by revision, filter and source. A successful session clear
+also advances the revision even though clearing emits no diagnostic event; a failed
+clear preserves the in-memory display and reports the storage failure.
+
+**Pause live logs** freezes the displayed list, not recording. Filter/session changes
+and new events continue to update the live snapshot, which is shown on resume.
+Leaving the composition cancels its revision collector; reopening reads current
+history. These are bounded diagnostic snapshots, not an event-delivery guarantee
+or a measured frame-performance claim.
+
 ## Desktop UI security posture
 
 The Desktop UI is a development harness, not a trusted room. Its persistent

@@ -45,6 +45,7 @@ import dev.p2pkit.sample.diagnostics.DiagnosticFilter
 import dev.p2pkit.sample.diagnostics.DiagnosticOutcome
 import dev.p2pkit.sample.diagnostics.DiagnosticSeverity
 import dev.p2pkit.sample.diagnostics.diagnosticJson
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -57,8 +58,6 @@ internal fun AndroidDiagnosticsScreen(
     onBack: () -> Unit,
     paddingValues: PaddingValues = PaddingValues()
 ) {
-    @Suppress("UNUSED_VARIABLE")
-    val revision by vm.diagnosticRevision.collectAsState()
     val context = LocalContext.current
     val clipboard = LocalClipboard.current
     val clipboardScope = rememberCoroutineScope()
@@ -80,7 +79,7 @@ internal fun AndroidDiagnosticsScreen(
         minimumSeverity = severity,
         search = search.trim().takeIf { it.isNotEmpty() }
     )
-    val liveEvents = vm.diagnosticEvents(filter)
+    val liveEvents = rememberDiagnosticEvents(vm.diagnosticRevision, filter, vm::diagnosticEvents)
     val events = if (paused) pausedEvents else liveEvents
     val summary = vm.diagnosticSummary()
 
@@ -292,6 +291,18 @@ internal fun AndroidDiagnosticsScreen(
             }
         )
     }
+}
+
+/** Composition-owned bridge from the recorder's invalidations to its filtered snapshot. */
+@Composable
+internal fun rememberDiagnosticEvents(
+    revision: StateFlow<Long>,
+    filter: DiagnosticFilter,
+    snapshot: (DiagnosticFilter) -> List<DiagnosticEvent>
+): List<DiagnosticEvent> {
+    val currentRevision by revision.collectAsState()
+    // Reading the revision as a key subscribes composition; an unread `by` local does not.
+    return remember(revision, currentRevision, filter, snapshot) { snapshot(filter) }
 }
 
 @Composable

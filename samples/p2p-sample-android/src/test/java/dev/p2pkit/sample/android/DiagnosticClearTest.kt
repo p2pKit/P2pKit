@@ -76,6 +76,28 @@ class DiagnosticClearTest {
     }
 
     @Test
+    fun clearNotifiesSnapshotReadersOnlyAfterSuccessfulRemovalIncludingRepeatClear() = withDirectory { root ->
+        val preferences = TestPreferences()
+        var revision = 0L
+        val harness = harness(root, preferences) { revision++ }
+        harness.beginSession("PS-T01", "both", "selected")
+        val before = harness.recorder.snapshot()
+        val beforeRevision = revision
+        preferences.failCommit = true
+
+        assertFailsWith<IOException> { harness.clearCurrentSession() }
+        assertEquals(beforeRevision, revision)
+        assertEquals(before, harness.recorder.snapshot())
+
+        preferences.failCommit = false
+        assertEquals(before.count { it.testSessionId == "selected" }, harness.clearCurrentSession())
+        assertEquals(beforeRevision + 1, revision)
+        assertTrue(harness.recorder.snapshot().none { it.testSessionId == "selected" })
+        assertEquals(0, harness.clearCurrentSession())
+        assertEquals(beforeRevision + 2, revision)
+    }
+
+    @Test
     fun newSessionCannotHaveItsRestartPreferencesErasedByAnOlderClear() = withDirectory { root ->
         val preferences = TestPreferences()
         val harness = harness(root, preferences)
@@ -120,10 +142,14 @@ class DiagnosticClearTest {
         assertEquals("receiver", preferences.getString("role", null))
     }
 
-    private fun harness(root: File, preferences: TestPreferences): AndroidDiagnosticHarness = AndroidDiagnosticHarness(
+    private fun harness(
+        root: File,
+        preferences: TestPreferences,
+        onChanged: () -> Unit = {}
+    ): AndroidDiagnosticHarness = AndroidDiagnosticHarness(
         preferences, File(root, "logs"), File(root, "evidence"),
         DiagnosticEnvironment("android", "synthetic-host", "test", "test", "test", "synthetic")
-    ) {}
+    ) { onChanged() }
 
     private fun withDirectory(action: (File) -> Unit) {
         val root = Files.createTempDirectory("p2pkit-android-clear").toFile()

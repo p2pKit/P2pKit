@@ -210,6 +210,29 @@ real API24/25 runtime, enable test diagnostics, record a session, export twice a
 verify both ZIP checksums and the second export's new events. Repeat on API26+.
 Keep that runtime/device validation pending until actually executed.
 
+## Android diagnostic composition tests
+
+```bash
+./gradlew :p2p-sample-android:testDebugUnitTest \
+  --tests 'dev.p2pkit.sample.android.DiagnosticCompositionTest' --console=plain
+```
+
+This suite runs the screen's production snapshot bridge in a real Compose
+`Composition`/`Recomposer`, with explicit virtual frames and one collector. It
+covers event-only and session-only invalidation, summary refresh, filters,
+pause/resume, successful harness clearing without another event, source replacement,
+disposal/re-entry and a 20,000-event burst against a bounded recorder. Separate
+clear tests preserve failure/retry behavior; source assertions connect the bridge
+to the actual screen. Do not substitute an unread delegated local for the revision
+key or cache history without invalidating successful clears.
+
+Robolectric supplies API35 tracing/snapshot services under JDK17. The framework is
+locked/checksummed, an explicit test input, and resolved offline at test runtime;
+the test fork is bounded to 1 GiB with a two-minute task deadline. This is host
+Compose/snapshot evidence, **not rendered Android UI, ART, physical-device behavior
+or frame timing**. On a device, leave the viewer untouched while traffic arrives,
+then verify pause, filter changes, resume, clearing and reopening separately.
+
 ## Android framework-adapter tests
 
 Run `./gradlew :p2p-network-provisioning-android:verifyAndroidAdapterTests --console=plain`

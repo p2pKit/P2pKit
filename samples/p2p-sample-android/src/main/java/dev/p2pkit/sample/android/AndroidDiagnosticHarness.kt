@@ -30,14 +30,14 @@ internal class AndroidDiagnosticHarness(
     logDirectory: File,
     private val evidenceDirectory: File,
     environment: DiagnosticEnvironment,
-    onEvent: () -> Unit
+    private val onChanged: () -> Unit
 ) {
-    constructor(context: Context, onEvent: () -> Unit) : this(
+    constructor(context: Context, onChanged: () -> Unit) : this(
         preferences = context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE),
         logDirectory = File(context.applicationContext.noBackupFilesDir, "test-diagnostics"),
         evidenceDirectory = File(context.applicationContext.cacheDir, "test-evidence"),
         environment = androidDiagnosticEnvironment(context.applicationContext),
-        onEvent = onEvent
+        onChanged = onChanged
     )
 
     private val rollingSink = RollingJsonlFileSink(
@@ -71,7 +71,7 @@ internal class AndroidDiagnosticHarness(
             try {
                 rollingSink(json)
             } finally {
-                onEvent()
+                onChanged()
             }
         }
     )
@@ -165,6 +165,9 @@ internal class AndroidDiagnosticHarness(
             }
         }
         correlations.resetSession()
+        // Clearing emits no diagnostic event. Invalidate cached UI snapshots only after
+        // persistence and in-memory removal succeed; failure must keep the old display.
+        onChanged()
         return removed
     }
 
