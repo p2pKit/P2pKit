@@ -61,7 +61,6 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#351: [AUDIT] File-transfer KDoc promises remote terminal outcomes without delivery guarantees](https://github.com/p2pKit/P2pKit/issues/351) | low | New audit | `ecdee2384c28` |
 | [#352: [AUDIT] Selective diagnostic clearing can lose other-session history and misreport storage failures](https://github.com/p2pKit/P2pKit/issues/352) | low | New audit | `32dc5c036581` |
 | [#353: [AUDIT] Android API24/25 diagnostics use API26 java.time and NIO without core-library desugaring](https://github.com/p2pKit/P2pKit/issues/353) | low | New audit | `44fdfeeb66a6` |
-
 | [#354: [AUDIT] Android hotspot Retry restarts instead of retrying failed cleanup](https://github.com/p2pKit/P2pKit/issues/354) | low | New audit | `b6af5b8b78bd` |
 
 ## Pending remediation (98)
