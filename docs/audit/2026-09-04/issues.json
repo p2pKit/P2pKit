@@ -1745,16 +1745,22 @@
       "affectedComponentsExcerpt": "**Line numbers have drifted** from the audit. The audit cites `CONTRIBUTING.md:24-29` and `CLAUDE.md:23-28`; the actual current locations are `CONTRIBUTING.md:24-29` (correct) and `CLAUDE.md:25-30` (drifted by two lines). `docs/testing/local.md:8-13` is correct as cited.",
       "relatedIssuesAndDependencies": [
         136,
-        150
+        150,
+        325
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Complete two-document correction3a96a77 independently approved and pushed on the audit branch, not merged/released. Restored missing link/whitespace commands; three six-command blocks are byte-identical. Editable guides document Bash/Git/Ruby prerequisites and actual link/whitespace/cleanup scope. Baseline equality regression fails and final comparison passes; five static gates and Mac Ruby/scope smoke checks pass. No permanent consistency guard added, as permitted by the issue. Scripts/CI/production/API/ABI/dependencies unchanged; protected instructions and #325 caveat preserved. Last full check stays bound to27fec6a, not rerun for this docs-only revision. Issue remains OPEN, external/final-release acceptance pending, audit NOT READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "3a96a775c379902f513f17a4f3552c5cdba65c9b"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_208_r1 APPROVE at3a96a77/tree6d9c3e7 of complete two-file correction and surrounding callers; independently confirmed56 evidence entries, actual block bytes and10 finalized cleanup receipts. No builds/tests by reviewer. Report SHA256 3ffbd9048b0b281d30395bb2771b897e0b22c2b2df59236f215203132d221980.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/208#issuecomment-5406162126"
-      ]
+        "https://github.com/p2pKit/P2pKit/issues/208#issuecomment-5406162126",
+        "https://github.com/p2pKit/P2pKit/issues/208#issuecomment-5570660142",
+        "https://github.com/p2pKit/P2pKit/issues/208#issuecomment-5570832503"
+      ],
+      "repositoryScopeStatus": "APPROVED"
     },
     {
       "number": 209,
@@ -4265,5 +4271,5 @@
       ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T12:25:53.669258+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T12:51:01.232728+00:00"
 }

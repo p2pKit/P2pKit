@@ -1,10 +1,10 @@
 # Issue disposition index
 
-Checkpoint inventory: **169 issues; 55 reviewed repository repairs (32.5%), 114 remaining issue rows (67.5%)**.
+Checkpoint inventory: **169 issues; 56 reviewed repository repairs (33.1%), 113 remaining issue rows (66.9%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #152 is approved
-at `27fec6a`; #208 is next. #133 is
+refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #208 is approved
+at `3a96a77`; #225 is next. #133 is
 repository-scope approved at `7127616`; its independent interoperability acceptance remains NOT STARTED.
 Percentages do not count completion of external acceptance attached to approved rows, including #133.
 The #325 protected-AGENTS exception remains recorded. Read [the full records](issues.json) for scope, dependencies,
@@ -14,7 +14,7 @@ Read [the root handoff](../../../AUDIT_CHECKPOINT.md) for exact evidence limits 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (55)
+## Repairs with recorded independent approval (56)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -42,6 +42,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#199: [WSF-10] Samples do not demonstrate pinning discovered peers or displaying local pairing QR](https://github.com/p2pKit/P2pKit/issues/199) | medium | Existing | `62dedfaad288` |
 | [#202: [WSF-08] iOS sample turns on console mirroring of every transport event with no DEBUG gate or reset](https://github.com/p2pKit/P2pKit/issues/202) | medium | Existing | `ec248178eb62` |
 | [#203: [WSF-07] JVM samples flip the library's off-by-default LAN/frame traces on (CLI has an opt-out, Desktop UI has none)](https://github.com/p2pKit/P2pKit/issues/203) | medium | Existing | `fc3c14b2c367` |
+| [#208: [WSH-06] local.md fast-gate list omits check-markdown-links.sh and git diff --check (CI runs both)](https://github.com/p2pKit/P2pKit/issues/208) | low | Existing | `3a96a775c379` |
 | [#214: [WSH-10] Operational limits documented only in internal source; one of ~40 reaches docs/](https://github.com/p2pKit/P2pKit/issues/214) | medium | Existing | `68170b99a2e7` |
 | [#228: [BUILD-44] iOS launcher lock leaks on EVERY run (trap reads main's local under set -u); mkdir IS atomic](https://github.com/p2pKit/P2pKit/issues/228) | medium | Existing | `d4be234161a5` |
 | [#289: [WSF-17] Filename-collision claim duplicated 4x in samples; iOS copy overwrites instead of suffixing](https://github.com/p2pKit/P2pKit/issues/289) | medium | Existing | `7f5f2d844e21` |
@@ -74,7 +75,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#354: [AUDIT] Android hotspot Retry restarts instead of retrying failed cleanup](https://github.com/p2pKit/P2pKit/issues/354) | low | New audit | `b6af5b8b78bd` |
 | [#355: [AUDIT][Low] Terminal kit shutdown misreports inbound completion and retries closed acceptance](https://github.com/p2pKit/P2pKit/issues/355) | low | New audit | `182063131438` |
 
-## Pending remediation (92)
+## Pending remediation (91)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -97,7 +98,6 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#205: [WSG-09] Reconnect tests disprove a 1000 ms retry with a 150 ms wall-clock delay](https://github.com/p2pKit/P2pKit/issues/205) | low | Existing | — |
 | [#206: [WSG-13] Test port binding is ephemeral and already serialized; residue is one unguarded user.home site + a mirrored constant](https://github.com/p2pKit/P2pKit/issues/206) | low | Existing | — |
 | [#207: [WSG-10] Warn/error teardown net armed in 1 of 34 kit-constructing suites; convention undocumented](https://github.com/p2pKit/P2pKit/issues/207) | low | Existing | — |
-| [#208: [WSH-06] local.md fast-gate list omits check-markdown-links.sh and git diff --check (CI runs both)](https://github.com/p2pKit/P2pKit/issues/208) | low | Existing | — |
 | [#209: [WSG-16] Fixture hangUp closes both directions; production collapses half-close, so the real gap is a transport test](https://github.com/p2pKit/P2pKit/issues/209) | low | Existing | — |
 | [#211: [WSH-07] gradle.properties and build.gradle.kts point at a release doc that moved into docs/archive/](https://github.com/p2pKit/P2pKit/issues/211) | low | Existing | — |
 | [#212: [WSH-08] Maintained specification.md delegates its design record into docs/archive/, which has a broken link](https://github.com/p2pKit/P2pKit/issues/212) | low | Existing | — |
