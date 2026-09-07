@@ -1322,7 +1322,7 @@
       ],
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
+      "assessmentAtCheckpoint": "Next sequential repair; no implementation or completed review recorded. Full issue/comments/timeline and consolidated closed #283 refreshed/read. Actionable gap is compiled public-constant coverage versus Kotlin-filtered JVM baselines. Preserve NOT_IN_V01, DEFAULT_POLL_INTERVAL_MS and Android OS_CALLBACK_TIMEOUT_MS/CLOSE_TIMEOUT_MS; do not weaken legacy-publication guard. Verify Native metadata before repeating title: current KLIB baselines contain none of these constants. #283 cleanup allegation was refuted; no runtime cleanup leak claimed. #133 follows.",
       "recordedFixCommitsOrFinalRevision": [],
       "recordedIndependentReview": "No completed local repair/review cycle recorded",
       "publicInvestigationAndOutcomeUrls": [
@@ -1360,8 +1360,8 @@
       "url": "https://github.com/p2pKit/P2pKit/issues/190",
       "origin": "PRE_EXISTING",
       "severityAtCheckpoint": "medium",
-      "reportedProblemExcerpt": "`WSD-12` — from the public API / design audit (WSD series).",
-      "affectedComponentsExcerpt": "Four `@JvmInline value class` wrappers over `String` in `library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/Identity.kt` and one in `provisioning/NetworkProvisioningTypes.kt`:",
+      "reportedProblemExcerpt": "Ambiguous Java compatibility wording did not distinguish Kotlin ABI checks from supported consumer languages and Java-source identity/DSL limits.",
+      "affectedComponentsExcerpt": "README.md, docs/compatibility.md and docs/architecture/specification.md. Production APIs, ABI baselines and consumer build/test sources unchanged.",
       "relatedIssuesAndDependencies": [
         9,
         47,
@@ -1375,13 +1375,16 @@
         188,
         189
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Next sequential repair; no implementation or completed review recorded. Full issue/comments/timeline refreshed for read-ahead. Recommended documentation-only correction clarifies Kotlin/Swift consumption vs ABI guarding, accurately describes Java identity/builder limits and preserves FileTransferFailed Java mapping. Verify actual bytecode/javac before repeating internal-constructor claims; keep immutable RC baselines unchanged. #187 and #133 remain subsequent medium integration/compatibility work.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Documentation-only correction d9b9001 is independently approved and pushed to the audit branch, not merged/released. Explicit Kotlin/Swift support, accurate Java identity/DSL limitations and retained narrow FileTransferFailed mapping. Real JVM/Android bytecode and javac refute the absent-builder-constructor claim: constructor and companion lambda are callable; required appId setter is mangled. Canonical probes: 28 intended compiler rejections, two positive compilations and two JDK17 host executions; session examples compile-only, no ART/device claim. Final core ABI gates pass (14 tasks) with zero baseline changes; five static gates pass. Latest full check remains #325 at 6ebfb9f, not rerun here. Full release/consumer and external gates remain pending.",
+      "recordedFixCommitsOrFinalRevision": [
+        "d9b900171bcfcbad0f63f7216f7a951c81fb55be"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_190_r1 APPROVE of complete 2a5d2ac..d9b9001 documentation correction, no actionable findings. Rehashed all 272 evidence entries and inspected actual bytecode/probe outcomes/platform contracts/callers. Report SHA256 1fb04caa7b089979c453edcf1f8171c688c0d145b0ad98694fd5501d1cab098f.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/190#issuecomment-5406159785"
+        "https://github.com/p2pKit/P2pKit/issues/190#issuecomment-5406159785",
+        "https://github.com/p2pKit/P2pKit/issues/190#issuecomment-5566533684"
       ]
     },
     {
@@ -4207,5 +4210,5 @@
       ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T06:27:21.971230+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T07:14:43.273904+00:00"
 }

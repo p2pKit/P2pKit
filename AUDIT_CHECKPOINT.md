@@ -1,7 +1,7 @@
 # P2pKit audit continuation checkpoint
 
 **Updated: 7 September 2026. Work in progress, not a release approval.** The owner authorized pushing the local
-audit work and continuing remediation. #325 now has final independent approval; #190 is next. This tracked handoff
+audit work and continuing remediation. #190 now has final independent approval; #187 is next. This tracked handoff
 replaces the earlier private archive-only instructions.
 Read it together with the unchanged `AGENTS.md` and `CLAUDE.md`.
 
@@ -28,8 +28,8 @@ not an account login, a native chat export, running agents or build processes.
 
 - Repository: <https://github.com/p2pKit/P2pKit>.
 - Audit branch: `audit/complete-2026-09-04`; not merged into `main`.
-- Latest independently reviewed source: **`6ebfb9f81de45164cc2f148db753c65a7061f835`** (#325).
-- Its tree: **`79c25845132f7851bfec746a2582a8bf102b5636`**; clean at integrated/static verification and review.
+- Latest independently reviewed source: **`d9b900171bcfcbad0f63f7216f7a951c81fb55be`** (#190, documentation-only).
+- Its tree: **`b22b4eccf16d7a2edbfadf94e48ff39fbd161151`**; clean at final ABI/static verification and review.
 - The latest clean full `check` plus Android sample assembly ran at **`6ebfb9f`**.
   Whole-audit final combined-tree/release verification remains pending, not completed by this scoped repair.
 - Source is pushed to the audit branch. `main` remains `eb444cccfc290be5435c5c10629c24183293606f`.
@@ -41,18 +41,18 @@ not an account login, a native chat export, running agents or build processes.
 
 | Disposition at this checkpoint | Count | Percentage of 168 inventoried issues |
 | --- | ---: | ---: |
-| Repairs with recorded independent approval | **50** | **29.8%** |
-| Pending repairs, including #190 | 96 | 57.1% |
+| Repairs with recorded independent approval | **51** | **30.4%** |
+| Pending repairs, including #187 | 95 | 56.5% |
 | External/platform validation | 21 | 12.5% |
 | Architecture/product decision (#120) | 1 | 0.6% |
-| **Total remaining** | **118** | **70.2%** |
+| **Total remaining** | **117** | **69.6%** |
 
 These percentages count issues, not effort, file coverage or production readiness. The 7 September GitHub list refresh
 found 275 issues across all states and 168 open issues. The ledger identifies **35 new-audit findings**, including
 newly filed #354. Refresh complete issue bodies, comments, timelines and linked work before relying on any entry.
 Historical assessment wording records its original local phase; branch availability does not imply a merge.
 
-All 50 recorded repairs are in this branch's history. #325's protected-file exception is recorded below.
+All 51 recorded repairs are in this branch's history. #325's protected-file exception is recorded below.
 Issues remain OPEN under the completion policy; nothing has
 been merged, closed or released by these pushes. See [every disposition](docs/audit/2026-09-04/issues.md) and
 [scope, dependencies, commits and public outcomes](docs/audit/2026-09-04/issues.json).
@@ -63,7 +63,16 @@ Recorded cycles include dependency/provenance/publication gates, coroutine cance
 secure-v2 tests, provisioning callbacks, sample pairing/privacy, file source/destination safeguards, diagnostics,
 Android API24/25 diagnostics and iOS integration. These are scoped repairs, not proof of complete subsystem correctness.
 
-Latest #325 corrects editable Android onboarding guidance. The canonical
+Latest #190 clarifies supported consumer languages (Kotlin and Swift), distinguishes Kotlin ABI guarding from
+Java-source callability, and retains the narrow Java `FileTransferFailed` mapping promise. It changes only three
+Markdown documents, not production code, ABI baselines, dependencies or build/test sources. Actual JVM/Android
+bytecode and javac **refute the issue's constructor claim**: the builder constructor is JVM-public and the companion
+creation lambda is Java-callable; the required mangled `appId` setter is the ordinary Java-source blocker.
+Fresh reviewer `/root/review_190_r1` **APPROVED** the final correction, independently rehashing 272 evidence entries.
+See the [#190 repair report](docs/audit/2026-09-04/repairs/190.md) and
+[verified public outcome](https://github.com/p2pKit/P2pKit/issues/190#issuecomment-5566533684).
+
+Earlier #325 corrects editable Android onboarding guidance. The canonical
 [SDK setup](docs/testing/local.md#android-sdk-setup) distinguishes Platform36 for library/shared modules,
 Platform37 for the Android sample (SDK Manager package **`platforms;android-37.0`**), and runtime minimum API24.
 Contributor and validation entry points link there. The layout gate now checks catalog/table/install-command/CI
@@ -79,13 +88,18 @@ Read the [safe repair report](docs/audit/2026-09-04/repairs/325.md) and
 
 | Evidence | Result and limitation |
 | --- | --- |
+| #190 real clean-baseline JVM/Android bytecode and javac probes | 28 intended compiler rejections, two positive compilations and two JDK17 host executions. Session examples compile only; Android classfiles on JDK are not ART/device evidence |
+| Clean final #190 core Kotlin/Native/JVM and Android ABI checks at **`d9b9001`** | PASS, 14 executed tasks; all ABI baselines unchanged. Three Native targets compiled, not executed |
+| Five final #190 static gates and independent review | Layout, OSV coverage, Markdown links, release metadata and full-range whitespace PASS; complete documentation correction APPROVED |
 | Clean `./gradlew check :p2p-sample-android:assembleDebug` at **`6ebfb9f`**, strict/rerun/no-cache/bounded options | **2,236 passed, 0 failures/errors, 1 unchanged manual interop-capture skip**; 236 executed tasks; Android assembly/lint and library ABI gates pass |
 | Isolated baseline SDK resolution, downloads disabled | Platform36-only fails finding `android-37.0`; adding installed Platform37.0 resolves actual sample bootclasspath. No legacy alias; not a fresh SDK download or isolated full assembly |
-| Eight final static gates | PASS: layout, OSV lockfile coverage, Markdown links, release metadata, full-range whitespace, new checker under system Ruby2.6.10, independent toolchain/ABI graph and release-workflow policies |
+| Eight final #325 static gates | PASS: layout, OSV lockfile coverage, Markdown links, release metadata, full-range whitespace, new checker under system Ruby2.6.10, independent toolchain/ABI graph and release-workflow policies |
 | Independent final #325 review | APPROVE of feasible correction, with protected `AGENTS.md` caveat retained; no actionable finding |
 | Inherited #352 Swift XCTest on Xcode26.5/iOS26.5 arm64 simulator | 46 passed at earlier `32dc5c0` inputs, **not re-run for #325** |
 
-The integrated run includes JVM, Android host and Kotlin/Native arm64 iOS simulator tests, **not Swift XCTest**.
+The earlier #325 integrated run includes JVM, Android host and Kotlin/Native arm64 iOS simulator tests,
+**not Swift XCTest**; it was not rerun for #190. The full isolated-consumer script was source-inspected,
+not executed for #190. Exploratory Java-probe harness failures are preserved separately, not acceptance evidence.
 Do not add overlapping test totals. Controller/fake-manager tests and source wiring assertions are not rendered
 Android UI, restoration, ART/OEM or physical-device proof. Final audit/release gates need the eventual combined tree;
 whole-repository corroboration, release/consumer gates and external validation remain incomplete.
@@ -122,33 +136,36 @@ diagnostic trace experiment is intentionally private and is not required for cur
 dropped or pushed; do not blindly apply either over reviewed code. Authenticate GitHub and the coding agent normally
 on the new device rather than copying token stores or SSH keys.
 
-## Next: fix #190, then continue the queue
+## Next: fix #187, then continue the queue
 
-[#190](https://github.com/p2pKit/P2pKit/issues/190), **Medium**, remains **unfixed**. The recommended correction is
-documentation-only: remove ambiguity between binary ABI checks and Java-language consumption support. Kotlin and
-Swift are the supported consumer languages; retain the narrower Java `FileTransferFailed` mapping contract. Do not
-retrofit a Java facade or change the immutable RC ABI. Its complete issue/comment/timeline history was refreshed for
-read-ahead; no #190 implementation or completed review is recorded here.
+[#187](https://github.com/p2pKit/P2pKit/issues/187), **Medium**, remains **unfixed**. Read its complete history and
+consolidated closed [#283](https://github.com/p2pKit/P2pKit/issues/283). The actionable gap is that Kotlin-aware
+JVM baselines omit already-emitted public constants from private companions, while Android records them. Preserve
+the published constants; prevent new unrecorded exposure without broadening the supported raw-Java API contract.
+Its complete issue/comment/timeline history was refreshed for read-ahead; no #187 implementation is recorded here.
 
-Trace the actual source, emitted bytecode and public contracts before repeating issue claims:
+Trace source, emitted bytecode, Native metadata and the actual checks before repeating title/body claims:
 
 ```text
-docs/compatibility.md
-docs/architecture/specification.md
-library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/Identity.kt
-library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/dsl/Builders.kt
+library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/provisioning/UnsupportedNetworkProvisioningManager.kt
 library/p2p-core/api/{jvm,android}/p2p-core.api
+library/p2p-network-provisioning-{android,desktop}/
+build.gradle.kts
+scripts/check-android-abi-guard.sh
+scripts/check-publish-artifacts.sh
 ```
 
 Required behavior and verification:
 
-- Verify mangled identity/builder accessors and unmangled error mapping against emitted bytecode and a bounded javac
-  probe. The issue's claim that an `internal` builder constructor is absent from the JVM ABI must not be inferred from
-  a Kotlin-filtered baseline alone. Enumerate accurate limitations, not an unsupported blanket Java claim.
-- Run documentation checks and affected ABI checks; keep the `.api` baseline diff empty. Create a fresh independent
-  reviewer, resolve findings and review the final revision. Preserve protected `AGENTS.md` and `CLAUDE.md`.
-- Then address the remaining medium integration/compatibility work: #187 (preserve already-public RC2/RC3 constants;
-  read consolidated closed #283) and #133 (composed wire fixtures and v1/v2 fail-closed coverage). Same-implementation
+- Preserve `NOT_IN_V01`, Desktop `DEFAULT_POLL_INTERVAL_MS`, and Android `OS_CALLBACK_TIMEOUT_MS` /
+  `CLOSE_TIMEOUT_MS`. Do not weaken `check_rc2_legacy_jvm_symbols()` in the publication gate. The consolidated
+  cleanup-leak allegation was refuted; it is not a runtime leak to repair under #187.
+- Verify Native claims rather than copying the issue title: current `.klib.api` files contain none of these four
+  constants; Android provisioning is not a Native target. Inspect actual metadata before asserting export behavior.
+- Design a compiled-artifact guard with minimal explicit legacy exceptions, meaningful positive/negative controls
+  and correct ABI/check wiring. Do not replace verification with fragile Kotlin source regexes or silently rewrite
+  immutable baselines. Create a fresh independent reviewer after the complete correction; resolve and re-review findings.
+- Then address #133 (composed wire fixtures and v1/v2 fail-closed coverage). Same-implementation
   goldens are not independent interoperability. #208's fast-gate/Ruby docs and #225's tripwires remain separate/pending.
 - Preserve #317's observed revision and successful-clear invalidation. Closed #294/#315 remain separate/invalid;
   #316 is still pending. Do not replace the real snapshot regression with a source-string-only check.
@@ -159,7 +176,7 @@ Required behavior and verification:
    [unverified follow-ups](docs/audit/2026-09-04/followups.md). Preserve all existing user changes.
 2. Record exact branch/commit/tree/status and refresh full GitHub issues/comments/linked PRs. Reconcile new evidence
    by underlying cause, not similar titles. Use exact local drafts if access is unavailable; never claim remote writes.
-3. Continue all actionable issues sequentially, prioritizing severity/dependencies. #190 is next; assess the remaining
+3. Continue all actionable issues sequentially, prioritizing severity/dependencies. #187 is next; assess the remaining
    medium integration/compatibility items and their dependencies before the lower-severity queue.
 4. Track verified distinct discoveries with severity, platforms, paths/lines, reproduction, root cause, impact,
    correction and regression plan. Respect `SECURITY.md`. Keep suspicions separate; do not duplicate existing issues.
@@ -211,10 +228,11 @@ verification scope, blockers, cleanup and practical readiness limits at each han
 
 > Continue the complete P2pKit audit from AUDIT_CHECKPOINT.md and docs/audit/2026-09-04/. Verify the audit branch,
 > current commit/tree/status, read repository instructions and full GitHub issue histories, and preserve user work.
-> This checkpoint has 50/168 reviewed repairs (29.8%) and 118 remaining (70.2%). #325 is reviewed and pushed at
-> 6ebfb9f; clean full check plus Android assembly there passed 2236 cases with one manual skip. Preserve the explicit
-> protected-AGENTS prerequisite exception. Fix #190 next (documentation-only Java-consumer limits, verified against
-> actual bytecode), then #187/#133 and the rest of the queue; do not infer independent interoperability from goldens.
+> This checkpoint has 51/168 reviewed repairs (30.4%) and 117 remaining (69.6%). #190's documentation correction is
+> reviewed/pushed at d9b9001; its final ABI and static gates passed. The latest full check plus Android assembly is
+> still #325 at 6ebfb9f (2236 passes, one manual skip), not a new run at #190. Preserve the protected-AGENTS SDK caveat.
+> Fix #187 next: preserve legacy public constants, verify Native claims and guard unrecorded compiled exposure;
+> then #133 and the rest of the queue. Do not infer independent interoperability from same-implementation goldens.
 > Work sequentially through every actionable issue with meaningful regressions and a fresh independent reviewer after
 > every fix. Resolve/re-review all findings. Serialize bounded builds and always stop owned workers and clean only
 > disposable outputs. Track safe outcomes in Git so another clone can resume, keep raw/private evidence out of Git,

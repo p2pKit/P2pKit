@@ -1,16 +1,17 @@
 # Issue disposition index
 
-Checkpoint inventory: **168 issues; 50 reviewed repairs (29.8%), 118 remaining (70.2%)**.
+Checkpoint inventory: **168 issues; 51 reviewed repairs (30.4%), 117 remaining (69.6%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #325 is reviewed with the protected-AGENTS exception;
-#190 is next. Read [the full records](issues.json) for scope, dependencies, commits and outcome links.
+refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #190 is reviewed;
+#187 is next. The #325 protected-AGENTS exception remains recorded. Read [the full records](issues.json) for scope,
+dependencies, commits and outcome links.
 Read [the root handoff](../../../AUDIT_CHECKPOINT.md) for exact evidence limits and mandatory review/cleanup.
 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (50)
+## Repairs with recorded independent approval (51)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -27,6 +28,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#171: [WSA2-07] startFeature is a 262-line inline transaction whose cancellation flag misses a settlement window](https://github.com/p2pKit/P2pKit/issues/171) | medium | Existing | `2ea1060b1b9a` |
 | [#175: [WSB-08] JVM sendFile(File) reopens by path with no file-identity binding (detected post-transmission)](https://github.com/p2pKit/P2pKit/issues/175) | medium | Existing | `a0d074c32206` |
 | [#186: [WSD-03] Handshake interpolates a whole ProtocolEvent, leaking unfiltered peer payload into error messages](https://github.com/p2pKit/P2pKit/issues/186) | medium | Existing | `ceaf028263c0` |
+| [#190: [WSD-12] Value-class mangling makes the identity surface (and the builder's appId) unreachable from Java](https://github.com/p2pKit/P2pKit/issues/190) | medium | Existing | `d9b900171bcf` |
 | [#194: [WSE-08] Android LOHS support predicate omits FEATURE_WIFI](https://github.com/p2pKit/P2pKit/issues/194) | medium | Existing | `e39153eec3f1` |
 | [#196: [WSE-14] WifiManagerWrapperImpl adapter untested; no Robolectric/instrumented tier exists to test it](https://github.com/p2pKit/P2pKit/issues/196) | medium | Existing | `5ac78f9d55e1` |
 | [#197: [WSF-09] Sample console/logcat paths print chat message bodies, peer names and full peer ids unredacted](https://github.com/p2pKit/P2pKit/issues/197) | medium | Existing | `3f596b1de5ab` |
@@ -65,7 +67,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#353: [AUDIT] Android API24/25 diagnostics use API26 java.time and NIO without core-library desugaring](https://github.com/p2pKit/P2pKit/issues/353) | low | New audit | `44fdfeeb66a6` |
 | [#354: [AUDIT] Android hotspot Retry restarts instead of retrying failed cleanup](https://github.com/p2pKit/P2pKit/issues/354) | low | New audit | `b6af5b8b78bd` |
 
-## Pending remediation (96)
+## Pending remediation (95)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -86,7 +88,6 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#184: [WSD-04] PeerAuthorizationPolicy sealed hierarchy has no documented evolution contract](https://github.com/p2pKit/P2pKit/issues/184) | low | Existing | — |
 | [#187: [WSD-06] NOT_IN_V01 leaks into Kotlin/Native ABI without cross-target baseline parity](https://github.com/p2pKit/P2pKit/issues/187) | medium | Existing | — |
 | [#188: [WSD-07] Recommended sendFile(PreparedFileSource) overload has an undocumented throwing interface default](https://github.com/p2pKit/P2pKit/issues/188) | low | Existing | — |
-| [#190: [WSD-12] Value-class mangling makes the identity surface (and the builder's appId) unreachable from Java](https://github.com/p2pKit/P2pKit/issues/190) | medium | Existing | — |
 | [#191: [WSD-14] Swift receives P2pError through string-based NSError details](https://github.com/p2pKit/P2pKit/issues/191) | low | Existing | — |
 | [#195: [WSE-07] Post-start Android permission loss is reported as a platform failure](https://github.com/p2pKit/P2pKit/issues/195) | low | Existing | — |
 | [#205: [WSG-09] Reconnect tests disprove a 1000 ms retry with a 150 ms wall-clock delay](https://github.com/p2pKit/P2pKit/issues/205) | low | Existing | — |

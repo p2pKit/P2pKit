@@ -11,11 +11,12 @@ Start with the root [continuation checkpoint](../../../AUDIT_CHECKPOINT.md). Clo
 - [Coverage ledger](coverage.tsv): inherited per-path review claims, provenance revisions and reopened work.
 - [Unverified follow-ups](followups.md): hypotheses needing reproduction and deduplication, not confirmed bug claims.
 
-The inventory snapshot is a continuation aid, not GitHub's live state. It contains 50 repairs with recorded independent
-approval, 96 pending repairs, 21 external-validation items and one architecture decision: 29.8% completed by issue count,
-70.2% remaining. Thirty-five entries originated in the audit. Availability on this branch does not imply merge/release
-or a new verification result. #325 now has final independent approval at `6ebfb9f`; #190 is next.
-See the [#325 repair/verification summary](repairs/325.md), [#317 report](repairs/317.md),
+The inventory snapshot is a continuation aid, not GitHub's live state. It contains 51 repairs with recorded independent
+approval, 95 pending repairs, 21 external-validation items and one architecture decision: 30.4% completed by issue count,
+69.6% remaining. Thirty-five entries originated in the audit. Availability on this branch does not imply merge/release
+or a new verification result. #190 now has final independent approval at `d9b9001`; #187 is next.
+See the [#190 documentation/bytecode verification report](repairs/190.md),
+[#325 repair/verification summary](repairs/325.md), [#317 report](repairs/317.md),
 [#354 report](repairs/354.md) and [earlier #337 report](repairs/337.md). The last clean integrated check plus Android
 sample assembly ran at `6ebfb9f`. Whole-audit final/release verification remains pending. #325's feasible correction
 preserves `AGENTS.md:9` by owner instruction; literal alignment of that SDK prerequisite requires new authorization.
@@ -33,8 +34,8 @@ artifacts are necessary, request the private backup; otherwise run fresh, scoped
 
 Coverage rows preserve the last recorded scoped assessment at their recorded revisions. This is not complete current
 coverage: later changes invalidate affected paths/callers; the original full audit must be corroborated before final
-completion. The #325 paths have scoped final review records; other domains still need current corroboration. Added handoff
-documents are inventory entries, not runtime-verification claims.
+completion. The #190 and #325 paths have scoped final review records; other domains still need current corroboration.
+Added handoff documents are inventory entries, not runtime-verification claims.
 
 ## Maintaining cloneable progress
 
