@@ -5,22 +5,22 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "b6af5b8b78bd846be9f456438ef0586aa10569bc",
-  "sourceCheckpointTree": "909690f39b071971c566a792b462a7362c95580e",
+  "sourceCheckpointCommit": "f273b1b98e955ebaf6f1d4e5273c1959702e4984",
+  "sourceCheckpointTree": "a9ea232f7974781646db3b8cffc0290ebf17f872",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
-  "activeIssue": 317,
+  "activeIssue": 325,
   "activeIssueState": "PENDING_REMEDIATION",
   "issueCountDenominator": 168,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
-    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 48,
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 49,
     "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
-    "PENDING_REMEDIATION": 98
+    "PENDING_REMEDIATION": 97
   },
-  "completedIssueCount": 48,
-  "remainingIssueCount": 120,
+  "completedIssueCount": 49,
+  "remainingIssueCount": 119,
   "percentageMeaning": "Issue-count progress only, not engineering effort or production readiness",
-  "githubIssueListRefreshedUtc": "2026-09-07T04:07:03.813705+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T05:18:37.596827+00:00",
   "githubTotalIssuesAtRefresh": 275,
   "githubOpenIssuesAtRefresh": 168,
   "newAuditIssueCount": 35,
@@ -29,14 +29,14 @@
   "scope": "Branch continuation only; not a merge, release, independent crypto assurance, or physical-device completion.",
   "preservedDraftCommit": "eb564e9487f2887f83f519575c82d4e7657864cb",
   "preservedDraftTree": "69161ac65e02bbf33d390bde2575d3131a9d7996",
-  "lastReviewedIssue": 354,
+  "lastReviewedIssue": 317,
   "lastIntegratedCheck": {
-    "commit": "12e6cfac9ccd510b31b52945fbfd39ce04aaa457",
-    "tree": "ce493e395ce5a6c26a1f20a88c87907089462b9f",
-    "passed": 2225,
+    "commit": "99b7cc112fe630946b15d073b95c663deadfa372",
+    "tree": "6891a554e56e1cca75a9a2cfb1b7b59cfd41262f",
+    "passed": 2236,
     "failures": 0,
     "errors": 0,
     "skipped": 1,
-    "scope": "Before the final #354 permission-admission correction. Does not verify sourceCheckpointCommit. Fresh final combined-tree integrated/release verification pending."
+    "scope": "Clean full check at 99b7cc1. Final f273b1b changes only test-runtime documentation; production/build/test/dependency inputs unchanged. Final static gates and independent review at f273b1b. Whole-audit final combined-tree/release verification remains pending."
   }
 }

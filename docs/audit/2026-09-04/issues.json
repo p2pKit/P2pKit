@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T04:07:03.813705+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T05:18:37.596827+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -3389,15 +3389,20 @@
       "relatedIssuesAndDependencies": [
         294,
         315,
-        316
+        316,
+        352
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Next sequential repair. Full #317/#294/#315/#316 issue/comment/timeline histories refreshed. Current source still collects diagnosticRevision into an unused by delegate, without the intended snapshot read. No implementation/verification performed. Preserve pause/filter/session/disposal and #352 selective clearing; Android clear currently does not bump diagnosticRevision. Closed #294 performance allegation and #315 polling decision remain invalid/separate; #316 is separate structural work.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Complete correction through f273b1b is pushed to the audit branch, not merged/released. The production Compose bridge reads revision and keys filter/source; successful clear invalidates cached history while failures preserve memory. Seven real host Compose regressions plus clear-failure/retry coverage; 349 focused cases passed. Clean full check at 99b7cc1: 2236 passed, 1 unchanged manual skip. Independent reviewer caught a JDK17 runtime wording error; actual sample fork JDK21.0.7 was verified and final docs-only f273b1b correction re-reviewed. Final static gates pass; physical/rendered UI/external assurance pending.",
+      "recordedFixCommitsOrFinalRevision": [
+        "99b7cc112fe630946b15d073b95c663deadfa372",
+        "f273b1b98e955ebaf6f1d4e5273c1959702e4984"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_317_r1 APPROVE of complete a318bb5..f273b1b after runtime-documentation finding/correction. 4539 evidence entries independently rehashed; report SHA256 282f712949e2e27bb401b36d59910accb3010eac02c04a9705c930ddc1d349e4.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/317#issuecomment-5406172513"
+        "https://github.com/p2pKit/P2pKit/issues/317#issuecomment-5406172513",
+        "https://github.com/p2pKit/P2pKit/issues/317#issuecomment-5565557697"
       ]
     },
     {
@@ -3519,7 +3524,7 @@
       ],
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
+      "assessmentAtCheckpoint": "Next sequential repair. #325/#208/#225 bodies/comments/timelines captured for current investigation; read complete histories and callers before editing. Catalog/library compile SDK is 36 while Android sample requires 37. Correct editable canonical setup guidance and add drift coverage without modifying protected AGENTS.md or CLAUDE.md; explicitly account for any remaining protected wording. No #325 implementation or completed review recorded at this checkpoint.",
       "recordedFixCommitsOrFinalRevision": [],
       "recordedIndependentReview": "No completed local repair/review cycle recorded",
       "publicInvestigationAndOutcomeUrls": []
@@ -4198,5 +4203,5 @@
       ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T03:02:25.741276+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T05:37:19.025744+00:00"
 }
