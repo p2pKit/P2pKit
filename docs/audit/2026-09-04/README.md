@@ -48,7 +48,7 @@ See the [#187 compiled-constant guard/verification report](repairs/187.md),
 [#325 repair/verification summary](repairs/325.md), [#317 report](repairs/317.md),
 [#354 report](repairs/354.md) and [earlier #337 report](repairs/337.md). Whole-audit final/release verification remains
 pending; #229 is next, with remediation unstarted. Refresh its full history and revalidate TXT decoding through
-+actual JVM/Android and Apple callers. Preserve the #226 macOS GPG socket bound and all earlier provenance fixes. #325's feasible correction
+actual JVM/Android and Apple callers. Preserve the #226 macOS GPG socket bound and all earlier provenance fixes. #325's feasible correction
 preserves `AGENTS.md:9` by owner instruction; literal alignment of that SDK prerequisite requires new authorization.
 
 ## Provenance and scope
