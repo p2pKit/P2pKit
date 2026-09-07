@@ -188,6 +188,7 @@ jobs:
           scripts/tests/resolve-ci-scope-test.sh
           scripts/tests/check-git-whitespace-test.sh
           scripts/tests/check-kotlin-toolchain-policy-test.sh
+          scripts/check-android-abi-guard.sh
           python3 scripts/tests/ios-project-generation-test.py
           source scripts/run-ios-app.sh
           device_json="$(xcrun simctl list -j devices available)"

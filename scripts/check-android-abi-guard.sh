@@ -32,6 +32,8 @@ fail() {
 
 ROOT_BUILD="$ROOT/build.gradle.kts"
 CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
+RELEASE_GATE="$ROOT/scripts/run-release-gate.sh"
+TOOLCHAIN_POLICY="$ROOT/scripts/tests/check-kotlin-toolchain-policy-test.sh"
 CORE_BUILD="$ROOT/library/p2p-core/build.gradle.kts"
 LAN_BUILD="$ROOT/library/p2p-transport-lan/build.gradle.kts"
 PROVISIONING_BUILD="$ROOT/library/p2p-network-provisioning-android/build.gradle.kts"
@@ -42,6 +44,8 @@ PROVISIONING_API="$ROOT/library/p2p-network-provisioning-android/api/android/p2p
 for required_file in \
     "$ROOT_BUILD" \
     "$CI_WORKFLOW" \
+    "$RELEASE_GATE" \
+    "$TOOLCHAIN_POLICY" \
     "$CORE_BUILD" \
     "$LAN_BUILD" \
     "$PROVISIONING_BUILD" \
@@ -95,6 +99,28 @@ done
 ci_command=':p2p-core:checkAndroidAbi :p2p-transport-lan:checkAndroidAbi :p2p-network-provisioning-android:checkAndroidAbi'
 [[ "$(grep -Fc "$ci_command" "$CI_WORKFLOW")" == "1" ]] ||
     fail "CI must invoke every Android ABI comparison together exactly once"
+
+# An explicit comparison does not prove module check owns it. The full-mode
+# graph probe is a separate, load-bearing command in both complete gates.
+# Match executable, unflagged lines, not comments, --static-only or || true.
+require_full_graph_call() {
+    local file="$1"
+    local gate="$2"
+    [[ "$(grep -Ec '^[[:space:]]*scripts/check-android-abi-guard\.sh[[:space:]]*$' "$file")" == "1" ]] ||
+        fail "$gate must invoke the Android ABI task-graph verification in full mode exactly once"
+}
+
+require_full_graph_call "$CI_WORKFLOW" "CI"
+require_full_graph_call "$RELEASE_GATE" "release gate"
+
+# Static policy (also exercised by its own fixture suite) protects the direct
+# calls even when a maintainer removes them. Do not hide a second Gradle run
+# in this nested script or remove its independently exercised static check.
+static_call="\"\$ROOT/scripts/check-android-abi-guard.sh\" --static-only"
+[[ "$(grep -Fxc "$static_call" "$TOOLCHAIN_POLICY")" == "1" ]] ||
+    fail "toolchain policy must invoke Android ABI verification with --static-only exactly once"
+[[ "$(grep -Ec '^[[:space:]]*"[$]ROOT/scripts/check-android-abi-guard\.sh"([[:space:]]|$)' "$TOOLCHAIN_POLICY")" == "1" ]] ||
+    fail "toolchain policy must not duplicate the Android ABI verification invocation"
 
 required_core=(
     'dev/p2pkit/core/AndroidNetworkPathObserver'

@@ -68,7 +68,9 @@ grep -Fq 'compilerOptions.moduleName.set(project.name)' "$ANDROID_PROVISIONING_B
 grep -Fq 'compilerOptions.moduleName.set(project.name)' "$DESKTOP_PROVISIONING_BUILD" ||
     fail "Desktop provisioning does not preserve its module name"
 
-"$ROOT/scripts/check-android-abi-guard.sh"
+# The real Gradle graph probe is an explicit full CI/release command. Keep
+# this policy-only entry static so each complete gate probes the graph once.
+"$ROOT/scripts/check-android-abi-guard.sh" --static-only
 "$ROOT/scripts/tests/check-android-abi-guard-policy-test.sh"
 
 grep -Fq -- '-Xoverride-konan-properties=minVersion.ios=$iosMinimumVersion' "$LAN_BUILD" ||

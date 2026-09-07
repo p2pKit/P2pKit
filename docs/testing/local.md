@@ -44,6 +44,18 @@ tests, Android lint/host tests, Apple simulator tests, ABI, strict Dokka,
 publication artifacts, isolated consumers, SBOM, Swift warnings-as-errors, and
 release-XCFramework provenance.
 
+## Android ABI graph verification
+
+`scripts/check-android-abi-guard.sh` runs a strict Gradle dry-run of the three Android modules' `check` tasks and
+requires their compiler, ABI extraction and comparison tasks in the realized graph. It does not execute those
+tasks or replace a real `check`/ABI comparison. Configure the SDKs below first, and stop Gradle afterward even
+on failure. Full CI and `scripts/run-release-gate.sh` each invoke this unflagged command explicitly once.
+
+`scripts/tests/check-kotlin-toolchain-policy-test.sh` now runs only the static ABI policy and its mutation fixtures;
+it is not the graph probe. Static policy rejects removal, `--static-only` downgrade, comments, duplication or
+ignored failure at either full-mode call site. Keep the explicit commands when reorganizing either gate.
+Run `scripts/tests/check-android-abi-guard-policy-test.sh` for these no-Gradle fixture checks.
+
 ## Android SDK setup
 
 The compile SDKs are separate inputs in [the version catalog](../../gradle/libs.versions.toml).

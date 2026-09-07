@@ -19,6 +19,7 @@ scripts/tests/resolve-ci-scope-test.sh
 scripts/tests/check-git-whitespace-test.sh
 scripts/tests/check-release-identity-test.sh
 scripts/tests/check-kotlin-toolchain-policy-test.sh
+scripts/check-android-abi-guard.sh
 ruby scripts/tests/check-platform-test-policy-test.rb
 python3 scripts/tests/run-platform-tests-test.py
 scripts/check-release-metadata.sh

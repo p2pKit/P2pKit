@@ -16,11 +16,15 @@ reset_fixture() {
     rm -rf "$FIXTURE"
     mkdir -p \
         "$FIXTURE/.github/workflows" \
+        "$FIXTURE/scripts/tests" \
         "$FIXTURE/library/p2p-core/api/android" \
         "$FIXTURE/library/p2p-transport-lan/api/android" \
         "$FIXTURE/library/p2p-network-provisioning-android/api/android"
     cp "$ROOT/build.gradle.kts" "$FIXTURE/build.gradle.kts"
     cp "$ROOT/.github/workflows/ci.yml" "$FIXTURE/.github/workflows/ci.yml"
+    cp "$ROOT/scripts/run-release-gate.sh" "$FIXTURE/scripts/run-release-gate.sh"
+    cp "$ROOT/scripts/tests/check-kotlin-toolchain-policy-test.sh" \
+        "$FIXTURE/scripts/tests/check-kotlin-toolchain-policy-test.sh"
     cp "$ROOT/library/p2p-core/build.gradle.kts" "$FIXTURE/library/p2p-core/build.gradle.kts"
     cp "$ROOT/library/p2p-core/api/android/p2p-core.api" \
         "$FIXTURE/library/p2p-core/api/android/p2p-core.api"
@@ -78,6 +82,56 @@ remove_matching_lines \
     ':p2p-core:checkAndroidAbi :p2p-transport-lan:checkAndroidAbi :p2p-network-provisioning-android:checkAndroidAbi'
 expect_rejected "missing-ci-edge" "CI must invoke every Android ABI comparison"
 
+# Keep the actual graph probe reachable exactly once from each complete gate.
+# These fixtures need no wrapper: --static-only must enforce the caller policy.
+for gate in ci release; do
+    for mutation in removed static-only commented duplicated ignored-failure; do
+        reset_fixture
+        if [[ "$gate" == "ci" ]]; then
+            caller="$FIXTURE/.github/workflows/ci.yml"
+            label="CI"
+        else
+            caller="$FIXTURE/scripts/run-release-gate.sh"
+            label="release gate"
+        fi
+        awk -v mutation="$mutation" '
+            /scripts\/check-android-abi-guard\.sh/ {
+                if (mutation == "removed") next
+                if (mutation == "static-only") { print $0 " --static-only"; next }
+                if (mutation == "commented") { print "#" $0; next }
+                if (mutation == "duplicated") { print; print; next }
+                if (mutation == "ignored-failure") { print $0 " || true"; next }
+            }
+            { print }
+        ' "$caller" >"$caller.new"
+        mv "$caller.new" "$caller"
+        expect_rejected "$gate-graph-$mutation" \
+            "$label must invoke the Android ABI task-graph verification in full mode exactly once"
+    done
+done
+
+reset_fixture
+sed 's/ --static-only$//' "$FIXTURE/scripts/tests/check-kotlin-toolchain-policy-test.sh" \
+    >"$FIXTURE/scripts/tests/check-kotlin-toolchain-policy-test.sh.new"
+mv "$FIXTURE/scripts/tests/check-kotlin-toolchain-policy-test.sh.new" \
+    "$FIXTURE/scripts/tests/check-kotlin-toolchain-policy-test.sh"
+expect_rejected "hidden-full-probe" "toolchain policy must invoke Android ABI verification with --static-only"
+
+reset_fixture
+printf '%s\n' "\"\$ROOT/scripts/check-android-abi-guard.sh\"" \
+    >>"$FIXTURE/scripts/tests/check-kotlin-toolchain-policy-test.sh"
+expect_rejected "duplicate-hidden-probe" "toolchain policy must not duplicate the Android ABI verification"
+
+reset_fixture
+remove_matching_lines "$FIXTURE/scripts/tests/check-kotlin-toolchain-policy-test.sh" \
+    'scripts/check-android-abi-guard.sh'
+expect_rejected "missing-static-policy-call" "toolchain policy must invoke Android ABI verification with --static-only"
+
+reset_fixture
+printf '%s\n' "\"\$ROOT/scripts/check-android-abi-guard.sh\" --static-only" \
+    >>"$FIXTURE/scripts/tests/check-kotlin-toolchain-policy-test.sh"
+expect_rejected "duplicate-static-policy-call" "toolchain policy must invoke Android ABI verification with --static-only"
+
 reset_fixture
 printf '%s\n' 'public final class dev/p2pkit/transport/lan/AndroidLanDataTransport {' \
     >>"$FIXTURE/library/p2p-transport-lan/api/android/p2p-transport-lan.api"
@@ -93,4 +147,4 @@ reset_fixture
 printf '%s\n' '// classes/kotlin/android/main' >>"$FIXTURE/build.gradle.kts"
 expect_rejected "hardcoded-output" "reconstructs compiler output ownership"
 
-echo "RESULT: PASS — Android ABI policy rejects missing modules, providers, check/CI edges, public symbols, internal leaks, and hardcoded outputs"
+echo "RESULT: PASS — Android ABI policy rejects broken module/compiler/check/CI wiring, missing or nonblocking full-mode graph probes, duplicate hidden probes, public-symbol loss, internal leaks, and hardcoded outputs"
