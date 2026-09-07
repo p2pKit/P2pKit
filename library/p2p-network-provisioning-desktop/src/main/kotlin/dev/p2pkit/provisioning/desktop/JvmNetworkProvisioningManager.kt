@@ -248,6 +248,9 @@ public class JvmNetworkProvisioningManager private constructor(
     }
 
     private companion object {
+        // Already emitted as a public JVM field in RC2/RC3 despite this private
+        // companion. The supplemental constant ABI/publication guards retain it;
+        // do not remove it or use this visibility pattern for new internal values.
         const val DEFAULT_POLL_INTERVAL_MS: Long = 5_000
     }
 }

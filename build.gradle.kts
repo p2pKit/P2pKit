@@ -1,3 +1,4 @@
+import dev.p2pkit.build.VerifyPublicConstantAbiTask
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.publish.maven.tasks.AbstractPublishToMaven
@@ -12,6 +13,7 @@ import org.cyclonedx.gradle.utils.CyclonedxUtils
 import org.cyclonedx.model.Dependency
 import org.cyclonedx.parsers.BomParserFactory
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import com.android.build.gradle.tasks.BundleAar
 import kotlinx.validation.KotlinApiBuildTask
 import kotlinx.validation.KotlinApiCompareTask
@@ -247,6 +249,14 @@ subprojects {
         generatedApiFile.set(buildAndroidAbi.flatMap { it.outputApiFile })
     }
 
+    val checkAndroidPublicConstants = tasks.register<VerifyPublicConstantAbiTask>("checkAndroidPublicConstants") {
+        group = "verification"
+        description = "Rejects unrecorded public constants on Kotlin-visible Android API owners."
+        apiBaseline.set(layout.projectDirectory.file("api/android/${project.name}.api"))
+        inputClassesDirs.from(buildAndroidAbi.map { it.inputClassesDirs })
+    }
+    checkAndroidAbi.configure { dependsOn(checkAndroidPublicConstants) }
+
     tasks.register<Copy>("updateAndroidAbi") {
         group = "other"
         description = "Updates the committed Android-only ABI baseline after review."
@@ -258,6 +268,50 @@ subprojects {
     tasks.matching { it.name == "check" }.configureEach {
         dependsOn(checkAndroidAbi)
     }
+}
+
+// Kotlin's JVM dumper omits some ConstantValue fields even on supported public
+// owners (private companions and internal members in public file facades).
+// Inspect compiled fields rather than guessing visibility from Kotlin source.
+val jvmAbiProjects = setOf(":p2p-core", ":p2p-transport-lan", ":p2p-network-provisioning-desktop")
+subprojects {
+    if (path !in jvmAbiProjects) return@subprojects
+    val desktop = path == ":p2p-network-provisioning-desktop"
+    val checkJvmPublicConstants = tasks.register<VerifyPublicConstantAbiTask>("checkJvmPublicConstants") {
+        group = "verification"
+        description = "Rejects unrecorded public constants on Kotlin-visible JVM API owners."
+        apiBaseline.set(layout.projectDirectory.file("api/${if (desktop) "" else "jvm/"}${project.name}.api"))
+        // Include both main producers, never dependencies or test outputs. Configure
+        // these providers here rather than mutating this task during Java task realization.
+        inputClassesDirs.from(
+            tasks.named<KotlinCompile>(if (desktop) "compileKotlin" else "compileKotlinJvm")
+                .flatMap { it.destinationDirectory },
+            tasks.named<JavaCompile>(if (desktop) "compileJava" else "compileJvmMainJava")
+                .flatMap { it.destinationDirectory },
+        )
+        // These two already-published fields are absent only from the Kotlin JVM
+        // dumps. Never turn this into a wildcard or a list of newly leaked fields.
+        retainedConstants.set(
+            when (project.path) {
+                ":p2p-core" -> listOf(
+                    "dev/p2pkit/core/provisioning/UnsupportedNetworkProvisioningManager#NOT_IN_V01 Ljava/lang/String;",
+                )
+                ":p2p-network-provisioning-desktop" -> listOf(
+                    "dev/p2pkit/provisioning/desktop/JvmNetworkProvisioningManager#DEFAULT_POLL_INTERVAL_MS J",
+                )
+                else -> emptyList()
+            },
+        )
+    }
+    tasks.matching { it.name == "checkKotlinAbi" || it.name == "check" }.configureEach {
+        dependsOn(checkJvmPublicConstants)
+    }
+}
+
+val checkPublicConstantAbiPolicy = tasks.register<Exec>("checkPublicConstantAbiPolicy") {
+    group = "verification"
+    description = "Exercises the constant ABI guard against real compiled positive and negative fixtures."
+    commandLine("bash", layout.projectDirectory.file("scripts/tests/check-public-constant-abi.sh").asFile)
 }
 
 val verifyBuildPluginSecurityFloors = tasks.register("verifyBuildPluginSecurityFloors") {
@@ -330,8 +384,9 @@ val verifyBuildPluginSecurityFloors = tasks.register("verifyBuildPluginSecurityF
 // check task so plugin-classpath verification runs alongside every subproject.
 tasks.register("check") {
     group = "verification"
-    description = "Runs root build-tool security verification."
+    description = "Runs root build-tool security and ABI-policy verification."
     dependsOn(verifyBuildPluginSecurityFloors)
+    dependsOn(checkPublicConstantAbiPolicy)
 }
 
 val resolveAndLockAll = tasks.register("resolveAndLockAll") {

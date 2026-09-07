@@ -84,8 +84,10 @@ public class UnsupportedNetworkProvisioningManager : NetworkProvisioningManager 
     }
 
     private companion object {
-        // The compiler-generated field name is retained for RC2 JVM binary
-        // compatibility even though its original v0.1-era wording is obsolete.
+        // JVM and Android both emit a public static field. Only the Android
+        // dumper records it; checkJvmPublicConstants and the publication gate
+        // cover the JVM omission. Retain its RC2/RC3 name and signature despite
+        // the obsolete v0.1-era wording. See docs/compatibility.md.
         const val NOT_IN_V01 =
             "No network provisioning implementation is registered. Add the platform module and configure " +
                 "android(...), jvm(), or iosManualIp()."

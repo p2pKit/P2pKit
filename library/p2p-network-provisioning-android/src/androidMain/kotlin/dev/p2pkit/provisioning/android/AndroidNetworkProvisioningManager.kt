@@ -597,6 +597,9 @@ public class AndroidNetworkProvisioningManager internal constructor(
     }
 
     private companion object {
+        // Both fields are already in the published Android ABI. This companion's
+        // visibility does not make its const fields private in JVM bytecode.
+        // Preserve them; new implementation constants need explicit private visibility.
         /** Upper bound for OS-callback waits (LOHS start, specifier join approval). */
         const val OS_CALLBACK_TIMEOUT_MS: Long = 60_000
         const val CLOSE_TIMEOUT_MS: Long = 5_000

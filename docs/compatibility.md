@@ -44,6 +44,33 @@ physical-device evidence. Exact toolchain versions are locked in the Gradle
 wrapper, version catalog, and CI workflows. Physical validation at the Android
 and Apple minimums remains pending until the evidence handbook is completed.
 
+## JVM-family constant ABI checks
+
+Kotlin visibility and JVM field visibility differ: a `const val` in a private
+companion can still become a public static field on its outer class. The Kotlin
+JVM dumper omits some such fields; Android's metadata-aware dumper records the
+existing provisioning constants, but can omit internal constants in public file
+facades. `checkJvmPublicConstants` / `checkAndroidPublicConstants` therefore inspect
+actual compiled fields using JDK `javap`, under the normal ABI and module `check`
+tasks. Their scope is owners in the committed Kotlin-visible baselines, not every
+raw JVM-internal class, and field signatures, not constant values.
+
+New unrecorded constants fail. Only JVM `NOT_IN_V01` and Desktop
+`DEFAULT_POLL_INTERVAL_MS` need explicit retained-field exceptions; Android's
+`NOT_IN_V01`, `OS_CALLBACK_TIMEOUT_MS` and `CLOSE_TIMEOUT_MS` are already baselined.
+Do not remove or rename these published RC2/RC3 fields in the stabilization line,
+or add newly leaked fields to the exception list. New implementation constants
+need an explicit `private` modifier on the property, not just its companion.
+
+On Apple, full KLIB metadata can contain `NOT_IN_V01` inside its **private**
+companion; it is not an exported Native ABI member. The Android/Desktop sidecars
+have no Native targets. This guard adds no Java SDK support or wire guarantee.
+
+Future breaking-version follow-up: decide whether to retire the legacy fields.
+Any approved removal must coordinate declarations, Android baselines, retained
+JVM exceptions and `check_rc2_legacy_jvm_symbols()` in the publication gate.
+Until that migration is explicitly approved, preserve all of them.
+
 ## Consumer languages and Java interop
 
 Supported consumers are **Kotlin** on Android, JVM/Desktop and KMP, and

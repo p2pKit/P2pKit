@@ -367,6 +367,16 @@ entry points cannot change silently. An intentional Android API change
 requires a manual review followed by the affected module's
 `updateAndroidAbi` task.
 
+The supplemental `checkJvmPublicConstants` and `checkAndroidPublicConstants`
+tasks inspect compiled fields on baselined public owners, closing Kotlin-metadata
+blind spots without freezing all Kotlin-internal bytecode. They run under each
+applicable ABI check and module `check`; a full JDK with `javap` is required.
+`./gradlew checkPublicConstantAbiPolicy` (or
+`bash scripts/tests/check-public-constant-abi.sh`) exercises real compiled
+positive/negative fixtures. See the [constant ABI policy](../compatibility.md#jvm-family-constant-abi-checks)
+before changing any retained legacy symbol. Constant values and cross-platform
+wire behavior still need their own tests; these are signature checks.
+
 To revalidate the latest published artifacts rather than the source snapshot:
 
 ```bash
