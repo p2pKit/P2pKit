@@ -3,6 +3,21 @@ package dev.p2pkit.transport.lan
 import kotlin.text.CharacterCodingException
 
 /**
+ * Snapshot native RDATA only after bounding its original unsigned length.
+ * The reader is synchronous and must copy exactly the requested bytes while
+ * its native storage is valid. An empty record never dereferences storage;
+ * a missing or incomplete nonempty copy is malformed, not an absent record.
+ */
+internal fun decodeLanTxtRecord(length: ULong, readBytes: (Int) -> ByteArray?): Map<String, String>? {
+    if (length > MAX_DNS_SD_TXT_RECORD_BYTES.toULong()) return null
+    if (length == 0UL) return emptyMap()
+    val byteCount = length.toInt()
+    val bytes = readBytes(byteCount) ?: return null
+    if (bytes.size != byteCount) return null
+    return decodeLanTxtRecord(bytes)
+}
+
+/**
  * Decode original DNS-SD TXT RDATA, before a dependency can normalize it.
  * JmDNS 3.6.3 normalizes values even in `getPropertyBytes`, so neither of its
  * property accessors is a suitable byte-validation boundary.

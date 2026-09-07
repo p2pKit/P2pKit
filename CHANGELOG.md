@@ -17,7 +17,14 @@ remain pending; no stable-release readiness claim is implied.
   stay empty and trailing NULs reach the existing semantic rejection checks.
   Unknown fields remain ignored, and correctly encoded Unicode (including
   literal U+FFFD) remains valid. Valid peers, security profiles and the wire
-  format are unchanged. Invalid re-resolutions still withdraw their old route.
+  format are unchanged. JVM/Android invalid re-resolutions still withdraw their
+  old route.
+- #356: Apple reads the original bounded TXT bytes for both native dictionary
+  and buffer records. Unknown NUL-containing keys cannot supply or overwrite
+  canonical fields, and valid fields after those keys remain readable.
+  Failed access, truncated framing and malformed consumed values reject the
+  whole record. Absent records and valid Unicode/empty/duplicate-value behavior
+  stay compatible. This decoder change does not change discovery cache lifecycle.
 - This is an unmerged audit-branch change, **not** part of published RC3 and
   **not approved for a 0.7 release**. The current snapshot version label does
   not override #229's 0.8.0+ requirement. A release must honor that target or

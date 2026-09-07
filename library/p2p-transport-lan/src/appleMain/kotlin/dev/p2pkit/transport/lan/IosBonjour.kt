@@ -1,20 +1,15 @@
-@file:OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
+@file:OptIn(ExperimentalForeignApi::class)
 
 package dev.p2pkit.transport.lan
 
-import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.reinterpret
-import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
-import platform.Network.nw_txt_record_apply
+import platform.Network.nw_txt_record_access_bytes
 import platform.Network.nw_txt_record_create_dictionary
-import platform.Network.nw_txt_record_find_key_empty_value
-import platform.Network.nw_txt_record_find_key_no_value
-import platform.Network.nw_txt_record_find_key_non_empty_value
 import platform.Network.nw_txt_record_set_key
 import platform.Network.nw_txt_record_t
 import platform.posix.uint8_tVar
@@ -71,55 +66,25 @@ internal object IosBonjour {
     }
 
     /**
-     * Decode the bounded protocol key/value pairs in [record] into a map.
-     * Unknown keys are skipped before reading their values, so a foreign or
-     * future record cannot force allocations for data this version ignores.
-     * Empty values surface as `""`; boolean-style entries with no value at
-     * all ALSO surface as `""` (indistinguishable from empty-value entries
-     * after decoding), so every key present in the record appears in the map.
+     * Copy at most one wire-bounded TXT record while native storage is valid,
+     * then select protocol keys from their complete original bytes. The
+     * property iterator's C-string keys would alias `name\u0000suffix` to
+     * `name`, and some records are buffers that it cannot iterate at all.
+     * Unknown keys do not select fields or decode value strings. Empty and
+     * boolean-style known fields both become `""`. Failed access, malformed
+     * framing or invalid UTF-8 in any consumed value rejects the whole record.
      */
     fun decodeTxtRecord(record: nw_txt_record_t): DecodedRecord {
         if (record == null) return DecodedRecord(emptyMap(), malformed = false)
-        val out = mutableMapOf<String, String>()
-        var valid = true
-        nw_txt_record_apply(record) { keyPtr, found, valuePtr, valueLen ->
-            val key = keyPtr?.toKString() ?: return@nw_txt_record_apply true
-            if (key !in LanConstants.DISCOVERY_TXT_KEYS) return@nw_txt_record_apply true
-            when (found) {
-                nw_txt_record_find_key_non_empty_value -> {
-                    val valueLength = valueLen.toInt()
-                    val maximum = MAX_DNS_SD_TXT_ENTRY_BYTES - key.encodeToByteArray().size - 1
-                    if (valuePtr != null && valueLength in 1..maximum) {
-                        val bytes = valuePtr.readBytes(valueLength)
-                        val decoded = try {
-                            bytes.decodeToString(throwOnInvalidSequence = true)
-                        } catch (_: Exception) {
-                            valid = false
-                            return@nw_txt_record_apply false
-                        }
-                        out[key] = decoded
-                    } else {
-                        valid = false
-                        return@nw_txt_record_apply false
-                    }
-                }
-
-                nw_txt_record_find_key_empty_value -> {
-                    out[key] = ""
-                }
-
-                nw_txt_record_find_key_no_value -> {
-                    out[key] = ""
-                }
-                // .invalid / .not_present — skip.
+        var decoded: Map<String, String>? = null
+        val accessed = nw_txt_record_access_bytes(record) { bytes, length ->
+            decoded = decodeLanTxtRecord(length) { byteCount ->
+                bytes?.readBytes(byteCount)
             }
-            true
+            decoded != null
         }
-        return if (valid) {
-            DecodedRecord(out, malformed = false)
-        } else {
-            DecodedRecord(emptyMap(), malformed = true)
-        }
+        val properties = decoded?.takeIf { accessed }
+        return DecodedRecord(properties.orEmpty(), malformed = properties == null)
     }
 
     fun txtRecordToMap(record: nw_txt_record_t): Map<String, String> =
