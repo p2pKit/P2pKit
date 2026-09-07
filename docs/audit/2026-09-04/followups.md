@@ -41,3 +41,14 @@ Pending behavior, but generic failure events have no operation/resource identifi
 with a different Pending-producing adapter, specify failure attribution during concurrent hotspot work and test the
 actual producer. This is a future-adapter applicability concern from independent #337 review, **not a verified current
 Android defect**, a lossless/replay guarantee, or a new issue claim.
+
+## XcodeGen version-probe status and failed-install cleanup
+
+During #225 source/evidence review, the unchanged `scripts/install-xcodegen.sh` version probe was noted as unquoted
+and used in command-substitution/conditional contexts. Reproduce whether a fake binary printing the expected version
+but exiting nonzero is accepted, whether failed probes leave temporary unpack/download directories, and whether an
+executable path containing spaces is supported. Use synthetic archives, not a live installer or personal files.
+
+This is **unverified**, not a new issue or a #225 approval claim. Check complete issue histories before tracking an
+independent defect. The caller still verifies a reviewed archive checksum; do not infer checksum bypass or attacker
+control over that archive. #225 intentionally changed fixture inputs/policies, not the real installer.

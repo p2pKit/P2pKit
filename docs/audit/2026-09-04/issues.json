@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T12:18:39.959416+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T13:36:22.174561+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -2091,14 +2091,20 @@
         223,
         224
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Complete seven-file correction through46ed124 independently approved and pushed to the audit branch, not merged/released. Baseline actual callers accepted arbitrary consumer Kotlin pins and mixed old/unsupported Netty locks. Persistent source/lock policies now enforce variable-based consumer inputs and numeric stable Netty floors for every active row; independent approval tripwires remain. Installer fixtures use sourced and synthetic inputs; real installer unchanged.24 caller controls at82be9c5 have expected outcomes; only one reviewed documentation line changed later.14 final gates and full check/Android assembly at46ed124 pass2276/0 failures/0 errors/1 unchanged manual skip. No production/API/ABI/dependency/lock/workflow/deployment/protected-file changes; #210 closed-invalid decision preserved. Issue OPEN; final release/external acceptance pending; audit NOT READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "82be9c58f82d28253d9abc72b300caef8e681086",
+        "46ed124ded59f6cbdcccbec3df1140b994efad69"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_225_r1 APPROVE through46ed124/treeb9d0ee3 after corrected documentation finding; inspected complete seven-file range and surrounding callers. Independently verified1932 evidence entries,278 XMLs(2276 passes,0 failure/error,1 unchanged skip) and101 finalized cleanup receipts. No builds/tests by reviewer. Report SHA256 8253854daa2d777bb8a015a2645b9e881450286a1dbfc657c5b69f6464846698.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/225#issuecomment-5406163505"
-      ]
+        "https://github.com/p2pKit/P2pKit/issues/225#issuecomment-5406163505",
+        "https://github.com/p2pKit/P2pKit/issues/225#issuecomment-5571076317",
+        "https://github.com/p2pKit/P2pKit/issues/225#issuecomment-5571608911"
+      ],
+      "repositoryScopeStatus": "APPROVED"
     },
     {
       "number": 226,
@@ -4271,5 +4277,5 @@
       ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T12:51:01.232728+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T13:53:18.252498+00:00"
 }

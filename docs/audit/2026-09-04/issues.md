@@ -1,10 +1,10 @@
 # Issue disposition index
 
-Checkpoint inventory: **169 issues; 56 reviewed repository repairs (33.1%), 113 remaining issue rows (66.9%)**.
+Checkpoint inventory: **169 issues; 57 reviewed repository repairs (33.7%), 112 remaining issue rows (66.3%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #208 is approved
-at `3a96a77`; #225 is next. #133 is
+refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #225 is approved
+through `46ed124`; #226 is next. #133 is
 repository-scope approved at `7127616`; its independent interoperability acceptance remains NOT STARTED.
 Percentages do not count completion of external acceptance attached to approved rows, including #133.
 The #325 protected-AGENTS exception remains recorded. Read [the full records](issues.json) for scope, dependencies,
@@ -14,7 +14,7 @@ Read [the root handoff](../../../AUDIT_CHECKPOINT.md) for exact evidence limits 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (56)
+## Repairs with recorded independent approval (57)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -44,6 +44,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#203: [WSF-07] JVM samples flip the library's off-by-default LAN/frame traces on (CLI has an opt-out, Desktop UI has none)](https://github.com/p2pKit/P2pKit/issues/203) | medium | Existing | `fc3c14b2c367` |
 | [#208: [WSH-06] local.md fast-gate list omits check-markdown-links.sh and git diff --check (CI runs both)](https://github.com/p2pKit/P2pKit/issues/208) | low | Existing | `3a96a775c379` |
 | [#214: [WSH-10] Operational limits documented only in internal source; one of ~40 reaches docs/](https://github.com/p2pKit/P2pKit/issues/214) | medium | Existing | `68170b99a2e7` |
+| [#225: [BUILD-33] Version pins duplicated as literals in 4 policy scripts; 10 of 12 sites are deliberate tripwires](https://github.com/p2pKit/P2pKit/issues/225) | low | Existing | `46ed124ded59` |
 | [#228: [BUILD-44] iOS launcher lock leaks on EVERY run (trap reads main's local under set -u); mkdir IS atomic](https://github.com/p2pKit/P2pKit/issues/228) | medium | Existing | `d4be234161a5` |
 | [#289: [WSF-17] Filename-collision claim duplicated 4x in samples; iOS copy overwrites instead of suffixing](https://github.com/p2pKit/P2pKit/issues/289) | medium | Existing | `7f5f2d844e21` |
 | [#313: [WSF-23] DiagnosticRedactor passes details["line"] through the weaker text path; instance= ids survive](https://github.com/p2pKit/P2pKit/issues/313) | low | Existing | `0bfa94481a3a` |
@@ -75,7 +76,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#354: [AUDIT] Android hotspot Retry restarts instead of retrying failed cleanup](https://github.com/p2pKit/P2pKit/issues/354) | low | New audit | `b6af5b8b78bd` |
 | [#355: [AUDIT][Low] Terminal kit shutdown misreports inbound completion and retries closed acceptance](https://github.com/p2pKit/P2pKit/issues/355) | low | New audit | `182063131438` |
 
-## Pending remediation (91)
+## Pending remediation (90)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -109,7 +110,6 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#219: [WSH-12] Public transport SPI lacks an integration and security contract](https://github.com/p2pKit/P2pKit/issues/219) | low | Existing | — |
 | [#220: [WSG-17] Relay concurrency test collects after awaitAll; only the non-diff branch runs](https://github.com/p2pKit/P2pKit/issues/220) | low | Existing | — |
 | [#223: [BUILD-25] .gitattributes pins gradlew.bat line endings but leaves gradlew to core.autocrlf](https://github.com/p2pKit/P2pKit/issues/223) | low | Existing | — |
-| [#225: [BUILD-33] Version pins duplicated as literals in 4 policy scripts; 10 of 12 sites are deliberate tripwires](https://github.com/p2pKit/P2pKit/issues/225) | low | Existing | — |
 | [#226: [BUILD-43] review-dependency-verification.sh hardcodes /tmp, ignoring TMPDIR (mktemp+trap intact)](https://github.com/p2pKit/P2pKit/issues/226) | low | Existing | — |
 | [#229: [F-03] Lossy JmDNS UTF-8 decode makes isWellFormedLanText vacuous; iOS decodes strictly](https://github.com/p2pKit/P2pKit/issues/229) | low | Existing | — |
 | [#230: [BUILD-54] Release metadata gate matches whole prose sentences via grep -F; two guards fail open](https://github.com/p2pKit/P2pKit/issues/230) | low | Existing | — |

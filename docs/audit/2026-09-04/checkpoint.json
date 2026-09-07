@@ -5,22 +5,22 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "3a96a775c379902f513f17a4f3552c5cdba65c9b",
-  "sourceCheckpointTree": "6d9c3e789058f522ffd1a55955ac2a078d2ad8d0",
+  "sourceCheckpointCommit": "46ed124ded59f6cbdcccbec3df1140b994efad69",
+  "sourceCheckpointTree": "b9d0ee3010aa15f46672a76b9de0a4522bb7e307",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
-  "activeIssue": 225,
+  "activeIssue": 226,
   "activeIssueState": "NEXT_PENDING_REMEDIATION_NOT_STARTED",
   "issueCountDenominator": 169,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
-    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 56,
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 57,
     "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
-    "PENDING_REMEDIATION": 91
+    "PENDING_REMEDIATION": 90
   },
-  "completedIssueCount": 56,
-  "remainingIssueCount": 113,
+  "completedIssueCount": 57,
+  "remainingIssueCount": 112,
   "percentageMeaning": "Reviewed repository-repair rows /169, not effort, issue closure or readiness. External acceptance still attached to approved rows (including #133) is not counted complete; independent interoperability remains separately NOT_STARTED.",
-  "githubIssueListRefreshedUtc": "2026-09-07T12:18:39.959416+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T13:36:22.174561+00:00",
   "githubTotalIssuesAtRefresh": 276,
   "githubOpenIssuesAtRefresh": 169,
   "newAuditIssueCount": 36,
@@ -29,33 +29,37 @@
   "scope": "Branch continuation only; not a merge, release, independent crypto assurance, or physical-device completion.",
   "preservedDraftCommit": "eb564e9487f2887f83f519575c82d4e7657864cb",
   "preservedDraftTree": "69161ac65e02bbf33d390bde2575d3131a9d7996",
-  "lastReviewedIssue": 208,
+  "lastReviewedIssue": 225,
   "lastIntegratedCheck": {
-    "commit": "27fec6a2268acf7a5b0246168ddc55315a5fc27f",
-    "tree": "1e728fdfce2e1fb68275ecfeed15078835817876",
+    "commit": "46ed124ded59f6cbdcccbec3df1140b994efad69",
+    "tree": "b9d0ee3010aa15f46672a76b9de0a4522bb7e307",
     "passed": 2276,
     "failures": 0,
     "errors": 0,
     "skipped": 1,
-    "scope": "Clean full check plus Android sample assembleDebug at27fec6a, strict/rerun/no-cache/bounded settings;246 executed tasks,278 XMLs. Core JVM744/Native686/Android-host26. Actual ABI/constant checks, Android lint and sample assembly pass. Not Swift XCTest,Intel,ART/OEM or physical devices. Publication/isolated-consumer checks were not rerun for this policy-only fix; #133 evidence remains bound to7127616. Whole-audit final release verification remains pending."
+    "scope": "Clean full check plus Android sample assembleDebug at46ed124, strict/rerun/no-cache/bounded settings;246 executed tasks,278 XMLs,2276 passes/0 failures/0 errors/1 unchanged manual LAN interop-capture skip. Actual ABI/constant checks, Android lint and sample assembly pass. Includes JVM,Android host and Kotlin/Native arm64 iOS simulator tests, not Swift XCTest,Intel,ART/OEM or physical devices. Publication/isolated-consumer checks were not rerun for this policy-only fix; #133 evidence remains bound to7127616. Whole-audit final release verification remains pending."
   },
   "protectedInstructionFilesCaveat": "Issue325 feasible correction preserves AGENTS.md:9 library-only SDK wording by owner instruction. Canonical setup explicitly warns about missing sample SDK. Literal alignment requires new owner authorization; not claimed fixed. CLAUDE.md unchanged.",
   "lastScopedVerification": {
-    "issue": 208,
-    "commit": "3a96a775c379902f513f17a4f3552c5cdba65c9b",
-    "tree": "6d9c3e789058f522ffd1a55955ac2a078d2ad8d0",
-    "scope": "Complete two-document correction independently APPROVED: all3 six-command blocks byte-identical; baseline equality regression fails, final comparison passes. Five static gates and Ruby/scope smoke checks pass;56 evidence entries and10 cleanup receipts independently verified. No script/production/API/ABI/dependency or protected-file changes. No permanent consistency guard added. Last fullcheck/Android assembly remains bound to27fec6a, not rerun or rebound to this docs-only tree; final release/external acceptance pending."
+    "issue": 225,
+    "commit": "46ed124ded59f6cbdcccbec3df1140b994efad69",
+    "tree": "b9d0ee3010aa15f46672a76b9de0a4522bb7e307",
+    "scope": "Complete seven-file correction independently APPROVED after documentation finding correction: independent approval expectations preserved, lasting consumer/Netty policies and current/future installer fixtures.14 final static gates,39 negative unit controls,14 installer assertions;24 actual-caller controls remain bound to82be9c5, after which only one documentation line changed.1932 evidence entries,278 XMLs and101 cleanup receipts independently verified. Full check/Android assembly passes2276/0 failures/0 errors/1 unchanged manual skip. No production/API/ABI/dependency/lock/workflow/deployment/protected-file change; final release/external acceptance pending.",
+    "callerControlsCommit": "82be9c58f82d28253d9abc72b300caef8e681086",
+    "postCallerControlsDelta": "One reviewed documentation line only; script/build/dependency bytes unchanged.",
+    "reviewSha256": "8253854daa2d777bb8a015a2645b9e881450286a1dbfc657c5b69f6464846698",
+    "manifestSha256": "ba933e08e62aff07a060d878b8dc52e4f21c2302f7e1011bed2747cb49967f0e"
   },
   "lastIntegratedAttempt": {
-    "commit": "27fec6a2268acf7a5b0246168ddc55315a5fc27f",
-    "tree": "1e728fdfce2e1fb68275ecfeed15078835817876",
+    "commit": "46ed124ded59f6cbdcccbec3df1140b994efad69",
+    "tree": "b9d0ee3010aa15f46672a76b9de0a4522bb7e307",
     "result": "PASS",
     "executedTasks": 246,
     "executedTestResultsPassed": 2276,
     "testFailures": 0,
     "testErrors": 0,
     "testSkips": 1,
-    "scope": "Clean full check and Android assembleDebug with one unchanged manual LAN interop-capture skip. #152 policies pass; the historical #355-era #133 lint failure remains superseded. Not whole-audit release/device/independent interoperability completion."
+    "scope": "Clean full check and Android assembleDebug with one unchanged manual LAN interop-capture skip. #225 policies pass; the historical #355-era #133 lint failure remains superseded. Not whole-audit release/device/independent interoperability completion."
   },
   "resolvedDrafts": [
     {
