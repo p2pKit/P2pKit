@@ -24,6 +24,9 @@ Thumbs.db
 # Logs
 *.log
 
+# Private audit evidence is not part of public cloneable continuation documentation.
+/.audit-evidence/
+
 # Kotlin
 *.hotspot.log
 hs_err_pid*

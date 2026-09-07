@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "updatedDate": "2026-09-07",
+  "status": "IN_PROGRESS_NOT_RELEASE_READY",
+  "branch": "audit/complete-2026-09-04",
+  "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
+  "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
+  "sourceCheckpointCommit": "eb564e9487f2887f83f519575c82d4e7657864cb",
+  "sourceCheckpointTree": "69161ac65e02bbf33d390bde2575d3131a9d7996",
+  "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
+  "activeIssue": 337,
+  "activeIssueState": "DRAFT_NOT_COMPILED_TESTED_OR_REVIEWED",
+  "issueCountDenominator": 167,
+  "dispositions": {
+    "EXTERNAL_VALIDATION_PENDING": 21,
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 46,
+    "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
+    "PENDING_REMEDIATION": 99
+  },
+  "completedIssueCount": 46,
+  "remainingIssueCount": 121,
+  "percentageMeaning": "Issue-count progress only, not engineering effort or production readiness",
+  "githubIssueListRefreshedUtc": "2026-09-07T01:22:35.221022+00:00",
+  "githubTotalIssuesAtRefresh": 274,
+  "githubOpenIssuesAtRefresh": 167,
+  "newAuditIssueCount": 34,
+  "rawEvidenceIncludedInGit": false,
+  "originalEvidenceContinuity": "Some original raw evidence and initial audit ledger were lost. Recovered summaries are not original logs. Later raw evidence remains private. Fresh corroboration and integrated verification required.",
+  "scope": "Branch continuation only; not a merge, release, independent crypto assurance, or physical-device completion."
+}

@@ -280,6 +280,7 @@ release candidate as fully production validated or independently audited.
 
 ## Contributing and support
 
+- [In-progress audit continuation checkpoint](AUDIT_CHECKPOINT.md) (audit branch; not a release approval)
 - [Documentation index](docs/README.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security reporting](SECURITY.md)
