@@ -334,14 +334,55 @@ class JvmNetworkProvisioningManagerTest {
     @Test
     fun createManualPeerDelegatesToRegistrar() = runBlocking<Unit> {
         val registrar = RecordingRegistrar()
-        val mgr = JvmNetworkProvisioningManager(ctx(registrar = registrar))
+        val mgr = JvmNetworkProvisioningManager(
+            ctx(registrar = registrar, localFingerprint = PeerFingerprint("p2f1-${"a".repeat(52)}")),
+            1_000,
+            { emptyList() }
+        )
         try {
             val peer = mgr.createManualPeer(host = "192.168.1.42", port = 7777)
-            assertEquals("192.168.1.42", registrar.calls.single().host)
-            assertEquals(7777, registrar.calls.single().port)
-            assertEquals(TransportKind.LAN, registrar.calls.single().kind)
+            val call = registrar.calls.single()
+            assertEquals("192.168.1.42", call.host)
+            assertEquals(7777, call.port)
+            assertEquals(TransportKind.LAN, call.kind)
+            assertNull(call.deviceName)
+            assertNull(call.expectedFingerprint, "The deprecated overload must not invent a local-identity pin")
             assertEquals("manual:192.168.1.42:7777", peer.name)
             assertTrue(peer.supportedTransports.contains(TransportKind.LAN))
+        } finally {
+            mgr.close()
+        }
+    }
+
+    @Test
+    fun createManualPeerWithFingerprintForwardsEachExactRemotePin() = runBlocking<Unit> {
+        val registrar = RecordingRegistrar()
+        val localFingerprint = PeerFingerprint("p2f1-${"a".repeat(52)}")
+        // Repeated calls with distinct pins expose local, constant and stale-pin substitutions.
+        val remotePins = listOf(
+            PeerFingerprint("p2f1-${"b".repeat(51)}a"),
+            PeerFingerprint("p2f1-${"c".repeat(51)}a")
+        )
+        assertTrue(remotePins.all { it != localFingerprint })
+        val mgr = JvmNetworkProvisioningManager(
+            ctx(registrar = registrar, localFingerprint = localFingerprint),
+            1_000,
+            { emptyList() }
+        )
+        try {
+            val peers = withTimeout(1_000) {
+                remotePins.map { pin ->
+                    mgr.createManualPeer(host = "192.0.2.42", port = 7777, expectedFingerprint = pin)
+                }
+            }
+            assertEquals(
+                remotePins.map { pin -> RecordingRegistrar.Call("192.0.2.42", 7777, TransportKind.LAN, null, pin) },
+                registrar.calls
+            )
+            for (peer in peers) {
+                assertEquals("manual:192.0.2.42:7777", peer.name)
+                assertEquals(setOf(TransportKind.LAN), peer.supportedTransports)
+            }
         } finally {
             mgr.close()
         }
@@ -350,7 +391,13 @@ class JvmNetworkProvisioningManagerTest {
 
 @OptIn(ExperimentalP2pApi::class)
 private class RecordingRegistrar : ManualPeerRegistrar {
-    data class Call(val host: String, val port: Int, val kind: TransportKind, val deviceName: String?)
+    data class Call(
+        val host: String,
+        val port: Int,
+        val kind: TransportKind,
+        val deviceName: String?,
+        val expectedFingerprint: PeerFingerprint?
+    )
     val calls: MutableList<Call> = mutableListOf()
 
     override fun registerManualPeer(
@@ -360,7 +407,7 @@ private class RecordingRegistrar : ManualPeerRegistrar {
         deviceName: String?,
         expectedFingerprint: PeerFingerprint?
     ): Peer {
-        calls += Call(host, port, kind, deviceName)
+        calls += Call(host, port, kind, deviceName, expectedFingerprint)
         return Peer(
             id = PeerId("manual-$host:$port"),
             name = deviceName ?: "manual:$host:$port",
