@@ -1,17 +1,17 @@
 # Issue disposition index
 
-Checkpoint inventory: **168 issues; 52 reviewed repairs (31.0%), 116 remaining (69.0%)**.
+Checkpoint inventory: **169 issues; 53 reviewed repairs (31.4%), 116 remaining (68.6%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #187 is reviewed;
-#133 is next. The #325 protected-AGENTS exception remains recorded. Read [the full records](issues.json) for scope,
-dependencies, commits and outcome links.
+refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #355 is reviewed;
+#133 remains an unreviewed draft with a known lint-producer build failure. The #325 protected-AGENTS exception remains
+recorded. Read [the full records](issues.json) for scope, dependencies, commits and outcome links.
 Read [the root handoff](../../../AUDIT_CHECKPOINT.md) for exact evidence limits and mandatory review/cleanup.
 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (52)
+## Repairs with recorded independent approval (53)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -67,6 +67,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#352: [AUDIT] Selective diagnostic clearing can lose other-session history and misreport storage failures](https://github.com/p2pKit/P2pKit/issues/352) | low | New audit | `32dc5c036581` |
 | [#353: [AUDIT] Android API24/25 diagnostics use API26 java.time and NIO without core-library desugaring](https://github.com/p2pKit/P2pKit/issues/353) | low | New audit | `44fdfeeb66a6` |
 | [#354: [AUDIT] Android hotspot Retry restarts instead of retrying failed cleanup](https://github.com/p2pKit/P2pKit/issues/354) | low | New audit | `b6af5b8b78bd` |
+| [#355: [AUDIT][Low] Terminal kit shutdown misreports inbound completion and retries closed acceptance](https://github.com/p2pKit/P2pKit/issues/355) | low | New audit | `182063131438` |
 
 ## Pending remediation (94)
 

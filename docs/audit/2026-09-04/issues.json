@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T08:17:37.842501+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T09:57:54.798715+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -549,16 +549,23 @@
         27,
         44,
         47,
-        129
+        129,
+        138,
+        146,
+        355
       ],
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Next sequential repair; full body/comments/timeline refreshed/read for read-ahead, no implementation or tests started. Reconcile existing lower-layer vectors and earlier #138/#146 before repeating historical claims. Feasible scope: immutable composed secure-session/application-envelope fixed bytes, production encode/decode assertions with same-change mutation controls, kit/session mixed v1/v2 attempts both directions, typed fail-closed outcomes and zero application delivery. Same-implementation fixtures are not independent interoperability; independent implementation/device matrices and professional crypto review remain external.",
+      "assessmentAtCheckpoint": "Preserved/pushed unfinished draft ce350c8 adds 12 immutable composed wire/envelope fixtures, common/Android-host replay and bidirectional repeated mixed-profile kit tests, test-only transcriber and documentation. Independently reviewed runtime dependency #355 is corrected at 1820631; mixed-profile tests now pass JVM/Native without relaxing diagnostics. Full check FAILS at generateAndroidHostTestLintModel: draft commonTest generated-source producer ownership is missing from Android lint. Correct this, execute coordinated encoder/decoder drift controls, validate generator failure/freshness and publication exclusion, run combined/consumer gates and obtain a fresh independent review before counting #133 complete. Existing lower-layer Cacophony/preface/version tests refute parts of the historical claim. Same-implementation goldens do not complete independent interoperability; external campaign remains NOT STARTED.",
       "recordedFixCommitsOrFinalRevision": [],
       "recordedIndependentReview": "No completed local repair/review cycle recorded",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/133#issuecomment-5406151897"
-      ]
+        "https://github.com/p2pKit/P2pKit/issues/133#issuecomment-5406151897",
+        "https://github.com/p2pKit/P2pKit/issues/133#issuecomment-5568400347",
+        "https://github.com/p2pKit/P2pKit/issues/133#issuecomment-5568795599",
+        "https://github.com/p2pKit/P2pKit/issues/133#issuecomment-5569028494"
+      ],
+      "preservedUnreviewedDraftCommit": "ce350c85f1a37932011968b21fe0163b7e5fad28"
     },
     {
       "number": 135,
@@ -1700,15 +1707,17 @@
         146,
         165,
         169,
-        204
+        204,
+        355
       ],
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
+      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken. New #355 reproduction demonstrates an existing clean-stop substring assertion missed normal-completion warnings. That specific test is strengthened in #355; broader diagnostic-net/assertion-precision remediation remains pending.",
       "recordedFixCommitsOrFinalRevision": [],
       "recordedIndependentReview": "No completed local repair/review cycle recorded",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/207#issuecomment-5406161826"
+        "https://github.com/p2pKit/P2pKit/issues/207#issuecomment-5406161826",
+        "https://github.com/p2pKit/P2pKit/issues/207#issuecomment-5568796169"
       ]
     },
     {
@@ -3118,16 +3127,18 @@
         230,
         271,
         280,
-        281
+        281,
+        355
       ],
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
+      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken. New #355 reproduction demonstrates an existing clean-stop substring assertion missed normal-completion warnings. That specific test is strengthened in #355; broader diagnostic-net/assertion-precision remediation remains pending.",
       "recordedFixCommitsOrFinalRevision": [],
       "recordedIndependentReview": "No completed local repair/review cycle recorded",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/292#issuecomment-5406170706",
-        "https://github.com/p2pKit/P2pKit/issues/292#issuecomment-5544835956"
+        "https://github.com/p2pKit/P2pKit/issues/292#issuecomment-5544835956",
+        "https://github.com/p2pKit/P2pKit/issues/292#issuecomment-5568796559"
       ]
     },
     {
@@ -4212,7 +4223,32 @@
         "https://github.com/p2pKit/P2pKit/issues/354",
         "https://github.com/p2pKit/P2pKit/issues/354#issuecomment-5564873197"
       ]
+    },
+    {
+      "number": 355,
+      "title": "[AUDIT][Low] Terminal kit shutdown misreports inbound completion and retries closed acceptance",
+      "url": "https://github.com/p2pKit/P2pKit/issues/355",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Terminal shutdown seals setups before disposing transports and cancels its parent later. A coroutine-liveness-only acceptance recovery loop misreports expected normal/error/cancellation completion and recollects disposed sources during teardown. No downgrade, data loss or unbounded post-stop leak demonstrated.",
+      "affectedComponentsExcerpt": "Common SessionManager acceptance recovery; P2pKitImpl terminal lifecycle and JVM/Android/Apple data-transport callers; deterministic common and existing kit clean-stop tests.",
+      "relatedIssuesAndDependencies": [
+        133,
+        207,
+        292
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": "open",
+      "assessmentAtCheckpoint": "Three-file correction 1820631 independently approved and pushed to audit branch, not merged/released. Existing authoritative setupRegistry.accepting gates admission and classifies completion; active recovery/cancellation and late raw ownership preserved. Same regression: five expected old-runtime failures, nine corrected tests pass. Focused726 pass; clean integrated attempt produced1615 passes but command FAILS on separate #133 draft lint/source producer ownership; LAN369 pass/one manual skip; five static gates pass. This is an issue-scoped approval, not a full green gate, #133 approval or readiness claim.",
+      "recordedFixCommitsOrFinalRevision": [
+        "182063131438690702bdb40f0f09247015cb8ae6"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_355_r1 APPROVE of complete ce350c8..1820631 correction, no actionable findings; independently inspected all1635 evidence entries, source/callers/platforms and ten finalized cleanup records. Report SHA256 ee79e21aab99e8a639a43ec6a7d44754b62c1c6265c234799c0be383107c6e70.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/355",
+        "https://github.com/p2pKit/P2pKit/issues/355#issuecomment-5569027807"
+      ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T08:52:52.813649+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T10:14:04.336860+00:00"
 }

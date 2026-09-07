@@ -6,19 +6,22 @@ Start with the root [continuation checkpoint](../../../AUDIT_CHECKPOINT.md). Clo
 ## Records
 
 - [Checkpoint metadata](checkpoint.json): source revisions, issue-count denominator and evidence limitations.
-- [Issue index](issues.md): all 168 inventoried open issues grouped by checkpoint disposition.
+- [Issue index](issues.md): all 169 inventoried open issues grouped by checkpoint disposition.
 - [Issue records](issues.json): reported scope, dependencies, recorded commits and public investigation/outcome links.
 - [Coverage ledger](coverage.tsv): inherited per-path review claims, provenance revisions and reopened work.
 - [Unverified follow-ups](followups.md): hypotheses needing reproduction and deduplication, not confirmed bug claims.
 
-The inventory snapshot is a continuation aid, not GitHub's live state. It contains 52 repairs with recorded independent
-approval, 94 pending repairs, 21 external-validation items and one architecture decision: 31.0% completed by issue count,
-69.0% remaining. Thirty-five entries originated in the audit. Availability on this branch does not imply merge/release
-or a new verification result. #187 now has final independent approval at `bf3932e`; #133 is next.
+The inventory snapshot is a continuation aid, not GitHub's live state. It contains 53 repairs with recorded independent
+approval, 94 pending repairs, 21 external-validation items and one architecture decision: 31.4% completed by issue count,
+68.6% remaining. Thirty-six entries originated in the audit. Availability on this branch does not imply merge/release
+or a new verification result. #355 has issue-scoped independent approval at `1820631`; #133 remains an unreviewed
+preserved draft.
+The current full check fails on its Android lint/generated-source dependency, despite all 1,615 executed tests passing.
+See the [#355 correction and failed-gate report](repairs/355.md).
 See the [#187 compiled-constant guard/verification report](repairs/187.md),
 [#190 documentation/bytecode verification report](repairs/190.md),
 [#325 repair/verification summary](repairs/325.md), [#317 report](repairs/317.md),
-[#354 report](repairs/354.md) and [earlier #337 report](repairs/337.md). The last clean integrated check plus Android
+[#354 report](repairs/354.md) and [earlier #337 report](repairs/337.md). The last fully passing integrated check plus Android
 sample assembly ran at `bf3932e`, as did local publication/isolated-consumer checks. Whole-audit final/release
 verification remains pending. #325's feasible correction
 preserves `AGENTS.md:9` by owner instruction; literal alignment of that SDK prerequisite requires new authorization.
@@ -36,7 +39,7 @@ artifacts are necessary, request the private backup; otherwise run fresh, scoped
 
 Coverage rows preserve the last recorded scoped assessment at their recorded revisions. This is not complete current
 coverage: later changes invalidate affected paths/callers; the original full audit must be corroborated before final
-completion. The #187, #190 and #325 paths have scoped final review records; other domains still need current corroboration.
+completion. The #355, #187, #190 and #325 paths have scoped final review records; other domains still need current corroboration.
 Added handoff documents are inventory entries, not runtime-verification claims.
 
 ## Maintaining cloneable progress
