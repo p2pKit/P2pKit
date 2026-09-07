@@ -24,27 +24,66 @@ fail() {
 
 git -C "$ROOT" cat-file -e "$BASE_REF^{commit}" 2>/dev/null ||
     fail "base ref is not an available commit: $BASE_REF"
-for command in curl gh gpg awk comm sort shasum; do
+for command in curl gh gpg gpgconf awk comm sort shasum; do
     command -v "$command" >/dev/null 2>&1 || fail "required review tool is missing: $command"
 done
 PYTHON3="${P2PKIT_PYTHON3:-/usr/bin/python3}"
 if [[ ! -x "$PYTHON3" ]] || ! "$PYTHON3" -c 'import json, xml.etree.ElementTree' 2>/dev/null; then
     PYTHON3="$(command -v python3 || true)"
 fi
-[[ -n "$PYTHON3" ]] && "$PYTHON3" -c 'import json, xml.etree.ElementTree' 2>/dev/null ||
+if [[ -z "$PYTHON3" ]] || ! "$PYTHON3" -c 'import json, xml.etree.ElementTree' 2>/dev/null; then
     fail "a working Python 3 with JSON and XML support is required"
+fi
 
 provenance_policy="$ROOT/gradle/plugin-provenance-policy.txt"
 [[ -f "$provenance_policy" ]] || fail "missing Gradle plugin provenance policy"
 
-# Keep GNUPGHOME short enough for the agent's Unix-domain socket on macOS.
-# The system TMPDIR path can already approach the platform socket limit.
-work="$(mktemp -d "/tmp/p2pkit-dependency-review.XXXXXX")"
-trap 'rm -rf "$work"' EXIT
+# Large downloads follow the operator's volume choice, independently of GPG's
+# short socket paths. Install cleanup before either allocation can fail.
+work=""
+gnupg=""
+gnupg_ready=false
+cleanup_review() {
+    local result=$? cleanup_failed=false
+    trap - EXIT
+    trap '' HUP INT TERM
+    if [[ "$gnupg_ready" == true ]] &&
+        ! gpgconf --homedir "$gnupg" --kill all >/dev/null 2>&1; then
+        # Keep the socket directory reachable for an explicit cleanup retry.
+        printf 'FATAL: could not stop review GPG workers; retry gpgconf --homedir %q --kill all\n' "$gnupg" >&2
+        cleanup_failed=true
+    elif [[ -n "$gnupg" ]] && ! rm -rf -- "$gnupg"; then
+        cleanup_failed=true
+    fi
+    if [[ -n "$work" ]] && ! rm -rf -- "$work"; then
+        cleanup_failed=true
+    fi
+    if [[ "$result" -eq 0 && "$cleanup_failed" == true ]]; then
+        result=1
+    fi
+    exit "$result"
+}
+trap cleanup_review EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+work="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-dependency-review.XXXXXX")"
 chmod 700 "$work"
-gnupg="$work/gnupg"
-mkdir -p "$gnupg"
+
+# Keep GNUPGHOME short enough for the agent's Unix-domain sockets on macOS.
+# A long system TMPDIR must not redirect the large artifact workspace to /tmp.
+# Hosts without /tmp may explicitly select another existing, short directory.
+gnupg="$(mktemp -d "${P2PKIT_GPG_TMPDIR:-/tmp}/p2pkit-gpg.XXXXXX")"
+gnupg_physical="$(cd "$gnupg" && pwd -P)"
+gnupg="$gnupg_physical"
+gpg_socket="$gnupg/S.gpg-agent.browser"
+# LC_ALL=C counts bytes. libassuan rejects strlen(path)+1 >= sizeof(sun_path).
+# macOS/BSD's 104-byte field therefore permits at most 102 pathname bytes;
+# account for the longest standard agent socket, not just S.gpg-agent.
+[[ "${#gpg_socket}" -lt 103 ]] ||
+    fail "GPG socket path is too long; set P2PKIT_GPG_TMPDIR to a shorter physical directory"
 chmod 700 "$gnupg"
+gnupg_ready=true
 marker_requirements="$work/marker.requirements"
 module_requirements="$work/module.requirements"
 trusted_implementations="$work/trusted.implementations"

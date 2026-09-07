@@ -8,10 +8,10 @@ PYTHON3="${P2PKIT_PYTHON3:-/usr/bin/python3}"
 if [[ ! -x "$PYTHON3" ]] || ! "$PYTHON3" -c 'import json, xml.etree.ElementTree' 2>/dev/null; then
     PYTHON3="$(command -v python3 || true)"
 fi
-[[ -n "$PYTHON3" ]] && "$PYTHON3" -c 'import json, xml.etree.ElementTree' 2>/dev/null || {
+if [[ -z "$PYTHON3" ]] || ! "$PYTHON3" -c 'import json, xml.etree.ElementTree' 2>/dev/null; then
     echo "FATAL: a working Python 3 with JSON and XML support is required" >&2
     exit 1
-}
+fi
 
 fail() {
     echo "FATAL: $*" >&2
@@ -595,5 +595,6 @@ grep -Fq -- '- "gradle-wrapper"' "$ROOT/.github/dependabot.yml" ||
 
 "$PYTHON3" "$ROOT/scripts/tests/check-gradle-plugin-metadata-test.py"
 "$PYTHON3" "$ROOT/scripts/tests/check-gradle-variant-artifact-test.py"
+"$PYTHON3" "$ROOT/scripts/tests/review-dependency-temporary-directories-test.py"
 
 echo "RESULT: PASS — incomplete updates, stale locks, broad trust, and malformed checksums fail before Gradle execution"

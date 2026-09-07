@@ -363,12 +363,27 @@ compatibility unit.
 
 From a dedicated update branch, generate candidates and independently verify
 every newly admitted artifact against its repository bytes and publisher
-provenance before committing. This maintainer workflow requires `curl`, `gpg`,
+provenance before committing. This maintainer workflow requires `curl`, `gpg`, `gpgconf`,
 an authenticated GitHub CLI (`gh`), and Python 3:
 
 ```bash
 scripts/prepare-dependency-update.sh origin/main
 ```
+
+The artifact-review workspace follows `${TMPDIR:-/tmp}`; an unusable selected directory fails rather than silently
+moving downloads to another volume. Its small GPG home is separately created under `${P2PKIT_GPG_TMPDIR:-/tmp}`.
+Both parent directories must already exist. Choose a short GPG root: its physical path, random directory name and
+longest standard agent socket must be at most 102 bytes: libassuan's strict guard reserves two bytes in macOS/BSD's
+104-byte Unix-socket field. Long or space-containing artifact paths remain usable without regressing macOS GPG. For example:
+
+```bash
+TMPDIR=/large-volume/tmp P2PKIT_GPG_TMPDIR=/short/tmp scripts/prepare-dependency-update.sh origin/main
+```
+
+Normal completion, errors and handled HUP/INT/TERM signals remove the workspace and stop workers belonging to the
+review keyring before removing it. If worker shutdown fails, the invocation fails and reports the retained keyring
+path for an explicit `gpgconf --homedir <path> --kill all` retry; remove that directory after shutdown succeeds.
+SIGKILL/power loss cannot run shell cleanup. These paths contain public artifacts/keys, not a personal secret keyring.
 
 The reviewer also compares an authoritative repository SHA-256 sidecar when
 one is published. Maven Central does not publish such a sidecar consistently,
