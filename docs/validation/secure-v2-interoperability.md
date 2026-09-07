@@ -3,6 +3,10 @@
 **Status: NOT STARTED.** P2pKit-to-P2pKit tests share implementation code and
 therefore do not prove independent interoperability.
 
+The repository's [frozen-wire regression suite](../testing/wire-goldens.md) pins a synthetic P2pKit baseline and
+both kit-level v1/v2 rejection directions. It does not satisfy the independence or platform matrix below;
+its expected bytes were captured from P2pKit, not independently authored.
+
 ## Purpose and independence requirement
 
 Validate `secure-v2` against a separately implemented encoder, decoder, and

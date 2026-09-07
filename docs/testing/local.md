@@ -202,6 +202,14 @@ the same assertions under every mode. Run them with
 These are in-process tests, not kernel short-write/backpressure, independent
 interoperability, real filesystem durability, or physical-network evidence.
 
+## Frozen wire compatibility checks
+
+The [secure-v2 golden suite](wire-goldens.md) consumes committed synthetic hex independently of the live encoder,
+then checks the production encoder against the same bytes. It covers the composed handshake/HELLO/message prefix,
+four envelope variants and both kit-level v1/v2 rejection directions. Common suites run on JVM/Native; selected
+Android-source wrappers run on the host JVM. See that guide for focused commands, exact provenance and the policy
+against automatically refreshing fixtures. These are regression checks, not independent or device interoperability.
+
 ## Authenticated kit fixtures
 
 Use `commonTest/.../testfixtures/createSecureTestKit` for new secure session

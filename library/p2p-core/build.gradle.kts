@@ -1,4 +1,5 @@
 import dev.p2pkit.build.GenerateBuildInfoTask
+import dev.p2pkit.build.GenerateWireGoldensTask
 import dev.p2pkit.build.GitCommitTimeValueSource
 import dev.p2pkit.build.GitCommitValueSource
 import dev.p2pkit.build.GitDirtyValueSource
@@ -88,6 +89,13 @@ tasks.named("check") {
     dependsOn(verifyBuildInfoReproducibility)
 }
 
+// Native has no classpath resource loader. Transcribe the same committed bytes
+// into test-only literals for every target, without regenerating their values.
+val generateWireGoldens = tasks.register<GenerateWireGoldensTask>("generateWireGoldens") {
+    fixtureDirectory.set(layout.projectDirectory.dir("src/commonTest/resources/wire-goldens"))
+    outputDirectory.set(layout.buildDirectory.dir("generated/wire-goldens/commonTest/kotlin"))
+}
+
 kotlin {
     @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class)
     abiValidation()
@@ -138,9 +146,12 @@ kotlin {
         iosMain.dependencies {
             implementation(libs.cryptography.provider.cryptokit)
         }
-        commonTest.dependencies {
-            implementation(kotlin("test"))
-            implementation(libs.kotlinx.coroutines.test)
+        commonTest {
+            kotlin.srcDir(generateWireGoldens)
+            dependencies {
+                implementation(kotlin("test"))
+                implementation(libs.kotlinx.coroutines.test)
+            }
         }
     }
 }
