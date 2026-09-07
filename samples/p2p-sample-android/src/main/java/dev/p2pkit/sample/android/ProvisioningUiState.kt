@@ -80,7 +80,8 @@ internal class ProvisioningUiState(
         var hotspot: LocalNetworkResult? = null
         var joined: JoinNetworkResult.Joined? = null
         var joinRequest: JoinRequest? = null
-        var joinDismissed = false
+        // A new binding must be visible even if its predecessor's Ended was never rendered.
+        var dismissedJoin: ResourceSignal.Live? = null
     }
 
     private var run: Run? = null
@@ -135,6 +136,7 @@ internal class ProvisioningUiState(
         previous?.hotspot = null
         previous?.joined = null
         previous?.joinRequest = null
+        previous?.dismissedJoin = null
         _hotspotResult.value = null
         _joinResult.value = null
         _busy.value = false
@@ -197,7 +199,6 @@ internal class ProvisioningUiState(
         launchOperation(Operation.JOIN) { owner ->
             val request = JoinRequest(owner.signals.value.failure)
             owner.joinRequest = request
-            if (owner.joined == null) owner.joinDismissed = false
             val result = try {
                 owner.manager.joinLocalNetwork(credentials)
             } catch (cancelled: CancellationException) {
@@ -233,7 +234,7 @@ internal class ProvisioningUiState(
         val owner = run ?: return
         reconcile(owner)
         if (!isCurrent(owner)) return
-        owner.joinDismissed = owner.joined != null
+        owner.dismissedJoin = owner.observed.join as? ResourceSignal.Live
         _joinResult.value = null
     }
 
@@ -277,12 +278,15 @@ internal class ProvisioningUiState(
                 is ResourceSignal.Live -> {
                     owner.joined = JoinNetworkResult.Joined(requireNotNull(signal.joinedState))
                     owner.joinRequest = null
-                    if (!owner.joinDismissed) _joinResult.value = owner.joined
+                    if (owner.dismissedJoin !== signal) {
+                        owner.dismissedJoin = null
+                        _joinResult.value = owner.joined
+                    }
                 }
                 is ResourceSignal.Ended -> {
                     owner.joined = null
                     owner.joinRequest = null
-                    owner.joinDismissed = false
+                    owner.dismissedJoin = null
                     _joinResult.value = signal.error?.let(JoinNetworkResult::Failed)
                 }
                 null -> Unit

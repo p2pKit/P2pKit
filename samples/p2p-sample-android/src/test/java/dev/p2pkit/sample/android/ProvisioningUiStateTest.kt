@@ -169,6 +169,44 @@ class ProvisioningUiStateTest {
     }
 
     @Test
+    fun dismissalDoesNotHideANewJoinWhenReleaseFollowsOperationAdmission() = withHarness { h ->
+        h.startAndJoin()
+        val previousJoin = assertIs<JoinNetworkResult.Joined>(h.ui.joinResult.value)
+        h.ui.dismissJoin()
+        var reported: JoinNetworkResult? = null
+
+        assertTrue(h.ui.joinHotspot(credentials) { reported = it })
+        h.manager.releaseFromSystem()
+        h.drain()
+
+        assertIs<JoinNetworkResult.Joined>(reported)
+        assertEquals(2L, h.ui.joinSuccessCount.value)
+        // The new binding has the same SSID/IPs; value equality is not lifetime identity.
+        assertEquals(previousJoin, assertIs<JoinNetworkResult.Joined>(h.ui.joinResult.value))
+        assertTrue(h.manager.joinActive)
+        assertIs<LocalNetworkResult.Started>(h.ui.hotspotResult.value)
+        assertFalse(h.ui.joinBusy.value)
+    }
+
+    @Test
+    fun dismissalDoesNotHideANewJoinWhenReleaseOccursInsideTheManagerCall() = withHarness { h ->
+        h.startAndJoin()
+        h.ui.dismissJoin()
+        h.manager.beforeJoin = { h.onManagerThread { h.manager.releaseFromSystem() } }
+        var reported: JoinNetworkResult? = null
+
+        assertTrue(h.ui.joinHotspot(credentials) { reported = it })
+        h.drain()
+
+        assertIs<JoinNetworkResult.Joined>(reported)
+        assertEquals(2L, h.ui.joinSuccessCount.value)
+        assertIs<JoinNetworkResult.Joined>(h.ui.joinResult.value)
+        assertTrue(h.manager.joinActive)
+        assertIs<LocalNetworkResult.Started>(h.ui.hotspotResult.value)
+        assertFalse(h.ui.joinBusy.value)
+    }
+
+    @Test
     fun refusedRepeatJoinKeepsTheLiveCardButReportsTheActualFailedOperation() = withHarness { h ->
         h.startAndJoin()
         var reported: JoinNetworkResult? = null
@@ -822,6 +860,7 @@ class ProvisioningUiStateTest {
         private var stateOwner: Owner? = null
         private var networkOwner: Owner? = null
         var afterStart: suspend () -> Unit = {}
+        var beforeJoin: () -> Unit = {}
         var afterJoin: suspend () -> Unit = {}
         var startOverride: LocalNetworkResult? = null
         var joinOverride: JoinNetworkResult? = null
@@ -854,6 +893,7 @@ class ProvisioningUiStateTest {
 
         override suspend fun joinLocalNetwork(credentials: WifiCredentials): JoinNetworkResult {
             joinCalls++
+            beforeJoin()
             joinOverride?.let { afterJoin(); return it }
             if (joinActive) {
                 return JoinNetworkResult.Failed(

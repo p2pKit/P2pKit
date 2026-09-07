@@ -63,8 +63,9 @@ join cards follow separate resource lifetimes, not just the acquisition result o
 the manager's last-owner snapshots. System stop/release removes the corresponding
 live claim and credentials/endpoints without erasing the other live resource.
 Stopping the hotspot does **not** leave a joined network; stop the kit to release
-that binding. Dismissing an established join only hides its card. A later genuine
-release is shown as a failure; a refused repeat join does not release the binding.
+that binding. Dismissing an established join only hides that binding's card, not a
+later successful join (even to the same SSID). A later genuine release is shown as
+a failure; a refused repeat join does not release the binding.
 
 The presenter records the Android manager's hot-flow events without waiting for
 the UI thread, then applies the latest two-resource snapshot on the main thread.
