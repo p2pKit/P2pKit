@@ -1,7 +1,7 @@
 # P2pKit audit continuation checkpoint
 
 **Updated: 7 September 2026. Work in progress, not a release approval.** The owner authorized pushing the local
-audit work and continuing remediation. #190 now has final independent approval; #187 is next. This tracked handoff
+audit work and continuing remediation. #187 now has final independent approval; #133 is next. This tracked handoff
 replaces the earlier private archive-only instructions.
 Read it together with the unchanged `AGENTS.md` and `CLAUDE.md`.
 
@@ -28,9 +28,9 @@ not an account login, a native chat export, running agents or build processes.
 
 - Repository: <https://github.com/p2pKit/P2pKit>.
 - Audit branch: `audit/complete-2026-09-04`; not merged into `main`.
-- Latest independently reviewed source: **`d9b900171bcfcbad0f63f7216f7a951c81fb55be`** (#190, documentation-only).
-- Its tree: **`b22b4eccf16d7a2edbfadf94e48ff39fbd161151`**; clean at final ABI/static verification and review.
-- The latest clean full `check` plus Android sample assembly ran at **`6ebfb9f`**.
+- Latest independently reviewed source: **`bf3932eece77a404fcf525b91d9e81141aa43b0c`** (#187, compiled-constant ABI guard).
+- Its tree: **`da1bcb0c3e9bdc6b1a42d2fd55b8aad42cdea46a`**; clean at final integrated verification and review.
+- The latest clean full `check` plus Android sample assembly ran at **`bf3932e`**.
   Whole-audit final combined-tree/release verification remains pending, not completed by this scoped repair.
 - Source is pushed to the audit branch. `main` remains `eb444cccfc290be5435c5c10629c24183293606f`.
 - The earlier unchanged #337 draft was preserved in `eb564e9487f2887f83f519575c82d4e7657864cb`.
@@ -41,18 +41,18 @@ not an account login, a native chat export, running agents or build processes.
 
 | Disposition at this checkpoint | Count | Percentage of 168 inventoried issues |
 | --- | ---: | ---: |
-| Repairs with recorded independent approval | **51** | **30.4%** |
-| Pending repairs, including #187 | 95 | 56.5% |
+| Repairs with recorded independent approval | **52** | **31.0%** |
+| Pending repairs, including #133 | 94 | 56.0% |
 | External/platform validation | 21 | 12.5% |
 | Architecture/product decision (#120) | 1 | 0.6% |
-| **Total remaining** | **117** | **69.6%** |
+| **Total remaining** | **116** | **69.0%** |
 
 These percentages count issues, not effort, file coverage or production readiness. The 7 September GitHub list refresh
 found 275 issues across all states and 168 open issues. The ledger identifies **35 new-audit findings**, including
 newly filed #354. Refresh complete issue bodies, comments, timelines and linked work before relying on any entry.
 Historical assessment wording records its original local phase; branch availability does not imply a merge.
 
-All 51 recorded repairs are in this branch's history. #325's protected-file exception is recorded below.
+All 52 recorded repairs are in this branch's history. #325's protected-file exception is recorded below.
 Issues remain OPEN under the completion policy; nothing has
 been merged, closed or released by these pushes. See [every disposition](docs/audit/2026-09-04/issues.md) and
 [scope, dependencies, commits and public outcomes](docs/audit/2026-09-04/issues.json).
@@ -63,7 +63,20 @@ Recorded cycles include dependency/provenance/publication gates, coroutine cance
 secure-v2 tests, provisioning callbacks, sample pairing/privacy, file source/destination safeguards, diagnostics,
 Android API24/25 diagnostics and iOS integration. These are scoped repairs, not proof of complete subsystem correctness.
 
-Latest #190 clarifies supported consumer languages (Kotlin and Swift), distinguishes Kotlin ABI guarding from
+Latest #187 closes the compiled-public-constant gap in ordinary JVM/Android ABI checks without removing any legacy
+field or changing its value. The guard inspects actual compiler-producer classfiles with JDK `javap`, derives supported
+owners/signatures from committed baselines and retains only two omitted-JVM exceptions. It rejects new unrecorded
+accessible constants, missing/ambiguous/wrong artifacts and incomplete inspection without loading application classes.
+Actual Native metadata refutes the title's public-leak claim: the core sentinel is in a private companion, not the
+exported ABI; Android/Desktop provisioning have no Native targets. Signature guards do not record constant values.
+All ABI baselines, dependencies and the legacy publication gate are unchanged; production Kotlin edits are comments
+only. #283's cleanup allegation remains refuted; #152's dynamic-caller assertion remains separate and pending.
+Fresh reviewer `/root/review_187_r1` **APPROVED** the entire ten-file correction, independently rehashing 2,064 evidence
+entries and parsing all 269 test reports. See the [#187 repair report](docs/audit/2026-09-04/repairs/187.md) for the
+verified public outcome, commands, exact hashes and limits. Future breaking-version retirement remains a decision,
+not permission to remove published fields now.
+
+Earlier #190 clarifies supported consumer languages (Kotlin and Swift), distinguishes Kotlin ABI guarding from
 Java-source callability, and retains the narrow Java `FileTransferFailed` mapping promise. It changes only three
 Markdown documents, not production code, ABI baselines, dependencies or build/test sources. Actual JVM/Android
 bytecode and javac **refute the issue's constructor claim**: the builder constructor is JVM-public and the companion
@@ -88,21 +101,22 @@ Read the [safe repair report](docs/audit/2026-09-04/repairs/325.md) and
 
 | Evidence | Result and limitation |
 | --- | --- |
-| #190 real clean-baseline JVM/Android bytecode and javac probes | 28 intended compiler rejections, two positive compilations and two JDK17 host executions. Session examples compile only; Android classfiles on JDK are not ART/device evidence |
-| Clean final #190 core Kotlin/Native/JVM and Android ABI checks at **`d9b9001`** | PASS, 14 executed tasks; all ABI baselines unchanged. Three Native targets compiled, not executed |
-| Five final #190 static gates and independent review | Layout, OSV coverage, Markdown links, release metadata and full-range whitespace PASS; complete documentation correction APPROVED |
-| Clean `./gradlew check :p2p-sample-android:assembleDebug` at **`6ebfb9f`**, strict/rerun/no-cache/bounded options | **2,236 passed, 0 failures/errors, 1 unchanged manual interop-capture skip**; 236 executed tasks; Android assembly/lint and library ABI gates pass |
-| Isolated baseline SDK resolution, downloads disabled | Platform36-only fails finding `android-37.0`; adding installed Platform37.0 resolves actual sample bootclasspath. No legacy alias; not a fresh SDK download or isolated full assembly |
-| Eight final #325 static gates | PASS: layout, OSV lockfile coverage, Markdown links, release metadata, full-range whitespace, new checker under system Ruby2.6.10, independent toolchain/ABI graph and release-workflow policies |
-| Independent final #325 review | APPROVE of feasible correction, with protected `AGENTS.md` caveat retained; no actionable finding |
-| Inherited #352 Swift XCTest on Xcode26.5/iOS26.5 arm64 simulator | 46 passed at earlier `32dc5c0` inputs, **not re-run for #325** |
+| Clean `./gradlew check :p2p-sample-android:assembleDebug` at **`bf3932e`**, strict/rerun/no-cache/bounded options | **2,236 passed, 0 failures/errors, 1 unchanged manual interop-capture skip**; 243 executed tasks; all six new guards, existing ABI checks and Android assembly/lint pass |
+| #187 old-gap reproduction and corrected Kotlin controls | Old checks accepted injected constants (34 tasks); all six corrected ordinary ABI surfaces reject them. Retained-field removal is rejected; temporary edits restored exactly |
+| #187 compiled policy and actual producer/check graph | 26 compiled controls pass in final full check; all six guards and the root fixture task are in the realized graph. Earlier standalone policy run had 25 controls, not the final total |
+| Final local publication and isolated consumers at **`bf3932e`** | 15 publication sets pass; 23 isolated JVM/Java/Android/KMP/iOS compile/link tasks pass; Android permissions and simulator framework minimum iOS14.0 inspected. No remote publication or consumer runtime claim |
+| Ten final #187 static/policy gates and independent review | PASS; full correction APPROVED. Unchanged release-workflow checker passed using system Python after Homebrew Python/expat linkage failure |
+| Earlier #190 real bytecode/javac and final ABI checks | 28 intended rejections, two positive compilations and two JDK17 host executions; 14 final ABI tasks. Session examples compile-only; no ART/device claim |
+| Earlier #325 isolated SDK resolution, downloads disabled | Platform36-only fails finding `android-37.0`; adding installed Platform37.0 resolves sample bootclasspath. Not a fresh SDK download or isolated full assembly |
+| Inherited #352 Swift XCTest on Xcode26.5/iOS26.5 arm64 simulator | 46 passed at earlier `32dc5c0` inputs, **not re-run for #187** |
 
-The earlier #325 integrated run includes JVM, Android host and Kotlin/Native arm64 iOS simulator tests,
-**not Swift XCTest**; it was not rerun for #190. The full isolated-consumer script was source-inspected,
-not executed for #190. Exploratory Java-probe harness failures are preserved separately, not acceptance evidence.
+The latest integrated run includes JVM, Android host and Kotlin/Native arm64 iOS simulator tests,
+**not Swift XCTest**, Intel execution, ART/OEM or physical devices. #187 publication/isolated-consumer checks executed,
+but complete release/XCFramework/Swift gates were not rerun. Exploratory harness/environment failures are preserved
+separately, not acceptance evidence. All 43 source-verification invocations finalized cleanup; required evidence remains.
 Do not add overlapping test totals. Controller/fake-manager tests and source wiring assertions are not rendered
 Android UI, restoration, ART/OEM or physical-device proof. Final audit/release gates need the eventual combined tree;
-whole-repository corroboration, release/consumer gates and external validation remain incomplete.
+whole-repository corroboration, eventual combined-tree release/consumer gates and external validation remain incomplete.
 
 Earlier #317 corrected the diagnostic revision subscription and successful-clear invalidation through `f273b1b`.
 Its [report](docs/audit/2026-09-04/repairs/317.md) preserves the real Compose regression evidence and the correction
@@ -136,37 +150,23 @@ diagnostic trace experiment is intentionally private and is not required for cur
 dropped or pushed; do not blindly apply either over reviewed code. Authenticate GitHub and the coding agent normally
 on the new device rather than copying token stores or SSH keys.
 
-## Next: fix #187, then continue the queue
+## Next: fix #133, then continue the queue
 
-[#187](https://github.com/p2pKit/P2pKit/issues/187), **Medium**, remains **unfixed**. Read its complete history and
-consolidated closed [#283](https://github.com/p2pKit/P2pKit/issues/283). The actionable gap is that Kotlin-aware
-JVM baselines omit already-emitted public constants from private companions, while Android records them. Preserve
-the published constants; prevent new unrecorded exposure without broadening the supported raw-Java API contract.
-Its complete issue/comment/timeline history was refreshed for read-ahead; no #187 implementation is recorded here.
-
-Trace source, emitted bytecode, Native metadata and the actual checks before repeating title/body claims:
-
-```text
-library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/provisioning/UnsupportedNetworkProvisioningManager.kt
-library/p2p-core/api/{jvm,android}/p2p-core.api
-library/p2p-network-provisioning-{android,desktop}/
-build.gradle.kts
-scripts/check-android-abi-guard.sh
-scripts/check-publish-artifacts.sh
-```
+[#133](https://github.com/p2pKit/P2pKit/issues/133), **Medium**, remains **unfixed**. Its complete body, comments and
+timeline were refreshed/read for read-ahead; no #133 implementation or test execution is recorded here. Reconcile
+the historical claims with current lower-layer vectors and earlier #138/#146 integration repairs before designing
+new coverage. Keep the externally validated interoperation requirement separate from repository-executable work.
 
 Required behavior and verification:
 
-- Preserve `NOT_IN_V01`, Desktop `DEFAULT_POLL_INTERVAL_MS`, and Android `OS_CALLBACK_TIMEOUT_MS` /
-  `CLOSE_TIMEOUT_MS`. Do not weaken `check_rc2_legacy_jvm_symbols()` in the publication gate. The consolidated
-  cleanup-leak allegation was refuted; it is not a runtime leak to repair under #187.
-- Verify Native claims rather than copying the issue title: current `.klib.api` files contain none of these four
-  constants; Android provisioning is not a Native target. Inspect actual metadata before asserting export behavior.
-- Design a compiled-artifact guard with minimal explicit legacy exceptions, meaningful positive/negative controls
-  and correct ABI/check wiring. Do not replace verification with fragile Kotlin source regexes or silently rewrite
-  immutable baselines. Create a fresh independent reviewer after the complete correction; resolve and re-review findings.
-- Then address #133 (composed wire fixtures and v1/v2 fail-closed coverage). Same-implementation
-  goldens are not independent interoperability. #208's fast-gate/Ruby docs and #225's tripwires remain separate/pending.
+- Add committed immutable composed secure-session and application-envelope wire fixtures. Assert fixed-byte decoding
+  and production encoding; include controls where encoder and decoder drift together so round-trips cannot hide it.
+- Exercise kit/session-level v1/v2 attempts in both directions with typed fail-closed outcomes and zero application
+  delivery. Trace actual transport/session callers, not only lower-layer parsers or a source-string assertion.
+- Same-implementation goldens are **not independent interoperability**. Independent implementation/device matrices
+  and professional crypto review remain external; record the precise feasible scope and remaining blockers.
+- Preserve #187's actual-artifact guard, all legacy fields and baselines; #152's dynamic-caller meta-assertion remains
+  separate. #208's fast-gate/Ruby docs and #225's tripwires also remain pending.
 - Preserve #317's observed revision and successful-clear invalidation. Closed #294/#315 remain separate/invalid;
   #316 is still pending. Do not replace the real snapshot regression with a source-string-only check.
 
@@ -176,7 +176,7 @@ Required behavior and verification:
    [unverified follow-ups](docs/audit/2026-09-04/followups.md). Preserve all existing user changes.
 2. Record exact branch/commit/tree/status and refresh full GitHub issues/comments/linked PRs. Reconcile new evidence
    by underlying cause, not similar titles. Use exact local drafts if access is unavailable; never claim remote writes.
-3. Continue all actionable issues sequentially, prioritizing severity/dependencies. #187 is next; assess the remaining
+3. Continue all actionable issues sequentially, prioritizing severity/dependencies. #133 is next; assess the remaining
    medium integration/compatibility items and their dependencies before the lower-severity queue.
 4. Track verified distinct discoveries with severity, platforms, paths/lines, reproduction, root cause, impact,
    correction and regression plan. Respect `SECURITY.md`. Keep suspicions separate; do not duplicate existing issues.
@@ -228,11 +228,12 @@ verification scope, blockers, cleanup and practical readiness limits at each han
 
 > Continue the complete P2pKit audit from AUDIT_CHECKPOINT.md and docs/audit/2026-09-04/. Verify the audit branch,
 > current commit/tree/status, read repository instructions and full GitHub issue histories, and preserve user work.
-> This checkpoint has 51/168 reviewed repairs (30.4%) and 117 remaining (69.6%). #190's documentation correction is
-> reviewed/pushed at d9b9001; its final ABI and static gates passed. The latest full check plus Android assembly is
-> still #325 at 6ebfb9f (2236 passes, one manual skip), not a new run at #190. Preserve the protected-AGENTS SDK caveat.
-> Fix #187 next: preserve legacy public constants, verify Native claims and guard unrecorded compiled exposure;
-> then #133 and the rest of the queue. Do not infer independent interoperability from same-implementation goldens.
+> This checkpoint has 52/168 reviewed repairs (31.0%) and 116 remaining (69.0%). #187's compiled-constant guard is
+> reviewed/pushed at bf3932e. The latest full check plus Android assembly ran there (2236 passes, one manual skip,
+> 243 tasks); final local publication/isolated-consumer/static gates also passed. Full release/XCFramework/Swift and
+> external validation remain pending. Preserve the protected-AGENTS SDK caveat and all legacy public constants.
+> Fix #133 next: composed immutable wire fixtures and kit/session v1/v2 fail-closed coverage, then the rest of the
+> queue. Do not infer independent interoperability from same-implementation goldens or repeat stale issue claims.
 > Work sequentially through every actionable issue with meaningful regressions and a fresh independent reviewer after
 > every fix. Resolve/re-review all findings. Serialize bounded builds and always stop owned workers and clean only
 > disposable outputs. Track safe outcomes in Git so another clone can resume, keep raw/private evidence out of Git,

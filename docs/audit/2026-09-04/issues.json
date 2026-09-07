@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T06:14:10.630840+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T08:17:37.842501+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -553,7 +553,7 @@
       ],
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
+      "assessmentAtCheckpoint": "Next sequential repair; full body/comments/timeline refreshed/read for read-ahead, no implementation or tests started. Reconcile existing lower-layer vectors and earlier #138/#146 before repeating historical claims. Feasible scope: immutable composed secure-session/application-envelope fixed bytes, production encode/decode assertions with same-change mutation controls, kit/session mixed v1/v2 attempts both directions, typed fail-closed outcomes and zero application delivery. Same-implementation fixtures are not independent interoperability; independent implementation/device matrices and professional crypto review remain external.",
       "recordedFixCommitsOrFinalRevision": [],
       "recordedIndependentReview": "No completed local repair/review cycle recorded",
       "publicInvestigationAndOutcomeUrls": [
@@ -1307,8 +1307,8 @@
       "url": "https://github.com/p2pKit/P2pKit/issues/187",
       "origin": "PRE_EXISTING",
       "severityAtCheckpoint": "medium",
-      "reportedProblemExcerpt": "`UnsupportedNetworkProvisioningManager.NOT_IN_V01` — a `const val` inside a `private companion object` — appears as `public static final field NOT_IN_V01 Ljava/lang/String;` in the committed **Android** ABI baseline and is absent from the **JVM** baseline. The baseline asymmetry is real and reproducible from committed files.",
-      "affectedComponentsExcerpt": "Audit line references are **accurate, no drift**. All paths below are current.",
+      "reportedProblemExcerpt": "Kotlin-aware JVM-family ABI tooling omitted already-emitted public constants. Actual KLIBs refute the public Native-leak title: the core sentinel is in private-companion metadata, not exported ABI; provisioning sidecars have no Native targets.",
+      "affectedComponentsExcerpt": "Root Gradle wiring, new buildSrc PublicConstantAbi/VerifyPublicConstantAbiTask, compiled Java policy tests/shell entry point, compatibility/testing docs and comment-only changes in three provisioning managers. Baselines, dependencies, publication configuration and production runtime unchanged.",
       "relatedIssuesAndDependencies": [
         9,
         110,
@@ -1320,13 +1320,17 @@
         186,
         283
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Next sequential repair; no implementation or completed review recorded. Full issue/comments/timeline and consolidated closed #283 refreshed/read. Actionable gap is compiled public-constant coverage versus Kotlin-filtered JVM baselines. Preserve NOT_IN_V01, DEFAULT_POLL_INTERVAL_MS and Android OS_CALLBACK_TIMEOUT_MS/CLOSE_TIMEOUT_MS; do not weaken legacy-publication guard. Verify Native metadata before repeating title: current KLIB baselines contain none of these constants. #283 cleanup allegation was refuted; no runtime cleanup leak claimed. #133 follows.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Correction bf3932e independently approved and pushed to the audit branch, not merged/released. Actual producer classfiles are inspected without application classloading; normal ABI paths reject new unrecorded accessible constants and incomplete inspection. Only two omitted-JVM legacy exceptions; all four fields/values and immutable baselines/publication gate preserved. Old checks accepted real injected constants; six corrected surfaces reject them; 26 compiled controls and actual graph pass. Clean full check plus Android assembly: 2236 passed, one unchanged manual skip, 243 executed tasks. Fifteen local publication sets, 23 isolated-consumer compile/link tasks and ten static/policy gates pass. No constant-value, Native public-leak, end-to-end Java SDK or runtime behavior claim. Future breaking-version retirement remains a decision tracked in #187; #283 cleanup refuted and #152 separate. Full release/XCFramework/Swift, whole-audit and external gates remain pending.",
+      "recordedFixCommitsOrFinalRevision": [
+        "bf3932eece77a404fcf525b91d9e81141aa43b0c"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_187_r1 APPROVE of complete 2a090bc..bf3932e ten-file correction, no actionable findings. Independently inspected source/callers/platforms, rehashed 2064 evidence entries, parsed 269 XMLs and checked 43 finalized invocations. Report SHA256 1f4097cc8eef25986d9e3fcb7c9548d4ce902148ee755fb89a01e84a6295fefd.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/187#issuecomment-5406159471"
+        "https://github.com/p2pKit/P2pKit/issues/187#issuecomment-5406159471",
+        "https://github.com/p2pKit/P2pKit/issues/187#issuecomment-5567050102",
+        "https://github.com/p2pKit/P2pKit/issues/187#issuecomment-5567951662"
       ]
     },
     {
@@ -4210,5 +4214,5 @@
       ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T07:14:43.273904+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T08:52:52.813649+00:00"
 }

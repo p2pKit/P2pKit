@@ -5,22 +5,22 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "d9b900171bcfcbad0f63f7216f7a951c81fb55be",
-  "sourceCheckpointTree": "b22b4eccf16d7a2edbfadf94e48ff39fbd161151",
+  "sourceCheckpointCommit": "bf3932eece77a404fcf525b91d9e81141aa43b0c",
+  "sourceCheckpointTree": "da1bcb0c3e9bdc6b1a42d2fd55b8aad42cdea46a",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
-  "activeIssue": 187,
+  "activeIssue": 133,
   "activeIssueState": "PENDING_REMEDIATION",
   "issueCountDenominator": 168,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
-    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 51,
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 52,
     "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
-    "PENDING_REMEDIATION": 95
+    "PENDING_REMEDIATION": 94
   },
-  "completedIssueCount": 51,
-  "remainingIssueCount": 117,
+  "completedIssueCount": 52,
+  "remainingIssueCount": 116,
   "percentageMeaning": "Issue-count progress only, not engineering effort or production readiness",
-  "githubIssueListRefreshedUtc": "2026-09-07T06:14:10.630840+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T08:17:37.842501+00:00",
   "githubTotalIssuesAtRefresh": 275,
   "githubOpenIssuesAtRefresh": 168,
   "newAuditIssueCount": 35,
@@ -29,21 +29,21 @@
   "scope": "Branch continuation only; not a merge, release, independent crypto assurance, or physical-device completion.",
   "preservedDraftCommit": "eb564e9487f2887f83f519575c82d4e7657864cb",
   "preservedDraftTree": "69161ac65e02bbf33d390bde2575d3131a9d7996",
-  "lastReviewedIssue": 190,
+  "lastReviewedIssue": 187,
   "lastIntegratedCheck": {
-    "commit": "6ebfb9f81de45164cc2f148db753c65a7061f835",
-    "tree": "79c25845132f7851bfec746a2582a8bf102b5636",
+    "commit": "bf3932eece77a404fcf525b91d9e81141aa43b0c",
+    "tree": "da1bcb0c3e9bdc6b1a42d2fd55b8aad42cdea46a",
     "passed": 2236,
     "failures": 0,
     "errors": 0,
     "skipped": 1,
-    "scope": "Clean full check plus Android sample assembleDebug at 6ebfb9f, strict/rerun/no-cache/bounded settings; 236 executed tasks. JVM, Android host and Kotlin/Native arm64 simulator, not Swift XCTest, Intel execution, ART/OEM or physical devices. Final static gates and independent review at same clean source revision. Whole-audit final combined-tree/release verification remains pending."
+    "scope": "Clean full check plus Android sample assembleDebug at bf3932e, strict/rerun/no-cache/bounded settings; 243 executed tasks, 269 XMLs. All six new guards, existing ABI checks, JVM, Android host and Kotlin/Native arm64 simulator; not Swift XCTest, Intel execution, ART/OEM or physical devices. Same clean source has final static, local publication, isolated-consumer checks and independent approval. Whole-audit final combined-tree/release verification remains pending."
   },
   "protectedInstructionFilesCaveat": "Issue325 feasible correction preserves AGENTS.md:9 library-only SDK wording by owner instruction. Canonical setup explicitly warns about missing sample SDK. Literal alignment requires new owner authorization; not claimed fixed. CLAUDE.md unchanged.",
   "lastScopedVerification": {
-    "issue": 190,
-    "commit": "d9b900171bcfcbad0f63f7216f7a951c81fb55be",
-    "tree": "b22b4eccf16d7a2edbfadf94e48ff39fbd161151",
-    "scope": "Documentation-only correction. Real baseline JVM/Android bytecode and javac: 28 intended rejections, two positive compilations, two JDK17 host executions (not ART/device; session examples compile-only). At clean final revision: core Kotlin/Native/JVM and Android ABI pass, 14 executed tasks, baselines unchanged; five static gates pass; final independent APPROVE, 272 evidence entries rehashed. Full check/consumer/release gates were not rerun here."
+    "issue": 187,
+    "commit": "bf3932eece77a404fcf525b91d9e81141aa43b0c",
+    "tree": "da1bcb0c3e9bdc6b1a42d2fd55b8aad42cdea46a",
+    "scope": "Compiled-constant guard preserves all fields/values/baselines. Actual classfiles/KLIBs inspected; old-gap reproduction and six corrected real Kotlin negative controls. Final full check includes 26 compiled policy controls; actual producer graph passes. Fifteen local publication sets, 23 isolated-consumer compile/link tasks and ten static/policy gates pass. Fresh independent APPROVE; 2064 evidence entries rehashed, 269 XMLs parsed, 43 finalized invocations checked. Full release/XCFramework/Swift and external gates not rerun/completed."
   }
 }

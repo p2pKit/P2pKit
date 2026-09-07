@@ -1,17 +1,17 @@
 # Issue disposition index
 
-Checkpoint inventory: **168 issues; 51 reviewed repairs (30.4%), 117 remaining (69.6%)**.
+Checkpoint inventory: **168 issues; 52 reviewed repairs (31.0%), 116 remaining (69.0%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #190 is reviewed;
-#187 is next. The #325 protected-AGENTS exception remains recorded. Read [the full records](issues.json) for scope,
+refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #187 is reviewed;
+#133 is next. The #325 protected-AGENTS exception remains recorded. Read [the full records](issues.json) for scope,
 dependencies, commits and outcome links.
 Read [the root handoff](../../../AUDIT_CHECKPOINT.md) for exact evidence limits and mandatory review/cleanup.
 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (51)
+## Repairs with recorded independent approval (52)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -28,6 +28,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#171: [WSA2-07] startFeature is a 262-line inline transaction whose cancellation flag misses a settlement window](https://github.com/p2pKit/P2pKit/issues/171) | medium | Existing | `2ea1060b1b9a` |
 | [#175: [WSB-08] JVM sendFile(File) reopens by path with no file-identity binding (detected post-transmission)](https://github.com/p2pKit/P2pKit/issues/175) | medium | Existing | `a0d074c32206` |
 | [#186: [WSD-03] Handshake interpolates a whole ProtocolEvent, leaking unfiltered peer payload into error messages](https://github.com/p2pKit/P2pKit/issues/186) | medium | Existing | `ceaf028263c0` |
+| [#187: [WSD-06] NOT_IN_V01 leaks into Kotlin/Native ABI without cross-target baseline parity](https://github.com/p2pKit/P2pKit/issues/187) | medium | Existing | `bf3932eece77` |
 | [#190: [WSD-12] Value-class mangling makes the identity surface (and the builder's appId) unreachable from Java](https://github.com/p2pKit/P2pKit/issues/190) | medium | Existing | `d9b900171bcf` |
 | [#194: [WSE-08] Android LOHS support predicate omits FEATURE_WIFI](https://github.com/p2pKit/P2pKit/issues/194) | medium | Existing | `e39153eec3f1` |
 | [#196: [WSE-14] WifiManagerWrapperImpl adapter untested; no Robolectric/instrumented tier exists to test it](https://github.com/p2pKit/P2pKit/issues/196) | medium | Existing | `5ac78f9d55e1` |
@@ -67,7 +68,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#353: [AUDIT] Android API24/25 diagnostics use API26 java.time and NIO without core-library desugaring](https://github.com/p2pKit/P2pKit/issues/353) | low | New audit | `44fdfeeb66a6` |
 | [#354: [AUDIT] Android hotspot Retry restarts instead of retrying failed cleanup](https://github.com/p2pKit/P2pKit/issues/354) | low | New audit | `b6af5b8b78bd` |
 
-## Pending remediation (95)
+## Pending remediation (94)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -86,7 +87,6 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#173: [WSA2-05] PeerListStateFlow defeats StateFlow operator fusion](https://github.com/p2pKit/P2pKit/issues/173) | low | Existing | — |
 | [#176: [WSB-06] Unverified partial file stages in the user-visible destination directory during transfer](https://github.com/p2pKit/P2pKit/issues/176) | low | Existing | — |
 | [#184: [WSD-04] PeerAuthorizationPolicy sealed hierarchy has no documented evolution contract](https://github.com/p2pKit/P2pKit/issues/184) | low | Existing | — |
-| [#187: [WSD-06] NOT_IN_V01 leaks into Kotlin/Native ABI without cross-target baseline parity](https://github.com/p2pKit/P2pKit/issues/187) | medium | Existing | — |
 | [#188: [WSD-07] Recommended sendFile(PreparedFileSource) overload has an undocumented throwing interface default](https://github.com/p2pKit/P2pKit/issues/188) | low | Existing | — |
 | [#191: [WSD-14] Swift receives P2pError through string-based NSError details](https://github.com/p2pKit/P2pKit/issues/191) | low | Existing | — |
 | [#195: [WSE-07] Post-start Android permission loss is reported as a platform failure](https://github.com/p2pKit/P2pKit/issues/195) | low | Existing | — |
