@@ -1,20 +1,23 @@
 # Issue disposition index
 
-Checkpoint inventory: **169 issues; 53 reviewed repairs (31.4%), 116 remaining (68.6%)**.
+Checkpoint inventory: **169 issues; 54 reviewed repository repairs (32.0%), 115 remaining issue rows (68.0%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #355 is reviewed;
-#133 remains an unreviewed draft with a known lint-producer build failure. The #325 protected-AGENTS exception remains
-recorded. Read [the full records](issues.json) for scope, dependencies, commits and outcome links.
+refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #133 is
+repository-scope approved at `7127616`; its independent interoperability acceptance remains NOT STARTED.
+Percentages do not count completion of external acceptance attached to approved rows, including #133.
+The #325 protected-AGENTS exception remains recorded. Read [the full records](issues.json) for scope, dependencies,
+commits and outcome links.
 Read [the root handoff](../../../AUDIT_CHECKPOINT.md) for exact evidence limits and mandatory review/cleanup.
 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (53)
+## Repairs with recorded independent approval (54)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
+| [#133: [WSG-02] No cross-implementation or cross-version interop test exists anywhere](https://github.com/p2pKit/P2pKit/issues/133) | medium | Existing | `71276169a7d0` |
 | [#135: [WSF-04] Desktop UI sample uses the risky policy and auto-mesh with zero warning anywhere](https://github.com/p2pKit/P2pKit/issues/135) | medium | Existing | `2386057d5721` |
 | [#138: [WSG-01] Kit/session integration tests do not exercise fragmented raw reads](https://github.com/p2pKit/P2pKit/issues/138) | medium | Existing | `02acee835200` |
 | [#141: [WSG-12] CI runs full `check` on macOS only; Windows/Linux defect class is invisible](https://github.com/p2pKit/P2pKit/issues/141) | high | Existing | `d859e20252d2` |
@@ -69,12 +72,11 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#354: [AUDIT] Android hotspot Retry restarts instead of retrying failed cleanup](https://github.com/p2pKit/P2pKit/issues/354) | low | New audit | `b6af5b8b78bd` |
 | [#355: [AUDIT][Low] Terminal kit shutdown misreports inbound completion and retries closed acceptance](https://github.com/p2pKit/P2pKit/issues/355) | low | New audit | `182063131438` |
 
-## Pending remediation (94)
+## Pending remediation (93)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
 | [#130: [WSE-02] Both provisioning test registrars discard expectedFingerprint — pin propagation is untested](https://github.com/p2pKit/P2pKit/issues/130) | low | Existing | — |
-| [#133: [WSG-02] No cross-implementation or cross-version interop test exists anywhere](https://github.com/p2pKit/P2pKit/issues/133) | medium | Existing | — |
 | [#137: [WSD-02] Four P2pError variants expose a mutable non-volatile `underlying` slot behind `cause`](https://github.com/p2pKit/P2pKit/issues/137) | low | Existing | — |
 | [#144: [BUILD-18] Docs-only CI shortcut reuses main-merge results from graph shape, not check evidence](https://github.com/p2pKit/P2pKit/issues/144) | low | Existing | — |
 | [#145: [WSA1-05] Receive-backlog byte cap allocates a full payload copy to measure and under-counts heap](https://github.com/p2pKit/P2pKit/issues/145) | low | Existing | — |

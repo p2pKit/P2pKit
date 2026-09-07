@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T09:57:54.798715+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T11:13:04.511982+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -554,18 +554,25 @@
         146,
         355
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Preserved/pushed unfinished draft ce350c8 adds 12 immutable composed wire/envelope fixtures, common/Android-host replay and bidirectional repeated mixed-profile kit tests, test-only transcriber and documentation. Independently reviewed runtime dependency #355 is corrected at 1820631; mixed-profile tests now pass JVM/Native without relaxing diagnostics. Full check FAILS at generateAndroidHostTestLintModel: draft commonTest generated-source producer ownership is missing from Android lint. Correct this, execute coordinated encoder/decoder drift controls, validate generator failure/freshness and publication exclusion, run combined/consumer gates and obtain a fresh independent review before counting #133 complete. Existing lower-layer Cacophony/preface/version tests refute parts of the historical claim. Same-implementation goldens do not complete independent interoperability; external campaign remains NOT STARTED.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Complete 23-path draft ce350c8 plus final correction 7127616 independently approved and pushed on the audit branch, not merged/released. Twelve immutable synthetic fixtures, composed role replay, four envelope variants and both repeated kit-level mixed-profile directions resolve the repository-executable covariance/coverage gap. True lazy dependencies supply Android host lint producer ownership; no production/API/ABI/wire/security change. Coordinated drift controls, sixteen generator stages, full check plus Android assembly (2276 passes, one unchanged manual skip), local publication/23 isolated consumer tasks and ten static gates pass. Existing Cacophony/preface/version coverage is credited. Repository scope approved only: external interoperability remains NOT STARTED, issue remains OPEN and audit is NOT READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "ce350c85f1a37932011968b21fe0163b7e5fad28",
+        "71276169a7d0da6ecb8f01eb330d942b419fbc6c"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_133_r1 APPROVE of complete 23-path preserved draft plus final correction at 7127616, repository-executable scope only; no actionable findings. Surrounding code/callers/platforms, all2011 evidence entries and54 finalized cleanup receipts independently inspected. Report SHA256 e3cbc8b58d769c795a8295ef2da7a3eefe39d137c6b2fc8c9369886bc9174c56.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/133#issuecomment-5406151897",
         "https://github.com/p2pKit/P2pKit/issues/133#issuecomment-5568400347",
         "https://github.com/p2pKit/P2pKit/issues/133#issuecomment-5568795599",
-        "https://github.com/p2pKit/P2pKit/issues/133#issuecomment-5569028494"
+        "https://github.com/p2pKit/P2pKit/issues/133#issuecomment-5569028494",
+        "https://github.com/p2pKit/P2pKit/issues/133#issuecomment-5570024058"
       ],
-      "preservedUnreviewedDraftCommit": "ce350c85f1a37932011968b21fe0163b7e5fad28"
+      "repositoryScopeStatus": "APPROVED",
+      "externalAcceptanceStatus": "NOT_STARTED",
+      "externalAcceptanceScope": "Independent peer interoperability/two-process platform matrix; physical-device, hostile-network and professional cryptographic validation are not completed by same-implementation goldens.",
+      "preservedDraftCommit": "ce350c85f1a37932011968b21fe0163b7e5fad28"
     },
     {
       "number": 135,
@@ -4239,7 +4246,7 @@
       ],
       "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Three-file correction 1820631 independently approved and pushed to audit branch, not merged/released. Existing authoritative setupRegistry.accepting gates admission and classifies completion; active recovery/cancellation and late raw ownership preserved. Same regression: five expected old-runtime failures, nine corrected tests pass. Focused726 pass; clean integrated attempt produced1615 passes but command FAILS on separate #133 draft lint/source producer ownership; LAN369 pass/one manual skip; five static gates pass. This is an issue-scoped approval, not a full green gate, #133 approval or readiness claim.",
+      "assessmentAtCheckpoint": "Three-file correction 1820631 independently approved and pushed to audit branch, not merged/released. Existing authoritative setupRegistry.accepting gates admission and classifies completion; active recovery/cancellation and late raw ownership preserved. Same regression: five expected old-runtime failures, nine corrected tests pass. Focused726 pass; clean integrated attempt produced1615 passes but command FAILS on separate #133 draft lint/source producer ownership; LAN369 pass/one manual skip; five static gates pass. This is an issue-scoped approval, not a full green gate, #133 approval or readiness claim. Later #133 integrated verification at 7127616 passes (2276 passes/one unchanged manual skip), superseding that historical draft-build failure without changing the scoped #355 approval.",
       "recordedFixCommitsOrFinalRevision": [
         "182063131438690702bdb40f0f09247015cb8ae6"
       ],
@@ -4250,5 +4257,5 @@
       ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T10:14:04.336860+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T11:38:47.969579+00:00"
 }
