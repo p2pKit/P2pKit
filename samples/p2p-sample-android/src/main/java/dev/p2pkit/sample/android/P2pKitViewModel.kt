@@ -248,11 +248,13 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     // --- hotspot host (v0.2.1 task 11) ------------------------------------
 
     /**
-     * Latest hotspot-host result. `null` when no host attempt has been made.
+     * Latest hotspot-host result. `null` when no live/result card is available.
      * `LocalNetworkResult.Started` or `StartedWithoutCredentials` while the
      * hotspot is up; `Failed` when start failed or the system stopped it.
      */
     val hotspotResult: StateFlow<LocalNetworkResult?> = provisioningUi.hotspotResult
+    /** An explicit stop has not been confirmed; Retry must not start a new hotspot. */
+    val hotspotStopPending: StateFlow<Boolean> = provisioningUi.hotspotStopPending
 
     /** Missing perms reported by [AndroidP2pPermissionManager]; sample requests them. */
     private val _missingPermissions = MutableStateFlow<List<P2pPermission>>(emptyList())
@@ -812,34 +814,44 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         refreshMissingPermissions()
-        provisioningUi.startHotspot { result ->
-            when (result) {
-                is LocalNetworkResult.Started ->
-                    Log.i(LOG_TAG, "hotspot Started: credentials=<omitted> " +
-                        "port=${result.manualConnectionInfo?.port} " +
-                        "hostCount=${result.manualConnectionInfo?.hostAddresses?.size}")
-                is LocalNetworkResult.StartedWithoutCredentials ->
-                    Log.i(LOG_TAG, "hotspot StartedWithoutCredentials: " +
-                        "port=${result.manualConnectionInfo.port} " +
-                        "hostCount=${result.manualConnectionInfo.hostAddresses.size}")
-                is LocalNetworkResult.Failed ->
-                    Log.w(LOG_TAG, "hotspot Failed: ${result.error::class.simpleName} — <details omitted>")
-                is LocalNetworkResult.Unsupported ->
-                    Log.w(LOG_TAG, "hotspot Unsupported: <details omitted>")
-                is LocalNetworkResult.RequiresUserAction ->
-                    Log.i(LOG_TAG, "hotspot RequiresUserAction: see provisioning UI")
-            }
+        provisioningUi.startHotspot(::onHotspotResult)
+    }
+
+    fun retryHotspot() {
+        if (kit == null || runScope == null || provisioningBusy.value) return
+        if (!hotspotStopPending.value) refreshMissingPermissions()
+        provisioningUi.retryHotspot(::onHotspotResult, ::onHotspotStopResult)
+    }
+
+    private fun onHotspotResult(result: LocalNetworkResult) {
+        when (result) {
+            is LocalNetworkResult.Started ->
+                Log.i(LOG_TAG, "hotspot Started: credentials=<omitted> " +
+                    "port=${result.manualConnectionInfo?.port} " +
+                    "hostCount=${result.manualConnectionInfo?.hostAddresses?.size}")
+            is LocalNetworkResult.StartedWithoutCredentials ->
+                Log.i(LOG_TAG, "hotspot StartedWithoutCredentials: " +
+                    "port=${result.manualConnectionInfo.port} " +
+                    "hostCount=${result.manualConnectionInfo.hostAddresses.size}")
+            is LocalNetworkResult.Failed ->
+                Log.w(LOG_TAG, "hotspot Failed: ${result.error::class.simpleName} — <details omitted>")
+            is LocalNetworkResult.Unsupported ->
+                Log.w(LOG_TAG, "hotspot Unsupported: <details omitted>")
+            is LocalNetworkResult.RequiresUserAction ->
+                Log.i(LOG_TAG, "hotspot RequiresUserAction: see provisioning UI")
         }
     }
 
     fun stopHotspot() {
-        provisioningUi.stopHotspot { result ->
-            result.onSuccess {
-                Log.i(LOG_TAG, "hotspot stopped")
-            }.onFailure { failure ->
-                Log.w(LOG_TAG, "stopHotspot failed; errorType=${SampleConsole.failure(failure)}")
-                appendSystemMessage("stop hotspot failed: ${failure.message ?: failure::class.simpleName}")
-            }
+        provisioningUi.stopHotspot(::onHotspotStopResult)
+    }
+
+    private fun onHotspotStopResult(result: Result<Unit>) {
+        result.onSuccess {
+            Log.i(LOG_TAG, "hotspot stopped")
+        }.onFailure { failure ->
+            Log.w(LOG_TAG, "stopHotspot failed; errorType=${SampleConsole.failure(failure)}")
+            appendSystemMessage("stop hotspot failed: ${failure.message ?: failure::class.simpleName}")
         }
     }
 

@@ -40,6 +40,9 @@ internal class ProvisioningUiState(
 ) {
     private val _hotspotResult = MutableStateFlow<LocalNetworkResult?>(null)
     val hotspotResult = _hotspotResult.asStateFlow()
+    // Requested stop without a successful return, not an inventory of native resources.
+    private val _hotspotStopPending = MutableStateFlow(false)
+    val hotspotStopPending = _hotspotStopPending.asStateFlow()
     private val _joinResult = MutableStateFlow<JoinNetworkResult?>(null)
     val joinResult = _joinResult.asStateFlow()
     private val _busy = MutableStateFlow(false)
@@ -138,13 +141,14 @@ internal class ProvisioningUiState(
         previous?.joinRequest = null
         previous?.dismissedJoin = null
         _hotspotResult.value = null
+        _hotspotStopPending.value = false
         _joinResult.value = null
         _busy.value = false
         _joinBusy.value = false
     }
 
     fun startHotspot(onResult: (LocalNetworkResult) -> Unit = {}): Boolean =
-        launchOperation(Operation.START) { owner ->
+        !_hotspotStopPending.value && launchOperation(Operation.START) { owner ->
             val result = try {
                 owner.manager.startLocalNetwork(LocalNetworkConfig())
             } catch (cancelled: CancellationException) {
@@ -178,6 +182,11 @@ internal class ProvisioningUiState(
 
     fun stopHotspot(onResult: (Result<Unit>) -> Unit = {}): Boolean =
         launchOperation(Operation.STOP) { owner ->
+            // Keep the user's stop intent if the API fails or this operation is cancelled.
+            // A lifecycle event is not cleanup acknowledgement; only this call can confirm it.
+            _hotspotStopPending.value = true
+            owner.hotspot = null
+            _hotspotResult.value = null
             val result = try {
                 owner.manager.stopLocalNetwork()
                 Result.success(Unit)
@@ -190,10 +199,16 @@ internal class ProvisioningUiState(
             (result.exceptionOrNull() as? NetworkProvisioningError)?.let { observeClosedResult(owner, it) }
             reconcile(owner)
             if (!isCurrent(owner)) return@launchOperation
-            owner.hotspot = null
+            _hotspotStopPending.value = result.isFailure
             _hotspotResult.value = result.exceptionOrNull()?.let { LocalNetworkResult.Failed(provisioningError(it)) }
             onResult(result)
         }
+
+    /** The card's retry action preserves stop intent; it never starts hosting after an unconfirmed stop. */
+    fun retryHotspot(
+        onStartResult: (LocalNetworkResult) -> Unit = {},
+        onStopResult: (Result<Unit>) -> Unit = {}
+    ): Boolean = if (_hotspotStopPending.value) stopHotspot(onStopResult) else startHotspot(onStartResult)
 
     fun joinHotspot(credentials: WifiCredentials, onResult: (JoinNetworkResult) -> Unit = {}): Boolean =
         launchOperation(Operation.JOIN) { owner ->

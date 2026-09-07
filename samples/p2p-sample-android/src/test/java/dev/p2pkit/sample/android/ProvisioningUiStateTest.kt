@@ -348,6 +348,218 @@ class ProvisioningUiStateTest {
     }
 
     @Test
+    fun retryActionReattemptsFailedStopWithoutRestartingOrLeavingTheJoin() = withHarness { h ->
+        h.startAndJoin()
+        h.manager.stopFailure = NetworkProvisioningError.CleanupFailed("synthetic close failure")
+        assertTrue(h.ui.stopHotspot())
+        h.drain()
+        assertIs<LocalNetworkResult.Failed>(h.ui.hotspotResult.value)
+        assertTrue(h.ui.hotspotStopPending.value)
+
+        h.manager.stopFailure = null
+        assertTrue(h.ui.retryHotspot())
+        h.drain()
+
+        assertEquals(2, h.manager.stopCalls)
+        assertEquals(1, h.manager.startCalls)
+        assertNull(h.ui.hotspotResult.value)
+        assertFalse(h.ui.hotspotStopPending.value)
+        assertIs<JoinNetworkResult.Joined>(h.ui.joinResult.value)
+        assertTrue(h.manager.joinActive)
+        assertFalse(h.ui.busy.value)
+    }
+
+    @Test
+    fun repeatedCleanupFailuresKeepStopIntentAndReportTheActualStopResult() = withHarness { h ->
+        h.startAndJoin()
+        val failure = NetworkProvisioningError.CleanupFailed("synthetic repeated close failure")
+        h.manager.stopFailure = failure
+        assertTrue(h.ui.stopHotspot())
+        h.drain()
+        var startReports = 0
+        val stopReports = mutableListOf<Result<Unit>>()
+
+        repeat(2) {
+            assertTrue(h.ui.retryHotspot({ startReports++ }, stopReports::add))
+            h.drain()
+            assertTrue(h.ui.hotspotStopPending.value)
+            assertSame(failure, assertIs<LocalNetworkResult.Failed>(h.ui.hotspotResult.value).error)
+            assertIs<JoinNetworkResult.Joined>(h.ui.joinResult.value)
+        }
+        assertEquals(0, startReports)
+        assertEquals(2, stopReports.size)
+        stopReports.forEach { assertSame(failure, it.exceptionOrNull()) }
+        assertEquals(1, h.manager.startCalls)
+        assertEquals(3, h.manager.stopCalls)
+    }
+
+    @Test
+    fun ordinaryStartFailureStillRetriesStartWithoutStoppingTheJoin() = withHarness { h ->
+        assertTrue(h.ui.joinHotspot(credentials))
+        h.drain()
+        h.manager.startFailure = NetworkProvisioningError.HotspotStopped("synthetic start failure")
+        assertTrue(h.ui.startHotspot())
+        h.drain()
+        assertIs<LocalNetworkResult.Failed>(h.ui.hotspotResult.value)
+        assertFalse(h.ui.hotspotStopPending.value)
+
+        h.manager.startFailure = null
+        var reported: LocalNetworkResult? = null
+        assertTrue(h.ui.retryHotspot(onStartResult = { reported = it }))
+        h.drain()
+
+        assertIs<LocalNetworkResult.Started>(reported)
+        assertIs<LocalNetworkResult.Started>(h.ui.hotspotResult.value)
+        assertEquals(2, h.manager.startCalls)
+        assertEquals(0, h.manager.stopCalls)
+        assertTrue(h.manager.joinActive)
+    }
+
+    @Test
+    fun startupCleanupFailureDoesNotInventAnExplicitStopRequest() = withHarness { h ->
+        h.manager.startOverride = LocalNetworkResult.Failed(
+            NetworkProvisioningError.CleanupFailed("synthetic wrapper-owned startup cleanup")
+        )
+        assertTrue(h.ui.startHotspot())
+        h.drain()
+        assertFalse(h.ui.hotspotStopPending.value)
+        h.manager.startOverride = null
+
+        assertTrue(h.ui.retryHotspot())
+        h.drain()
+
+        assertIs<LocalNetworkResult.Started>(h.ui.hotspotResult.value)
+        assertEquals(2, h.manager.startCalls)
+        assertEquals(0, h.manager.stopCalls)
+    }
+
+    @Test
+    fun cancelledStopCanBeRetriedWithoutReportingCancellationAsFailureOrRestarting() = withHarness { h ->
+        h.startAndJoin()
+        h.manager.beforeStop = {
+            currentCoroutineContext().cancel()
+            awaitCancellation()
+        }
+        var reported = false
+        assertTrue(h.ui.stopHotspot { reported = true })
+        h.drain()
+
+        assertFalse(reported)
+        assertTrue(h.job.isActive)
+        assertTrue(h.ui.hotspotStopPending.value)
+        assertNull(h.ui.hotspotResult.value)
+        assertFalse(h.ui.busy.value)
+        assertFalse(h.ui.startHotspot())
+
+        h.manager.beforeStop = {}
+        assertTrue(h.ui.retryHotspot())
+        h.drain()
+        assertFalse(h.ui.hotspotStopPending.value)
+        assertEquals(1, h.manager.startCalls)
+        assertEquals(2, h.manager.stopCalls)
+        assertTrue(h.manager.joinActive)
+    }
+
+    @Test
+    fun aTerminalEventCannotConfirmAnInFlightStopOrAdmitCompetingRetries() = withHarness { h ->
+        h.startAndJoin()
+        val release = h.barrier()
+        h.manager.beforeStop = { release.await() }
+        assertTrue(h.ui.stopHotspot())
+        h.drain()
+        h.manager.stopFromSystem()
+        h.drain()
+
+        assertTrue(h.ui.hotspotStopPending.value)
+        assertTrue(h.ui.busy.value)
+        assertFalse(h.ui.retryHotspot())
+        assertFalse(h.ui.startHotspot())
+        assertFalse(h.ui.joinHotspot(credentials))
+        assertEquals(1, h.manager.stopCalls)
+
+        release.complete(Unit)
+        h.drain()
+        assertFalse(h.ui.hotspotStopPending.value)
+        assertFalse(h.ui.busy.value)
+        assertNull(h.ui.hotspotResult.value)
+        assertIs<JoinNetworkResult.Joined>(h.ui.joinResult.value)
+    }
+
+    @Test
+    fun oldStopFailureCannotRestoreStopIntentInAReplacementKit() = withHarness { h ->
+        h.startAndJoin()
+        val release = h.barrier()
+        h.manager.beforeStop = {
+            withContext(NonCancellable) { release.await() }
+            throw NetworkProvisioningError.CleanupFailed("synthetic old close failure")
+        }
+        assertTrue(h.ui.stopHotspot())
+        h.drain()
+        assertTrue(h.ui.hotspotStopPending.value)
+
+        val replacement = FakeManager()
+        h.ui.attach(replacement, h.scope)
+        assertTrue(h.ui.startHotspot())
+        h.drain()
+        assertTrue(h.ui.joinHotspot(credentials))
+        h.drain()
+        release.complete(Unit)
+        h.drain()
+
+        assertFalse(h.ui.hotspotStopPending.value)
+        assertIs<LocalNetworkResult.Started>(h.ui.hotspotResult.value)
+        assertIs<JoinNetworkResult.Joined>(h.ui.joinResult.value)
+        assertEquals(0, replacement.stopCalls)
+        assertFalse(h.ui.busy.value)
+    }
+
+    @Test
+    fun managerCloseRetiresPendingStopWithoutClaimingNativeCleanup() = withHarness { h ->
+        h.startAndJoin()
+        val release = h.barrier()
+        h.manager.beforeStop = { release.await() }
+        assertTrue(h.ui.stopHotspot())
+        h.drain()
+
+        h.manager.closeFromSystem()
+        h.drain()
+
+        assertFalse(h.ui.hotspotStopPending.value)
+        assertFalse(h.ui.busy.value)
+        assertFalse(h.ui.retryHotspot())
+        assertIs<NetworkProvisioningError.ManagerClosed>(
+            assertIs<LocalNetworkResult.Failed>(h.ui.hotspotResult.value).error
+        )
+        assertEquals(0, h.manager.closeCalls)
+    }
+
+    @Test
+    fun hotspotFailureCardInvokesTheSameRetryActionAsTheControllerTests() {
+        val vm = sampleSource("P2pKitViewModel.kt")
+        val card = sampleSource("MainActivity.kt").substringAfter("private fun HotspotCard(")
+            .substringBefore("private fun JoinHotspotCard(")
+        val failedCard = card.substringAfter("r is LocalNetworkResult.Failed ->")
+            .substringBefore("r is LocalNetworkResult.Unsupported ->")
+        assertTrue(failedCard.contains("vm.retryHotspot()"))
+        assertTrue(failedCard.contains("onClick = vm::retryHotspot"))
+        assertFalse(failedCard.contains("vm.startHotspot"))
+        assertTrue(vm.substringAfter("fun retryHotspot() {").substringBefore("private fun onHotspotResult(")
+            .contains("provisioningUi.retryHotspot("))
+        assertTrue(vm.contains("if (!hotspotStopPending.value) refreshMissingPermissions()"))
+        assertTrue(card.contains("val stopPending by vm.hotspotStopPending.collectAsState()"))
+        val stopCard = card.substringAfter("stopPending -> {").substringBefore("r is LocalNetworkResult.Started ->")
+        assertTrue(stopCard.contains("onClick = vm::retryHotspot"))
+        assertTrue(stopCard.contains("Retry hotspot stop"))
+        assertFalse(stopCard.contains("launcher.launch"))
+        assertFalse(stopCard.contains("vm.startHotspot"))
+        // Ambiguous startup CleanupFailed results also retain an explicit stop route.
+        val startupCleanup = failedCard.substringAfter(
+            "if (r.error is dev.p2pkit.core.NetworkProvisioningError.CleanupFailed)"
+        )
+        assertTrue(startupCleanup.contains("onClick = vm::stopHotspot"))
+    }
+
+    @Test
     fun untaggedCleanupFailureAndUnknownSnapshotDoNotRevokeEitherLiveResource() = withHarness { h ->
         h.startAndJoin()
         val hotspot = h.ui.hotspotResult.value
@@ -357,6 +569,7 @@ class ProvisioningUiStateTest {
         h.manager.networkState.value = NetworkState.Unknown
         h.manager.events.tryEmit(NetworkProvisioningEvent.Failed(error))
         h.drain()
+        assertFalse(h.ui.hotspotStopPending.value)
 
         assertSame(hotspot, h.ui.hotspotResult.value)
         assertSame(joined, h.ui.joinResult.value)
@@ -857,9 +1070,11 @@ class ProvisioningUiStateTest {
         var closeCalls = 0
         var joinActive = false
         private var hotspotActive = false
+        private var hotspotCleanupRetained = false
         private var stateOwner: Owner? = null
         private var networkOwner: Owner? = null
         var afterStart: suspend () -> Unit = {}
+        var beforeStop: suspend () -> Unit = {}
         var beforeJoin: () -> Unit = {}
         var afterJoin: suspend () -> Unit = {}
         var startOverride: LocalNetworkResult? = null
@@ -872,6 +1087,11 @@ class ProvisioningUiStateTest {
 
         override suspend fun startLocalNetwork(config: LocalNetworkConfig): LocalNetworkResult {
             startCalls++
+            if (hotspotCleanupRetained) {
+                return LocalNetworkResult.Failed(
+                    NetworkProvisioningError.CleanupFailed("synthetic retained hotspot: stop or close to retry")
+                )
+            }
             startFailure?.let { throw it }
             startOverride?.let { return it }
             if (hotspotActive) return startedResult()
@@ -951,8 +1171,13 @@ class ProvisioningUiStateTest {
 
         override suspend fun stopLocalNetwork() {
             stopCalls++
-            stopFailure?.let { throw it }
+            beforeStop()
             hotspotActive = false
+            stopFailure?.let {
+                hotspotCleanupRetained = true
+                throw it
+            }
+            hotspotCleanupRetained = false
             if (stateOwner == Owner.HOTSPOT) state.value = NetworkProvisioningState.Idle
             if (networkOwner == Owner.HOTSPOT) networkState.value = NetworkState.Unknown
             events.tryEmit(NetworkProvisioningEvent.LocalNetworkStopped)

@@ -49,6 +49,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -960,6 +961,7 @@ private fun isLocationModeOn(context: android.content.Context): Boolean {
 @Composable
 private fun HotspotCard(vm: P2pKitViewModel) {
     val result by vm.hotspotResult.collectAsState()
+    val stopPending by vm.hotspotStopPending.collectAsState()
     val missing by vm.missingPermissions.collectAsState()
     val busy by vm.provisioningBusy.collectAsState()
     val context = LocalContext.current
@@ -975,7 +977,7 @@ private fun HotspotCard(vm: P2pKitViewModel) {
     ) { granted ->
         vm.refreshMissingPermissions()
         if (granted) {
-            vm.startHotspot()
+            vm.retryHotspot()
         } else {
             // User denied. Either temporarily (will get the prompt next time)
             // or permanently (system silently returned false). Surface a
@@ -1011,6 +1013,28 @@ private fun HotspotCard(vm: P2pKitViewModel) {
             Spacer(Modifier.height(Dimens.SmallGap))
             val r = result
             when {
+                stopPending -> {
+                    Text(
+                        text = "Hotspot stop is not confirmed. Retry stopping it before hosting again. " +
+                            "This does not leave an independent joined network.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    val failure = (r as? LocalNetworkResult.Failed)?.error
+                    if (failure != null) {
+                        Text(
+                            text = "Failed: ${failure::class.simpleName} — ${failure.message ?: ""}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Spacer(Modifier.height(Dimens.ItemGap))
+                    Button(
+                        onClick = vm::retryHotspot,
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (busy) "Working…" else "Retry hotspot stop")
+                    }
+                }
                 r is LocalNetworkResult.Started -> {
                     val info = r.manualConnectionInfo
                     Text("SSID: ${r.credentials.ssid ?: "—"}", style = MaterialTheme.typography.bodySmall)
@@ -1086,7 +1110,7 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                         }
                         Spacer(Modifier.height(Dimens.SmallGap))
                         Button(
-                            onClick = vm::startHotspot,
+                            onClick = vm::retryHotspot,
                             enabled = !busy,
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -1100,7 +1124,7 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                         Spacer(Modifier.height(Dimens.ItemGap))
                         Button(
                             onClick = {
-                                if (missing.isNotEmpty()) launcher.launch(perm) else vm.startHotspot()
+                                if (missing.isNotEmpty()) launcher.launch(perm) else vm.retryHotspot()
                             },
                             enabled = !busy,
                             modifier = Modifier.fillMaxWidth()
@@ -1112,6 +1136,23 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                                     else -> "Retry"
                                 }
                             )
+                        }
+                        // A startup cleanup failure may concern wrapper-owned resources,
+                        // not this hotspot. Keep Start retry, but expose explicit hotspot
+                        // stop too: a retained hotspot reservation requires that operation.
+                        if (r.error is dev.p2pkit.core.NetworkProvisioningError.CleanupFailed) {
+                            Text(
+                                text = "You can also stop hotspot resources. If cleanup remains blocked, " +
+                                    "stop the kit to retry all cleanup (including any joined network).",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            OutlinedButton(
+                                onClick = vm::stopHotspot,
+                                enabled = !busy,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Stop hotspot")
+                            }
                         }
                     }
                 }
@@ -1156,7 +1197,7 @@ private fun HotspotCard(vm: P2pKitViewModel) {
                     Spacer(Modifier.height(Dimens.ItemGap))
                     Button(
                         onClick = {
-                            if (missing.isNotEmpty()) launcher.launch(perm) else vm.startHotspot()
+                            if (missing.isNotEmpty()) launcher.launch(perm) else vm.retryHotspot()
                         },
                         enabled = !busy,
                         modifier = Modifier.fillMaxWidth()

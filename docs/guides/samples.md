@@ -67,6 +67,14 @@ that binding. Dismissing an established join only hides that binding's card, not
 later successful join (even to the same SSID). A later genuine release is shown as
 a failure; a refused repeat join does not release the binding.
 
+A failed or cancelled hotspot stop keeps **Retry hotspot stop** available without
+requesting acquisition permissions. Retry does not restart hosting; only a
+successful stop call clears that intent, and it leaves an independent join intact.
+Startup failures still retry startup. A startup `CleanupFailed` may describe
+different native owners: the card also offers explicit hotspot stop, with whole-kit
+Stop as the fallback for all retained cleanup. Untagged cleanup events are not
+treated as proof that a live hotspot ended or that its cleanup succeeded.
+
 The presenter records the Android manager's hot-flow events without waiting for
 the UI thread, then applies the latest two-resource snapshot on the main thread.
 Keep that recorder non-suspending: do not put UI, logging or native work in it.
