@@ -156,6 +156,16 @@ kotlin {
     }
 }
 
+// AGP 9.3 copies KMP source roots as plain files; its lint inputs also exclude
+// variant-API generated entries. Neither path retains the commonTest producer.
+// Give the two host-test lint consumers a real dependency (not mustRunAfter),
+// without adding test fixtures to production sources or disabling lint.
+tasks.matching {
+    it.name == "generateAndroidHostTestLintModel" || it.name == "lintAnalyzeAndroidHostTest"
+}.configureEach {
+    dependsOn(generateWireGoldens)
+}
+
 // Kotlin's built-in ABI validator excludes Android targets. Feed the
 // supplemental metadata-aware guard from the compiler's declared output;
 // flatMap retains producer ownership if Kotlin relocates that output.

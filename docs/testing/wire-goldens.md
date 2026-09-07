@@ -13,8 +13,11 @@ branch baseline on the post-RC3 stabilization line; it does not retrospectively 
 
 The expected values are **not** recomputed by production encoders during tests. `GenerateWireGoldensTask`
 transcribes committed hex into generated **commonTest-only** literals, with declared Gradle inputs/outputs.
-Missing, empty or malformed inputs fail rather than silently refreshing expected values. This lets Native consume
-the same fixtures without a JVM resource loader. Generated Kotlin belongs under `build/`, not in Git or publications.
+A missing input directory, empty fixture set or malformed hex fails generation. Required fixture names are checked
+when tests request them: deleting one fails its consumers, not necessarily generation. Neither case silently refreshes
+expected values. Native consumes the same fixtures without a JVM resource loader. Generated Kotlin belongs under
+`build/`, not in Git or publications. Android host-test lint model/analysis tasks explicitly depend on the producer;
+AGP 9.3 otherwise loses that dependency while copying KMP source roots. Recheck both consumers on plugin upgrades.
 
 ## Public synthetic inputs
 
