@@ -37,7 +37,7 @@
     "failures": 0,
     "errors": 0,
     "skipped": 1,
-    "scope": "Clean full check plus Android sample assembleDebug at 7127616, strict/rerun/no-cache/bounded settings;246 executed tasks,278 XMLs. Core JVM744/Native686/Android-host26; all22 new #133 cases ran. ABI/constant checks and Android lint pass. Same frozen source passes local publications/23 isolated consumer compile-link tasks, mutations, generator and static controls. Not Swift XCTest, Intel execution, ART/OEM or physical devices. Whole-audit final combined-tree/release verification remains pending."
+    "scope": "Clean full check plus Android sample assembleDebug at 7127616, strict/rerun/no-cache/bounded settings;246 executed tasks,278 XMLs. Core JVM744/Native686/Android-host26; all22 new #133 cases ran. ABI/constant checks and Android lint pass. Same frozen source passes local publications and the isolated consumer compile/link gate with23 total executed tasks (8 compile,1 framework-link,14 prerequisite/preparation), mutations, generator and static controls. Not Swift XCTest, Intel execution, ART/OEM or physical devices. Whole-audit final combined-tree/release verification remains pending."
   },
   "protectedInstructionFilesCaveat": "Issue325 feasible correction preserves AGENTS.md:9 library-only SDK wording by owner instruction. Canonical setup explicitly warns about missing sample SDK. Literal alignment requires new owner authorization; not claimed fixed. CLAUDE.md unchanged.",
   "lastScopedVerification": {
