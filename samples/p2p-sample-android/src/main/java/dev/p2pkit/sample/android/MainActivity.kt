@@ -1179,8 +1179,9 @@ private fun HotspotCard(vm: P2pKitViewModel) {
 @Composable
 private fun JoinHotspotCard(vm: P2pKitViewModel) {
     val joinResult by vm.joinResult.collectAsState()
+    val joinSuccessCount by vm.joinSuccessCount.collectAsState()
     val missing by vm.missingPermissions.collectAsState()
-    val busy by vm.provisioningBusy.collectAsState()
+    val busy by vm.joinProvisioningBusy.collectAsState()
 
     // The SSID is ordinary form state and may survive recreation. The
     // passphrase is intentionally held only by this composition and is
@@ -1198,8 +1199,8 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
         credentialInput.onHostStopped()
     }
-    LaunchedEffect(joinResult) {
-        if (joinResult is JoinNetworkResult.Joined) credentialInput.onJoinSucceeded()
+    LaunchedEffect(joinSuccessCount) {
+        if (joinSuccessCount > 0) credentialInput.onJoinSucceeded()
     }
     LaunchedEffect(credentialInput.isRevealed) {
         if (credentialInput.isRevealed) {

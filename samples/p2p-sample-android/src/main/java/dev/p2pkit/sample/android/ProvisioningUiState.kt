@@ -12,41 +12,75 @@ import dev.p2pkit.core.provisioning.WifiCredentials
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 
 /**
- * Main-thread-confined presentation for one kit at a time; owns collectors, not native resources.
- *
- * Acquisition results are not lifetime guarantees. Subscribe before enabling operations, retain
- * hotspot/join status independently, and reconcile terminal signals before publishing a result.
- * Manager state/networkState are last-owner snapshots, NOT an inventory of both resources:
- * Unknown or a change to the other resource is not evidence that this resource was released.
+ * Main-thread presentation for one kit, attached before its first provisioning call.
+ * Owns subscriptions, never native resources. Android's manager snapshots describe
+ * the last publishing owner, not both resources: only resource-specific events end
+ * a card. In particular, Unknown and another resource's success do not imply loss.
  */
-internal class ProvisioningUiState {
+internal class ProvisioningUiState(
+    // Use the queued Main dispatcher, NOT Main.immediate: an OS publisher must never
+    // resume UI reconciliation/cancellation inline while holding a native manager lock.
+    private val renderDispatcher: CoroutineDispatcher = Dispatchers.Main
+) {
     private val _hotspotResult = MutableStateFlow<LocalNetworkResult?>(null)
     val hotspotResult = _hotspotResult.asStateFlow()
     private val _joinResult = MutableStateFlow<JoinNetworkResult?>(null)
     val joinResult = _joinResult.asStateFlow()
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
+    private val _joinBusy = MutableStateFlow(false)
+    val joinBusy = _joinBusy.asStateFlow()
+    private val _joinSuccessCount = MutableStateFlow(0L)
+    val joinSuccessCount = _joinSuccessCount.asStateFlow()
+
+    private sealed interface ResourceSignal {
+        class Live(val joinedState: NetworkState? = null) : ResourceSignal
+        class Ended(val error: NetworkProvisioningError? = null) : ResourceSignal
+    }
+
+    private class FailureNotice(val error: NetworkProvisioningError)
+
+    private data class Signals(
+        val hotspot: ResourceSignal? = null,
+        val join: ResourceSignal? = null,
+        val joinSuccesses: Long = 0,
+        val failure: FailureNotice? = null,
+        val unavailable: NetworkProvisioningError? = null
+    )
+
+    private enum class Operation { START, STOP, JOIN }
+
+    private class JoinRequest(val previousFailure: FailureNotice?) {
+        var awaitingEvent = false
+    }
 
     private class Run(val manager: NetworkProvisioningManager, parent: CoroutineScope) {
         val scope = CoroutineScope(parent.coroutineContext + SupervisorJob(parent.coroutineContext[Job]))
-        var operation: Job? = null
+        // The only cross-thread state. Immutable, atomically reduced snapshots retain BOTH
+        // lifetimes even if the main thread is busy and intermediate UI updates conflate.
+        val signals = MutableStateFlow(Signals())
+        var observed = Signals()
+        var operation: Operation? = null
         var hotspot: LocalNetworkResult? = null
-        var hotspotFailure: NetworkProvisioningError? = null
         var joined: JoinNetworkResult.Joined? = null
-        var joinFailure: NetworkProvisioningError? = null
+        var joinRequest: JoinRequest? = null
         var joinDismissed = false
-        var joinPending = false
     }
 
     private var run: Run? = null
@@ -56,26 +90,41 @@ internal class ProvisioningUiState {
         if (!scope.isActive) return
         val owner = Run(manager, scope)
         run = owner
-        // UNDISTPATCHED is important for the manager's replay-zero event stream. All callbacks
-        // resume on the supplied main-thread scope, and none suspend or launch per-event work.
-        owner.scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            manager.events.collect { event ->
-                if (isCurrent(owner)) onEvent(owner, event)
-            }
-        }
-        owner.scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            manager.state.collect { if (isCurrent(owner)) reconcileSnapshots(owner) }
-        }
-        owner.scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            manager.networkState.collect { if (isCurrent(owner)) reconcileSnapshots(owner) }
-        }
         owner.scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 awaitCancellation()
             } finally {
-                // Parent cancellation need not go through the ViewModel's explicit detach path.
                 if (run === owner) detach()
             }
+        }
+        // Register before enabling calls. These two unconfined collectors do ONLY atomic,
+        // non-suspending bookkeeping: no UI, callbacks, locks or manager calls. Recording the
+        // Android manager's direct hot-flow emissions must not queue behind the main thread
+        // or its replay-zero/DROP_OLDEST buffer can lose a resource's terminal notification.
+        owner.scope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
+            try {
+                manager.events.collect { event -> owner.signals.update { record(it, event) } }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                observationFailed(owner, failure)
+            }
+        }
+        owner.scope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
+            try {
+                manager.state.collect { state ->
+                    if (state == NetworkProvisioningState.Closing || state == NetworkProvisioningState.Closed) {
+                        owner.signals.update { it.copy(unavailable = NetworkProvisioningError.ManagerClosed()) }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                observationFailed(owner, failure)
+            }
+        }
+        owner.scope.launch(renderDispatcher, start = CoroutineStart.UNDISPATCHED) {
+            owner.signals.collect { reconcile(owner) }
         }
     }
 
@@ -85,206 +134,226 @@ internal class ProvisioningUiState {
         previous?.scope?.cancel()
         previous?.hotspot = null
         previous?.joined = null
+        previous?.joinRequest = null
         _hotspotResult.value = null
         _joinResult.value = null
         _busy.value = false
+        _joinBusy.value = false
     }
 
-    fun startHotspot(onResult: (LocalNetworkResult) -> Unit = {}): Boolean = launchOperation { owner ->
-        owner.hotspotFailure = null
-        val result = try {
-            owner.manager.startLocalNetwork(LocalNetworkConfig())
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Throwable) {
-            LocalNetworkResult.Failed(provisioningError(failure))
-        }
-        reconcileSnapshots(owner)
-        if (!isCurrent(owner)) return@launchOperation
-        if (result is LocalNetworkResult.Started || result is LocalNetworkResult.StartedWithoutCredentials) {
-            if (hotspotConfirmed(owner)) {
-                owner.hotspotFailure = null
-                owner.hotspot = result
-                _hotspotResult.value = result
-            } else {
-                failHotspot(owner, owner.hotspotFailure ?: NetworkProvisioningError.HotspotStopped(
-                    "Hotspot ended before its start result was delivered. Retry hosting."
-                ))
+    fun startHotspot(onResult: (LocalNetworkResult) -> Unit = {}): Boolean =
+        launchOperation(Operation.START) { owner ->
+            val result = try {
+                owner.manager.startLocalNetwork(LocalNetworkConfig())
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                LocalNetworkResult.Failed(provisioningError(failure))
             }
-        } else if (owner.hotspot == null) {
-            _hotspotResult.value = result
+            currentCoroutineContext().ensureActive()
+            if (result is LocalNetworkResult.Failed) observeClosedResult(owner, result.error)
+            reconcile(owner)
+            if (!isCurrent(owner)) return@launchOperation
+            val reported = when (result) {
+                is LocalNetworkResult.Started, is LocalNetworkResult.StartedWithoutCredentials -> {
+                    when (val signal = owner.observed.hotspot) {
+                        is ResourceSignal.Live -> {
+                            owner.hotspot = result
+                            _hotspotResult.value = result
+                            result
+                        }
+                        else -> LocalNetworkResult.Failed(
+                            (signal as? ResourceSignal.Ended)?.error ?: NetworkProvisioningError.HotspotStopped(
+                                "Hotspot lifetime ended or could not be confirmed. Retry hosting."
+                            )
+                        ).also { _hotspotResult.value = it }
+                    }
+                }
+                else -> result.also { if (owner.hotspot == null) _hotspotResult.value = it }
+            }
+            onResult(reported)
         }
-        onResult(_hotspotResult.value ?: result)
-    }
 
-    fun stopHotspot(onResult: (Result<Unit>) -> Unit = {}): Boolean = launchOperation { owner ->
-        val result = try {
-            owner.manager.stopLocalNetwork()
-            Result.success(Unit)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Throwable) {
-            Result.failure(failure)
-        }
-        if (isCurrent(owner)) {
+    fun stopHotspot(onResult: (Result<Unit>) -> Unit = {}): Boolean =
+        launchOperation(Operation.STOP) { owner ->
+            val result = try {
+                owner.manager.stopLocalNetwork()
+                Result.success(Unit)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                Result.failure(failure)
+            }
+            currentCoroutineContext().ensureActive()
+            (result.exceptionOrNull() as? NetworkProvisioningError)?.let { observeClosedResult(owner, it) }
+            reconcile(owner)
+            if (!isCurrent(owner)) return@launchOperation
             owner.hotspot = null
-            val failure = result.exceptionOrNull()
-            if (failure == null) {
-                owner.hotspotFailure = null
-                _hotspotResult.value = null
-            } else {
-                failHotspot(owner, provisioningError(failure))
-            }
+            _hotspotResult.value = result.exceptionOrNull()?.let { LocalNetworkResult.Failed(provisioningError(it)) }
             onResult(result)
         }
-    }
 
     fun joinHotspot(credentials: WifiCredentials, onResult: (JoinNetworkResult) -> Unit = {}): Boolean =
-        launchOperation { owner ->
-            owner.joinFailure = null
-            owner.joinDismissed = false
-            owner.joinPending = true
+        launchOperation(Operation.JOIN) { owner ->
+            val request = JoinRequest(owner.signals.value.failure)
+            owner.joinRequest = request
+            if (owner.joined == null) owner.joinDismissed = false
             val result = try {
                 owner.manager.joinLocalNetwork(credentials)
             } catch (cancelled: CancellationException) {
-                owner.joinPending = false
                 throw cancelled
             } catch (failure: Throwable) {
                 JoinNetworkResult.Failed(provisioningError(failure))
             }
-            reconcileSnapshots(owner)
+            currentCoroutineContext().ensureActive()
+            if (result is JoinNetworkResult.Failed) observeClosedResult(owner, result.error)
+            request.awaitingEvent = result is JoinNetworkResult.Pending
+            reconcile(owner)
             if (!isCurrent(owner)) return@launchOperation
-            if (result is JoinNetworkResult.Joined) {
-                if (joinConfirmed(owner)) {
-                    owner.joinFailure = null
-                    owner.joined = result
-                    owner.joinPending = false
-                } else {
-                    failJoin(owner, owner.joinFailure ?: NetworkProvisioningError.JoinFailed(
-                        "Joined network was released before its result was delivered. Retry joining."
-                    ))
+            val reported = when (result) {
+                is JoinNetworkResult.Joined -> owner.joined ?: JoinNetworkResult.Failed(
+                    (owner.observed.join as? ResourceSignal.Ended)?.error ?: NetworkProvisioningError.JoinFailed(
+                        "Joined network was released or could not be confirmed. Retry joining."
+                    )
+                )
+                JoinNetworkResult.Pending -> owner.joined ?: if (owner.joinRequest === request) result else {
+                    _joinResult.value ?: result
                 }
-            } else if (result !is JoinNetworkResult.Pending) {
-                owner.joinPending = false
+                else -> result
             }
-            // A repeat-join refusal is an operation result, not release of the existing binding.
-            _joinResult.value = owner.joined ?: owner.joinFailure?.let(JoinNetworkResult::Failed) ?: result
-            onResult(_joinResult.value ?: result)
+            if (result !is JoinNetworkResult.Pending || owner.joined != null) owner.joinRequest = null
+            // An already-active refusal is not release. Report the actual operation result
+            // to the caller, without relabelling the existing binding or undoing dismissal.
+            if (owner.joined == null) _joinResult.value = reported
+            onResult(reported)
         }
 
-    /** Hides an established join without releasing it; a pending request may still report its outcome. */
+    /** Hide an established join, not its lifetime. Dismissing Pending still allows its final outcome. */
     fun dismissJoin() {
-        run?.joinDismissed = run?.joined != null
+        val owner = run ?: return
+        reconcile(owner)
+        if (!isCurrent(owner)) return
+        owner.joinDismissed = owner.joined != null
         _joinResult.value = null
     }
 
-    private fun onEvent(owner: Run, event: NetworkProvisioningEvent) {
-        reconcileSnapshots(owner)
-        if (!isCurrent(owner)) return
-        when (event) {
+    private fun record(previous: Signals, event: NetworkProvisioningEvent): Signals {
+        if (previous.unavailable != null) return previous
+        return when (event) {
+            is NetworkProvisioningEvent.LocalNetworkStarted -> previous.copy(hotspot = ResourceSignal.Live())
+            NetworkProvisioningEvent.LocalNetworkStopped -> previous.copy(hotspot = ResourceSignal.Ended())
+            is NetworkProvisioningEvent.NetworkJoined -> previous.copy(
+                join = ResourceSignal.Live(event.state), joinSuccesses = previous.joinSuccesses + 1
+            )
             is NetworkProvisioningEvent.Failed -> when (val error = event.error) {
-                is NetworkProvisioningError.HotspotStopped -> {
-                    if (!hotspotConfirmed(owner)) failHotspot(owner, error)
-                }
-                is NetworkProvisioningError.JoinFailed -> {
-                    if (!joinConfirmed(owner)) failJoin(owner, error)
-                }
-                is NetworkProvisioningError.ManagerClosed -> retireClosedManager(owner)
-                // CleanupFailed can concern an already retired resource while the other one is
-                // live. Without a resource tag it must not invalidate either successful card.
-                else -> Unit
+                is NetworkProvisioningError.HotspotStopped -> previous.copy(hotspot = ResourceSignal.Ended(error))
+                is NetworkProvisioningError.JoinFailed -> previous.copy(join = ResourceSignal.Ended(error))
+                is NetworkProvisioningError.ManagerClosed -> previous.copy(unavailable = error)
+                // CleanupFailed is untagged and can concern an already retired resource.
+                // It cannot revoke a live card or overwrite a pending request's terminal signal.
+                is NetworkProvisioningError.CleanupFailed -> previous
+                else -> previous.copy(failure = FailureNotice(error))
             }
-            NetworkProvisioningEvent.LocalNetworkStopped -> {
-                if (!hotspotConfirmed(owner)) {
-                    owner.hotspot = null
-                    owner.hotspotFailure = null
-                    _hotspotResult.value = null
-                }
-            }
-            is NetworkProvisioningEvent.NetworkJoined -> {
-                // In particular, a queued Joined event cannot undo a newer failure snapshot.
-                if (owner.joinPending && owner.joinFailure == null && joinConfirmed(owner)) {
-                    owner.joined = JoinNetworkResult.Joined(event.state)
-                    owner.joinPending = false
-                    _joinResult.value = owner.joined
-                }
-            }
-            is NetworkProvisioningEvent.LocalNetworkStarted,
-            is NetworkProvisioningEvent.UserActionRequired -> Unit
+            is NetworkProvisioningEvent.UserActionRequired -> previous
         }
     }
 
-    private fun reconcileSnapshots(owner: Run) {
+    private fun reconcile(owner: Run) {
         if (!isCurrent(owner)) return
-        // Read current values, not an independently queued collector's possibly older argument.
-        when (val state = owner.manager.state.value) {
-            NetworkProvisioningState.Closing, NetworkProvisioningState.Closed -> retireClosedManager(owner)
-            is NetworkProvisioningState.Failed -> when (val error = state.error) {
-                is NetworkProvisioningError.HotspotStopped -> {
-                    if (!hotspotConfirmed(owner)) failHotspot(owner, error)
+        // Read one current snapshot, never an independently queued, older collector argument.
+        val latest = owner.signals.value
+        val previous = owner.observed
+        owner.observed = latest
+        // Success may be followed by release before the UI gets a turn. Credential clearing
+        // must still happen even when no Joined card was ever rendered (or it was dismissed).
+        _joinSuccessCount.value += latest.joinSuccesses - previous.joinSuccesses
+        latest.unavailable?.let { retire(owner, it); return }
+        if (latest.hotspot !== previous.hotspot) {
+            owner.hotspot = null
+            _hotspotResult.value = (latest.hotspot as? ResourceSignal.Ended)?.error?.let(LocalNetworkResult::Failed)
+        }
+        if (latest.join !== previous.join) {
+            when (val signal = latest.join) {
+                is ResourceSignal.Live -> {
+                    owner.joined = JoinNetworkResult.Joined(requireNotNull(signal.joinedState))
+                    owner.joinRequest = null
+                    if (!owner.joinDismissed) _joinResult.value = owner.joined
                 }
-                is NetworkProvisioningError.JoinFailed -> {
-                    if (!joinConfirmed(owner)) failJoin(owner, error)
+                is ResourceSignal.Ended -> {
+                    owner.joined = null
+                    owner.joinRequest = null
+                    owner.joinDismissed = false
+                    _joinResult.value = signal.error?.let(JoinNetworkResult::Failed)
                 }
-                is NetworkProvisioningError.ManagerClosed -> retireClosedManager(owner)
-                else -> Unit
+                null -> Unit
             }
-            else -> Unit
+        }
+        val request = owner.joinRequest
+        val failure = latest.failure
+        if (request?.awaitingEvent == true && failure != null && failure !== request.previousFailure) {
+            owner.joinRequest = null
+            if (owner.joined == null) _joinResult.value = JoinNetworkResult.Failed(failure.error)
+        }
+        updateBusy(owner)
+    }
+
+    private fun observeClosedResult(owner: Run, error: NetworkProvisioningError) {
+        if (error is NetworkProvisioningError.ManagerClosed) {
+            owner.signals.update { it.copy(unavailable = error) }
         }
     }
 
-    private fun hotspotConfirmed(owner: Run): Boolean =
-        owner.manager.state.value == NetworkProvisioningState.LocalNetworkRunning ||
-            owner.manager.networkState.value is NetworkState.LocalNetworkHosted
-
-    private fun joinConfirmed(owner: Run): Boolean =
-        owner.manager.state.value == NetworkProvisioningState.JoinedNetwork ||
-            owner.manager.networkState.value is NetworkState.ConnectedToWifi
-
-    private fun failHotspot(owner: Run, error: NetworkProvisioningError) {
-        owner.hotspot = null
-        owner.hotspotFailure = error
-        _hotspotResult.value = LocalNetworkResult.Failed(error)
+    private fun observationFailed(owner: Run, failure: Throwable) {
+        val error = NetworkProvisioningError.PlatformError(
+            IllegalStateException("Provisioning observation failed (${failure::class.simpleName}); restart the kit.")
+        )
+        owner.signals.update { if (it.unavailable == null) it.copy(unavailable = error) else it }
     }
 
-    private fun failJoin(owner: Run, error: NetworkProvisioningError) {
-        owner.joined = null
-        owner.joinFailure = error
-        owner.joinPending = false
-        owner.joinDismissed = false
-        _joinResult.value = JoinNetworkResult.Failed(error)
-    }
-
-    private fun retireClosedManager(owner: Run) {
-        val hadHotspot = _hotspotResult.value != null
-        val hadJoin = _joinResult.value != null || owner.joined != null || owner.joinPending
+    private fun retire(owner: Run, error: NetworkProvisioningError) {
+        val hadHotspot = _hotspotResult.value != null || owner.operation == Operation.START ||
+            owner.operation == Operation.STOP
+        val hadJoin = _joinResult.value != null || owner.joined != null || owner.joinRequest != null ||
+            owner.operation == Operation.JOIN
         detach()
-        if (hadHotspot) _hotspotResult.value = LocalNetworkResult.Failed(NetworkProvisioningError.ManagerClosed())
-        if (hadJoin) _joinResult.value = JoinNetworkResult.Failed(NetworkProvisioningError.ManagerClosed())
+        if (hadHotspot) _hotspotResult.value = LocalNetworkResult.Failed(error)
+        if (hadJoin) _joinResult.value = JoinNetworkResult.Failed(error)
     }
 
     private fun isCurrent(owner: Run): Boolean = run === owner && owner.scope.isActive
 
-    private fun launchOperation(action: suspend (Run) -> Unit): Boolean {
+    private fun launchOperation(kind: Operation, action: suspend (Run) -> Unit): Boolean {
         val owner = run ?: return false
-        if (!isCurrent(owner) || _busy.value || owner.joinPending) return false
-        _busy.value = true
-        owner.operation = owner.scope.launch {
+        reconcile(owner)
+        if (!isCurrent(owner) || owner.operation != null || (kind == Operation.JOIN && owner.joinRequest != null)) {
+            return false
+        }
+        owner.operation = kind
+        updateBusy(owner)
+        owner.scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
-                // Let already queued lifecycle notifications settle before a new acquisition
-                // can replace the manager's last-owner snapshots. This is not an OS timeout.
+                // Establish finally before the first dispatch/cancellation. This is only a
+                // scheduling boundary, NOT a heuristic for draining lifecycle notifications.
                 yield()
-                reconcileSnapshots(owner)
                 if (isCurrent(owner)) action(owner)
             } finally {
-                if (isCurrent(owner)) {
-                    // Drain emissions made before API completion before offering another operation.
-                    yield()
-                    if (isCurrent(owner)) _busy.value = false
+                // No suspension: cancellation must not strand busy, nor may a retired run's
+                // late result/finalizer change a replacement kit's controls.
+                if (run === owner) {
+                    owner.operation = null
+                    if (kind == Operation.JOIN && owner.joinRequest?.awaitingEvent != true) owner.joinRequest = null
+                    reconcile(owner)
+                    updateBusy(owner)
                 }
             }
         }
         return true
+    }
+
+    private fun updateBusy(owner: Run) {
+        if (!isCurrent(owner)) return
+        _busy.value = owner.operation != null
+        _joinBusy.value = _busy.value || owner.joinRequest != null
     }
 
     private fun provisioningError(failure: Throwable): NetworkProvisioningError =

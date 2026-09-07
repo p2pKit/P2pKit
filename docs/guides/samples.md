@@ -56,6 +56,32 @@ dialing consumes the displayed full `p2f1-…` fingerprint; iOS manual dialing
 consumes the whole QR. `info` supplies CLI endpoints. These flows do not provide
 internet signaling, NAT traversal, or automatic fallback to plaintext.
 
+## Android provisioning lifetime
+
+The Android sample subscribes before allowing provisioning calls. Its hotspot and
+join cards follow separate resource lifetimes, not just the acquisition result or
+the manager's last-owner snapshots. System stop/release removes the corresponding
+live claim and credentials/endpoints without erasing the other live resource.
+Stopping the hotspot does **not** leave a joined network; stop the kit to release
+that binding. Dismissing an established join only hides its card. A later genuine
+release is shown as a failure; a refused repeat join does not release the binding.
+
+The presenter records the Android manager's hot-flow events without waiting for
+the UI thread, then applies the latest two-resource snapshot on the main thread.
+Keep that recorder non-suspending: do not put UI, logging or native work in it.
+Manager close or kit replacement retires its subscriptions and pending UI work;
+the kit/manager, not the presenter, owns native cleanup. Events are not cleanup
+acknowledgements. This sample wiring is not a general replay/history guarantee for
+late subscribers to the library's event flow.
+
+API calls are serialized. An asynchronous `Pending` join keeps the join control
+disabled even after dismissal, while allowing hotspot controls once the API call
+returns. Android's current manager instead awaits its bounded OS callback before
+returning. A genuine join success clears ephemeral input even when immediate
+release or dismissal prevents a `Joined` card from being rendered. Passphrases
+remain non-saveable, obscured by default, and cleared on stop/disposal; a permission
+grant never silently resubmits a cleared credential.
+
 ## Desktop UI security posture
 
 The Desktop UI is a development harness, not a trusted room. Its persistent

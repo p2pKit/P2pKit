@@ -145,6 +145,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      */
     private val provisioningUi = ProvisioningUiState()
     val provisioningBusy: StateFlow<Boolean> = provisioningUi.busy
+    /** Also disables joining after an asynchronous Pending result; hosting stays independent. */
+    val joinProvisioningBusy: StateFlow<Boolean> = provisioningUi.joinBusy
+    /** Clears ephemeral credentials even if a successful join is immediately released or dismissed. */
+    val joinSuccessCount: StateFlow<Long> = provisioningUi.joinSuccessCount
 
     /**
      * Mirror of [P2pKit.networkPathStatus]. Surfaced in the room screen as
@@ -847,7 +851,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         security: WifiSecurityType = WifiSecurityType.WPA2
     ) {
         if (kit == null || runScope == null) return
-        if (provisioningBusy.value) {
+        if (joinProvisioningBusy.value) {
             Log.i(LOG_TAG, "joinHotspot ignored: provisioning busy")
             return
         }
