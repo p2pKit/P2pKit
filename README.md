@@ -42,6 +42,9 @@ reachable on the LAN. Guest/enterprise Wi-Fi may block multicast or peer TCP.
 ## Install
 
 Use `mavenCentral()` and keep all P2pKit modules on the same version.
+Supported consumer languages are Kotlin (Android, JVM/Desktop, and KMP) and
+Swift through the source-built XCFramework. Java is not supported as an
+end-to-end SDK integration; see the [Java interop limitations](docs/compatibility.md#consumer-languages-and-java-interop).
 
 | Published module | Purpose |
 | --- | --- |

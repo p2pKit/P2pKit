@@ -77,7 +77,10 @@ record produced during the 0.7 remediation is preserved in
 - Incoming offers remain in `pendingFileOffers` until accepted, rejected,
   cancelled, expired, or cleaned up by lifecycle limits.
 - Transfer failures use structured `FileTransferFailed` categories suitable for
-  Kotlin, Java, and Swift mapping.
+  Kotlin, Java, and Swift mapping. On Java, `getKind()`, `getPhase()`,
+  `getRetryability()` and `getTransferId()` are ordinary callable getters;
+  this narrow mapping contract does not promise a complete Java SDK. See
+  [consumer-language and Java interop limits](../compatibility.md#consumer-languages-and-java-interop).
 - The sender hashes the exact prepared byte snapshot before transfer. The
   negotiated `file-commit-sha256-v1` flow transmits length and SHA-256, streams
   bounded chunks, verifies at the receiver, flushes and atomically commits the
