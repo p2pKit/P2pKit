@@ -1,16 +1,16 @@
 # Issue disposition index
 
-Checkpoint inventory: **168 issues; 49 reviewed repairs (29.2%), 119 remaining (70.8%)**.
+Checkpoint inventory: **168 issues; 50 reviewed repairs (29.8%), 118 remaining (70.2%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #317 is reviewed;
-#325 is next. Read [the full records](issues.json) for scope, dependencies, commits and outcome links.
+refresh. Reviewed repairs are in the audit branch history, not merged/released by this checkpoint. #325 is reviewed with the protected-AGENTS exception;
+#190 is next. Read [the full records](issues.json) for scope, dependencies, commits and outcome links.
 Read [the root handoff](../../../AUDIT_CHECKPOINT.md) for exact evidence limits and mandatory review/cleanup.
 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (49)
+## Repairs with recorded independent approval (50)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -43,6 +43,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#321: [AUDIT] Android sample leaks process-global LAN diagnostics enablement](https://github.com/p2pKit/P2pKit/issues/321) | medium | New audit | `61484e1f0f53` |
 | [#323: [AUDIT] Rolling JSONL rotation ignores failures and can exceed its disk bound](https://github.com/p2pKit/P2pKit/issues/323) | low | New audit | `e5ee1bfb71b0` |
 | [#324: [AUDIT] Android sample persists and exposes hotspot passphrases](https://github.com/p2pKit/P2pKit/issues/324) | medium | New audit | `e392c13cfe83` |
+| [#325: [AUDIT] Setup prerequisites omit Android Platform 37 required by the sample](https://github.com/p2pKit/P2pKit/issues/325) | medium | New audit | `6ebfb9f81de4` |
 | [#328: [AUDIT] Samples key session-scoped transfer IDs as process-global IDs](https://github.com/p2pKit/P2pKit/issues/328) | medium | New audit | `852a088e3f70` |
 | [#332: [AUDIT] JVM and Android retain stale peers after invalid re-resolution](https://github.com/p2pKit/P2pKit/issues/332) | medium | New audit | `ad1d624499cb` |
 | [#334: [AUDIT] Dependency verifier cannot approve Gradle plugin marker updates](https://github.com/p2pKit/P2pKit/issues/334) | medium | New audit | `d1a93d025485` |
@@ -64,7 +65,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#353: [AUDIT] Android API24/25 diagnostics use API26 java.time and NIO without core-library desugaring](https://github.com/p2pKit/P2pKit/issues/353) | low | New audit | `44fdfeeb66a6` |
 | [#354: [AUDIT] Android hotspot Retry restarts instead of retrying failed cleanup](https://github.com/p2pKit/P2pKit/issues/354) | low | New audit | `b6af5b8b78bd` |
 
-## Pending remediation (97)
+## Pending remediation (96)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -155,7 +156,6 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#314: [WSF-19] iosApp scripts README teaches a manual Xcode phase setup that project.yml automates](https://github.com/p2pKit/P2pKit/issues/314) | low | Existing | — |
 | [#316: [WSF-24] Diagnostics recorder exposes three unused pause APIs](https://github.com/p2pKit/P2pKit/issues/316) | low | Existing | — |
 | [#322: [AUDIT] Per-session evidence reports recorder-lifetime dropped-event totals](https://github.com/p2pKit/P2pKit/issues/322) | low | New audit | — |
-| [#325: [AUDIT] Setup prerequisites omit Android Platform 37 required by the sample](https://github.com/p2pKit/P2pKit/issues/325) | medium | New audit | — |
 | [#326: [AUDIT] Validation catalog hard-codes a maintainer checkout path](https://github.com/p2pKit/P2pKit/issues/326) | low | New audit | — |
 | [#327: [AUDIT] iOS install recipe uses a DerivedData path the build never selects](https://github.com/p2pKit/P2pKit/issues/327) | low | New audit | — |
 | [#329: [AUDIT] CLI auto-mesh does not redial after stable-peer session loss](https://github.com/p2pKit/P2pKit/issues/329) | low | New audit | — |

@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T05:18:37.596827+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T06:14:10.630840+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -1377,7 +1377,7 @@
       ],
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
+      "assessmentAtCheckpoint": "Next sequential repair; no implementation or completed review recorded. Full issue/comments/timeline refreshed for read-ahead. Recommended documentation-only correction clarifies Kotlin/Swift consumption vs ABI guarding, accurately describes Java identity/builder limits and preserves FileTransferFailed Java mapping. Verify actual bytecode/javac before repeating internal-constructor claims; keep immutable RC baselines unchanged. #187 and #133 remain subsequent medium integration/compatibility work.",
       "recordedFixCommitsOrFinalRevision": [],
       "recordedIndependentReview": "No completed local repair/review cycle recorded",
       "publicInvestigationAndOutcomeUrls": [
@@ -3516,18 +3516,22 @@
       "url": "https://github.com/p2pKit/P2pKit/issues/325",
       "origin": "NEW_AUDIT_FINDING",
       "severityAtCheckpoint": "medium",
-      "reportedProblemExcerpt": "Medium",
-      "affectedComponentsExcerpt": "",
+      "reportedProblemExcerpt": "Setup guidance names only library compile SDK36, while the Android sample requires separate SDK37 (actual package platforms;android-37.0).",
+      "affectedComponentsExcerpt": "CONTRIBUTING.md, docs/testing/local.md, docs/validation/test-catalog.md, scripts/tests/check-repository-layout.sh and new check-android-setup-policy-test.rb. Protected AGENTS.md:9 remains unchanged by owner instruction.",
       "relatedIssuesAndDependencies": [
         208,
         225
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Next sequential repair. #325/#208/#225 bodies/comments/timelines captured for current investigation; read complete histories and callers before editing. Catalog/library compile SDK is 36 while Android sample requires 37. Correct editable canonical setup guidance and add drift coverage without modifying protected AGENTS.md or CLAUDE.md; explicitly account for any remaining protected wording. No #325 implementation or completed review recorded at this checkpoint.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
-      "publicInvestigationAndOutcomeUrls": []
+      "assessmentAtCheckpoint": "Feasible correction 6ebfb9f is reviewed and pushed to the audit branch, not merged/released. Canonical setup distinguishes SDK36/SDK37.0/runtime API24, installation and SDK-root precedence; contributor/validation links and catalog/CI drift policy cover the defect. Real baseline SDK probe confirms android-37.0 resolution requirement. Clean check plus Android assembly: 2236 passed, 1 unchanged manual skip, 236 executed tasks; eight static gates pass. Protected AGENTS.md:9 retains incomplete library-only wording by owner instruction; literal alignment requires new authorization and is not claimed fixed. #208/#225 and full audit/external gates remain pending.",
+      "recordedFixCommitsOrFinalRevision": [
+        "6ebfb9f81de45164cc2f148db753c65a7061f835"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_325_r1 APPROVE of entire b332da1..6ebfb9f feasible correction, with protected-file caveat and no actionable findings. 1501 evidence entries independently rehashed and 269 XMLs reparsed; report SHA256 a0d38a9eee14c659565c6a0f50d921000ea3191fb9151f49cec478968f740fa0.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/325#issuecomment-5565989401"
+      ]
     },
     {
       "number": 326,
@@ -4203,5 +4207,5 @@
       ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T05:37:19.025744+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T06:27:21.971230+00:00"
 }
