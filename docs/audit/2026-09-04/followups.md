@@ -74,13 +74,18 @@ was unchanged apart from extraction; actual native endpoints/TXT, generation gat
 This is not live native browse-result/multicast delivery or physical-device evidence. See the
 [verified investigation](https://github.com/p2pKit/P2pKit/issues/332#issuecomment-5575802714).
 
-The row's Apple scope is reopened pending correction, verification and a fresh independent review. The prior JVM/Android
-approval remains valid for its recorded scope only; no duplicate was filed. Read #23 and merged #24/#72/#101/#102 for
-separate startup/path/generation/correlation decisions; their external campaigns remain pending. Verify Found-to-invalid-
-to-Lost, late subscribers, retained dial leases, stale/current generations, recovery, repeated rejection and shutdown.
+The complete four-file Apple follow-up is now independently approved/pushed at `78ef361`, preserving the prior
+JVM/Android approval; no duplicate was filed. See [the repair report](repairs/332-apple.md) and
+[verified outcome](https://github.com/p2pKit/P2pKit/issues/332#issuecomment-5576324322). Twenty native-input methods/both
+profiles cover Found-to-invalid-to-Lost, late subscribers, controlled pending-dial ownership, stale/current generations,
+capacity, recovery, repeated rejection and stop/restart. Full check/Android assembly passes 2,387/zero failures/errors/
+one unchanged manual skip; eight controls and 14 static gates pass. This is not live multicast or a real TCP handshake.
+Read #23 and merged #24/#72/#101/#102 for separate startup/path/generation/correlation decisions; their external
+campaigns and #120 architecture remain pending. The #332 row returns to approved repository scope, not issue closure.
 
 Separately, the Apple NUL-key alias mechanism was **confirmed and filed as
 [#356](https://github.com/p2pKit/P2pKit/issues/356)** using actual macOS Network.framework plus a first-party caller
 trace. Its complete six-file correction is independently approved/pushed at `183b6c9`; see the [repair report](repairs/356.md).
-That fixes the original-key/native-representation/byte boundary, not this now-confirmed lifecycle mechanism and not an
-expansion of #229's value approval. Complete the reopened transition repair using the corrected native decoder.
+That fixes the original-key/native-representation/byte boundary; the separately approved #332 correction handles the
+lifecycle transition. Neither expands #229's original value approval. Earlier reports' unconfirmed/pending wording
+is historical and superseded here, not rewritten. The 0.8.0+ admission-change restriction remains.

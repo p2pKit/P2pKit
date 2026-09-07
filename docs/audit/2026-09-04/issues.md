@@ -1,19 +1,19 @@
 # Issue disposition index
 
-Checkpoint inventory: **171 issues; 60 reviewed repository repairs (35.1%), 111 remaining issue rows (64.9%)**.
+Checkpoint inventory: **171 issues; 61 reviewed repository repairs (35.7%), 110 remaining issue rows (64.3%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed fixes are in the audit branch, not merged/released. #356 is independently approved through `183b6c9`,
-following the earlier #229/#357 approvals. #332 now has confirmed, reopened Apple scope; its prior JVM/Android
-approval remains valid but does not cover the Apple correction/review still required. #133's independent interoperability remains NOT STARTED.
-Percentages do not count completion of external acceptance attached to approved rows, including #133.
-The #325 protected-AGENTS exception remains recorded. Read [the full records](issues.json) for scope, dependencies,
-commits and outcome links, and [the root handoff](../../../AUDIT_CHECKPOINT.md) for evidence limits and cleanup rules.
+refresh. Reviewed fixes are in the audit branch, not merged/released. #332's Apple follow-up is independently approved
+through `78ef361`, retaining the prior JVM/Android approval and the earlier #229/#356/#357 corrections. Its reopened row
+returns to approved; it is not a newly counted duplicate issue. #133's independent interoperability remains NOT STARTED.
+Percentages do not count external acceptance attached to approved rows. The #325 protected-AGENTS exception remains.
+Read [the full records](issues.json) for scope, dependencies, commits and public outcomes, and [the root handoff](../../../AUDIT_CHECKPOINT.md)
+for evidence limits and cleanup rules. Historical assessment text retains its original review-time scope.
 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (60)
+## Repairs with recorded independent approval (61)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -56,6 +56,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#324: [AUDIT] Android sample persists and exposes hotspot passphrases](https://github.com/p2pKit/P2pKit/issues/324) | medium | New audit | `e392c13cfe83` |
 | [#325: [AUDIT] Setup prerequisites omit Android Platform 37 required by the sample](https://github.com/p2pKit/P2pKit/issues/325) | medium | New audit | `6ebfb9f81de4` |
 | [#328: [AUDIT] Samples key session-scoped transfer IDs as process-global IDs](https://github.com/p2pKit/P2pKit/issues/328) | medium | New audit | `852a088e3f70` |
+| [#332: [AUDIT] LAN discovery retains stale peers after invalid re-resolution (JVM, Android, Apple)](https://github.com/p2pKit/P2pKit/issues/332) | medium | New audit | `78ef36142fe7` |
 | [#334: [AUDIT] Dependency verifier cannot approve Gradle plugin marker updates](https://github.com/p2pKit/P2pKit/issues/334) | medium | New audit | `d1a93d025485` |
 | [#335: [AUDIT] Dependency verifier rejects valid issuer-key-ID-only OpenPGP signatures](https://github.com/p2pKit/P2pKit/issues/335) | medium | New audit | `d6d8585e39a2` |
 | [#336: [AUDIT] Late terminal diagnostic callbacks retire replacement SDK sessions](https://github.com/p2pKit/P2pKit/issues/336) | medium | New audit | `df4c042f3e90` |
@@ -78,7 +79,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#356: [AUDIT][Low] Apple Bonjour aliases NUL-containing TXT keys into canonical fields](https://github.com/p2pKit/P2pKit/issues/356) | low | New audit | `183b6c917faf` |
 | [#357: [AUDIT][Low] LAN watcher test races a real executor against a virtual timeout](https://github.com/p2pKit/P2pKit/issues/357) | low | New audit | `6d9cd3c74724` |
 
-## Pending remediation (89)
+## Pending remediation (88)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -166,7 +167,6 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#329: [AUDIT] CLI auto-mesh does not redial after stable-peer session loss](https://github.com/p2pKit/P2pKit/issues/329) | low | New audit | — |
 | [#330: [AUDIT] iOS history cap can evict an active transfer row](https://github.com/p2pKit/P2pKit/issues/330) | low | New audit | — |
 | [#331: [AUDIT] Android base-LAN KDoc requires provisioning-only runtime permissions](https://github.com/p2pKit/P2pKit/issues/331) | low | New audit | — |
-| [#332: [AUDIT] LAN discovery retains stale peers after invalid re-resolution (JVM, Android, Apple)](https://github.com/p2pKit/P2pKit/issues/332) | medium | New audit | `ad1d624499cb` |
 | [#333: [AUDIT] Maintenance index gives the GitHub audit the wrong date](https://github.com/p2pKit/P2pKit/issues/333) | informational | New audit | — |
 | [#341: iOS sample groups the local TCP port, breaking copy/paste into manual dialing](https://github.com/p2pKit/P2pKit/issues/341) | low | New audit | — |
 | [#342: [Low] Discovery test fixture falsely claims current LAN delivery and acknowledgement semantics](https://github.com/p2pKit/P2pKit/issues/342) | low | New audit | — |

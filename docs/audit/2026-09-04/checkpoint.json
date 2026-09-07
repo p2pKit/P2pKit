@@ -5,22 +5,22 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "183b6c917faf989cb7c15372cda33829a58d3b57",
-  "sourceCheckpointTree": "d93f93f05f63a9933e0ab894327f94a995f28b36",
+  "sourceCheckpointCommit": "78ef36142fe79b4ff9672656c6f4c97f049678d0",
+  "sourceCheckpointTree": "0f8ab1465d257baac8110e3bd1ecf95859abe93c",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
-  "activeIssue": 332,
-  "activeIssueState": "APPLE_SCOPE_CONFIRMED_REOPENED_PENDING_REPAIR_PRIOR_JVM_ANDROID_APPROVAL_RETAINED",
+  "activeIssue": 130,
+  "activeIssueState": "NEXT_PENDING_READ_COMPLETE_ISSUE_BEFORE_REPAIR",
   "issueCountDenominator": 171,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
-    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 60,
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 61,
     "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
-    "PENDING_REMEDIATION": 89
+    "PENDING_REMEDIATION": 88
   },
-  "completedIssueCount": 60,
-  "remainingIssueCount": 111,
+  "completedIssueCount": 61,
+  "remainingIssueCount": 110,
   "percentageMeaning": "Reviewed repository-repair rows /171, not effort, issue closure or readiness. External acceptance still attached to approved rows (including #133) is not counted complete; independent interoperability remains separately NOT_STARTED.",
-  "githubIssueListRefreshedUtc": "2026-09-07T20:30:08.595524+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T22:45:14.872707+00:00",
   "githubTotalIssuesAtRefresh": 278,
   "githubOpenIssuesAtRefresh": 171,
   "newAuditIssueCount": 38,
@@ -29,37 +29,38 @@
   "scope": "Branch continuation only; not a merge, release, independent crypto assurance, or physical-device completion.",
   "preservedDraftCommit": "eb564e9487f2887f83f519575c82d4e7657864cb",
   "preservedDraftTree": "69161ac65e02bbf33d390bde2575d3131a9d7996",
-  "lastReviewedIssue": 356,
+  "lastReviewedIssue": 332,
   "lastIntegratedCheck": {
-    "commit": "183b6c917faf989cb7c15372cda33829a58d3b57",
-    "tree": "d93f93f05f63a9933e0ab894327f94a995f28b36",
-    "passed": 2367,
+    "commit": "78ef36142fe79b4ff9672656c6f4c97f049678d0",
+    "tree": "0f8ab1465d257baac8110e3bd1ecf95859abe93c",
+    "passed": 2387,
     "failures": 0,
     "errors": 0,
     "skipped": 1,
-    "scope": "Clean full check+Android assembleDebug, strict/rerun/no-cache/bounded;246 executed tasks,289 XMLs, 2367 passes/0 failure/error/1 unchanged manual LAN interop-capture skip. JVM,Android host,Kotlin/Native arm64 iOS simulator; not Swift XCTest,Intel runtime,ART/OEM,physical devices or independent interoperability. Actual ABI/lint/sample assembly pass. Final release/publication/isolated-consumer/Swift/XCFramework pending; #133 consumer evidence still bound to7127616, not rerun for#356."
+    "scope": "Clean full check+Android assembleDebug, strict/rerun/no-cache/bounded;246executed tasks,290XMLs, 2387passes/0failure/error/1unchanged manual LAN interop-capture skip. JVM,Android host,Kotlin/Native arm64 iOS simulator, actual ABI/lint/sample assembly; not Swift XCTest,Intel runtime,ART/OEM,physical devices or independent interoperability. Final release/publication/isolated-consumer/Swift/XCFramework pending;#133 consumer evidence still bound to7127616, not rerun for this Apple repair."
   },
   "protectedInstructionFilesCaveat": "Issue325 feasible correction preserves AGENTS.md:9 library-only SDK wording by owner instruction. Canonical setup explicitly warns about missing sample SDK. Literal alignment requires new owner authorization; not claimed fixed. CLAUDE.md unchanged.",
   "lastScopedVerification": {
-    "issue": 356,
-    "commit": "183b6c917faf989cb7c15372cda33829a58d3b57",
-    "tree": "d93f93f05f63a9933e0ab894327f94a995f28b36",
+    "issue": 332,
+    "scopePlatform": "Apple follow-up",
+    "commit": "78ef36142fe79b4ff9672656c6f4c97f049678d0",
+    "tree": "0f8ab1465d257baac8110e3bd1ecf95859abe93c",
     "staticGates": 14,
-    "negativeControls": 4,
-    "reviewSha256": "2bb0d0c47e33d0ad8612d6e64f0f3b45bdd827018c96ac33f8ccf2ef688c4da7",
-    "manifestSha256": "20bc9e4080f79578bc5218b4025f2a77385593071e8dec7083874c83a3b20408",
-    "scope": "Complete six-file Apple original-key/native-representation/byte-boundary correction APPROVED/pushed. Actual native25-case probe; baseline7 intended failures+5 controls; focused460 passes/1 unchanged manual skip, compiled draft equals commit except later checklist text;4 exact red controls restored. Final full2367 pass/0 failure/error/1 manual skip;14 static gates;1955 sealed entries/28 cleanup receipts. Not authentication bypass, lifecycle parity or release approval. Apple#332 transition unconfirmed; 0.8.0+ admission restriction and external/final release gates remain."
+    "negativeControls": 8,
+    "reviewSha256": "2b29c8a6332dd794469c77a39e3b834eb90e462d4176181d9115d4c892c64445",
+    "manifestSha256": "120d92c9c28d6c7c90b8117483cf06f2cf7ef975abe04a70668373228b6fde8e",
+    "scope": "Complete four-file current-browser invalid-re-resolution correction APPROVED/pushed.20 native-input transition tests/both profiles, focused480passes/1manual skip and8exact red controls restored. Precommit LAN patch byte-equals committed diff. Final full2387pass/0failure/error/1manual skip;14static gates;1992sealed entries/28cleanup receipts. Prior JVM/Android332 and229/356 parser approvals retained. No authentication bypass;0.8.0+ restriction remains. Native-input boundary/control-state evidence, not real NWBrowser result delivery, physical multicast or actual pending TCP handshake."
   },
   "lastIntegratedAttempt": {
-    "commit": "183b6c917faf989cb7c15372cda33829a58d3b57",
-    "tree": "d93f93f05f63a9933e0ab894327f94a995f28b36",
+    "commit": "78ef36142fe79b4ff9672656c6f4c97f049678d0",
+    "tree": "0f8ab1465d257baac8110e3bd1ecf95859abe93c",
     "result": "PASS",
     "executedTasks": 246,
-    "executedTestResultsPassed": 2367,
+    "executedTestResultsPassed": 2387,
     "testFailures": 0,
     "testErrors": 0,
     "testSkips": 1,
-    "scope": "Clean combined full check and Android assembly after#356. Not whole-audit/release/device or independent interoperability completion."
+    "scope": "Clean combined check and Android assembly after#332 Apple. Not whole-audit/release/device or independent interoperability completion."
   },
   "resolvedDrafts": [
     {
@@ -110,7 +111,16 @@
     "skipped": 1,
     "scope": "Clean full check+Android assembleDebug, strict/rerun/no-cache/bounded;246 executed tasks,285 XMLs, 2333 passes/0 failure/error/1 unchanged manual LAN interop-capture skip. JVM,Android host,Kotlin/Native arm64 iOS simulator tests; not Swift XCTest,Intel,ART/OEM,physical devices or independent interoperability. Actual ABI guards/lint/sample assembly pass; publication/isolated-consumer/Swift/XCFramework not rerun for these fixes. #133 consumer evidence remains bound to7127616; final release verification pending."
   },
-  "activeIssueInvestigation": {
+  "previousVerifiedIntegratedCheck356": {
+    "commit": "183b6c917faf989cb7c15372cda33829a58d3b57",
+    "tree": "d93f93f05f63a9933e0ab894327f94a995f28b36",
+    "passed": 2367,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1,
+    "scope": "Clean full check+Android assembleDebug, strict/rerun/no-cache/bounded;246 executed tasks,289 XMLs, 2367 passes/0 failure/error/1 unchanged manual LAN interop-capture skip. JVM,Android host,Kotlin/Native arm64 iOS simulator; not Swift XCTest,Intel runtime,ART/OEM,physical devices or independent interoperability. Actual ABI/lint/sample assembly pass. Final release/publication/isolated-consumer/Swift/XCFramework pending; #133 consumer evidence still bound to7127616, not rerun for#356."
+  },
+  "completedInvestigation332Apple": {
     "issue": 332,
     "baselineCommit": "3134789e0ebe072fd7bd96c2cc08ab0e0ad3ecb0",
     "baselineTree": "c9e4c590e43d8f9d8e7a2825d47d6f8e585487e6",
@@ -121,6 +131,7 @@
     "errors": 0,
     "skipped": 0,
     "publicEvidence": "https://github.com/p2pKit/P2pKit/issues/332#issuecomment-5575802714",
-    "scope": "Native endpoint/TXT inputs at actual first-party callback boundary; not live NWBrowser result delivery, multicast or physical device validation. Existing JVM/Android approval unchanged; Apple correction/review pending."
+    "scopeAtBaseline": "Native endpoint/TXT inputs at actual first-party callback boundary; not live NWBrowser result delivery, multicast or physical device validation. Existing JVM/Android approval unchanged; Apple correction/review pending.",
+    "finalStatus": "FOLLOWUP_APPROVED_AT_78ef361_AFTER_BASELINE_REPRODUCTION"
   }
 }

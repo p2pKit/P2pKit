@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T20:30:08.595524+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-07T22:45:14.872707+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -2186,7 +2186,7 @@
       ],
       "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Complete 14-file correction bf34f70 independently approved at combined 6d9cd3c after separately reviewed test-only prerequisite #357; both pushed to audit branch, not merged/released. Actual JmDNS3.6.3 normalizes both property APIs; original textBytes now feed bounded strict parsing. Valid U+FFFD remains valid, unknown fields remain ignored, every consumed duplicate is validated and #332 JVM/Android withdrawal stays intact. Baseline5 intended failures+1 valid control; focused426 passes /0 failure/error/1 unchanged manual skip;8 negative controls. Final full check/Android assembly2333 passes /0 failure/error/1 manual skip,285 XMLs,246 executed tasks;13 static gates pass. Canonical known-key VALUE parity only; separate Apple key correction #356 subsequently approved at183b6c9 and Apple invalid re-resolution unconfirmed. Admission tightening reserved for0.8.0+; not an authentication bypass. IssueOPEN; overallNOT READY.",
+      "assessmentAtCheckpoint": "Complete 14-file correction bf34f70 independently approved at combined 6d9cd3c after separately reviewed test-only prerequisite #357; both pushed to audit branch, not merged/released. Actual JmDNS3.6.3 normalizes both property APIs; original textBytes now feed bounded strict parsing. Valid U+FFFD remains valid, unknown fields remain ignored, every consumed duplicate is validated and #332 JVM/Android withdrawal stays intact. Baseline5 intended failures+1 valid control; focused426 passes /0 failure/error/1 unchanged manual skip;8 negative controls. Final full check/Android assembly2333 passes /0 failure/error/1 manual skip,285 XMLs,246 executed tasks;13 static gates pass. Canonical known-key VALUE parity only; separate Apple key correction #356 subsequently approved at183b6c9 and Apple invalid re-resolution unconfirmed. Admission tightening reserved for0.8.0+; not an authentication bypass. IssueOPEN; overallNOT READY. Dated qualification: Apple#332 was unconfirmed at that review; its separately confirmed follow-up is now approved at78ef361. The earlier correction/review is not silently expanded.",
       "recordedFixCommitsOrFinalRevision": [
         "bf34f70b13ceab1549741b09647fec0b603b15c0",
         "6d9cd3c7472415af5166f25864db17b659901c3c"
@@ -3723,16 +3723,18 @@
         229,
         356
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Apple same-current-generation invalid re-resolution confirmed at3134789 with behavior-equivalent native-input extraction:14 arm64 simulator cases,10 intended cache-retention assertion failures,4 passing controls,0 errors/skips;18 tasks. Existing JVM/Android ad1d624 approval remains valid, but does not cover Apple. Reopened row until Apple correction/focused+integrated verification/fresh independent review. No authentication bypass; #23 physical scope unchanged; #229/#356 decoders remain approved. All baseline cleanup finalized. OverallNOT READY.",
+      "assessmentAtCheckpoint": "Prior JVM/Android ad1d624 approval retained; same-root-cause Apple follow-up 78ef361 independently approved/pushed, not merged/released. Current-browser invalid TXT/schema/security/identity re-resolution withdraws only its admitted native-service cache/endpoint/relay ownership under the generation-fenced transaction. Retired callbacks, other peers, manual hints and existing dial/session ownership preserved. Baseline14 tests:10 intended failures+4 controls; final20 new transition cases run both profiles, focused480 passes/1 manual skip,8 exact red controls restored. Final full check+Android assembly2387 passes/0failures/errors/1manual skip,290XMLs,246tasks;14static gates. Native-input injection after browse-result copying and controlled connection states, not live multicast/physical/TCP-handshake proof. No public API/ABI, dependency, wire or authentication change;0.8.0+ admission restriction retained. IssueOPEN; external/final release gates pending; overallNOT READY.",
       "recordedFixCommitsOrFinalRevision": [
-        "ad1d624499cb4b13d3c86957d9bbbcf0b1132b14"
+        "ad1d624499cb4b13d3c86957d9bbbcf0b1132b14",
+        "78ef36142fe79b4ff9672656c6f4c97f049678d0"
       ],
-      "recordedIndependentReview": "Prior JVM/Android ad1d624 issue-scoped approval retained; NO Apple repair approval. See previousScopedApproval and evidence/recovery qualifications.",
+      "recordedIndependentReview": "Prior JVM/Android scoped approval retained. Fresh /root/review_332_apple_r1 APPROVE at78ef361/tree0f8ab146:complete four-file correction, surrounding callers/platforms/security/lifecycle/ownership contracts and tests;1992 sealed entries,290XMLs,28finalized cleanup receipts independently verified. No actionable findings or reviewer builds/workers. Report SHA256 2b29c8a6332dd794469c77a39e3b834eb90e462d4176181d9115d4c892c64445.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/332#issuecomment-5547811559",
-        "https://github.com/p2pKit/P2pKit/issues/332#issuecomment-5575802714"
+        "https://github.com/p2pKit/P2pKit/issues/332#issuecomment-5575802714",
+        "https://github.com/p2pKit/P2pKit/issues/332#issuecomment-5576324322"
       ],
       "previousScopedApproval": {
         "platforms": [
@@ -3744,7 +3746,7 @@
         "assessment": "Historical local fix and approval corroborated by surviving commit/GitHub outcomes; fresh integrated verification remains required.",
         "status": "UNCHANGED_SCOPED_APPROVAL_NOT_APPLE_APPROVAL"
       },
-      "repositoryScopeStatus": "APPLE_REOPENED_CONFIRMED_PENDING_REPAIR_AND_REVIEW"
+      "repositoryScopeStatus": "APPROVED"
     },
     {
       "number": 333,
@@ -4329,7 +4331,7 @@
         332
       ],
       "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
-      "assessmentAtCheckpoint": "Complete six-file correction183b6c9 independently approved/pushed; not merged/released. Apple now uses original bounded native TXT bytes before exact-key/strict-value parsing, covering dictionary and buffer representations, unsigned pre-copy bound, failed/short copy and framing rejection. Baseline7 intended assertion failures+5 controls; focused460 passes/1 unchanged manual skip;4 exact negative controls. Final clean full check+Android assembly2367 passes/0 failure/error/1 manual skip,289 XMLs,246 tasks;14 static gates pass. No public API/ABI, dependency, wire format, authentication or lifecycle ownership change. Admission change reserved for0.8.0+. Apple#332 transition remains unconfirmed. IssueOPEN; overallNOT READY.",
+      "assessmentAtCheckpoint": "Complete six-file correction183b6c9 independently approved/pushed; not merged/released. Apple now uses original bounded native TXT bytes before exact-key/strict-value parsing, covering dictionary and buffer representations, unsigned pre-copy bound, failed/short copy and framing rejection. Baseline7 intended assertion failures+5 controls; focused460 passes/1 unchanged manual skip;4 exact negative controls. Final clean full check+Android assembly2367 passes/0 failure/error/1 manual skip,289 XMLs,246 tasks;14 static gates pass. No public API/ABI, dependency, wire format, authentication or lifecycle ownership change. Admission change reserved for0.8.0+. Apple#332 transition remains unconfirmed. IssueOPEN; overallNOT READY. Dated qualification: Apple#332 was unconfirmed at that review; its separately confirmed follow-up is now approved at78ef361. The earlier correction/review is not silently expanded.",
       "recordedFixCommitsOrFinalRevision": [
         "183b6c917faf989cb7c15372cda33829a58d3b57"
       ],
@@ -4369,5 +4371,5 @@
       ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T21:34:53.288492+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T22:45:30.841586+00:00"
 }
