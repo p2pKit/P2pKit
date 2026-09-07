@@ -3710,27 +3710,41 @@
     },
     {
       "number": 332,
-      "title": "[AUDIT] JVM and Android retain stale peers after invalid re-resolution",
+      "title": "[AUDIT] LAN discovery retains stale peers after invalid re-resolution (JVM, Android, Apple)",
       "url": "https://github.com/p2pKit/P2pKit/issues/332",
       "origin": "NEW_AUDIT_FINDING",
       "severityAtCheckpoint": "medium",
       "reportedProblemExcerpt": "Medium — discovery retains stale identities and dial routes after the latest service record becomes invalid.",
-      "affectedComponentsExcerpt": "",
+      "affectedComponentsExcerpt": "JVM/Android prior repair plus newly confirmed Apple IosLanDiscoveryTransport native-TXT callback, announce cache, ReliablePeerEventRelay and IosEndpointRegistry/canConnect ownership.",
       "relatedIssuesAndDependencies": [
+        23,
         43,
         120,
-        229
+        229,
+        356
       ],
-      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Historical local fix and approval corroborated by surviving commit/GitHub outcomes; fresh integrated verification remains required.",
+      "assessmentAtCheckpoint": "Apple same-current-generation invalid re-resolution confirmed at3134789 with behavior-equivalent native-input extraction:14 arm64 simulator cases,10 intended cache-retention assertion failures,4 passing controls,0 errors/skips;18 tasks. Existing JVM/Android ad1d624 approval remains valid, but does not cover Apple. Reopened row until Apple correction/focused+integrated verification/fresh independent review. No authentication bypass; #23 physical scope unchanged; #229/#356 decoders remain approved. All baseline cleanup finalized. OverallNOT READY.",
       "recordedFixCommitsOrFinalRevision": [
         "ad1d624499cb4b13d3c86957d9bbbcf0b1132b14"
       ],
-      "recordedIndependentReview": "APPROVE recorded for issue-scoped local correction; see evidence/recovery qualifications",
+      "recordedIndependentReview": "Prior JVM/Android ad1d624 issue-scoped approval retained; NO Apple repair approval. See previousScopedApproval and evidence/recovery qualifications.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/332#issuecomment-5547811559"
-      ]
+        "https://github.com/p2pKit/P2pKit/issues/332#issuecomment-5547811559",
+        "https://github.com/p2pKit/P2pKit/issues/332#issuecomment-5575802714"
+      ],
+      "previousScopedApproval": {
+        "platforms": [
+          "JVM",
+          "Android"
+        ],
+        "commit": "ad1d624499cb4b13d3c86957d9bbbcf0b1132b14",
+        "review": "APPROVE recorded for issue-scoped local correction; see evidence/recovery qualifications",
+        "assessment": "Historical local fix and approval corroborated by surviving commit/GitHub outcomes; fresh integrated verification remains required.",
+        "status": "UNCHANGED_SCOPED_APPROVAL_NOT_APPLE_APPROVAL"
+      },
+      "repositoryScopeStatus": "APPLE_REOPENED_CONFIRMED_PENDING_REPAIR_AND_REVIEW"
     },
     {
       "number": 333,
@@ -4355,5 +4369,5 @@
       ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T20:50:35.183026+00:00"
+  "lastDispositionUpdateUtc": "2026-09-07T21:34:53.288492+00:00"
 }

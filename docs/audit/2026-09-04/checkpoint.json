@@ -9,16 +9,16 @@
   "sourceCheckpointTree": "d93f93f05f63a9933e0ab894327f94a995f28b36",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
   "activeIssue": 332,
-  "activeIssueState": "APPLE_SCOPE_INVESTIGATION_UNCONFIRMED_JVM_ANDROID_REPAIR_STILL_APPROVED",
+  "activeIssueState": "APPLE_SCOPE_CONFIRMED_REOPENED_PENDING_REPAIR_PRIOR_JVM_ANDROID_APPROVAL_RETAINED",
   "issueCountDenominator": 171,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
-    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 61,
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 60,
     "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
-    "PENDING_REMEDIATION": 88
+    "PENDING_REMEDIATION": 89
   },
-  "completedIssueCount": 61,
-  "remainingIssueCount": 110,
+  "completedIssueCount": 60,
+  "remainingIssueCount": 111,
   "percentageMeaning": "Reviewed repository-repair rows /171, not effort, issue closure or readiness. External acceptance still attached to approved rows (including #133) is not counted complete; independent interoperability remains separately NOT_STARTED.",
   "githubIssueListRefreshedUtc": "2026-09-07T20:30:08.595524+00:00",
   "githubTotalIssuesAtRefresh": 278,
@@ -109,5 +109,18 @@
     "errors": 0,
     "skipped": 1,
     "scope": "Clean full check+Android assembleDebug, strict/rerun/no-cache/bounded;246 executed tasks,285 XMLs, 2333 passes/0 failure/error/1 unchanged manual LAN interop-capture skip. JVM,Android host,Kotlin/Native arm64 iOS simulator tests; not Swift XCTest,Intel,ART/OEM,physical devices or independent interoperability. Actual ABI guards/lint/sample assembly pass; publication/isolated-consumer/Swift/XCFramework not rerun for these fixes. #133 consumer evidence remains bound to7127616; final release verification pending."
+  },
+  "activeIssueInvestigation": {
+    "issue": 332,
+    "baselineCommit": "3134789e0ebe072fd7bd96c2cc08ab0e0ad3ecb0",
+    "baselineTree": "c9e4c590e43d8f9d8e7a2825d47d6f8e585487e6",
+    "result": "CONFIRMED_APPLE_CURRENT_GENERATION_INVALID_RERESOLUTION",
+    "baselineTests": 14,
+    "intendedAssertionFailures": 10,
+    "passingControls": 4,
+    "errors": 0,
+    "skipped": 0,
+    "publicEvidence": "https://github.com/p2pKit/P2pKit/issues/332#issuecomment-5575802714",
+    "scope": "Native endpoint/TXT inputs at actual first-party callback boundary; not live NWBrowser result delivery, multicast or physical device validation. Existing JVM/Android approval unchanged; Apple correction/review pending."
   }
 }

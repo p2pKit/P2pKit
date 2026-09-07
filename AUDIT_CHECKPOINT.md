@@ -3,7 +3,7 @@
 **Updated: 8 September 2026. Work in progress, not a release approval.** The owner authorized pushing the local
 audit work and continuing remediation. #356's Apple original-byte TXT correction is now independently approved/pushed,
 following #229's value decoder and #357's test-clock correction. The combined full check and Android assembly pass.
-Next is the unconfirmed Apple invalid re-resolution follow-up. #133's independent interoperability is NOT STARTED.
+Apple invalid re-resolution is now confirmed within #332; its repair/review scope is reopened. #133's independent interoperability is NOT STARTED.
 Read it together with the unchanged `AGENTS.md` and `CLAUDE.md`.
 
 ## Resume from a fresh clone
@@ -48,20 +48,21 @@ not an account login, a native chat export, running agents or build processes.
 
 | Disposition at this checkpoint | Count | Percentage of 171 inventoried issues |
 | --- | ---: | ---: |
-| Repository repairs with independent approval | **61** | **35.7%** |
-| Pending repairs | 88 | 51.5% |
+| Repository repairs with independent approval | **60** | **35.1%** |
+| Pending repairs | 89 | 52.0% |
 | External/platform validation | 21 | 12.3% |
 | Architecture/product decision (#120) | 1 | 0.6% |
-| **Total remaining issue rows** | **110** | **64.3%** |
+| **Total remaining issue rows** | **111** | **64.9%** |
 
 These percentages count repository-repair rows, not effort, file coverage, issue closure or production readiness.
+#332 moved back to pending when its Apple scope was confirmed; this does not undo its prior JVM/Android approval.
 They do **not** count completion of external acceptance still attached to approved rows (including #133); independent
-interoperability remains separately pending and is not implied complete by 61/171. The 7 September GitHub list refresh
+interoperability remains separately pending and is not implied complete by 60/171. The 7 September GitHub list refresh
 found 278 issues across all states and 171 open issues. The ledger identifies **38 new-audit findings**, including
 newly filed #356 and #357. Refresh complete issue bodies, comments, timelines and linked work before relying on any entry.
 Historical assessment wording records its original local phase; branch availability does not imply a merge.
 
-All 61 recorded repository repairs are in this branch's history. #325's protected-file exception is recorded below.
+All 60 currently approved repository-repair rows are in this branch's history. #325's protected-file exception is recorded below.
 Issues remain OPEN under the completion policy; nothing has
 been merged, closed or released by these pushes. See [every disposition](docs/audit/2026-09-04/issues.md) and
 [scope, dependencies, commits and public outcomes](docs/audit/2026-09-04/issues.json).
@@ -252,16 +253,16 @@ diagnostic trace experiment is intentionally private and is not required for cur
 dropped or pushed; do not blindly apply either over reviewed code. Authenticate GitHub and the coding agent normally
 on the new device rather than copying token stores or SSH keys.
 
-## Next: Apple discovery follow-up, then the remaining queue
+## Next: reopened Apple #332 repair, then the remaining queue
 
 1. #356, #229 and prerequisite #357 are reviewed/pushed; do not repeat their repairs or misreport historical failures.
    Preserve strict original-byte/exact-key decoding, valid literal U+FFFD, unsigned byte bounds, generation-owned
    JVM/Android withdrawal and the real-clock test. Maintain 0.8.0+ admission scope.
-2. Investigate Apple same-generation invalid re-resolution against [#332](https://github.com/p2pKit/P2pKit/issues/332),
-   [#23](https://github.com/p2pKit/P2pKit/issues/23) and merged #24/#72/#101/#102. Current return paths appear to retain
-   old cache/relay/endpoint ownership, but no transition regression has been run. Deduplicate by cause and update #332
-   if confirmed; reassess priority/counts then. Do not silently expand the prior JVM/Android approval or call this fixed.
-3. Continue every actionable issue sequentially: **88 pending repair rows (87 low, one informational #333)**,
+2. Complete the reopened Apple scope of [#332](https://github.com/p2pKit/P2pKit/issues/332). At `3134789`, the native-input
+   regression produced ten intended cache-retention assertion failures and four passing controls. Full #23 and merged
+   #24/#72/#101/#102 histories were read; this is the same invalid-record-withdrawal cause, not a duplicate or physical
+   timing claim. Prior JVM/Android approval remains intact; Apple correction/verification/fresh review are pending.
+3. Continue every actionable issue sequentially: **89 pending repair rows (one medium #332, 87 low, one informational #333)**,
    21 external-validation rows and #120's architecture decision. Resolve precise external/product blockers honestly.
 4. Investigate the other [unverified follow-ups](docs/audit/2026-09-04/followups.md); do not invent findings from suspicions.
 
@@ -275,8 +276,8 @@ GPG-socket ownership and all previous reviewed repairs. Whole-repository corrobo
    [unverified follow-ups](docs/audit/2026-09-04/followups.md). Preserve all existing user changes.
 2. Record exact branch/commit/tree/status and refresh full GitHub issues/comments/linked PRs. Reconcile new evidence
    by underlying cause, not similar titles. Use exact local drafts if access is unavailable; never claim remote writes.
-3. Continue all actionable issues sequentially, prioritizing severity/dependencies. Investigate Apple's unconfirmed
-   #332 scope first; refresh the remaining queue rather than relying only on historical issue titles.
+3. Continue all actionable issues sequentially, prioritizing severity/dependencies. Complete the reopened
+   #332 Apple scope first; refresh the remaining queue rather than relying only on historical issue titles.
 4. Track verified distinct discoveries with severity, platforms, paths/lines, reproduction, root cause, impact,
    correction and regression plan. Respect `SECURITY.md`. Keep suspicions separate; do not duplicate existing issues.
 5. For every issue: confirm behavior/callers, fix the whole root cause, add meaningful regressions, run focused checks,
@@ -327,13 +328,13 @@ verification scope, blockers, cleanup and practical readiness limits at each han
 
 > Continue the complete P2pKit audit from AUDIT_CHECKPOINT.md and docs/audit/2026-09-04/. Verify the audit branch,
 > current commit/tree/status, read repository instructions and full GitHub issue histories, and preserve user work.
-> This checkpoint has 61/171 independently reviewed repository repairs (35.7%) and 110 remaining rows (64.3%).
+> This checkpoint has 60/171 independently reviewed repository repairs (35.1%) and 111 remaining rows (64.9%).
 > Percentages exclude external acceptance still attached to approved rows, including #133 (independent interoperability
 > NOT_STARTED). #356 is approved/pushed at183b6c9/treed93f93f05f63a9933e0ab894327f94a995f28b36, following#229/#357; full
 > check+Android assembly passes2367/0 failures/errors/1 unchanged manual skip;14 static gates pass. All builds stopped
 > owned workers/removed disposable module outputs; private evidence/shared caches/stashes/protected files preserved.
-> Investigate unconfirmed Apple invalid re-resolution against#332 before expanding its
-> scope; track by underlying cause and reprioritize if confirmed. Preserve0.8.0+ TXT-admission restriction, valid U+FFFD,
+> Apple invalid re-resolution is confirmed within#332:10 baseline assertion failures/4 controls at3134789. Complete
+> its reopened Apple repair/verification/fresh review; prior JVM/Android approval is unchanged. Preserve0.8.0+ TXT-admission restriction, valid U+FFFD,
 > strict byte limits, prior ownership fixes and independent approval tripwires. Read full issues, repair sequentially,
 > create a fresh independent reviewer after each fix, address findings and review the final revision. Serialize bounded
 > builds with unconditional scoped cleanup. Push safe summaries only to the audit branch; no force-push, main merge,
