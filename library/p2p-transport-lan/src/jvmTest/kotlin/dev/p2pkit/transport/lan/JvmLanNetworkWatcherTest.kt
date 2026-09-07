@@ -1,17 +1,22 @@
 package dev.p2pkit.transport.lan
 
 import java.net.InetAddress
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -178,32 +183,50 @@ class JvmLanNetworkWatcherTest {
 
     @Test
     fun snapshotsRunOnTheInjectedIoContext() = runTest {
-        val snapshotDispatcher = Executors.newSingleThreadExecutor { runnable ->
+        val releaseSnapshot = CountDownLatch(1)
+        val snapshotExecutor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "p2pkit-network-probe")
-        }.asCoroutineDispatcher()
+        }
+        val snapshotDispatcher = snapshotExecutor.asCoroutineDispatcher()
+        val wifi = target("wifi", "192.168.10.2")
+        val thread = AtomicReference<String>()
+        val entered = CompletableDeferred<Unit>()
+        val watcher = JvmLanNetworkWatcher(
+            scope = this,
+            pollIntervalMillis = 100,
+            snapshotContext = snapshotDispatcher,
+            currentTarget = {
+                thread.set(Thread.currentThread().name)
+                entered.complete(Unit)
+                wifi
+            },
+            targetChanged = { _, _, _ -> error("no topology change expected") }
+        )
         try {
-            val wifi = target("wifi", "192.168.10.2")
-            val thread = AtomicReference<String>()
-            val entered = CompletableDeferred<Unit>()
-            val watcher = JvmLanNetworkWatcher(
-                scope = this,
-                pollIntervalMillis = 100,
-                snapshotContext = snapshotDispatcher,
-                currentTarget = {
-                    thread.set(Thread.currentThread().name)
-                    entered.complete(Unit)
-                    wifi
-                },
-                targetChanged = { _, _, _ -> error("no topology change expected") }
-            )
-
+            // Keep the real probe queued while virtual time advances. This
+            // makes a virtual-clock timeout fail deterministically, rather
+            // than occasionally beating a correctly dispatched real worker.
+            val queueGate = snapshotExecutor.submit { releaseSnapshot.await() }
             watcher.start(boundTarget = wifi)
             runCurrent()
-            withTimeout(1_000) { entered.await() }
+            val snapshotEntered = async(start = CoroutineStart.UNDISPATCHED) {
+                withContext(Dispatchers.Default) {
+                    withTimeout(1_000) { entered.await() }
+                }
+            }
+            advanceTimeBy(1_001)
+            runCurrent()
+            assertFalse(snapshotEntered.isCompleted, "virtual time must not expire a real-worker wait")
+
+            releaseSnapshot.countDown()
+            snapshotEntered.await()
+            queueGate.get(1, TimeUnit.SECONDS)
             assertTrue(thread.get().startsWith("p2pkit-network-probe"))
-            watcher.stop()
         } finally {
+            watcher.stop()
+            releaseSnapshot.countDown()
             snapshotDispatcher.close()
+            assertTrue(snapshotExecutor.awaitTermination(1, TimeUnit.SECONDS), "snapshot executor must terminate")
         }
     }
 
