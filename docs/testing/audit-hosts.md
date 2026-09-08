@@ -64,6 +64,17 @@ Kotlin suites are not an execution of the complete Swift bridge/sample `ENV-04`
 procedure. Windows product commands do not run through WSL or a POSIX wrapper.
 A sample packaging pass is not rendered headful Desktop observation.
 
+Windows shell prerequisites use Git for Windows: the driver resolves native
+`git.exe` from its `cmd` or `bin` installation layout, requires that installation's
+`bin/bash.exe` and `usr/bin` tools, and validates the Git/MSYS Bash version output.
+The same absolute Bash executable is recorded and used for the wrapper-checkout
+fixture, even if the ambient `bash` command selects WSL. Only its version probe and
+fixture receive the Git `bin`/`usr/bin` PATH prefix for nested shell utilities;
+native Python and `gradlew.bat` product commands keep the original host PATH.
+Missing or unusable Git Bash fails closed with retained prerequisite diagnostics;
+installing WSL or skipping the fixture is not a substitute. Linux process-boundary
+fixtures do not establish actual Windows execution or checkout compatibility.
+
 Runner/image documentation advertises availability, not actual allocation or
 compatible installed tools. The driver records the real OS/image, architecture,
 CPU/disk and tool versions; it requires the explicitly selected Xcode and supported

@@ -64,6 +64,23 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def resolve_windows_shell(environment):
+    """Bind Git for Windows, never the ambient Bash/WSL executable search."""
+    executable = shutil.which("git.exe", path=environment.get("PATH", ""))
+    require(executable is not None and Path(executable).is_absolute(), "Git for Windows git.exe is unavailable")
+    git_exe = Path(executable).resolve(strict=True)
+    require(git_exe.name.lower() == "git.exe" and git_exe.parent.name.lower() in ("cmd", "bin"),
+            "Unsupported Git for Windows installation layout: " + str(git_exe))
+    installation = git_exe.parent.parent
+    bash = installation / "bin/bash.exe"
+    utilities = installation / "usr/bin"
+    require(bash.is_file() and utilities.is_dir(), "Git for Windows Bash/tools are unavailable: " + str(installation))
+    # Nested /usr/bin/env bash and checksum/checkout utilities need this same
+    # installation. Do not shadow Windows tools for native Gradle product tasks.
+    path = os.pathsep.join((str(bash.parent), str(utilities), environment.get("PATH", "")))
+    return {"git": str(git_exe), "bash": str(bash), "PATH": path}
+
+
 def digest(path):
     value = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -262,6 +279,7 @@ class Host:
         self.state_identity = None
         self.work_identity = None
         self.safe = False
+        self.windows_shell = None
         self.simulator = None
         self.started = now()
         budget = timeout_seconds if timeout_seconds is not None else (19200 if role == "macos-arm64" else 8400)
@@ -492,9 +510,24 @@ class Host:
                           "sdk": ["xcrun", "--show-sdk-version", "--sdk", "iphonesimulator"],
                           "jq": ["jq", "--version"], "xmllint": ["xmllint", "--version"]})
         results = {}
+        shell = None
+        if self.role == "windows-x64":
+            self.windows_shell = None
+            del tools["bash"]
+            try:
+                shell = resolve_windows_shell(self.environment)
+                tools["git"] = [shell["git"], "--version"]
+                tools["bash"] = [shell["bash"], "--version"]
+            except (OSError, ValueError) as error:
+                # Keep other version diagnostics and write the failed selection;
+                # absence must not fall back to WSL or bypass prerequisites.json.
+                results["bash"] = {"command": [], "exitCode": None, "error": str(error)}
         for label, args in tools.items():
             try:
-                proc = subprocess.run(args, cwd=ROOT, capture_output=True, text=True, timeout=60)
+                environment = dict(self.environment)
+                if label == "bash" and shell is not None:
+                    environment["PATH"] = shell["PATH"]
+                proc = subprocess.run(args, cwd=ROOT, env=environment, capture_output=True, text=True, timeout=60)
                 results[label] = {"command": args, "exitCode": proc.returncode,
                                   "stdout": proc.stdout, "stderr": proc.stderr}
             except (OSError, subprocess.SubprocessError) as error:
@@ -519,7 +552,8 @@ class Host:
                    "physicalMemoryBytes": ram,
                    "disk": shutil.disk_usage(self.state)._asdict(),
                    "imageOS": os.environ.get("ImageOS"), "imageVersion": os.environ.get("ImageVersion"),
-                   "tools": results, "limits": "Hosted/simulator only; no physical or independent acceptance."})
+                   "tools": results, "windowsShell": shell,
+                   "limits": "Hosted/simulator only; no physical or independent acceptance."})
         require(ram >= 6 * 1024 ** 3, "Less than 6GiB native RAM; bounded hosted gate cannot start")
         require(all(value["exitCode"] == 0 for value in results.values()), "Required tool version query failed")
         require(re.search(r'version "17\.', results["java17"]["stderr"] + results["java17"]["stdout"]),
@@ -529,6 +563,12 @@ class Host:
         if self.role != "windows-x64":
             expected = "Xcode 26.5" if self.role == "macos-arm64" else "Xcode 26.3"
             require(results["xcode"]["stdout"].splitlines()[0] == expected, "Unexpected selected Xcode version")
+        else:
+            require(re.search(r"^git version [^\r\n]+\.windows\.[0-9]+", results["git"]["stdout"], re.M),
+                    "Not a Git for Windows version")
+            require(re.search(r"^GNU bash, version [^\r\n]+\(x86_64-pc-msys\)", results["bash"]["stdout"], re.M),
+                    "Not native x64 Git for Windows Bash")
+            self.windows_shell = shell
 
     def setup_sdk(self):
         sdk = Path(self.environment.get("ANDROID_HOME", ""))
@@ -548,7 +588,9 @@ class Host:
         self.write("android-platforms.json", properties)
 
     def windows(self):
-        self.invoke("wrapper-checkouts", ["bash", "scripts/tests/check-gradle-wrapper-test.sh"], kind="command")
+        require(self.windows_shell is not None, "Windows shell prerequisite has not passed")
+        self.invoke("wrapper-checkouts", [self.windows_shell["bash"], "scripts/tests/check-gradle-wrapper-test.sh"],
+                    kind="command", extra_env={"PATH": self.windows_shell["PATH"]})
         token = uuid.uuid4().hex
         success = self.invoke("windows-libraries", [*sorted(WINDOWS_TASKS), "--continue", "--init-script",
                                str(ROOT / "gradle/platform-test-coverage.init.gradle"),

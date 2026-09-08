@@ -8,6 +8,7 @@ invoked without replacing their policy, test model, or case-count validation.
 
 import contextlib
 import copy
+import ctypes
 import hashlib
 import importlib.util
 import io
@@ -72,6 +73,79 @@ def swift_objects():
     return [{"_type": {"_name": "ActionTestPlanRunSummaries"},
              "summaries": {"_values": [{"testableSummaries": {"_values": [
                  swift_target(name) for name in SWIFT_TARGETS]}}]}}]
+
+
+@contextlib.contextmanager
+def windows_tool_boundary(test, host, *, layout="cmd", missing=None, bash_result=None,
+                          git_version="git version 2.55.0.windows.5\n"):
+    """Real file lookup; modeled Windows version/RAM processes, never native acceptance."""
+    work = temporary(test)
+    installation = work / "Program Files Ω" / "Git"
+    for directory in ("cmd", "bin", "usr/bin"):
+        (installation / directory).mkdir(parents=True, exist_ok=True)
+    git_exe = installation / layout / "git.exe"
+    git_exe.parent.mkdir(parents=True, exist_ok=True)
+    bash_exe = installation / "bin/bash.exe"
+    wsl = work / "Windows" / "System32"
+    wsl.mkdir(parents=True)
+    for path in (git_exe, bash_exe, wsl / "bash.exe", wsl / "bash"):
+        path.write_text("synthetic executable; subprocess boundary must intercept\n", encoding="utf-8")
+        path.chmod(0o700)
+    if missing == "git":
+        git_exe.unlink()
+    elif missing == "bash":
+        bash_exe.unlink()
+    elif missing == "utilities":
+        (installation / "usr/bin").rmdir()
+    path_value = os.pathsep.join((str(wsl), str(git_exe.parent)))
+    host.environment.update(PATH=path_value, JAVA_HOME=str(work / "jdk17"),
+                            P2PKIT_AUDIT_JDK21=str(work / "jdk21"))
+    original_environment = dict(host.environment)
+    calls = []
+
+    def version(command, **kwargs):
+        calls.append({"command": list(command), "options": kwargs})
+        test.assertEqual(HOST.ROOT, kwargs["cwd"])
+        test.assertTrue(kwargs["capture_output"])
+        test.assertTrue(kwargs["text"])
+        test.assertEqual(60, kwargs["timeout"])
+        if command == ["bash", "--version"]:
+            return subprocess.CompletedProcess(command, 1,
+                stdout="Windows Subsystem for Linux has no installed distributions.\n", stderr="")
+        if command == [str(bash_exe), "--version"]:
+            result = bash_result or (0, "GNU bash, version 5.2.37(1)-release (x86_64-pc-msys)\n", "")
+            if isinstance(result, Exception):
+                raise result
+            return subprocess.CompletedProcess(command, result[0], stdout=result[1], stderr=result[2])
+        if command in (["git", "--version"], [str(git_exe), "--version"]):
+            return subprocess.CompletedProcess(command, 0, stdout=git_version, stderr="")
+        if command == [sys.executable, "--version"]:
+            return subprocess.CompletedProcess(command, 0, stdout="Python 3.12.10\n", stderr="")
+        for major in (17, 21):
+            if command == [str(work / ("jdk" + str(major)) / "bin/java.exe"), "-version"]:
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr=f'openjdk version "{major}.0.1"\n')
+        test.fail("unexpected prerequisite subprocess: " + repr(command))
+
+    def memory(pointer):
+        pointer._obj.totalPhysical = 16 * 1024 ** 3
+        return 1
+
+    native_os = types.SimpleNamespace(**vars(os))
+    native_os.name = "nt"  # Do not change pathlib's real host OS or launch native Windows processes.
+    memory_api = mock.Mock(side_effect=memory)
+    disk = types.SimpleNamespace(free=10 * 1024 ** 3,
+                                 _asdict=lambda: {"total": 20 * 1024 ** 3, "used": 10 * 1024 ** 3,
+                                                  "free": 10 * 1024 ** 3})
+    with mock.patch.object(HOST, "os", native_os), \
+            mock.patch.dict(os.environ, host.environment, clear=True), \
+            mock.patch.object(HOST.platform, "platform", return_value="Windows-2025-fixture"), \
+            mock.patch.object(HOST.platform, "machine", return_value="AMD64"), \
+            mock.patch.object(ctypes, "WinDLL", create=True,
+                              return_value=types.SimpleNamespace(GlobalMemoryStatusEx=memory_api)), \
+            mock.patch.object(HOST.shutil, "disk_usage", return_value=disk), \
+            mock.patch.object(HOST.subprocess, "run", side_effect=version):
+        yield {"git": git_exe, "bash": bash_exe, "installation": installation, "wsl": wsl,
+               "calls": calls, "environment": original_environment, "memory": memory_api}
 
 
 class AdmissionTest(unittest.TestCase):
@@ -594,6 +668,183 @@ class HostInvocationTest(unittest.TestCase):
         self.assertEqual(self.source, receipt["sourceAfter"])
         self.assertTrue(self.host.safe)
         self.assertEqual([], self.cancel_calls)
+
+    def test_windows_git_bash_precedes_wsl_in_both_real_callers_without_changing_native_gradle(self):
+        with windows_tool_boundary(self, self.host) as tools:
+            try:
+                self.host.prerequisites()
+            except ValueError:
+                print((self.host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+                raise
+            observed = json.loads((self.host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+            self.assertEqual([str(tools["bash"]), "--version"], observed["tools"]["bash"]["command"])
+            self.assertEqual([str(tools["git"]), "--version"], observed["tools"]["git"]["command"])
+            self.assertEqual(0, observed["tools"]["bash"]["exitCode"])
+            self.assertEqual(1, tools["memory"].call_count)
+            with mock.patch.object(self.host, "check", return_value=True), \
+                    mock.patch.object(self.host, "clean_outputs") as clean:
+                self.host.windows()
+            self.assertEqual(2, clean.call_count)
+            self.assertEqual(3, len(self.calls))
+            wrapper, libraries, desktop = self.calls
+            command = wrapper["command"]
+            self.assertEqual([str(tools["bash"]), "scripts/tests/check-gradle-wrapper-test.sh"],
+                             command[command.index("--") + 1:])
+            self.assertEqual("command", command[command.index("--kind") + 1])
+            scoped_path = wrapper["options"]["env"]["PATH"]
+            self.assertEqual([str(tools["installation"] / "bin"), str(tools["installation"] / "usr/bin"),
+                              str(tools["wsl"]), str(tools["git"].parent)], scoped_path.split(os.pathsep))
+            version_call = next(row for row in tools["calls"] if row["command"][0] == str(tools["bash"]))
+            self.assertEqual(scoped_path, version_call["options"]["env"]["PATH"])
+            for call in (libraries, desktop):
+                command = call["command"]
+                self.assertEqual("gradle", command[command.index("--kind") + 1])
+                self.assertEqual(tools["environment"]["PATH"], call["options"]["env"]["PATH"])
+            self.assertTrue(WINDOWS_TASKS <= set(libraries["command"]))
+            self.assertEqual(HOST.DESKTOP_TASKS, desktop["command"][desktop["command"].index("--") + 1:])
+            for call in self.calls:
+                command = call["command"]
+                self.assertEqual([sys.executable, str(self.host.runner)], command[:2])
+                self.assertEqual(str(self.repo / "gradlew.bat"), command[command.index("--wrapper") + 1])
+            self.assertEqual(tools["environment"], self.host.environment)
+            self.assertEqual(tools["environment"]["PATH"], os.environ["PATH"])
+            self.assertTrue(all(row["result"] == "PASS" and row["cleanupComplete"] for row in self.host.rows))
+
+    def test_windows_git_bin_layout_with_spaces_uses_the_same_explicit_shell(self):
+        with windows_tool_boundary(self, self.host, layout="bin") as tools:
+            self.host.prerequisites()
+            observed = json.loads((self.host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+            self.assertEqual([str(tools["bash"]), "--version"], observed["tools"]["bash"]["command"])
+            self.assertEqual([str(tools["git"]), "--version"], observed["tools"]["git"]["command"])
+            self.assertEqual(tools["environment"], self.host.environment)
+
+    def test_missing_windows_git_retains_failed_resolution_and_other_version_diagnostics(self):
+        with windows_tool_boundary(self, self.host, missing="git"):
+            with self.assertRaisesRegex(ValueError, "Required tool version query failed"):
+                self.host.prerequisites()
+        observed = json.loads((self.host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+        self.assertEqual([], observed["tools"]["bash"]["command"])
+        self.assertIsNone(observed["tools"]["bash"]["exitCode"])
+        self.assertIn("Git for Windows", observed["tools"]["bash"]["error"])
+        self.assertEqual({"python", "git", "java17", "java21", "bash"}, set(observed["tools"]))
+        self.assertEqual([], self.calls)
+        self.assertIsNone(self.host.windows_shell)
+
+    def test_missing_windows_bash_retains_failed_resolution_and_never_uses_wsl(self):
+        with windows_tool_boundary(self, self.host, missing="bash") as tools:
+            with self.assertRaisesRegex(ValueError, "Required tool version query failed"):
+                self.host.prerequisites()
+            self.assertFalse(any(row["command"][0] == "bash" for row in tools["calls"]))
+        observed = json.loads((self.host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+        self.assertEqual([], observed["tools"]["bash"]["command"])
+        self.assertIn("Git for Windows Bash", observed["tools"]["bash"]["error"])
+        self.assertTrue(all(observed["tools"][name]["exitCode"] == 0 for name in ("python", "git", "java17", "java21")))
+        self.assertIsNone(self.host.windows_shell)
+
+    def test_unusable_windows_bash_is_fail_closed_with_its_original_diagnostic(self):
+        with windows_tool_boundary(self, self.host, bash_result=(7, "", "synthetic Bash failed\n")) as tools:
+            with self.assertRaisesRegex(ValueError, "Required tool version query failed"):
+                self.host.prerequisites()
+            observed = json.loads((self.host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+            self.assertEqual({"command": [str(tools["bash"]), "--version"], "exitCode": 7,
+                              "stdout": "", "stderr": "synthetic Bash failed\n"}, observed["tools"]["bash"])
+        self.assertIsNone(self.host.windows_shell)
+        self.assertEqual([], self.calls)
+
+    def test_windows_bash_start_failure_is_retained_without_binding_an_unvalidated_shell(self):
+        with windows_tool_boundary(self, self.host, bash_result=OSError("synthetic executable unavailable")):
+            with self.assertRaisesRegex(ValueError, "Required tool version query failed"):
+                self.host.prerequisites()
+        observed = json.loads((self.host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+        self.assertIsNone(observed["tools"]["bash"]["exitCode"])
+        self.assertEqual("synthetic executable unavailable", observed["tools"]["bash"]["error"])
+        self.assertIsNone(self.host.windows_shell)
+
+    def test_windows_bash_timeout_is_retained_and_does_not_fall_back_to_wsl(self):
+        timeout = subprocess.TimeoutExpired("synthetic Git Bash", 60)
+        with windows_tool_boundary(self, self.host, bash_result=timeout) as tools:
+            with self.assertRaisesRegex(ValueError, "Required tool version query failed"):
+                self.host.prerequisites()
+            self.assertFalse(any(row["command"][0] == "bash" for row in tools["calls"]))
+        observed = json.loads((self.host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+        self.assertIsNone(observed["tools"]["bash"]["exitCode"])
+        self.assertIn("timed out", observed["tools"]["bash"]["error"])
+        self.assertIsNone(self.host.windows_shell)
+
+    def test_unsupported_windows_git_layout_is_reported_without_ancestor_search(self):
+        with windows_tool_boundary(self, self.host, layout="mingw64/bin"):
+            with self.assertRaisesRegex(ValueError, "Required tool version query failed"):
+                self.host.prerequisites()
+        observed = json.loads((self.host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+        self.assertEqual([], observed["tools"]["bash"]["command"])
+        self.assertIn("Git for Windows Bash/tools are unavailable", observed["tools"]["bash"]["error"])
+        self.assertIsNone(self.host.windows_shell)
+
+    def test_missing_windows_unix_utilities_cannot_be_substituted_with_ambient_tools(self):
+        with windows_tool_boundary(self, self.host, missing="utilities"):
+            with self.assertRaisesRegex(ValueError, "Required tool version query failed"):
+                self.host.prerequisites()
+        observed = json.loads((self.host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+        self.assertEqual([], observed["tools"]["bash"]["command"])
+        self.assertIn("Git for Windows Bash/tools are unavailable", observed["tools"]["bash"]["error"])
+        self.assertIsNone(self.host.windows_shell)
+
+    def test_windows_shell_requires_msys_bash_not_just_a_successful_version_exit(self):
+        with windows_tool_boundary(self, self.host, bash_result=(0, "GNU bash, version 5.2 (x86_64-pc-linux-gnu)\n", "")):
+            with self.assertRaisesRegex(ValueError, "Git for Windows Bash"):
+                self.host.prerequisites()
+        self.assertTrue((self.host.evidence / "prerequisites.json").is_file())
+        self.assertIsNone(self.host.windows_shell)
+
+    def test_windows_shell_requires_native_git_for_windows_version(self):
+        with windows_tool_boundary(self, self.host, git_version="git version 2.55.0\n"):
+            with self.assertRaisesRegex(ValueError, "Git for Windows version"):
+                self.host.prerequisites()
+        self.assertTrue((self.host.evidence / "prerequisites.json").is_file())
+        self.assertIsNone(self.host.windows_shell)
+
+    def test_windows_components_cannot_bypass_shell_prerequisites(self):
+        with self.assertRaisesRegex(ValueError, "Windows shell prerequisite"):
+            self.host.windows()
+        self.assertEqual([], self.calls)
+
+    def test_mac_prerequisites_keep_posix_bash_and_required_xcode_without_windows_resolution(self):
+        self.host.role = "macos-arm64"
+        native_os = types.SimpleNamespace(**vars(os))
+        native_os.name = "posix"
+        environment = dict(self.host.environment, JAVA_HOME=str(self.work / "jdk17"),
+                           P2PKIT_AUDIT_JDK21=str(self.work / "jdk21"))
+        self.host.environment = dict(environment)
+        versions = {sys.executable: "Python 3.12.10\n", "git": "git version 2.55.0\n",
+                    "bash": "GNU bash, version 3.2.57(1)-release (arm64-apple-darwin)\n",
+                    "ruby": "ruby 3.4.0\n", "xcodebuild": "Xcode 26.5\nBuild version fixture\n",
+                    "xcrun": "26.5\n", "jq": "jq-1.8.1\n", "xmllint": "libxml version fixture\n"}
+        for major in (17, 21):
+            versions[str(self.work / ("jdk" + str(major)) / "bin/java")] = f'openjdk version "{major}.0.1"\n'
+        calls = []
+
+        def version(command, **kwargs):
+            self.assertEqual(environment["PATH"], kwargs["env"]["PATH"])
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout=versions[command[0]], stderr="")
+
+        disk = types.SimpleNamespace(_asdict=lambda: {"free": 10 * 1024 ** 3})
+        with mock.patch.object(HOST, "os", native_os), \
+                mock.patch.dict(os.environ, environment, clear=True), \
+                mock.patch.object(HOST.platform, "platform", return_value="macOS-fixture"), \
+                mock.patch.object(HOST.platform, "machine", return_value="arm64"), \
+                mock.patch.object(HOST.shutil, "disk_usage", return_value=disk), \
+                mock.patch.object(HOST.shutil, "which", side_effect=AssertionError("not a Windows role")), \
+                mock.patch.object(HOST.subprocess, "run", side_effect=version), \
+                mock.patch.object(HOST.subprocess, "check_output", return_value=str(16 * 1024 ** 3)) as ram:
+            self.host.prerequisites()
+        ram.assert_called_once_with(["sysctl", "-n", "hw.memsize"], text=True, timeout=30)
+        self.assertIn(["bash", "--version"], calls)
+        self.assertIn(["xcodebuild", "-version"], calls)
+        self.assertIn(["xcrun", "--show-sdk-version", "--sdk", "iphonesimulator"], calls)
+        self.assertEqual(10, len(calls))
+        self.assertEqual(environment, self.host.environment)
+        self.assertIsNone(self.host.windows_shell)
 
     def test_clean_product_failure_remains_failed_but_cleanup_proof_is_retained(self):
         self.next_status = 7
