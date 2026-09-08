@@ -1,7 +1,9 @@
 # Follow-ups not yet established as new defects
 
-These are inherited hypotheses, not fresh findings or issue-completion claims. Reproduce at the current tree and read
-complete related issue histories before tracking a new defect. Record negative results as well as confirmations.
+This file distinguishes unverified hypotheses from separately promoted/repaired findings. Reproduce suspicions at
+the current tree and read complete related issue histories before tracking a new defect. Record negative results
+as well as confirmations. Promoted findings below are not unfiled concerns or repair-completion claims unless
+an exact independent approval is stated. The transfer stop is superseded; current queue starts #367, then #223.
 
 ## Desktop large-text/RTL sidebar applicability
 
@@ -72,7 +74,9 @@ not a separately demonstrated throwing application callback. See [the repair rep
 [verified outcome](https://github.com/p2pKit/P2pKit/issues/359#issuecomment-5579078847). Final full check/Android assembly/strict core Dokka passes
 2,459/zero failures/errors/one unchanged manual skip; focused33passes,three mutation controls,14static gates.
 Do not refile this mechanism or rewrite historical #358 evidence as if its then-unverified observation was already
-confirmed. Host/arm64 simulator and synthetic pinned in-memory wires are not physical or independent interoperability.
+confirmed. The later [#358 investigation comment](https://github.com/p2pKit/P2pKit/issues/358#issuecomment-5578711750)
+records reproduction/filing; #359 has its own approval at `de882840e1e24aa04339b2285e8cd753af265b40`.
+Host/arm64 simulator and synthetic pinned in-memory wires are not physical or independent interoperability.
 
 ## XcodeGen version-probe status and failed-install cleanup
 
@@ -135,3 +139,60 @@ See [the repair report](repairs/360.md) and [verified outcome](https://github.co
 The initial failed replay and later verifier failures remain original failures, not relabeled evidence.
 Do not refile this root cause or claim every archived file now has an integrity pin. Plain Git honors attributes
 but does not enforce the three pins; use the actual repository gate. No hosted CI or Windows execution is claimed.
+
+## Resumed corroboration: confirmed and filed #361–#367
+
+These current findings were independently checked against source/callers and the full issue corpus before filing.
+They are **pending repairs**, not fresh runtime/device passes or approval of a completed revision. See the full
+GitHub bodies and [issue records](issues.json); do not duplicate them as still-unfiled suspicions.
+
+- [#361](https://github.com/p2pKit/P2pKit/issues/361): Android hotspot error-reason decoder assumes 0–3 while real
+  SDK constants are 1–4. Forwarded codes, typed failure and lifecycle remain; fresh manager/message regressions are pending.
+- [#362](https://github.com/p2pKit/P2pKit/issues/362): initializer KDoc incorrectly promises an in-memory legacy
+  fallback under authenticated defaults. Runtime correctly fails closed; fix prose, not security behavior.
+- [#363](https://github.com/p2pKit/P2pKit/issues/363): iOS consent section is hidden for a pending first offer with
+  no transfer history. Preserve explicit consent; actual rendered/simulator verification has not been performed.
+- [#364](https://github.com/p2pKit/P2pKit/issues/364): interoperability catalog confuses explicit whole-kit security
+  profile selection with later optional feature intersection. Source/caller confirmation is not the #133 campaign.
+- [#365](https://github.com/p2pKit/P2pKit/issues/365): iOS catalog requests a bare fingerprint where the current
+  sample requires a full trusted same-AppId pairing QR. Preserve parser/pins and scoped-IPv6 acceptance coverage.
+- [#366](https://github.com/p2pKit/P2pKit/issues/366): Android URI KDoc recommends a JVM-only `sendFile(File)`
+  overload absent from that artifact. Source-set/API contradiction, not an executed compilation/device failure.
+- [#367](https://github.com/p2pKit/P2pKit/issues/367): missing five Native/AAPT2 supported-host classifier records
+  prevent strict builds. Fresh #145 Linux combined/affected commands fail on two missing Linux artifacts; eleven
+  affected failed tasks are repetitions of that root. Windows/Intel absence is static-only. The metadata predates
+  #145, so this is not its regression. Medium non-security fail-closed availability; signed/provenanced curation,
+  independent host policy/mutations, strict reruns and a fresh final reviewer are required. Active, not approved.
+
+The original private #364/#365 drafts retain their discovery-time NOT_FILED status; the verified publication above
+supersedes that historical state without rewriting it. Their source inspection does not complete any physical or
+independent interoperability requirement. GitHub Actions may now supply supported Mac/Windows/Apple gates under
+serialized root ownership, but no such new gate results are established by these notes.
+
+## #145 stronger original claims and current approval boundary
+
+[#145](repairs/145.md) is independently approved/pushed at `0423e96e15c894c26a7d45a5dfb2a012e0c1ba8e`;
+[verified outcome](https://github.com/p2pKit/P2pKit/issues/145#issuecomment-5582924265). Do not refile the fixed
+measurement-copy/policy-unit cause. The estimator is a bounded retention-policy estimate, not measured universal
+Native heap bounds, literal zero allocation or constant-time metadata processing. Both original caps bounded growth;
+Binary under-reporting was already refuted. Preserve deliberate ownership copies and 0.8.0+ admission restrictions.
+The JVM allocation probe establishes removal of payload-size scaling in the estimator only. Future measured Native
+heap/allocation claims require their own target-specific evidence; this limitation is not a new confirmed defect.
+Partial core-test/ABI passes do not supersede #367's failed integrated/sample/Dokka commands or imply external readiness.
+
+## Validation evidence-recipe suspicions — unconfirmed
+
+- **Checksum-manifest self-inclusion:** the catalog's `find "$EVIDENCE" ... > "$EVIDENCE/sha256sums.txt"` recipe
+  may enumerate the manifest created/truncated by its own redirection. The root owns a bounded synthetic reproduction;
+  none was executed by the documentation investigator. If confirmed, duplicate-check the underlying cause and retain
+  hashing of all other evidence, using manifest exclusion or outside-tree staging rather than dropping verification.
+- **Apple log source:** plain macOS `log stream` in the Apple handbook/catalog may collect host rather than physical
+  device logs. Verify actual forwarding/Console behavior on a supported host before alleging a defect; no Mac run here.
+- **Private/shareable identity fields:** serial/UDID result lines may be intended for private raw evidence, whereas
+  the evidence schema forbids publishing those values. Establish the intended boundary before claiming a leak.
+- **SecurityConfig wording:** cryptographic preparation may use a shorthand for the DSL builder rather than a literal
+  public type. Trace the current entry point before filing an API/documentation finding.
+
+These suspicions are not included in the 181-row denominator or counted as repairs. Preserve historical/private raw
+artifacts, full external acceptance criteria and protected files while investigating; do not manufacture device,
+network, independent-implementation or professional-cryptography results from source inspection.

@@ -5,31 +5,31 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "6995130bcdb2594257c42bed006f7d23f5bc4d6a",
-  "sourceCheckpointTree": "323fc39587c626df7ac9da1edce7cc0ab80ac313",
+  "sourceCheckpointCommit": "0423e96e15c894c26a7d45a5dfb2a012e0c1ba8e",
+  "sourceCheckpointTree": "26984a1b7d2048bdbda8e1808bb38f299e7a6866",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
-  "activeIssue": 145,
-  "activeIssueState": "NOT_STARTED_RESUME_WITH_COMPLETE_HISTORY_AND_CURRENT_CODE_VERIFICATION",
-  "issueCountDenominator": 174,
+  "activeIssue": 367,
+  "activeIssueState": "CONFIRMED_ACTIVE_HOST_TOOLCHAIN_PREREQUISITE_UNAPPROVED_AFTER_145_APPROVAL",
+  "issueCountDenominator": 181,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
-    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 67,
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 68,
     "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
-    "PENDING_REMEDIATION": 85
+    "PENDING_REMEDIATION": 91
   },
-  "completedIssueCount": 67,
-  "remainingIssueCount": 107,
-  "percentageMeaning": "Independently approved repository-repair rows /174, not effort, issue closure or readiness. External acceptance attached to approved rows (including #133) is not counted complete; independent interoperability remains separately NOT_STARTED.",
-  "githubIssueListRefreshedUtc": "2026-09-08T06:34:27.126475+00:00",
-  "githubTotalIssuesAtRefresh": 281,
-  "githubOpenIssuesAtRefresh": 174,
-  "newAuditIssueCount": 41,
+  "completedIssueCount": 68,
+  "remainingIssueCount": 113,
+  "percentageMeaning": "Independently approved repository-repair rows /181:68(37.6%) approved and113(62.4%) remaining, not effort, GitHub issue closure or readiness. External acceptance attached to approved rows is not counted complete;#133 independent interoperability remainsNOT_STARTED.",
+  "githubIssueListRefreshedUtc": "2026-09-08T09:28:07.480134+00:00",
+  "githubTotalIssuesAtRefresh": 287,
+  "githubOpenIssuesAtRefresh": 180,
+  "newAuditIssueCount": 48,
   "rawEvidenceIncludedInGit": false,
   "originalEvidenceContinuity": "Some original raw evidence and initial audit ledger were lost. Recovered summaries are not original logs. Later raw evidence remains private. Fresh corroboration and integrated verification required.",
   "scope": "Branch continuation only; not a merge, release, independent crypto assurance, or physical-device completion.",
   "preservedDraftCommit": "eb564e9487f2887f83f519575c82d4e7657864cb",
   "preservedDraftTree": "69161ac65e02bbf33d390bde2575d3131a9d7996",
-  "lastReviewedIssue": 144,
+  "lastReviewedIssue": 145,
   "lastIntegratedCheck": {
     "commit": "6995130bcdb2594257c42bed006f7d23f5bc4d6a",
     "tree": "323fc39587c626df7ac9da1edce7cc0ab80ac313",
@@ -37,48 +37,74 @@
     "failures": 0,
     "errors": 0,
     "skipped": 1,
-    "scope": "Clean full check+Android assembleDebug+strict core Dokka;strict/rerun/no-cache/bounded;256executed tasks,297XMLs,2459passes/0failure/error/1unchanged manual LAN capture skip. JVM,Android host,Kotlin/Native arm64 iOS simulator and actual ABI/lint/sample assembly. Not Swift XCTest,Intel runtime,ART/OEM,physical devices,hosted CI or independent interoperability. Final release/publication/isolated-consumer/Swift/XCFramework pending;#133consumer evidence remains at7127616,not rerun for#144/#360."
+    "scope": "Historical last successful integrated run, not rerun/pass at0423e96. Clean full check+Android assembleDebug+strict core Dokka;strict/rerun/no-cache/bounded;256executed tasks,297XMLs,2459passes/0failure/error/1unchanged manual LAN capture skip. JVM,Android host,Kotlin/Native arm64 iOS simulator and actual ABI/lint/sample assembly. Not Swift XCTest,Intel runtime,ART/OEM,physical devices,hosted CI or independent interoperability. Final release/publication/isolated-consumer/Swift/XCFramework pending;#133consumer evidence remains at7127616,not rerun for#144/#360.",
+    "status": "HISTORICAL_PASS_NOT_CURRENT_SOURCE_VALIDATION"
   },
   "protectedInstructionFilesCaveat": "Issue325 feasible correction preserves AGENTS.md:9 library-only SDK wording by owner instruction. Canonical setup explicitly warns about missing sample SDK. Literal alignment requires new owner authorization; not claimed fixed. CLAUDE.md unchanged.",
   "lastScopedVerification": {
-    "issue": 144,
-    "prerequisiteIssue": 360,
+    "issue": 145,
     "platforms": [
-      "macOS local shell/Git/Ruby",
-      "JVM",
-      "Android host",
-      "Kotlin/Native arm64 iOS simulator"
+      "Linux JVM",
+      "Linux Android host",
+      "Linux static/policy"
     ],
-    "commit": "6995130bcdb2594257c42bed006f7d23f5bc4d6a",
-    "tree": "323fc39587c626df7ac9da1edce7cc0ab80ac313",
-    "staticGates": 23,
-    "resolverChecks": 28,
-    "workflowPolicyChecks": 21,
-    "whitespaceAssertions": 51,
-    "yamlCommandReplays": 5,
-    "negativeControls144": 13,
-    "negativeControls360": 10,
-    "positiveControlsPerIssue": 2,
-    "reviewSha256": "82e6e9ad6e34a87b18b36645463d9b0a2217432cf3258257fa6094d9b91eaab0",
-    "prerequisiteReviewSha256": "65de75d34645f4a497395f76cae78f10f0ea146bf4dad6dfadf24edbc032b9a2",
-    "manifestSha256": "cb09a4b3c4b02e904d28e7eac800f3d736cdacbe00cb96f904f8764b2d6845cd",
-    "prerequisiteManifestSha256": "08ae831555d21d2fd7e09c9bfc0fa7f26f5e88f67675e94d83de18e0dcc4c337",
-    "sharedSealedFiles": 3558,
-    "sharedSealedBytes": 18444319,
-    "sharedCleanupReceipts": 106,
-    "serializedLeafInvocations": 95,
-    "scope": "Both complete corrections APPROVED/pushed;#360 prerequisite reviewed before final#144 review. No source changes after freeze. Initial actual YAML replay,first#360control verifier and first evidence sealer failures preserved. No archive-byte,production/API/ABI/protocol/dependency changes. Five replays are actual YAML-derived commands with synthetic event contexts,not hosted CI or a scheduling deadline."
+    "commit": "0423e96e15c894c26a7d45a5dfb2a012e0c1ba8e",
+    "tree": "26984a1b7d2048bdbda8e1808bb38f299e7a6866",
+    "baselineCommit": "d823bb9cc0d187ec746714af67b08904a28331b6",
+    "baselineTree": "44cd608fb05d16d3593d496b355e690af928a247",
+    "diffSha256": "bf041ac5567850ef75022889fc68c707338e40d8e1ed5fe342142c63264e8002",
+    "reviewVerdict": "APPROVED_ISSUE_SCOPED_ONLY",
+    "reviewer": "/root/review_145_r1",
+    "reviewedUtc": "2026-09-08T09:28:05.468034+00:00",
+    "reviewSha256": "a677e3f7190109ae9d732c929dd8f97e602e8a9d221f008586c1046b17f28e5d",
+    "originalProductionIntendedAssertionFailures": 33,
+    "originalProductionJvmFailures": 17,
+    "originalProductionAndroidHostFailures": 16,
+    "restoredMutationControls": 3,
+    "finalFocusedInvocation": "145-corrected-regressions-r2",
+    "focusedPassed": 805,
+    "focusedJvmPassed": 789,
+    "focusedAndroidHostPassed": 16,
+    "focusedFailures": 0,
+    "focusedErrors": 0,
+    "focusedSkipped": 0,
+    "focusedXmlFiles": 89,
+    "focusedExecutedTasks": 19,
+    "staticGates": 12,
+    "manifestSha256": "d562f1274a65eafc9e2d04326f07dad750466c823be1e31fda710a6dccf5904e",
+    "sealedFiles": 1754,
+    "sealedBytes": 17292499,
+    "finalizedSerializedInvocationReceipts": 25,
+    "additionalSealerReceipt": true,
+    "publicOutcome": "https://github.com/p2pKit/P2pKit/issues/145#issuecomment-5582924265",
+    "scope": "Complete nine-file estimator/admission/test/doc repair; count-first64message/8MiB limits, immutable private Binary size, UTF16 retention-policy allowances and stored exact release charges. Low bounded post-session-admission impact; default v2 requires authenticated/authorized admission, not pre-admission LAN. Explicit plaintext mode also reaches accounting. Policy estimate not universal heap upper bound, literal zero allocation or O(1) metadata processing; no Native heap/allocation profiling. Tighter admission reserved for0.8.0+. Focused805pass and affected851core tests pass; integrated/affected commandsFAIL on#367 strict host classifiers, sample/Dokka incomplete. No API/ABI/wire/dependency/test-hook/security weakening. No current whole-check/consumer/release/Mac/Windows/Apple/device/independent-interop approval.",
+    "historicalFailuresPreserved": [
+      "Original first harness:16 genuine assertion failures plus separate init-script Task.project deprecation failure.",
+      "Original cleaned harness:804tests,772passes,31intended assertions and one Android unmocked Log fixture error.",
+      "Corrected r1:804tests,801passes,two incorrect warning oracles and one Android Log fixture error. Oracles/fixture corrected; no skipped or weakened required checks.",
+      "Integrated and affected strict Linux failures remain failures; passing partial test results do not complete the requested task set."
+    ],
+    "allocationProbe": {
+      "scope": "JDK estimator-only reflection probe; preconstructed messages,64calls/sample,256warmups, reflection overhead included. Not enqueue/retained-heap/Native/absolute-zero-allocation proof.",
+      "originalTextSizeScalingBytes": 67043328,
+      "originalMetadataSizeScalingBytes": 524800,
+      "originalBinarySizeScalingBytes": 0,
+      "finalMinimumSizeScalingBytes": 0,
+      "oneFinalMetadataRoundExtraBytes": 96
+    }
   },
   "lastIntegratedAttempt": {
-    "commit": "6995130bcdb2594257c42bed006f7d23f5bc4d6a",
-    "tree": "323fc39587c626df7ac9da1edce7cc0ab80ac313",
-    "result": "PASS",
-    "executedTasks": 256,
-    "executedTestResultsPassed": 2459,
+    "commit": "0423e96e15c894c26a7d45a5dfb2a012e0c1ba8e",
+    "tree": "26984a1b7d2048bdbda8e1808bb38f299e7a6866",
+    "invocation": "145-linux-integrated-r1",
+    "result": "FAIL",
+    "executedTasks": 6,
+    "executedTestResultsPassed": 0,
     "testFailures": 0,
     "testErrors": 0,
-    "testSkips": 1,
-    "scope": "Latest combined check/Android assembly/strict core Dokka after#144/#360; not whole-audit/release/external completion."
+    "testSkips": 0,
+    "reason": "Requested check,Android assembleDebug,strict core Dokka failed before tests at missing strict Kotlin/Native Linuxx64 distribution checksum; tracked with AAPT2 omission as#367.",
+    "scope": "No tests executed; not completed check/sample/Dokka. Last successful full integration remains historical6995130."
   },
   "resolvedDrafts": [
     {
@@ -214,7 +240,8 @@
     "sourceReviewIssue": 358,
     "resolutionIssue": 359,
     "resolutionCommit": "de882840e1e24aa04339b2285e8cd753af265b40",
-    "scope": "Distinct cleanup-order defect confirmed with ordinary IOException and local AuthenticationFailed; not a budget leak, demonstrated data loss or guaranteed remote completion. #358 classification preserved."
+    "scope": "Distinct cleanup-order defect confirmed with ordinary IOException and local AuthenticationFailed; not a budget leak, demonstrated data loss or guaranteed remote completion. #358 classification preserved.",
+    "publicInvestigation": "https://github.com/p2pKit/P2pKit/issues/358#issuecomment-5578711750"
   },
   "completedInvestigation358": {
     "issue": 358,
@@ -252,7 +279,8 @@
     "negativeControls": 3,
     "reviewSha256": "e89611a7715b7bfdbbdc75e250f9bda8f296994c89e585c9cc50649d012e997f",
     "manifestSha256": "c4f6688612ec100f19ceb5e541b234427f6e210c69c77c5a7daebda586c3151e",
-    "scope": "Complete four-file classifier/test correction APPROVED/pushed. Original JVM cast reproduction: 5tests/2intended failures/3controls; Android original production8tests/3intended failures/5controls; focused21passes;3restored mutation controls. Final2433pass/0failure/error/1manual skip;14static gates; 1736sealed entries/26cleanup receipts. Actual channel authentication preserved. No API/ABI/protocol/auth policy/dependency/durability implementation change. Separate cancellation-at-abort hypothesis unverified. Physical/ART/OEM/independent gates pending."
+    "scope": "Complete four-file classifier/test correction APPROVED/pushed. Original JVM cast reproduction: 5tests/2intended failures/3controls; Android original production8tests/3intended failures/5controls; focused21passes;3restored mutation controls. Final2433pass/0failure/error/1manual skip;14static gates; 1736sealed entries/26cleanup receipts. Actual channel authentication preserved. No API/ABI/protocol/auth policy/dependency/durability implementation change. Separate cancellation-at-abort hypothesis unverified. Physical/ART/OEM/independent gates pending.",
+    "subsequentSupersession": "Subsequent supersession on 8 September: the cancellation-during-abort observation was reproduced and tracked as #359, whose separate four-file correction was independently approved at de882840e1e24aa04339b2285e8cd753af265b40. The historical #358 cast approval does not itself cover #359."
   },
   "completedInvestigation359": {
     "issue": 359,
@@ -293,12 +321,11 @@
     "scope": "Complete four-file failed-destination cleanup correction APPROVED/pushed. Three-test original repro2failures/1control;final-test original production JVM10/8failures/2controls,Android16/7failures/9controls;focused33passes;three restored mutations. Full2459passes/0failure/error/1manual skip;14static gates;1797sealed entries/28cleanup receipts. Two compilation failures and initial evidence-verifier failure retained. No API/ABI/wire/authentication/dependency/durability change. Physical/ART/OEM/independent gates pending."
   },
   "lastReviewedIssues": [
-    360,
-    144
+    145
   ],
-  "requestedStop": "CLONEABLE_TRANSFER_CHECKPOINT_AFTER_360_AND_144; next #145 has not started",
-  "lastSourceBaselineCommit": "6ca4acf0445a7e63a9664fd3ff3988fb7912db07",
-  "lastSourceBaselineTree": "606b74ba6233f381ecbf2f823b64538724ead701",
+  "requestedStop": "NONE; owner resumed completed transfer checkpoint and authorized continued sequential repairs plus GitHub Actions for supported Mac/Windows/Apple gates.",
+  "lastSourceBaselineCommit": "d823bb9cc0d187ec746714af67b08904a28331b6",
+  "lastSourceBaselineTree": "44cd608fb05d16d3593d496b355e690af928a247",
   "mainCommitAtSourcePush": "eb444cccfc290be5435c5c10629c24183293606f",
   "continuationDelivery": "Source and safe context on audit branch; clone cannot transfer accounts, private raw evidence, historical stashes or live agents/session. Record actual checkout HEAD/tree; administrative commits follow reviewed source without rebinding its verification.",
   "completedInvestigation144": {
@@ -355,6 +382,173 @@
       }
     ],
     "removedProjectCacheBytes": 82595043,
-    "scope": "Every source invocation stopped its task-isolated wrapper/owned workers. Three ignored unused project caches were removed after separate stop and no-open-descriptor checks. Shared caches, private evidence, settings, source/stashes and unrelated projects were preserved. Later admin/push receipts are separate."
-  }
+    "scope": "Historical transfer-device cleanup at the prior checkpoint. Every source invocation stopped its task-isolated wrapper/owned workers. Three ignored unused project caches were removed after separate stop and no-open-descriptor checks. Shared caches, private evidence, settings, source/stashes and unrelated projects were preserved. Later admin/push receipts are separate."
+  },
+  "pendingRepairSeverities": {
+    "low": 89,
+    "medium": 1,
+    "informational": 1
+  },
+  "githubRefreshEvidence": {
+    "startedUtc": "2026-09-08T09:17:23.275604+00:00",
+    "endedUtc": "2026-09-08T09:28:07.480134+00:00",
+    "issues": 287,
+    "openIssues": 180,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "allStateListStableAcrossCapture": true,
+    "freshCompleteIssueStyleHistories": 31,
+    "exactSealedHistoriesReused": 335,
+    "effectiveIssueStyleComments": 486,
+    "effectiveTimelineEvents": 4170,
+    "apiCalls": 133,
+    "apiFailures": 0,
+    "apiParallelism": 1,
+    "manifestEntries": 445,
+    "manifestSha256": "83e589f0a620ccda6a2a289ebd4e212402cc968f5955d3f7a5af39dd5301ea0a",
+    "scope": "Complete all-state list reconciliation against the sealed 07:58-08:01 capture and 08:47 addendum. New #361-#366 and all their direct local reference targets had fresh full bodies/comments/timelines; linked PR #8/#102 metadata/files/commits/reviews refreshed, closed decisions retained. Unchanged unreferenced histories reuse exact sealed evidence, not fresh GETs. Known timeline-only backlinks were refreshed independently of list updated_at; initial listing-only capture is preserved as historical evidence. No blanket exclusion of unrelated timeline-only changes is claimed.",
+    "subsequentPre367ListObservation": "Root reports a 09:33 UTC all-state list equal to this sealed list before #367 creation; not a new full-history capture."
+  },
+  "incrementalGithubAdditions": [
+    {
+      "issue": 367,
+      "verifiedUtc": "2026-09-08T09:33:49.310802+00:00",
+      "url": "https://github.com/p2pKit/P2pKit/issues/367",
+      "githubState": "open",
+      "requestSha256": "056e2c5d217bd4266e0d0d5c2736476cf25e077e532ee0e0f9b7e7c6120e6776",
+      "knownTotalIssuesAfterAddition": 288,
+      "knownOpenIssuesAfterAddition": 181,
+      "knownPullRequests": 79,
+      "completeAllStateListAfterAdditionPerformed": false,
+      "scope": "Individually filed and refetched #367 after the sealed all-state capture. These known counts incorporate that addition, not a complete post-write list refresh."
+    }
+  ],
+  "previousScopedVerification144360": {
+    "issue": 144,
+    "prerequisiteIssue": 360,
+    "platforms": [
+      "macOS local shell/Git/Ruby",
+      "JVM",
+      "Android host",
+      "Kotlin/Native arm64 iOS simulator"
+    ],
+    "commit": "6995130bcdb2594257c42bed006f7d23f5bc4d6a",
+    "tree": "323fc39587c626df7ac9da1edce7cc0ab80ac313",
+    "staticGates": 23,
+    "resolverChecks": 28,
+    "workflowPolicyChecks": 21,
+    "whitespaceAssertions": 51,
+    "yamlCommandReplays": 5,
+    "negativeControls144": 13,
+    "negativeControls360": 10,
+    "positiveControlsPerIssue": 2,
+    "reviewSha256": "82e6e9ad6e34a87b18b36645463d9b0a2217432cf3258257fa6094d9b91eaab0",
+    "prerequisiteReviewSha256": "65de75d34645f4a497395f76cae78f10f0ea146bf4dad6dfadf24edbc032b9a2",
+    "manifestSha256": "cb09a4b3c4b02e904d28e7eac800f3d736cdacbe00cb96f904f8764b2d6845cd",
+    "prerequisiteManifestSha256": "08ae831555d21d2fd7e09c9bfc0fa7f26f5e88f67675e94d83de18e0dcc4c337",
+    "sharedSealedFiles": 3558,
+    "sharedSealedBytes": 18444319,
+    "sharedCleanupReceipts": 106,
+    "serializedLeafInvocations": 95,
+    "scope": "Both complete corrections APPROVED/pushed;#360 prerequisite reviewed before final#144 review. No source changes after freeze. Initial actual YAML replay,first#360control verifier and first evidence sealer failures preserved. No archive-byte,production/API/ABI/protocol/dependency changes. Five replays are actual YAML-derived commands with synthetic event contexts,not hosted CI or a scheduling deadline."
+  },
+  "previousIntegratedAttempt144360": {
+    "commit": "6995130bcdb2594257c42bed006f7d23f5bc4d6a",
+    "tree": "323fc39587c626df7ac9da1edce7cc0ab80ac313",
+    "result": "PASS",
+    "executedTasks": 256,
+    "executedTestResultsPassed": 2459,
+    "testFailures": 0,
+    "testErrors": 0,
+    "testSkips": 1,
+    "scope": "Latest combined check/Android assembly/strict core Dokka after#144/#360; not whole-audit/release/external completion."
+  },
+  "latestAffectedGateAttempt": {
+    "commit": "0423e96e15c894c26a7d45a5dfb2a012e0c1ba8e",
+    "tree": "26984a1b7d2048bdbda8e1808bb38f299e7a6866",
+    "invocation": "145-linux-affected-gates-r1",
+    "result": "FAIL",
+    "executedTasks": 97,
+    "xmlFiles": 100,
+    "passed": 851,
+    "jvmPassed": 789,
+    "androidHostPassed": 62,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "failedTaskEntries": 11,
+    "distinctMissingArtifactRecords": 2,
+    "reason": "Strict missing Linux Native/AAPT2 classifier records repeat across failed tasks;#367 owns prerequisite.",
+    "scope": "Actual core JVM/Android-host tests,Android ABI and JVM/Android compiled-public-constant guards pass. Aggregate command fails; Android sample assembly/strict Dokka incomplete. Not an additional full-check pass; overlapping tests must not be added to focused totals."
+  },
+  "completedTransferCheckpoint": {
+    "commit": "d823bb9cc0d187ec746714af67b08904a28331b6",
+    "tree": "44cd608fb05d16d3593d496b355e690af928a247",
+    "lastReviewedIssues": [
+      360,
+      144
+    ],
+    "completedIssueCount": 67,
+    "issueCountDenominator": 174,
+    "remainingIssueCount": 107,
+    "historicalRequestedStop": "CLONEABLE_TRANSFER_CHECKPOINT_AFTER_360_AND_144; next #145 has not started",
+    "status": "COMPLETED_STOP_SUPERSEDED_BY_EXPLICIT_OWNER_AUTHORIZATION_TO_CONTINUE_145_AND_REMAINING_WORK"
+  },
+  "sourcePublication145": {
+    "verifiedUtc": "2026-09-08T09:37:43.053273+00:00",
+    "commit": "0423e96e15c894c26a7d45a5dfb2a012e0c1ba8e",
+    "tree": "26984a1b7d2048bdbda8e1808bb38f299e7a6866",
+    "branch": "audit/complete-2026-09-04",
+    "remoteRefMatches": true,
+    "mainObservedCommit": "eb444cccfc290be5435c5c10629c24183293606f",
+    "scope": "Approved source-only audit-branch push/ref verification,not merge/release. Later administrative edits are not part of this reviewed tree."
+  },
+  "outcomePublication145": {
+    "verifiedUtc": "2026-09-08T09:42:42.666201+00:00",
+    "url": "https://github.com/p2pKit/P2pKit/issues/145#issuecomment-5582924265",
+    "issueRemainsOpen": true,
+    "verifiedBodyEquality": true,
+    "scope": "Individually verified comment after inventory capture; not a post-comment full-list refresh."
+  },
+  "sourceVerificationCleanup145": {
+    "sealedFiles": 1754,
+    "sealedBytes": 17292499,
+    "finalizedSerializedInvocationReceipts": 25,
+    "separateSealerReceipt": true,
+    "sealerCleanupEndedUtc": "2026-09-08T09:18:44.679102+00:00",
+    "wrapperStopsAllExitZero": true,
+    "invocationOwnedSurvivors": [],
+    "scope": "Every #145 build/test/failure finalized its task-isolated wrapper stop and owned-worker cleanup; dependent disposable outputs removed. Source,protected files,required evidence,shared caches and unrelated tasks preserved. This receipt does not cover later#367 work."
+  },
+  "continuationQueue": [
+    367,
+    223
+  ],
+  "continuationQueueScope": "Repair#367 strict host classifiers and obtain fresh final independent approval,then#223 wrapper LF,then a serialized hosted verification facility and remaining dependency-aware sequential repairs. Keep builds/tests nonoverlapping across local/hosted agents. No later repair approved or hosted results claimed.",
+  "completedInvestigation145": {
+    "issue": 145,
+    "baselineCommit": "d823bb9cc0d187ec746714af67b08904a28331b6",
+    "baselineTree": "44cd608fb05d16d3593d496b355e690af928a247",
+    "result": "BOUNDED_ALLOCATION_AND_POLICY_UNIT_MISMATCH_REPRODUCED",
+    "finalStatus": "NINE_FILE_REPAIR_INDEPENDENTLY_APPROVED_AT_0423E96",
+    "publicEvidence": "https://github.com/p2pKit/P2pKit/issues/145#issuecomment-5582924265",
+    "scope": "Final regressions on original production fail33/33at intended assertions; private Binary payload-size under-reporting remains refuted, caps always bounded growth. Approval excludes universal heap-bound/Native allocation/whole-audit claims."
+  },
+  "activeInvestigation367": {
+    "issue": 367,
+    "baselineCommit": "0423e96e15c894c26a7d45a5dfb2a012e0c1ba8e",
+    "baselineTree": "26984a1b7d2048bdbda8e1808bb38f299e7a6866",
+    "result": "STRICT_LINUX_NATIVE_AND_AAPT2_CLASSIFIERS_MISSING",
+    "status": "CONFIRMED_REPAIR_ACTIVE_UNAPPROVED",
+    "missingClassifierRecords": 5,
+    "publicEvidence": "https://github.com/p2pKit/P2pKit/issues/367",
+    "scope": "Two exact missing Linux artifacts caused actual failed commands; Windowsx64/Macx64 absence static only. Affected metadata unchanged from transfer baseline. No checksum bypass or#145regression."
+  },
+  "hostedValidationAuthorization": {
+    "status": "OWNER_AUTHORIZED_NOT_EXECUTED_THIS_CYCLE",
+    "scope": "GitHub Actions may supply supported macOS/Windows/Apple host and simulator gates under serialized bounded execution and exact source/run/evidence/cleanup binding. Not physical-device,hostile-network,independent-implementation or professional-crypto acceptance; no merge/default-branch settings/release/issue-closure authority."
+  },
+  "lastDispositionUpdateUtc": "2026-09-08T09:47:15.695353+00:00"
 }

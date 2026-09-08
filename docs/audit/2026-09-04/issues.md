@@ -1,19 +1,26 @@
 # Issue disposition index
 
-Checkpoint inventory: **174 issues; 67 reviewed repository repairs (38.5%), 107 remaining issue rows (61.5%)**.
+Checkpoint inventory: **181 issues; 68 reviewed repository repairs (37.6%), 113 remaining issue rows (62.4%)**.
 
-This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at refresh.
-Reviewed fixes are on the audit branch, not merged/released. #360's archive prerequisite and #144's complete CI-scope
-correction are independently approved at `6995130`; two separate reviewers inspected the final source. Next: #145,
-not started; refresh its full history and verify current behavior before repair. Earlier approvals remain intact.
-#133 independent interoperability remains NOT STARTED; percentages exclude external acceptance attached to approved
-rows. The #325 protected-AGENTS exception remains. Read [full records](issues.json), [the root handoff](../../../AUDIT_CHECKPOINT.md)
-and [unverified follow-ups](followups.md). Historical assessments retain their original review-time scope.
+This is a dated continuation ledger, not GitHub live state or production readiness. All inventoried issues remain
+open at their recorded list/individual refresh; no issues were closed by these fixes. #145's complete nine-file
+repair is independently APPROVED/pushed at `0423e96e15c8`; scope/limits and failed integrated Linux gates remain
+explicit in [the repair report](repairs/145.md). #144/#360 and earlier approvals are unchanged. **#367 is the active
+unapproved prerequisite**, then #223 and the serialized hosted facility/remaining sequential queue. The completed
+transfer stop is superseded. Pending repairs: **89 Low, one Medium (#367), one informational (#333)**.
+
+The sealed 09:28 UTC full-list reconciliation has 287 issues / 180 open / 79 PRs; individually verified #367 adds
+one to known issue/open totals, not a complete post-addition all-state refresh. #145's later review/outcome is an
+individual disposition update. See exact refresh/reuse/source bindings in [checkpoint metadata](checkpoint.json).
+#133 independent interoperability remains NOT_STARTED; percentages exclude external acceptance on approved rows.
+The #325 protected-AGENTS exception remains. Read [full records](issues.json),
+[the root handoff](../../../AUDIT_CHECKPOINT.md) and [unverified follow-ups](followups.md). Historical assessments
+retain original review-time scope; overall **NOT_READY**. GitHub Actions authorization is not hosted/external evidence.
 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that no earlier investigation exists.
 
-## Repairs with recorded independent approval (67)
+## Repairs with recorded independent approval (68)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -26,6 +33,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#142: [BUILD-26] resolveAndLockAll write-locks guard is bypassable via task-name matching](https://github.com/p2pKit/P2pKit/issues/142) | low | Existing | `639167cc1432` |
 | [#143: [BUILD-13] Four workflows persist GITHUB_TOKEN in .git/config (persist-credentials missing)](https://github.com/p2pKit/P2pKit/issues/143) | medium | Existing | `d18500c939bf` |
 | [#144: [BUILD-18] Docs-only CI shortcut reuses main-merge results from graph shape, not check evidence](https://github.com/p2pKit/P2pKit/issues/144) | low | Existing | `6995130bcdb2` |
+| [#145: [WSA1-05] Receive-backlog byte cap allocates a full payload copy to measure and under-counts heap](https://github.com/p2pKit/P2pKit/issues/145) | low | Existing | `0423e96e15c8` |
 | [#146: [WSG-04] Shared createTestKit fixture leaves most kit-level tests on the legacy plaintext path](https://github.com/p2pKit/P2pKit/issues/146) | medium | Existing | `ee75358d1a74` |
 | [#151: [BUILD-53] SBOM content gate never runs against the bytes uploaded to Maven Central](https://github.com/p2pKit/P2pKit/issues/151) | medium | Existing | `79ec60f50419` |
 | [#152: [BUILD-64] Android-ABI task-graph dry-run has one unasserted caller; removable with a green CI](https://github.com/p2pKit/P2pKit/issues/152) | low | Existing | `27fec6a2268a` |
@@ -85,11 +93,10 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#359: [AUDIT][Low] Caller cancellation during failed destination abort skips terminal settlement](https://github.com/p2pKit/P2pKit/issues/359) | low | New audit | `de882840e1e2` |
 | [#360: [AUDIT][Low] All-tree CI whitespace gates reject immutable historical archives](https://github.com/p2pKit/P2pKit/issues/360) | low | New audit | `6995130bcdb2` |
 
-## Pending remediation (85)
+## Pending remediation (91)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
-| [#145: [WSA1-05] Receive-backlog byte cap allocates a full payload copy to measure and under-counts heap](https://github.com/p2pKit/P2pKit/issues/145) | low | Existing | — |
 | [#156: [F-07] TCP_NODELAY is unset and transport liveness relies on core deadlines](https://github.com/p2pKit/P2pKit/issues/156) | low | Existing | — |
 | [#158: [F-11] Inbound buffer depth diverges: 64 on JVM/Android (framework default) vs 16 on iOS](https://github.com/p2pKit/P2pKit/issues/158) | low | Existing | — |
 | [#167: [WSA2-03] Discovery claim overwrites a pinned manual peer's display name (UI spoof, not auth bypass)](https://github.com/p2pKit/P2pKit/issues/167) | low | Existing | — |
@@ -174,6 +181,13 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#341: iOS sample groups the local TCP port, breaking copy/paste into manual dialing](https://github.com/p2pKit/P2pKit/issues/341) | low | New audit | — |
 | [#342: [Low] Discovery test fixture falsely claims current LAN delivery and acknowledgement semantics](https://github.com/p2pKit/P2pKit/issues/342) | low | New audit | — |
 | [#347: [AUDIT] CLI identityProfile comment promises persistence that the in-memory store does not provide](https://github.com/p2pKit/P2pKit/issues/347) | low | New audit | — |
+| [#361: [AUDIT][Low] Android hotspot failure labels are shifted from the SDK reason constants](https://github.com/p2pKit/P2pKit/issues/361) | low | New audit | — |
+| [#362: [AUDIT][Low] Android initializer KDoc promises a legacy fallback under authenticated defaults](https://github.com/p2pKit/P2pKit/issues/362) | low | New audit | — |
+| [#363: [AUDIT][Low] First iOS incoming file offer has no visible Accept/Reject controls](https://github.com/p2pKit/P2pKit/issues/363) | low | New audit | — |
+| [#364: [AUDIT][Low] Interoperability catalog conflates security profile selection with optional features](https://github.com/p2pKit/P2pKit/issues/364) | low | New audit | — |
+| [#365: [AUDIT][Low] iOS validation recipe requests a bare fingerprint in a full pairing-QR field](https://github.com/p2pKit/P2pKit/issues/365) | low | New audit | — |
+| [#366: [AUDIT][Low] Android unknown-size URI KDoc recommends a JVM-only overload](https://github.com/p2pKit/P2pKit/issues/366) | low | New audit | — |
+| [#367: [AUDIT][Medium] Host-toolchain checksums omit Linux/Windows and Intel Native archives](https://github.com/p2pKit/P2pKit/issues/367) | medium | New audit | — |
 
 ## External/platform validation pending (21)
 

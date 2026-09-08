@@ -3,8 +3,8 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-08T06:34:27.126475+00:00",
-  "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
+  "githubIssueListRefreshedUtc": "2026-09-08T09:28:07.480134+00:00",
+  "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released. The original inventorySnapshotUtc remains historical. Current rows reconcile the sealed 09:28 UTC refresh plus individually verified #367; #145 approval/publication is a later disposition update, not an inferred GitHub closure or full-list refresh.",
   "issues": [
     {
       "number": 21,
@@ -822,14 +822,25 @@
         125,
         140
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Complete nine-file #145 repair independently APPROVED at0423e96/tree26984a1, pushed/ref-verified09:37:43UTC; safe outcome posted/refetched09:42:42UTC, issueOPEN. Low bounded post-session-admission allocation/retention amplification; both64-message and8MiB caps already bounded growth. Default v2 requires authenticated/authorized admission; not pre-admission LAN. Explicit plaintext mode also reaches accounting. Binary under-reporting was refuted and defensive ownership copies remain. Count rejection precedes measurement under the same mutex. Stored charge is512/message plus2 per Text UTF-16 code unit or actual private Binary length, plus256 and2 per metadata key/value UTF-16 code unit, widened before arithmetic; delivery/rollback/drain retain exact charge ownership. Policy estimate, not universal heap upper bound, O(1) metadata processing or literal zero allocation; Native allocation/heap profiling not performed. Tighter admission is0.8.0+ only:4,194,048 ASCII code units reach8MiB, one more rejects; wire-legal4MiB ASCII Text exceeds the cap by512 even into empty backlog. No API/ABI/wire/dependency/test-hook/security weakening. Corrected final regressions on original production:33intended AssertionErrors(17JVM/16Android-host); three restored mutations. Final focused805/805pass(89XMLs/19tasks); affected851/851core tests pass(100XMLs/97tasks), Android ABI/JVM+Android constant guards pass, but aggregateFAIL on missing strict host classifiers tracked as#367. Combined check/sample/DokkaFAIL before tests(6tasks); Android sample/Dokka not complete. Twelve static gates pass. Earlier harness/deprecation, assertion-oracle/Android Log fixture and integration failures preserved. JVM allocation probe establishes estimator payload-scaling reduction only, not retained heap/Native/absolute-zero allocation.1754sealed files/17292499bytes,25finalized serialized invocation receipts plus separate sealer receipt; wrapper stops0, no owned survivors, dependent outputs cleaned. No current full-check/consumer/release/Mac/Windows/Apple/device/hostile-network/independent-interop/crypto approval; overallNOT_READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "0423e96e15c894c26a7d45a5dfb2a012e0c1ba8e"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_145_r1 APPROVED at0423e96e15c894c26a7d45a5dfb2a012e0c1ba8e/tree26984a1b7d2048bdbda8e1808bb38f299e7a6866,09:28:05UTC: complete nine-file diff, actual admission/ownership/cancellation/rearm callers, immutable message representation, protocol limits and final regression/evidence/cleanup inspected; no actionable findings, reviewer builds or edits. Report SHA256 a677e3f7190109ae9d732c929dd8f97e602e8a9d221f008586c1046b17f28e5d; evidence manifest SHA256 d562f1274a65eafc9e2d04326f07dad750466c823be1e31fda710a6dccf5904e. Issue-scoped repository repair only; failed integrated gates and policy-estimate/Native limitations explicitly retained.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/145#issuecomment-5406153528"
-      ]
+        "https://github.com/p2pKit/P2pKit/issues/145#issuecomment-5406153528",
+        "https://github.com/p2pKit/P2pKit/issues/145#issuecomment-5582924265"
+      ],
+      "repositoryScopeStatus": "APPROVED",
+      "subsequentGithubOutcomeVerification": {
+        "utc": "2026-09-08T09:42:42.666201+00:00",
+        "url": "https://github.com/p2pKit/P2pKit/issues/145#issuecomment-5582924265",
+        "issueRemainsOpen": true,
+        "verifiedBodyEquality": true,
+        "scope": "Individual outcome comment refetched after full-list capture; no complete post-comment inventory refresh claimed."
+      }
     },
     {
       "number": 146,
@@ -4417,19 +4428,21 @@
         176,
         191,
         213,
-        351
+        351,
+        359
       ],
       "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "repositoryScopeStatus": "APPROVED",
-      "assessmentAtCheckpoint": "Complete four-file series independently approved at d424a23, pushed to audit branch, not merged/released. Both local catches use statically typed fileFailureFromCause; retain original local cause/existing file-error identity, while genuine channel authentication remains unchanged. Public open and synthetic internal preflight reproduce cast; no auth-throwing install callback was established. Original JVM5tests/2intended failures/3controls; Android baseline8tests/3intended failures/5controls. First focused compilation failure retained; corrected focused21passes. Three restored mutation controls. Clean check+Android assembly+strict core Dokka:2433passes/0failures/errors/1unchanged manual skip, 296XMLs/256executed tasks;14static gates. Real pinned same-implementation kits over exact/fragmented/coalesced in-memory wires prove another transfer/message survives. No API/ABI/protocol/auth policy/dependency/durability change. Separate cancellation-during-abort suspicion remains unverified, not covered by this cast approval. Host/Native simulator are not ART/OEM/physical/Swift/independent evidence. IssueOPEN; final whole-audit/release/external gates pending; overallNOT READY.",
+      "assessmentAtCheckpoint": "Complete four-file series independently approved at d424a23, pushed to audit branch, not merged/released. Both local catches use statically typed fileFailureFromCause; retain original local cause/existing file-error identity, while genuine channel authentication remains unchanged. Public open and synthetic internal preflight reproduce cast; no auth-throwing install callback was established. Original JVM5tests/2intended failures/3controls; Android baseline8tests/3intended failures/5controls. First focused compilation failure retained; corrected focused21passes. Three restored mutation controls. Clean check+Android assembly+strict core Dokka:2433passes/0failures/errors/1unchanged manual skip, 296XMLs/256executed tasks;14static gates. Real pinned same-implementation kits over exact/fragmented/coalesced in-memory wires prove another transfer/message survives. No API/ABI/protocol/auth policy/dependency/durability change. Separate cancellation-during-abort suspicion remains unverified, not covered by this cast approval. Host/Native simulator are not ART/OEM/physical/Swift/independent evidence. IssueOPEN; final whole-audit/release/external gates pending; overallNOT READY. Subsequent supersession on 8 September: the cancellation-during-abort observation was reproduced and tracked as #359, whose separate four-file correction was independently approved at de882840e1e24aa04339b2285e8cd753af265b40. The historical #358 cast approval does not itself cover #359.",
       "recordedFixCommitsOrFinalRevision": [
         "f7ba814d65a4b002493690e0783ff3cf080edd49",
         "d424a23b00fb43b97d0ce318eb0c73b4c4d1cef2"
       ],
-      "recordedIndependentReview": "Fresh /root/review_358_r1 APPROVE at d424a23/tree02275e18: complete four-file series, surrounding classifiers/callers/platform destinations and contracts;1736sealed entries, 296finalXMLs,26targeted full-run executions,26finalized cleanup receipts independently verified. No actionable #358 findings or reviewer builds/workers. Separate cleanup-cancellation suspicion remains unverified. Report SHA256 e89611a7715b7bfdbbdc75e250f9bda8f296994c89e585c9cc50649d012e997f.",
+      "recordedIndependentReview": "Fresh /root/review_358_r1 APPROVE at d424a23/tree02275e18: complete four-file series, surrounding classifiers/callers/platform destinations and contracts;1736sealed entries, 296finalXMLs,26targeted full-run executions,26finalized cleanup receipts independently verified. No actionable #358 findings or reviewer builds/workers. Separate cleanup-cancellation suspicion remains unverified. Report SHA256 e89611a7715b7bfdbbdc75e250f9bda8f296994c89e585c9cc50649d012e997f. Subsequent supersession on 8 September: the cancellation-during-abort observation was reproduced and tracked as #359, whose separate four-file correction was independently approved at de882840e1e24aa04339b2285e8cd753af265b40. The historical #358 cast approval does not itself cover #359.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/358",
-        "https://github.com/p2pKit/P2pKit/issues/358#issuecomment-5578319370"
+        "https://github.com/p2pKit/P2pKit/issues/358#issuecomment-5578319370",
+        "https://github.com/p2pKit/P2pKit/issues/358#issuecomment-5578711750"
       ]
     },
     {
@@ -4489,7 +4502,215 @@
         "https://github.com/p2pKit/P2pKit/issues/360",
         "https://github.com/p2pKit/P2pKit/issues/360#issuecomment-5580382007"
       ]
+    },
+    {
+      "number": 361,
+      "title": "[AUDIT][Low] Android hotspot failure labels are shifted from the SDK reason constants",
+      "url": "https://github.com/p2pKit/P2pKit/issues/361",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Android provisioning labels all four forwarded LocalOnlyHotspotCallback failure reason integers incorrectly: decoder assumes0..3 while SDK constants are1..4. Typed failure/state and raw code survive; diagnostic correctness, not failed cleanup or security bypass.",
+      "affectedComponentsExcerpt": "AndroidNetworkProvisioningManager.reasonCodeName and real startLocalNetwork error/state/log consumers; WifiManagerWrapperImpl forwarding; Android SDK Platform36 constants.",
+      "relatedIssuesAndDependencies": [
+        187,
+        194,
+        195,
+        198,
+        280,
+        283
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": "open",
+      "assessmentAtCheckpoint": "Source/caller plus SDK javap-constants confirmation atd823bb9/tree44cd608; manager and adapter inspected, no fresh production behavior test or device/radio run. Existing tests assert failure type/forwarding but not all actual named reasons. Replace numeric guesses with SDK constants; add exact returned/state-message assertions for all four codes and synthetic/unknown controls. Preserve lifecycle/permissions/ABI and earlier#194/#198 approvals. Pending sequential repair and fresh independent review.",
+      "recordedFixCommitsOrFinalRevision": [],
+      "recordedIndependentReview": "No completed repair/final-revision review recorded; investigation corroboration is not repair approval.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/361"
+      ]
+    },
+    {
+      "number": 362,
+      "title": "[AUDIT][Low] Android initializer KDoc promises a legacy fallback under authenticated defaults",
+      "url": "https://github.com/p2pKit/P2pKit/issues/362",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Public Android initializer KDoc promises warning/in-memory legacy behavior without initialization, but default authenticated construction correctly fails closed with typed missing-store configuration failure. This is stale setup documentation, not a runtime fallback or downgrade defect.",
+      "affectedComponentsExcerpt": "P2pKitAndroid KDoc; P2pKit.create/builder, newP2pKit, Android secure/default PeerId factories and maintained0.7 migration guide.",
+      "relatedIssuesAndDependencies": [
+        131,
+        177,
+        187,
+        200,
+        213,
+        262,
+        311
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": "open",
+      "assessmentAtCheckpoint": "Current source/call-chain confirmation atd823bb9/tree44cd608; no fresh Android runtime test. Document initialization before default authenticated construction, typed LocalIdentityUnavailable/STORE_NOT_CONFIGURED/CONFIGURE_STORE, and restrict retained legacy fallback wording to explicit deprecated NoneForMvp without recommending downgrade. Preserve correct secure runtime/context ownership. Applicable docs/Dokka and independent final review pending; closed-invalid runtime findings stay closed.",
+      "recordedFixCommitsOrFinalRevision": [],
+      "recordedIndependentReview": "No completed repair/final-revision review recorded; investigation corroboration is not repair approval.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/362"
+      ]
+    },
+    {
+      "number": 363,
+      "title": "[AUDIT][Low] First iOS incoming file offer has no visible Accept/Reject controls",
+      "url": "https://github.com/p2pKit/P2pKit/issues/363",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "iOS sample includes transfersSection only for nonempty transfers even though its only Accept/Reject buttons serve independently populated pendingOffers. A fresh receiver can have a pending first offer and no visible consent controls.",
+      "affectedComponentsExcerpt": "samples/iosApp/ContentView.swift outer section predicate, pendingOffers reconciliation, start reset, accept and watchTransfer callers.",
+      "relatedIssuesAndDependencies": [
+        102,
+        328,
+        330
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": "open",
+      "assessmentAtCheckpoint": "Source/caller confirmation independently corroborated atd823bb9/tree44cd608, Swift blob886739b5be4289c07e265d088a1cb09eefd602cd. A first pending offer does not append a transfer until after acceptance; prior outgoing/history rows mask the defect. Rendered simulator/device reproduction and repair not executed. Make visibility depend on either model and test actual view-state boundary for neither/offers/transfers/both/last-offer expiry; never auto-accept. Preserve session selectors, quotas and consent; not SDK/wire/authentication/data-loss proof. Pending sequential repair and fresh review.",
+      "recordedFixCommitsOrFinalRevision": [],
+      "recordedIndependentReview": "No completed repair/final-revision review recorded; investigation corroboration is not repair approval.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/363"
+      ]
+    },
+    {
+      "number": 364,
+      "title": "[AUDIT][Low] Interoperability catalog conflates security profile selection with optional features",
+      "url": "https://github.com/p2pKit/P2pKit/issues/364",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Independent interoperability catalog incorrectly makes secure-v2 selection conditional on optional file/metadata features; actual whole-kit security profile is explicitly chosen before encrypted HELLO feature intersection.",
+      "affectedComponentsExcerpt": "docs/validation/test-catalog.md interoperability criterion; SecurityMode, SessionManager handshake, Handshake, ProtocolFeatures and separate operation refusal callers.",
+      "relatedIssuesAndDependencies": [
+        129,
+        133,
+        219
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": "open",
+      "assessmentAtCheckpoint": "Source/caller confirmation independently corroborated atd823bb9/tree44cd608; no fresh runtime or external interoperability execution. Correct profile-versus-capability distinction without weakening mismatch/version/no-fallback refusal or implying feature-reduced peers pass every functional campaign case. Existing test source was inspected, not executed here. Preserve independent ownership/vector/platform/evidence requirements;#133 remainsNOT_STARTED. Pending documentation repair, verification and independent final review.",
+      "recordedFixCommitsOrFinalRevision": [],
+      "recordedIndependentReview": "No completed repair/final-revision review recorded; investigation corroboration is not repair approval.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/364"
+      ]
+    },
+    {
+      "number": 365,
+      "title": "[AUDIT][Low] iOS validation recipe requests a bare fingerprint in a full pairing-QR field",
+      "url": "https://github.com/p2pKit/P2pKit/issues/365",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "PS-T08 tells iOS manual-dial operators to enter a bare full p2f1 fingerprint, but the actual pairing field and AppId-aware parser require complete trusted p2pkit:v2:<app-binding>:<fingerprint> QR text; bare fingerprint returns before dialing.",
+      "affectedComponentsExcerpt": "docs/validation/test-catalog.md PS-T08; ContentView.swift field/dialManual, kit/identity QR parser and maintained sample pairing guide.",
+      "relatedIssuesAndDependencies": [
+        199,
+        273,
+        285
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": "open",
+      "assessmentAtCheckpoint": "Source/caller confirmation independently corroborated atd823bb9/tree44cd608; no Swift build, simulator/device/network execution. Correct field/input instructions while retaining separate host/port, trusted same-AppId pinning, malformed/wrong-AppId rejection and physical scoped-IPv6/hostile-name campaign coverage. Nearby host-whitelist applicability concern is separate, not silently removed. Pending documentation repair, applicable parser/sample checks and final independent review.",
+      "recordedFixCommitsOrFinalRevision": [],
+      "recordedIndependentReview": "No completed repair/final-revision review recorded; investigation corroboration is not repair approval.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/365"
+      ]
+    },
+    {
+      "number": 366,
+      "title": "[AUDIT][Low] Android unknown-size URI KDoc recommends a JVM-only overload",
+      "url": "https://github.com/p2pKit/P2pKit/issues/366",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Android unknown-size URI KDoc recommends temporary File plus JVM sendFile(File), an extension absent from the Android artifact/source set. The runtime unknown-size message likewise gives no Android-supported sending route.",
+      "affectedComponentsExcerpt": "Android FileTransferAndroid KDoc/failure guidance, Android exported API, JVM-only FileTransferJvm convenience overload and common PreparedFileSource contract.",
+      "relatedIssuesAndDependencies": [
+        8,
+        172,
+        175,
+        176,
+        188,
+        257,
+        351
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": "open",
+      "assessmentAtCheckpoint": "Static source-set/API/caller confirmation at0423e96; affected files unchanged fromd823bb9. Not an executed compiler/runtime/device failure. Replace unavailable-overload advice with a stable known-size URI or correctly owned/reopenable/verified PreparedFileSource recipe; explain temporary-file cleanup. Preserve size/integrity/permissions/budget checks and ABI, do not add an overload to make stale prose true. Compile-only Android consumer/doc and strict Dokka checks plus final independent review pending. Closed#257 is not reopened.",
+      "recordedFixCommitsOrFinalRevision": [],
+      "recordedIndependentReview": "No completed repair/final-revision review recorded; investigation corroboration is not repair approval.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/366"
+      ]
+    },
+    {
+      "number": 367,
+      "title": "[AUDIT][Medium] Host-toolchain checksums omit Linux/Windows and Intel Native archives",
+      "url": "https://github.com/p2pKit/P2pKit/issues/367",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "medium",
+      "reportedProblemExcerpt": "Current strict toolchain verification metadata admits only macos-aarch64 Native and osx AAPT2 classifier artifacts. Missing Native Linuxx64/Windowsx64/Macx64 and AAPT2 Linux/Windows records block supported-host builds fail-closed.",
+      "affectedComponentsExcerpt": "gradle/verification-metadata.xml Native2.4.10/AAPT2 9.3.1-15703166 components; supported-host CI/release/toolchain policy and strict Linux check/sample/Dokka callers.",
+      "relatedIssuesAndDependencies": [
+        69,
+        105,
+        141,
+        142,
+        148,
+        150,
+        157,
+        223,
+        309
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": "open",
+      "assessmentAtCheckpoint": "Medium non-security build availability, confirmed at0423e96/tree26984a1; affected metadata subtrees unchanged fromd823bb9, not a#145 regression. Fresh Linux integrated check/sample/DokkaFAIL at Native checksum absence before tests; affected uncached --continue gates execute97tasks/851passing core tests butFAIL on two missing artifact records across11failed task entries. Windows/Intel absence is static only. Active next prerequisite after approved#145: independently curate five exact supported-host classifier records with publisher-signature/authoritative-sidecar evidence, preserve versions/locks/existing trust/strict verification; add independently enumerated host policy and meaningful mutations; rerun failed Linux and applicable serialized hosted gates, then fresh independent review. No repair approval, foreign-host runtime, physical/interoperability/crypto/release claim.",
+      "recordedFixCommitsOrFinalRevision": [],
+      "recordedIndependentReview": "No completed repair/final-revision review recorded; investigation corroboration is not repair approval.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/367"
+      ],
+      "githubStateObservationScope": "Individual creation/refetch at2026-09-08T09:33:49.310802+00:00 after sealed full-list refresh; not present in that earlier list."
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-08T06:38:20.009405+00:00"
+  "lastDispositionUpdateUtc": "2026-09-08T09:47:15.695353+00:00",
+  "githubRefreshEvidence": {
+    "startedUtc": "2026-09-08T09:17:23.275604+00:00",
+    "endedUtc": "2026-09-08T09:28:07.480134+00:00",
+    "issues": 287,
+    "openIssues": 180,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "allStateListStableAcrossCapture": true,
+    "freshCompleteIssueStyleHistories": 31,
+    "exactSealedHistoriesReused": 335,
+    "effectiveIssueStyleComments": 486,
+    "effectiveTimelineEvents": 4170,
+    "apiCalls": 133,
+    "apiFailures": 0,
+    "apiParallelism": 1,
+    "manifestEntries": 445,
+    "manifestSha256": "83e589f0a620ccda6a2a289ebd4e212402cc968f5955d3f7a5af39dd5301ea0a",
+    "scope": "Complete all-state list reconciliation against the sealed 07:58-08:01 capture and 08:47 addendum. New #361-#366 and all their direct local reference targets had fresh full bodies/comments/timelines; linked PR #8/#102 metadata/files/commits/reviews refreshed, closed decisions retained. Unchanged unreferenced histories reuse exact sealed evidence, not fresh GETs. Known timeline-only backlinks were refreshed independently of list updated_at; initial listing-only capture is preserved as historical evidence. No blanket exclusion of unrelated timeline-only changes is claimed.",
+    "subsequentPre367ListObservation": "Root reports a 09:33 UTC all-state list equal to this sealed list before #367 creation; not a new full-history capture."
+  },
+  "incrementalGithubAdditions": [
+    {
+      "issue": 367,
+      "verifiedUtc": "2026-09-08T09:33:49.310802+00:00",
+      "url": "https://github.com/p2pKit/P2pKit/issues/367",
+      "githubState": "open",
+      "requestSha256": "056e2c5d217bd4266e0d0d5c2736476cf25e077e532ee0e0f9b7e7c6120e6776",
+      "knownTotalIssuesAfterAddition": 288,
+      "knownOpenIssuesAfterAddition": 181,
+      "knownPullRequests": 79,
+      "completeAllStateListAfterAdditionPerformed": false,
+      "scope": "Individually filed and refetched #367 after the sealed all-state capture. These known counts incorporate that addition, not a complete post-write list refresh."
+    }
+  ]
 }
