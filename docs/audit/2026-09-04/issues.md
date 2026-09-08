@@ -1,17 +1,18 @@
 # Issue disposition index
 
-Checkpoint inventory: **182 issues; 69 reviewed repository repairs (37.9%), 113 remaining rows (62.1%)**.
+Checkpoint inventory: **182 issues; 70 reviewed repository repairs (38.5%), 112 remaining rows (61.5%)**.
 
 This dated ledger is not GitHub live state, effort or production readiness. Issues remain open at their recorded
-list/individual observations; none was closed by these fixes. #367's five-file source correction is independently
-APPROVED/pushed at `0d88be3e3769`; [scope and retained full-check failures](repairs/367.md) exclude unexecuted
-Windows/Intel acceptance. #145/#144/#360 and earlier approvals are unchanged. Next **#368**, then **#223** and
-the serialized hosted facility/remaining queue. No approved #368 revision is recorded at this #367 checkpoint.
-Pending repairs: **90 Low and one informational (#333)**. There are **49 new-audit findings**.
+list/individual observations; none was closed by these fixes. #368 is independently APPROVED/pushed at
+`c221d54b549d`; [Linux passes and preserved failures](repairs/368.md) have exact source/evidence bindings.
+#367 remains approved at `0d88be3e3769`; [its original full-check failures](repairs/367.md) stay historical
+and Windows/Intel acceptance unexecuted. #145/#144/#360 and earlier approvals are unchanged. Next active
+**#223** has a fresh isolated Linux checkout baseline, not a repair approval here; then serialized hosted work/queue.
+Pending repairs: **89 Low and one informational (#333)**. There are **49 new-audit findings**.
 
 The exhaustive 10:24–10:30 UTC capture has 288 issues/181 open/79 PRs: all 367 issue-style histories and
 79 PR metadata sets freshly fetched, 1,519 GETs, no reused current histories. #368's individual 10:50:42 addition
-gives known 289 issues/182 open; #367's 11:01 outcome is also individual, not a complete post-write refresh.
+gives known 289 issues/182 open; #367's 11:01 and #368's 11:49:57 outcomes are individual, not new full refreshes.
 Earlier captures remain historical. See [checkpoint metadata](checkpoint.json) for exact bindings/limitations.
 #133 independent interoperability stays NOT_STARTED; external acceptance on approved rows is not counted complete.
 #325's protected-AGENTS exception remains. #240 dependency `0` was a parser mistake (`transport #0` in the body),
@@ -22,7 +23,7 @@ Read [full records](issues.json), [root handoff](../../../AUDIT_CHECKPOINT.md) a
 GitHub Actions authorization is not an executed hosted/external gate. Severity `SEE_FULL_ISSUE` is an inherited
 gap, not a new severity assignment. A blank revision means no completed repair/review cycle was recorded.
 
-## Repairs with recorded independent approval (69)
+## Repairs with recorded independent approval (70)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -95,8 +96,9 @@ gap, not a new severity assignment. A blank revision means no completed repair/r
 | [#359: [AUDIT][Low] Caller cancellation during failed destination abort skips terminal settlement](https://github.com/p2pKit/P2pKit/issues/359) | low | New audit | `de882840e1e2` |
 | [#360: [AUDIT][Low] All-tree CI whitespace gates reject immutable historical archives](https://github.com/p2pKit/P2pKit/issues/360) | low | New audit | `6995130bcdb2` |
 | [#367: [AUDIT][Medium] Host-toolchain checksums omit Linux/Windows and Intel Native archives](https://github.com/p2pKit/P2pKit/issues/367) | medium | New audit | `0d88be3e3769` |
+| [#368: [AUDIT][Low] API24 export-failure fixture targets an unnormalized filename on case-sensitive filesystems](https://github.com/p2pKit/P2pKit/issues/368) | low | New audit | `c221d54b549d` |
 
-## Pending remediation (91)
+## Pending remediation (90)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -190,7 +192,6 @@ gap, not a new severity assignment. A blank revision means no completed repair/r
 | [#364: [AUDIT][Low] Interoperability catalog conflates security profile selection with optional features](https://github.com/p2pKit/P2pKit/issues/364) | low | New audit | — |
 | [#365: [AUDIT][Low] iOS validation recipe requests a bare fingerprint in a full pairing-QR field](https://github.com/p2pKit/P2pKit/issues/365) | low | New audit | — |
 | [#366: [AUDIT][Low] Android unknown-size URI KDoc recommends a JVM-only overload](https://github.com/p2pKit/P2pKit/issues/366) | low | New audit | — |
-| [#368: [AUDIT][Low] API24 export-failure fixture targets an unnormalized filename on case-sensitive filesystems](https://github.com/p2pKit/P2pKit/issues/368) | low | New audit | — |
 
 ## External/platform validation pending (21)
 

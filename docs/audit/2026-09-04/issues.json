@@ -4,7 +4,7 @@
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
   "githubIssueListRefreshedUtc": "2026-09-08T10:30:05.205645+00:00",
-  "provenance": "Curated recovery/continuation record; original inventorySnapshotUtc stays historical. Full issue discussions and affected callers, not excerpts, govern repairs. Earlier assessments/outcomes are not fresh executions; raw private evidence is not inGit. Rows reconcile the exhaustive 10:24–10:30UTC fresh-history capture plus individually filed/refetched368 at10:50:42UTC. 367 source approval/push/outcome are later scoped disposition/publication observations, not a post-outcome complete GitHub refresh, closure, merge or release. This is the intermediate367 approved-source checkpoint, not a claim that no newer368source or execution exists. Previous145 verification and refresh fields are preserved under explicit historical keys. Approved repository scope excludes unexecuted foreign-host/device/independent acceptance; whole audit NOT_READY.",
+  "provenance": "Curated recovery/continuation record; original inventorySnapshotUtc stays historical. Full issue discussions and affected callers, not excerpts, govern repairs. Earlier assessments/outcomes are not fresh executions; raw private evidence is not inGit. Rows reconcile the exhaustive 10:24–10:30UTC fresh-history capture plus individually filed/refetched368 at10:50:42UTC. 367 and368 source approvals/pushes/outcomes are later scoped disposition/publication observations, not post-outcome complete GitHub refreshes, closure, merge or release. Current368approval/verification is bound to c221d54; earlier367/145 assessments/failures retain their original scope, and later223work is not approved here. Previous145 verification and refresh fields are preserved under explicit historical keys. Approved repository scope excludes unexecuted foreign-host/device/independent acceptance; whole audit NOT_READY.",
   "issues": [
     {
       "number": 21,
@@ -4742,19 +4742,61 @@
         353,
         367
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": null,
       "githubStateAtIndividualRefresh": "open",
-      "githubStateObservationScope": "Absent from exhaustive10:30full capture; individually filed/refetched at2026-09-08T10:50:42.706211+00:00. No post-addition full refresh inferred.",
-      "assessmentAtCheckpoint": "Confirmed at0d88be3/tree db432eb; relevant test/model blobs equal transfer d823bb9 and are unchanged by367. The method originated in353, but no prior issue owns this raw-versus-normalized obstacle mismatch. Both strict clean whole checks fail1297passes+1/151XML/172tasks. A message-only diagnostic run retains all predicates/setup/assertions and proves failureType=null, normalizedId=TEST, differently cased paths and exportRecorded=true; one intended assertion failure/12tasks, then exact restore. The IllegalStateException is the fixture check, not an exporter exception. No approved368repair at this367checkpoint; root owns sequential source work. Derive obstacle from the captured exporter summary, keep all preservation/event/staging assertions and add exact-string target invariant; reproduce raw-ID mutation even on case-insensitive hosts. Do not change production normalization, accept successful export, relax assertions, skip hosts or weaken API24/25 isolation. Pending independent final-revision review and full reruns; hostclassloader not ART/device.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed368repair/final-revision approval at the367checkpoint. Independent367review corroborates the distinct downstream failure, not a368fix.",
+      "githubStateObservationScope": "Absent from exhaustive10:30full capture; individually filed/refetched at2026-09-08T10:50:42.706211+00:00. No post-addition full refresh inferred. Approved-source outcome individually posted/refetched at 2026-09-08T11:49:57.394437+00:00, issue remainsOPEN. This is not a new complete list/history capture.",
+      "assessmentAtCheckpoint": "Exact two-test-file repair independently APPROVED at c221d54/tree c72ba83; source ref-verified 11:48:48 UTC, outcome refetched11:49:57 UTC, issueOPEN. Obstacle uses one captured normalized summary; exact String basename guard detects raw-ID restoration even on case-insensitive hosts. Real IOException, unrelated-byte preservation, no-success-event and staging checks remain; canonical lower-case evidence_export_failed/outcome/severity and default/SDK24/SDK25 host cases strengthen coverage. Production normalization/exporter/replacement/API/dependencies/isolation/skips/timeouts unchanged. Focused10PASS; strict clean combined check/Androidsample/coreDokka PASS1607/199XML/234tasks; separatecheck PASS1607/199XML/194tasks, each110diagnostics cases, zeroXMLfailures/errors/skips. Counts overlap. All1298 prior case identities retained, only repaired outcome changes,309downstream cases newly reached. Both367full failures, original diagnostic, first368incorrect-uppercase-oracle FAIL9+1 and intended raw-ID exact-name mutation failure remain historical; candidate restored exactly. Independent review rehashed3355files/23948299bytes,14own leaves plus separate sealer;3earlier failure leaves shared. Stops0/no owned survivors, source/caches/evidence preserved. Linux host/classloader/shadow only; Apple skips/unavailable diagnostics remain, zeroXMLskips is not Apple execution. No ART/device/Windows/Mac/hostile-network/independent-interop/professional-crypto/finalconsumer/release acceptance. Whole auditNOT_READY;133NOT_STARTED.",
+      "recordedFixCommitsOrFinalRevision": [
+        "c221d54b549d7d65d19fb47457416ac3e43e6b37"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_368_r1 APPROVE exact two-file source c221d54b549d7d65d19fb47457416ac3e43e6b37/tree c72ba8380a510c187298aa69efc721453c07f6c8; no actionable findings. Both changed files fully read; actual recorder/exporter/replacement and application callers inspected with explicitly recorded read scopes. Complete issue, raw logs/XML, source bindings, exact-name mutation/restoration, cleanup and case preservation independently inspected; all3355sealed hashes match. Review SHA256 25143aaf1aa380b468a1b3e2d539a9f1a688b7edaaf51c544f5d65434e0e2b2c; detailed inspection 9e59e6cf0543eb2a8371100a989f995548b575504c0345e25ccbf763f6a45fb1; source patch e709be8718b76f3d275d8d6fa04ed91d395ab69de720c9bf90f8574d7dce6ef6; manifest 74198991b7a95e8faef680a6571fdae6193483863674e83459a012d185b250de. No reviewer execution; source approval does not approve later administrative bytes or external acceptance.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/368"
-      ]
+        "https://github.com/p2pKit/P2pKit/issues/368",
+        "https://github.com/p2pKit/P2pKit/issues/368#issuecomment-5584672507"
+      ],
+      "historicalPreRepairRecord": {
+        "number": 368,
+        "title": "[AUDIT][Low] API24 export-failure fixture targets an unnormalized filename on case-sensitive filesystems",
+        "url": "https://github.com/p2pKit/P2pKit/issues/368",
+        "origin": "NEW_AUDIT_FINDING",
+        "severityAtCheckpoint": "low",
+        "reportedProblemExcerpt": "The API24 missing-class export-failure fixture obstructs a raw lowercase test-ID filename, but the real recorder/exporter uses normalized TEST. On a case-sensitive filesystem export succeeds at a different target and the fixture check fails. Test-only portability, not exporter/security failure.",
+        "affectedComponentsExcerpt": "DiagnosticApi24Probe.failedExport and its real API26-blocking DiagnosticApi24CompatibilityTest classloader caller; DiagnosticRecorder normalization/summary and actual DiagnosticEvidenceExporter target derivation.",
+        "relatedIssuesAndDependencies": [
+          102,
+          317,
+          323,
+          352,
+          353,
+          367
+        ],
+        "status": "PENDING_REMEDIATION",
+        "githubStateAtListRefresh": null,
+        "githubStateAtIndividualRefresh": "open",
+        "githubStateObservationScope": "Absent from exhaustive10:30full capture; individually filed/refetched at2026-09-08T10:50:42.706211+00:00. No post-addition full refresh inferred.",
+        "assessmentAtCheckpoint": "Confirmed at0d88be3/tree db432eb; relevant test/model blobs equal transfer d823bb9 and are unchanged by367. The method originated in353, but no prior issue owns this raw-versus-normalized obstacle mismatch. Both strict clean whole checks fail1297passes+1/151XML/172tasks. A message-only diagnostic run retains all predicates/setup/assertions and proves failureType=null, normalizedId=TEST, differently cased paths and exportRecorded=true; one intended assertion failure/12tasks, then exact restore. The IllegalStateException is the fixture check, not an exporter exception. No approved368repair at this367checkpoint; root owns sequential source work. Derive obstacle from the captured exporter summary, keep all preservation/event/staging assertions and add exact-string target invariant; reproduce raw-ID mutation even on case-insensitive hosts. Do not change production normalization, accept successful export, relax assertions, skip hosts or weaken API24/25 isolation. Pending independent final-revision review and full reruns; hostclassloader not ART/device.",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed368repair/final-revision approval at the367checkpoint. Independent367review corroborates the distinct downstream failure, not a368fix.",
+        "publicInvestigationAndOutcomeUrls": [
+          "https://github.com/p2pKit/P2pKit/issues/368"
+        ]
+      },
+      "repositoryScopeStatus": "APPROVED",
+      "subsequentGithubOutcomeVerification": {
+        "verifiedUtc": "2026-09-08T11:49:57.394437+00:00",
+        "url": "https://github.com/p2pKit/P2pKit/issues/368#issuecomment-5584672507",
+        "id": 5584672507,
+        "issueRemainsOpen": true,
+        "verifiedBodyEquality": true,
+        "bodySha256": "dba51c0ae9407f8ad617db3f384186ab826a603e8e1416eef5eb337f3c1e2121",
+        "scope": "Individual approved-source outcome; Linux passes supersede original fixture failures additively. No foreign-host, physical or whole-audit acceptance."
+      },
+      "externalAcceptanceStatus": "NOT_EXECUTED",
+      "externalAcceptanceScope": "No fresh Windows/macOS/Apple/ART/physical-device execution, hostile-network, independent interoperability, professional cryptographic, final isolated-consumer or release acceptance from this host fixture repair."
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-08T11:38:51.465095+00:00",
+  "lastDispositionUpdateUtc": "2026-09-08T12:25:06.517016+00:00",
   "githubRefreshEvidence": {
     "startedUtc": "2026-09-08T10:24:33.734412+00:00",
     "endedUtc": "2026-09-08T10:30:05.205645+00:00",
@@ -4842,5 +4884,6 @@
       "scope": "Individually filed and refetched #367 after the sealed all-state capture. These known counts incorporate that addition, not a complete post-write list refresh."
     }
   ],
-  "previousDispositionUpdateUtc145": "2026-09-08T09:47:15.695353+00:00"
+  "previousDispositionUpdateUtc145": "2026-09-08T09:47:15.695353+00:00",
+  "previousDispositionUpdateUtc367": "2026-09-08T11:38:51.465095+00:00"
 }

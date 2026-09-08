@@ -3,7 +3,7 @@
 This file distinguishes unverified hypotheses from separately promoted/repaired findings. Reproduce suspicions at
 the current tree and read complete related issue histories before tracking a new defect. Record negative results
 as well as confirmations. Promoted findings below are not unfiled concerns or repair-completion claims unless
-an exact independent approval is stated. The transfer stop is superseded; current queue starts #368, then #223; #367 has source-only approval below.
+an exact independent approval is stated. The transfer stop is superseded; current queue starts #223; #367/#368 have scoped source approval below.
 
 ## Desktop large-text/RTL sidebar applicability
 
@@ -143,8 +143,8 @@ but does not enforce the three pins; use the actual repository gate. No hosted C
 ## Resumed corroboration: confirmed and filed #361–#368
 
 These current findings were independently checked against source/callers and the full issue corpus before filing.
-#361–#366 and #368 are **pending repairs**; #367 has the bounded source-only approval below. Neither
-investigation nor that approval is device/external acceptance. See full GitHub bodies and
+#361–#366 are **pending repairs**; #367/#368 have bounded source approvals below. Neither
+investigation nor those approvals establish device/external acceptance. See full GitHub bodies and
 [issue records](issues.json); do not duplicate them as still-unfiled suspicions.
 
 - [#361](https://github.com/p2pKit/P2pKit/issues/361): Android hotspot error-reason decoder assumes 0–3 while real
@@ -162,14 +162,18 @@ investigation nor that approval is device/external acceptance. See full GitHub b
 - [#367](https://github.com/p2pKit/P2pKit/issues/367): the five missing Native/AAPT2 supported-host records
   were confirmed from #145's strict Linux failures, then independently curated and source-repaired at
   `0d88be3`; see [the approved report](repairs/367.md). Independent host-policy regressions and the actual
-  851-test/sample/Dokka affected command pass. Both new full checks still fail on distinct #368; old #145
+  851-test/sample/Dokka affected command pass. Its original full checks fail on distinct #368; old #145
   failures remain. Windows/Intel acceptance is NOT_EXECUTED, not discharged by source approval.
 - [#368](https://github.com/p2pKit/P2pKit/issues/368): the API24 export-failure fixture blocks lowercase raw
-  `test_…zip`, but the recorder/exporter uses normalized `TEST_…zip`. Actual Linux checks fail; message-only
+  `test_…zip`, but the recorder/exporter uses normalized `TEST_…zip`. Original Linux checks fail; message-only
   instrumentation proves the exporter succeeded at the other path, then was restored. This is not an
   exporter `IllegalStateException`, security defect or assumed flake. Filed/refetched 10:50:42 UTC after
-  duplicate checks; no approved #368 repair at this checkpoint. Preserve exact assertions and add a
-  summary-derived obstacle plus exact-string invariant; do not change production normalization or skip hosts.
+  duplicate checks; now independently APPROVED/pushed at `c221d54`, with [report](repairs/368.md) and
+  [verified outcome](https://github.com/p2pKit/P2pKit/issues/368#issuecomment-5584672507). Summary-derived
+  obstacle/exact-string guard preserve and strengthen assertions without production/skip/timeout changes.
+  Focused10PASS; combined and separate whole checks eachPASS1607/199XML (234/194tasks), including
+  diagnostics110. Original full/diagnostic failures, first368uppercase-oracle FAIL9+1 and intended
+  exact-name mutation failure/restoration remain preserved. Host evidence is not ART/device/foreign-host acceptance.
 
 The original private #364/#365 drafts retain their discovery-time NOT_FILED status; the verified publication above
 supersedes that historical state without rewriting it. Their source inspection does not complete any physical or
@@ -186,8 +190,9 @@ Binary under-reporting was already refuted. Preserve deliberate ownership copies
 The JVM allocation probe establishes removal of payload-size scaling in the estimator only. Future measured Native
 heap/allocation claims require their own target-specific evidence; this limitation is not a new confirmed defect.
 The original #145 failed strict commands remain historical failures. #367 later passes its affected
-851-test/sample/Dokka slice, but both new full checks fail on #368. No partial pass implies whole-audit,
-foreign-host or external readiness; the original #145 report remains unchanged.
+851-test/sample/Dokka slice, while its original full checks fail on #368. Later #368 Linux passes are
+separately recorded, not a relabeling of those failures or whole-audit/foreign-host/external readiness.
+The original #145/#367 reports remain unchanged.
 
 ## Validation evidence-recipe suspicions — unconfirmed
 

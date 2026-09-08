@@ -11,15 +11,16 @@ Start with the root [continuation checkpoint](../../../AUDIT_CHECKPOINT.md). Clo
 - [Coverage ledger](coverage.tsv): inherited per-path review claims, provenance revisions and reopened work.
 - [Unverified follow-ups](followups.md): hypotheses needing reproduction and deduplication, not confirmed bug claims.
 
-The inventory is a continuation aid, not live GitHub state: **69 independently approved repository repairs,
-91 pending repairs, 21 external-validation rows and one architecture decision**. Using **182 rows**, this is
-**37.9% reviewed / 62.1% remaining**; pending repairs are 90 Low and one informational (#333).
-**49 findings** originated in this audit. #133 independent interoperability remains NOT_STARTED; #367 source
-approval does not complete its unexecuted Windows/Intel acceptance. These are not effort, closure or readiness
-percentages. The completed transfer stop is superseded. Next #368, then #223 and serialized hosted facility/
-remaining repairs; no #368 repair is approved by this #367 checkpoint. Overall **NOT_READY**.
-This records #367's approved-source cycle at `0d88be3`, not later #368 executions/results. The separate
-source-reading receipts at `c221d54` do not themselves approve #368 or retarget #367 verification.
+The inventory is a continuation aid, not live GitHub state: **70 independently approved repository repairs,
+90 pending repairs, 21 external-validation rows and one architecture decision**. Using **182 rows**, this is
+**38.5% reviewed / 61.5% remaining**; pending repairs are 89 Low and one informational (#333).
+**49 findings** originated in this audit. #368 is independently approved/pushed at `c221d54`; current
+Linux combined and separate whole checks each pass 1,607 cases, without rewriting older #367/#145 failures.
+#133 independent interoperability remains NOT_STARTED; #367 source approval does not complete its
+unexecuted Windows/Intel acceptance. These are not effort, closure or readiness percentages. The transfer
+stop is superseded. Next active #223 has a fresh isolated Linux checkout baseline reproduction, not repair
+approval here; then separately reviewed serialized hosted work/remaining repairs. Overall **NOT_READY**.
+Verification is bound to the approved #368 source, not later #223 drafts/commits or administrative changes.
 
 The exhaustive **10:24:33–10:30:05 UTC** GitHub capture refreshed all 288 issues (181 open/107 closed),
 79 PRs (7 open/72 closed), all 367 issue-style histories and every PR metadata/review/file/commit collection.
@@ -27,11 +28,43 @@ The exhaustive **10:24:33–10:30:05 UTC** GitHub capture refreshed all 288 issu
 Thirteen newly observed timeline identities include three older uncaptured backlinks, not new defects/decisions.
 Earlier 09:17–09:28 capture/reuse evidence and initial #367-addition records remain historical and unchanged.
 #368 was individually filed/refetched **10:50:42 UTC**, bringing known totals to 289 issues/182 open/79 PRs;
-#367's approved outcome was individually refetched 11:01:17 UTC. Neither is a complete post-write refresh.
+#367's outcome was individually refetched 11:01:17 UTC and #368's at 11:49:57 UTC; none is a new full refresh.
 See [checkpoint metadata](checkpoint.json) for exact bindings, retained prior evidence and limitations.
 GitHub snapshots are per-endpoint, not transactional or permanently current; refresh before work.
 
-## Latest #367 repository-source correction
+## Latest #368 API24 export-failure fixture correction
+
+The two-test-file repair is independently **APPROVED** and pushed at
+`c221d54b549d7d65d19fb47457416ac3e43e6b37`, tree `c72ba8380a510c187298aa69efc721453c07f6c8`.
+Fresh `/root/review_368_r1` found no actionable findings. Source/ref verification was 11:48:48 UTC;
+the [safe outcome](https://github.com/p2pKit/P2pKit/issues/368#issuecomment-5584672507) was refetched
+11:49:57 UTC, with the issue still OPEN. See [the scoped report](repairs/368.md).
+
+The obstacle now uses one captured normalized summary, plus an independent exact-string uppercase-ID guard.
+The real IOException, preserved unrelated content, absent success event and staging cleanup checks remain;
+canonical failure-code/outcome/severity checks and default/SDK24/SDK25 host-model cases strengthen coverage.
+Production normalization, exporter/replacement paths, API, dependencies, existing skips and timeouts are unchanged.
+
+- Final focused API24 class **PASS 10/10**; each final whole check includes **110 diagnostics cases**.
+- Clean strict combined `check`, Android sample `assembleDebug` and strict core Dokka **PASS 1,607/1,607**,
+  199 XMLs, 234 executed tasks. Separate `./gradlew check --console=plain` **PASS 1,607/1,607**,
+  199 XMLs, 194 executed tasks. No XML failures/errors/skips; totals overlap and are not additive coverage.
+- Both original #367 full-check failures and the message-only diagnostic remain historical failures.
+  The first #368 focused run also **FAILS** (nine passes/one incorrect uppercase-code oracle failure).
+  Restoring only the raw-ID argument is rejected by the exact-name guard before `mkdir`; that intended
+  one-failure mutation result and byte-exact restoration are preserved, not counted as passing product tests.
+- The independent reviewer rehashed **3,355 files / 23,948,299 bytes**, recounted XML and verified all
+  1,298 earlier case identities remain; only the repaired outcome changes, with 309 downstream cases newly reached.
+  Fourteen own serialized leaves plus a separate sealer finalized; three earlier failure leaves are shared history.
+  All task-isolated wrapper stops exited zero, no owned survivors remained, and only confirmed disposable outputs
+  were removed after evidence retention. Source/protected files, shared caches and unrelated tasks were preserved.
+
+These are **Linux host/classloader/shadow results**, not ART/device or fresh Windows/macOS/Apple execution.
+Apple skips and cinterop/ABI-unavailable diagnostics remain in the logs; zero skipped XML cases does not mean
+Apple ran. #367 Windows/Intel acceptance, final consumer/release gates and physical/hostile-network/independent/
+professional-crypto validation remain pending. #133 is **NOT_STARTED**; whole audit **NOT_READY**. Next is #223.
+
+## Historical #367 repository-source correction
 
 The complete five-file host-classifier correction is independently **APPROVED** and pushed at
 `0d88be3e3769b5133a985e4fe2fca782ba0ef2a6`, tree `db432eb14791d9637e812333305e811edceb834e`.
@@ -53,18 +86,17 @@ not authentication of arbitrary well-formed hashes or foreign-host execution.
   each **1,297 passes plus one failure**, 1,298 cases/151 XMLs/172 tasks, no errors/skips.
   The distinct downstream test-fixture mismatch is [#368](https://github.com/p2pKit/P2pKit/issues/368),
   not an exporter exception or #367 regression. Message-only instrumentation proved export succeeded at the
-  normalized uppercase path and was then restored exactly. No #368 repair is approved by this checkpoint.
+  normalized uppercase path and was then restored exactly. That #367 checkpoint did not yet approve #368.
 - All provenance/completeness/control/toolchain checks and twelve static/range gates pass. The private seal
   retains **2,160 files / 21,605,300 bytes**, 20 own serialized leaves plus a separate successful sealer.
   Shared #145 failures and the #368 diagnostic are not additional own leaves or passing tests. All stops
   exited zero; no owned survivors remained; dependent disposable outputs and owned GPG/artifact workspaces
   were removed after evidence preservation. Protected source, shared caches and unrelated tasks remain.
 
-The original #145 failures below remain historical failures. Last successful full integration recorded in this
-#367 checkpoint is historical `6995130`, not `0d88be3`; newer #368 executions are outside this cycle's record.
-Windows/Intel/Apple acceptance is **NOT_EXECUTED** in this cycle;
-source approval does not discharge those #367 acceptance gates. Next is #368, then #223 and the serialized
-hosted facility/remaining sequential queue. #133 independent interoperability remains **NOT_STARTED**;
+The original #145 failures below and both #367 full-check failures remain historical failures. At the
+#367 checkpoint the last successful integration was historical `6995130`, not `0d88be3`; later #368
+Linux passes are recorded separately above. Windows/Intel/Apple acceptance is **NOT_EXECUTED** in that
+cycle and not discharged by source approval. The former next #368 repair is now approved; #223 is next. #133 independent interoperability remains **NOT_STARTED**;
 physical-device/ART, hostile-network, independent-implementation and professional-crypto acceptance remain
 separate. Whole audit **NOT_READY**. No merge, closure, release, tag or settings change is authorized.
 
@@ -111,7 +143,7 @@ professional-crypto or final consumer/release pass is implied by this issue-scop
 The original #145 failures above established the distinct Medium, non-security, fail-closed #367
 host-classifier prerequisite; they remain historical failures. The later five-file correction and
 independent source approval at `0d88be3` are recorded above. Windows/Intel execution remains pending;
-the current downstream full-check failure is separately tracked as [#368](https://github.com/p2pKit/P2pKit/issues/368).
+the then-downstream full-check failure is [#368](https://github.com/p2pKit/P2pKit/issues/368), whose later repair is recorded above.
 
 ## Earlier approved repairs and historical verification
 
@@ -130,7 +162,8 @@ Linux/Windows jobs, permissions, required checks and release provenance are pres
 See [the #144 report](repairs/144.md) and [verified outcome](https://github.com/p2pKit/P2pKit/issues/144#issuecomment-5580383643).
 
 Historical #144/#360 combined verification: **2,459 passes, zero failures/errors, one unchanged manual skip;
-297 XMLs, 256 tasks**. This is the last successful full run, bound to `6995130`, not current #367 integration.
+297 XMLs, 256 tasks**. At the former #367 checkpoint this was the last successful full run.
+It remains bound to `6995130`; #368 Linux passes at `c221d54` are separate evidence above.
 Resolver28/policy21 checks, five actual YAML command replays and 23 static gates pass; 13 #144 expected-red controls
 and two positive controls pass as verification outcomes. Both reviews inspected shared sealed evidence:
 3,558 files/18,444,319 bytes, 106 finalized cleanup receipts and 95 nonoverlapping leaf invocations.
@@ -183,7 +216,7 @@ Dokka pass. Full check/Android assembly: **2,407 passes, zero failures/errors, o
 [the #137 report](repairs/137.md). Its then-unverified cast observation was later reproduced and repaired as #358;
 the historical report is unchanged. Different-thread StateFlow tests use a real secure kit, not physical devices or
 proof of a race. The separate cleanup-cancellation observation is now repaired as #359; the then-planned #144
-work is also approved above. Neither historical next-step note supersedes the current #368 → #223 queue.
+work is also approved above. Neither historical next-step note supersedes this #368 checkpoint's #223-first queue.
 
 Earlier #130's complete two-test-file correction is approved/pushed at `1847ed3`, tree
 `3fe527a16a52e536dedad610aebff53a7a026cdb`. Both recorders retain pins; repeated distinct remote values and intentional
@@ -264,11 +297,12 @@ preserves `AGENTS.md:9` by owner instruction; literal alignment of that SDK prer
 | [#364](https://github.com/p2pKit/P2pKit/issues/364) | Interoperability criterion confuses security profile with optional features | Current-caller documentation correction; #133 external campaign remains NOT_STARTED |
 | [#365](https://github.com/p2pKit/P2pKit/issues/365) | iOS catalog requests bare fingerprint in full pairing-QR field | Correct recipe and parser/sample contract; preserve physical/scoped-IPv6 acceptance |
 | [#366](https://github.com/p2pKit/P2pKit/issues/366) | Android URI KDoc recommends unavailable JVM-only overload | Android-supported recipe/consumer compile checks; no runtime/API weakening |
-| [#368](https://github.com/p2pKit/P2pKit/issues/368) | API24 export-failure fixture obstructs raw instead of normalized target | Summary-derived target, exact-string invariant, raw-ID mutation, diagnostics and full gates; independent review |
 
-#361–#366 and #368 are Low pending repairs; their discovery did not execute physical/device campaigns.
-#368 has fresh Linux failing-host evidence, not a production exporter failure. #367 has the bounded source
-approval above, with foreign-host acceptance still NOT_EXECUTED. Every next repair requires sequential
+#361–#366 are Low pending repairs; their discovery did not execute physical/device campaigns.
+#368 is independently approved/pushed at `c221d54`; [its repair report](repairs/368.md) records the source-bound
+Linux combined and separate whole-check passes, preserving the original failing-host evidence and first
+repair-oracle failure. This was a fixture defect, not a production exporter failure. #367 has the bounded
+source approval above, with foreign-host acceptance still **NOT_EXECUTED**. Every next repair requires sequential
 implementation and fresh independent final-revision review. Investigation is not repair approval.
 GitHub Actions is authorized for supported Mac/Windows/Apple gates; physical devices, hostile networks,
 independent implementations and professional crypto remain separate acceptance.
@@ -286,7 +320,7 @@ artifacts are necessary, request the private backup; otherwise run fresh, scoped
 
 Coverage rows preserve the last recorded scoped assessment at their recorded revisions. This is not complete current
 coverage: later changes invalidate affected paths/callers; the original full audit must be corroborated before final
-completion. The #145 and #367 repairs have exact scoped reviews above; the inherited #144/#360, #359, #358, #137, #130, #332 Apple,
+completion. The #145, #367 and #368 repairs have exact scoped reviews above; the inherited #144/#360, #359, #358, #137, #130, #332 Apple,
 #356, #229, #357, #226, #225, #208, #152, #133, #355, #187, #190 and #325 paths retain historical review records;
 other domains still need current corroboration. The inherited transfer ledger inventoried **1,038 paths with
 334 recorded blob bindings**; those figures are historical, not a new current-tree aggregation. Changed paths
@@ -295,18 +329,21 @@ affected-subtree scope, not full-file XML text review. Administrative updates do
 binding from their inputs. Inventory, hashing and structural parsing are not completed semantic review.
 Added handoff documents are inventory entries, not runtime-verification claims.
 
-The expanded coverage projection preserves all **5,190 cells in the five historical columns** and
-adds nine read-scope/provenance columns. It uses source-reading context `c221d54` (1,044 source paths),
-plus the actually read new #367 report: **1,045 projected paths**. It records **777 full-text**,
-**259 structural-only**, **one semantic-delta**, **one partial XML**, **six reopened administrative**
-paths and **one self-excluded coverage output**. Six changed ledgers retain historical full-read
-input bindings; independent complete-delta review is not a full reread of their new bytes. The two
-#368 test-file reads at `c221d54` are source inspection, not #368 repair approval or execution evidence.
-This differs from the older `0d88be3` input map (783 full-text including the old coverage input)
-and its earlier generated output (782 full-text plus self-exclusion). No final administrative commit,
-self-hash or complete current semantic review is inferred. Private receipt names are provenance
-identifiers, not links or raw evidence transferred by cloning. These scope counts do not alter
-the 69/182 repository-repair denominator or retarget #367 verification to newer #368 executions.
+The expanded coverage projection preserves all **5,190 original cells in the five historical columns**
+(and all 5,225 such cells in the preceding 1,045-row projection), with nine read-scope/provenance columns.
+It uses immutable source-reading context `c221d54` (1,044 source paths), plus the reports:
+both #367/#368 reports have actual byte-bound uncommitted full-text receipts; **1,046 projected paths**.
+It records **776 full-text**, **259 structural-only**, **one semantic-delta**, **one partial XML**,
+**eight reopened paths** (six administrative plus two later #223 source paths) and **one self-excluded output**.
+Six changed ledgers retain historical full-read input bindings; complete-delta review is not a full reread
+of their new bytes. Report reads do not upgrade those six paths. The two #368 test-file reads at `c221d54`
+remain source inspection; final repair approval/execution is separately evidenced above, not inferred from
+coverage. Older `0d88be3` input/output counts (783 full-text input; 782 plus self-exclusion output) and the
+#367 1,045-path projection remain historical. The two #223 changes at `8dd65ce` are explicitly reopened,
+retaining old input readings rather than claiming later source was read, reviewed or executed here.
+No final administrative commit, self-hash or complete current semantic review is inferred. Private receipt
+names are provenance identifiers, not links or raw evidence transferred by cloning. Read-scope counts
+do not alter the **70/182** repair-row denominator or retarget earlier verification.
 
 ## Maintaining cloneable progress
 
