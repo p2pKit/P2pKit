@@ -29,6 +29,10 @@ grep -Fq 'kotlin = "2.4.10"' "$CATALOG" || fail "Kotlin 2.4.10 is not the catalo
 # This independent metadata-reader expectation must move only after review.
 grep -Fq 'binary-compatibility-validator = "0.18.1"' "$CATALOG" ||
     fail "the Android ABI metadata reader is not pinned"
+# A current-host refresh cannot discover all Native/AAPT2 host archives.
+# Require the independently reviewed classifier set in the pre-build policy.
+python3 "$ROOT/scripts/check-host-toolchain-verification.py"
+python3 "$ROOT/scripts/tests/check-host-toolchain-verification-test.py"
 grep -Fqx 'IOS_MIN_VERSION=14.0' "$PROPERTIES" || fail "the iOS 14 floor is not canonical"
 grep -Fqx 'kotlin.native.ignoreDisabledTargets=true' "$PROPERTIES" ||
     fail "Apple Silicon host-mismatch handling is not explicit"

@@ -348,6 +348,7 @@ Counterparts are named by stable keys/sections, not line numbers that drift duri
 | Independent gate | Counterpart to review and update together |
 | --- | --- |
 | `scripts/tests/check-kotlin-toolchain-policy-test.sh` | `gradle/libs.versions.toml`: `kotlin`, `binary-compatibility-validator` |
+| `scripts/check-host-toolchain-verification.py` | Catalog `kotlin`/`agp`, reviewed AGP/AAPT2 version pair, and all current Native/AAPT2 host classifiers in `gradle/verification-metadata.xml` |
 | `scripts/check-gradle-wrapper.sh` | `gradle/wrapper/gradle-wrapper.properties`: URL/distribution checksum; reviewed wrapper JAR and both launchers |
 | `scripts/tests/release-workflow-test.sh` | `scripts/install-xcodegen.sh`: version/archive checksum; `build.gradle.kts`: Netty and both jsoup floors; Android sample's Netty lock |
 
@@ -442,6 +443,16 @@ CI executes the range-aware update check before Gradle so an incomplete bot PR
 fails quickly instead of spending the Complete Gate discovering missing
 artifacts. Candidate generation is deliberately not automatic: newly downloaded
 checksums are not trusted until the maintainer review succeeds.
+
+Toolchain updates must curate foreign-host artifacts as well as the updating machine's resolved graph.
+The pre-build Kotlin policy requires all four Kotlin/Native host archives (Linux x64, macOS arm64/x64,
+Windows x64) and all three AAPT2 classifiers (Linux, macOS `osx`, Windows), with independently pinned
+Kotlin and AGP/AAPT2 versions. Run `python3 scripts/check-host-toolchain-verification.py` and
+`python3 scripts/tests/check-host-toolchain-verification-test.py` after curation. The checker enforces
+complete, unambiguous exact SHA-256 records; it does not authenticate an arbitrary well-formed hash.
+Every newly added archive still needs the byte/signature review above, and host execution remains a
+separate gate. Preserve reviewed historical artifacts and strict verification; do not disable Native
+tasks or checksum verification to work around an incomplete current-host refresh.
 
 Kotlin's built-in ABI validator covers JVM and KLIB outputs but not Android
 KMP artifacts. The separate `checkAndroidAbi` tasks read Kotlin metadata from
