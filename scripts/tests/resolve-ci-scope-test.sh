@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RESOLVER="$ROOT/scripts/resolve-ci-scope.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-ci-scope-test.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
+checks=0
 
 fail() {
     echo "FATAL: $*" >&2
@@ -62,6 +63,7 @@ expect_scope() {
     expected_diagnostic="CI scope: $expected_scope ($expected_reason)"
     [[ "$actual_diagnostic" == "$expected_diagnostic" ]] ||
         fail "resolver diagnostic differs; expected [$expected_diagnostic], got [$actual_diagnostic]"
+    checks=$((checks + 1))
 }
 
 expect_failure() {
@@ -74,6 +76,7 @@ expect_failure() {
         fail "$description emitted partial GitHub outputs: $(<"$WORK/resolver.stdout")"
     grep -Fq -- "$expected_fragment" "$WORK/resolver.stderr" ||
         fail "$description did not report '$expected_fragment': $(<"$WORK/resolver.stderr")"
+    checks=$((checks + 1))
 }
 
 zero=0000000000000000000000000000000000000000
@@ -188,9 +191,53 @@ exact_tree_merge="$(git -C "$exact_tree_repo" rev-parse HEAD)"
 [[ "$(git -C "$exact_tree_repo" rev-parse "$exact_tree_merge^{tree}")" == \
     "$(git -C "$exact_tree_repo" rev-parse "$exact_tree_topic^{tree}")" ]] ||
     fail "exact-tree push fixture is not exact"
-expect_scope lightweight "$exact_tree_base" "$exact_tree_merge" \
-    "protected exact-tree merge reuses required PR gate" \
+# There is no remote or successful check evidence in this fixture. Tree
+# equality must never turn its source delta into a lightweight main push.
+expect_scope full "$exact_tree_base" "$exact_tree_merge" \
+    "main push changed-file classification" \
     "$exact_tree_repo" push main "$exact_tree_merge" "$exact_tree_base" '' ''
+
+# Actual Markdown-only merge deltas remain lightweight; do not replace the
+# unsound reuse shortcut with an unnecessary full gate for every main push.
+[[ "$(git -C "$docs_pr_repo" rev-parse "$docs_pr_merge^{tree}")" == \
+    "$(git -C "$docs_pr_repo" rev-parse "$docs_pr_head^{tree}")" ]] ||
+    fail "docs-only push fixture is not exact"
+expect_scope lightweight "$docs_pr_base" "$docs_pr_merge" \
+    "main push changed-file classification" \
+    "$docs_pr_repo" push main "$docs_pr_merge" "$docs_pr_base" '' ''
+expect_scope full "$rename_pr_base" "$rename_pr_merge" \
+    "main push changed-file classification" \
+    "$rename_pr_repo" push main "$rename_pr_merge" "$rename_pr_base" '' ''
+expect_scope full "$result_base" "$result_merge" \
+    "main push changed-file classification" \
+    "$result_repo" push main "$result_merge" "$result_base" '' ''
+
+empty_merge_repo="$(new_repo empty-merge-push)"
+empty_merge_base="$(git -C "$empty_merge_repo" rev-parse HEAD)"
+git -C "$empty_merge_repo" switch -qc topic
+git -C "$empty_merge_repo" commit --allow-empty -qm "empty topic"
+git -C "$empty_merge_repo" switch -q main
+git -C "$empty_merge_repo" merge -q --no-ff topic -m "empty merge"
+empty_merge_head="$(git -C "$empty_merge_repo" rev-parse HEAD)"
+[[ "$(git -C "$empty_merge_repo" rev-parse "$empty_merge_head^{tree}")" == \
+    "$(git -C "$empty_merge_repo" rev-parse "$empty_merge_base^{tree}")" ]] ||
+    fail "empty merge fixture changed the tree"
+expect_scope full "$empty_merge_base" "$empty_merge_head" \
+    "main push changed-file classification" \
+    "$empty_merge_repo" push main "$empty_merge_head" "$empty_merge_base" '' ''
+expect_scope full "$empty_merge_head" "$empty_merge_head" \
+    "main push changed-file classification" \
+    "$empty_merge_repo" push main "$empty_merge_head" "$empty_merge_head" '' ''
+
+direct_source_repo="$(new_repo direct-source-push)"
+direct_source_base="$(git -C "$direct_source_repo" rev-parse HEAD)"
+printf 'pushed source\n' >>"$direct_source_repo/source.kt"
+git -C "$direct_source_repo" add .
+git -C "$direct_source_repo" commit -qm "source push"
+direct_source_head="$(git -C "$direct_source_repo" rev-parse HEAD)"
+expect_scope full "$direct_source_base" "$direct_source_head" \
+    "main push changed-file classification" \
+    "$direct_source_repo" push main "$direct_source_head" "$direct_source_base" '' ''
 
 # A multi-commit push ending in a merge must retain github.event.before, not
 # silently narrow the whitespace comparison to the merge's first parent.
@@ -239,8 +286,15 @@ expect_scope full "$direct_docs_empty_tree" "$direct_docs_head" \
     "manual dispatch uses all-tree fallback" \
     "$direct_docs_repo" workflow_dispatch main "$direct_docs_head" '' '' ''
 expect_scope full "$direct_docs_empty_tree" "$direct_docs_head" \
-    "unsupported event uses all-tree fallback" \
+    "scheduled run uses all-tree fallback" \
     "$direct_docs_repo" schedule main "$direct_docs_head" '' '' ''
+# A scheduled run must not use even a valid Markdown-only comparison range.
+expect_scope full "$direct_docs_empty_tree" "$direct_docs_head" \
+    "scheduled run uses all-tree fallback" \
+    "$direct_docs_repo" schedule main "$direct_docs_head" "$direct_docs_base" '' ''
+expect_scope full "$direct_docs_empty_tree" "$direct_docs_head" \
+    "unsupported event uses all-tree fallback" \
+    "$direct_docs_repo" repository_dispatch main "$direct_docs_head" '' '' ''
 
 expect_failure "non-main push" "push REF_NAME must be main" \
     "$direct_docs_repo" push maintenance "$direct_docs_head" "$direct_docs_base" '' ''
@@ -256,4 +310,4 @@ expect_failure "push event/check-out mismatch" \
     "GITHUB_SHA does not equal the checked-out HEAD" \
     "$direct_docs_repo" push main "$direct_docs_base" "$zero" '' ''
 
-echo "RESULT: PASS — exact PR graphs/results, exact-tree merge reuse, complete push ranges, and ambiguous/all-tree fallbacks are fail closed"
+echo "RESULT: PASS — exact PR results, full push deltas without check reuse, scheduled/manual and ambiguous fallbacks ($checks checks)"

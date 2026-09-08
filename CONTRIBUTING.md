@@ -38,21 +38,35 @@ Before requesting a release-facing review, follow
 
 ## CI scope policy
 
-The required `complete-gate` check classifies each change conservatively:
+Every CI event runs the Linux and Windows library suites. The required
+`complete-gate` rejects failed, cancelled or skipped results from either host,
+then classifies the macOS work conservatively:
 
-- a non-empty Markdown-only change runs link, layout, release-metadata, scope,
+- a non-empty Markdown-only PR/push delta runs link, layout, release-metadata, scope,
   and whitespace checks;
-- any source, build, workflow, script, dependency, security, license, API, or
-  release change runs the complete module/platform, ABI, Dokka, SBOM,
+- any delta containing a non-`.md` path runs the complete module/platform, ABI, Dokka, SBOM,
   publication-consumer, XCFramework, provenance, and Swift gate;
-- an empty or unclassifiable change set fails closed to the complete gate;
-- a protected merge push reuses the complete check already required on the
-  exact pull-request tree instead of repeating the expensive gate; and
-- a manual workflow dispatch always runs the complete gate.
+- empty deltas and unavailable/non-ancestor push bases select the full gate;
+  invalid event identities or Git inspection failures fail the job;
+- every main push is classified from its complete event-before-to-HEAD delta,
+  including merges whose tree equals the pull-request head. Git topology is
+  not proof of a successful check; no previous check result is reused; and
+- manual dispatches and the weekly schedule (Monday, 04:17 UTC) always request
+  the full gate, with all-tree whitespace/dependency checking.
 
-The lightweight path does not weaken branch protection: it produces the same
-required check name after executing the checks appropriate to documentation
-only. Adding any non-Markdown file automatically selects the complete path.
+The schedule uses GitHub's default branch (`main`) and a separate concurrency
+group, so ordinary pushes/dispatches cannot cancel it; a later scheduled run
+does not cancel an already running backstop. This is defense in depth, not a
+one-week execution guarantee: GitHub can delay/drop scheduled runs, and checks
+can fail. Inspect missing/failed runs and dispatch `CI` on the intended ref
+when necessary; verify its recorded commit and actual full-gate results.
+
+Keep the main ruleset's pull-request, deletion/non-fast-forward and strict
+required checks (`complete-gate`, `review`, `scan / osv-scan`, `osv-scanner`).
+The administrator bypass and branch-creation exception remain owner-controlled;
+scope classification does not assume they were unused or prevent bypass itself.
+Both scopes keep the required check name; a green lightweight result proves
+its documentation checks and the two JVM hosts, not the full macOS gate.
 
 ## Change rules
 

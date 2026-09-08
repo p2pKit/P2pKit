@@ -121,7 +121,10 @@ Bash continuations. The symlink prerequisites above still apply; do not skip
 tests when a runner lacks them. Stop Gradle after failures as well as success.
 
 `CI` runs these tasks on Ubuntu and Windows for every pull request, main push,
-and manual run. macOS retains the complete `check` gate. Keep `complete-gate`
+manual run and weekly schedule. macOS uses the conservative
+[CI scope policy](../../CONTRIBUTING.md#ci-scope-policy): non-Markdown changes,
+manual dispatches and the weekly backstop request the full gate; no main-merge
+check is inferred from tree equality. Keep `complete-gate`
 required in repository rules: it waits for both JVM hosts and explicitly rejects
 failure, cancellation, or a skipped matrix before running either its lightweight
 or full checks. No new required-check name is needed. The separate Desktop

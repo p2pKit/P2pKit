@@ -16,6 +16,7 @@ scripts/tests/check-osv-lockfile-coverage.sh
 scripts/tests/check-markdown-links.sh
 scripts/tests/classify-ci-scope-test.sh
 scripts/tests/resolve-ci-scope-test.sh
+ruby scripts/tests/check-ci-scope-policy-test.rb
 scripts/tests/check-git-whitespace-test.sh
 scripts/tests/check-release-identity-test.sh
 scripts/tests/check-kotlin-toolchain-policy-test.sh

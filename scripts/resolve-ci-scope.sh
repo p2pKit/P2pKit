@@ -62,6 +62,9 @@ case "$event_name" in
     workflow_dispatch)
         reason="manual dispatch uses all-tree fallback"
         ;;
+    schedule)
+        reason="scheduled run uses all-tree fallback"
+        ;;
     pull_request)
         is_commit "$pr_base_sha" || fail "PR_BASE_SHA is not an available exact commit"
         is_commit "$pr_head_sha" || fail "PR_HEAD_SHA is not an available exact commit"
@@ -87,24 +90,11 @@ case "$event_name" in
         [[ "$ref_name" == "main" ]] || fail "push REF_NAME must be main"
         if is_commit "$before_sha" && git merge-base --is-ancestor "$before_sha" "$head"; then
             base="$before_sha"
-            parent_line="$(git show -s --format=%P "$head")" ||
-                fail "cannot inspect main-push parents"
-            read -r -a push_parents <<<"$parent_line"
-            if [[ "${#push_parents[@]}" -eq 2 ]] &&
-                [[ "${push_parents[0]}" == "$before_sha" ]] &&
-                [[ "$(git rev-parse "$head^{tree}")" == \
-                    "$(git rev-parse "${push_parents[1]}^{tree}")" ]]; then
-                # Branch protection proves that the second parent entered
-                # through a required PR check. Reuse is safe only for one
-                # merge commit whose resulting tree is byte-identical to that
-                # verified PR head. Any batched, conflicted, or rewritten
-                # graph falls through to fresh classification/full scope.
-                scope="lightweight"
-                reason="protected exact-tree merge reuses required PR gate"
-            else
-                scope="$(classify_delta "$base" "$head")"
-                reason="main push changed-file classification"
-            fi
+            # Equal merge/parent trees do not prove any successful PR check.
+            # Classify the complete push delta even for an exact-tree merge;
+            # only actual non-empty Markdown-only deltas may be lightweight.
+            scope="$(classify_delta "$base" "$head")"
+            reason="main push changed-file classification"
         elif is_commit "$before_sha"; then
             scope="full"
             reason="push base is not an ancestor; using all-tree fallback"
