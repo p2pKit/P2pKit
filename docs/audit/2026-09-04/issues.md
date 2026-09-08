@@ -1,26 +1,28 @@
 # Issue disposition index
 
-Checkpoint inventory: **181 issues; 68 reviewed repository repairs (37.6%), 113 remaining issue rows (62.4%)**.
+Checkpoint inventory: **182 issues; 69 reviewed repository repairs (37.9%), 113 remaining rows (62.1%)**.
 
-This is a dated continuation ledger, not GitHub live state or production readiness. All inventoried issues remain
-open at their recorded list/individual refresh; no issues were closed by these fixes. #145's complete nine-file
-repair is independently APPROVED/pushed at `0423e96e15c8`; scope/limits and failed integrated Linux gates remain
-explicit in [the repair report](repairs/145.md). #144/#360 and earlier approvals are unchanged. **#367 is the active
-unapproved prerequisite**, then #223 and the serialized hosted facility/remaining sequential queue. The completed
-transfer stop is superseded. Pending repairs: **89 Low, one Medium (#367), one informational (#333)**.
+This dated ledger is not GitHub live state, effort or production readiness. Issues remain open at their recorded
+list/individual observations; none was closed by these fixes. #367's five-file source correction is independently
+APPROVED/pushed at `0d88be3e3769`; [scope and retained full-check failures](repairs/367.md) exclude unexecuted
+Windows/Intel acceptance. #145/#144/#360 and earlier approvals are unchanged. Next **#368**, then **#223** and
+the serialized hosted facility/remaining queue. No approved #368 revision is recorded at this #367 checkpoint.
+Pending repairs: **90 Low and one informational (#333)**. There are **49 new-audit findings**.
 
-The sealed 09:28 UTC full-list reconciliation has 287 issues / 180 open / 79 PRs; individually verified #367 adds
-one to known issue/open totals, not a complete post-addition all-state refresh. #145's later review/outcome is an
-individual disposition update. See exact refresh/reuse/source bindings in [checkpoint metadata](checkpoint.json).
-#133 independent interoperability remains NOT_STARTED; percentages exclude external acceptance on approved rows.
-The #325 protected-AGENTS exception remains. Read [full records](issues.json),
-[the root handoff](../../../AUDIT_CHECKPOINT.md) and [unverified follow-ups](followups.md). Historical assessments
-retain original review-time scope; overall **NOT_READY**. GitHub Actions authorization is not hosted/external evidence.
+The exhaustive 10:24–10:30 UTC capture has 288 issues/181 open/79 PRs: all 367 issue-style histories and
+79 PR metadata sets freshly fetched, 1,519 GETs, no reused current histories. #368's individual 10:50:42 addition
+gives known 289 issues/182 open; #367's 11:01 outcome is also individual, not a complete post-write refresh.
+Earlier captures remain historical. See [checkpoint metadata](checkpoint.json) for exact bindings/limitations.
+#133 independent interoperability stays NOT_STARTED; external acceptance on approved rows is not counted complete.
+#325's protected-AGENTS exception remains. #240 dependency `0` was a parser mistake (`transport #0` in the body),
+not a GitHub issue; its removal is not a product repair, new finding or count change.
 
-Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
-A blank fix revision means no completed repair/review cycle was recorded, not that no earlier investigation exists.
+Read [full records](issues.json), [root handoff](../../../AUDIT_CHECKPOINT.md) and
+[unverified follow-ups](followups.md). Historical assessments retain original scope. Overall **NOT_READY**;
+GitHub Actions authorization is not an executed hosted/external gate. Severity `SEE_FULL_ISSUE` is an inherited
+gap, not a new severity assignment. A blank revision means no completed repair/review cycle was recorded.
 
-## Repairs with recorded independent approval (68)
+## Repairs with recorded independent approval (69)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -92,6 +94,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#358: [AUDIT][Low] Destination AuthenticationFailed escapes as ClassCastException and skips acceptance cleanup](https://github.com/p2pKit/P2pKit/issues/358) | low | New audit | `d424a23b00fb` |
 | [#359: [AUDIT][Low] Caller cancellation during failed destination abort skips terminal settlement](https://github.com/p2pKit/P2pKit/issues/359) | low | New audit | `de882840e1e2` |
 | [#360: [AUDIT][Low] All-tree CI whitespace gates reject immutable historical archives](https://github.com/p2pKit/P2pKit/issues/360) | low | New audit | `6995130bcdb2` |
+| [#367: [AUDIT][Medium] Host-toolchain checksums omit Linux/Windows and Intel Native archives](https://github.com/p2pKit/P2pKit/issues/367) | medium | New audit | `0d88be3e3769` |
 
 ## Pending remediation (91)
 
@@ -187,7 +190,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#364: [AUDIT][Low] Interoperability catalog conflates security profile selection with optional features](https://github.com/p2pKit/P2pKit/issues/364) | low | New audit | — |
 | [#365: [AUDIT][Low] iOS validation recipe requests a bare fingerprint in a full pairing-QR field](https://github.com/p2pKit/P2pKit/issues/365) | low | New audit | — |
 | [#366: [AUDIT][Low] Android unknown-size URI KDoc recommends a JVM-only overload](https://github.com/p2pKit/P2pKit/issues/366) | low | New audit | — |
-| [#367: [AUDIT][Medium] Host-toolchain checksums omit Linux/Windows and Intel Native archives](https://github.com/p2pKit/P2pKit/issues/367) | medium | New audit | — |
+| [#368: [AUDIT][Low] API24 export-failure fixture targets an unnormalized filename on case-sensitive filesystems](https://github.com/p2pKit/P2pKit/issues/368) | low | New audit | — |
 
 ## External/platform validation pending (21)
 

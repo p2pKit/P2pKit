@@ -3,7 +3,7 @@
 This file distinguishes unverified hypotheses from separately promoted/repaired findings. Reproduce suspicions at
 the current tree and read complete related issue histories before tracking a new defect. Record negative results
 as well as confirmations. Promoted findings below are not unfiled concerns or repair-completion claims unless
-an exact independent approval is stated. The transfer stop is superseded; current queue starts #367, then #223.
+an exact independent approval is stated. The transfer stop is superseded; current queue starts #368, then #223; #367 has source-only approval below.
 
 ## Desktop large-text/RTL sidebar applicability
 
@@ -140,11 +140,12 @@ The initial failed replay and later verifier failures remain original failures, 
 Do not refile this root cause or claim every archived file now has an integrity pin. Plain Git honors attributes
 but does not enforce the three pins; use the actual repository gate. No hosted CI or Windows execution is claimed.
 
-## Resumed corroboration: confirmed and filed #361–#367
+## Resumed corroboration: confirmed and filed #361–#368
 
 These current findings were independently checked against source/callers and the full issue corpus before filing.
-They are **pending repairs**, not fresh runtime/device passes or approval of a completed revision. See the full
-GitHub bodies and [issue records](issues.json); do not duplicate them as still-unfiled suspicions.
+#361–#366 and #368 are **pending repairs**; #367 has the bounded source-only approval below. Neither
+investigation nor that approval is device/external acceptance. See full GitHub bodies and
+[issue records](issues.json); do not duplicate them as still-unfiled suspicions.
 
 - [#361](https://github.com/p2pKit/P2pKit/issues/361): Android hotspot error-reason decoder assumes 0–3 while real
   SDK constants are 1–4. Forwarded codes, typed failure and lifecycle remain; fresh manager/message regressions are pending.
@@ -158,11 +159,17 @@ GitHub bodies and [issue records](issues.json); do not duplicate them as still-u
   sample requires a full trusted same-AppId pairing QR. Preserve parser/pins and scoped-IPv6 acceptance coverage.
 - [#366](https://github.com/p2pKit/P2pKit/issues/366): Android URI KDoc recommends a JVM-only `sendFile(File)`
   overload absent from that artifact. Source-set/API contradiction, not an executed compilation/device failure.
-- [#367](https://github.com/p2pKit/P2pKit/issues/367): missing five Native/AAPT2 supported-host classifier records
-  prevent strict builds. Fresh #145 Linux combined/affected commands fail on two missing Linux artifacts; eleven
-  affected failed tasks are repetitions of that root. Windows/Intel absence is static-only. The metadata predates
-  #145, so this is not its regression. Medium non-security fail-closed availability; signed/provenanced curation,
-  independent host policy/mutations, strict reruns and a fresh final reviewer are required. Active, not approved.
+- [#367](https://github.com/p2pKit/P2pKit/issues/367): the five missing Native/AAPT2 supported-host records
+  were confirmed from #145's strict Linux failures, then independently curated and source-repaired at
+  `0d88be3`; see [the approved report](repairs/367.md). Independent host-policy regressions and the actual
+  851-test/sample/Dokka affected command pass. Both new full checks still fail on distinct #368; old #145
+  failures remain. Windows/Intel acceptance is NOT_EXECUTED, not discharged by source approval.
+- [#368](https://github.com/p2pKit/P2pKit/issues/368): the API24 export-failure fixture blocks lowercase raw
+  `test_…zip`, but the recorder/exporter uses normalized `TEST_…zip`. Actual Linux checks fail; message-only
+  instrumentation proves the exporter succeeded at the other path, then was restored. This is not an
+  exporter `IllegalStateException`, security defect or assumed flake. Filed/refetched 10:50:42 UTC after
+  duplicate checks; no approved #368 repair at this checkpoint. Preserve exact assertions and add a
+  summary-derived obstacle plus exact-string invariant; do not change production normalization or skip hosts.
 
 The original private #364/#365 drafts retain their discovery-time NOT_FILED status; the verified publication above
 supersedes that historical state without rewriting it. Their source inspection does not complete any physical or
@@ -178,7 +185,9 @@ Native heap bounds, literal zero allocation or constant-time metadata processing
 Binary under-reporting was already refuted. Preserve deliberate ownership copies and 0.8.0+ admission restrictions.
 The JVM allocation probe establishes removal of payload-size scaling in the estimator only. Future measured Native
 heap/allocation claims require their own target-specific evidence; this limitation is not a new confirmed defect.
-Partial core-test/ABI passes do not supersede #367's failed integrated/sample/Dokka commands or imply external readiness.
+The original #145 failed strict commands remain historical failures. #367 later passes its affected
+851-test/sample/Dokka slice, but both new full checks fail on #368. No partial pass implies whole-audit,
+foreign-host or external readiness; the original #145 report remains unchanged.
 
 ## Validation evidence-recipe suspicions — unconfirmed
 
@@ -193,6 +202,13 @@ Partial core-test/ABI passes do not supersede #367's failed integrated/sample/Do
 - **SecurityConfig wording:** cryptographic preparation may use a shorthand for the DSL builder rather than a literal
   public type. Trace the current entry point before filing an API/documentation finding.
 
-These suspicions are not included in the 181-row denominator or counted as repairs. Preserve historical/private raw
+These suspicions are not included in the 182-row denominator or counted as repairs. Preserve historical/private raw
 artifacts, full external acceptance criteria and protected files while investigating; do not manufacture device,
 network, independent-implementation or professional-cryptography results from source inspection.
+
+## Administrative dependency-token correction, not a product defect
+
+#240's curated dependency list previously contained `0`. Its full historical issue body says
+`transport #0` twice, referring to the zero-indexed first transport, not a GitHub issue. Only
+that extraction error is corrected. Original source/body, all real dependencies, severity, pending
+status and repair denominator are otherwise unchanged; no new GitHub defect or #240 fix is claimed.

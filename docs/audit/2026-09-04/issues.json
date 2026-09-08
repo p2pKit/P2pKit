@@ -3,8 +3,8 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-08T09:28:07.480134+00:00",
-  "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released. The original inventorySnapshotUtc remains historical. Current rows reconcile the sealed 09:28 UTC refresh plus individually verified #367; #145 approval/publication is a later disposition update, not an inferred GitHub closure or full-list refresh.",
+  "githubIssueListRefreshedUtc": "2026-09-08T10:30:05.205645+00:00",
+  "provenance": "Curated recovery/continuation record; original inventorySnapshotUtc stays historical. Full issue discussions and affected callers, not excerpts, govern repairs. Earlier assessments/outcomes are not fresh executions; raw private evidence is not inGit. Rows reconcile the exhaustive 10:24–10:30UTC fresh-history capture plus individually filed/refetched368 at10:50:42UTC. 367 source approval/push/outcome are later scoped disposition/publication observations, not a post-outcome complete GitHub refresh, closure, merge or release. This is the intermediate367 approved-source checkpoint, not a claim that no newer368source or execution exists. Previous145 verification and refresh fields are preserved under explicit historical keys. Approved repository scope excludes unexecuted foreign-host/device/independent acceptance; whole audit NOT_READY.",
   "issues": [
     {
       "number": 21,
@@ -840,7 +840,8 @@
         "issueRemainsOpen": true,
         "verifiedBodyEquality": true,
         "scope": "Individual outcome comment refetched after full-list capture; no complete post-comment inventory refresh claimed."
-      }
+      },
+      "subsequentPrerequisiteOutcome367": "Historical145 assessment and verification above remain unchanged. Source-only367 correction approved/pushed at0d88be3; its851-test affected command passes including sample assembly/Dokka, but both whole checks fail1297passes+1 distinct368fixture failure. Original145 failed invocations remain failures. This is not a new145 production repair or whole-gate/foreign-host acceptance."
     },
     {
       "number": 146,
@@ -2392,7 +2393,6 @@
       "reportedProblemExcerpt": "`startupRollbackFailure` builds a `P2pError.TransportStartFailed`, which mandatorily carries a `TransportKind`. Two callers have no transport to blame, so they invent one with `transportFactories.first().descriptor.kind`. In the network-path-observer case the failing component is not a transport at all; the surfaced typed error nevertheless names a transport, pointing a log reader or a consumer branching on `transportKind` at the wrong subsystem.",
       "affectedComponentsExcerpt": "Audit cited lines 536-541 and 1438-1444. Current lines are **538-541** and **1438-1444** — the second range is exact, the first has drifted by two lines. Verified against the working tree at commit `e2d50c9`.",
       "relatedIssuesAndDependencies": [
-        0,
         9,
         47,
         110,
@@ -2410,7 +2410,13 @@
       "recordedIndependentReview": "No completed local repair/review cycle recorded",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/240#issuecomment-5406164671"
-      ]
+      ],
+      "dependencyExtractionCorrection": {
+        "date": "2026-09-08",
+        "removedNonIssueToken": 0,
+        "source": "https://github.com/p2pKit/P2pKit/issues/240",
+        "scope": "Full captured issue body twice says transport #0 for the zero-indexed first transport, not GitHub issue0. Remove only the falsely extracted dependency; no replacement issue, new product finding, source repair or disposition/count change. Original body retained."
+      }
     },
     {
       "number": 241,
@@ -4659,25 +4665,148 @@
         105,
         141,
         142,
+        145,
         148,
         150,
         157,
         223,
         309
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Medium non-security build availability, confirmed at0423e96/tree26984a1; affected metadata subtrees unchanged fromd823bb9, not a#145 regression. Fresh Linux integrated check/sample/DokkaFAIL at Native checksum absence before tests; affected uncached --continue gates execute97tasks/851passing core tests butFAIL on two missing artifact records across11failed task entries. Windows/Intel absence is static only. Active next prerequisite after approved#145: independently curate five exact supported-host classifier records with publisher-signature/authoritative-sidecar evidence, preserve versions/locks/existing trust/strict verification; add independently enumerated host policy and meaningful mutations; rerun failed Linux and applicable serialized hosted gates, then fresh independent review. No repair approval, foreign-host runtime, physical/interoperability/crypto/release claim.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed repair/final-revision review recorded; investigation corroboration is not repair approval.",
-      "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/367"
+      "assessmentAtCheckpoint": "Complete five-file repository correction independently APPROVED at0d88be3/tree db432eb; source pushed/ref-verified10:59:45UTC, outcome refetched11:01:17UTC, issueOPEN. Exactly five missing current Native/AAPT2 classifier hashes added after maintained byte/signature curation and first-party publisher fingerprint anchoring. Native digests match official JetBrains archive digests (Maven SHA256 sidecars absent); AAPT2 also matches Google SHA256 sidecars. Existing hashes/versions/locks/wrapper/trust/tasks unchanged. Independently pinned four Native+three AAPT2 host policy is unconditional in maintained pre-build policy; ten test methods and real original-metadata outer gate negative control. Completeness/format tripwire, not authentication of arbitrary well-formed hashes. Strict uncached Linux affected commandPASS851/851 (789JVM+62Androidhost,100XML,110tasks), including Native download, AAPT2 processing, Android sample assembly, strict core Dokka, ABI/constants. Both clean integrated and separate rootcheckFAIL1297passes+1 distinct368diagnostic fixture failure,151XML/172tasks each; no fullcheckpass. Original145 failures retained. 2160sealed files/21605300bytes,20own serialized leaves plus separate sealer; shared145failures and diagnostic are not extra ownleaves/testpasses. Stops0/no ownedsurvivors; source/caches/required evidence preserved. Review source-only: Windows/Intel/Apple acceptance NOT_EXECUTED; host download/curation not runtime. No physical/ART/hostile-network/independent-interop/professional-crypto/release acceptance. Whole auditNOT_READY;133NOT_STARTED.",
+      "recordedFixCommitsOrFinalRevision": [
+        "0d88be3e3769b5133a985e4fe2fca782ba0ef2a6"
       ],
-      "githubStateObservationScope": "Individual creation/refetch at2026-09-08T09:33:49.310802+00:00 after sealed full-list refresh; not present in that earlier list."
+      "recordedIndependentReview": "Fresh /root/review_367_r1 APPROVED exact five-file source/provenance at0d88be3e3769b5133a985e4fe2fca782ba0ef2a6/treedb432eb14791d9637e812333305e811edceb834e; no actionable findings. Complete diff, full text of four changed code/doc files and complete affected metadata subtrees/configuration (not all11822XMLlines), callers and retained execution evidence independently inspected; XML recounted, no reviewer builds/GPG/edits. Report SHA256 ead4d4b561f9bb9723c00380b881c92dfe3161cbbd3dcc2b209e95299ecbd386; source diff 591ea0d2143e9d94ac8b448b31f9789fe7565438b6f480112301021a9266b627; evidence manifest 6ba9c96944e71638df4845db6c5c85beaf9b01b851884d679e5072026ed6c768. Foreign-host gates, both full failures and administrative review remain outside this source approval.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/367",
+        "https://github.com/p2pKit/P2pKit/issues/367#issuecomment-5584111070"
+      ],
+      "githubStateObservationScope": "Fresh complete10:24–10:30capture:OPEN with0comments; later approved-outcome comment individually posted/refetched11:01:17UTC. Historical initial creation observation retained in pre-repair record; no complete post-outcome history refresh inferred.",
+      "historicalPreRepairRecord": {
+        "number": 367,
+        "title": "[AUDIT][Medium] Host-toolchain checksums omit Linux/Windows and Intel Native archives",
+        "url": "https://github.com/p2pKit/P2pKit/issues/367",
+        "origin": "NEW_AUDIT_FINDING",
+        "severityAtCheckpoint": "medium",
+        "reportedProblemExcerpt": "Current strict toolchain verification metadata admits only macos-aarch64 Native and osx AAPT2 classifier artifacts. Missing Native Linuxx64/Windowsx64/Macx64 and AAPT2 Linux/Windows records block supported-host builds fail-closed.",
+        "affectedComponentsExcerpt": "gradle/verification-metadata.xml Native2.4.10/AAPT2 9.3.1-15703166 components; supported-host CI/release/toolchain policy and strict Linux check/sample/Dokka callers.",
+        "relatedIssuesAndDependencies": [
+          69,
+          105,
+          141,
+          142,
+          148,
+          150,
+          157,
+          223,
+          309
+        ],
+        "status": "PENDING_REMEDIATION",
+        "githubStateAtListRefresh": "open",
+        "assessmentAtCheckpoint": "Medium non-security build availability, confirmed at0423e96/tree26984a1; affected metadata subtrees unchanged fromd823bb9, not a#145 regression. Fresh Linux integrated check/sample/DokkaFAIL at Native checksum absence before tests; affected uncached --continue gates execute97tasks/851passing core tests butFAIL on two missing artifact records across11failed task entries. Windows/Intel absence is static only. Active next prerequisite after approved#145: independently curate five exact supported-host classifier records with publisher-signature/authoritative-sidecar evidence, preserve versions/locks/existing trust/strict verification; add independently enumerated host policy and meaningful mutations; rerun failed Linux and applicable serialized hosted gates, then fresh independent review. No repair approval, foreign-host runtime, physical/interoperability/crypto/release claim.",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed repair/final-revision review recorded; investigation corroboration is not repair approval.",
+        "publicInvestigationAndOutcomeUrls": [
+          "https://github.com/p2pKit/P2pKit/issues/367"
+        ],
+        "githubStateObservationScope": "Individual creation/refetch at2026-09-08T09:33:49.310802+00:00 after sealed full-list refresh; not present in that earlier list."
+      },
+      "repositoryScopeStatus": "APPROVED",
+      "subsequentGithubOutcomeVerification": {
+        "verifiedUtc": "2026-09-08T11:01:17.156634+00:00",
+        "url": "https://github.com/p2pKit/P2pKit/issues/367#issuecomment-5584111070",
+        "id": 5584111070,
+        "issueRemainsOpen": true,
+        "verifiedBodyEquality": true,
+        "bodySha256": "5a10f5b4842484b6968627093683bbc41cb1c3ad4585be5e3066a60a99f367ac",
+        "scope": "Individual approved-source outcome; foreign-host acceptance remains pending and both fullcheck failures preserved."
+      },
+      "externalAcceptanceStatus": "NOT_EXECUTED",
+      "externalAcceptanceScope": "Applicable Windows/Intel/Apple checks and final combined-source consumer/release gates remain pending; source correction approval does not discharge every issue acceptance gate."
+    },
+    {
+      "number": 368,
+      "title": "[AUDIT][Low] API24 export-failure fixture targets an unnormalized filename on case-sensitive filesystems",
+      "url": "https://github.com/p2pKit/P2pKit/issues/368",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "The API24 missing-class export-failure fixture obstructs a raw lowercase test-ID filename, but the real recorder/exporter uses normalized TEST. On a case-sensitive filesystem export succeeds at a different target and the fixture check fails. Test-only portability, not exporter/security failure.",
+      "affectedComponentsExcerpt": "DiagnosticApi24Probe.failedExport and its real API26-blocking DiagnosticApi24CompatibilityTest classloader caller; DiagnosticRecorder normalization/summary and actual DiagnosticEvidenceExporter target derivation.",
+      "relatedIssuesAndDependencies": [
+        102,
+        317,
+        323,
+        352,
+        353,
+        367
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": null,
+      "githubStateAtIndividualRefresh": "open",
+      "githubStateObservationScope": "Absent from exhaustive10:30full capture; individually filed/refetched at2026-09-08T10:50:42.706211+00:00. No post-addition full refresh inferred.",
+      "assessmentAtCheckpoint": "Confirmed at0d88be3/tree db432eb; relevant test/model blobs equal transfer d823bb9 and are unchanged by367. The method originated in353, but no prior issue owns this raw-versus-normalized obstacle mismatch. Both strict clean whole checks fail1297passes+1/151XML/172tasks. A message-only diagnostic run retains all predicates/setup/assertions and proves failureType=null, normalizedId=TEST, differently cased paths and exportRecorded=true; one intended assertion failure/12tasks, then exact restore. The IllegalStateException is the fixture check, not an exporter exception. No approved368repair at this367checkpoint; root owns sequential source work. Derive obstacle from the captured exporter summary, keep all preservation/event/staging assertions and add exact-string target invariant; reproduce raw-ID mutation even on case-insensitive hosts. Do not change production normalization, accept successful export, relax assertions, skip hosts or weaken API24/25 isolation. Pending independent final-revision review and full reruns; hostclassloader not ART/device.",
+      "recordedFixCommitsOrFinalRevision": [],
+      "recordedIndependentReview": "No completed368repair/final-revision approval at the367checkpoint. Independent367review corroborates the distinct downstream failure, not a368fix.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/368"
+      ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-08T09:47:15.695353+00:00",
+  "lastDispositionUpdateUtc": "2026-09-08T11:38:51.465095+00:00",
   "githubRefreshEvidence": {
+    "startedUtc": "2026-09-08T10:24:33.734412+00:00",
+    "endedUtc": "2026-09-08T10:30:05.205645+00:00",
+    "issues": 288,
+    "openIssues": 181,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "allStateListStableAcrossCapture": true,
+    "freshCompleteIssueStyleHistories": 367,
+    "exactSealedHistoriesReused": 0,
+    "freshLocalPullDetails": 79,
+    "freshExternalPullDetails": 0,
+    "effectiveIssueStyleComments": 487,
+    "effectiveTimelineEvents": 4186,
+    "pullReviews": 0,
+    "pullInlineComments": 0,
+    "pullFileEntries": 1817,
+    "pullCommitEntries": 277,
+    "apiCalls": 1519,
+    "mainGetRequests": 1518,
+    "preflightGetRequests": 1,
+    "apiFailures": 0,
+    "apiParallelism": 3,
+    "paginationEndpoints": 1054,
+    "paginatedPageRequests": 1069,
+    "incompletePaginations": [],
+    "manifestEntries": 5060,
+    "sealedBytes": 194219341,
+    "manifestSha256": "f68f2feefba9e48a20c12dcd8442723b8b1c992174d4e8e255c2a22cd99fac91",
+    "reportSha256": "c365cf262676353ab012c1c76190757ccd2d926f3ed21c9bbd1daf1a8febe091",
+    "reconciliationSha256": "6aaddca184b27e9acf9d8e6dc78584270952b8354552d4d869bb0eb8e8b2b144",
+    "sealedUtc": "2026-09-08T10:44:41.640680+00:00",
+    "priorSealedSourcesUnchanged": true,
+    "scope": "All open AND closed local issue/PR bodies, full comments/timelines, and all PR details/reviews/inline comments/files/commits freshly fetched. No reused current histories. Includes relevant closed decisions and PR69/PR105, and corroborates145 approved outcome5582924265. Thirteen newly observed timeline identities include three historical backlinks absent from previous reused histories; not thirteen defects or new decisions. All79 changed PR details differ only in embedded repository count/pushed_at metadata; head/base/review/file/commit data unchanged. Initial derived reference analysis retained. Per-endpoint snapshots are not transactional or permanently current. API-omitted binary/oversize patch text is not reconstructed. This is metadata, not build/release/platform verification."
+  },
+  "incrementalGithubAdditions": [
+    {
+      "issue": 368,
+      "verifiedUtc": "2026-09-08T10:50:42.706211+00:00",
+      "url": "https://github.com/p2pKit/P2pKit/issues/368",
+      "githubState": "open",
+      "requestSha256": "7015bfe3449c2adaa18a2ac7b901fae2d310e947e53ce624ef701fb1ce096cb6",
+      "knownTotalIssuesAfterAddition": 289,
+      "knownOpenIssuesAfterAddition": 182,
+      "knownPullRequests": 79,
+      "completeAllStateListAfterAdditionPerformed": false,
+      "scope": "Individually filed/refetched Low test-only finding after exhaustive10:30capture; pre-write all-state listing retained. Not a complete post-addition history/list refresh, not an implementation or approval. The locally rejected unsupported --slurp preflight was retained; that attempt made no HTTP request or remote write."
+    }
+  ],
+  "previousGithubRefreshEvidence145": {
     "startedUtc": "2026-09-08T09:17:23.275604+00:00",
     "endedUtc": "2026-09-08T09:28:07.480134+00:00",
     "issues": 287,
@@ -4699,7 +4828,7 @@
     "scope": "Complete all-state list reconciliation against the sealed 07:58-08:01 capture and 08:47 addendum. New #361-#366 and all their direct local reference targets had fresh full bodies/comments/timelines; linked PR #8/#102 metadata/files/commits/reviews refreshed, closed decisions retained. Unchanged unreferenced histories reuse exact sealed evidence, not fresh GETs. Known timeline-only backlinks were refreshed independently of list updated_at; initial listing-only capture is preserved as historical evidence. No blanket exclusion of unrelated timeline-only changes is claimed.",
     "subsequentPre367ListObservation": "Root reports a 09:33 UTC all-state list equal to this sealed list before #367 creation; not a new full-history capture."
   },
-  "incrementalGithubAdditions": [
+  "previousIncrementalGithubAdditions145": [
     {
       "issue": 367,
       "verifiedUtc": "2026-09-08T09:33:49.310802+00:00",
@@ -4712,5 +4841,6 @@
       "completeAllStateListAfterAdditionPerformed": false,
       "scope": "Individually filed and refetched #367 after the sealed all-state capture. These known counts incorporate that addition, not a complete post-write list refresh."
     }
-  ]
+  ],
+  "previousDispositionUpdateUtc145": "2026-09-08T09:47:15.695353+00:00"
 }

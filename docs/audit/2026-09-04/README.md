@@ -6,27 +6,71 @@ Start with the root [continuation checkpoint](../../../AUDIT_CHECKPOINT.md). Clo
 ## Records
 
 - [Checkpoint metadata](checkpoint.json): source revisions, issue-count denominator and evidence limitations.
-- [Issue index](issues.md): all 181 inventoried issue rows grouped by checkpoint disposition.
+- [Issue index](issues.md): all 182 inventoried issue rows grouped by checkpoint disposition.
 - [Issue records](issues.json): reported scope, dependencies, recorded commits and public investigation/outcome links.
 - [Coverage ledger](coverage.tsv): inherited per-path review claims, provenance revisions and reopened work.
 - [Unverified follow-ups](followups.md): hypotheses needing reproduction and deduplication, not confirmed bug claims.
 
-The inventory is a continuation aid, not GitHub live state. It contains **68 independently approved repository
-repairs, 91 pending repairs, 21 external-validation rows and one architecture decision**: **37.6% reviewed / 62.4%
-remaining**, using **181 rows**. Pending repairs comprise 89 Low, one Medium (#367), one informational (#333).
-Percentages exclude external acceptance still attached to approved rows; #133 independent interoperability remains
-NOT_STARTED. **48 findings** originated in this audit. Branch availability is not merge/release or fresh verification.
-The completed transfer stop is superseded by explicit continuation authorization. **#145 is approved; #367 is active
-and unapproved**, then #223 and the serialized hosted facility/remaining queue. Overall **NOT_READY**.
+The inventory is a continuation aid, not live GitHub state: **69 independently approved repository repairs,
+91 pending repairs, 21 external-validation rows and one architecture decision**. Using **182 rows**, this is
+**37.9% reviewed / 62.1% remaining**; pending repairs are 90 Low and one informational (#333).
+**49 findings** originated in this audit. #133 independent interoperability remains NOT_STARTED; #367 source
+approval does not complete its unexecuted Windows/Intel acceptance. These are not effort, closure or readiness
+percentages. The completed transfer stop is superseded. Next #368, then #223 and serialized hosted facility/
+remaining repairs; no #368 repair is approved by this #367 checkpoint. Overall **NOT_READY**.
+This records #367's approved-source cycle at `0d88be3`, not later #368 executions/results. The separate
+source-reading receipts at `c221d54` do not themselves approve #368 or retarget #367 verification.
 
-The sealed 09:17–09:28 UTC GitHub reconciliation has 287 issues (180 open / 107 closed) and 79 PRs (7 open / 72 closed).
-It freshly fetched 31 full histories and reused 335 exact sealed histories; new #361–#366's direct-reference histories,
-known timeline-only backlinks and PR #8/#102 details were refreshed. Unrelated unchanged histories are not new GETs.
-The root's 09:33 pre-write list matched. Individually filed/refetched #367 at 09:33:49 UTC brings known totals to
-288 issues / 181 open / 79 PRs, **not** a complete post-addition list refresh. #145's later approval/outcome is separate.
-See [checkpoint metadata](checkpoint.json) for exact timestamps, seals and limitations; refresh live state before work.
+The exhaustive **10:24:33–10:30:05 UTC** GitHub capture refreshed all 288 issues (181 open/107 closed),
+79 PRs (7 open/72 closed), all 367 issue-style histories and every PR metadata/review/file/commit collection.
+**1,519 GETs** including preflight, zero failures, zero reused current histories; start/end lists stable.
+Thirteen newly observed timeline identities include three older uncaptured backlinks, not new defects/decisions.
+Earlier 09:17–09:28 capture/reuse evidence and initial #367-addition records remain historical and unchanged.
+#368 was individually filed/refetched **10:50:42 UTC**, bringing known totals to 289 issues/182 open/79 PRs;
+#367's approved outcome was individually refetched 11:01:17 UTC. Neither is a complete post-write refresh.
+See [checkpoint metadata](checkpoint.json) for exact bindings, retained prior evidence and limitations.
+GitHub snapshots are per-endpoint, not transactional or permanently current; refresh before work.
 
-Latest #145's complete nine-file receive-backlog correction is independently **APPROVED** and pushed at
+## Latest #367 repository-source correction
+
+The complete five-file host-classifier correction is independently **APPROVED** and pushed at
+`0d88be3e3769b5133a985e4fe2fca782ba0ef2a6`, tree `db432eb14791d9637e812333305e811edceb834e`.
+Fresh `/root/review_367_r1` found no actionable source/provenance findings. Source/ref verification was
+10:59:45 UTC; the [safe outcome](https://github.com/p2pKit/P2pKit/issues/367#issuecomment-5584111070)
+was refetched at 11:01:17 UTC. The issue remains OPEN. See [the scoped report](repairs/367.md).
+
+Exactly five current Native/AAPT2 classifier records were added after byte/signature curation anchored to
+official publisher fingerprints. Three Native hashes also match official archive digests; both AAPT2 hashes
+match authoritative SHA-256 sidecars. All old records, versions, locks, wrapper, trust and required tasks remain.
+The maintained pre-build policy independently requires four Native and three AAPT2 hosts, with ten regression
+methods and an exact-original-metadata outer-gate negative control. This is a completeness/format tripwire,
+not authentication of arbitrary well-formed hashes or foreign-host execution.
+
+- Strict, clean Linux affected command **PASS**: **851/851** core tests (789 JVM, 62 Android-host),
+  100 XMLs, 110 executed tasks; Native Linux download, AAPT2 processing, Android sample assembly,
+  strict core Dokka and Android ABI/compiled-constant guards pass.
+- Both clean combined `check`/sample/Dokka and separate `./gradlew check --console=plain` commands **FAIL**:
+  each **1,297 passes plus one failure**, 1,298 cases/151 XMLs/172 tasks, no errors/skips.
+  The distinct downstream test-fixture mismatch is [#368](https://github.com/p2pKit/P2pKit/issues/368),
+  not an exporter exception or #367 regression. Message-only instrumentation proved export succeeded at the
+  normalized uppercase path and was then restored exactly. No #368 repair is approved by this checkpoint.
+- All provenance/completeness/control/toolchain checks and twelve static/range gates pass. The private seal
+  retains **2,160 files / 21,605,300 bytes**, 20 own serialized leaves plus a separate successful sealer.
+  Shared #145 failures and the #368 diagnostic are not additional own leaves or passing tests. All stops
+  exited zero; no owned survivors remained; dependent disposable outputs and owned GPG/artifact workspaces
+  were removed after evidence preservation. Protected source, shared caches and unrelated tasks remain.
+
+The original #145 failures below remain historical failures. Last successful full integration recorded in this
+#367 checkpoint is historical `6995130`, not `0d88be3`; newer #368 executions are outside this cycle's record.
+Windows/Intel/Apple acceptance is **NOT_EXECUTED** in this cycle;
+source approval does not discharge those #367 acceptance gates. Next is #368, then #223 and the serialized
+hosted facility/remaining sequential queue. #133 independent interoperability remains **NOT_STARTED**;
+physical-device/ART, hostile-network, independent-implementation and professional-crypto acceptance remain
+separate. Whole audit **NOT_READY**. No merge, closure, release, tag or settings change is authorized.
+
+## Historical #145 approval and verification
+
+Earlier #145's complete nine-file receive-backlog correction is independently **APPROVED** and pushed at
 `0423e96e15c894c26a7d45a5dfb2a012e0c1ba8e`, tree `26984a1b7d2048bdbda8e1808bb38f299e7a6866`.
 Fresh `/root/review_145_r1` inspected the complete diff, actual admission/ownership/cancellation/rearm callers and
 sealed raw evidence; no actionable findings. See [the #145 report](repairs/145.md) and
@@ -64,12 +108,10 @@ and dependent disposable outputs were removed while preserving source, shared ca
 Android-host is not ART/emulator/device evidence. No Mac/Windows/Apple, physical-network, independent-interop,
 professional-crypto or final consumer/release pass is implied by this issue-scoped approval.
 
-[#367](https://github.com/p2pKit/P2pKit/issues/367) now owns the distinct **Medium, non-security, fail-closed build
-availability prerequisite**: five absent current-version host classifier records (Native Linux/Windows/Intel Mac,
-AAPT2 Linux/Windows). The affected metadata subtrees are unchanged from `d823bb9`; this is not a #145 regression.
-Fresh failures are Linux-only; Windows/Intel absence is static evidence. Eleven failed affected-task entries repeat
-two missing Linux artifacts, not eleven defects. #367 is active and **unapproved**; next is #223's separate wrapper
-LF issue, then a serialized hosted-verification facility and the remaining dependency-aware sequential repairs.
+The original #145 failures above established the distinct Medium, non-security, fail-closed #367
+host-classifier prerequisite; they remain historical failures. The later five-file correction and
+independent source approval at `0d88be3` are recorded above. Windows/Intel execution remains pending;
+the current downstream full-check failure is separately tracked as [#368](https://github.com/p2pKit/P2pKit/issues/368).
 
 ## Earlier approved repairs and historical verification
 
@@ -88,7 +130,7 @@ Linux/Windows jobs, permissions, required checks and release provenance are pres
 See [the #144 report](repairs/144.md) and [verified outcome](https://github.com/p2pKit/P2pKit/issues/144#issuecomment-5580383643).
 
 Historical #144/#360 combined verification: **2,459 passes, zero failures/errors, one unchanged manual skip;
-297 XMLs, 256 tasks**. This is the last successful full run, bound to `6995130`, not current #145 integration.
+297 XMLs, 256 tasks**. This is the last successful full run, bound to `6995130`, not current #367 integration.
 Resolver28/policy21 checks, five actual YAML command replays and 23 static gates pass; 13 #144 expected-red controls
 and two positive controls pass as verification outcomes. Both reviews inspected shared sealed evidence:
 3,558 files/18,444,319 bytes, 106 finalized cleanup receipts and 95 nonoverlapping leaf invocations.
@@ -141,7 +183,7 @@ Dokka pass. Full check/Android assembly: **2,407 passes, zero failures/errors, o
 [the #137 report](repairs/137.md). Its then-unverified cast observation was later reproduced and repaired as #358;
 the historical report is unchanged. Different-thread StateFlow tests use a real secure kit, not physical devices or
 proof of a race. The separate cleanup-cancellation observation is now repaired as #359; the then-planned #144
-work is also approved above. Neither historical next-step note supersedes the current #367 → #223 queue.
+work is also approved above. Neither historical next-step note supersedes the current #368 → #223 queue.
 
 Earlier #130's complete two-test-file correction is approved/pushed at `1847ed3`, tree
 `3fe527a16a52e536dedad610aebff53a7a026cdb`. Both recorders retain pins; repeated distinct remote values and intentional
@@ -222,13 +264,14 @@ preserves `AGENTS.md:9` by owner instruction; literal alignment of that SDK prer
 | [#364](https://github.com/p2pKit/P2pKit/issues/364) | Interoperability criterion confuses security profile with optional features | Current-caller documentation correction; #133 external campaign remains NOT_STARTED |
 | [#365](https://github.com/p2pKit/P2pKit/issues/365) | iOS catalog requests bare fingerprint in full pairing-QR field | Correct recipe and parser/sample contract; preserve physical/scoped-IPv6 acceptance |
 | [#366](https://github.com/p2pKit/P2pKit/issues/366) | Android URI KDoc recommends unavailable JVM-only overload | Android-supported recipe/consumer compile checks; no runtime/API weakening |
-| [#367](https://github.com/p2pKit/P2pKit/issues/367) | Strict host-toolchain classifier records missing | Signed/provenanced curation, independent classifier policy/mutations, Linux/hosted gates |
+| [#368](https://github.com/p2pKit/P2pKit/issues/368) | API24 export-failure fixture obstructs raw instead of normalized target | Summary-derived target, exact-string invariant, raw-ID mutation, diagnostics and full gates; independent review |
 
-#361–#366 are Low source/caller-confirmed findings; their discovery did not execute fresh device/runtime campaigns.
-#367 is Medium fail-closed build availability with actual Linux failures and static-only Windows/Intel absence.
-Each requires its own sequential repair and fresh independent final-revision approval. Do not count investigation
-corroboration as repair approval. Hosted Mac/Windows/Apple gates are authorized but have no new results here;
-physical devices, hostile networks, independent implementations and professional crypto remain separate acceptance.
+#361–#366 and #368 are Low pending repairs; their discovery did not execute physical/device campaigns.
+#368 has fresh Linux failing-host evidence, not a production exporter failure. #367 has the bounded source
+approval above, with foreign-host acceptance still NOT_EXECUTED. Every next repair requires sequential
+implementation and fresh independent final-revision review. Investigation is not repair approval.
+GitHub Actions is authorized for supported Mac/Windows/Apple gates; physical devices, hostile networks,
+independent implementations and professional crypto remain separate acceptance.
 
 ## Provenance and scope
 
@@ -243,12 +286,27 @@ artifacts are necessary, request the private backup; otherwise run fresh, scoped
 
 Coverage rows preserve the last recorded scoped assessment at their recorded revisions. This is not complete current
 coverage: later changes invalidate affected paths/callers; the original full audit must be corroborated before final
-completion. The #145 repair has a new exact scoped review above; the inherited #144/#360, #359, #358, #137, #130, #332 Apple,
+completion. The #145 and #367 repairs have exact scoped reviews above; the inherited #144/#360, #359, #358, #137, #130, #332 Apple,
 #356, #229, #357, #226, #225, #208, #152, #133, #355, #187, #190 and #325 paths retain historical review records;
 other domains still need current corroboration. The inherited transfer ledger inventoried **1,038 paths with
-334 recorded blob bindings**; those figures are historical, not a new current-tree aggregation. #145-changed paths
-and actual callers must be reopened/rebound in the maintained coverage ledger. Inventory is not completed review.
+334 recorded blob bindings**; those figures are historical, not a new current-tree aggregation. Changed paths
+and actual callers must be reopened/rebound whenever revisions advance. #367 metadata review is full-diff and
+affected-subtree scope, not full-file XML text review. Administrative updates do not inherit a current read/hash
+binding from their inputs. Inventory, hashing and structural parsing are not completed semantic review.
 Added handoff documents are inventory entries, not runtime-verification claims.
+
+The expanded coverage projection preserves all **5,190 cells in the five historical columns** and
+adds nine read-scope/provenance columns. It uses source-reading context `c221d54` (1,044 source paths),
+plus the actually read new #367 report: **1,045 projected paths**. It records **777 full-text**,
+**259 structural-only**, **one semantic-delta**, **one partial XML**, **six reopened administrative**
+paths and **one self-excluded coverage output**. Six changed ledgers retain historical full-read
+input bindings; independent complete-delta review is not a full reread of their new bytes. The two
+#368 test-file reads at `c221d54` are source inspection, not #368 repair approval or execution evidence.
+This differs from the older `0d88be3` input map (783 full-text including the old coverage input)
+and its earlier generated output (782 full-text plus self-exclusion). No final administrative commit,
+self-hash or complete current semantic review is inferred. Private receipt names are provenance
+identifiers, not links or raw evidence transferred by cloning. These scope counts do not alter
+the 69/182 repository-repair denominator or retarget #367 verification to newer #368 executions.
 
 ## Maintaining cloneable progress
 
