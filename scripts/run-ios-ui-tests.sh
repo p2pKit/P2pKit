@@ -34,7 +34,7 @@ ensure_ios_xcframework_present "$REPO_ROOT"
 (cd "$PROJECT_DIR" && run_ios_mutation xcodegen generate) | tail -3
 boot_and_wait_for_simulator "$udid"
 
-run_ios_mutation xcodebuild \
+run_ios_xcodebuild \
     -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
     -scheme p2pkit-sample-ui \
     -configuration Debug \

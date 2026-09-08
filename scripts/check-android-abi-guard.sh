@@ -161,15 +161,29 @@ done
 
 if [[ "$STATIC_ONLY" == "false" ]]; then
     [[ -x "$ROOT/gradlew" ]] || fail "Gradle wrapper is unavailable for Android ABI graph verification"
-    task_graph="$(
-        cd "$ROOT"
-        ./gradlew \
-            :p2p-core:check \
-            :p2p-transport-lan:check \
-            :p2p-network-provisioning-android:check \
-            --dependency-verification=strict \
-            --dry-run --console=plain
-    )" || fail "Android ABI task graph dry-run failed"
+    if [[ -n "${P2PKIT_GRADLE_EXECUTOR:-}" ]]; then
+        [[ "$P2PKIT_GRADLE_EXECUTOR" == /* && -x "$P2PKIT_GRADLE_EXECUTOR" ]] ||
+            fail "P2PKIT_GRADLE_EXECUTOR must be an absolute executable path"
+        task_graph="$(
+            "$P2PKIT_GRADLE_EXECUTOR" --cwd "$ROOT" --wrapper "$ROOT/gradlew" \
+                --purpose android-abi-graph -- \
+                :p2p-core:check \
+                :p2p-transport-lan:check \
+                :p2p-network-provisioning-android:check \
+                --dependency-verification=strict \
+                --dry-run --console=plain
+        )" || fail "Android ABI task graph dry-run failed"
+    else
+        task_graph="$(
+            cd "$ROOT"
+            ./gradlew \
+                :p2p-core:check \
+                :p2p-transport-lan:check \
+                :p2p-network-provisioning-android:check \
+                --dependency-verification=strict \
+                --dry-run --console=plain
+        )" || fail "Android ABI task graph dry-run failed"
+    fi
     for project in "${android_abi_projects[@]}"; do
         grep -Fq "$project:compileAndroidMain SKIPPED" <<<"$task_graph" ||
             fail "$project check does not own the Android compiler producer"

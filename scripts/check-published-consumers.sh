@@ -13,11 +13,120 @@ KOTLIN_VERSION="$(sed -n 's/^kotlin = "\([^"]*\)"/\1/p' "$ROOT/gradle/libs.versi
 AGP_VERSION="$(sed -n 's/^agp = "\([^"]*\)"/\1/p' "$ROOT/gradle/libs.versions.toml")"
 IOS_MIN_VERSION="$(sed -n 's/^IOS_MIN_VERSION=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 GROUP_PATH="${GROUP//.//}"
-WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-consumer-check.XXXXXX")"
+# Default invocations retain the historical disposable work directory. Explicit
+# retention/borrowed directories remain available without the audit executor.
+# The opt-in executor supports only source-local publication into a new/empty
+# borrowed directory beneath its initialized physical STATE/work. This script
+# never deletes executor work, including failed or unfinished invocations.
+KEEP_CONSUMER_ARTIFACTS="${P2PKIT_KEEP_CONSUMER_ARTIFACTS:-0}"
+AUDIT_CONSUMER_METADATA="${P2PKIT_CONSUMER_AUDIT_METADATA:-0}"
+GRADLE_EXECUTOR="${P2PKIT_GRADLE_EXECUTOR:-}"
+REMOTE_REPOSITORY_URL="${P2PKIT_CONSUMER_REPOSITORY_URL:-}"
+AUDIT_WORK_STATE=""
+for boolean_value in "$KEEP_CONSUMER_ARTIFACTS" "$AUDIT_CONSUMER_METADATA"; do
+    [[ "$boolean_value" == 0 || "$boolean_value" == 1 ]] || {
+        echo "FAIL: consumer retention/audit switches accept only 0 or 1" >&2
+        exit 2
+    }
+done
+if [[ -n "$GRADLE_EXECUTOR" ]]; then
+    [[ "$GRADLE_EXECUTOR" == /* && -f "$GRADLE_EXECUTOR" && -x "$GRADLE_EXECUTOR" ]] || {
+        echo "FAIL: P2PKIT_GRADLE_EXECUTOR must be an absolute executable file, not a shell fragment" >&2
+        exit 2
+    }
+    [[ "${P2PKIT_AUDIT_STATE_DIR:-}" == /* && -d "$P2PKIT_AUDIT_STATE_DIR" &&
+       ! -L "$P2PKIT_AUDIT_STATE_DIR" && -f "$P2PKIT_AUDIT_STATE_DIR/context.json" &&
+       ! -L "$P2PKIT_AUDIT_STATE_DIR/context.json" ]] || {
+        echo "FAIL: the consumer executor requires an initialized P2PKIT_AUDIT_STATE_DIR" >&2
+        exit 2
+    }
+    [[ -z "$REMOTE_REPOSITORY_URL" && $# -eq 0 ]] || {
+        echo "FAIL: the consumer executor supports only source-local publication (no remote or --latest-published mode)" >&2
+        exit 2
+    }
+    [[ -n "${P2PKIT_CONSUMER_WORK_DIR:-}" ]] || {
+        echo "FAIL: the consumer executor requires an explicit borrowed P2PKIT_CONSUMER_WORK_DIR beneath STATE/work" >&2
+        exit 2
+    }
+    AUDIT_WORK_STATE="$P2PKIT_AUDIT_STATE_DIR"
+fi
+if [[ "$AUDIT_CONSUMER_METADATA" == 1 ]]; then
+    [[ -n "$GRADLE_EXECUTOR" && -z "$REMOTE_REPOSITORY_URL" && $# -eq 0 ]] || {
+        echo "FAIL: audit consumer metadata requires the executor and source-local publication mode" >&2
+        exit 2
+    }
+fi
+
+OWN_CONSUMER_WORK_DIR=0
+if [[ -n "${P2PKIT_CONSUMER_WORK_DIR:-}" ]]; then
+    WORK_DIR="$(python3 - "$P2PKIT_CONSUMER_WORK_DIR" "$AUDIT_WORK_STATE" <<'PY_WORK_DIR'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+if not path.is_absolute() or path.is_symlink() or path.resolve() != path:
+    sys.exit("FAIL: P2PKIT_CONSUMER_WORK_DIR must be a physical absolute non-symlink path")
+if sys.argv[2]:
+    state = pathlib.Path(sys.argv[2])
+    work = state / "work"
+    for directory in (state, work):
+        if not directory.is_dir() or directory.is_symlink() or directory.resolve(strict=True) != directory:
+            sys.exit("FAIL: the consumer executor requires an initialized physical STATE/work directory")
+    if work not in path.parents:
+        sys.exit("FAIL: executor consumer work must be a strict descendant of initialized STATE/work")
+if path.exists():
+    if not path.is_dir() or any(path.iterdir()):
+        sys.exit("FAIL: P2PKIT_CONSUMER_WORK_DIR must be a new or empty directory")
+else:
+    path.mkdir(mode=0o700)
+print(path)
+PY_WORK_DIR
+)"
+else
+    WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-consumer-check.XXXXXX")"
+    WORK_DIR="$(cd "$WORK_DIR" && pwd -P)"
+    OWN_CONSUMER_WORK_DIR=1
+fi
 REPO_DIR="$WORK_DIR/repository"
 FIXTURE_DIR="$WORK_DIR/consumer"
-REMOTE_REPOSITORY_URL="${P2PKIT_CONSUMER_REPOSITORY_URL:-}"
-trap 'rm -rf "$WORK_DIR"' EXIT
+cleanup_consumer_work() {
+    local result=$?
+    trap - EXIT
+    if [[ -z "$GRADLE_EXECUTOR" && "$OWN_CONSUMER_WORK_DIR" == 1 && "$KEEP_CONSUMER_ARTIFACTS" != 1 ]]; then
+        if ! rm -rf -- "$WORK_DIR"; then
+            echo "FAIL: could not remove owned consumer work directory: $WORK_DIR" >&2
+            [[ "$result" != 0 ]] || result=125
+        fi
+    else
+        echo "==> Retained consumer work directory: $WORK_DIR (script-owned=$OWN_CONSUMER_WORK_DIR)" >&2
+    fi
+    exit "$result"
+}
+trap cleanup_consumer_work EXIT
+
+CONSUMER_RECEIPT_DIR=""
+if [[ -n "$GRADLE_EXECUTOR" ]]; then
+    # Evidence is outside disposable fixture outputs and is never removed here.
+    CONSUMER_RECEIPT_DIR="$(mktemp -d "$P2PKIT_AUDIT_STATE_DIR/consumer-receipts.XXXXXX")"
+    CONSUMER_RECEIPT_DIR="$(cd "$CONSUMER_RECEIPT_DIR" && pwd -P)"
+fi
+AUDIT_METADATA_HELPER="$ROOT/scripts/prepare-audit-consumer-metadata.py"
+
+run_audit_consumer_gradle() {
+    local purpose="$1" receipt="$2" result
+    shift 2
+    if "$GRADLE_EXECUTOR" --cwd "$ROOT" --wrapper "$ROOT/gradlew" \
+        --purpose "$purpose" --receipt "$receipt" -- "$@"; then
+        result=0
+    else
+        result=$?
+    fi
+    # A missing/malformed receipt or failed finalization is never a successful
+    # consumer, even when the executor process reports product exit zero.
+    python3 "$ROOT/scripts/check-audit-receipt.py" --purpose "$purpose" \
+        --cwd "$ROOT" --wrapper "$ROOT/gradlew" "$receipt" "$result" -- "$@" || return 125
+    return "$result"
+}
 
 for required_value in KOTLIN_VERSION AGP_VERSION IOS_MIN_VERSION; do
     [[ -n "${!required_value}" ]] || {
@@ -90,7 +199,19 @@ if [[ -n "$REMOTE_REPOSITORY_URL" ]]; then
     CONSUMER_REPOSITORY="$REMOTE_REPOSITORY_URL"
 else
     echo "==> Publishing $VERSION to isolated repository"
-    (cd "$ROOT" && ./gradlew --no-daemon --console=plain publishToMavenLocal -Dmaven.repo.local="$REPO_DIR")
+    if [[ "$AUDIT_CONSUMER_METADATA" == 1 ]]; then
+        ownership=borrowed
+        [[ "$OWN_CONSUMER_WORK_DIR" != 1 ]] || ownership=owned
+        python3 "$AUDIT_METADATA_HELPER" admit --root "$ROOT" --work-dir "$WORK_DIR" \
+            --publication-receipt "$CONSUMER_RECEIPT_DIR/consumer-publish.json" --ownership "$ownership"
+    fi
+    if [[ -n "$GRADLE_EXECUTOR" ]]; then
+        (cd "$ROOT" && run_audit_consumer_gradle consumer-publish \
+            "$CONSUMER_RECEIPT_DIR/consumer-publish.json" \
+            --no-daemon --console=plain publishToMavenLocal -Dmaven.repo.local="$REPO_DIR")
+    else
+        (cd "$ROOT" && ./gradlew --no-daemon --console=plain publishToMavenLocal -Dmaven.repo.local="$REPO_DIR")
+    fi
     CONSUMER_REPOSITORY="$REPO_DIR"
 fi
 
@@ -559,6 +680,14 @@ import kotlinx.coroutines.flow.SharedFlow
 fun iosEvents(): SharedFlow<String> = IosLanDebug.events
 EOF
 
+if [[ "$AUDIT_CONSUMER_METADATA" == 1 ]]; then
+    # This explicit opt-in is separate from the generic executor. Only immutable
+    # reviewed external records plus exact source-local publication hashes enter
+    # the generated fixture; no remote checksums are downloaded or auto-trusted.
+    python3 "$AUDIT_METADATA_HELPER" prepare --root "$ROOT" --work-dir "$WORK_DIR" \
+        --publication-receipt "$CONSUMER_RECEIPT_DIR/consumer-publish.json"
+fi
+
 echo "==> Compiling isolated published consumers"
 run_consumer_gradle() {
     if [[ -n "$REMOTE_REPOSITORY_URL" ]]; then
@@ -567,19 +696,36 @@ run_consumer_gradle() {
         "$@"
     fi
 }
-(cd "$ROOT" && run_consumer_gradle ./gradlew --no-daemon --console=plain -p "$FIXTURE_DIR" \
-    -PconsumerRepo="$CONSUMER_REPOSITORY" \
-    ${REMOTE_REPOSITORY_URL:+--refresh-dependencies} \
-    :coreJvm:compileKotlin \
-    :coreJvm:compileJava \
-    :lanJvm:compileKotlin \
-    :desktopJvm:compileKotlin \
-    :androidConsumer:compileDebugKotlin \
-    :androidConsumer:processDebugManifest \
-    :kmpConsumer:compileKotlinJvm \
-    :kmpConsumer:compileAndroidMain \
-    :kmpConsumer:compileKotlinIosSimulatorArm64 \
-    :kmpConsumer:linkDebugFrameworkIosSimulatorArm64)
+if [[ -n "$GRADLE_EXECUTOR" ]]; then
+    (cd "$ROOT" && run_consumer_gradle run_audit_consumer_gradle consumer-build \
+        "$CONSUMER_RECEIPT_DIR/consumer-build.json" --no-daemon --console=plain -p "$FIXTURE_DIR" \
+        -PconsumerRepo="$CONSUMER_REPOSITORY" \
+        ${REMOTE_REPOSITORY_URL:+--refresh-dependencies} \
+        :coreJvm:compileKotlin \
+        :coreJvm:compileJava \
+        :lanJvm:compileKotlin \
+        :desktopJvm:compileKotlin \
+        :androidConsumer:compileDebugKotlin \
+        :androidConsumer:processDebugManifest \
+        :kmpConsumer:compileKotlinJvm \
+        :kmpConsumer:compileAndroidMain \
+        :kmpConsumer:compileKotlinIosSimulatorArm64 \
+        :kmpConsumer:linkDebugFrameworkIosSimulatorArm64)
+else
+    (cd "$ROOT" && run_consumer_gradle ./gradlew --no-daemon --console=plain -p "$FIXTURE_DIR" \
+        -PconsumerRepo="$CONSUMER_REPOSITORY" \
+        ${REMOTE_REPOSITORY_URL:+--refresh-dependencies} \
+        :coreJvm:compileKotlin \
+        :coreJvm:compileJava \
+        :lanJvm:compileKotlin \
+        :desktopJvm:compileKotlin \
+        :androidConsumer:compileDebugKotlin \
+        :androidConsumer:processDebugManifest \
+        :kmpConsumer:compileKotlinJvm \
+        :kmpConsumer:compileAndroidMain \
+        :kmpConsumer:compileKotlinIosSimulatorArm64 \
+        :kmpConsumer:linkDebugFrameworkIosSimulatorArm64)
+fi
 
 CONSUMER_FRAMEWORK="$FIXTURE_DIR/kmpConsumer/build/bin/iosSimulatorArm64/debugFramework/P2pKitConsumer.framework/P2pKitConsumer"
 [[ -f "$CONSUMER_FRAMEWORK" ]] || fail "iOS 14 consumer framework was not linked"
@@ -600,5 +746,10 @@ for permission in \
     grep -Fq "android:name=\"$permission\"" "$MERGED_MANIFEST" ||
         fail "Android consumer merged manifest is missing $permission"
 done
+
+if [[ "$AUDIT_CONSUMER_METADATA" == 1 ]]; then
+    python3 "$AUDIT_METADATA_HELPER" verify --root "$ROOT" --work-dir "$WORK_DIR" \
+        --publication-receipt "$CONSUMER_RECEIPT_DIR/consumer-publish.json"
+fi
 
 echo "RESULT: PASS — published scopes, Android LAN permissions, and isolated JVM/Android/KMP/iOS 14 consumers are complete"

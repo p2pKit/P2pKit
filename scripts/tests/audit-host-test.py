@@ -1,0 +1,1489 @@
+#!/usr/bin/env python3
+"""Audit-host admission/evidence controls, not native product or device acceptance.
+
+Git admission uses an isolated synthetic repository. Platform identity and external
+process boundaries are controlled fixtures; actual maintained report assessors are
+invoked without replacing their policy, test model, or case-count validation.
+"""
+
+import contextlib
+import copy
+import hashlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import types
+import unittest
+from unittest import mock
+
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parents[2]
+SPEC = importlib.util.spec_from_file_location("audit_host_under_test", ROOT / "scripts/run-audit-host.py")
+HOST = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(HOST)
+POLICY = json.loads((ROOT / "gradle/platform-test-policy.json").read_text(encoding="utf-8"))
+TOKEN = "abcdef0123456789abcdef0123456789"
+WINDOWS_TASKS = {":p2p-core:jvmTest", ":p2p-transport-lan:jvmTest",
+                 ":p2p-network-provisioning-desktop:test"}
+SWIFT_TARGETS = ("p2pkit-sample-tests", "p2pkit-sample-uitests")
+
+
+def temporary(test):
+    parent = Path(tempfile.gettempdir()).resolve()
+    if parent == ROOT or ROOT in parent.parents:
+        test.fail("synthetic audit state must be outside the source checkout")
+    directory = tempfile.TemporaryDirectory(prefix="p2pkit-audit-host-", dir=parent)
+    test.addCleanup(directory.cleanup)
+    return Path(directory.name)
+
+
+def windows_report():
+    tasks = {task for entry in POLICY["model"].values() for task in entry["tests"]}
+    return {
+        "schema": 1, "token": TOKEN, "buildFailed": False, "dryRun": False,
+        "host": {"os": "Windows Server 2025", "arch": "amd64"},
+        "model": copy.deepcopy(POLICY["model"]),
+        "tests": {task: {"outcome": "EXECUTED" if task in WINDOWS_TASKS else "NOT_REQUESTED",
+                         "enabled": task in WINDOWS_TASKS, "inGraph": task in WINDOWS_TASKS,
+                         "passed": 3 if task in WINDOWS_TASKS else 0, "failed": 0, "skipped": 0}
+                  for task in tasks},
+    }
+
+
+def swift_case(identifier="SyntheticTests/testCase()", status="Success"):
+    return {"_type": {"_name": "ActionTestMetadata"}, "identifier": {"_value": identifier},
+            "testStatus": {"_value": status}}
+
+
+def swift_target(name, cases=None):
+    return {"_type": {"_name": "ActionTestableSummary"}, "targetName": {"_value": name},
+            "tests": {"_values": [{"_type": {"_name": "ActionTestSummaryGroup"},
+                                   "subtests": {"_values": [swift_case()] if cases is None else cases}}]}}
+
+
+def swift_objects():
+    return [{"_type": {"_name": "ActionTestPlanRunSummaries"},
+             "summaries": {"_values": [{"testableSummaries": {"_values": [
+                 swift_target(name) for name in SWIFT_TARGETS]}}]}}]
+
+
+class AdmissionTest(unittest.TestCase):
+    def setUp(self):
+        self.work = temporary(self)
+        self.repo = self.work / "checkout with spaces Ω"
+        self.repo.mkdir()
+        scripts = self.repo / "scripts"
+        scripts.mkdir()
+        shutil.copy2(ROOT / "scripts/run-platform-tests.py", scripts / "run-platform-tests.py")
+        self.workflow = self.repo / HOST.WORKFLOW
+        self.workflow.parent.mkdir(parents=True)
+        self.workflow.write_text("# synthetic previous workflow revision\n", encoding="utf-8")
+        (self.repo / "tracked.txt").write_text("unchanged source\n", encoding="utf-8")
+        self.environment = dict(os.environ)
+        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+                     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"):
+            self.environment.pop(name, None)
+        self.environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                                GIT_AUTHOR_NAME="Synthetic Host Fixture", GIT_COMMITTER_NAME="Synthetic Host Fixture",
+                                GIT_AUTHOR_EMAIL="host-fixture@example.invalid",
+                                GIT_COMMITTER_EMAIL="host-fixture@example.invalid")
+        hooks = self.work / "empty hooks"
+        hooks.mkdir()
+        self.git("init", "-q")
+        self.git("config", "user.name", "Synthetic Host Fixture")
+        self.git("config", "user.email", "host-fixture@example.invalid")
+        self.git("config", "commit.gpgsign", "false")
+        self.git("config", "core.hooksPath", str(hooks))
+        self.git("checkout", "-b", "audit/complete-2026-09-04")
+        self.commit("Synthetic existing branch base")
+        self.before = self.git("rev-parse", "HEAD")
+        self.workflow.write_text("# synthetic explicit audit trigger revision\n", encoding="utf-8")
+        self.commit("Synthetic explicit audit trigger")
+        self.after = self.git("rev-parse", "HEAD")
+        self.tree = self.git("rev-parse", "HEAD^{tree}")
+        self.event = {"ref": HOST.REF, "repository": {"full_name": "p2pKit/P2pKit"},
+                      "deleted": False, "forced": False, "created": False,
+                      "before": self.before, "after": self.after}
+        self.environment.update(GITHUB_EVENT_NAME="push", GITHUB_REPOSITORY="p2pKit/P2pKit",
+                                GITHUB_REF=HOST.REF, GITHUB_SHA=self.after,
+                                GITHUB_RUN_ID="101", GITHUB_RUN_ATTEMPT="2")
+        self.native_calls = []
+
+    def git(self, *args):
+        return subprocess.check_output(["git", *args], cwd=self.repo, env=self.environment,
+                                       text=True, stderr=subprocess.PIPE).strip()
+
+    def commit(self, message):
+        self.git("add", ".")
+        self.git("commit", "-qm", message)
+
+    def admit(self, role="windows-x64", event=None, environment=None, native=None, translated=(0, "0\n")):
+        system, machine = native or {"windows-x64": ("Windows", "AMD64"),
+                                     "macos-arm64": ("Darwin", "arm64"),
+                                     "macos-x64": ("Darwin", "x86_64")}.get(role, ("Windows", "AMD64"))
+        original_run = subprocess.run
+
+        def boundary(command, *args, **kwargs):
+            if command[0] == "sysctl":
+                self.assertEqual(["sysctl", "-in", "sysctl.proc_translated"], command)
+                self.native_calls.append(list(command))
+                return subprocess.CompletedProcess(command, translated[0], stdout=translated[1], stderr="")
+            self.assertEqual("git", command[0], "admission must not start a product or runner process")
+            return original_run(command, *args, **kwargs)
+
+        with mock.patch.dict(os.environ, self.environment, clear=True), \
+                mock.patch.object(HOST.platform, "system", return_value=system), \
+                mock.patch.object(HOST.platform, "machine", return_value=machine), \
+                mock.patch.object(HOST.subprocess, "run", side_effect=boundary):
+            return HOST.admit(self.event if event is None else event,
+                              self.environment if environment is None else environment, role, root=self.repo)
+
+    def test_explicit_existing_branch_trigger_binds_exact_commit_tree_and_native_role(self):
+        for role in ("windows-x64", "macos-arm64", "macos-x64"):
+            with self.subTest(role=role):
+                self.native_calls.clear()
+                admission = self.admit(role)
+                self.assertEqual(self.after, admission["commit"])
+                self.assertEqual(self.tree, admission["tree"])
+                self.assertEqual(self.before, admission["before"])
+                self.assertEqual(HOST.REF, admission["ref"])
+                self.assertEqual(role, admission["role"])
+                self.assertEqual([HOST.WORKFLOW], admission["changedPaths"])
+                self.assertEqual("101", admission["runId"])
+                self.assertEqual("2", admission["runAttempt"])
+                self.assertEqual(0 if role == "windows-x64" else 1, len(self.native_calls))
+
+    def test_event_environment_and_exact_repository_ref_must_all_agree(self):
+        for key, value in (("GITHUB_EVENT_NAME", "workflow_dispatch"), ("GITHUB_EVENT_NAME", "pull_request"),
+                           ("GITHUB_REPOSITORY", "another/P2pKit"), ("GITHUB_REF", "refs/heads/main"),
+                           ("GITHUB_REF", "refs/tags/v0.7.0-rc3"), ("GITHUB_SHA", "f" * 40)):
+            with self.subTest(environment=key, value=value):
+                environment = dict(self.environment, **{key: value})
+                with self.assertRaises(ValueError):
+                    self.admit(environment=environment)
+        for key, value in (("ref", "refs/heads/main"), ("repository", {"full_name": "another/P2pKit"}),
+                           ("after", "f" * 40), ("after", "A" * 40), ("after", None)):
+            with self.subTest(event=key, value=value):
+                event = copy.deepcopy(self.event)
+                event[key] = value
+                with self.assertRaises(ValueError):
+                    self.admit(event=event)
+
+    def test_missing_base_force_creation_and_deletion_never_use_a_fallback_base(self):
+        for field in ("forced", "created", "deleted"):
+            for value in (True, None, "false", 0):
+                with self.subTest(field=field, value=value):
+                    event = copy.deepcopy(self.event)
+                    if value is None:
+                        del event[field]
+                    else:
+                        event[field] = value
+                    with self.assertRaises(ValueError):
+                        self.admit(event=event)
+        for value in (None, "0" * 40, "A" * 40, "1" * 39, "HEAD~1"):
+            with self.subTest(before=value):
+                event = dict(self.event, before=value)
+                with self.assertRaises(ValueError):
+                    self.admit(event=event)
+        with self.assertRaises((ValueError, subprocess.CalledProcessError)):
+            self.admit(event=dict(self.event, before="f" * 40))
+
+    def test_nonancestor_existing_commit_is_rejected_without_resetting_checkout(self):
+        self.git("checkout", "--detach", self.before)
+        (self.repo / "tracked.txt").write_text("synthetic divergent source\n", encoding="utf-8")
+        self.commit("Synthetic unrelated descendant")
+        divergent = self.git("rev-parse", "HEAD")
+        self.git("checkout", "--detach", self.after)
+        with self.assertRaises((ValueError, subprocess.CalledProcessError)):
+            self.admit(event=dict(self.event, before=divergent))
+        self.assertEqual(self.after, self.git("rev-parse", "HEAD"))
+        self.assertEqual("", self.git("status", "--porcelain=v1", "--untracked-files=all"))
+
+    def test_source_only_push_and_noop_push_do_not_satisfy_explicit_workflow_path(self):
+        for modify in (False, True):
+            with self.subTest(modify=modify):
+                before = self.git("rev-parse", "HEAD")
+                if modify:
+                    (self.repo / "tracked.txt").write_text("synthetic source-only revision\n", encoding="utf-8")
+                    self.commit("Synthetic source-only update")
+                after = self.git("rev-parse", "HEAD")
+                with self.assertRaisesRegex(ValueError, "workflow trigger path"):
+                    self.admit(event=dict(self.event, before=before, after=after),
+                               environment=dict(self.environment, GITHUB_SHA=after))
+
+    def test_dirty_staged_and_untracked_source_reject_without_deleting_input(self):
+        tracked = self.repo / "tracked.txt"
+        tracked.write_text("preserve contributor source\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "not clean"):
+            self.admit()
+        self.git("add", "tracked.txt")
+        with self.assertRaisesRegex(ValueError, "not clean"):
+            self.admit()
+        self.assertEqual("preserve contributor source\n", tracked.read_text(encoding="utf-8"))
+        self.git("restore", "--staged", "--worktree", "tracked.txt")  # Only this disposable fixture's tracked file.
+        untracked = self.repo / "untracked Ω.txt"
+        untracked.write_text("preserve untracked source", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "not clean"):
+            self.admit()
+        self.assertEqual("preserve untracked source", untracked.read_text(encoding="utf-8"))
+
+    def test_native_role_cannot_be_substituted_with_another_os_or_architecture(self):
+        for role, native in (("windows-x64", ("Linux", "x86_64")),
+                             ("windows-x64", ("Windows", "arm64")),
+                             ("macos-arm64", ("Darwin", "x86_64")),
+                             ("macos-x64", ("Darwin", "aarch64")),
+                             ("macos-x64", ("Darwin", "unknown")),
+                             ("macos-arm64", ("Linux", "arm64")),
+                             ("invented", ("Windows", "AMD64"))):
+            with self.subTest(role=role, native=native), self.assertRaises(ValueError):
+                self.admit(role, native=native)
+
+    def test_rosetta_or_unknown_translation_status_cannot_be_native_mac_evidence(self):
+        for role in ("macos-arm64", "macos-x64"):
+            for translated in ((0, "1\n"), (2, ""), (1, "unexpected"), (0, "unknown")):
+                with self.subTest(role=role, translated=translated), self.assertRaisesRegex(ValueError, "native"):
+                    self.admit(role, translated=translated)
+            with self.subTest(role=role, translated="absent native sysctl"):
+                self.assertEqual(role, self.admit(role, translated=(1, ""))["role"])
+
+
+class WindowsAssessmentTest(unittest.TestCase):
+    def assess(self, report, policy=POLICY):
+        return HOST.assess_windows(report, policy, TOKEN)
+
+    def test_only_all_three_fresh_library_event_records_establish_windows_execution(self):
+        report = windows_report()
+        actual = self.assess(report)
+        self.assertEqual(WINDOWS_TASKS, set(actual))
+        self.assertEqual(sorted(WINDOWS_TASKS), list(actual))
+        self.assertTrue(all(result["passed"] == 3 for result in actual.values()))
+        self.assertTrue(all(report["tests"][task]["outcome"] == "NOT_REQUESTED"
+                            for task in report["tests"] if task not in WINDOWS_TASKS))
+
+    def test_each_required_task_rejects_nonexecution_disabled_zero_or_failed_counts(self):
+        for task in WINDOWS_TASKS:
+            mutations = [("outcome", outcome) for outcome in
+                         ("SKIPPED", "UP-TO-DATE", "FROM-CACHE", "NO_SOURCE", "NOT_COMPLETED", "NOT_REQUESTED", "FAILED")]
+            mutations += [("enabled", False), ("inGraph", False), ("passed", 0), ("failed", 1)]
+            for field, value in mutations:
+                with self.subTest(task=task, field=field, value=value):
+                    report = windows_report()
+                    report["tests"][task][field] = value
+                    with self.assertRaises(ValueError):
+                        self.assess(report)
+
+    def test_stale_dry_failed_wrong_host_and_malformed_reports_cannot_pass(self):
+        for field, value in (("schema", True), ("schema", 2), ("token", "previous-token"),
+                             ("dryRun", True), ("dryRun", 0), ("buildFailed", True), ("buildFailed", 0),
+                             ("host", None), ("host", []), ("host", {"os": "Linux", "arch": "amd64"}),
+                             ("host", {"os": "Windows", "arch": "arm64"}),
+                             ("host", {"os": "Windows", "arch": 1}),
+                             ("tests", []), ("tests", {}), ("model", None)):
+            with self.subTest(field=field, value=value):
+                report = windows_report()
+                report[field] = value
+                with self.assertRaises(ValueError):
+                    self.assess(report)
+        for report in (None, [], "invalid", 1):
+            with self.subTest(report=report), self.assertRaises(ValueError):
+                self.assess(report)
+
+    def test_every_configured_task_and_target_must_match_committed_model(self):
+        for project, entry in POLICY["model"].items():
+            for target in entry["targets"]:
+                with self.subTest(project=project, missing_target=target):
+                    report = windows_report()
+                    del report["model"][project]["targets"][target]
+                    with self.assertRaises(ValueError):
+                        self.assess(report)
+            for task in entry["tests"]:
+                with self.subTest(missing_record=task):
+                    report = windows_report()
+                    del report["tests"][task]
+                    with self.assertRaises(ValueError):
+                        self.assess(report)
+                with self.subTest(missing_model_task=task):
+                    report = windows_report()
+                    report["model"][project]["tests"].remove(task)
+                    del report["tests"][task]
+                    with self.assertRaises(ValueError):
+                        self.assess(report)
+        report = windows_report()
+        report["tests"][":unclassified:test"] = copy.deepcopy(report["tests"][":p2p-core:jvmTest"])
+        with self.assertRaises(ValueError):
+            self.assess(report)
+
+    def test_boolean_pseudocounts_and_unrequested_failures_are_rejected(self):
+        for task in (":p2p-core:jvmTest", ":p2p-core:iosX64Test"):
+            for field, value in (("enabled", 1), ("inGraph", "true"), ("outcome", "INVENTED"),
+                                 ("passed", True), ("passed", -1), ("passed", "1"), ("passed", 1.5),
+                                 ("failed", False), ("failed", 1), ("skipped", None), ("skipped", -1)):
+                with self.subTest(task=task, field=field, value=value):
+                    report = windows_report()
+                    report["tests"][task][field] = value
+                    with self.assertRaises(ValueError):
+                        self.assess(report)
+        report = windows_report()
+        report["tests"][":p2p-core:jvmTest"] = None
+        with self.assertRaises(ValueError):
+            self.assess(report)
+
+    def test_skipped_case_counts_remain_visible_without_becoming_device_acceptance(self):
+        report = windows_report()
+        report["tests"][":p2p-core:jvmTest"]["skipped"] = 2
+        self.assertEqual(2, self.assess(report)[":p2p-core:jvmTest"]["skipped"])
+        for invalid in (None, {}, {"schema": True}, {"schema": 1, "model": {}},
+                        {"schema": 1, "model": {":p2p-core": {"targets": {}, "tests": [False]}}}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.assess(report, invalid)
+
+
+class SwiftAssessmentTest(unittest.TestCase):
+    def test_nested_actual_metadata_requires_both_maintained_swift_targets(self):
+        result = HOST.assess_swift(swift_objects())
+        self.assertEqual(set(SWIFT_TARGETS), set(result))
+        for target in SWIFT_TARGETS:
+            self.assertEqual([{"identifier": "SyntheticTests/testCase()", "status": "Success"}], result[target])
+
+    def test_distinct_cases_can_span_summary_objects_without_dropping_either_target(self):
+        objects = [swift_target(name, [swift_case("First/testOne()")]) for name in SWIFT_TARGETS]
+        objects += [swift_target(name, [swift_case("Second/testTwo()")]) for name in SWIFT_TARGETS]
+        result = HOST.assess_swift(objects)
+        for target in SWIFT_TARGETS:
+            self.assertEqual(["First/testOne()", "Second/testTwo()"],
+                             [case["identifier"] for case in result[target]])
+
+    def test_build_success_missing_target_or_empty_metadata_is_not_xctest_acceptance(self):
+        for objects in ([], [{"_value": "BUILD SUCCEEDED"}], [swift_case()],
+                        [swift_target(SWIFT_TARGETS[0])], [swift_target(SWIFT_TARGETS[1])],
+                        [swift_target(name, []) for name in SWIFT_TARGETS],
+                        [swift_target("unmaintained-tests"), swift_target(SWIFT_TARGETS[1])]):
+            with self.subTest(objects=objects), self.assertRaises(ValueError):
+                HOST.assess_swift(objects)
+
+    def test_failed_skipped_unknown_and_missing_case_status_cannot_pass(self):
+        for target in SWIFT_TARGETS:
+            for status in ("Failure", "Skipped", "Expected Failure", "Unknown", "", None, True, 1):
+                with self.subTest(target=target, status=status):
+                    objects = [swift_target(name, [swift_case(status=status if name == target else "Success")])
+                               for name in SWIFT_TARGETS]
+                    with self.assertRaises(ValueError):
+                        HOST.assess_swift(objects)
+
+    def test_duplicate_cases_within_target_or_across_bundles_are_not_double_counted(self):
+        for target in SWIFT_TARGETS:
+            with self.subTest(target=target, duplication="same summary"):
+                objects = [swift_target(name, [swift_case(), swift_case()] if name == target else [swift_case()])
+                           for name in SWIFT_TARGETS]
+                with self.assertRaisesRegex(ValueError, "Duplicated"):
+                    HOST.assess_swift(objects)
+            with self.subTest(target=target, duplication="another bundle"):
+                objects = swift_objects() + [swift_target(target)]
+                with self.assertRaisesRegex(ValueError, "Duplicated"):
+                    HOST.assess_swift(objects)
+
+    def test_malformed_swift_shapes_are_controlled_rejections_not_unhandled_attribute_errors(self):
+        for objects in (None, True, 1, "not xcresult objects", {}, [None], [[False]]):
+            with self.subTest(objects=objects), self.assertRaises(ValueError):
+                HOST.assess_swift(objects)
+        for field, value in (("_type", None), ("_type", []), ("targetName", None),
+                             ("targetName", SWIFT_TARGETS[0]), ("tests", None)):
+            with self.subTest(field=field, value=value):
+                target = swift_target(SWIFT_TARGETS[0])
+                target[field] = value
+                with self.assertRaises(ValueError):
+                    HOST.assess_swift([target, swift_target(SWIFT_TARGETS[1])])
+        for field, value in (("_type", None), ("_type", []), ("identifier", None),
+                             ("identifier", "unboxed identifier"), ("identifier", {"_value": ""}),
+                             ("identifier", {"_value": 1}), ("testStatus", None), ("testStatus", [])):
+            with self.subTest(field=field, value=value):
+                case = swift_case()
+                case[field] = value
+                with self.assertRaises(ValueError):
+                    HOST.assess_swift([swift_target(SWIFT_TARGETS[0], [case]), swift_target(SWIFT_TARGETS[1])])
+
+
+class HostInvocationTest(unittest.TestCase):
+    def setUp(self):
+        self.work = temporary(self)
+        self.repo = self.work / "source with spaces Ω"
+        scripts = self.repo / "scripts"
+        scripts.mkdir(parents=True)
+        for name in ("check-audit-receipt.py", "run-platform-tests.py"):
+            shutil.copy2(ROOT / "scripts" / name, scripts / name)
+        # No actual Gradle/native program is installed in this fixture checkout.
+        for path in (self.repo / "gradlew", self.repo / "gradlew.bat", scripts / "run-audit-command.py"):
+            path.write_text("synthetic boundary; never execute this file\n", encoding="utf-8")
+        patcher = mock.patch.object(HOST, "ROOT", self.repo)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.state = self.work / "new job state Ω"
+        self.host = HOST.Host("windows-x64", self.state)
+        self.assertFalse(self.state.exists(), "Host construction must not create or overwrite state")
+        self.state.mkdir()
+        self.host.evidence.mkdir()
+        home = self.state / "gradle-home"
+        home.mkdir()
+        policy = b"synthetic bounded-home policy\n"
+        (home / "gradle.properties").write_bytes(policy)
+        self.source = {"commit": "1" * 40, "tree": "2" * 40, "status": "",
+                       "diffSha256": hashlib.sha256(b"").hexdigest()}
+        self.context = {"schema": 1, "id": "3" * 32, "root": str(self.repo),
+                        "expectedCommit": self.source["commit"], "tree": self.source["tree"],
+                        "source": copy.deepcopy(self.source), "host": "windows-x64",
+                        "gradleHome": str(home), "gradlePropertiesSha256": hashlib.sha256(policy).hexdigest(),
+                        "javaHomes": [], "preexistingOutputPaths": [], "createdUtc": "synthetic fixture"}
+        self.context_bytes = (json.dumps(self.context, indent=2) + "\n").encode("utf-8")
+        (self.state / "context.json").write_bytes(self.context_bytes)
+        self.host.admission = {"commit": self.source["commit"], "tree": self.source["tree"],
+                               "ref": HOST.REF, "role": self.host.role}
+        self.host.context = copy.deepcopy(self.context)
+        self.host.context_hash = hashlib.sha256(self.context_bytes).hexdigest()
+        self.host.owns_state = True
+        self.host.state_identity = self.host.identity(self.state)
+        owned_work = self.state / "work"
+        owned_work.mkdir()
+        self.host.work_identity = self.host.identity(owned_work)
+        self.host.safe = True
+        self.calls = []
+        self.cancel_calls = []
+        self.children = []
+        self.next_mutation = None
+        self.next_status = 0
+        self.next_wait = None
+        self.cancel_status = 0
+        self.arguments = ["check", "--tests", "test case with spaces Ω", ""]
+        self.output = self.work / "github-output.txt"
+        env_patch = mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(self.output)})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        popen_patch = mock.patch.object(HOST.subprocess, "Popen", side_effect=self.controller)
+        popen_patch.start()
+        self.addCleanup(popen_patch.stop)
+        run_patch = mock.patch.object(HOST.subprocess, "run", side_effect=self.external_command)
+        run_patch.start()
+        self.addCleanup(run_patch.stop)
+        for name in ("kill", "killpg"):
+            if hasattr(HOST.os, name):
+                signal_patch = mock.patch.object(HOST.os, name,
+                    side_effect=AssertionError("host fixture must not signal its synthetic/unowned PID"))
+                signal_patch.start()
+                self.addCleanup(signal_patch.stop)
+        disk_patch = mock.patch.object(HOST.shutil, "disk_usage",
+                                      return_value=types.SimpleNamespace(free=10 * 1024 ** 3))
+        disk_patch.start()
+        self.addCleanup(disk_patch.stop)
+
+    def write_receipt(self, command):
+        boundary = command.index("--")
+        options = dict(zip(command[2:boundary:2], command[3:boundary:2]))
+        invocation = options["--id"]
+        self.assertRegex(invocation, r"^[0-9a-f]{32}$")
+        receipt = Path(options["--receipt"])
+        evidence = self.host.evidence / invocation
+        evidence.mkdir()
+        record = {"schema": 1, "id": invocation, "purpose": options["--purpose"],
+                  "kind": options["--kind"], "host": self.host.role, "jobId": self.context["id"],
+                  "requestedArgv": command[boundary + 1:], "cwd": str(self.repo),
+                  "wrapper": str(self.host.wrapper), "gradleHome": self.context["gradleHome"],
+                  "sourceBefore": copy.deepcopy(self.source), "sourceAfter": copy.deepcopy(self.source),
+                  "productExitCode": self.next_status, "stopExitCode": 0, "finalExitCode": self.next_status,
+                  "sourceUnchanged": True, "ownedSurvivors": [], "errors": [],
+                  "evidenceDirectory": str(evidence), "reports": []}
+        initial = dict(record, productExitCode=None, stopExitCode=None, finalExitCode=125,
+                       sourceBefore=None, sourceAfter=None, sourceUnchanged=False)
+        (evidence / "start.json").write_text(json.dumps(initial), encoding="utf-8")
+        for name in ("product.stdout.log", "product.stderr.log", "stop.stdout.log", "stop.stderr.log"):
+            (evidence / name).write_text("synthetic " + name + "\n", encoding="utf-8")
+        (evidence / "report-manifest.json").write_text(json.dumps({"schema": 1, "records": []}), encoding="utf-8")
+        if self.next_mutation:
+            self.next_mutation(record, receipt, evidence, "before-write")
+        raw = (json.dumps(record, indent=2) + "\n").encode("utf-8")
+        receipt.write_bytes(raw)
+        (evidence / "receipt.json").write_bytes(raw)
+        if self.next_mutation:
+            self.next_mutation(record, receipt, evidence, "after-write")
+        return options, record
+
+    def controller(self, command, **kwargs):
+        self.assertEqual([sys.executable, str(self.host.runner)], command[:2])
+        self.assertEqual(self.repo, kwargs["cwd"])
+        self.calls.append({"command": list(command), "options": kwargs})
+        options, record = self.write_receipt(command)
+        owner = self
+
+        class Controller:
+            pid = 424242  # Recorded fixture identity only; never passed to an OS signal API.
+
+            def __init__(self):
+                self.waits = []
+
+            def wait(self, timeout=None):
+                self.waits.append(timeout)
+                if len(self.waits) == 1 and owner.next_wait == "interrupt":
+                    raise KeyboardInterrupt("synthetic cooperative interruption")
+                if owner.next_wait == "always-timeout" or (len(self.waits) == 1 and owner.next_wait == "timeout"):
+                    raise subprocess.TimeoutExpired(command, timeout)
+                return owner.next_status
+
+            def terminate(self):
+                owner.fail("host driver must not hard-terminate its Windows controller")
+
+            def kill(self):
+                owner.fail("host driver must request cooperative cancellation, not kill its controller")
+
+        child = Controller()
+        self.children.append(child)
+        return child
+
+    def external_command(self, command, **kwargs):
+        expected = [sys.executable, str(self.host.runner), "request-cancel", "--state", str(self.state), "--id"]
+        self.assertEqual(expected, command[:-1], "unexpected real external command in a host fixture")
+        self.assertRegex(command[-1], r"^[0-9a-f]{32}$")
+        self.cancel_calls.append({"command": list(command), "options": kwargs})
+        return subprocess.CompletedProcess(command, self.cancel_status, stdout=b"synthetic cancel receipt\n", stderr=b"")
+
+    def invoke(self, label="fixture-leaf", **kwargs):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return self.host.invoke(label, self.arguments, timeout=60, **kwargs)
+
+    def test_constructor_does_not_borrow_foreign_state_or_caller_opt_ins(self):
+        foreign = self.work / "foreign prior attempt"
+        foreign.mkdir()
+        sentinel = foreign / "context.json"
+        sentinel.write_text("preserve prior attempt\n", encoding="utf-8")
+        injected = {name: "caller-owned override" for name in HOST.ADAPTER_OPT_INS}
+        injected.update(ANDROID_SDK_ROOT="legacy conflicting SDK")
+        with mock.patch.dict(os.environ, injected):
+            host = HOST.Host("macos-arm64", foreign)
+        self.assertFalse(host.owns_state)
+        self.assertEqual("preserve prior attempt\n", sentinel.read_text(encoding="utf-8"))
+        self.assertEqual(["context.json"], [path.name for path in foreign.iterdir()])
+        for key in HOST.ADAPTER_OPT_INS:
+            if key not in ("P2PKIT_GRADLE_EXECUTOR", "P2PKIT_XCODE_JOBS"):
+                self.assertNotIn(key, host.environment)
+        self.assertEqual(str(host.runner), host.environment["P2PKIT_GRADLE_EXECUTOR"])
+        self.assertEqual("2", host.environment["P2PKIT_XCODE_JOBS"])
+        self.assertNotIn("ANDROID_SDK_ROOT", host.environment)
+        for budget in (True, 0, HOST.FINALIZATION_GRACE, 19801):
+            with self.subTest(budget=budget), self.assertRaises(ValueError):
+                HOST.Host("windows-x64", foreign, timeout_seconds=budget)
+
+    def test_invocation_binds_exact_original_vector_and_complete_evidence_before_pass(self):
+        self.assertTrue(self.invoke())
+        self.assertEqual(1, len(self.calls))
+        command = self.calls[0]["command"]
+        self.assertEqual(self.arguments, command[command.index("--") + 1:])
+        self.assertEqual(str(self.repo / "gradlew.bat"), command[command.index("--wrapper") + 1])
+        self.assertEqual([60 + HOST.FINALIZATION_GRACE], self.children[0].waits)
+        row = self.host.rows[-1]
+        self.assertEqual("PASS", row["result"])
+        self.assertTrue(row["cleanupComplete"])
+        self.assertFalse(row["cancelled"])
+        self.assertEqual(424242, row["controllerPid"])
+        receipt = self.host.receipts["fixture-leaf"]
+        self.assertEqual(self.context["id"], receipt["jobId"])
+        self.assertEqual(self.source, receipt["sourceBefore"])
+        self.assertEqual(self.source, receipt["sourceAfter"])
+        self.assertTrue(self.host.safe)
+        self.assertEqual([], self.cancel_calls)
+
+    def test_clean_product_failure_remains_failed_but_cleanup_proof_is_retained(self):
+        self.next_status = 7
+        self.assertFalse(self.invoke())
+        row = self.host.rows[-1]
+        self.assertEqual("FAIL", row["result"])
+        self.assertEqual(7, row["exitCode"])
+        self.assertTrue(row["cleanupComplete"])
+        self.assertTrue(self.host.safe, "a finalized product failure must not be relabelled an ownership failure")
+        self.assertEqual(7, self.host.receipts["fixture-leaf"]["productExitCode"])
+
+    def test_missing_malformed_or_unbound_receipt_cannot_become_a_successful_leaf(self):
+        changes = (("schema", True), ("id", "f" * 32), ("jobId", "4" * 32), ("kind", "command"),
+                   ("host", "macos-x64"), ("gradleHome", str(self.work)),
+                   ("purpose", "another-purpose"), ("cwd", str(self.work)),
+                   ("wrapper", str(self.repo / "gradlew")), ("requestedArgv", ["help"]),
+                   ("stopExitCode", 9), ("stopExitCode", False), ("productExitCode", 1),
+                   ("finalExitCode", False), ("sourceUnchanged", 1), ("ownedSurvivors", {}),
+                   ("ownedSurvivors", [{"pid": 99}]), ("errors", ["synthetic failed cleanup"]),
+                   ("evidenceDirectory", str(self.work)))
+        for index, (field, value) in enumerate(changes):
+            with self.subTest(field=field, value=value):
+                self.host.safe = True
+
+                def mutate(record, receipt, evidence, phase):
+                    if phase == "before-write":
+                        record[field] = value
+
+                self.next_mutation = mutate
+                with self.assertRaises(HOST.InfrastructureFailure):
+                    self.invoke("invalid-receipt-" + str(index))
+                self.assertFalse(self.host.safe)
+                self.assertEqual("FAIL", self.host.rows[-1]["result"])
+                self.assertFalse(self.host.rows[-1]["cleanupComplete"])
+        self.assertEqual({}, self.host.receipts)
+
+    def test_fresh_source_equality_cannot_be_forged_with_self_consistent_foreign_receipts(self):
+        for index, (field, value) in enumerate((("commit", "7" * 40), ("tree", "8" * 40),
+                                               ("status", " M tracked.txt\n"), ("diffSha256", "9" * 64))):
+            with self.subTest(field=field):
+
+                def mutate(record, receipt, evidence, phase):
+                    if phase == "before-write":
+                        record["sourceBefore"][field] = value
+                        record["sourceAfter"][field] = value
+
+                self.next_mutation = mutate
+                with self.assertRaises(HOST.InfrastructureFailure):
+                    self.invoke("foreign-source-" + str(index))
+                self.assertFalse(self.host.rows[-1]["cleanupComplete"])
+
+    def test_actual_log_start_manifest_and_final_receipt_files_are_mandatory(self):
+        for index, name in enumerate(("receipt.json", "start.json", "product.stdout.log", "product.stderr.log",
+                                      "stop.stdout.log", "stop.stderr.log", "report-manifest.json")):
+            with self.subTest(missing=name):
+
+                def mutate(record, receipt, evidence, phase):
+                    if phase == "after-write":
+                        (evidence / name).unlink()
+
+                self.next_mutation = mutate
+                with self.assertRaises(HOST.InfrastructureFailure):
+                    self.invoke("missing-evidence-" + str(index))
+                self.assertFalse(self.host.safe)
+        for index, mode in enumerate(("missing", "malformed", "duplicate", "copies-differ", "context-changed")):
+            with self.subTest(mode=mode):
+                (self.state / "context.json").write_bytes(self.context_bytes)
+
+                def mutate(record, receipt, evidence, phase):
+                    if phase != "after-write":
+                        return
+                    if mode == "missing":
+                        receipt.unlink()
+                    elif mode == "malformed":
+                        receipt.write_text("{invalid", encoding="utf-8")
+                    elif mode == "duplicate":
+                        receipt.write_text('{"schema":1,"schema":1}', encoding="utf-8")
+                    elif mode == "copies-differ":
+                        (evidence / "receipt.json").write_text("{}", encoding="utf-8")
+                    elif mode == "context-changed":
+                        (self.state / "context.json").write_bytes(self.context_bytes + b" ")
+
+                self.next_mutation = mutate
+                with self.assertRaises(HOST.InfrastructureFailure):
+                    self.invoke("unretained-evidence-" + str(index))
+                self.assertFalse(self.host.rows[-1]["cleanupComplete"])
+
+    def test_symlinked_evidence_is_not_followed_or_uploaded_as_owned(self):
+        sentinel = self.work / "caller-owned-file"
+        sentinel.write_text("preserve caller data\n", encoding="utf-8")
+
+        def mutate(record, receipt, evidence, phase):
+            if phase == "after-write":
+                log = evidence / "product.stdout.log"
+                log.unlink()
+                log.symlink_to(sentinel)
+
+        self.next_mutation = mutate
+        with self.assertRaises(HOST.InfrastructureFailure):
+            self.invoke()
+        self.assertEqual("preserve caller data\n", sentinel.read_text(encoding="utf-8"))
+        self.assertFalse(self.host.safe)
+
+    def test_cancellation_uses_id_bound_cooperative_request_and_cannot_pass_on_zero_exit(self):
+        for index, interruption in enumerate(("interrupt", "timeout")):
+            with self.subTest(interruption=interruption):
+                self.next_wait = interruption
+                label = "cancelled-" + str(index)
+                with self.assertRaises(HOST.InfrastructureFailure):
+                    self.invoke(label)
+                self.assertEqual([60 + HOST.FINALIZATION_GRACE, HOST.FINALIZATION_GRACE], self.children[-1].waits)
+                row = self.host.rows[-1]
+                self.assertTrue(row["cancelled"])
+                self.assertEqual("FAIL", row["result"])
+                self.assertFalse(row["cleanupComplete"])
+                self.assertFalse(self.host.safe)
+                command = self.calls[-1]["command"]
+                invocation = command[command.index("--id") + 1]
+                self.assertEqual(invocation, self.cancel_calls[-1]["command"][-1])
+                cancel = json.loads((self.host.evidence / ("cancel-" + invocation + ".json")).read_text())
+                self.assertEqual(0, cancel["requestExitCode"])
+                self.assertNotIn(label, self.host.receipts)
+
+    def test_failed_cancel_or_unfinished_controller_never_reports_clean_continuation(self):
+        for index, wait in enumerate(("timeout", "always-timeout")):
+            with self.subTest(wait=wait):
+                self.next_wait = wait
+                self.cancel_status = 125
+                with self.assertRaises(HOST.InfrastructureFailure):
+                    self.invoke("failed-cancel-" + str(index))
+                self.assertFalse(self.host.safe)
+                self.assertTrue(self.host.rows[-1]["cancelled"])
+                self.assertEqual("FAIL", self.host.rows[-1]["result"])
+                self.assertEqual(2, len(self.children[-1].waits))
+
+    def test_invocation_rejects_reused_receipt_changed_state_and_resource_admission_before_spawn(self):
+        (self.state / "host-previous.json").write_text("preserve prior invocation", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            self.invoke("previous")
+        self.assertEqual([], self.calls)
+        self.assertEqual("preserve prior invocation", (self.state / "host-previous.json").read_text())
+        with mock.patch.object(HOST.shutil, "disk_usage", return_value=types.SimpleNamespace(free=1024)):
+            with self.assertRaises(ValueError):
+                self.invoke("insufficient-disk")
+        with mock.patch.object(self.host, "state_identity", (0, 0)), self.assertRaises(ValueError):
+            self.invoke("changed-state")
+        with mock.patch.object(self.host, "owns_state", False), self.assertRaises(ValueError):
+            self.invoke("unowned-state")
+        with mock.patch.object(self.host, "deadline", 0), self.assertRaises(ValueError):
+            self.invoke("expired-host")
+        self.assertEqual([], self.calls)
+
+    def test_explicit_environment_removal_does_not_leak_outer_opt_ins_to_fixture_controls(self):
+        self.assertTrue(self.invoke(kind="command", extra_env={"P2PKIT_GRADLE_EXECUTOR": None,
+                             "P2PKIT_XCODE_JOBS": None, "OWNED_SYNTHETIC_VALUE": "space Ω"}))
+        environment = self.calls[0]["options"]["env"]
+        self.assertNotIn("P2PKIT_GRADLE_EXECUTOR", environment)
+        self.assertNotIn("P2PKIT_XCODE_JOBS", environment)
+        self.assertEqual("space Ω", environment["OWNED_SYNTHETIC_VALUE"])
+        self.assertEqual(str(self.state), environment["P2PKIT_AUDIT_STATE_DIR"])
+        self.assertIn("P2PKIT_GRADLE_EXECUTOR", self.host.environment)
+
+    def test_start_receipt_and_report_manifest_are_parsed_and_bound_not_just_present(self):
+        for index, mutation in enumerate(("malformed-start", "stale-start", "bool-start-schema",
+                                          "malformed-manifest", "mismatched-manifest", "bool-manifest-schema")):
+            with self.subTest(mutation=mutation):
+
+                def mutate(record, receipt, evidence, phase):
+                    if phase != "after-write":
+                        return
+                    start = evidence / "start.json"
+                    manifest = evidence / "report-manifest.json"
+                    if mutation == "malformed-start":
+                        start.write_text("{invalid", encoding="utf-8")
+                    elif mutation in ("stale-start", "bool-start-schema"):
+                        value = json.loads(start.read_text())
+                        value["id" if mutation == "stale-start" else "schema"] = (
+                            "f" * 32 if mutation == "stale-start" else True)
+                        start.write_text(json.dumps(value), encoding="utf-8")
+                    elif mutation == "malformed-manifest":
+                        manifest.write_text("{invalid", encoding="utf-8")
+                    else:
+                        value = {"schema": True if mutation == "bool-manifest-schema" else 1,
+                                 "records": [] if mutation == "bool-manifest-schema" else [{"source": "another-report"}]}
+                        manifest.write_text(json.dumps(value), encoding="utf-8")
+
+                self.next_mutation = mutate
+                with self.assertRaises(HOST.InfrastructureFailure):
+                    self.invoke("unbound-manifest-" + str(index))
+                self.assertFalse(self.host.safe)
+
+    def retained_report(self, record, receipt, evidence, phase):
+        if phase == "before-write":
+            path = evidence / "reports/build/test-results/fixture.xml"
+            path.parent.mkdir(parents=True)
+            raw = b'<testsuite name="synthetic" tests="1" failures="0"/>\n'
+            path.write_bytes(raw)
+            record["reports"] = [{"source": "build/test-results/fixture.xml", "bytes": len(raw),
+                                  "sha256": hashlib.sha256(raw).hexdigest(),
+                                  "classification": "changed-since-admission",
+                                  "retained": path.relative_to(evidence).as_posix()}]
+            (evidence / "report-manifest.json").write_text(
+                json.dumps({"schema": 1, "records": record["reports"]}), encoding="utf-8")
+
+    def test_retained_report_bytes_and_hashes_are_verified_without_inferred_test_acceptance(self):
+        self.next_mutation = self.retained_report
+        self.assertTrue(self.invoke())
+        record = self.host.receipts["fixture-leaf"]
+        self.assertEqual(1, len(record["reports"]))
+        self.assertEqual(["fixture-leaf"], [row["component"] for row in self.host.rows])
+        # The host leaf is finalized, not assessed as Windows/Kotlin/Swift test execution.
+        self.assertNotIn("windows-execution", self.host.receipts)
+
+    def test_corrupt_unretained_or_escape_report_records_reject_even_consistent_receipt_copies(self):
+        modes = ("wrong-hash", "wrong-size", "bool-size", "missing-file", "escape", "symlink",
+                 "unclassified", "duplicate-retained")
+        for index, mode in enumerate(modes):
+            with self.subTest(mode=mode):
+
+                def mutate(record, receipt, evidence, phase):
+                    self.retained_report(record, receipt, evidence, phase)
+                    if phase != "before-write":
+                        return
+                    row = record["reports"][0]
+                    path = evidence / row["retained"]
+                    if mode == "wrong-hash":
+                        row["sha256"] = "f" * 64
+                    elif mode == "wrong-size":
+                        row["bytes"] += 1
+                    elif mode == "bool-size":
+                        row["bytes"] = True
+                    elif mode == "missing-file":
+                        path.unlink()
+                    elif mode == "escape":
+                        row["retained"] = "../context.json"
+                    elif mode == "symlink":
+                        path.unlink()
+                        path.symlink_to(self.state / "context.json")
+                    elif mode == "unclassified":
+                        row["classification"] = "assumed-execution"
+                    elif mode == "duplicate-retained":
+                        record["reports"].append(dict(row, source="another/source.xml"))
+                    (evidence / "report-manifest.json").write_text(
+                        json.dumps({"schema": 1, "records": record["reports"]}), encoding="utf-8")
+
+                self.next_mutation = mutate
+                with self.assertRaises(HOST.InfrastructureFailure):
+                    self.invoke("corrupt-report-" + str(index))
+                self.assertFalse(self.host.safe)
+
+    def test_retention_copies_and_hashes_selected_owned_files_before_source_removal(self):
+        source = self.state / "work/owned reports"
+        source.mkdir()
+        (source / "test.xml").write_bytes(b"synthetic XML evidence\n")
+        (source / "product.log").write_bytes(b"synthetic failure log\n")
+        nested = source / "nested Ω"
+        nested.mkdir()
+        (nested / "other.txt").write_bytes(b"retained nested bytes\n")
+        before = {path.relative_to(source).as_posix(): path.read_bytes()
+                  for path in source.rglob("*") if path.is_file()}
+        destination = self.host.evidence / "retained-reports"
+        rows = self.host.retain_tree(source, destination)
+        self.assertEqual(set(before), {row["path"] for row in rows})
+        for row in rows:
+            self.assertEqual(before[row["path"]], (destination / row["path"]).read_bytes())
+            self.assertEqual(hashlib.sha256(before[row["path"]]).hexdigest(), row["sha256"])
+            self.assertEqual(len(before[row["path"]]), row["bytes"])
+            self.assertEqual(before[row["path"]], (source / row["path"]).read_bytes())
+        self.host.remove_work(source)
+        self.assertFalse(source.exists())
+        self.assertTrue((destination / "product.log").is_file())
+
+    def test_retention_rejects_foreign_destination_symlinks_limits_overwrite_and_corrupt_copy(self):
+        source = self.state / "work/reports"
+        source.mkdir()
+        original = source / "original.txt"
+        original.write_bytes(b"preserve original report bytes\n")
+        outside = self.work / "unrelated caller data"
+        outside.mkdir()
+        sentinel = outside / "sentinel.txt"
+        sentinel.write_bytes(b"preserve caller data\n")
+        with self.assertRaises(ValueError):
+            self.host.retain_tree(source, outside / "not-evidence")
+        with self.assertRaises(ValueError):
+            self.host.retain_tree(source, self.host.evidence / "too-large", byte_limit=1)
+        self.assertFalse((self.host.evidence / "too-large").exists())
+        existing = self.host.evidence / "existing"
+        existing.mkdir()
+        (existing / "keep.txt").write_text("prior evidence", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            self.host.retain_tree(source, existing)
+        self.assertEqual("prior evidence", (existing / "keep.txt").read_text())
+        link = source / "borrowed.txt"
+        link.symlink_to(sentinel)
+        with self.assertRaises(ValueError):
+            self.host.retain_tree(source, self.host.evidence / "symlink-copy")
+        self.assertFalse((self.host.evidence / "symlink-copy").exists())
+        link.unlink()
+        with mock.patch.object(HOST.shutil, "copyfileobj", side_effect=lambda incoming, outgoing: outgoing.write(b"wrong")):
+            with self.assertRaisesRegex(ValueError, "changed during copy"):
+                self.host.retain_tree(source, self.host.evidence / "corrupt-copy")
+        self.assertEqual(b"preserve original report bytes\n", original.read_bytes())
+        self.assertEqual(b"preserve caller data\n", sentinel.read_bytes())
+
+    def test_selected_retention_prunes_only_unselected_links_and_records_omissions(self):
+        source = self.state / "work/metadata"
+        source.mkdir()
+        caller = self.work / "caller-evidence"
+        caller.mkdir()
+        sentinel = caller / "never-read.txt"
+        sentinel.write_text("outside the selected evidence", encoding="utf-8")
+        (source / "cache-link").symlink_to(caller, target_is_directory=True)
+        (source / "binary-link").symlink_to(sentinel)
+        nested = source / "ordinary-directory"
+        nested.mkdir()
+        (nested / "required.txt").write_text("selected nested file", encoding="utf-8")
+        destination = self.host.evidence / "selected-metadata"
+        rows = self.host.retain_tree(source, destination, selected=lambda path: path.suffix == ".txt")
+        self.assertEqual(["ordinary-directory/required.txt"], [row["path"] for row in rows])
+        omissions = json.loads(next(self.host.evidence.glob("retention-omissions-*.json")).read_text())
+        self.assertEqual({"cache-link", "binary-link"}, {row["path"] for row in omissions["omitted"]})
+        self.assertTrue(all(row["reason"] == "unselected-link-not-followed" for row in omissions["omitted"]))
+        (source / "selected-link.txt").symlink_to(sentinel)
+        with self.assertRaises(ValueError):
+            self.host.retain_tree(source, self.host.evidence / "selected-link-rejection",
+                                  selected=lambda path: path.suffix == ".txt")
+        self.assertEqual("outside the selected evidence", sentinel.read_text())
+        self.assertFalse((destination / "cache-link").exists())
+
+    def test_consumer_framework_inspection_is_bound_and_missing_binary_is_not_a_pass(self):
+        self.host.receipts["isolated-consumers"] = {"id": "b" * 32}
+        consumer = self.state / "work/consumer"
+        self.host.retain_consumer_framework(consumer)
+        binding_file = self.host.evidence / "consumer-framework-binding.json"
+        absent = json.loads(binding_file.read_text())
+        self.assertEqual("NOT_EXECUTED", absent["result"])
+        self.assertEqual("b" * 32, absent["sourceInvocationId"])
+        binding_file.unlink()  # Explicitly replace only this test's synthetic absent case.
+        binary = consumer / "consumer/kmpConsumer/build/bin/iosSimulatorArm64/debugFramework/P2pKitConsumer.framework/P2pKitConsumer"
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(b"synthetic Mach-O fixture, not a built product")
+        calls = []
+        def inspect(label, arguments):
+            calls.append((label, arguments))
+            output = self.host.evidence / (label + ".stdout.log")
+            output.write_bytes(b"synthetic read-only native tool output")
+            return output
+        with mock.patch.object(self.host, "inspect_tool", side_effect=inspect):
+            self.host.retain_consumer_framework(consumer)
+        binding = json.loads(binding_file.read_text())
+        self.assertEqual("INSPECTED", binding["result"])
+        self.assertEqual(hashlib.sha256(binary.read_bytes()).hexdigest(), binding["sha256"])
+        self.assertEqual(self.host.admission, binding["source"])
+        self.assertEqual(["vtool", "lipo"], [row[1][1] for row in calls])
+        self.assertEqual({"vtool", "lipo"}, set(binding["nativeInspections"]))
+        self.assertTrue(all(row[1][-1] == str(binary) for row in calls))
+
+    def test_publication_manifest_preserves_partial_failure_metadata_and_all_artifact_hashes(self):
+        publication = self.state / "work/partial-publication"
+        publication.mkdir()
+        files = {"module.pom": b"synthetic partial POM\n", "module.module": b"synthetic module metadata\n",
+                 "maven-metadata-local.xml": b"synthetic Maven metadata\n", "module.jar": b"synthetic binary\n"}
+        for name, raw in files.items():
+            (publication / name).write_bytes(raw)
+        self.host.retain_publication(publication, "partial-publication")
+        manifest = json.loads((self.host.evidence / "partial-publication-manifest.json").read_text())
+        self.assertEqual(set(files), {row["path"] for row in manifest["artifacts"]})
+        self.assertEqual({"module.pom", "module.module", "maven-metadata-local.xml"},
+                         {row["path"] for row in manifest["retainedMetadata"]})
+        for row in manifest["artifacts"]:
+            self.assertEqual(hashlib.sha256(files[row["path"]]).hexdigest(), row["sha256"])
+        self.assertTrue((publication / "module.jar").exists(), "retention must precede any explicit cleanup")
+        self.assertFalse((self.host.evidence / "partial-publication-metadata/module.jar").exists())
+
+    def test_work_cleanup_never_removes_foreign_state_work_root_or_link_targets(self):
+        work = self.state / "work"
+        caller = self.work / "caller-owned"
+        caller.mkdir()
+        sentinel = caller / "keep.txt"
+        sentinel.write_text("keep caller data", encoding="utf-8")
+        for path in (work, self.state, caller):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                self.host.remove_work(path)
+        child = work / "disposable"
+        child.mkdir()
+        (child / "borrowed").symlink_to(caller, target_is_directory=True)
+        with mock.patch.object(self.host, "work_identity", (0, 0)), self.assertRaises(ValueError):
+            self.host.remove_work(child)
+        self.host.remove_work(child)
+        self.assertFalse(child.exists())
+        self.assertEqual("keep caller data", sentinel.read_text())
+
+    def test_output_cleanup_requests_exact_disposable_roots_and_never_source_named_build(self):
+        disposable = [self.repo / "build", self.repo / "buildSrc/build"]
+        for path in disposable:
+            path.mkdir(parents=True)
+        source = self.repo / "buildSrc/src/main/java/dev/p2pkit/build"
+        source.mkdir(parents=True)
+        sentinel = source / "Preserve.java"
+        sentinel.write_text("synthetic source sentinel", encoding="utf-8")
+        with mock.patch.object(HOST.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as cleanup:
+            self.host.clean_outputs()
+        command = cleanup.call_args.args[0]
+        self.assertEqual([sys.executable, str(self.host.runner), "cleanup", "--state", str(self.state)], command[:5])
+        self.assertEqual(["--path", str(disposable[0]), "--path", str(disposable[1])], command[5:])
+        with mock.patch.object(HOST.subprocess, "run", return_value=subprocess.CompletedProcess([], 125)):
+            with self.assertRaises(HOST.InfrastructureFailure):
+                self.host.clean_outputs()
+        self.assertFalse(self.host.safe)
+        self.assertEqual("synthetic source sentinel", sentinel.read_text())
+        self.assertTrue(all(path.is_dir() for path in disposable))
+
+    def test_failed_actual_assessment_is_a_failed_inspection_not_a_fake_pass(self):
+        report = windows_report()
+        report["tests"][":p2p-core:jvmTest"]["passed"] = 0
+        result = self.host.check("windows-execution", lambda: HOST.assess_windows(report, POLICY, TOKEN))
+        self.assertFalse(result)
+        row = self.host.rows[-1]
+        self.assertEqual({"component": "windows-execution", "result": "FAIL", "inspectionOnly": True}, row)
+        evidence = json.loads((self.host.evidence / "windows-execution.json").read_text())
+        self.assertEqual("FAIL", evidence["result"])
+        self.assertIn("Fresh nonzero Windows test execution", evidence["error"])
+        self.assertEqual([], self.calls)
+
+    def seed_apple_sidecars(self):
+        release = self.repo / "library/p2p-transport-lan/build/XCFrameworks/release"
+        release.mkdir(parents=True)
+        for name, value in (("BUILD_COMMIT.txt", self.source["commit"]), ("BUILD_SOURCE_STATE.txt", "clean"),
+                            ("BUILD_INPUTS_SHA256.txt", "a" * 64), ("BUILD_ARTIFACTS_SHA256.txt", "b" * 64)):
+            (release / name).write_text(value + "\n", encoding="utf-8")
+
+    def test_xcframework_native_inspections_and_four_sidecars_precede_later_builds(self):
+        self.seed_apple_sidecars()
+        release = self.repo / "library/p2p-transport-lan/build/XCFrameworks/release"
+        for identifier in ("ios-arm64", "ios-arm64_x86_64-simulator"):
+            binary = release / "P2pKitShared.xcframework" / identifier / "P2pKitShared.framework/P2pKitShared"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(("synthetic " + identifier).encode())
+        events = []
+        original_invoke = self.host.invoke
+        def invoke(label, *args, **kwargs):
+            events.append(label)
+            if label == "xcode-project":
+                return False  # No later native product boundary is needed for this fixture.
+            return original_invoke(label, *args, **kwargs)
+        def inspect(label, arguments):
+            events.append(label)
+            path = self.host.evidence / (label + ".stdout.log")
+            path.write_text("synthetic inspection output", encoding="utf-8")
+            self.assertEqual("xcrun", arguments[0])
+            self.assertTrue(Path(arguments[-1]).is_file())
+            return path
+        with mock.patch.object(self.host, "invoke", side_effect=invoke), \
+                mock.patch.object(self.host, "inspect_tool", side_effect=inspect):
+            self.host.apple()
+        self.assertEqual(["xcframework-build", "xcframework-inspect", "xcframework-device-vtool",
+                          "xcframework-device-lipo", "xcframework-simulator-vtool", "xcframework-simulator-lipo",
+                          "xcode-project"], events)
+        sidecars = json.loads((self.host.evidence / "xcframework-sidecars.json").read_text())
+        self.assertEqual(4, len(sidecars["files"]))
+        for row in sidecars["files"]:
+            self.assertEqual("RETAINED", row["result"])
+            self.assertEqual((release / row["path"]).read_bytes(), (self.host.evidence / row["path"]).read_bytes())
+        for name in ("device", "simulator"):
+            record = json.loads((self.host.evidence / ("xcframework-" + name + "-binding.json")).read_text())
+            self.assertEqual(self.host.receipts["xcframework-build"]["id"], record["sourceInvocationId"])
+            self.assertEqual(hashlib.sha256(Path(record["path"]).read_bytes()).hexdigest(), record["sha256"])
+            self.assertEqual({"vtool", "lipo"}, set(record["nativeInspections"]))
+
+    def test_zero_xcode_exit_without_real_build_marker_does_not_start_swift_tests(self):
+        self.seed_apple_sidecars()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.host.apple()
+        labels = [row["component"] for row in self.host.rows]
+        self.assertIn("swift-warnings-build", labels)
+        self.assertNotIn("swift-unit-ui", labels)
+        self.assertEqual("FAIL", self.host.rows[-1]["result"])
+        self.assertEqual("swift-build-marker", self.host.rows[-1]["component"])
+        self.assertEqual([], self.cancel_calls)
+
+    def test_retained_exact_build_marker_allows_only_the_next_real_simulator_inspection(self):
+        self.seed_apple_sidecars()
+
+        def marker(record, receipt, evidence, phase):
+            if phase == "after-write" and record["purpose"] == "swift-warnings-build":
+                (evidence / "product.stdout.log").write_text("** BUILD SUCCEEDED **\n", encoding="utf-8")
+
+        self.next_mutation = marker
+
+        class ReachedInspection(Exception):
+            pass
+
+        with mock.patch.object(self.host, "inspect_tool", side_effect=ReachedInspection) as inspection, \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(ReachedInspection):
+                self.host.apple()
+        inspection.assert_called_once_with("simulators-before",
+                                           ["xcrun", "simctl", "list", "--json", "devices", "available"])
+        self.assertEqual("swift-build-marker", self.host.rows[-1]["component"])
+        self.assertEqual("PASS", self.host.rows[-1]["result"])
+        self.assertNotIn("swift-unit-ui", [row["component"] for row in self.host.rows])
+
+    def finalize(self, error=None):
+        with mock.patch.object(HOST, "source_snapshot", return_value=copy.deepcopy(self.source)), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return self.host.finalize(error)
+
+    def summary(self):
+        return json.loads((self.host.evidence / "host-summary.json").read_text(encoding="utf-8"))
+
+    def test_finalizer_seals_every_retained_file_before_emitting_safe_continuation(self):
+        self.assertTrue(self.invoke())
+        owned_log = self.state / "work/synthetic-failure.log"
+        owned_log.write_text("preserve this historical fixture diagnostic\n", encoding="utf-8")
+        self.assertEqual(0, self.finalize())
+        self.assertFalse((self.state / "work").exists())
+        self.assertEqual("preserve this historical fixture diagnostic\n",
+                         (self.host.evidence / "work-metadata/synthetic-failure.log").read_text())
+        summary = self.summary()
+        self.assertEqual("PASS", summary["result"])
+        self.assertTrue(summary["safeToContinue"])
+        self.assertEqual(self.source, summary["sourceAfter"])
+        self.assertEqual("NOT_EXECUTED_COMPONENT_REPLAY", summary["releaseGateMonolith"])
+        self.assertIn("NOT_VALIDATED", summary["externalAcceptance"])
+        self.assertEqual("safe_to_continue=true\n", self.output.read_text())
+        manifest = self.host.evidence / "manifest.sha256"
+        hashes = dict(line.split("  ", 1)[::-1] for line in manifest.read_text().splitlines())
+        files = {path.relative_to(self.host.evidence).as_posix(): path for path in self.host.evidence.rglob("*")
+                 if path.is_file() and path != manifest}
+        self.assertEqual(set(files), set(hashes))
+        for name, path in files.items():
+            self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), hashes[name])
+
+    def test_finalized_product_failure_stays_failed_while_later_host_admission_can_be_safe(self):
+        self.next_status = 7
+        self.assertFalse(self.invoke())
+        self.assertEqual(1, self.finalize())
+        summary = self.summary()
+        self.assertEqual("FAIL", summary["result"])
+        self.assertTrue(summary["safeToContinue"])
+        self.assertEqual("FAIL", summary["components"][0]["result"])
+        self.assertEqual(7, summary["components"][0]["exitCode"])
+        self.assertEqual("safe_to_continue=true\n", self.output.read_text())
+
+    def test_finalizer_without_owned_state_does_not_read_write_copy_or_delete_prior_attempt(self):
+        foreign = self.work / "previous owned-by-someone-else attempt"
+        foreign.mkdir()
+        sentinel = foreign / "context.json"
+        sentinel.write_text("not this driver's context", encoding="utf-8")
+        host = HOST.Host("windows-x64", foreign)
+        host.safe = True  # Even an optimistic caller cannot manufacture state ownership.
+        with mock.patch.object(host, "assert_owned_state", side_effect=AssertionError("must not inspect foreign state")), \
+                mock.patch.object(host, "write", side_effect=AssertionError("must not write foreign state")), \
+                mock.patch.object(host, "clean_outputs", side_effect=AssertionError("must not clean foreign state")):
+            self.assertEqual(1, host.finalize("source admission was rejected"))
+        self.assertFalse(host.safe)
+        self.assertEqual("not this driver's context", sentinel.read_text())
+        self.assertEqual(["context.json"], [path.name for path in foreign.iterdir()])
+        self.assertEqual("safe_to_continue=false\n", self.output.read_text())
+
+    def test_finalizer_retains_uncopied_raw_xcresults_even_after_product_or_parser_failure(self):
+        self.assertTrue(self.invoke())
+        bundle = self.state / "work/swift-ui/DerivedData/Logs/Test/FailedFixture.xcresult"
+        bundle.mkdir(parents=True)
+        raw = bundle / "opaque-result-data"
+        raw.write_bytes(b"synthetic failed xcresult bytes\n")
+        self.assertEqual(1, self.finalize("synthetic XCTest/parser failure"))
+        retained = self.host.evidence / "swift-xcresult/FailedFixture.xcresult/opaque-result-data"
+        self.assertEqual(b"synthetic failed xcresult bytes\n", retained.read_bytes())
+        self.assertFalse((self.state / "work").exists())
+        self.assertEqual("FAIL", self.summary()["result"])
+        self.assertTrue(self.summary()["safeToContinue"], "product failure and ownership failure are distinct")
+
+    def test_source_change_after_leaf_forbids_deletion_and_continuation(self):
+        self.assertTrue(self.invoke())
+        sentinel = self.state / "work/preserve-failure.txt"
+        sentinel.write_text("preserve until source/ownership is reconciled", encoding="utf-8")
+        changed = dict(self.source, status=" M tracked.txt\n")
+        with mock.patch.object(HOST, "source_snapshot", return_value=changed), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(1, self.host.finalize(None))
+        self.assertFalse(self.host.safe)
+        self.assertFalse(self.summary()["safeToContinue"])
+        self.assertEqual("preserve until source/ownership is reconciled", sentinel.read_text())
+        self.assertEqual("safe_to_continue=false\n", self.output.read_text())
+
+    def test_cleanup_failure_preserves_work_and_blocks_following_host(self):
+        self.assertTrue(self.invoke())
+        sentinel = self.state / "work/preserve.txt"
+        sentinel.write_text("retain incomplete cleanup", encoding="utf-8")
+        with mock.patch.object(self.host, "clean_outputs", side_effect=HOST.InfrastructureFailure("synthetic cleanup failure")):
+            self.assertEqual(1, self.finalize())
+        self.assertFalse(self.host.safe)
+        self.assertEqual("retain incomplete cleanup", sentinel.read_text())
+        self.assertIn("synthetic cleanup failure", self.summary()["error"])
+        self.assertEqual("safe_to_continue=false\n", self.output.read_text())
+
+    def test_postinvoke_lost_or_modified_evidence_and_unfinished_nested_leaf_cannot_be_sealed_safe(self):
+        self.assertTrue(self.invoke())
+        original = self.host.receipts["fixture-leaf"]
+        directory = Path(original["evidenceDirectory"])
+        stdout = directory / "product.stdout.log"
+        baseline = stdout.read_bytes()
+        for mode in ("missing-log", "modified-log", "deleted-leaf", "unfinished-nested"):
+            with self.subTest(mode=mode):
+                nested = None
+                renamed = None
+                if mode == "missing-log":
+                    stdout.unlink()
+                elif mode == "modified-log":
+                    stdout.write_bytes(b"later changed output, not original evidence\n")
+                elif mode == "deleted-leaf":
+                    renamed = self.state / "temporarily preserved original evidence"
+                    directory.rename(renamed)
+                else:
+                    nested = self.host.evidence / ("e" * 32)
+                    nested.mkdir()
+                    (nested / "start.json").write_text('{"schema":1}', encoding="utf-8")
+                with self.assertRaises((ValueError, OSError, KeyError)):
+                    self.host.validate_completed_leaves()
+                if renamed:
+                    renamed.rename(directory)
+                if nested:
+                    shutil.rmtree(nested)
+                stdout.write_bytes(baseline)
+        # A full finalizer failure must publish false, not merely expose a helper exception.
+        stdout.unlink()
+        self.assertEqual(1, self.finalize())
+        self.assertFalse(self.host.safe)
+        self.assertFalse(self.summary()["safeToContinue"])
+        self.assertTrue((self.state / "work").exists())
+        self.assertEqual("safe_to_continue=false\n", self.output.read_text())
+
+    def test_manifest_seal_failure_never_publishes_true_or_rewrites_earlier_summary(self):
+        self.assertTrue(self.invoke())
+        original_digest = HOST.digest
+
+        def fail_final_summary_hash(path):
+            if Path(path).name == "host-summary.json":
+                raise OSError("synthetic manifest write/hash failure")
+            return original_digest(path)
+
+        with mock.patch.object(HOST, "digest", side_effect=fail_final_summary_hash):
+            self.assertEqual(1, self.finalize())
+        self.assertFalse(self.host.safe)
+        # Historical optimistic content is not silently rewritten. The failed seal
+        # and false workflow output are mandatory before any later host may run.
+        self.assertEqual("PASS", self.summary()["result"])
+        self.assertEqual("safe_to_continue=false\n", self.output.read_text())
+
+    def test_replaced_state_identity_cannot_be_finalized_or_overwritten(self):
+        before = {path.relative_to(self.state).as_posix(): path.read_bytes()
+                  for path in self.state.rglob("*") if path.is_file()}
+        self.host.state_identity = (0, 0)
+        self.assertEqual(1, self.finalize())
+        after = {path.relative_to(self.state).as_posix(): path.read_bytes()
+                 for path in self.state.rglob("*") if path.is_file()}
+        self.assertEqual(before, after)
+        self.assertFalse(self.host.safe)
+        self.assertEqual("safe_to_continue=false\n", self.output.read_text())
+
+    def initialize_boundary(self, host, status=0, mutation=None):
+        def initialize(command, **kwargs):
+            self.assertEqual([sys.executable, str(host.runner), "init"], command[:3])
+            options = dict(zip(command[3::2], command[4::2]))
+            self.assertEqual({"--root": str(self.repo), "--state": str(host.state),
+                              "--expected-commit": host.admission["commit"], "--host": host.role}, options)
+            host.state.mkdir()
+            (host.state / "evidence").mkdir()
+            home = host.state / "gradle-home"
+            home.mkdir()
+            (home / "gradle.properties").write_bytes(b"synthetic bounded-home policy\n")
+            context = copy.deepcopy(self.context)
+            context["gradleHome"] = str(home)
+            if mutation:
+                mutation(context)
+            (host.state / "context.json").write_text(json.dumps(context), encoding="utf-8")
+            return subprocess.CompletedProcess(command, status)
+        return initialize
+
+    def test_initialization_claims_only_fresh_context_bound_to_source_host_and_private_home(self):
+        state = self.work / "fresh initialized state Ω"
+        host = HOST.Host("windows-x64", state)
+        host.admission = dict(self.host.admission)
+        with mock.patch.object(HOST.subprocess, "run", side_effect=self.initialize_boundary(host)), \
+                mock.patch.object(HOST, "source_snapshot", return_value=copy.deepcopy(self.source)):
+            host.initialize()
+        self.assertTrue(host.owns_state)
+        self.assertEqual(host.identity(state), host.state_identity)
+        self.assertEqual(host.identity(state / "work"), host.work_identity)
+        self.assertEqual(self.source, host.context["source"])
+        self.assertEqual(hashlib.sha256((state / "context.json").read_bytes()).hexdigest(), host.context_hash)
+        self.assertTrue((state / "evidence/admission.json").is_file())
+        self.assertFalse(host.safe, "initialization is not successful native ownership-control execution")
+
+    def test_initialization_rejects_malformed_context_and_preserves_failed_partial_state(self):
+        changes = (("schema", True), ("root", str(self.work)), ("host", "macos-x64"),
+                   ("expectedCommit", "7" * 40), ("tree", "8" * 40), ("id", "invalid"),
+                   ("gradleHome", str(self.work / "unrelated-home")))
+        for index, (field, value) in enumerate(changes):
+            with self.subTest(field=field):
+                host = HOST.Host("windows-x64", self.work / ("bad-context-" + str(index)))
+                host.admission = dict(self.host.admission)
+                with mock.patch.object(HOST.subprocess, "run", side_effect=self.initialize_boundary(
+                        host, mutation=lambda context: context.update({field: value}))), \
+                        mock.patch.object(HOST, "source_snapshot", return_value=copy.deepcopy(self.source)):
+                    with self.assertRaises(ValueError):
+                        host.initialize()
+                self.assertFalse(host.owns_state)
+                self.assertTrue((host.state / "context.json").is_file())
+                self.assertFalse((host.state / "work").exists())
+        host = HOST.Host("windows-x64", self.work / "failed partial context")
+        host.admission = dict(self.host.admission)
+        with mock.patch.object(HOST.subprocess, "run", side_effect=self.initialize_boundary(host, status=125)):
+            with self.assertRaises(ValueError):
+                host.initialize()
+        before = (host.state / "context.json").read_bytes()
+        self.assertFalse(host.owns_state)
+        self.assertEqual(1, host.finalize("native init failed"))
+        self.assertEqual(before, (host.state / "context.json").read_bytes())
+        self.assertEqual([], list((host.state / "evidence").iterdir()))
+
+    def test_initialization_never_reuses_an_existing_state(self):
+        before = (self.state / "context.json").read_bytes()
+        host = HOST.Host("windows-x64", self.state)
+        host.admission = dict(self.host.admission)
+        with mock.patch.object(HOST.subprocess, "run") as controller:
+            with self.assertRaises(ValueError):
+                host.initialize()
+        controller.assert_not_called()
+        self.assertFalse(host.owns_state)
+        self.assertEqual(before, (self.state / "context.json").read_bytes())
+
+    def test_run_blocks_product_tasks_when_native_controller_controls_fail_and_keeps_failure_evidence(self):
+        # Recreate only this test's disposable setup state through the real
+        # initialize path. No real source checkout or user's state is removed.
+        shutil.rmtree(self.state)
+        self.host = HOST.Host("windows-x64", self.state)
+        admission = {"commit": self.source["commit"], "tree": self.source["tree"],
+                     "ref": HOST.REF, "role": "windows-x64"}
+        self.host.admission = admission
+        event = self.work / "event.json"
+        event.write_text("{}", encoding="utf-8")
+        self.next_status = 7
+        with mock.patch.dict(os.environ, {"GITHUB_EVENT_PATH": str(event)}), \
+                mock.patch.object(HOST, "admit", return_value=admission), \
+                mock.patch.object(HOST.subprocess, "run", side_effect=self.initialize_boundary(self.host)), \
+                mock.patch.object(HOST, "source_snapshot", return_value=copy.deepcopy(self.source)), \
+                mock.patch.object(self.host, "prerequisites"), \
+                mock.patch.object(self.host, "setup_sdk") as sdk, \
+                mock.patch.object(self.host, "windows") as products, \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(1, self.host.run())
+        sdk.assert_not_called()
+        products.assert_not_called()
+        self.assertEqual(1, len(self.calls))
+        command = self.calls[0]["command"]
+        self.assertEqual("executor-native-controls", command[command.index("--purpose") + 1])
+        arguments = command[command.index("--") + 1:]
+        self.assertEqual([sys.executable, "scripts/tests/run-audit-command-test.py", "--expected-host", "windows-x64",
+                          "--evidence-dir", str(self.host.evidence / "native-controls")], arguments)
+        self.assertFalse(self.host.safe)
+        self.assertEqual("FAIL", self.summary()["result"])
+        self.assertFalse(self.summary()["safeToContinue"])
+        self.assertNotIn("safe_to_continue=true", self.output.read_text())
+
+    def simulator_inspection(self, states):
+        values = iter(states)
+
+        def inspect(label, command):
+            self.assertEqual(["xcrun", "simctl", "list", "--json", "devices", "available"], command)
+            path = self.host.evidence / (label + ".json")
+            path.write_text(json.dumps({"devices": {"synthetic-runtime": [
+                {"udid": self.host.simulator["udid"], "state": next(values)},
+                {"udid": "22222222-2222-2222-2222-222222222222", "state": "Booted"}]}}), encoding="utf-8")
+            return path
+        return inspect
+
+    def test_only_exact_job_booted_simulator_is_shutdown_and_original_state_is_rechecked(self):
+        udid = "11111111-1111-1111-1111-111111111111"
+        self.host.simulator = {"udid": udid, "stateBefore": "Shutdown"}
+        with mock.patch.object(self.host, "inspect_tool", side_effect=self.simulator_inspection(["Booted", "Shutdown"])) as inspect:
+            self.host.shutdown_simulator()
+        self.assertEqual(2, inspect.call_count)
+        command = self.calls[0]["command"]
+        self.assertEqual(["xcrun", "simctl", "shutdown", udid], command[command.index("--") + 1:])
+        self.assertEqual("Shutdown", self.host.simulator["stateAfter"])
+
+    def test_preexisting_booted_or_already_restored_simulator_is_never_blindly_stopped(self):
+        self.host.simulator = {"udid": "11111111-1111-1111-1111-111111111111", "stateBefore": "Booted"}
+        with mock.patch.object(self.host, "inspect_tool") as inspect:
+            self.host.shutdown_simulator()
+        inspect.assert_not_called()
+        self.assertEqual([], self.calls)
+        self.host.simulator["stateBefore"] = "Shutdown"
+        with mock.patch.object(self.host, "inspect_tool", side_effect=self.simulator_inspection(["Shutdown", "Shutdown"])):
+            self.host.shutdown_simulator()
+        self.assertEqual([], self.calls)
+        self.assertEqual("Shutdown", self.host.simulator["stateAfter"])
+
+    def test_failed_simulator_shutdown_blocks_final_continuation(self):
+        self.host.simulator = {"udid": "11111111-1111-1111-1111-111111111111", "stateBefore": "Shutdown"}
+        self.next_status = 7
+        with mock.patch.object(self.host, "inspect_tool", side_effect=self.simulator_inspection(["Booted"])):
+            self.assertEqual(1, self.finalize())
+        self.assertFalse(self.host.safe)
+        self.assertEqual("FAIL", self.summary()["result"])
+        self.assertFalse(self.summary()["safeToContinue"])
+        self.assertIn("simulator shutdown failed", self.summary()["error"])
+        self.assertEqual("safe_to_continue=false\n", self.output.read_text())
+
+
+    def test_strict_tree_scan_counts_directories_as_well_as_files(self):
+        source = self.state / "work/entry-bound"
+        (source / "first/second/third").mkdir(parents=True)
+        with mock.patch.object(HOST, "MAX_SCAN_ENTRIES", 2):
+            with self.assertRaisesRegex(ValueError, "traversal exceeds its entry bound"):
+                list(HOST.strict_walk(source))
+        with mock.patch.object(HOST, "MAX_SCAN_ENTRIES", 3):
+            self.assertEqual(4, len(list(HOST.strict_walk(source))))
+        self.assertTrue((source / "first/second/third").is_dir())
+
+    def test_required_work_scan_failure_preserves_originals_and_blocks_continuation(self):
+        self.assertTrue(self.invoke())
+        hidden = self.state / "work/unreadable"
+        hidden.mkdir()
+        sentinel = hidden / "required.log"
+        sentinel.write_bytes(b"required diagnostic must not disappear\n")
+        original = os.scandir
+
+        def scan(path):
+            if not isinstance(path, int) and Path(path) == hidden:
+                raise PermissionError("fixture required work scan failed")
+            return original(path)
+
+        with mock.patch.object(os, "scandir", side_effect=scan):
+            self.assertEqual(1, self.finalize())
+        self.assertFalse(self.host.safe)
+        self.assertFalse(self.summary()["safeToContinue"])
+        self.assertEqual(b"required diagnostic must not disappear\n", sentinel.read_bytes())
+        self.assertIn("fixture required work scan failed", self.summary()["error"])
+        self.assertEqual("safe_to_continue=false\n", self.output.read_text())
+
+    def test_final_seal_scan_error_cannot_emit_safe_continuation(self):
+        self.assertTrue(self.invoke())
+        hidden = self.host.evidence / "unreadable-final-evidence"
+        hidden.mkdir()
+        sentinel = hidden / "required.log"
+        sentinel.write_bytes(b"original retained evidence\n")
+        original = os.scandir
+
+        def scan(path):
+            if not isinstance(path, int) and Path(path) == hidden:
+                raise PermissionError("fixture final seal scan failed")
+            return original(path)
+
+        with mock.patch.object(os, "scandir", side_effect=scan):
+            self.assertEqual(1, self.finalize())
+        self.assertFalse(self.host.safe)
+        self.assertEqual(b"original retained evidence\n", sentinel.read_bytes())
+        self.assertFalse((self.host.evidence / "manifest.sha256").exists())
+        self.assertEqual("safe_to_continue=false\n", self.output.read_text())
+
+    def test_retention_and_publication_scans_reject_unreadable_root_or_descendant(self):
+        for operation in ("retention", "publication"):
+            for position in ("root", "descendant"):
+                with self.subTest(operation=operation, position=position):
+                    source = self.state / "work" / (operation + "-" + position)
+                    hidden = source / "unreadable"
+                    hidden.mkdir(parents=True)
+                    sentinel = hidden / "required.xml"
+                    sentinel.write_bytes(b"preserve original required evidence\n")
+                    denied = source if position == "root" else hidden
+                    original = os.scandir
+
+                    def scan(path):
+                        if not isinstance(path, int) and Path(path) == denied:
+                            raise PermissionError("fixture required evidence scan failed")
+                        return original(path)
+
+                    with mock.patch.object(os, "scandir", side_effect=scan):
+                        with self.assertRaisesRegex(PermissionError, "fixture required evidence scan failed"):
+                            if operation == "retention":
+                                self.host.retain_tree(source, self.host.evidence / (operation + "-" + position))
+                            else:
+                                self.host.retain_publication(source, operation + "-" + position)
+                    self.assertEqual(b"preserve original required evidence\n", sentinel.read_bytes())
+                    self.assertFalse((self.host.evidence / (operation + "-" + position)).exists())
+                    self.assertFalse((self.host.evidence / (operation + "-" + position + "-manifest.json")).exists())
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

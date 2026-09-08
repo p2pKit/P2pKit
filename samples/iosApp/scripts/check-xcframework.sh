@@ -22,8 +22,22 @@ set -e
 cd "${SRCROOT:-$(dirname "$0")/..}/../.."
 
 echo "→ V0.4-PROVENANCE: ensuring P2pKitShared XCFramework is up to date..."
-sh ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance \
-  -q --console=plain
+if [ -n "${P2PKIT_GRADLE_EXECUTOR:-}" ]; then
+    case "$P2PKIT_GRADLE_EXECUTOR" in
+        /*) ;;
+        *) echo "error: P2PKIT_GRADLE_EXECUTOR must be an absolute executable path" >&2; exit 1 ;;
+    esac
+    [ -x "$P2PKIT_GRADLE_EXECUTOR" ] || {
+        echo "error: P2PKIT_GRADLE_EXECUTOR is not executable" >&2
+        exit 1
+    }
+    "$P2PKIT_GRADLE_EXECUTOR" --cwd "$(pwd -P)" --wrapper "$(pwd -P)/gradlew" \
+        --purpose xcode-provenance -- \
+        :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance -q --console=plain
+else
+    sh ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance \
+      -q --console=plain
+fi
 
 XCF_DIR="library/p2p-transport-lan/build/XCFrameworks/release"
 XCF_COMMIT_FILE="$XCF_DIR/BUILD_COMMIT.txt"

@@ -154,9 +154,22 @@ ensure_ios_xcframework_present() {
     fi
 
     echo "[ios-run] Bootstrapping the missing P2pKitShared XCFramework..."
-    (cd "$repo_root" && run_ios_mutation sh ./gradlew \
-        :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance \
-        --console=plain)
+    (
+        cd "$repo_root"
+        if [[ -n "${P2PKIT_GRADLE_EXECUTOR:-}" ]]; then
+            [[ "$P2PKIT_GRADLE_EXECUTOR" == /* && -x "$P2PKIT_GRADLE_EXECUTOR" ]] || {
+                echo "[ios-run] FATAL: P2PKIT_GRADLE_EXECUTOR must be an absolute executable path." >&2
+                exit 1
+            }
+            run_ios_mutation "$P2PKIT_GRADLE_EXECUTOR" \
+                --cwd "$repo_root" --wrapper "$repo_root/gradlew" --purpose ios-bootstrap -- \
+                :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance --console=plain
+        else
+            run_ios_mutation sh ./gradlew \
+                :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance \
+                --console=plain
+        fi
+    )
     if [[ ! -f "$device_binary" || ! -f "$simulator_binary" ]]; then
         echo "[ios-run] FATAL: XCFramework verification completed without both required slices." >&2
         return 1
@@ -177,6 +190,23 @@ run_ios_mutation() {
     else
         # Helpers may also operate on isolated fixtures when sourced by tests.
         "$@"
+    fi
+}
+
+# Hosted audit runs bound compilation separately from XCTest's existing
+# non-parallel test policy. Unset behavior is the original Xcode invocation.
+run_ios_xcodebuild() {
+    if [[ -n "${P2PKIT_XCODE_JOBS:-}" ]]; then
+        case "$P2PKIT_XCODE_JOBS" in
+            1|2) ;;
+            *)
+                echo "[ios-run] FATAL: P2PKIT_XCODE_JOBS must be 1 or 2." >&2
+                return 2
+                ;;
+        esac
+        run_ios_mutation xcodebuild -jobs "$P2PKIT_XCODE_JOBS" "$@"
+    else
+        run_ios_mutation xcodebuild "$@"
     fi
 }
 
@@ -264,7 +294,7 @@ main() {
     (cd "$project_dir" && run_ios_mutation xcodegen generate) | tail -3
 
     echo "[ios-run] Building iOS app for simulator UDID $udid..."
-    if ! run_ios_mutation xcodebuild \
+    if ! run_ios_xcodebuild \
         -project "$project_dir/p2pkit-sample.xcodeproj" \
         -scheme "$scheme" \
         -configuration Debug \

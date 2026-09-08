@@ -1,0 +1,999 @@
+#!/usr/bin/env python3
+"""Recording-boundary controls for the real consumer shell gate and metadata helper.
+
+These tests use synthetic local publication bytes and fake Gradle/Xcode/curl
+boundaries. They do not claim Gradle resolution, real publication shape, Apple
+compilation, artifact authenticity, or native Windows executor ownership.
+The explicit cancellation producer is consumed by the separate native executor
+selftest; producing its fixture is not a cancellation or cleanup verdict.
+"""
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+import uuid
+import xml.etree.ElementTree as ET
+
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+import audit_processes as processes
+
+
+OWNERSHIP_FIELDS = (
+    "P2PKIT_AUDIT_JOB_ID", "P2PKIT_AUDIT_OWNERSHIP_CHAIN", "P2PKIT_AUDIT_OWNERSHIP_DOMAINS",
+    "P2PKIT_AUDIT_STATE_DIR", "GRADLE_USER_HOME", "P2PKIT_AUDIT_INVOCATION",
+    "P2PKIT_AUDIT_FIXTURE_ANCESTOR",
+)
+NAMESPACE = "https://schema.gradle.org/dependency-verification"
+GROUP = "io.github.apdelrahman1911"
+VERSION = "9.11.0-SNAPSHOT"
+EXTERNAL_BYTES = b"independently reviewed external fixture bytes\n"
+EXTERNAL_SHA256 = hashlib.sha256(EXTERNAL_BYTES).hexdigest()
+CONSUMER_REPORT_BYTES = b'{"fixtureOnly":true,"result":"synthetic-consumer-report-not-compilation"}\n'
+# This fixture expectation is deliberately not imported from the implementation.
+EXPECTED_PUBLICATIONS = [
+    ("p2p-core", ".jar"), ("p2p-core-jvm", ".jar"), ("p2p-core-android", ".aar"),
+    ("p2p-transport-lan", ".jar"), ("p2p-transport-lan-jvm", ".jar"), ("p2p-transport-lan-android", ".aar"),
+    ("p2p-network-provisioning-android", ".jar"), ("p2p-network-provisioning-android-android", ".aar"),
+    ("p2p-network-provisioning-desktop", ".jar"),
+    ("p2p-core-iosarm64", ".klib"), ("p2p-transport-lan-iosarm64", ".klib"),
+    ("p2p-core-iossimulatorarm64", ".klib"), ("p2p-transport-lan-iossimulatorarm64", ".klib"),
+    ("p2p-core-iosx64", ".klib"), ("p2p-transport-lan-iosx64", ".klib"),
+]
+EXPECTED_TASKS = [
+    ":coreJvm:compileKotlin", ":coreJvm:compileJava", ":lanJvm:compileKotlin", ":desktopJvm:compileKotlin",
+    ":androidConsumer:compileDebugKotlin", ":androidConsumer:processDebugManifest", ":kmpConsumer:compileKotlinJvm",
+    ":kmpConsumer:compileAndroidMain", ":kmpConsumer:compileKotlinIosSimulatorArm64",
+    ":kmpConsumer:linkDebugFrameworkIosSimulatorArm64",
+]
+PERMISSIONS = [
+    "android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE",
+    "android.permission.ACCESS_WIFI_STATE", "android.permission.CHANGE_WIFI_MULTICAST_STATE",
+]
+POM_DEPENDENCIES = {
+    "p2p-core-jvm": [
+        ["kotlinx-coroutines-core-jvm", "compile"], ["kotlinx-io-core-jvm", "compile"],
+        ["kotlinx-serialization-json-jvm", "runtime"], ["cryptography-core-jvm", "runtime"],
+        ["cryptography-provider-jdk-jvm", "runtime"], ["bcprov-jdk18on", "runtime"],
+    ],
+    "p2p-transport-lan-jvm": [
+        ["p2p-core-jvm", "compile"], ["kotlinx-coroutines-core-jvm", "compile"], ["jmdns", "runtime"],
+    ],
+    "p2p-network-provisioning-android-android": [["p2p-core-android", "compile"], ["kotlinx-coroutines-core-jvm", "compile"]],
+    "p2p-network-provisioning-desktop": [["p2p-core-jvm", "compile"], ["kotlinx-coroutines-core-jvm", "compile"]],
+}
+
+BOUNDARY = r'''#!/usr/bin/env python3
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+PUBLICATIONS = __PUBLICATIONS__
+DEPS = __DEPS__
+PERMISSIONS = __PERMISSIONS__
+GROUP = __GROUP__
+VERSION = __VERSION__
+EXTERNAL_SHA256 = __EXTERNAL_SHA256__
+OWNERSHIP_FIELDS = __OWNERSHIP_FIELDS__
+CONSUMER_REPORT_BYTES = __CONSUMER_REPORT_BYTES__
+
+def record(kind, **fields):
+    with open(os.environ["FAKE_CALLS"], "a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"kind": kind, "ownership": {
+            name: os.environ.get(name) for name in OWNERSHIP_FIELDS}, **fields}, ensure_ascii=False) + "\n")
+
+def snapshot(root):
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(root), *args])
+    return {
+        "commit": git("rev-parse", "HEAD").decode().strip(),
+        "tree": git("rev-parse", "HEAD^{tree}").decode().strip(),
+        "status": git("status", "--porcelain=v1", "--untracked-files=all").decode(),
+        "diffSha256": hashlib.sha256(git("--no-pager", "diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD", "--")).hexdigest(),
+    }
+
+def pom(artifact):
+    deps = [list(pair) for pair in DEPS.get(artifact, [])]
+    for dependency in deps:
+        if os.environ.get("FAKE_BAD_SCOPE") == artifact + "|" + dependency[0]:
+            dependency[1] = "runtime" if dependency[1] == "compile" else "compile"
+    if os.environ.get("FAKE_TEST_ONLY_LAN") and artifact == "p2p-network-provisioning-desktop":
+        deps.append(["p2p-transport-lan-jvm", "runtime"])
+    group = "invalid.fixture" if os.environ.get("FAKE_BAD_COORDINATE") == artifact else GROUP
+    lines = ["<project>", f"<groupId>{group}</groupId>", f"<artifactId>{artifact}</artifactId>",
+             f"<version>{VERSION}</version>", "<dependencies>"]
+    for name, scope in deps:
+        lines.extend(["<dependency>", f"<artifactId>{name}</artifactId>", f"<scope>{scope}</scope>", "</dependency>"])
+    return "\n".join(lines + ["</dependencies>", "</project>", ""])
+
+def publish(repo):
+    for artifact, suffix in PUBLICATIONS:
+        folder = repo / GROUP.replace(".", "/") / artifact / VERSION
+        folder.mkdir(parents=True, exist_ok=True)
+        for ending in [suffix, "-sources.jar", "-javadoc.jar"]:
+            name = f"{artifact}-{VERSION}{ending}"
+            (folder / name).write_bytes(("synthetic fixture artifact " + name + "\n").encode())
+        (folder / f"{artifact}-{VERSION}.pom").write_text(pom(artifact))
+        component = artifact
+        if artifact.startswith("p2p-core-"):
+            component = "p2p-core"
+        elif artifact.startswith("p2p-transport-lan-"):
+            component = "p2p-transport-lan"
+        elif artifact == "p2p-network-provisioning-android-android":
+            component = "p2p-network-provisioning-android"
+        (folder / f"{artifact}-{VERSION}.module").write_text(json.dumps({
+            "formatVersion": "1.1", "component": {"group": GROUP, "module": component, "version": VERSION},
+        }))
+        (folder.parent / "maven-metadata-local.xml").write_text("<metadata/>\n")
+        (folder / "maven-metadata-local.xml").write_text("<metadata/>\n")
+    if os.environ.get("FAKE_MISSING_POM"):
+        artifact = os.environ["FAKE_MISSING_POM"]
+        (repo / GROUP.replace(".", "/") / artifact / VERSION / f"{artifact}-{VERSION}.pom").unlink()
+    if os.environ.get("FAKE_EXTRA_ARTIFACT"):
+        (repo / GROUP.replace(".", "/") / "p2p-core-jvm" / VERSION / f"p2p-core-jvm-{VERSION}-debug.jar").write_bytes(b"unapproved variant")
+    if os.environ.get("FAKE_EXTRA_GROUP"):
+        (repo / "unapproved" / "group").mkdir(parents=True)
+    if os.environ.get("FAKE_MISSING_ARTIFACT"):
+        (repo / GROUP.replace(".", "/") / "p2p-core-iosx64" / VERSION / f"p2p-core-iosx64-{VERSION}.klib").unlink()
+    if os.environ.get("FAKE_SYMLINK_ARTIFACT"):
+        target = repo / GROUP.replace(".", "/") / "p2p-core-iosx64" / VERSION / f"p2p-core-iosx64-{VERSION}.klib"
+        target.unlink()
+        target.symlink_to(os.environ["FAKE_CALLS"])
+
+def build(args):
+    fixture = Path(args[args.index("-p") + 1])
+    report = fixture / "kmpConsumer/build/reports/consumer-fixture.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_bytes(CONSUMER_REPORT_BYTES)
+    if not os.environ.get("FAKE_MISSING_FRAMEWORK"):
+        framework = fixture / "kmpConsumer/build/bin/iosSimulatorArm64/debugFramework/P2pKitConsumer.framework/P2pKitConsumer"
+        framework.parent.mkdir(parents=True, exist_ok=True)
+        framework.write_bytes(b"synthetic Mach-O stand-in, not a real Apple binary")
+    manifest = fixture / "androidConsumer/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    permissions = [name for name in PERMISSIONS if name != os.environ.get("FAKE_OMIT_PERMISSION")]
+    manifest.write_text("<manifest>\n" + "\n".join(f'<uses-permission android:name="{name}" />' for name in permissions) + "\n</manifest>\n")
+    if os.environ.get("FAKE_TAMPER_EXTERNAL"):
+        metadata = fixture / "gradle/verification-metadata.xml"
+        metadata.chmod(0o600)
+        metadata.write_text(metadata.read_text().replace(EXTERNAL_SHA256, "0" * 64))
+    if os.environ.get("FAKE_TAMPER_LOCAL"):
+        repo = Path(next(arg.split("=", 1)[1] for arg in args if arg.startswith("-PconsumerRepo=")))
+        (repo / GROUP.replace(".", "/") / "p2p-core-jvm" / VERSION / f"p2p-core-jvm-{VERSION}.jar").write_bytes(b"changed after prepared allowlist")
+
+def main():
+    name, args = Path(sys.argv[0]).name, sys.argv[1:]
+    if name == "git":
+        record("git", argv=args, cwd=os.getcwd())
+        return subprocess.run([os.environ["FAKE_REAL_GIT"], *args]).returncode
+    if name == "executor with spaces":
+        parser = argparse.ArgumentParser()
+        for option in ["cwd", "wrapper", "purpose", "receipt"]:
+            parser.add_argument("--" + option, required=True)
+        before_separator = args.index("--")
+        request = parser.parse_args(args[:before_separator])
+        arguments = args[before_separator + 1:]
+        record("executor", argv=args, cwd=os.getcwd(), requested=arguments, purpose=request.purpose)
+        if os.environ.get("FAKE_EXECUTOR_FAILURE") == request.purpose:
+            return 125
+        before = snapshot(request.cwd)
+        product = subprocess.run([request.wrapper, *arguments], cwd=request.cwd).returncode
+        stop = subprocess.run([request.wrapper, "--stop"], cwd=request.cwd).returncode
+        after = snapshot(request.cwd)
+        result = 125 if stop != 0 or before != after else product
+        receipt = {
+            "schema": 1, "id": request.purpose + "-fixture-leaf", "purpose": request.purpose,
+            "requestedArgv": arguments, "cwd": request.cwd, "wrapper": request.wrapper,
+            "sourceBefore": before, "sourceAfter": after, "sourceUnchanged": before == after,
+            "productExitCode": product, "stopExitCode": stop, "finalExitCode": result,
+            "ownedSurvivors": [], "errors": [] if result != 125 else ["fixture infrastructure failure"],
+        }
+        if request.purpose == "consumer-publish" and os.environ.get("FAKE_RECEIPT_MUTATION"):
+            receipt.update(json.loads(os.environ["FAKE_RECEIPT_MUTATION"]))
+        if os.environ.get("FAKE_MISSING_RECEIPT") != request.purpose:
+            with open(request.receipt, "x", encoding="utf-8") as stream:
+                json.dump(receipt, stream)
+        return result
+    if name == "gradlew":
+        stopping = args and args[0] == "--stop"
+        record("gradle-stop" if stopping else "gradle", argv=args, cwd=os.getcwd(), home=os.environ.get("GRADLE_USER_HOME"))
+        if stopping:
+            native_stop = ["--stop", "--console=plain", "--no-parallel", "--max-workers=2",
+                           "-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8"]
+            assert args == ["--stop"] or args == native_stop, args
+            print("SYNTHETIC CONSUMER WRAPPER STOP", flush=True)
+            return int(os.environ.get("FAKE_STOP_EXIT", "0"))
+        if "publishToMavenLocal" in args:
+            repo = Path(next(arg.split("=", 1)[1] for arg in args if arg.startswith("-Dmaven.repo.local=")))
+            publish(repo)
+            if os.environ.get("FAKE_CONSUMER_OWNERSHIP_READY"):
+                # Only the explicit native-selftest producer selects this mode.
+                # Inherit the actual fixture environment without repairing it:
+                # the native enclosing scope must detect any lost ancestor.
+                worker = "import json, os, pathlib, signal, sys, time\nfields = " + repr(OWNERSHIP_FIELDS) + "\n" + """
+ready = pathlib.Path(sys.argv[1])
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+record = {"schema": 1, "kind": "consumer-ownership-cancellation-fixture",
+          "workerPid": os.getpid(), "producerPid": int(sys.argv[2]),
+          "ownership": {name: os.environ.get(name) for name in fields}}
+pending = ready.with_name(ready.name + ".pending")
+with pending.open("x", encoding="utf-8") as stream:
+    stream.write(json.dumps(record) + "\\n")
+    stream.flush()
+    os.fsync(stream.fileno())
+os.link(pending, ready)
+pending.unlink()
+time.sleep(120)
+"""
+                ready = Path(os.environ["FAKE_CONSUMER_OWNERSHIP_READY"])
+                subprocess.Popen([sys.executable, "-c", worker, str(ready), str(os.getpid())],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+                deadline = time.monotonic() + 10
+                while not ready.exists():
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("cancellation fixture worker did not become ready")
+                    time.sleep(.02)
+                time.sleep(120)
+                raise AssertionError("native cancellation did not stop the long-lived consumer fixture")
+            return int(os.environ.get("FAKE_PUBLISH_EXIT", "0"))
+        build(args)
+        return int(os.environ.get("FAKE_BUILD_EXIT", "0"))
+    if name == "xcrun":
+        record("xcrun", argv=args)
+        print("platform " + os.environ.get("FAKE_PLATFORM", "IOSSIMULATOR"))
+        print("minos " + os.environ.get("FAKE_MINOS", "14.0"))
+        return 0
+    if name == "curl":
+        record("curl", argv=args)
+        target = Path(args[args.index("--output") + 1])
+        target.write_text(pom(target.parent.parent.name))
+        return 0
+    raise AssertionError("unexpected fake tool: " + name)
+
+sys.exit(main())
+'''
+
+
+def source_snapshot(root, env):
+    def git(*arguments):
+        return subprocess.check_output(["git", "-C", str(root), *arguments], env=env)
+    return {
+        "commit": git("rev-parse", "HEAD").decode().strip(),
+        "tree": git("rev-parse", "HEAD^{tree}").decode().strip(),
+        "status": git("status", "--porcelain=v1", "--untracked-files=all").decode(),
+        "diffSha256": hashlib.sha256(git("--no-pager", "diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD", "--")).hexdigest(),
+    }
+
+
+def ownership_observation(environment):
+    return {name: environment.get(name) for name in OWNERSHIP_FIELDS}
+
+
+def write_fixture_record(path, value):
+    with path.open("x", encoding="utf-8") as stream:
+        stream.write(json.dumps(value, indent=2) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+class ConsumerGateTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="p2pkit consumer boundary ")
+        if getattr(self, "fixture_evidence", None) is None:
+            self.addCleanup(self.temporary.cleanup)
+        else:
+            # Native cancellation may end this producer without finally. Its
+            # enclosing fixture owns TMPDIR and removes these bytes only after
+            # actual worker drain and evidence retention, never on a fake verdict.
+            self.temporary._finalizer.detach()
+        self.base = Path(self.temporary.name).resolve()
+        if getattr(self, "fixture_evidence", None) is not None:
+            write_fixture_record(self.fixture_evidence / "fixture-created.json", {
+                "schema": 1, "fixtureBase": str(self.base),
+                "retention": "Native enclosing fixture owns this TMPDIR; drain before disposing generated bytes.",
+            })
+        self.root = self.base / "checkout λ with spaces"
+        self.tools = self.base / "tool boundaries with spaces"
+        self.state = self.base / "audit state with spaces"
+        self.work_root = self.state / "work"
+        self.work = self.work_root / "borrowed consumer λ directory"
+        self.calls_file = getattr(self, "fixture_evidence", self.base) / "calls.jsonl"
+        for path in (self.root / "scripts", self.root / "gradle", self.tools, self.state, self.work_root,
+                     self.base / "temporary"):
+            path.mkdir(parents=True)
+        for name in ("check-published-consumers.sh", "prepare-audit-consumer-metadata.py", "check-audit-receipt.py"):
+            shutil.copy2(ROOT / "scripts" / name, self.root / "scripts" / name)
+        (self.root / "gradle.properties").write_text(
+            f"GROUP={GROUP}\nVERSION_NAME={VERSION}\nLATEST_PUBLISHED_VERSION={VERSION.removesuffix('-SNAPSHOT')}\nIOS_MIN_VERSION=14.0\n"
+        )
+        (self.root / "gradle/libs.versions.toml").write_text('[versions]\nkotlin = "91.0.0"\nagp = "92.0.0"\n')
+        self.reviewed = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            f'<verification-metadata xmlns="{NAMESPACE}">\n'
+            '   <configuration>\n      <verify-metadata>true</verify-metadata>\n'
+            '      <verify-signatures>false</verify-signatures>\n   </configuration>\n   <components>\n'
+            '      <component group="org.example.reviewed" name="external" version="1.0">\n'
+            '         <artifact name="external-1.0.jar">\n'
+            f'            <sha256 value="{EXTERNAL_SHA256}" origin="reviewed fixture"/>\n'
+            '         </artifact>\n      </component>\n   </components>\n</verification-metadata>\n'
+        ).encode()
+        (self.root / "gradle/verification-metadata.xml").write_bytes(self.reviewed)
+        code = BOUNDARY
+        for key, value in {
+            "PUBLICATIONS": EXPECTED_PUBLICATIONS, "DEPS": POM_DEPENDENCIES, "PERMISSIONS": PERMISSIONS,
+            "GROUP": GROUP, "VERSION": VERSION, "EXTERNAL_SHA256": EXTERNAL_SHA256,
+            "OWNERSHIP_FIELDS": OWNERSHIP_FIELDS, "CONSUMER_REPORT_BYTES": CONSUMER_REPORT_BYTES,
+        }.items():
+            code = code.replace("__" + key + "__", repr(value))
+        for path in (self.root / "gradlew", self.tools / "executor with spaces", self.tools / "xcrun", self.tools / "curl",
+                     self.tools / "git"):
+            path.write_text(code)
+            path.chmod(0o755)
+        env = dict(os.environ)
+        for key in list(env):
+            # Opt-in isolation must never erase the enclosing controller's
+            # ownership, including private/future audit ancestor markers.
+            if ((key.startswith("P2PKIT_") and not key.startswith("P2PKIT_AUDIT_")) or
+                    key in {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "FAKE_CONSUMER_OWNERSHIP_READY"}):
+                env.pop(key)
+        real_git = shutil.which("git", path=env.get("PATH"))
+        self.assertIsNotNone(real_git, "real Git is required for the isolated source fixture")
+        env.update({
+            "PATH": str(self.tools) + os.pathsep + env["PATH"],
+            "TMPDIR": str(self.base / "temporary"), "ANDROID_HOME": str(self.base / "synthetic sdk"),
+            "FAKE_CALLS": str(self.calls_file), "FAKE_REAL_GIT": real_git,
+            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+        })
+        self.env = env
+        for args in (["init", "-q"], ["config", "user.name", "Audit fixture"],
+                     ["config", "user.email", "audit-fixture@example.invalid"], ["add", "."],
+                     ["-c", "commit.gpgsign=false", "commit", "-qm", "Synthetic consumer fixture"]):
+            subprocess.run(["git", "-C", str(self.root), *args], env=self.env, check=True, capture_output=True)
+        source = source_snapshot(self.root, self.env)
+        self.fixture_job = uuid.uuid4().hex
+        (self.state / "gradle-home").mkdir()
+        (self.state / "context.json").write_text(json.dumps({
+            "schema": 1, "id": self.fixture_job, "root": str(self.root), "expectedCommit": source["commit"],
+            "tree": source["tree"], "source": source, "host": "fixture-not-native-host-proof",
+            "gradleHome": str(self.state / "gradle-home"), "createdUtc": "2026-09-08T00:00:00+00:00",
+        }))
+
+    def fixture_environment(self, home, *, state=None):
+        return processes.ownership_environment(self.env, self.fixture_job, uuid.uuid4().hex,
+                                               str(self.state if state is None else state), str(home),
+                                               allow_new_context=True)
+
+    def run_gate(self, overrides=None, arguments=(), *, home=None, capture_directory=None):
+        env = {**(self.env if home is None else self.fixture_environment(home)), **(overrides or {})}
+        command = ["bash", str(self.root / "scripts/check-published-consumers.sh"), *arguments]
+        if capture_directory is None:
+            return subprocess.run(command, cwd=self.base, env=env, text=True, capture_output=True)
+        with (capture_directory / "consumer.stdout.log").open("xb") as stdout, \
+                (capture_directory / "consumer.stderr.log").open("xb") as stderr:
+            result = subprocess.run(command, cwd=self.base, env=env, stdout=stdout, stderr=stderr)
+            for stream in (stdout, stderr):
+                stream.flush()
+                os.fsync(stream.fileno())
+            return result
+
+    def adapter_options(self, work=None):
+        work = self.work_root / ("borrowed " + uuid.uuid4().hex) if work is None else work
+        return {**self.fixture_environment(self.state / "gradle-home"),
+                "P2PKIT_GRADLE_EXECUTOR": str(self.tools / "executor with spaces"),
+                "P2PKIT_CONSUMER_WORK_DIR": str(work)}
+
+    def audit_options(self):
+        return {**self.adapter_options(self.work), "P2PKIT_CONSUMER_AUDIT_METADATA": "1"}
+
+    def calls(self, kind=None):
+        rows = [json.loads(line) for line in self.calls_file.read_text().splitlines()] if self.calls_file.exists() else []
+        return [row for row in rows if kind is None or row["kind"] == kind]
+
+    def output(self, result):
+        return f"exit={result.returncode}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+    def assert_pass(self, result):
+        self.assertEqual(result.returncode, 0, self.output(result))
+        self.assertIn("RESULT: PASS — published scopes", result.stdout)
+
+    def assert_rejected(self, result, message=None):
+        self.assertNotEqual(result.returncode, 0, self.output(result))
+        self.assertNotIn("RESULT: PASS — published scopes", result.stdout)
+        if message is not None:
+            self.assertIn(message, result.stdout + result.stderr, self.output(result))
+
+    def published_work(self, call):
+        repository = next(arg.split("=", 1)[1] for arg in call["argv"] if arg.startswith("-Dmaven.repo.local="))
+        return Path(repository).parent
+
+    def assert_complete_arguments(self, leaves):
+        self.assertEqual(len(leaves), 2)
+        work = self.published_work(leaves[0])
+        self.assertEqual(leaves[0]["argv"], ["--no-daemon", "--console=plain", "publishToMavenLocal", f"-Dmaven.repo.local={work / 'repository'}"])
+        self.assertEqual(leaves[1]["argv"], ["--no-daemon", "--console=plain", "-p", str(work / "consumer"),
+                                                   f"-PconsumerRepo={work / 'repository'}", *EXPECTED_TASKS])
+        self.assertEqual([row["cwd"] for row in leaves], [str(self.root), str(self.root)])
+        return work
+
+    def assert_ancestor_bindings(self, rows):
+        self.assertTrue(rows, "the asserted boundary must actually execute")
+        ancestors = processes.ownership_domains(self.env.get(processes.CHAIN_ENV, ""),
+                                                 self.env.get(processes.DOMAINS_ENV, ""))
+        for row in rows:
+            observation = row["ownership"]
+            domains = processes.ownership_domains(observation[processes.CHAIN_ENV] or "",
+                                                   observation[processes.DOMAINS_ENV] or "")
+            self.assertEqual(domains[:len(ancestors)], ancestors, row)
+            if domains:
+                self.assertEqual(observation[processes.JOB_ENV], domains[-1]["job"], row)
+                self.assertEqual(observation[processes.STATE_ENV], domains[-1]["state"], row)
+                self.assertEqual(observation["GRADLE_USER_HOME"], domains[-1]["home"], row)
+            for name in ("P2PKIT_AUDIT_INVOCATION", "P2PKIT_AUDIT_FIXTURE_ANCESTOR"):
+                self.assertEqual(observation[name], self.env.get(name), row)
+
+    def test_recorded_boundaries_preserve_inherited_ownership_and_isolate_non_audit_opt_ins(self):
+        for name, value in os.environ.items():
+            if name.startswith("P2PKIT_AUDIT_") or name == "GRADLE_USER_HOME":
+                self.assertEqual(self.env.get(name), value, name)
+        for name in ("P2PKIT_GRADLE_EXECUTOR", "P2PKIT_CONSUMER_WORK_DIR", "P2PKIT_TEST_NON_AUDIT_OPT_IN"):
+            self.assertNotIn(name, self.env)
+
+        self.assert_pass(self.run_gate())
+        baseline = self.calls()
+        self.assertEqual({row["kind"] for row in baseline}, {"git", "gradle", "xcrun"})
+        for row in baseline:
+            self.assertEqual(row["ownership"], ownership_observation(self.env))
+        self.assert_ancestor_bindings(baseline)
+
+        options = self.adapter_options(self.work)
+        self.assert_pass(self.run_gate(options))
+        nested = self.calls()[len(baseline):]
+        self.assertEqual({row["kind"] for row in nested}, {"executor", "git", "gradle", "gradle-stop", "xcrun"})
+        for row in nested:
+            self.assertEqual(row["ownership"], ownership_observation(options))
+        self.assert_ancestor_bindings(nested)
+        domains = processes.ownership_domains(options[processes.CHAIN_ENV], options[processes.DOMAINS_ENV])
+        self.assertEqual(domains[-1], {"id": options[processes.CHAIN_ENV].split(":")[-1],
+                                      "job": self.fixture_job, "state": str(self.state),
+                                      "home": str(self.state / "gradle-home")})
+
+    def test_actual_fixture_caller_preserves_two_ancestor_domains(self):
+        state = self.base / "synthetic enclosing state"
+        state.mkdir()
+        home = state / "gradle-home"
+        home.mkdir()
+        job, outer, inner = (uuid.uuid4().hex for _ in range(3))
+        # Start from this interpreter's real caller, not its fake-tool PATH.
+        environment = processes.ownership_environment(dict(os.environ), job, outer, str(state), str(home),
+                                                       allow_new_context=True)
+        environment = processes.ownership_environment(environment, job, inner, str(state), str(home))
+        environment.setdefault("P2PKIT_AUDIT_INVOCATION", "private-parent-" + uuid.uuid4().hex)
+        environment.update({"P2PKIT_AUDIT_FIXTURE_ANCESTOR": "future ancestor marker must survive",
+                            "P2PKIT_GRADLE_EXECUTOR": "/not/a/fixture/executor",
+                            "P2PKIT_CONSUMER_WORK_DIR": "/not/a/fixture/work-directory",
+                            "P2PKIT_TEST_NON_AUDIT_OPT_IN": "must be isolated"})
+        result = subprocess.run([sys.executable, str(Path(__file__).resolve()),
+            "ConsumerGateTest.test_recorded_boundaries_preserve_inherited_ownership_and_isolate_non_audit_opt_ins"],
+            cwd=ROOT, env=environment, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, self.output(result))
+        self.assertIn("Ran 1 test", result.stderr)
+
+    def test_default_keeps_exact_two_commands_and_disposes_work(self):
+        result = self.run_gate(home=self.base / "normal caller home")
+        self.assert_pass(result)
+        work = self.assert_complete_arguments(self.calls("gradle"))
+        self.assertFalse(work.exists())
+        self.assertFalse(self.calls("executor"))
+        self.assertEqual({row["home"] for row in self.calls("gradle")}, {str(self.base / "normal caller home")})
+        self.assert_ancestor_bindings(self.calls("gradle"))
+
+    def test_default_failure_disposal_and_real_exit_are_unchanged(self):
+        result = self.run_gate({"FAKE_PUBLISH_EXIT": "23"})
+        self.assert_rejected(result)
+        self.assertEqual(result.returncode, 23)
+        self.assertEqual(len(self.calls("gradle")), 1)
+        self.assertFalse(self.published_work(self.calls("gradle")[0]).exists())
+
+    def test_kept_owned_work_survives_success_and_failure(self):
+        for failure in ("0", "31"):
+            with self.subTest(productExit=failure):
+                result = self.run_gate({"P2PKIT_KEEP_CONSUMER_ARTIFACTS": "1", "FAKE_BUILD_EXIT": failure})
+                self.assert_pass(result) if failure == "0" else self.assert_rejected(result)
+                work = self.published_work(self.calls("gradle")[-2])
+                self.assertTrue((work / "repository").is_dir())
+                self.assertTrue((work / "consumer").is_dir())
+                self.assertIn("Retained consumer work directory", result.stderr)
+
+    def test_borrowed_new_and_empty_work_survive_success_and_failure(self):
+        for existing, failure in ((False, "0"), (True, "27")):
+            with self.subTest(existing=existing, productExit=failure):
+                work = self.base / f"borrowed-{existing}"
+                if existing:
+                    work.mkdir()
+                result = self.run_gate({"P2PKIT_CONSUMER_WORK_DIR": str(work), "FAKE_BUILD_EXIT": failure})
+                self.assert_pass(result) if failure == "0" else self.assert_rejected(result)
+                self.assertTrue((work / "repository").is_dir())
+                self.assertTrue((work / "consumer").is_dir())
+
+    def test_bad_borrowed_paths_never_delete_inputs(self):
+        target = self.base / "external sentinel directory"
+        target.mkdir()
+        sentinel = target / "keep.txt"
+        sentinel.write_bytes(b"caller bytes")
+        symlink = self.base / "borrowed symlink"
+        symlink.symlink_to(target, target_is_directory=True)
+        ancestor = self.base / "symlink ancestor"
+        ancestor.symlink_to(self.base, target_is_directory=True)
+        file_path = self.base / "borrowed file"
+        file_path.write_bytes(b"file sentinel")
+        paths = ["relative", str(target), str(symlink), str(file_path), str(ancestor / "unused")]
+        for path in paths:
+            with self.subTest(path=path):
+                self.assert_rejected(self.run_gate({"P2PKIT_CONSUMER_WORK_DIR": path}))
+                self.assertEqual(sentinel.read_bytes(), b"caller bytes")
+                self.assertEqual(file_path.read_bytes(), b"file sentinel")
+        self.assertTrue(symlink.is_symlink())
+        self.assertFalse(self.calls("gradle"))
+
+    def test_bad_flags_and_arguments_leave_borrowed_directory(self):
+        self.work.mkdir()
+        for overrides, args in (({"P2PKIT_KEEP_CONSUMER_ARTIFACTS": "maybe"}, ()),
+                                ({"P2PKIT_CONSUMER_AUDIT_METADATA": "2"}, ()), ({}, ("--bogus",))):
+            with self.subTest(overrides=overrides, args=args):
+                result = self.run_gate({"P2PKIT_CONSUMER_WORK_DIR": str(self.work), **overrides}, args)
+                self.assert_rejected(result)
+                self.assertTrue(self.work.is_dir())
+                self.assertEqual(list(self.work.iterdir()), [])
+        self.assertFalse(self.calls("gradle"))
+
+    def test_supported_borrowed_adapter_preserves_argv_cwd_home_and_retains_work_and_receipts(self):
+        result = self.run_gate(self.adapter_options())
+        self.assert_pass(result)
+        work = self.assert_complete_arguments(self.calls("gradle"))
+        self.assertTrue((work / "repository").is_dir())
+        self.assertTrue((work / "consumer").is_dir())
+        self.assertIn(self.work_root, work.parents)
+        self.assertEqual({row["home"] for row in self.calls("gradle") + self.calls("gradle-stop")},
+                         {str(self.state / "gradle-home")})
+        requests = self.calls("executor")
+        self.assertEqual([row["purpose"] for row in requests], ["consumer-publish", "consumer-build"])
+        self.assertEqual(len(self.calls("gradle-stop")), 2)
+        for row in requests:
+            argv = row["argv"]
+            self.assertEqual(argv[argv.index("--cwd") + 1], str(self.root))
+            self.assertEqual(argv[argv.index("--wrapper") + 1], str(self.root / "gradlew"))
+            receipt = Path(argv[argv.index("--receipt") + 1])
+            self.assertTrue(receipt.is_file())
+            self.assertIn(self.state, receipt.parents)
+            self.assertEqual(json.loads(receipt.read_text())["requestedArgv"], row["requested"])
+
+    def test_executor_rejects_implicit_owned_work_before_creating_fixtures_or_receipts(self):
+        for keep in ("0", "1"):
+            with self.subTest(keep=keep):
+                options = self.adapter_options()
+                options.pop("P2PKIT_CONSUMER_WORK_DIR")
+                result = self.run_gate({**options, "P2PKIT_KEEP_CONSUMER_ARTIFACTS": keep})
+                self.assert_rejected(result, "requires an explicit borrowed P2PKIT_CONSUMER_WORK_DIR")
+                self.assertEqual(result.returncode, 2)
+        self.assertEqual(list(self.work_root.iterdir()), [])
+        self.assertEqual(list((self.base / "temporary").iterdir()), [])
+        self.assertFalse(list(self.state.glob("consumer-receipts.*")))
+        for kind in ("executor", "gradle", "curl", "xcrun"):
+            self.assertFalse(self.calls(kind))
+
+    def test_executor_accepts_empty_borrowed_work_with_metadata_explicitly_off_or_on(self):
+        for metadata in ("0", "1"):
+            with self.subTest(metadata=metadata):
+                work = self.work_root / ("existing empty metadata " + metadata)
+                work.mkdir()
+                result = self.run_gate({**self.adapter_options(work), "P2PKIT_CONSUMER_AUDIT_METADATA": metadata})
+                self.assert_pass(result)
+                self.assertTrue((work / "repository").is_dir())
+                self.assertTrue((work / "consumer").is_dir())
+                self.assertEqual((work / "consumer/gradle/verification-metadata.xml").is_file(), metadata == "1")
+                self.assertIn("script-owned=0", result.stderr)
+
+    def test_executor_rejects_remote_latest_and_other_modes_before_fixture_creation(self):
+        modes = [({}, ("--latest-published",)), ({}, ("--bogus",)),
+                 ({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven"}, ()),
+                 ({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven"},
+                  ("--latest-published",))]
+        for metadata in ("0", "1"):
+            for overrides, arguments in modes:
+                with self.subTest(metadata=metadata, overrides=overrides, arguments=arguments):
+                    options = {**self.adapter_options(), "P2PKIT_CONSUMER_AUDIT_METADATA": metadata, **overrides}
+                    result = self.run_gate(options, arguments)
+                    self.assert_rejected(result, "supports only source-local publication")
+                    self.assertEqual(result.returncode, 2)
+                    self.assertFalse(Path(options["P2PKIT_CONSUMER_WORK_DIR"]).exists())
+        self.assertFalse(list(self.state.glob("consumer-receipts.*")))
+        for kind in ("executor", "gradle", "curl", "xcrun"):
+            self.assertFalse(self.calls(kind))
+
+    def test_executor_borrowing_rejects_nonempty_foreign_and_aliased_work_before_product(self):
+        outside = self.base / "outside work"
+        outside.mkdir()
+        sentinel = outside / "sentinel.txt"
+        sentinel.write_bytes(b"caller data must survive")
+        empty = outside / "empty"
+        empty.mkdir()
+        nonempty = self.work_root / "not empty"
+        nonempty.mkdir()
+        (nonempty / "keep.txt").write_bytes(b"borrowed caller data")
+        alias = self.work_root / "work alias"
+        alias.symlink_to(outside, target_is_directory=True)
+        for path in (outside / "new", empty, self.state / "not-work", self.work_root, nonempty, alias / "new"):
+            with self.subTest(path=path):
+                result = self.run_gate(self.adapter_options(path))
+                self.assert_rejected(result)
+                self.assertEqual(sentinel.read_bytes(), b"caller data must survive")
+                self.assertEqual((nonempty / "keep.txt").read_bytes(), b"borrowed caller data")
+        self.assertFalse((outside / "new").exists())
+        self.assertFalse((self.state / "not-work").exists())
+        self.assertEqual(list(empty.iterdir()), [])
+        self.assertTrue(alias.is_symlink())
+        self.assertFalse(self.calls("executor"))
+        self.assertFalse(list(self.state.glob("consumer-receipts.*")))
+
+    def test_executor_requires_physical_state_work_and_regular_context(self):
+        alias = self.base / "state alias"
+        alias.symlink_to(self.state, target_is_directory=True)
+        options = self.adapter_options()
+        options.update(self.fixture_environment(self.state / "gradle-home", state=alias))
+        self.assert_rejected(self.run_gate(options), "initialized P2PKIT_AUDIT_STATE_DIR")
+        self.work_root.rmdir()
+        self.assert_rejected(self.run_gate(self.adapter_options()), "initialized physical STATE/work")
+        self.work_root.mkdir()
+        context = self.state / "context.json"
+        original = self.base / "original-context.json"
+        context.rename(original)
+        context.symlink_to(original)
+        self.assert_rejected(self.run_gate(self.adapter_options()), "initialized P2PKIT_AUDIT_STATE_DIR")
+        self.assertTrue(context.is_symlink())
+        self.assertTrue(original.is_file())
+        self.assertFalse(self.calls("executor"))
+        self.assertFalse(list(self.state.glob("consumer-receipts.*")))
+
+    def test_executor_unknown_or_unfinished_cleanup_never_deletes_borrowed_publication(self):
+        for mutation in ({"ownedSurvivors": ["synthetic owned worker"]}, {"errors": ["unfinished evidence"]},
+                         {"stopExitCode": 9}, {"sourceUnchanged": False}):
+            with self.subTest(mutation=mutation):
+                options = self.adapter_options()
+                work = Path(options["P2PKIT_CONSUMER_WORK_DIR"])
+                result = self.run_gate({**options, "FAKE_RECEIPT_MUTATION": json.dumps(mutation)})
+                self.assert_rejected(result, "invalid audit leaf receipt")
+                self.assertEqual(result.returncode, 125)
+                artifact = work / "repository" / GROUP.replace(".", "/") / "p2p-core-jvm" / VERSION / f"p2p-core-jvm-{VERSION}.jar"
+                self.assertEqual(artifact.read_bytes(), f"synthetic fixture artifact {artifact.name}\n".encode())
+                self.assertIn("script-owned=0", result.stderr)
+                self.assertFalse((work / "consumer").exists())
+
+    def test_adapter_nonmetadata_rejects_missing_or_wrong_receipt(self):
+        for purpose in ("consumer-publish", "consumer-build"):
+            with self.subTest(missingPurpose=purpose):
+                result = self.run_gate({**self.adapter_options(), "FAKE_MISSING_RECEIPT": purpose})
+                self.assert_rejected(result, "invalid audit leaf receipt")
+                self.assertEqual(result.returncode, 125)
+        result = self.run_gate({**self.adapter_options(), "FAKE_RECEIPT_MUTATION": json.dumps({"requestedArgv": []})})
+        self.assert_rejected(result, "argument vector differs")
+        self.assertEqual(result.returncode, 125)
+
+    def test_adapter_product_nonzero_is_not_hidden_or_reclassified(self):
+        for name, value in (("FAKE_PUBLISH_EXIT", "23"), ("FAKE_BUILD_EXIT", "29")):
+            with self.subTest(failure=name):
+                result = self.run_gate({**self.adapter_options(), name: value})
+                self.assert_rejected(result)
+                self.assertEqual(result.returncode, int(value))
+
+    def test_invalid_executor_never_falls_back_to_wrapper(self):
+        nonexec = self.tools / "not executable"
+        nonexec.write_text("not an executable")
+        for path in ("relative-executor", str(nonexec), str(self.tools / "missing"), str(self.tools / "executor with spaces") + " --pretend"):
+            with self.subTest(path=path):
+                self.assert_rejected(self.run_gate({**self.adapter_options(), "P2PKIT_GRADLE_EXECUTOR": path}))
+        self.assertFalse(self.calls("gradle"))
+
+    def test_executor_failure_blocks_second_leaf_and_keeps_borrowed_bytes(self):
+        result = self.run_gate({**self.audit_options(), "FAKE_EXECUTOR_FAILURE": "consumer-build"})
+        self.assert_rejected(result)
+        self.assertEqual(result.returncode, 125)
+        self.assertEqual(len(self.calls("gradle")), 1)
+        self.assertTrue((self.work / "repository").is_dir())
+        self.assertTrue((self.work / "consumer/gradle/verification-metadata.xml").is_file())
+
+    def test_owned_stop_failure_is_not_a_consumer_pass(self):
+        result = self.run_gate({**self.audit_options(), "FAKE_STOP_EXIT": "17"})
+        self.assert_rejected(result)
+        self.assertEqual(result.returncode, 125)
+        self.assertEqual(len(self.calls("gradle")), 1)
+        self.assertTrue((self.work / "repository").is_dir())
+        receipt = json.loads(next(self.state.glob("consumer-receipts.*/consumer-publish.json")).read_text())
+        self.assertEqual(receipt["productExitCode"], 0)
+        self.assertEqual(receipt["stopExitCode"], 17)
+
+    def test_remote_mode_keeps_refresh_and_private_home_without_publication(self):
+        result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven",
+                                "P2PKIT_CONSUMER_WORK_DIR": str(self.work)}, home=self.work / "gradle-home")
+        self.assert_pass(result)
+        leaves = self.calls("gradle")
+        self.assertEqual(len(leaves), 1)
+        self.assertIn("--refresh-dependencies", leaves[0]["argv"])
+        self.assertIn("-PconsumerRepo=https://repository.example.invalid/maven", leaves[0]["argv"])
+        self.assertEqual(leaves[0]["argv"][-len(EXPECTED_TASKS):], EXPECTED_TASKS)
+        self.assertEqual(leaves[0]["home"], str(self.work / "gradle-home"))
+        self.assertEqual(len(self.calls("curl")), 4)
+        self.assert_ancestor_bindings(self.calls("curl") + self.calls("gradle") + self.calls("xcrun"))
+
+    def test_audit_metadata_is_explicit_local_only(self):
+        for overrides, args, message in (
+                ({"P2PKIT_CONSUMER_AUDIT_METADATA": "1"}, (), "requires the executor and source-local publication mode"),
+                ({**self.audit_options(), "P2PKIT_CONSUMER_REPOSITORY_URL": "https://repo.example.invalid"}, (),
+                 "supports only source-local publication"),
+                (self.audit_options(), ("--latest-published",), "supports only source-local publication")):
+            with self.subTest(overrides=overrides, args=args):
+                self.assert_rejected(self.run_gate(overrides, args), message)
+        self.assertFalse(self.calls("gradle"))
+        self.assertFalse(self.calls("curl"))
+
+    def test_metadata_preserves_external_bytes_and_only_exact_75_local_hashes(self):
+        result = self.run_gate(self.audit_options())
+        self.assert_pass(result)
+        metadata = (self.work / "consumer/gradle/verification-metadata.xml").read_bytes()
+        marker = f'      <component group="{GROUP}"'.encode()
+        first_local = metadata.index(marker)
+        end_local = metadata.index(b"   </components>\n", first_local)
+        self.assertEqual(metadata[:first_local] + metadata[end_local:], self.reviewed)
+        tree = ET.fromstring(metadata)
+        components = tree.find(f"{{{NAMESPACE}}}components")
+        local = [node for node in components if node.get("group") == GROUP]
+        self.assertEqual({node.get("name") for node in local}, {name for name, _ in EXPECTED_PUBLICATIONS})
+        actual = {}
+        for component in local:
+            self.assertEqual(component.get("version"), VERSION)
+            self.assertEqual(len(component), 5)
+            for artifact in component:
+                relative = Path(GROUP.replace(".", "/")) / component.get("name") / VERSION / artifact.get("name")
+                actual[relative.as_posix()] = artifact[0].get("value")
+                self.assertEqual(artifact[0].tag, f"{{{NAMESPACE}}}sha256")
+                self.assertEqual(artifact[0].get("value"), hashlib.sha256((self.work / "repository" / relative).read_bytes()).hexdigest())
+        self.assertEqual(len(actual), 75)
+        self.assertNotIn(b"<trust", metadata)
+        manifest_path = next(self.state.glob("consumer-receipts.*/consumer-publication-manifest.json"))
+        manifest = json.loads(manifest_path.read_text())
+        self.assertEqual(manifest["publicationCount"], 15)
+        self.assertEqual(manifest["artifactCount"], 75)
+        self.assertEqual(len(manifest["repositoryFiles"]), 105)
+        self.assertEqual({row["path"]: row["sha256"] for row in manifest["localArtifacts"]}, actual)
+        evidence = manifest_path.parent
+        self.assertEqual((evidence / "reviewed-verification-metadata.xml").read_bytes(), self.reviewed)
+        self.assertEqual(json.loads((evidence / "consumer-metadata-verification.json").read_text())["result"], "PASS")
+        build_recipe = (self.work / "consumer/build.gradle.kts").read_text()
+        self.assertIn('kotlin("jvm") version "91.0.0"', build_recipe)
+        self.assertIn('id("com.android.library") version "92.0.0"', build_recipe)
+
+    def test_missing_or_malformed_publication_receipt_cannot_prepare_trust(self):
+        mutations = [
+            {"schema": 2}, {"productExitCode": 1}, {"stopExitCode": 1}, {"finalExitCode": 125},
+            {"sourceUnchanged": False}, {"ownedSurvivors": ["owned-worker"]}, {"errors": ["failed copy"]},
+            {"sourceAfter": {}}, {"cwd": "/unexpected"}, {"wrapper": "/unexpected/gradlew"},
+            {"purpose": "unrelated"}, {"requestedArgv": ["publishToMavenLocal", "-Dmaven.repo.local=/unexpected"]},
+        ]
+        for index, mutation in enumerate(mutations):
+            with self.subTest(mutation=mutation):
+                work = self.work_root / f"receipt mutation {index}"
+                result = self.run_gate({**self.audit_options(), "P2PKIT_CONSUMER_WORK_DIR": str(work), "FAKE_RECEIPT_MUTATION": json.dumps(mutation)})
+                self.assert_rejected(result)
+                self.assertEqual(result.returncode, 125)
+                self.assertFalse((work / "consumer/gradle/verification-metadata.xml").exists())
+        work = self.work_root / "missing receipt"
+        result = self.run_gate({**self.audit_options(), "P2PKIT_CONSUMER_WORK_DIR": str(work), "FAKE_MISSING_RECEIPT": "consumer-publish"})
+        self.assert_rejected(result)
+        self.assertFalse((work / "consumer/gradle/verification-metadata.xml").exists())
+
+    def test_missing_consumer_receipt_cannot_issue_final_pass(self):
+        result = self.run_gate({**self.audit_options(), "FAKE_MISSING_RECEIPT": "consumer-build"})
+        self.assert_rejected(result)
+        self.assertEqual(result.returncode, 125)
+        self.assertEqual(len(self.calls("gradle")), 2)
+        self.assertFalse(list(self.state.glob("consumer-receipts.*/consumer-metadata-verification.json")))
+
+    def test_unexpected_missing_and_symlink_publications_are_not_trusted(self):
+        for flag, text in (("FAKE_EXTRA_ARTIFACT", "unexpected publication artifact"),
+                           ("FAKE_EXTRA_GROUP", "unexpected publication directory"),
+                           ("FAKE_MISSING_ARTIFACT", "missing required artifacts"),
+                           ("FAKE_SYMLINK_ARTIFACT", "not a regular publication file")):
+            with self.subTest(flag=flag):
+                work = self.work_root / flag
+                result = self.run_gate({**self.audit_options(), "P2PKIT_CONSUMER_WORK_DIR": str(work), flag: "1"})
+                self.assert_rejected(result, text)
+                self.assertFalse((work / "consumer/gradle/verification-metadata.xml").exists())
+                self.assertTrue((work / "repository").is_dir())
+
+    def test_wrong_local_pom_coordinate_is_not_trusted(self):
+        result = self.run_gate({**self.audit_options(), "FAKE_BAD_COORDINATE": "p2p-core-iosx64"})
+        self.assert_rejected(result, "source-local POM coordinate mismatch")
+        self.assertFalse((self.work / "consumer/gradle/verification-metadata.xml").exists())
+
+    def test_tampered_external_copy_and_local_artifact_fail_after_build(self):
+        for flag, text in (("FAKE_TAMPER_EXTERNAL", "prepared external/local verification metadata was modified"),
+                           ("FAKE_TAMPER_LOCAL", "prepared consumer publication binding changed")):
+            with self.subTest(flag=flag):
+                work = self.work_root / flag
+                result = self.run_gate({**self.audit_options(), "P2PKIT_CONSUMER_WORK_DIR": str(work), flag: "1"})
+                self.assert_rejected(result, text)
+                self.assertTrue((work / "consumer/gradle/verification-metadata.xml").is_file())
+        self.assertFalse(list(self.state.glob("consumer-receipts.*/consumer-metadata-verification.json")))
+
+    def test_dirty_external_source_or_wrong_context_rejected_before_publish(self):
+        metadata = self.root / "gradle/verification-metadata.xml"
+        metadata.write_bytes(self.reviewed.replace(EXTERNAL_SHA256.encode(), b"0" * 64))
+        result = self.run_gate(self.audit_options())
+        self.assert_rejected(result, "source is not clean")
+        self.assertFalse(self.calls("gradle"))
+        metadata.write_bytes(self.reviewed)
+        context_path = self.state / "context.json"
+        context = json.loads(context_path.read_text())
+        context["expectedCommit"] = "0" * 40
+        context_path.write_text(json.dumps(context))
+        result = self.run_gate(self.audit_options())
+        self.assert_rejected(result, "context is not bound")
+        self.assertFalse(self.calls("gradle"))
+
+    def test_all_original_scopes_and_test_only_dependency_exclusion_still_block(self):
+        for artifact, dependencies in POM_DEPENDENCIES.items():
+            for dependency, scope in dependencies:
+                with self.subTest(artifact=artifact, dependency=dependency, requiredScope=scope):
+                    result = self.run_gate({"FAKE_BAD_SCOPE": artifact + "|" + dependency})
+                    self.assert_rejected(result, "scope was")
+            with self.subTest(missingPom=artifact):
+                self.assert_rejected(self.run_gate({"FAKE_MISSING_POM": artifact}), "missing generated POM")
+        self.assert_rejected(self.run_gate({"FAKE_TEST_ONLY_LAN": "1"}), "test-only LAN dependency")
+
+    def test_original_framework_platform_floor_and_permission_checks_still_block(self):
+        for overrides, text in (({"FAKE_MISSING_FRAMEWORK": "1"}, "framework was not linked"),
+                                ({"FAKE_PLATFORM": "IOS"}, "not an iOS Simulator binary"),
+                                ({"FAKE_MINOS": "15.0"}, "deployment floor"),
+                                *(({"FAKE_OMIT_PERMISSION": permission}, "merged manifest is missing") for permission in PERMISSIONS)):
+            with self.subTest(overrides=overrides):
+                self.assert_rejected(self.run_gate(overrides), text)
+
+    def test_missing_marker_is_not_silently_curated(self):
+        result = self.run_gate(self.audit_options())
+        self.assert_pass(result)
+        tree = ET.parse(self.work / "consumer/gradle/verification-metadata.xml")
+        coordinates = {(node.get("group"), node.get("name"), node.get("version"))
+                       for node in tree.findall(f".//{{{NAMESPACE}}}component")}
+        self.assertEqual(len(coordinates), 16)
+        self.assertNotIn(("com.android.library", "com.android.library.gradle.plugin", "92.0.0"), coordinates)
+        self.assertEqual(len(self.calls("curl")), 0)
+
+
+def native_fixture_producer(arguments):
+    """Supply real caller fixtures; the independent native test owns the verdict."""
+    parser = argparse.ArgumentParser(description="Fixture producers for the separate native executor selftest")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--ownership-cancellation-fixture", metavar="READY_JSON")
+    mode.add_argument("--executor-integration-fixture", action="store_true")
+    parser.add_argument("--fixture-evidence", required=True)
+    parser.add_argument("--executor")
+    args = parser.parse_args(arguments)
+    if os.name != "posix":
+        parser.error("These producers exercise the POSIX/mac-policy consumer caller, not Windows consumer acceptance")
+    if bool(args.executor) != args.executor_integration_fixture:
+        parser.error("Only --executor-integration-fixture requires --executor")
+
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+
+    state = Path(os.environ.get(processes.STATE_ENV, ""))
+    temporary = Path(os.environ.get("TMPDIR", ""))
+    for path in (state, state / "work", state / "evidence", temporary):
+        require(path.is_absolute() and path.is_dir() and not path.is_symlink() and
+                path.resolve(strict=True) == path, "Producer requires physical initialized state/work/evidence/TMPDIR")
+    require(state / "work" in temporary.parents, "Producer TMPDIR must be owned below the enclosing state/work")
+    evidence = Path(args.fixture_evidence)
+    require(evidence.is_absolute() and not evidence.exists() and not evidence.is_symlink() and
+            evidence.resolve() == evidence and evidence.parent.is_dir() and state / "evidence" in evidence.parents,
+            "Producer evidence must be a new physical directory beneath the enclosing state/evidence")
+    ready = Path(args.ownership_cancellation_fixture) if args.ownership_cancellation_fixture else None
+    if ready is not None:
+        require(ready.is_absolute() and ready.parent == evidence and not ready.exists() and not ready.is_symlink(),
+                "Readiness must be a new direct child of the producer evidence directory")
+    executor = Path(args.executor) if args.executor else None
+    if executor is not None:
+        require(executor.is_absolute() and executor.is_file() and not executor.is_symlink() and
+                executor.resolve(strict=True) == executor and os.access(executor, os.X_OK),
+                "Integration requires the explicit real executable audit executor")
+
+    evidence.mkdir(mode=0o700)
+    selected_mode = "ownership-cancellation" if ready is not None else "real-executor-integration"
+    write_fixture_record(evidence / "producer-start.json", {
+        "schema": 1, "mode": selected_mode, "pid": os.getpid(), "temporaryRoot": str(temporary),
+        "parentOwnership": ownership_observation(os.environ),
+        "producerSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "consumerScriptSha256": hashlib.sha256((ROOT / "scripts/check-published-consumers.sh").read_bytes()).hexdigest(),
+        "scope": "Synthetic consumer bytes; native enclosing selftest independently validates execution and cleanup.",
+    })
+    fixture = ConsumerGateTest(methodName="test_supported_borrowed_adapter_preserves_argv_cwd_home_and_retains_work_and_receipts")
+    fixture.fixture_evidence = evidence
+    fixture.setUp()
+    require(temporary in fixture.base.parents, "Actual consumer fixture escaped the enclosing owned TMPDIR")
+    binding = {
+        "schema": 1, "mode": selected_mode, "fixtureBase": str(fixture.base), "fixtureRoot": str(fixture.root),
+        "fixtureState": str(fixture.state), "consumerWorkDir": str(fixture.work), "callsFile": str(fixture.calls_file),
+        "fixtureSetupOwnership": ownership_observation(fixture.env),
+        "retention": "Enclosing native fixture retains evidence and drains actual workers before deleting its TMPDIR.",
+    }
+
+    if ready is not None:
+        options = fixture.adapter_options(fixture.work)
+        write_fixture_record(evidence / "producer.json", {
+            **binding, "readyFile": str(ready), "adapterOwnership": ownership_observation(options),
+            "executor": options["P2PKIT_GRADLE_EXECUTOR"],
+        })
+        print("Synthetic consumer cancellation producer; awaiting the enclosing native controller", flush=True)
+        result = fixture.run_gate({**options, "FAKE_CONSUMER_OWNERSHIP_READY": str(ready)}, capture_directory=evidence)
+        write_fixture_record(evidence / "producer-completion.json", {
+            **binding, "exitCode": result.returncode, "unexpectedCompletion": True,
+        })
+        # No producer-created success can stand in for the native cancellation
+        # receipt, retired worker identity, or separately-owned live sentinel.
+        return 125
+
+    child_state = fixture.base / "native audit state"
+    source = source_snapshot(fixture.root, fixture.env)
+    command = [sys.executable, str(executor), "init", "--root", str(fixture.root), "--state", str(child_state),
+               "--expected-commit", source["commit"], "--host", processes.host_role()]
+    with (evidence / "init.stdout.log").open("xb") as stdout, (evidence / "init.stderr.log").open("xb") as stderr:
+        initialized = subprocess.run(command, env=fixture.env, stdout=stdout, stderr=stderr, timeout=30)
+        for stream in (stdout, stderr):
+            stream.flush()
+            os.fsync(stream.fileno())
+    write_fixture_record(evidence / "init.json", {"schema": 1, "argv": command, "exitCode": initialized.returncode,
+                                                 "childState": str(child_state)})
+    require(initialized.returncode == 0, "Actual native executor did not initialize the positive fixture")
+    context = json.loads((child_state / "context.json").read_text(encoding="utf-8"))
+    require(context.get("root") == str(fixture.root) and context.get("source") == source,
+            "Actual native fixture context is not bound to the consumer source")
+    work_root = child_state / "work"
+    work_root.mkdir(mode=0o700)
+    work = work_root / "borrowed consumer λ directory"
+    environment = processes.ownership_environment(fixture.env, context["id"], uuid.uuid4().hex,
+                                                   str(child_state), context["gradleHome"], allow_new_context=True)
+    options = {**environment, "P2PKIT_GRADLE_EXECUTOR": str(executor), "P2PKIT_CONSUMER_WORK_DIR": str(work),
+               "P2PKIT_CONSUMER_AUDIT_METADATA": "0"}
+    report = work / "consumer/kmpConsumer/build/reports/consumer-fixture.json"
+    binding.update({"childState": str(child_state), "consumerWorkDir": str(work), "fixtureReport": str(report),
+                    "executor": str(executor), "executorSha256": hashlib.sha256(executor.read_bytes()).hexdigest(),
+                    "adapterOwnership": ownership_observation(options)})
+    write_fixture_record(evidence / "producer.json", binding)
+    result = fixture.run_gate(options, capture_directory=evidence)
+    write_fixture_record(evidence / "producer-completion.json", {**binding, "exitCode": result.returncode,
+        "fixtureReportSha256": hashlib.sha256(report.read_bytes()).hexdigest() if report.is_file() else None,
+        "scope": "Real executor with synthetic wrappers/report; not Gradle resolution, compilation or Apple acceptance."})
+    # The native parent inspects and archives actual child context/receipts/raw
+    # stop/report evidence before its own guarded TMPDIR teardown. No receipt is
+    # fabricated and this producer does not issue an ownership approval.
+    return result.returncode
+
+
+if __name__ == "__main__":
+    if any(option in sys.argv[1:] for option in ("--ownership-cancellation-fixture", "--executor-integration-fixture")):
+        raise SystemExit(native_fixture_producer(sys.argv[1:]))
+    unittest.main(verbosity=2)
