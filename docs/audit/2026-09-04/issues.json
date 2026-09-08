@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-08T04:04:42.803897+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-08T06:34:27.126475+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -770,22 +770,36 @@
       "origin": "PRE_EXISTING",
       "severityAtCheckpoint": "low",
       "reportedProblemExcerpt": "`.github/workflows/ci.yml` runs a single required job, `complete-gate`, which gates almost every build/test step behind `steps.scope.outputs.full == 'true'`. Scope is resolved by `scripts/resolve-ci-scope.sh` + `scripts/classify-ci-scope.sh`.",
-      "affectedComponentsExcerpt": "`.github/workflows/ci.yml:16-35` — one job, whose id is the required status check name `complete-gate`:",
+      "affectedComponentsExcerpt": "CI scope resolver, real-Git regression fixtures, weekly workflow trigger/concurrency, workflow policy and release caller, contributor/testing guidance. Current Linux/Windows suites were already unconditional; the removed shortcut skipped the macOS full path, not every test.",
       "relatedIssuesAndDependencies": [
         9,
         47,
+        103,
         112,
         114,
-        140
+        140,
+        150,
+        151,
+        221,
+        224,
+        226,
+        360
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Complete eight-file correction f10c590 plus separately reviewed seven-file prerequisite #360 at6995130 independently approved and pushed;14 unique paths combined. No graph/check-result reuse: classify complete main-push delta, retain genuine nonempty Markdown-only lightweight scope and exact identity/rename/empty/fallback safeguards. Monday04:17UTC full all-tree schedule is isolated/non-cancelling, not a delivery deadline; unchanged permissions/check names/cross-host guards/release provenance. Baseline original resolver misclassified real source/rename/empty exact-tree merges;Markdown control passed. Final resolver28/policy21 checks,13expected-red controls,5actual YAML command replays,23static gates pass. Full check+Android assembly+strict core Dokka2459passes/0failure/error/1unchanged manual skip;297XMLs/256tasks. Initial actual YAML replay FAILED on pre-existing#360;control-verifier and first sealing failures retained. 106shared finalized receipts/3558sealed entries. No production/API/ABI/protocol/dependency or archive-byte changes. No hosted scheduling/matrix/bypass execution;workflow schedule becomes active only after an authorized default-branch merge. Main unchanged;issueOPEN;whole auditNOT READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "f10c590e4bf72075d2bb2e3ed223d179c38ba633",
+        "6995130bcdb2594257c42bed006f7d23f5bc4d6a"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_144_r1 APPROVED complete eight-file correction plus seven-file prerequisite effects at6995130/tree323fc395;14 unique changed paths. Independent full diff/caller/policy/evidence review, no actionable issue-specific findings. Report SHA256 82e6e9ad6e34a87b18b36645463d9b0a2217432cf3258257fa6094d9b91eaab0.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/144#issuecomment-5406153245"
-      ]
+        "https://github.com/p2pKit/P2pKit/issues/144#issuecomment-5406153245",
+        "https://github.com/p2pKit/P2pKit/issues/144#issuecomment-5579359464",
+        "https://github.com/p2pKit/P2pKit/issues/144#issuecomment-5579759107",
+        "https://github.com/p2pKit/P2pKit/issues/144#issuecomment-5580383643"
+      ],
+      "repositoryScopeStatus": "APPROVED"
     },
     {
       "number": 145,
@@ -4447,7 +4461,35 @@
         "https://github.com/p2pKit/P2pKit/issues/359",
         "https://github.com/p2pKit/P2pKit/issues/359#issuecomment-5579078847"
       ]
+    },
+    {
+      "number": 360,
+      "title": "[AUDIT][Low] All-tree CI whitespace gates reject immutable historical archives",
+      "url": "https://github.com/p2pKit/P2pKit/issues/360",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "githubStateAtListRefresh": "open",
+      "reportedProblemExcerpt": "Both all-tree whitespace entry points reject six formatting diagnostics in three unchanged deliberately retained historical archives, preventing manual/fallback full CI before macOS builds.",
+      "affectedComponentsExcerpt": "Git attributes; archive-integrity helper; whitespace/dependency-update gates and their fixtures; local testing guide. Reproduced with actual Git/scripts on macOS; not Windows or hosted CI.",
+      "relatedIssuesAndDependencies": [
+        59,
+        144,
+        223,
+        301,
+        303
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "repositoryScopeStatus": "APPROVED",
+      "assessmentAtCheckpoint": "Complete seven-file correction independently approved at6995130 and pushed to audit branch,not merged/released. Three exact-path/category whitespace exceptions plus -text preserve archive bytes;mandatory SHA256 checks in range head,index,worktree reject modification/missing/symlink. Both actual entry points enforce integrity;no blanket archive exclusion or edited historical bytes. Original pre-144 manual resolver selected full;both gates exited2;ordinary-range control passed. Final51labeled assertions,10expected-red controls/2positive controls,5shared YAML replays/23static gates and full2459passes/0failure/error/1manual skip pass. Original YAML failure and verifier failures retained,not relabeled. Independent review rehashed3558entries/106shared receipts/297finalXMLs. No runtime/API/ABI/protocol/dependency change or hosted/Windows execution;plain git diff honors attrs but not pins. #223 remains distinct/pending;#301/#303 retention preserved;whole auditNOT READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "6995130bcdb2594257c42bed006f7d23f5bc4d6a"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_360_r1 APPROVED full seven-file correction at6995130/tree323fc395;whole diff/callers/archive history and source contracts independently inspected;3558sealed entries,106cleanup receipts/95serialized leaves,297rawXMLs reverified. No actionable findings or reviewer builds. Report SHA256 65de75d34645f4a497395f76cae78f10f0ea146bf4dad6dfadf24edbc032b9a2.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/360",
+        "https://github.com/p2pKit/P2pKit/issues/360#issuecomment-5580382007"
+      ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-08T04:14:09.309450+00:00"
+  "lastDispositionUpdateUtc": "2026-09-08T06:38:20.009405+00:00"
 }

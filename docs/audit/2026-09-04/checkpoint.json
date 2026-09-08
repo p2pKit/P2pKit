@@ -5,66 +5,80 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "de882840e1e24aa04339b2285e8cd753af265b40",
-  "sourceCheckpointTree": "89c498a7e24307d7cc23fb4eb6d7f3a6e53d8997",
+  "sourceCheckpointCommit": "6995130bcdb2594257c42bed006f7d23f5bc4d6a",
+  "sourceCheckpointTree": "323fc39587c626df7ac9da1edce7cc0ab80ac313",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
-  "activeIssue": 144,
-  "activeIssueState": "NEXT_PENDING_LINKED_HISTORY_AND_CURRENT_CODE_VERIFICATION",
-  "issueCountDenominator": 173,
+  "activeIssue": 145,
+  "activeIssueState": "NOT_STARTED_RESUME_WITH_COMPLETE_HISTORY_AND_CURRENT_CODE_VERIFICATION",
+  "issueCountDenominator": 174,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
-    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 65,
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 67,
     "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
-    "PENDING_REMEDIATION": 86
+    "PENDING_REMEDIATION": 85
   },
-  "completedIssueCount": 65,
-  "remainingIssueCount": 108,
-  "percentageMeaning": "Reviewed repository-repair rows /173, not effort, issue closure or readiness. External acceptance still attached to approved rows (including #133) is not counted complete; independent interoperability remains separately NOT_STARTED.",
-  "githubIssueListRefreshedUtc": "2026-09-08T04:04:42.803897+00:00",
-  "githubTotalIssuesAtRefresh": 280,
-  "githubOpenIssuesAtRefresh": 173,
-  "newAuditIssueCount": 40,
+  "completedIssueCount": 67,
+  "remainingIssueCount": 107,
+  "percentageMeaning": "Independently approved repository-repair rows /174, not effort, issue closure or readiness. External acceptance attached to approved rows (including #133) is not counted complete; independent interoperability remains separately NOT_STARTED.",
+  "githubIssueListRefreshedUtc": "2026-09-08T06:34:27.126475+00:00",
+  "githubTotalIssuesAtRefresh": 281,
+  "githubOpenIssuesAtRefresh": 174,
+  "newAuditIssueCount": 41,
   "rawEvidenceIncludedInGit": false,
   "originalEvidenceContinuity": "Some original raw evidence and initial audit ledger were lost. Recovered summaries are not original logs. Later raw evidence remains private. Fresh corroboration and integrated verification required.",
   "scope": "Branch continuation only; not a merge, release, independent crypto assurance, or physical-device completion.",
   "preservedDraftCommit": "eb564e9487f2887f83f519575c82d4e7657864cb",
   "preservedDraftTree": "69161ac65e02bbf33d390bde2575d3131a9d7996",
-  "lastReviewedIssue": 359,
+  "lastReviewedIssue": 144,
   "lastIntegratedCheck": {
-    "commit": "de882840e1e24aa04339b2285e8cd753af265b40",
-    "tree": "89c498a7e24307d7cc23fb4eb6d7f3a6e53d8997",
+    "commit": "6995130bcdb2594257c42bed006f7d23f5bc4d6a",
+    "tree": "323fc39587c626df7ac9da1edce7cc0ab80ac313",
     "passed": 2459,
     "failures": 0,
     "errors": 0,
     "skipped": 1,
-    "scope": "Clean full check+Android assembleDebug+strict core Dokka;strict/rerun/no-cache/bounded;256executed tasks,297XMLs,2459passes/0failure/error/1unchanged manual LAN interop-capture skip. JVM,Android host,Kotlin/Native arm64 iOS simulator,actual ABI/lint/sample assembly. Not Swift XCTest,Intel runtime,ART/OEM,physical devices or independent interoperability. Final release/publication/isolated-consumer/Swift/XCFramework pending;#133consumer evidence remains bound to7127616,not rerun for#359."
+    "scope": "Clean full check+Android assembleDebug+strict core Dokka;strict/rerun/no-cache/bounded;256executed tasks,297XMLs,2459passes/0failure/error/1unchanged manual LAN capture skip. JVM,Android host,Kotlin/Native arm64 iOS simulator and actual ABI/lint/sample assembly. Not Swift XCTest,Intel runtime,ART/OEM,physical devices,hosted CI or independent interoperability. Final release/publication/isolated-consumer/Swift/XCFramework pending;#133consumer evidence remains at7127616,not rerun for#144/#360."
   },
   "protectedInstructionFilesCaveat": "Issue325 feasible correction preserves AGENTS.md:9 library-only SDK wording by owner instruction. Canonical setup explicitly warns about missing sample SDK. Literal alignment requires new owner authorization; not claimed fixed. CLAUDE.md unchanged.",
   "lastScopedVerification": {
-    "issue": 359,
+    "issue": 144,
+    "prerequisiteIssue": 360,
     "platforms": [
+      "macOS local shell/Git/Ruby",
       "JVM",
       "Android host",
       "Kotlin/Native arm64 iOS simulator"
     ],
-    "commit": "de882840e1e24aa04339b2285e8cd753af265b40",
-    "tree": "89c498a7e24307d7cc23fb4eb6d7f3a6e53d8997",
-    "staticGates": 14,
-    "negativeControls": 3,
-    "reviewSha256": "0dc939114f60bd666cc7dceba848a69a3c86e3c13c85f2ad984108d79a869f5b",
-    "manifestSha256": "cf076b1b7362f069f815687caf54217c35e9caa3f21ba5d553024add470edab2",
-    "scope": "Complete four-file failed-destination cleanup correction APPROVED/pushed. Three-test original repro2failures/1control;final-test original production JVM10/8failures/2controls,Android16/7failures/9controls;focused33passes;three restored mutations. Full2459passes/0failure/error/1manual skip;14static gates;1797sealed entries/28cleanup receipts. Two compilation failures and initial evidence-verifier failure retained. No API/ABI/wire/authentication/dependency/durability change. Physical/ART/OEM/independent gates pending."
+    "commit": "6995130bcdb2594257c42bed006f7d23f5bc4d6a",
+    "tree": "323fc39587c626df7ac9da1edce7cc0ab80ac313",
+    "staticGates": 23,
+    "resolverChecks": 28,
+    "workflowPolicyChecks": 21,
+    "whitespaceAssertions": 51,
+    "yamlCommandReplays": 5,
+    "negativeControls144": 13,
+    "negativeControls360": 10,
+    "positiveControlsPerIssue": 2,
+    "reviewSha256": "82e6e9ad6e34a87b18b36645463d9b0a2217432cf3258257fa6094d9b91eaab0",
+    "prerequisiteReviewSha256": "65de75d34645f4a497395f76cae78f10f0ea146bf4dad6dfadf24edbc032b9a2",
+    "manifestSha256": "cb09a4b3c4b02e904d28e7eac800f3d736cdacbe00cb96f904f8764b2d6845cd",
+    "prerequisiteManifestSha256": "08ae831555d21d2fd7e09c9bfc0fa7f26f5e88f67675e94d83de18e0dcc4c337",
+    "sharedSealedFiles": 3558,
+    "sharedSealedBytes": 18444319,
+    "sharedCleanupReceipts": 106,
+    "serializedLeafInvocations": 95,
+    "scope": "Both complete corrections APPROVED/pushed;#360 prerequisite reviewed before final#144 review. No source changes after freeze. Initial actual YAML replay,first#360control verifier and first evidence sealer failures preserved. No archive-byte,production/API/ABI/protocol/dependency changes. Five replays are actual YAML-derived commands with synthetic event contexts,not hosted CI or a scheduling deadline."
   },
   "lastIntegratedAttempt": {
-    "commit": "de882840e1e24aa04339b2285e8cd753af265b40",
-    "tree": "89c498a7e24307d7cc23fb4eb6d7f3a6e53d8997",
+    "commit": "6995130bcdb2594257c42bed006f7d23f5bc4d6a",
+    "tree": "323fc39587c626df7ac9da1edce7cc0ab80ac313",
     "result": "PASS",
     "executedTasks": 256,
     "executedTestResultsPassed": 2459,
     "testFailures": 0,
     "testErrors": 0,
     "testSkips": 1,
-    "scope": "Clean combined check,Android assembly,strict core Dokka after#359. Not whole-audit/release/device or independent interoperability completion."
+    "scope": "Latest combined check/Android assembly/strict core Dokka after#144/#360; not whole-audit/release/external completion."
   },
   "resolvedDrafts": [
     {
@@ -253,5 +267,94 @@
     "publicEvidence": "https://github.com/p2pKit/P2pKit/issues/359",
     "scope": "Original JVM production;actual accepting Job cancellation. Abort1,pending0,initial result0,replay1,full-budget recovery succeeds,retained original stateOffered through shutdown. Callback-only cancellation control passes. Not budget leak,demonstrated file leak/data loss or permanent remote hang.",
     "finalStatus": "FOUR_FILE_CORRECTION_APPROVED_AT_DE88284"
+  },
+  "previousVerifiedIntegratedCheck359": {
+    "commit": "de882840e1e24aa04339b2285e8cd753af265b40",
+    "tree": "89c498a7e24307d7cc23fb4eb6d7f3a6e53d8997",
+    "passed": 2459,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1,
+    "scope": "Clean full check+Android assembleDebug+strict core Dokka;strict/rerun/no-cache/bounded;256executed tasks,297XMLs,2459passes/0failure/error/1unchanged manual LAN interop-capture skip. JVM,Android host,Kotlin/Native arm64 iOS simulator,actual ABI/lint/sample assembly. Not Swift XCTest,Intel runtime,ART/OEM,physical devices or independent interoperability. Final release/publication/isolated-consumer/Swift/XCFramework pending;#133consumer evidence remains bound to7127616,not rerun for#359."
+  },
+  "previousScopedVerification359": {
+    "issue": 359,
+    "platforms": [
+      "JVM",
+      "Android host",
+      "Kotlin/Native arm64 iOS simulator"
+    ],
+    "commit": "de882840e1e24aa04339b2285e8cd753af265b40",
+    "tree": "89c498a7e24307d7cc23fb4eb6d7f3a6e53d8997",
+    "staticGates": 14,
+    "negativeControls": 3,
+    "reviewSha256": "0dc939114f60bd666cc7dceba848a69a3c86e3c13c85f2ad984108d79a869f5b",
+    "manifestSha256": "cf076b1b7362f069f815687caf54217c35e9caa3f21ba5d553024add470edab2",
+    "scope": "Complete four-file failed-destination cleanup correction APPROVED/pushed. Three-test original repro2failures/1control;final-test original production JVM10/8failures/2controls,Android16/7failures/9controls;focused33passes;three restored mutations. Full2459passes/0failure/error/1manual skip;14static gates;1797sealed entries/28cleanup receipts. Two compilation failures and initial evidence-verifier failure retained. No API/ABI/wire/authentication/dependency/durability change. Physical/ART/OEM/independent gates pending."
+  },
+  "lastReviewedIssues": [
+    360,
+    144
+  ],
+  "requestedStop": "CLONEABLE_TRANSFER_CHECKPOINT_AFTER_360_AND_144; next #145 has not started",
+  "lastSourceBaselineCommit": "6ca4acf0445a7e63a9664fd3ff3988fb7912db07",
+  "lastSourceBaselineTree": "606b74ba6233f381ecbf2f823b64538724ead701",
+  "mainCommitAtSourcePush": "eb444cccfc290be5435c5c10629c24183293606f",
+  "continuationDelivery": "Source and safe context on audit branch; clone cannot transfer accounts, private raw evidence, historical stashes or live agents/session. Record actual checkout HEAD/tree; administrative commits follow reviewed source without rebinding its verification.",
+  "completedInvestigation144": {
+    "issue": 144,
+    "baselineCommit": "6ca4acf0445a7e63a9664fd3ff3988fb7912db07",
+    "baselineTree": "606b74ba6233f381ecbf2f823b64538724ead701",
+    "result": "ORIGINAL_EXACT_TREE_SOURCE_RENAME_EMPTY_MERGES_WRONGLY_LIGHTWEIGHT",
+    "mismatchedFixtures": [
+      "source",
+      "rename",
+      "empty"
+    ],
+    "passingControl": "genuine Markdown-only merge",
+    "publicEvidence": "https://github.com/p2pKit/P2pKit/issues/144#issuecomment-5579359464",
+    "finalStatus": "EIGHT_FILE_CORRECTION_PLUS_360_PREREQUISITE_APPROVED_AT_6995130",
+    "scope": "Actual original resolver in disposable real Git repositories; read-only ruleset history. No admin bypass or hosted scheduling test. Existing unconditional Linux/Windows test jobs preserved."
+  },
+  "completedInvestigation360": {
+    "issue": 360,
+    "baselineCommit": "6ca4acf0445a7e63a9664fd3ff3988fb7912db07",
+    "baselineTree": "606b74ba6233f381ecbf2f823b64538724ead701",
+    "result": "BOTH_ORIGINAL_ALL_TREE_GATES_EXIT_2_ON_SIX_RETAINED_ARCHIVE_DIAGNOSTICS",
+    "publicEvidence": "https://github.com/p2pKit/P2pKit/issues/360",
+    "finalStatus": "SEVEN_FILE_CORRECTION_APPROVED_AT_6995130",
+    "scope": "Manual resolver passes/full;ordinary-range control passes. Distinct from#144and#223;#301/#303 retention decision and every archive byte remain unchanged."
+  },
+  "remainingHostedAcceptance144": {
+    "status": "NOT_EXECUTED",
+    "action": "After authorized merge to main, inspect actual manual/scheduled full CI results for exact source; GitHub scheduling can delay/drop runs. No settings changes or publication authorized by this checkpoint."
+  },
+  "sourceAndPreCheckpointCleanup": {
+    "sourceCleanupReceipts": 106,
+    "serializedSourceLeaves": 95,
+    "lastFullBuildDirectoriesRemoved": 10,
+    "ownedSurvivorsAfterSourceVerification": [],
+    "removedProjectCaches": [
+      {
+        "path": ".gradle",
+        "bytes": 82507403,
+        "openFileCheckExitCode": 1,
+        "scope": "Ignored generated project cache only; no tracked files or open descriptors."
+      },
+      {
+        "path": "buildSrc/.gradle",
+        "bytes": 87640,
+        "openFileCheckExitCode": 1,
+        "scope": "Ignored generated project cache only; no tracked files or open descriptors."
+      },
+      {
+        "path": ".kotlin",
+        "bytes": 0,
+        "openFileCheckExitCode": 1,
+        "scope": "Ignored generated project cache only; no tracked files or open descriptors."
+      }
+    ],
+    "removedProjectCacheBytes": 82595043,
+    "scope": "Every source invocation stopped its task-isolated wrapper/owned workers. Three ignored unused project caches were removed after separate stop and no-open-descriptor checks. Shared caches, private evidence, settings, source/stashes and unrelated projects were preserved. Later admin/push receipts are separate."
   }
 }

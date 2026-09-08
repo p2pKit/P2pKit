@@ -6,18 +6,42 @@ Start with the root [continuation checkpoint](../../../AUDIT_CHECKPOINT.md). Clo
 ## Records
 
 - [Checkpoint metadata](checkpoint.json): source revisions, issue-count denominator and evidence limitations.
-- [Issue index](issues.md): all 173 inventoried open issues grouped by checkpoint disposition.
+- [Issue index](issues.md): all 174 inventoried open issues grouped by checkpoint disposition.
 - [Issue records](issues.json): reported scope, dependencies, recorded commits and public investigation/outcome links.
 - [Coverage ledger](coverage.tsv): inherited per-path review claims, provenance revisions and reopened work.
 - [Unverified follow-ups](followups.md): hypotheses needing reproduction and deduplication, not confirmed bug claims.
 
-The inventory snapshot is a continuation aid, not GitHub's live state. It contains 65 repository repairs with recorded
-independent approval, 86 pending repairs, 21 external-validation items and one architecture decision: **37.6% reviewed
-repository repairs, 62.4% remaining issue rows**. These percentages do not count external acceptance still attached
-to approved rows (including #133); independent interoperability remains separately pending. Forty entries
-originated in the audit. Branch availability does not imply merge/release or a new verification result.
+The inventory snapshot is a continuation aid, not GitHub's live state. It contains 67 repository repairs with
+independent approval, 85 pending repairs, 21 external-validation rows and one architecture decision:
+**38.5% reviewed repository repairs, 61.5% remaining issue rows**. Percentages do not count external acceptance still
+attached to approved rows (including #133); independent interoperability remains separately NOT STARTED.
+Forty-one findings originated in this audit. Branch availability does not imply merge/release or fresh verification.
+This is the requested transfer checkpoint after #360/#144; **next #145 has not started**.
 
-#359 completes failed-destination settlement despite caller cancellation during abort. Both generic
+Latest #360 repairs the pre-existing all-tree whitespace blocker without modifying historical evidence.
+Three exact-path/category exceptions preserve bytes and require SHA-256 integrity in head, index and worktree at
+both actual gate entry points. Fresh `/root/review_360_r1` **APPROVED** the complete seven-file correction at `6995130`.
+The original pre-#144 manual gates both exited 2; the ordinary-range control passed. Final 51 labeled assertions and
+ten expected-red controls/two positive controls establish the correction; #223's separate wrapper defect stays pending.
+See [the #360 report](repairs/360.md) and [verified outcome](https://github.com/p2pKit/P2pKit/issues/360#issuecomment-5580382007).
+
+#144 now classifies every complete main-push delta instead of inferring passed checks from graph/tree equality.
+Genuine nonempty Markdown-only changes remain lightweight; source, rename, empty and fallback safeguards remain.
+The weekly Monday 04:17 UTC full backstop is isolated and non-cancelling, not a scheduling deadline. Existing
+Linux/Windows jobs, permissions, required checks and release provenance are preserved. Fresh `/root/review_144_r1`
+**APPROVED** the complete eight-file correction plus #360's prerequisite effects at the same frozen `6995130` tree.
+See [the #144 report](repairs/144.md) and [verified outcome](https://github.com/p2pKit/P2pKit/issues/144#issuecomment-5580383643).
+
+Combined verification: **2,459 passes, zero failures/errors, one unchanged manual skip; 297 XMLs, 256 tasks**.
+Resolver28/policy21 checks, five actual YAML command replays and 23 static gates pass; 13 #144 expected-red controls
+and two positive controls pass as verification outcomes. Both reviews inspected shared sealed evidence:
+3,558 files/18,444,319 bytes, 106 finalized cleanup receipts and 95 nonoverlapping leaf invocations.
+Initial YAML replay, first #360 control-verifier and first evidence-sealer failures are retained, not relabeled.
+No production/API/ABI/protocol/dependency or archived-content change. No hosted CI, Windows execution, administrator
+bypass, physical-device or independent interoperability validation occurred in these cycles. The schedule is not
+installed on the default branch until an authorized merge. Both issues remain OPEN; main is unchanged.
+
+Earlier #359 completes failed-destination settlement despite caller cancellation during abort. Both generic
 setup catches retire ownership, perform independently bounded abort, publish the original typed failure and attempt
 the existing bounded entry-epoch-fenced terminal notice before restoring structural caller cancellation. Callback-only
 cancellation remains distinct; no shared bounded helper, API/ABI, wire, authentication or durability implementation
@@ -145,8 +169,8 @@ artifacts are necessary, request the private backup; otherwise run fresh, scoped
 
 Coverage rows preserve the last recorded scoped assessment at their recorded revisions. This is not complete current
 coverage: later changes invalidate affected paths/callers; the original full audit must be corroborated before final
-completion. The #359, #358, #137, #130, #332 Apple, #356, #229, #357, #226, #225, #208, #152, #133, #355, #187, #190 and #325 paths have scoped final review records;
-other domains still need current corroboration. The ledger inventories **1,034 paths with 328 recorded blob bindings**;
+completion. The #144/#360, #359, #358, #137, #130, #332 Apple, #356, #229, #357, #226, #225, #208, #152, #133, #355, #187, #190 and #325 paths have scoped final review records;
+other domains still need current corroboration. The ledger inventories **1,038 paths with 334 recorded blob bindings**;
 inventory is not equivalent to completed review.
 Added handoff documents are inventory entries, not runtime-verification claims.
 

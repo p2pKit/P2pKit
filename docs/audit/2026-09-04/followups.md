@@ -121,3 +121,17 @@ trace. Its complete six-file correction is independently approved/pushed at `183
 That fixes the original-key/native-representation/byte boundary; the separately approved #332 correction handles the
 lifecycle transition. Neither expands #229's original value approval. Earlier reports' unconfirmed/pending wording
 is historical and superseded here, not rewritten. The 0.8.0+ admission-change restriction remains.
+
+## All-tree archive whitespace policy
+
+The failed actual-YAML replay during #144 was **confirmed as distinct [#360](https://github.com/p2pKit/P2pKit/issues/360)
+and independently repaired/pushed** at `6995130`. Both pre-#144 manual all-tree gates exited 2 on six formatting
+diagnostics in three unchanged historical files; an ordinary-range control passed. Exact-path/category exceptions,
+byte-stable checkout attributes and mandatory head/index/worktree hashes now preserve those archives without
+unchecked replacement. No archive contents were modified; #301/#303's retention decision is intact.
+
+See [the repair report](repairs/360.md) and [verified outcome](https://github.com/p2pKit/P2pKit/issues/360#issuecomment-5580382007). #360 was independently approved before
+#144's final review; both final actual gate entry points pass. #223's wrapper LF defect remains separate and pending.
+The initial failed replay and later verifier failures remain original failures, not relabeled evidence.
+Do not refile this root cause or claim every archived file now has an integrity pin. Plain Git honors attributes
+but does not enforce the three pins; use the actual repository gate. No hosted CI or Windows execution is claimed.

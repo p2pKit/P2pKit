@@ -1,21 +1,19 @@
 # Issue disposition index
 
-Checkpoint inventory: **173 issues; 65 reviewed repository repairs (37.6%), 108 remaining issue rows (62.4%)**.
+Checkpoint inventory: **174 issues; 67 reviewed repository repairs (38.5%), 107 remaining issue rows (61.5%)**.
 
-This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed fixes are in the audit branch, not merged/released. #359's complete failed-destination cleanup
-correction is independently approved at `de88284`; #358's channel-authentication distinction is preserved. The
-cleanup-cancellation hypothesis is now resolved, not an unfiled suspicion. Next: complete #144's linked-history and
-current-code verification before repair. Prior approvals remain intact. #133 independent interoperability remains
-NOT STARTED; percentages exclude external acceptance attached to approved rows. The #325 protected-AGENTS exception
-remains. Read [full records](issues.json) for scope, dependencies, commits and public outcomes, and
-[the root handoff](../../../AUDIT_CHECKPOINT.md) for evidence limits and cleanup rules. Historical assessments retain
-their original review-time scope.
+This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at refresh.
+Reviewed fixes are on the audit branch, not merged/released. #360's archive prerequisite and #144's complete CI-scope
+correction are independently approved at `6995130`; two separate reviewers inspected the final source. Next: #145,
+not started; refresh its full history and verify current behavior before repair. Earlier approvals remain intact.
+#133 independent interoperability remains NOT STARTED; percentages exclude external acceptance attached to approved
+rows. The #325 protected-AGENTS exception remains. Read [full records](issues.json), [the root handoff](../../../AUDIT_CHECKPOINT.md)
+and [unverified follow-ups](followups.md). Historical assessments retain their original review-time scope.
 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
-A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
+A blank fix revision means no completed repair/review cycle was recorded, not that no earlier investigation exists.
 
-## Repairs with recorded independent approval (65)
+## Repairs with recorded independent approval (67)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -27,6 +25,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#141: [WSG-12] CI runs full `check` on macOS only; Windows/Linux defect class is invisible](https://github.com/p2pKit/P2pKit/issues/141) | high | Existing | `d859e20252d2` |
 | [#142: [BUILD-26] resolveAndLockAll write-locks guard is bypassable via task-name matching](https://github.com/p2pKit/P2pKit/issues/142) | low | Existing | `639167cc1432` |
 | [#143: [BUILD-13] Four workflows persist GITHUB_TOKEN in .git/config (persist-credentials missing)](https://github.com/p2pKit/P2pKit/issues/143) | medium | Existing | `d18500c939bf` |
+| [#144: [BUILD-18] Docs-only CI shortcut reuses main-merge results from graph shape, not check evidence](https://github.com/p2pKit/P2pKit/issues/144) | low | Existing | `6995130bcdb2` |
 | [#146: [WSG-04] Shared createTestKit fixture leaves most kit-level tests on the legacy plaintext path](https://github.com/p2pKit/P2pKit/issues/146) | medium | Existing | `ee75358d1a74` |
 | [#151: [BUILD-53] SBOM content gate never runs against the bytes uploaded to Maven Central](https://github.com/p2pKit/P2pKit/issues/151) | medium | Existing | `79ec60f50419` |
 | [#152: [BUILD-64] Android-ABI task-graph dry-run has one unasserted caller; removable with a green CI](https://github.com/p2pKit/P2pKit/issues/152) | low | Existing | `27fec6a2268a` |
@@ -84,12 +83,12 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#357: [AUDIT][Low] LAN watcher test races a real executor against a virtual timeout](https://github.com/p2pKit/P2pKit/issues/357) | low | New audit | `6d9cd3c74724` |
 | [#358: [AUDIT][Low] Destination AuthenticationFailed escapes as ClassCastException and skips acceptance cleanup](https://github.com/p2pKit/P2pKit/issues/358) | low | New audit | `d424a23b00fb` |
 | [#359: [AUDIT][Low] Caller cancellation during failed destination abort skips terminal settlement](https://github.com/p2pKit/P2pKit/issues/359) | low | New audit | `de882840e1e2` |
+| [#360: [AUDIT][Low] All-tree CI whitespace gates reject immutable historical archives](https://github.com/p2pKit/P2pKit/issues/360) | low | New audit | `6995130bcdb2` |
 
-## Pending remediation (86)
+## Pending remediation (85)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
-| [#144: [BUILD-18] Docs-only CI shortcut reuses main-merge results from graph shape, not check evidence](https://github.com/p2pKit/P2pKit/issues/144) | low | Existing | — |
 | [#145: [WSA1-05] Receive-backlog byte cap allocates a full payload copy to measure and under-counts heap](https://github.com/p2pKit/P2pKit/issues/145) | low | Existing | — |
 | [#156: [F-07] TCP_NODELAY is unset and transport liveness relies on core deadlines](https://github.com/p2pKit/P2pKit/issues/156) | low | Existing | — |
 | [#158: [F-11] Inbound buffer depth diverges: 64 on JVM/Android (framework default) vs 16 on iOS](https://github.com/p2pKit/P2pKit/issues/158) | low | Existing | — |
@@ -207,3 +206,4 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
 | [#120: [WSA2-01] Hostile LAN host can exhaust the discovery budget and lock out all real peers](https://github.com/p2pKit/P2pKit/issues/120) | high | Existing | — |
+
