@@ -1,16 +1,18 @@
 # P2pKit audit continuation checkpoint
 
 **Updated: 8 September 2026. Continuation resumed; not a release approval.**
-The completed transfer stop is superseded by the owner's authorization to continue. #145, #367, #144/#360 and
-earlier repairs remain approved. #368's two-test-file correction is independently approved and pushed at `c221d54`.
-**70/182 repository-repair rows reviewed (38.5%); 112 rows remain (61.5%).**
-**Next active repair: #223 wrapper LF checkout policy**, then the separately reviewed serialized hosted facility/queue.
-At `c221d54`, strict combined check/Android sample/Dokka and a separate root check each pass **1,607/1,607**.
-Earlier #367/#145 failures, the first #368 oracle failure and the intended raw-ID mutation remain historical evidence.
-This records the approved #368 cycle, not later #223 drafts/commits. Preserve later work; never reset to this source.
-#133 independent interoperability remains NOT_STARTED. Overall **NOT_READY**. Read this with unchanged
-`AGENTS.md`/`CLAUDE.md` and the complete tracked issue/coverage ledgers. GitHub Actions is authorized for
-supported Mac/Windows/Apple gates, not a substitute for physical-device or independent acceptance.
+The completed transfer stop is superseded by the owner's authorization to continue. #223's two-file wrapper LF
+checkout-policy correction is independently approved and pushed at `8dd65ce`; #368, #145, #367, #144/#360 and
+all earlier approvals remain intact. **71/182 repository-repair rows reviewed (39.0%); 111 remain (61.0%).**
+**Active work: private preparation of the serialized hosted Mac/Windows/Apple validation facility**; no facility
+approval or execution is recorded here. Planned #268 is **NOT_STARTED**, after any freshly reproduced prerequisites.
+Thirteen final #223 static/policy/range gates pass at clean `8dd65ce`; this is not a new product Gradle check.
+The latest recorded product checks remain `c221d54`: strict combined check/Android sample/Dokka and separate root
+check each pass **1,607/1,607**. Earlier failures and controls retain their original outcomes and source bindings.
+Preserve later commits/user changes; never reset to a checkpoint. #133 independent interoperability remains
+**NOT_STARTED**; whole audit **NOT_READY**. Read unchanged `AGENTS.md`/`CLAUDE.md` and complete ledgers.
+GitHub Actions is authorized for supported host/simulator gates, not a substitute for physical-device or independent
+acceptance. Continue feasible work; no new checkpoint stop is requested.
 
 ## Resume from a fresh clone
 
@@ -36,7 +38,13 @@ not an account login, a native chat export, running agents or build processes.
 - Repository: <https://github.com/p2pKit/P2pKit>; branch `audit/complete-2026-09-04`, not merged into `main`.
 - Completed transfer baseline: `d823bb9cc0d187ec746714af67b08904a28331b6`, tree
   `44cd608fb05d16d3593d496b355e690af928a247`. Preserve every later commit and working change; never reset to it.
-- Latest independently reviewed source: **`c221d54b549d7d65d19fb47457416ac3e43e6b37`** (#368), tree
+- Latest independently reviewed source: **`8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b`** (#223), tree
+  **`facccdaae07e66ae7d3017ef8525c09611b2c70a`**. Exactly two attributes/regression files, 77 insertions/1 deletion;
+  parent `dfdb36744ea2a33f4b9e6455b4359e4639e8a359`. Thirteen final static/policy/range gates pass; no product check rerun.
+- Previous #368 administration: **`b4a9248c78ec8088ac5d5ea10fb71e2f741c89e1`**, tree
+  **`e34b9f583d8c480d36b67fc3a8f60c990fb63617`**. This is the exact administrative input to the #223 increment,
+  not a product-verification revision or an inferred later administrative publication.
+- Latest recorded product verification: **`c221d54b549d7d65d19fb47457416ac3e43e6b37`** (#368), tree
   **`c72ba8380a510c187298aa69efc721453c07f6c8`**. Exactly two test files; parent `0d88be3e3769b5133a985e4fe2fca782ba0ef2a6`.
   Clean strict Linux combined check/Android sample/Dokka **PASS 1,607/1,607**, 199 XMLs/234 tasks;
   separate root check **PASS 1,607/1,607**, 199 XMLs/194 tasks. No XML failures/errors/skips; not Apple execution.
@@ -57,6 +65,8 @@ not an account login, a native chat export, running agents or build processes.
   Earlier `bf34f70` watcher failure was corrected by #357.
 - #229's fourteen source blobs were unchanged from `bf34f70` at `6d9cd3c`, not current HEAD; #356 and #145
   subsequently changed affected source/docs. #133 publication/isolated-consumer evidence remains at `7127616`.
+- #223 source was pushed/ref-verified at 12:30:53 UTC; its outcome was refetched at 12:36:30 UTC, issue OPEN.
+  Source approval is separate from this administration and unexecuted foreign-host acceptance.
 - #368 source was pushed/ref-verified at 11:48:48 UTC; its outcome was refetched at 11:49:57 UTC, issue OPEN.
   These are individual publication observations, not a complete post-write GitHub refresh.
 - #367 source was pushed/ref-verified at 10:59:45 UTC; main was observed unchanged at
@@ -69,16 +79,16 @@ not an account login, a native chat export, running agents or build processes.
 
 | Disposition at this checkpoint | Count | Percentage of 182 inventoried issues |
 | --- | ---: | ---: |
-| Repository repairs with independent approval | **70** | **38.5%** |
-| Pending repairs | 90 | 49.5% |
+| Repository repairs with independent approval | **71** | **39.0%** |
+| Pending repairs | 89 | 48.9% |
 | External/platform validation | 21 | 11.5% |
 | Architecture/product decision (#120) | 1 | 0.5% |
-| **Total remaining issue rows** | **112** | **61.5%** |
+| **Total remaining issue rows** | **111** | **61.0%** |
 
 These percentages count repository-repair rows, not effort, file coverage, issue closure or production readiness.
 Rounded category percentages may not sum exactly to the separately rounded total.
-Since the transfer checkpoint, #145, #367 and #368 add three approved rows; #361–#368 add eight distinct findings.
-Pending repairs are **89 Low and one informational (#333)**. The inventory includes **49 new-audit findings**.
+Since the transfer checkpoint, #145, #367, #368 and #223 add four approved rows; #361–#368 add eight distinct findings.
+Pending repairs are **88 Low and one informational (#333)**. The inventory includes **49 new-audit findings**.
 External acceptance on approved rows remains incomplete: #133 NOT_STARTED and #367 Windows/Intel NOT_EXECUTED.
 
 The exhaustive sealed **10:24:33–10:30:05 UTC** refresh captured 288 issues (181 open/107 closed) and 79 PRs
@@ -90,8 +100,12 @@ records, raw captures and the initial reference-parser analysis remain historica
 **#368 was individually filed/refetched at 10:50:42 UTC**: known totals become 289 issues / 182 open / 79 PRs,
 not a complete post-addition refresh. #367's 11:01 and #368's 11:49:57 outcomes are individual observations. Per-endpoint
 captures are not transactional or permanently current; refresh before relying on live state.
+A later **12:28:25 UTC all-state list** directly observes **289 issues / 182 open / 79 PRs (7 open)**.
+It is not a new complete-history capture and predates #223 publication/outcome verification. The #223
+**12:36:30 UTC** outcome is an individual observation, not a complete post-write refresh; older list-bound
+row states and their exhaustive refresh/addition records keep their original scope.
 
-All 70 approved repository-repair rows are in branch history; none was closed, merged or released by these pushes.
+All 71 approved repository-repair rows are in branch history; none was closed, merged or released by these pushes.
 #325's protected-file exception remains. #240's spurious dependency `0` is only an inventory extraction correction:
 its body says `transport #0`, not GitHub issue 0. No new product defect, #240 repair or count change follows.
 See [all dispositions](docs/audit/2026-09-04/issues.md) and
@@ -103,7 +117,35 @@ Recorded cycles include dependency/provenance/publication gates, coroutine cance
 secure-v2 tests, provisioning callbacks, sample pairing/privacy, file source/destination safeguards, diagnostics,
 Android API24/25 diagnostics and iOS integration. These are scoped repairs, not proof of complete subsystem correctness.
 
-## Latest #368 API24 export-failure fixture correction
+## Latest #223 wrapper LF checkout-policy correction
+
+The two-file correction is independently **APPROVED** and pushed at
+`8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b`, tree `facccdaae07e66ae7d3017ef8525c09611b2c70a`.
+Fresh `/root/review_223_r1` found no actionable findings. Source/ref verification was **12:30:53 UTC**;
+the [safe outcome](https://github.com/p2pKit/P2pKit/issues/223#issuecomment-5585231528) was refetched
+**12:36:30 UTC**, issue OPEN. See [the scoped report](docs/audit/2026-09-04/repairs/223.md).
+
+`.gitattributes` now explicitly pins `gradlew text eol=lf`. Wrapper bytes/checksums, the batch LF rule,
+ABI/archive exceptions, production source and protected guides are unchanged. A real isolated Linux Git
+checkout reproduces the original defect: `true` creates 248 CR bytes and the unchanged checker rejects the
+POSIX checksum, while `false`/`input` pass and the index/batch launcher remain LF.
+
+The final regression checks all three modes, exact attributes/index/HEAD preservation, two attribute mutations
+and a restored checkout, retaining all four wrapper-tamper controls. Original attributes plus final tests still
+fail at the intended `true`-mode checksum; correction/restoration and precommit source bindings are retained.
+**Thirteen final static/policy/range gates PASS at clean `8dd65ce`**, including all 51 archive-whitespace assertions.
+The reviewer independently rehashed **215 files / 3,129,690 bytes**. Seventeen own serialized leaves and a
+separate sealer finalized with stop exit zero/no owned survivors; sealer cleanup ended **12:22:07 UTC**.
+
+This is **Linux Git/shell evidence**, not native Windows/macOS or all-text checkout certification. No product
+`check` was rerun for #223: the latest recorded product checks remain the separate #368 `c221d54` runs below.
+Do not blanket-renormalize or overwrite existing clones/user changes. Next is the serialized hosted-validation facility
+(currently private, unapproved/unexecuted preparation; fresh independent review required), then #268 after any
+freshly reproduced prerequisites and the remaining dependency-aware queue. #268 is not started;
+#367 foreign-host acceptance remains **NOT_EXECUTED**.
+**#133 NOT_STARTED; whole audit NOT_READY.** Continue feasible work without a checkpoint stop.
+
+## Previous #368 correction and latest recorded product checks
 
 The two-test-file repair is independently **APPROVED** and pushed at
 `c221d54b549d7d65d19fb47457416ac3e43e6b37`, tree `c72ba8380a510c187298aa69efc721453c07f6c8`.
@@ -133,7 +175,8 @@ Production normalization, exporter/replacement paths, API, dependencies, existin
 These are **Linux host/classloader/shadow results**, not ART/device or fresh Windows/macOS/Apple execution.
 Apple skips and cinterop/ABI-unavailable diagnostics remain in the logs; zero skipped XML cases does not mean
 Apple ran. #367 Windows/Intel acceptance, final consumer/release gates and physical/hostile-network/independent/
-professional-crypto validation remain pending. #133 is **NOT_STARTED**; whole audit **NOT_READY**. Next is #223.
+professional-crypto validation remain pending. #133 is **NOT_STARTED**; whole audit **NOT_READY**.
+The then-next #223 repair is approved above; current active work is private hosted-facility preparation, not #268.
 
 ## Historical #367 repository-source correction
 
@@ -167,7 +210,8 @@ not authentication of arbitrary well-formed hashes or foreign-host execution.
 The original #145 failures below and both #367 full-check failures remain historical failures. At the
 #367 checkpoint the last successful integration was historical `6995130`, not `0d88be3`; later #368
 Linux passes are recorded separately above. Windows/Intel/Apple acceptance is **NOT_EXECUTED** in that
-cycle and not discharged by source approval. The former next #368 repair is now approved; #223 is next. #133 independent interoperability remains **NOT_STARTED**;
+cycle and not discharged by source approval. Former next repairs #368 and #223 are now approved above;
+private hosted-facility preparation is current, with #268 only planned. #133 remains **NOT_STARTED**;
 physical-device/ART, hostile-network, independent-implementation and professional-crypto acceptance remain
 separate. Whole audit **NOT_READY**. No merge, closure, release, tag or settings change is authorized.
 
@@ -220,7 +264,8 @@ Earlier #360 repairs the pre-existing all-tree whitespace blocker without modify
 Three exact-path/category exceptions preserve bytes and require SHA-256 integrity in head, index and worktree at
 both actual gate entry points. Fresh `/root/review_360_r1` **APPROVED** the complete seven-file correction at `6995130`.
 The original pre-#144 manual gates both exited 2; the ordinary-range control passed. Final 51 labeled assertions and
-ten expected-red controls/two positive controls establish the correction; #223's separate wrapper defect stays pending.
+ten expected-red controls/two positive controls establish the correction. #223 was then a separate pending
+wrapper defect; its later independent correction is recorded above. The original #360 report remains unchanged.
 See [the #360 report](docs/audit/2026-09-04/repairs/360.md) and [verified outcome](https://github.com/p2pKit/P2pKit/issues/360#issuecomment-5580382007).
 
 #144 now classifies every complete main-push delta instead of inferring passed checks from graph/tree equality.
@@ -440,6 +485,7 @@ Read the [safe repair report](docs/audit/2026-09-04/repairs/325.md) and
 
 | Evidence | Result and limitation |
 | --- | --- |
+| #223 final Linux static/policy/range gates at **`8dd65ce`** | **13 PASS**; three actual checkout modes, two attribute mutations/four preserved tamper controls, 51 archive assertions. Original negative controls retain FAIL1; no new product Gradle check or native Windows/Mac result |
 | #368 clean Linux combined `check`, Android assembly and strict core Dokka at **`c221d54`** | **1,607 passes**, zero failures/errors/skips; 199 XMLs, 234 executed tasks. JVM/Android host only; no Apple execution |
 | #368 separate clean Linux `./gradlew check --console=plain` at **`c221d54`** | **1,607 passes**, zero failures/errors/skips; 199 XMLs, 194 executed tasks. Overlaps the combined scope; not additional cases or later #223 evidence |
 | #145 combined Linux `check`, Android assembly and strict core Dokka at **`0423e96`** | **FAIL before tests**, six executed tasks; missing strict Native Linux checksum. Not a full-check/sample/Dokka pass |
@@ -555,20 +601,26 @@ Failures/controls retain their actual results. Every own invocation stops its ta
 successfully, leaves no owned survivors and removes only confirmed disposable outputs after evidence
 retention. These receipts do not certify later #223 work or unrelated workers.
 
-## Next: #223 and the remaining queue
+The separate #223 seal covers **215 files / 3,129,690 bytes**, seventeen own serialized fixture/policy leaves
+plus a separate sealer (final cleanup **12:22:07 UTC**). Logs and intended failures are retained, all stops
+exit zero and no owned survivors remain. Fixture removal is verified; these were not product Gradle builds.
+Source/protected files, shared caches, private evidence and unrelated tasks remain. No later hosted-facility
+cleanup or execution is inferred from the #223 receipts.
 
-1. The transfer stop is completed and superseded. #368, #145, #367, #360, #144 and earlier scoped corrections
+## Next: hosted validation facility, then the remaining queue
+
+1. The transfer stop is completed and superseded. #223, #368, #145, #367, #360, #144 and earlier scoped corrections
    are approved/pushed; do not reimplement them or relabel earlier failures. Preserve protected files, immutable
    archives/releases and all **0.8.0+** admission-tightening restrictions (#229/#356/#332/#145).
-2. Next [#223](https://github.com/p2pKit/P2pKit/issues/223): the wrapper LF checkout policy. Fresh isolated
-   Linux Git checkouts at `c221d54` reproduce the unchanged checker rejecting CRLF `gradlew` with
-   `core.autocrlf=true`; false/input controls pass and `gradlew.bat` stays LF. This is baseline reproduction,
-   not an approved repair or native Windows execution. Preserve any later draft/commits and the exact launcher
-   checksums; do not weaken the checker or reinterpret intended failures as production passes.
-3. After #223's final independent review, continue the separately reviewed, serialized Mac/Windows/Apple
-   validation facility and remaining dependency-aware repairs. #301/#303 archive retention stays intact.
-4. Continue **90 pending repairs (89 Low, one informational #333)**, 21 external rows and #120's architecture
-   decision. #361–#366 remain filed/pending; #367/#368 have scoped source approval. Do not refile them.
+2. The **sole active implementation** is the serialized Mac/Windows/Apple hosted-validation facility, currently
+   **private preparation, unapproved and unexecuted** in this record. Finish its focused implementation, evidence
+   and fresh independent review before use. Preserve any newer work rather than resetting to this checkpoint.
+3. Any freshly reproduced hosted prerequisites need their own sequential correction and fresh final-revision
+   review before planned [#268](https://github.com/p2pKit/P2pKit/issues/268), then the remaining dependency-aware
+   inventory. #268 is **NOT_STARTED**, not active while facility work proceeds. Preserve Binary defensive ownership;
+   read the complete current issue/callers before adding an allocation-free public size accessor.
+4. Continue **89 pending repairs (88 Low, one informational #333)**, 21 external rows and #120's architecture
+   decision. #361–#366 remain filed/pending; #367/#368/#223 have scoped source approval. Do not refile them.
    Reproduce and duplicate-check [unverified follow-ups](docs/audit/2026-09-04/followups.md) separately.
 5. #367's Windows/Intel acceptance is **NOT_EXECUTED**, not waived by source approval or Linux passes.
    GitHub Actions is authorized for supported host/simulator gates; bind exact source/run/artifacts and serialize
@@ -586,8 +638,9 @@ corroboration and combined-source consumer/release/Swift/XCFramework gates remai
    [unverified follow-ups](docs/audit/2026-09-04/followups.md). Preserve all existing user changes.
 2. Record exact branch/commit/tree/status and refresh full GitHub issues/comments/linked PRs. Reconcile new evidence
    by underlying cause, not similar titles. Use exact local drafts if access is unavailable; never claim remote writes.
-3. Continue all actionable issues sequentially, prioritizing severity/dependencies: #223 and the
-   serialized hosted facility/remaining queue. Refresh complete histories/current callers and deduplicate new concerns.
+3. Continue all actionable issues sequentially, prioritizing dependencies: private hosted facility first, any
+   freshly reproduced prerequisites next, planned #268 then remaining inventory. Refresh full histories/current
+   callers and deduplicate new concerns; private preparation is not an approved or executed gate.
 4. Track verified distinct discoveries with severity, platforms, paths/lines, reproduction, root cause, impact,
    correction and regression plan. Respect `SECURITY.md`. Keep suspicions separate; do not duplicate existing issues.
 5. For every issue: confirm behavior/callers, fix the whole root cause, add meaningful regressions, run focused checks,
@@ -643,35 +696,37 @@ verification scope, blockers, cleanup and practical readiness limits at each han
 > Continue the complete P2pKit audit from AUDIT_CHECKPOINT.md and docs/audit/2026-09-04/. Use only branch
 > audit/complete-2026-09-04; record actual HEAD/tree/status and preserve later commits/user changes. Read unchanged
 > AGENTS.md/CLAUDE.md, complete ledgers, relevant reports/testing/release docs and full GitHub issue/comment/PR/
-> decision histories. The transfer stop is completed and superseded. 70/182 approved repository-repair rows
-> (38.5%),112 remaining(61.5%):90repairs(89Low,1informational333),21external,#120decision. Not effort or readiness.
-> #368 two-test-file repair APPROVED/pushed atc221d54b549d7d65d19fb47457416ac3e43e6b37,
-> tree c72ba8380a510c187298aa69efc721453c07f6c8; fresh /root/review_368_r1 found no actionable findings.
-> Focused10PASS; strict combinedcheck/Androidsample/coreDokka PASS1607/199XML/234tasks; separate rootcheck
-> PASS1607/199XML/194tasks. Each contains110diagnostics cases; counts overlap, not additive coverage.
-> Earlier367fullcheckFAIL1297+1/151XML/172tasks,145failures,first368uppercase-oracleFAIL9+1 and intended
-> raw-ID exact-name mutation failure remain failures. Original1298case identities retained;309downstream cases
-> newly reached. Historical6995130 PASS2459/one manualskip has different platform scope, not a new Linux run.
-> #367 source remains approved0d88be3; Windows/Intel/Apple execution is not established. #145 approved0423e96
-> uses a bounded policy estimate, not universal heap/Native/zero-allocation proof. Preserve0.8.0+ restrictions,
-> security/ownership and immutable archive/release bytes. Do not repeat#368/#145/#367/#144/#360.
-> Active next#223wrapperLF: freshc221Linux isolated-checkout reproduction rejects autocrlf=true CRLFgradlew
-> while false/input controls pass; no approved223revision here. Preserve later drafts/commits. Then separately
-> reviewed serialized hosted facility and remaining sequential repairs. No Windows runtime pass is inferred.
-> GitHub exhaustive10:24–10:30capture:288issues/181open/79PRs,all367histories and79PRdetails fresh,1519GETs.
-> #368individual10:50:42addition gives known289issues/182open;367outcome11:01 and368outcome11:49:57 are
-> individual observations, not a complete post-write refresh. Earlier captures/seals stay historical; refresh live state.
-> One active repair at a time. Delegate bounded independent investigations/reviews; create a fresh reviewer after
-> every fix, give full issue/exactdiff/callers/platform/evidence and resolve every actionable finding before proceeding.
-> Never overlap builds across local/hosted agents. Use bounded memory,twoGradleworkers,no parallel execution,
-> strictverification; preserve logs after every build/test/failure/cancellation, run task-isolated wrapper--stop,
-> retire only owned survivors and remove only confirmed disposable outputs after dependent checks. Never blanket
-> delete build directories:buildSrc/src/main/java/dev/p2pkit/build is source. Preserve shared caches/private evidence.
-> Owner authorizes GitHub Actions for supported Mac/Windows/Apple gates, not main merge/settings/tags/releases/closure.
-> Track confirmed distinct defects after underlying-cause duplicate checks; keep suspicions separate. Update safe
-> issue/coverage/verification/limitations/cleanup records and push focused source/checkpoints only to audit branch.
-> Finish current whole-repository corroboration,./gradlew check --console=plain, applicable samples/consumers and
-> inspected release/Apple gates. Linux host results and zero XMLskips do not establish Apple/ART/device execution.
-> Physical devices,ART/OEM,hostile networks,independent implementations and professional crypto remain separate.
-> #133NOT_STARTED; whole auditNOT_READY. Cloning transfers source/context, not credentials/private logs/stashes/
-> active sessions. Continue feasible work beyond administrative checkpoints.
+> decision histories. The transfer stop is completed and superseded. 71/182 approved repository-repair rows
+> (39.0%),111remaining(61.0%):89repairs(88Low,1informational333),21external,#120decision. Not effort or readiness.
+> #223 two-file wrapper LF correction APPROVED/pushed at8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b,
+> tree facccdaae07e66ae7d3017ef8525c09611b2c70a; fresh /root/review_223_r1 found no actionable findings.
+> Final13static/policy/range gatesPASS atclean8dd; real isolatedLinux checkout reproduces original true-mode
+> rejection/248CRbytes with false/input controls. Two attribute mutations and four oldtamper controls retained;
+> original-attributes/final-tests FAIL1 remains intended evidence. No productGradle check rerun for223.
+> Lastproductchecks remain368source c221d54b549d7d65d19fb47457416ac3e43e6b37: combinedcheck/Androidsample/
+> coreDokka PASS1607/199XML/234tasks; separatecheck PASS1607/199XML/194tasks. Counts overlap, not new223results.
+> Earlier367wholeFAIL1297+1/151XML/172tasks,145failures,first368uppercase-oracleFAIL9+1 and intendedraw-ID
+> mutation remain failures. Historical6995130 PASS2459/one manualskip has different platform scope.
+> Preserve0.8.0+ admission restrictions, security/ownership and immutable archive/release bytes. Do not repeat
+> #223/#368/#145/#367/#144/#360. #145 estimate is not universal heap/Native/zero-allocation proof.
+> ActiveWorkItem is private,unapproved,unexecuted serialized hosted Mac/Windows/Apple facility; activeIssue=null.
+> Finish its separate implementation/fresh review. Any freshly reproduced prerequisites require sequentialrepair/
+> independentreview before planned#268(NOT_STARTED), then remainingdependency-aware inventory. PreserveBinary
+> defensivecopies; source review is not foreign-host acceptance. #367Windows/Intel remainsNOT_EXECUTED.
+> Latestall-state list12:28:25UTC:289issues/182open/79PRs(7open), not freshfullhistories. Exhaustive10:24–10:30
+> capture remains288issues/181open/79PRs,all367histories/79PRdetails fresh,1519GETs. 223source12:30:53 and
+> outcome12:36:30 are individualobservations, not post-write complete refresh. Preserveearliercaptures; refreshlive.
+> One active implementation at a time. Delegate bounded independent investigations/reviews; create a fresh reviewer
+> after every fix, give fullissue/exactdiff/callers/platform/evidence and resolve every actionable finding first.
+> Never overlap local/hosted builds. Use boundedmemory,twoGradleworkers,noparallel,strictverification; preserve
+> logs after every build/test/failure/cancellation, run task-isolatedwrapper--stop, retire only owned survivors,
+> remove only confirmed disposable outputs after dependentchecks. Never blanketdelete builddirectories:
+> buildSrc/src/main/java/dev/p2pkit/build is source. Preserve sharedcaches/privateevidence/userchanges.
+> GitHub Actions is authorized for supported Mac/Windows/Apple gates, not mainmerge/settings/tags/releases/closure.
+> Track confirmed distinct defects after underlying-cause duplicatechecks; keep suspicions separate. Update safe
+> issue/coverage/verification/limitations/cleanup records; push focused source/checkpoints only to auditbranch.
+> Finish currentwhole-repository corroboration,./gradlew check --console=plain, applicable samples/consumers and
+> inspectedrelease/Apple gates. Linuxhost/zeroXMLskips do not establishApple/ART/device execution. Physicaldevices,
+> ART/OEM,hostilenetworks,independentimplementations and professionalcrypto remain separate.
+> #133NOT_STARTED;wholeauditNOT_READY. Cloning transfers source/context, not credentials/private logs/stashes/
+> active sessions. Continue all feasiblework beyond administrativecheckpoints.

@@ -3,7 +3,9 @@
 This file distinguishes unverified hypotheses from separately promoted/repaired findings. Reproduce suspicions at
 the current tree and read complete related issue histories before tracking a new defect. Record negative results
 as well as confirmations. Promoted findings below are not unfiled concerns or repair-completion claims unless
-an exact independent approval is stated. The transfer stop is superseded; current queue starts #223; #367/#368 have scoped source approval below.
+an exact independent approval is stated. The transfer stop is superseded; #223/#367/#368 have scoped source
+approvals below. Active work is private, unapproved/unexecuted hosted-facility preparation; #268 is only planned
+after any freshly reproduced prerequisites and sequential independent reviews. Continue feasible work.
 
 ## Desktop large-text/RTL sidebar applicability
 
@@ -135,10 +137,28 @@ byte-stable checkout attributes and mandatory head/index/worktree hashes now pre
 unchecked replacement. No archive contents were modified; #301/#303's retention decision is intact.
 
 See [the repair report](repairs/360.md) and [verified outcome](https://github.com/p2pKit/P2pKit/issues/360#issuecomment-5580382007). #360 was independently approved before
-#144's final review; both final actual gate entry points pass. #223's wrapper LF defect remains separate and pending.
+#144's final review; both final actual gate entry points pass. #223's wrapper LF defect was then separate and
+pending; its later independent correction is recorded below without rewriting the original #360 report.
 The initial failed replay and later verifier failures remain original failures, not relabeled evidence.
 Do not refile this root cause or claim every archived file now has an integrity pin. Plain Git honors attributes
 but does not enforce the three pins; use the actual repository gate. No hosted CI or Windows execution is claimed.
+
+## Wrapper checkout line-ending policy — existing #223 approved
+
+The separate pre-existing [#223](https://github.com/p2pKit/P2pKit/issues/223) was freshly reproduced with actual
+isolated Linux Git checkouts: `autocrlf=true` converts the unpinned POSIX launcher to 248 CR bytes, and the real
+unchanged checker rejects its checksum; false/input and the batch launcher remain LF. This was a Low checkout/
+developer-experience defect, not demonstrated tampering, a production defect or a newly filed audit finding.
+
+The exact two-file correction is independently approved/pushed at `8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b`;
+see [the safe report](repairs/223.md) and
+[verified outcome](https://github.com/p2pKit/P2pKit/issues/223#issuecomment-5585231528). Explicit `gradlew text eol=lf`
+and real checkout regressions preserve wrappers/pins, batch/ABI/archive rules and all four old tamper controls.
+Thirteen final static/policy/range gates pass; original-attributes rejection and two attribute mutations remain
+meaningful negative evidence. No product Gradle check or native Windows/macOS acceptance follows from this cycle.
+Do not refile this cause, blanket-renormalize existing clones, or reinterpret the unchanged #360 report's historical
+pending note as current. Active hosted-facility preparation remains private/unapproved/unexecuted here, with #268
+only planned after any freshly reproduced prerequisites; no checkpoint stop or whole-audit readiness is implied.
 
 ## Resumed corroboration: confirmed and filed #361–#368
 

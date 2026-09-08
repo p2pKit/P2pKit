@@ -4,7 +4,7 @@
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
   "githubIssueListRefreshedUtc": "2026-09-08T10:30:05.205645+00:00",
-  "provenance": "Curated recovery/continuation record; original inventorySnapshotUtc stays historical. Full issue discussions and affected callers, not excerpts, govern repairs. Earlier assessments/outcomes are not fresh executions; raw private evidence is not inGit. Rows reconcile the exhaustive 10:24–10:30UTC fresh-history capture plus individually filed/refetched368 at10:50:42UTC. 367 and368 source approvals/pushes/outcomes are later scoped disposition/publication observations, not post-outcome complete GitHub refreshes, closure, merge or release. Current368approval/verification is bound to c221d54; earlier367/145 assessments/failures retain their original scope, and later223work is not approved here. Previous145 verification and refresh fields are preserved under explicit historical keys. Approved repository scope excludes unexecuted foreign-host/device/independent acceptance; whole audit NOT_READY.",
+  "provenance": "Curated recovery/continuation record; original inventorySnapshotUtc and historical assessments keep their original scope. Full issue discussions/current callers govern repairs; rawprivate evidence is not inGit. Exhaustive10:24-10:30UTC full-history capture and368individualaddition remain unchanged. Latest12:28:25all-state list observes289issues/182open/79PRs, not fresh fullhistories; explicit latestGithubListObservation avoids rebinding older row state. 223source approval/static verification is bound to8dd65ce; source ref-verified12:30:53 and outcome individually refetched12:36:30, issueOPEN. Lastproductchecks remain368sourcec221d54, not223or lateradministration. Earlier145/367/368failures and all181otherrows are preserved; old360assessment then-pending223wording is superseded by the current223record without rewriting it. Private hostedfacility preparation is unapproved/unexecuted here,268onlyplannedNOT_STARTED; no checkpointstop. Source approval does not complete foreignhost/device/independentacceptance, closeissues, merge or release. WholeauditNOT_READY;133NOT_STARTED.",
   "issues": [
     {
       "number": 21,
@@ -2107,14 +2107,51 @@
         142,
         150
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Exact two-file checkout-policy repair independently APPROVED at8dd65ce/treefacccdaa; source ref-verified12:30:53UTC, outcome refetched12:36:30UTC, issueOPEN. Actual originalc221Linux checkout:true creates248CRbytes inPOSIXgradlew, unchangedcheckerFAIL1 with exactchecksumdiagnostic; false/input pass, index/batchremainLF. Adds explicitgradlew text eol=lf and realisolatedGit checkoutregressions. Allthree modes, exactattrs/index/HEAD, twoattribute mutations and restoredpositive; fouroldtampercontrols preserved. Originalattributes+finaltests intentionallyFAIL1, correctedattributes restoredexactly; precommitpositive/negative sourcebindings retained, not calledclean8ddruns. Thirteen finalclean8ddstatic/policy/rangegatesPASS, including51archiveassertions. Wrappers/pins/versions,batchLF,ABI/archiveexceptions,production/API/protocol/dependencies/protectedguidesunchanged. Independent review rehashed215files/3129690bytes,17ownleaves plusseparate sealer; stops0/source stable/noowned survivors. No newproductGradlecheck: lastrecordedcombined1607/199XML/234tasks and separate1607/199XML/194tasks stayat368c221source. LinuxGit/shell only, notnativeWindows/Mac/alltextcheckout/Apple/ART/device/hostilenetwork/independentinterop/professionalcrypto/finalconsumer/releaseacceptance. Do not blanket-renormalize existingclones/userchanges. WholeauditNOT_READY;133NOT_STARTED; laterfacilitypreparation unapproved/unexecuted and268notstarted.",
+      "recordedFixCommitsOrFinalRevision": [
+        "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_223_r1 APPROVED exacttwo-filesource 8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b/tree facccdaae07e66ae7d3017ef8525c09611b2c70a; no actionable findings. Full issue/current callers/related decisions, exact sourcepatch, actual checkout/mutation/restoration and finalized rawreceipts inspected; all215sealedhashesmatch. Twenty genuine trackedfull-textreads separatelyreceipted; onlytwochangedsourcerows are promotedbythisadministration. Source review SHA256 ef1bc19690ed2d78d4731504d80b390feb24e7f6fa79305d36d96ef9c384a47f; read-scope 3e36a7c6f224e54164053c6b64c44657f6a83ded4eaefc46bd0e59361b209a10; independent evidenceinspection 3588434db052c54d4b35c3ca694198891c0acfe0a0f445c04562145ea9c3f07b; sourcepatch 552870a648c4bbd6c4e8327bf2461c790f8b16b614e98d95ac0a69322009b541; manifest 9174079a4d05d2d143dd929a37457cfbdafd4e91c236220f7509598f37123367. Reviewer ran no builds/tests. Sourceapproval is not lateradministration/facility or platformacceptance.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/223#issuecomment-5406163481"
-      ]
+        "https://github.com/p2pKit/P2pKit/issues/223#issuecomment-5406163481",
+        "https://github.com/p2pKit/P2pKit/issues/223#issuecomment-5585231528"
+      ],
+      "historicalPreRepairRecord": {
+        "number": 223,
+        "title": "[BUILD-25] .gitattributes pins gradlew.bat line endings but leaves gradlew to core.autocrlf",
+        "url": "https://github.com/p2pKit/P2pKit/issues/223",
+        "origin": "PRE_EXISTING",
+        "severityAtCheckpoint": "low",
+        "reportedProblemExcerpt": "`.gitattributes` pins an explicit line-ending attribute for `gradlew.bat` but declares nothing for `gradlew`, and there is no blanket `* text=auto` fallback. On a maintainer host with `core.autocrlf=true`, `gradlew` checks out with CRLF, so its on-disk SHA-256 no longer matches the reviewed constant in `scripts/check-gradle-wrapper.sh`. The wrapper gate then fails with `gradlew checksum mismatch` — a message that reads like a supply-chain compromise but is purely a checkout artifact. I reproduced this on the current `main` checkout.",
+        "affectedComponentsExcerpt": "`.gitattributes` is 9 lines in full. The entire file:",
+        "relatedIssuesAndDependencies": [
+          141,
+          142,
+          150
+        ],
+        "status": "PENDING_REMEDIATION",
+        "githubStateAtListRefresh": "open",
+        "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded",
+        "publicInvestigationAndOutcomeUrls": [
+          "https://github.com/p2pKit/P2pKit/issues/223#issuecomment-5406163481"
+        ]
+      },
+      "repositoryScopeStatus": "APPROVED",
+      "subsequentGithubOutcomeVerification": {
+        "verifiedUtc": "2026-09-08T12:36:30.939504+00:00",
+        "url": "https://github.com/p2pKit/P2pKit/issues/223#issuecomment-5585231528",
+        "id": 5585231528,
+        "issueRemainsOpen": true,
+        "verifiedBodyEquality": true,
+        "bodySha256": "954438c2b07bb566969148a7902fc976a54033d4b13e005c35bb3d52636ac4e7",
+        "scope": "Individually verified approved-source outcome; native Windows/macOS and all-text checkout acceptance remain separate, whole audit NOT_READY."
+      },
+      "externalAcceptanceStatus": "NOT_EXECUTED",
+      "externalAcceptanceScope": "NativeWindows/macOS and all-text checkout acceptance were not executed by223. No Apple/ART/physicaldevice/hostilenetwork/independentinteroperability/professionalcrypto/finalisolatedconsumer/release acceptance follows from Linuxlauncherfixtures."
     },
     {
       "number": 225,
@@ -4796,7 +4833,7 @@
       "externalAcceptanceScope": "No fresh Windows/macOS/Apple/ART/physical-device execution, hostile-network, independent interoperability, professional cryptographic, final isolated-consumer or release acceptance from this host fixture repair."
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-08T12:25:06.517016+00:00",
+  "lastDispositionUpdateUtc": "2026-09-08T13:18:49.492924+00:00",
   "githubRefreshEvidence": {
     "startedUtc": "2026-09-08T10:24:33.734412+00:00",
     "endedUtc": "2026-09-08T10:30:05.205645+00:00",
@@ -4885,5 +4922,20 @@
     }
   ],
   "previousDispositionUpdateUtc145": "2026-09-08T09:47:15.695353+00:00",
-  "previousDispositionUpdateUtc367": "2026-09-08T11:38:51.465095+00:00"
+  "previousDispositionUpdateUtc367": "2026-09-08T11:38:51.465095+00:00",
+  "previousDispositionUpdateUtc368": "2026-09-08T12:25:06.517016+00:00",
+  "previousProvenance368": "Curated recovery/continuation record; original inventorySnapshotUtc stays historical. Full issue discussions and affected callers, not excerpts, govern repairs. Earlier assessments/outcomes are not fresh executions; raw private evidence is not inGit. Rows reconcile the exhaustive 10:24–10:30UTC fresh-history capture plus individually filed/refetched368 at10:50:42UTC. 367 and368 source approvals/pushes/outcomes are later scoped disposition/publication observations, not post-outcome complete GitHub refreshes, closure, merge or release. Current368approval/verification is bound to c221d54; earlier367/145 assessments/failures retain their original scope, and later223work is not approved here. Previous145 verification and refresh fields are preserved under explicit historical keys. Approved repository scope excludes unexecuted foreign-host/device/independent acceptance; whole audit NOT_READY.",
+  "latestGithubListObservation": {
+    "startedUtc": "2026-09-08T12:28:21.418285+00:00",
+    "endedUtc": "2026-09-08T12:28:25.847519+00:00",
+    "issues": 289,
+    "openIssues": 182,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "allStateListSha256": "06bae6da0253a48f71f3190baae08964e8d707d9dd1f24f19c0a3e1a38decb37",
+    "freshCompleteHistories": false,
+    "scope": "Later all-state list only, before223source/outcome publication; not new complete bodies/comments/timelines/PRdetails capture. Earlier githubIssueListRefreshedUtc/refresh evidence/addition fields retain their10:30scope, including368absence from that older list. The12:36outcome verification is individual, not a complete post-write refresh. Refresh live state before relying on it."
+  }
 }

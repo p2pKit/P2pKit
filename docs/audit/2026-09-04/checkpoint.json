@@ -5,21 +5,21 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
-  "sourceCheckpointTree": "c72ba8380a510c187298aa69efc721453c07f6c8",
+  "sourceCheckpointCommit": "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b",
+  "sourceCheckpointTree": "facccdaae07e66ae7d3017ef8525c09611b2c70a",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
-  "activeIssue": 223,
-  "activeIssueState": "BASELINE_REPRODUCED_NEXT_SEQUENTIAL_REPAIR_NO_APPROVED_223_REVISION_IN_THIS_368_CHECKPOINT",
+  "activeIssue": null,
+  "activeIssueState": "NO_ACTIVE_ISSUE_REPAIR; hosted facility is the sole active implementation",
   "issueCountDenominator": 182,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
-    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 70,
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 71,
     "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
-    "PENDING_REMEDIATION": 90
+    "PENDING_REMEDIATION": 89
   },
-  "completedIssueCount": 70,
-  "remainingIssueCount": 112,
-  "percentageMeaning": "Independently approved repository-repair rows/182:70(38.5%) approved and112(61.5%) remaining;90pendingrepairs(89Low,1informational333),21external,1architecture120. Not effort/GitHubclosure/readiness;Linux368passes do not discharge367foreign-host acceptance or133independent interoperability.",
+  "completedIssueCount": 71,
+  "remainingIssueCount": 111,
+  "percentageMeaning": "Independently approved repository-repair rows/182:71(39.0%) approved and111(61.0%) remaining;89pendingrepairs(88Low,1informational333),21external,1architecture120. Not effort/GitHubclosure/readiness. 223Linux checkout/static passes are not a new productcheck or367foreign-host/133independent acceptance.",
   "githubIssueListRefreshedUtc": "2026-09-08T10:30:05.205645+00:00",
   "githubTotalIssuesAtRefresh": 288,
   "githubOpenIssuesAtRefresh": 181,
@@ -29,7 +29,7 @@
   "scope": "Branch continuation only; not a merge, release, independent crypto assurance, or physical-device completion.",
   "preservedDraftCommit": "eb564e9487f2887f83f519575c82d4e7657864cb",
   "preservedDraftTree": "69161ac65e02bbf33d390bde2575d3131a9d7996",
-  "lastReviewedIssue": 368,
+  "lastReviewedIssue": 223,
   "lastIntegratedCheck": {
     "commit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
     "tree": "c72ba8380a510c187298aa69efc721453c07f6c8",
@@ -45,43 +45,222 @@
   },
   "protectedInstructionFilesCaveat": "Issue325 feasible correction preserves AGENTS.md:9 library-only SDK wording by owner instruction. Canonical setup explicitly warns about missing sample SDK. Literal alignment requires new owner authorization; not claimed fixed. CLAUDE.md unchanged.",
   "lastScopedVerification": {
-    "issue": 368,
-    "commit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
-    "tree": "c72ba8380a510c187298aa69efc721453c07f6c8",
-    "baselineCommit": "0d88be3e3769b5133a985e4fe2fca782ba0ef2a6",
-    "baselineTree": "db432eb14791d9637e812333305e811edceb834e",
-    "diffSha256": "e709be8718b76f3d275d8d6fa04ed91d395ab69de720c9bf90f8574d7dce6ef6",
+    "issue": 223,
+    "commit": "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b",
+    "tree": "facccdaae07e66ae7d3017ef8525c09611b2c70a",
+    "baselineCommit": "dfdb36744ea2a33f4b9e6455b4359e4639e8a359",
+    "baselineTree": "1b9e2c547079440e0416d2cf1faea136eaa80b97",
+    "diffSha256": "552870a648c4bbd6c4e8327bf2461c790f8b16b614e98d95ac0a69322009b541",
     "reviewVerdict": "APPROVED_REPOSITORY_SOURCE_ONLY",
-    "reviewer": "/root/review_368_r1",
-    "reviewedDate": "2026-09-08",
-    "reviewSha256": "25143aaf1aa380b468a1b3e2d539a9f1a688b7edaaf51c544f5d65434e0e2b2c",
-    "independentEvidenceInspectionSha256": "9e59e6cf0543eb2a8371100a989f995548b575504c0345e25ccbf763f6a45fb1",
+    "reviewer": "/root/review_223_r1",
+    "reviewedUtc": "2026-09-08T12:26:48.226905+00:00",
+    "reviewSha256": "ef1bc19690ed2d78d4731504d80b390feb24e7f6fa79305d36d96ef9c384a47f",
+    "independentEvidenceInspectionSha256": "3588434db052c54d4b35c3ca694198891c0acfe0a0f445c04562145ea9c3f07b",
+    "sourceReadReceiptSha256": "3e36a7c6f224e54164053c6b64c44657f6a83ded4eaefc46bd0e59361b209a10",
     "platforms": [
-      "Linux JVM API26-blocking classloader",
-      "synthetic SDK24/SDK25",
-      "Linux Android-host/shadow"
+      "Linux actual isolated Git checkout",
+      "Linux shell/static/policy fixtures"
     ],
-    "focusedPassed": 10,
-    "focusedXmlFiles": 1,
-    "focusedExecutedTasks": 12,
-    "focusedExecutionBinding": "See latestAffectedGateAttempt: precommit candidate; not clean c221d54 HEAD.",
-    "diagnosticsPassedPerFinalWholeCheck": 110,
-    "diagnosticsXmlFilesPerFinalWholeCheck": 12,
-    "staticAndRangeGates": 8,
-    "additionalInitialWhitespaceGate": "PASS",
-    "all1298EarlierCaseIdentitiesRetained": true,
-    "newlyReachedDownstreamCases": 309,
-    "onlyPriorOutcomeChange": "exportFailureWithoutApi26CleansOwnedStagingAndKeepsDestination failure becomes pass",
-    "finalWholeRunsHaveEqualCaseIdentitiesAndResults": true,
-    "manifestSha256": "74198991b7a95e8faef680a6571fdae6193483863674e83459a012d185b250de",
-    "sealedFiles": 3355,
-    "sealedBytes": 23948299,
-    "finalizedSerializedInvocationReceipts": 14,
-    "sharedEarlierFailedInvocations": 3,
+    "changedPaths": [
+      ".gitattributes",
+      "scripts/tests/check-gradle-wrapper-test.sh"
+    ],
+    "insertions": 77,
+    "deletions": 1,
+    "finalCleanSourceStaticAndRangeGates": 13,
+    "finalGates": [
+      {
+        "invocation": "223-final-wrapper",
+        "command": [
+          "bash",
+          "scripts/check-gradle-wrapper.sh"
+        ],
+        "startedUtc": "2026-09-08T12:13:25.413903+00:00",
+        "commandEndedUtc": "2026-09-08T12:13:25.614741+00:00",
+        "finishedUtc": "2026-09-08T12:13:26.801823+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "receiptSha256": "5eaa2852fe6c4e11c5845afde7c8100d1a88f4b43706f4431ef521762d25f4a5"
+      },
+      {
+        "invocation": "223-final-wrapper-tests",
+        "command": [
+          "bash",
+          "scripts/tests/check-gradle-wrapper-test.sh"
+        ],
+        "startedUtc": "2026-09-08T12:13:26.873641+00:00",
+        "commandEndedUtc": "2026-09-08T12:13:27.974952+00:00",
+        "finishedUtc": "2026-09-08T12:13:28.712995+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "receiptSha256": "d452167c5d6c088a2537370524440baac17a30c21d3ab323301cd901a1336ae1"
+      },
+      {
+        "invocation": "223-final-archive-whitespace-tests",
+        "command": [
+          "bash",
+          "scripts/tests/check-git-whitespace-test.sh"
+        ],
+        "startedUtc": "2026-09-08T12:13:28.782847+00:00",
+        "commandEndedUtc": "2026-09-08T12:13:33.098715+00:00",
+        "finishedUtc": "2026-09-08T12:13:33.979867+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "receiptSha256": "b0eb2bf26e87a051e47d1c09d56e0a415ca1d4c8a8acbbb80209161b1011ff95"
+      },
+      {
+        "invocation": "223-final-verification",
+        "command": [
+          "bash",
+          "scripts/check-dependency-verification.sh"
+        ],
+        "startedUtc": "2026-09-08T12:13:34.041679+00:00",
+        "commandEndedUtc": "2026-09-08T12:13:34.195222+00:00",
+        "finishedUtc": "2026-09-08T12:13:34.873552+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "receiptSha256": "49097fa9db368379abbe1da23b2757e478ea42a48ff8f65d5d82208d09866cdf"
+      },
+      {
+        "invocation": "223-final-layout",
+        "command": [
+          "bash",
+          "scripts/tests/check-repository-layout.sh"
+        ],
+        "startedUtc": "2026-09-08T12:13:34.935174+00:00",
+        "commandEndedUtc": "2026-09-08T12:13:35.237567+00:00",
+        "finishedUtc": "2026-09-08T12:13:35.971879+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "receiptSha256": "8241b54ebd06b453454cf2554b5988e68b150484c694c9e3d80a9565f96c4548"
+      },
+      {
+        "invocation": "223-final-osv-lock",
+        "command": [
+          "bash",
+          "scripts/tests/check-osv-lockfile-coverage.sh"
+        ],
+        "startedUtc": "2026-09-08T12:13:36.034006+00:00",
+        "commandEndedUtc": "2026-09-08T12:13:36.178534+00:00",
+        "finishedUtc": "2026-09-08T12:13:36.810755+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "receiptSha256": "a18547db5b9392a65af34fafc2c3b6dec9584143e26aa5d3ab90f6f866ecd6d6"
+      },
+      {
+        "invocation": "223-final-links",
+        "command": [
+          "bash",
+          "scripts/tests/check-markdown-links.sh"
+        ],
+        "startedUtc": "2026-09-08T12:13:36.873751+00:00",
+        "commandEndedUtc": "2026-09-08T12:13:37.074967+00:00",
+        "finishedUtc": "2026-09-08T12:13:37.807472+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "receiptSha256": "edded217ec308839b8d3fa132f5e88913fe7a43cb82255c4c68ff73419066364"
+      },
+      {
+        "invocation": "223-final-release-metadata",
+        "command": [
+          "bash",
+          "scripts/check-release-metadata.sh"
+        ],
+        "startedUtc": "2026-09-08T12:13:37.870306+00:00",
+        "commandEndedUtc": "2026-09-08T12:13:38.017089+00:00",
+        "finishedUtc": "2026-09-08T12:13:38.695889+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "receiptSha256": "2c0f73f5c26c47daa603e5fd9276eecf7e0b894370ec608a38914d266cf3e287"
+      },
+      {
+        "invocation": "223-final-whitespace",
+        "command": [
+          "bash",
+          "scripts/check-git-whitespace.sh",
+          "dfdb36744ea2a33f4b9e6455b4359e4639e8a359",
+          "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b"
+        ],
+        "startedUtc": "2026-09-08T12:13:38.737937+00:00",
+        "commandEndedUtc": "2026-09-08T12:13:38.886754+00:00",
+        "finishedUtc": "2026-09-08T12:13:39.520144+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "receiptSha256": "ac2b8c6d0e7ee94d235ac35e7e85f94eca0ba431f8f7e6257d95660f36f1dafe"
+      },
+      {
+        "invocation": "223-final-dependency-range",
+        "command": [
+          "bash",
+          "scripts/check-dependency-update.sh",
+          "dfdb36744ea2a33f4b9e6455b4359e4639e8a359",
+          "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b"
+        ],
+        "startedUtc": "2026-09-08T12:13:39.581543+00:00",
+        "commandEndedUtc": "2026-09-08T12:13:39.780161+00:00",
+        "finishedUtc": "2026-09-08T12:13:40.462314+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "receiptSha256": "3e7891c1ca3ac54645685bba3837e85edd8a840d5f56b7151382ff499a65b251"
+      },
+      {
+        "invocation": "223-final-dependency-policy",
+        "command": [
+          "bash",
+          "scripts/tests/check-dependency-update-policy-test.sh"
+        ],
+        "startedUtc": "2026-09-08T12:13:40.524863+00:00",
+        "commandEndedUtc": "2026-09-08T12:14:08.675138+00:00",
+        "finishedUtc": "2026-09-08T12:14:09.355212+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "receiptSha256": "45c5dec2cf8c176874150cf1f695475e1c9dbaead00c720e0cfd92d58bd922f1"
+      },
+      {
+        "invocation": "223-final-ci-policy",
+        "command": [
+          "ruby",
+          "scripts/tests/check-ci-scope-policy-test.rb"
+        ],
+        "startedUtc": "2026-09-08T12:14:09.416522+00:00",
+        "commandEndedUtc": "2026-09-08T12:14:09.564757+00:00",
+        "finishedUtc": "2026-09-08T12:14:10.249058+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "receiptSha256": "4164b266b49ad9d17b29c610d413bf6fea9ba39871ac508207730170297660f2"
+      },
+      {
+        "invocation": "223-final-release-workflow",
+        "command": [
+          "bash",
+          "scripts/tests/release-workflow-test.sh"
+        ],
+        "startedUtc": "2026-09-08T12:14:10.312309+00:00",
+        "commandEndedUtc": "2026-09-08T12:14:16.578542+00:00",
+        "finishedUtc": "2026-09-08T12:14:17.258482+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "receiptSha256": "acfcad5272b9bfa65c55d74f78f6382635380116609d358495d497ac67c5f026"
+      }
+    ],
+    "wrapperCheckoutModes": [
+      "false",
+      "input",
+      "true"
+    ],
+    "wrapperAttributeMutationControls": 2,
+    "existingWrapperTamperControlsPreserved": 4,
+    "archiveWhitespaceLabeledAssertions": 51,
+    "productGradleCheckRerun": false,
+    "lastProductVerificationCommit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
+    "manifestSha256": "9174079a4d05d2d143dd929a37457cfbdafd4e91c236220f7509598f37123367",
+    "sealedFiles": 215,
+    "sealedBytes": 3129690,
+    "finalizedSerializedInvocationReceipts": 17,
     "additionalSealerReceipt": true,
-    "publicOutcome": "https://github.com/p2pKit/P2pKit/issues/368#issuecomment-5584672507",
-    "historicalFailuresPreserved": "Both367whole-check failures, original message-only diagnostic, first368incorrect-uppercase oracle failure and intendedraw-ID rejection remain failures; original145history unchanged.",
-    "scope": "Exactly two test files; production normalization/exporter/replacement/API/dependencies/isolation/skips/timeouts unchanged. Source review only, not later administrative approval or whole-audit readiness. Linux host/classloader/shadow; no fresh Windows/Mac/Apple/ART/device execution or hostile-network/independent-interop/professional-crypto/finalconsumer/release acceptance."
+    "publicOutcome": "https://github.com/p2pKit/P2pKit/issues/223#issuecomment-5585231528",
+    "historicalFailuresPreserved": "Original true-mode inner checker FAIL1/248CRbytes and original-attributes/final-test FAIL1 are intended controls. All145/367/368failures remain unchanged. Precommit positive/negative source diffs are distinct from clean8ddfinal executions.",
+    "scope": "Exactly explicit POSIX LF attributes and real Git fixture regressions. Wrapper bytes/pins/versions, batchLF, ABI/archive exceptions, production/API/protocol/dependencies and protected guides unchanged. Final13gates are static/policy/fixture invocations, not product XML cases or a new wholecheck. Linux only; no nativeWindows/Mac/Apple/ART/device, hostile-network, independent-interop, professional-crypto, finalconsumer or release acceptance. Source review is not later administration/facility approval."
   },
   "lastIntegratedAttempt": {
     "commit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
@@ -335,11 +514,11 @@
     "scope": "Complete four-file failed-destination cleanup correction APPROVED/pushed. Three-test original repro2failures/1control;final-test original production JVM10/8failures/2controls,Android16/7failures/9controls;focused33passes;three restored mutations. Full2459passes/0failure/error/1manual skip;14static gates;1797sealed entries/28cleanup receipts. Two compilation failures and initial evidence-verifier failure retained. No API/ABI/wire/authentication/dependency/durability change. Physical/ART/OEM/independent gates pending."
   },
   "lastReviewedIssues": [
-    368
+    223
   ],
   "requestedStop": "NONE; owner resumed completed transfer checkpoint and authorized continued sequential repairs plus GitHub Actions for supported Mac/Windows/Apple gates.",
-  "lastSourceBaselineCommit": "0d88be3e3769b5133a985e4fe2fca782ba0ef2a6",
-  "lastSourceBaselineTree": "db432eb14791d9637e812333305e811edceb834e",
+  "lastSourceBaselineCommit": "dfdb36744ea2a33f4b9e6455b4359e4639e8a359",
+  "lastSourceBaselineTree": "1b9e2c547079440e0416d2cf1faea136eaa80b97",
   "mainCommitAtSourcePush": "eb444cccfc290be5435c5c10629c24183293606f",
   "continuationDelivery": "Source and safe context on audit branch; clone cannot transfer accounts, private raw evidence, historical stashes or live agents/session. Record actual checkout HEAD/tree; administrative commits follow reviewed source without rebinding its verification.",
   "completedInvestigation144": {
@@ -399,7 +578,7 @@
     "scope": "Historical transfer-device cleanup at the prior checkpoint. Every source invocation stopped its task-isolated wrapper/owned workers. Three ignored unused project caches were removed after separate stop and no-open-descriptor checks. Shared caches, private evidence, settings, source/stashes and unrelated projects were preserved. Later admin/push receipts are separate."
   },
   "pendingRepairSeverities": {
-    "low": 89,
+    "low": 88,
     "informational": 1
   },
   "githubRefreshEvidence": {
@@ -494,37 +673,21 @@
     "scope": "Latest combined check/Android assembly/strict core Dokka after#144/#360; not whole-audit/release/external completion."
   },
   "latestAffectedGateAttempt": {
-    "commit": "0d88be3e3769b5133a985e4fe2fca782ba0ef2a6",
-    "tree": "db432eb14791d9637e812333305e811edceb834e",
-    "invocation": "368-api24-focused-r2",
+    "commit": "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b",
+    "tree": "facccdaae07e66ae7d3017ef8525c09611b2c70a",
+    "invocation": "223-final-wrapper-tests",
     "result": "PASS",
-    "uncommittedSourceDiffSha256": "3653cba94b0e3b7d3208c8df7b649d524e49f32f4c84c918ab0c0e87a16fab07",
-    "reviewedFinalCommit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
     "command": [
-      "./gradlew",
-      ":p2p-sample-diagnostics:test",
-      "--tests",
-      "dev.p2pkit.sample.diagnostics.DiagnosticApi24CompatibilityTest",
-      "--rerun-tasks",
-      "--no-build-cache",
-      "--no-configuration-cache",
-      "--dependency-verification",
-      "strict",
-      "-Pkotlin.compiler.execution.strategy=in-process",
-      "-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8",
-      "--max-workers=2",
-      "--no-parallel",
-      "--console=plain"
+      "bash",
+      "scripts/tests/check-gradle-wrapper-test.sh"
     ],
-    "startedUtc": "2026-09-08T11:06:55.005105+00:00",
-    "finishedUtc": "2026-09-08T11:07:57.160417+00:00",
-    "executedTasks": 12,
-    "xmlFiles": 1,
-    "passed": 10,
-    "failures": 0,
-    "errors": 0,
-    "skipped": 0,
-    "scope": "Precommit corrected two-file candidate at0d88be3 plus recorded worktree diff; reviewed hunks match finalc221d54. Do not invent a clean finalcommit execution for this earlier focused run. Default missingAPI26/syntheticSDK24/25 host classloader cases, not ART or physical filesystem/device acceptance."
+    "startedUtc": "2026-09-08T12:13:26.873641+00:00",
+    "commandEndedUtc": "2026-09-08T12:13:27.974952+00:00",
+    "finishedUtc": "2026-09-08T12:13:28.712995+00:00",
+    "commandExitCode": 0,
+    "finalExitCode": 0,
+    "receiptSha256": "d452167c5d6c088a2537370524440baac17a30c21d3ab323301cd901a1336ae1",
+    "scope": "Actual clean committed8ddwrapper fixture: three checkout modes, exact attributes/index/HEAD preservation, two attribute mutations plus restored positive, four old tamper controls retained. Not product Gradle/XML, nativeWindows or all-text checkout verification."
   },
   "completedTransferCheckpoint": {
     "commit": "d823bb9cc0d187ec746714af67b08904a28331b6",
@@ -566,9 +729,9 @@
     "scope": "Every #145 build/test/failure finalized its task-isolated wrapper stop and owned-worker cleanup; dependent disposable outputs removed. Source,protected files,required evidence,shared caches and unrelated tasks preserved. This receipt does not cover later#367 work."
   },
   "continuationQueue": [
-    223
+    268
   ],
-  "continuationQueueScope": "After exact368source approval:223wrapperLF, then separately reviewed serialized hosted facility and remaining dependency-aware repairs. Fresh223isolated Linux checkout baseline atc221d54 is reproduced, not a223repair approval or nativeWindows execution. Preserve later drafts/commits; never reset to this checkpoint. Serialize local/hosted builds; final consumer/release and external gates remain required.",
+  "continuationQueueScope": "Hosted Mac/Windows/Apple facility first, currently private preparation/unapproved/unexecuted in this record. Any freshly reproduced prerequisites require sequential correction and fresh independent final-revision review before planned268(NOT_STARTED), then remaining dependency-aware inventory. Preserve Binary defensive ownership. Queue may change with real findings; no checkpoint stop. No inferred hosted acceptance or268implementation.",
   "completedInvestigation145": {
     "issue": 145,
     "baselineCommit": "d823bb9cc0d187ec746714af67b08904a28331b6",
@@ -582,7 +745,7 @@
     "status": "OWNER_AUTHORIZED_NOT_EXECUTED_THIS_CYCLE",
     "scope": "GitHub Actions may supply supported macOS/Windows/Apple host and simulator gates under serialized bounded execution and exact source/run/evidence/cleanup binding. Not physical-device,hostile-network,independent-implementation or professional-crypto acceptance; no merge/default-branch settings/release/issue-closure authority."
   },
-  "lastDispositionUpdateUtc": "2026-09-08T12:25:06.517016+00:00",
+  "lastDispositionUpdateUtc": "2026-09-08T13:18:49.492924+00:00",
   "previousGithubRefreshEvidence145": {
     "startedUtc": "2026-09-08T09:17:23.275604+00:00",
     "endedUtc": "2026-09-08T09:28:07.480134+00:00",
@@ -801,30 +964,44 @@
   "corroborationProjection": {
     "sourceReadSnapshotCommit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
     "sourceReadSnapshotTree": "c72ba8380a510c187298aa69efc721453c07f6c8",
-    "approvedRepairCheckpointCommit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
-    "authoredAdministrativeBaselineCommit": "dfdb36744ea2a33f4b9e6455b4359e4639e8a359",
-    "laterSourceChangeObservation": {
+    "approvedRepairCheckpointCommit": "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b",
+    "authoredAdministrativeBaselineCommit": "b4a9248c78ec8088ac5d5ea10fb71e2f741c89e1",
+    "authoredAdministrativeBaselineTree": "e34b9f583d8c480d36b67fc3a8f60c990fb63617",
+    "sourceTrackedPaths": 1044,
+    "precedingProjectionPaths": 1046,
+    "projectionPathsIncluding367368And223Reports": 1047,
+    "originalLegacyCellsPreserved": 5190,
+    "allPreviousProjectionFiveColumnCellsPreserved": 5230,
+    "latestSourceReadDelta": {
       "commit": "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b",
       "tree": "facccdaae07e66ae7d3017ef8525c09611b2c70a",
-      "reopenedPaths": [
+      "paths": [
         ".gitattributes",
         "scripts/tests/check-gradle-wrapper-test.sh"
       ],
-      "scope": "Only change inventory; not actual223source rereading, repair approval or execution."
+      "actualFullReadReceiptSha256": "3e36a7c6f224e54164053c6b64c44657f6a83ded4eaefc46bd0e59361b209a10",
+      "scope": "Actual later-source two-file full reads, not blanket8dd/currentHEAD semantic certification."
     },
-    "sourceTrackedPaths": 1044,
-    "projectionPathsIncluding367And368Reports": 1046,
-    "originalLegacyCellsPreserved": 5190,
-    "allPreviousProjectionFiveColumnCellsPreserved": 5225,
+    "new223ReportRead": {
+      "status": "FULL_TEXT_CURRENT",
+      "actualReportFullReadRecorded": true,
+      "reader": "/root/review_223_r1",
+      "readCompletedUtc": "2026-09-08T13:34:14.934222+00:00",
+      "receiptSha256": "51440f4853467cdf1669115bd85fdff07992916e98c8590bb59925a51543f2e8",
+      "reportSha256": "5a05576fe0ddd9f73639540d4aac8e75b5b2bf978062c16733538df6456bb57e",
+      "readBlob": "8ccda5f90708b8cfad6e4f2f43c72375d0f993c3",
+      "readCommit": null,
+      "scope": "Actual full-text read of this frozen uncommitted safe report only while bytes match; no retroactive commit binding, automatic administrative ledger promotion or runtime verification."
+    },
     "countsByReadStatus": {
       "FULL_SEMANTIC_DELTA_CURRENT": 1,
-      "FULL_TEXT_CURRENT": 776,
+      "FULL_TEXT_CURRENT": 779,
       "PARTIAL_CURRENT": 1,
-      "REOPENED_CHANGED_SINCE_RECORDED_READ": 8,
+      "REOPENED_CHANGED_SINCE_RECORDED_READ": 6,
       "SELF_DESCRIBING_LEDGER_NO_CURRENT_SELF_BINDING": 1,
       "STRUCTURAL_ONLY_CURRENT": 259
     },
-    "scope": "Immutablec221d54source-reading context plus367/368reports; not later223work or currentHEAD semantic approval. Original fivecolumns preserved; six changed administrative paths stay REOPENED with historical input read bindings and coverage excludes self-binding. Report367 retains its actual uncommitted full-read receipt; no retrospective readCommit is assigned. Report368status reflects only an actual separately supplied full-text receipt, otherwise inventory-only/unread. Two later223source paths are also REOPENED, not certified by the old snapshot. Read counts are not issue progress, execution or external acceptance. Final368source approval and Linux passes are recorded independently, not inferred from reading."
+    "scope": "Inheritedc221d54reading cohort plus genuine8ddtwo-file source delta and367/368/223reports; not whole currentHEAD semantic approval. All1046previous rows preserve all5230historical five-column cells. Sixadministrative rows remain byte-identically REOPENED; coverage output remains self-excluded. Earlier367/368report actualuncommitted readbindings are unchanged, without inventedreadcommits. New223report status follows only a separately supplied actualread receipt. Previous3681046/3671045 and0d88input783/output782counts remain historical. Read counts are not issue progress, newexecution or external acceptance. Product verification remainsc221d54; privatefacility/268not certified."
   },
   "previousVerifiedIntegratedCheckBefore368": {
     "commit": "6995130bcdb2594257c42bed006f7d23f5bc4d6a",
@@ -1090,7 +1267,108 @@
     "parent": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
     "scope": "Exact authored administrative baseline equals the independently approved367R2 candidate. Not a new368source verification, future368administrative hash, or inferred publication receipt."
   },
-  "activeInvestigation223": {
+  "previousScopedVerification368": {
+    "issue": 368,
+    "commit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
+    "tree": "c72ba8380a510c187298aa69efc721453c07f6c8",
+    "baselineCommit": "0d88be3e3769b5133a985e4fe2fca782ba0ef2a6",
+    "baselineTree": "db432eb14791d9637e812333305e811edceb834e",
+    "diffSha256": "e709be8718b76f3d275d8d6fa04ed91d395ab69de720c9bf90f8574d7dce6ef6",
+    "reviewVerdict": "APPROVED_REPOSITORY_SOURCE_ONLY",
+    "reviewer": "/root/review_368_r1",
+    "reviewedDate": "2026-09-08",
+    "reviewSha256": "25143aaf1aa380b468a1b3e2d539a9f1a688b7edaaf51c544f5d65434e0e2b2c",
+    "independentEvidenceInspectionSha256": "9e59e6cf0543eb2a8371100a989f995548b575504c0345e25ccbf763f6a45fb1",
+    "platforms": [
+      "Linux JVM API26-blocking classloader",
+      "synthetic SDK24/SDK25",
+      "Linux Android-host/shadow"
+    ],
+    "focusedPassed": 10,
+    "focusedXmlFiles": 1,
+    "focusedExecutedTasks": 12,
+    "focusedExecutionBinding": "See latestAffectedGateAttempt: precommit candidate; not clean c221d54 HEAD.",
+    "diagnosticsPassedPerFinalWholeCheck": 110,
+    "diagnosticsXmlFilesPerFinalWholeCheck": 12,
+    "staticAndRangeGates": 8,
+    "additionalInitialWhitespaceGate": "PASS",
+    "all1298EarlierCaseIdentitiesRetained": true,
+    "newlyReachedDownstreamCases": 309,
+    "onlyPriorOutcomeChange": "exportFailureWithoutApi26CleansOwnedStagingAndKeepsDestination failure becomes pass",
+    "finalWholeRunsHaveEqualCaseIdentitiesAndResults": true,
+    "manifestSha256": "74198991b7a95e8faef680a6571fdae6193483863674e83459a012d185b250de",
+    "sealedFiles": 3355,
+    "sealedBytes": 23948299,
+    "finalizedSerializedInvocationReceipts": 14,
+    "sharedEarlierFailedInvocations": 3,
+    "additionalSealerReceipt": true,
+    "publicOutcome": "https://github.com/p2pKit/P2pKit/issues/368#issuecomment-5584672507",
+    "historicalFailuresPreserved": "Both367whole-check failures, original message-only diagnostic, first368incorrect-uppercase oracle failure and intendedraw-ID rejection remain failures; original145history unchanged.",
+    "scope": "Exactly two test files; production normalization/exporter/replacement/API/dependencies/isolation/skips/timeouts unchanged. Source review only, not later administrative approval or whole-audit readiness. Linux host/classloader/shadow; no fresh Windows/Mac/Apple/ART/device execution or hostile-network/independent-interop/professional-crypto/finalconsumer/release acceptance."
+  },
+  "previousAffectedGateAttempt368": {
+    "commit": "0d88be3e3769b5133a985e4fe2fca782ba0ef2a6",
+    "tree": "db432eb14791d9637e812333305e811edceb834e",
+    "invocation": "368-api24-focused-r2",
+    "result": "PASS",
+    "uncommittedSourceDiffSha256": "3653cba94b0e3b7d3208c8df7b649d524e49f32f4c84c918ab0c0e87a16fab07",
+    "reviewedFinalCommit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
+    "command": [
+      "./gradlew",
+      ":p2p-sample-diagnostics:test",
+      "--tests",
+      "dev.p2pkit.sample.diagnostics.DiagnosticApi24CompatibilityTest",
+      "--rerun-tasks",
+      "--no-build-cache",
+      "--no-configuration-cache",
+      "--dependency-verification",
+      "strict",
+      "-Pkotlin.compiler.execution.strategy=in-process",
+      "-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8",
+      "--max-workers=2",
+      "--no-parallel",
+      "--console=plain"
+    ],
+    "startedUtc": "2026-09-08T11:06:55.005105+00:00",
+    "finishedUtc": "2026-09-08T11:07:57.160417+00:00",
+    "executedTasks": 12,
+    "xmlFiles": 1,
+    "passed": 10,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "scope": "Precommit corrected two-file candidate at0d88be3 plus recorded worktree diff; reviewed hunks match finalc221d54. Do not invent a clean finalcommit execution for this earlier focused run. Default missingAPI26/syntheticSDK24/25 host classloader cases, not ART or physical filesystem/device acceptance."
+  },
+  "previousCorroborationProjection368": {
+    "sourceReadSnapshotCommit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
+    "sourceReadSnapshotTree": "c72ba8380a510c187298aa69efc721453c07f6c8",
+    "approvedRepairCheckpointCommit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
+    "authoredAdministrativeBaselineCommit": "dfdb36744ea2a33f4b9e6455b4359e4639e8a359",
+    "laterSourceChangeObservation": {
+      "commit": "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b",
+      "tree": "facccdaae07e66ae7d3017ef8525c09611b2c70a",
+      "reopenedPaths": [
+        ".gitattributes",
+        "scripts/tests/check-gradle-wrapper-test.sh"
+      ],
+      "scope": "Only change inventory; not actual223source rereading, repair approval or execution."
+    },
+    "sourceTrackedPaths": 1044,
+    "projectionPathsIncluding367And368Reports": 1046,
+    "originalLegacyCellsPreserved": 5190,
+    "allPreviousProjectionFiveColumnCellsPreserved": 5225,
+    "countsByReadStatus": {
+      "FULL_SEMANTIC_DELTA_CURRENT": 1,
+      "FULL_TEXT_CURRENT": 776,
+      "PARTIAL_CURRENT": 1,
+      "REOPENED_CHANGED_SINCE_RECORDED_READ": 8,
+      "SELF_DESCRIBING_LEDGER_NO_CURRENT_SELF_BINDING": 1,
+      "STRUCTURAL_ONLY_CURRENT": 259
+    },
+    "scope": "Immutablec221d54source-reading context plus367/368reports; not later223work or currentHEAD semantic approval. Original fivecolumns preserved; six changed administrative paths stay REOPENED with historical input read bindings and coverage excludes self-binding. Report367 retains its actual uncommitted full-read receipt; no retrospective readCommit is assigned. Report368status reflects only an actual separately supplied full-text receipt, otherwise inventory-only/unread. Two later223source paths are also REOPENED, not certified by the old snapshot. Read counts are not issue progress, execution or external acceptance. Final368source approval and Linux passes are recorded independently, not inferred from reading."
+  },
+  "previousDispositionUpdateUtc368": "2026-09-08T12:25:06.517016+00:00",
+  "previousActiveInvestigation223BeforeRepair": {
     "issue": 223,
     "baselineCommit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
     "baselineTree": "c72ba8380a510c187298aa69efc721453c07f6c8",
@@ -1106,5 +1384,233 @@
     ],
     "fixtureRemoved": true,
     "scope": "Real isolated Linux Git checkout of both launchers atc221d54, unchanged actual checksum checker. autocrlf=true creates248CR bytes in gradlew and fails its reviewed hash; false/input and gradlew.bat remainLF. Not nativeWindows, a product-test pass or a223source approval. Preserve subsequent223drafts/commits; no later execution is inferred."
+  },
+  "previousActiveIssue368": 223,
+  "previousActiveIssueState368": "BASELINE_REPRODUCED_NEXT_SEQUENTIAL_REPAIR_NO_APPROVED_223_REVISION_IN_THIS_368_CHECKPOINT",
+  "previousContinuationQueue368": [
+    223
+  ],
+  "previousContinuationQueueScope368": "After exact368source approval:223wrapperLF, then separately reviewed serialized hosted facility and remaining dependency-aware repairs. Fresh223isolated Linux checkout baseline atc221d54 is reproduced, not a223repair approval or nativeWindows execution. Preserve later drafts/commits; never reset to this checkpoint. Serialize local/hosted builds; final consumer/release and external gates remain required.",
+  "previousSourceCheckpoint368": {
+    "commit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
+    "tree": "c72ba8380a510c187298aa69efc721453c07f6c8"
+  },
+  "previousSourceBaseline368": {
+    "commit": "0d88be3e3769b5133a985e4fe2fca782ba0ef2a6",
+    "tree": "db432eb14791d9637e812333305e811edceb834e"
+  },
+  "activeWorkItem": {
+    "name": "SERIALIZED_HOSTED_MAC_WINDOWS_APPLE_VALIDATION_FACILITY",
+    "status": "PRIVATE_PREPARATION_UNAPPROVED_UNEXECUTED",
+    "owner": "primary agent",
+    "scope": "Owner-authorized hosted facility is the sole active implementation. No approved facility revision or hosted execution is recorded here. Any freshly reproduced prerequisites require sequential repair and fresh independent final-revision review before planned #268 and remaining dependency-aware repairs."
+  },
+  "latestGithubListObservation": {
+    "startedUtc": "2026-09-08T12:28:21.418285+00:00",
+    "endedUtc": "2026-09-08T12:28:25.847519+00:00",
+    "issues": 289,
+    "openIssues": 182,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "allStateListSha256": "06bae6da0253a48f71f3190baae08964e8d707d9dd1f24f19c0a3e1a38decb37",
+    "freshCompleteHistories": false,
+    "scope": "Later all-state list only, before223source/outcome publication; not new complete bodies/comments/timelines/PRdetails capture. Earlier githubIssueListRefreshedUtc/refresh evidence/addition fields retain their10:30scope, including368absence from that older list. The12:36outcome verification is individual, not a complete post-write refresh. Refresh live state before relying on it."
+  },
+  "completedInvestigation223": {
+    "issue": 223,
+    "status": "REPOSITORY_SOURCE_FIXED_INDEPENDENTLY_APPROVED",
+    "approvedSource": "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b",
+    "safeReport": "docs/audit/2026-09-04/repairs/223.md",
+    "originalCheckout": {
+      "invocation": "223-original-checkout-r1",
+      "commit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
+      "tree": "c72ba8380a510c187298aa69efc721453c07f6c8",
+      "uncommittedSourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "startedUtc": "2026-09-08T11:55:02.103940+00:00",
+      "finishedUtc": "2026-09-08T11:55:03.844409+00:00",
+      "commandExitCode": 0,
+      "finalExitCode": 0,
+      "receiptSha256": "ebd6bd01e862c5887439777b0e8eb19084a3404c49820ca8bb377cdd69e304a2",
+      "commandEvidence": "223-original-checkout.py private helper; complete original command retained in the hash-bound private receipt, not a portable repository recipe"
+    },
+    "originalCheckoutResult": {
+      "autocrlfFalseAndInputInnerCheckerExitCodes": [
+        0,
+        0
+      ],
+      "autocrlfTrueInnerCheckerExitCode": 1,
+      "autocrlfTruePosixCarriageReturnBytes": 248,
+      "indexRemainedLf": true,
+      "batchRemainedLf": true,
+      "exactDiagnostic": "FATAL: gradlew checksum mismatch",
+      "fixtureRemoved": true,
+      "scope": "Originalc221d54committed inputs; real isolated Linux Git checkout. Outer oracle exit0 confirms expected innerFAIL1, not a passing original wrapper or Windows execution."
+    },
+    "precommitPositive": {
+      "invocation": "223-wrapper-regressions-r1",
+      "commit": "dfdb36744ea2a33f4b9e6455b4359e4639e8a359",
+      "tree": "1b9e2c547079440e0416d2cf1faea136eaa80b97",
+      "uncommittedSourceDiffSha256": "b7f42feed1518d5bec57deaec3d187f7b841e3a64b3192196ad936db7afcd005",
+      "startedUtc": "2026-09-08T12:05:12.538428+00:00",
+      "finishedUtc": "2026-09-08T12:05:14.382748+00:00",
+      "commandExitCode": 0,
+      "finalExitCode": 0,
+      "receiptSha256": "c8d552f7dd515f70f2389348be48eeda791cefecf6c191989a5b2eb1efc9bfd3",
+      "command": [
+        "bash",
+        "scripts/tests/check-gradle-wrapper-test.sh"
+      ]
+    },
+    "originalAttributesNegative": {
+      "invocation": "223-original-attributes-negative-r1",
+      "commit": "dfdb36744ea2a33f4b9e6455b4359e4639e8a359",
+      "tree": "1b9e2c547079440e0416d2cf1faea136eaa80b97",
+      "uncommittedSourceDiffSha256": "da58dc49a341f046458073dc2b694fe7e1045b1525cd739d4467f6af20123901",
+      "startedUtc": "2026-09-08T12:09:30.047536+00:00",
+      "finishedUtc": "2026-09-08T12:09:31.593966+00:00",
+      "commandExitCode": 1,
+      "finalExitCode": 1,
+      "receiptSha256": "3fae925c9e2818247460d38a298ba9aa2e89a35b82953fb9920bc304b87537c6",
+      "command": [
+        "bash",
+        "scripts/tests/check-gradle-wrapper-test.sh"
+      ]
+    },
+    "precommitWhitespace": {
+      "invocation": "223-precommit-whitespace",
+      "commit": "dfdb36744ea2a33f4b9e6455b4359e4639e8a359",
+      "tree": "1b9e2c547079440e0416d2cf1faea136eaa80b97",
+      "uncommittedSourceDiffSha256": "b7f42feed1518d5bec57deaec3d187f7b841e3a64b3192196ad936db7afcd005",
+      "startedUtc": "2026-09-08T12:10:55.029737+00:00",
+      "finishedUtc": "2026-09-08T12:10:56.179606+00:00",
+      "commandExitCode": 0,
+      "finalExitCode": 0,
+      "receiptSha256": "fcc4827adebff52e5bc316f87fc7636cab1f20503b181963e553347e68ef8694",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ]
+    },
+    "attributesRestoredExactly": true,
+    "publicOutcome": "https://github.com/p2pKit/P2pKit/issues/223#issuecomment-5585231528",
+    "scope": "Existing Low checkout/DX defect, not a new finding, supply-chain tampering or product/API/protocol failure. Preserve immutable archives and301/303decisions. NativeWindows/Mac, othertextcheckout and finalexternal gates remain separate; do not blanket-renormalize existing clones/userchanges."
+  },
+  "sourcePublication223": {
+    "verifiedUtc": "2026-09-08T12:30:53.900579+00:00",
+    "commit": "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b",
+    "tree": "facccdaae07e66ae7d3017ef8525c09611b2c70a",
+    "branch": "audit/complete-2026-09-04",
+    "remoteBefore": "dfdb36744ea2a33f4b9e6455b4359e4639e8a359",
+    "remoteRefMatches": true,
+    "mainObservedCommit": "eb444cccfc290be5435c5c10629c24183293606f",
+    "mainObservedUnchanged": true,
+    "sourceReviewSha256": "ef1bc19690ed2d78d4731504d80b390feb24e7f6fa79305d36d96ef9c384a47f",
+    "scope": "Approved two-file attributes/regression audit-branch source push only; no wrapper-byte/admin/force-push/main/tag/settings/release/closure change."
+  },
+  "outcomePublication223": {
+    "verifiedUtc": "2026-09-08T12:36:30.939504+00:00",
+    "url": "https://github.com/p2pKit/P2pKit/issues/223#issuecomment-5585231528",
+    "id": 5585231528,
+    "issueRemainsOpen": true,
+    "verifiedBodyEquality": true,
+    "bodySha256": "954438c2b07bb566969148a7902fc976a54033d4b13e005c35bb3d52636ac4e7",
+    "scope": "Individually verified approved-source outcome; native Windows/macOS and all-text checkout acceptance remain separate, whole audit NOT_READY."
+  },
+  "sourceVerificationCleanup223": {
+    "sealedFiles": 215,
+    "sealedBytes": 3129690,
+    "finalizedSerializedInvocationReceipts": 17,
+    "separateSealerReceipt": true,
+    "sealerCleanupEndedUtc": "2026-09-08T12:22:07.960866+00:00",
+    "sealerReceiptSha256": "9f765985458662cdfb2c10f57bab7645fa74862bcb29e2a781af98da7b7d1fdc",
+    "wrapperStopsAllExitZero": true,
+    "invocationOwnedSurvivors": [],
+    "allSourceSnapshotsUnchanged": true,
+    "allReceiptRemovedOutputsListsEmpty": true,
+    "scope": "All17ownserialized fixture/policy leaves, including intendedfailure, plus separate successful sealer finalized with task-isolated wrapper--stop exit0/no owned survivors. Original fixture removed; required logs preserved. These are not product Gradle builds or later hosted-facility cleanup. Source/protectedfiles, sharedcaches, privateevidence and unrelated tasks preserved; buildSrc/src/main/java/dev/p2pkit/build is source."
+  },
+  "previousAdministrativeCheckpoint368": {
+    "commit": "b4a9248c78ec8088ac5d5ea10fb71e2f741c89e1",
+    "tree": "e34b9f583d8c480d36b67fc3a8f60c990fb63617",
+    "parent": "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b",
+    "patchSha256": "1efb2647289da96198ba0bd62fb9377b84940d514d05c75d288c9a19fd667245",
+    "scope": "Exact immutableb4a9248authored administrative baseline; earlier eight-file368administration follows223source. Not new productverification, future223administrative commit/hash, or inferred administrative publication receipt."
+  },
+  "coverage223RestoredReadBindings": {
+    "previousProjectionCommit": "b4a9248c78ec8088ac5d5ea10fb71e2f741c89e1",
+    "previousRows": {
+      ".gitattributes": {
+        "path": ".gitattributes",
+        "historicalReview": "INITIAL_AUDIT_COMPLETED_RAW_LEDGER_LOST",
+        "checkpointAssessment": "SCOPED_360_CI_ARCHIVE_CORRECTION_INDEPENDENTLY_APPROVED",
+        "assessmentCommit": "6995130bcdb2594257c42bed006f7d23f5bc4d6a",
+        "assessmentBlob": "00a2f4e9704faf2173d3b20b313347244ae8ee68",
+        "corroborationStatus": "REOPENED_CHANGED_SINCE_RECORDED_READ",
+        "corroborationReadLevel": "FULL_TEXT",
+        "corroborationReadCommit": "d823bb9cc0d187ec746714af67b08904a28331b6",
+        "corroborationReadBlob": "00a2f4e9704faf2173d3b20b313347244ae8ee68",
+        "corroborationMaterialRole": "CURRENT_REPOSITORY_CONTENT",
+        "corroborationReader": "/root/core_protocol_fixture_corroboration; /root/coverage_inspection/build_config_static",
+        "corroborationEvidence": "corroboration-build.tsv:3; archive-legacy-read-records.json:supportingReadsNotAdditionalOwnership",
+        "corroborationScope": "HISTORICAL INPUT READ ONLY: Complete exact-path archive/category exceptions; batch LF policy; no archive mutation; static inspection only; no build/test execution; Historical/current-obligation reconciliation only; not reapproval of underlying source, gates or referenced evidence.. The later223 source commit 8dd65ce changes these bytes after the c221d54 source snapshot. This368administrative projection does not reread, review, execute or approve that223implementation; original actual read bindings retained.",
+        "corroborationLimitations": "REOPENED for later223source changes observed at8dd65ce/tree facccdaa. Recorded FULL_TEXT level/commit/blob apply only to historical input. Require a genuine later-source read/review; no inherited current certification,223repair approval or foreign-host execution is inferred."
+      },
+      "scripts/tests/check-gradle-wrapper-test.sh": {
+        "path": "scripts/tests/check-gradle-wrapper-test.sh",
+        "historicalReview": "INITIAL_AUDIT_COMPLETED_RAW_LEDGER_LOST",
+        "checkpointAssessment": "SCOPED_225_POLICY_CALLER_REVIEW_NOT_FULL_DOMAIN_REVERIFICATION",
+        "assessmentCommit": "46ed124ded59f6cbdcccbec3df1140b994efad69",
+        "assessmentBlob": "398b8e9c8b489d5accd5a8a6b33ec03be6c8ad32",
+        "corroborationStatus": "REOPENED_CHANGED_SINCE_RECORDED_READ",
+        "corroborationReadLevel": "FULL_TEXT",
+        "corroborationReadCommit": "d823bb9cc0d187ec746714af67b08904a28331b6",
+        "corroborationReadBlob": "398b8e9c8b489d5accd5a8a6b33ec03be6c8ad32",
+        "corroborationMaterialRole": "CURRENT_REPOSITORY_CONTENT",
+        "corroborationReader": "/root/coverage_inspection",
+        "corroborationEvidence": "corroboration-build.tsv:91",
+        "corroborationScope": "HISTORICAL INPUT READ ONLY: Independent mutation of distribution URL, wrapper JAR, Unix launcher and Windows launcher after accepted current fixture. The later223 source commit 8dd65ce changes these bytes after the c221d54 source snapshot. This368administrative projection does not reread, review, execute or approve that223implementation; original actual read bindings retained.",
+        "corroborationLimitations": "REOPENED for later223source changes observed at8dd65ce/tree facccdaa. Recorded FULL_TEXT level/commit/blob apply only to historical input. Require a genuine later-source read/review; no inherited current certification,223repair approval or foreign-host execution is inferred."
+      }
+    },
+    "reader": "/root/review_223_r1",
+    "sourceReadReceiptWrittenUtc": "2026-09-08T12:19:20.731917+00:00",
+    "readReceiptSha256": "3e36a7c6f224e54164053c6b64c44657f6a83ded4eaefc46bd0e59361b209a10",
+    "receiptHasFullTextTrackedPaths": 20,
+    "restoredPaths": [
+      {
+        "path": ".gitattributes",
+        "sourceCommit": "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b",
+        "blob": "58c24f2b3a76232d9bcb0e7d18d3830ebaa2d530",
+        "sha256": "62457820ad2fd8884186648612204c4799671c4d70daedda46b0adb141b36201",
+        "bytes": 1212,
+        "readScope": "FULL_TEXT",
+        "lineRanges": [
+          [
+            1,
+            21
+          ]
+        ],
+        "basis": "Complete text displayed/read in this independent review; not inferred from hashing or automated parse."
+      },
+      {
+        "path": "scripts/tests/check-gradle-wrapper-test.sh",
+        "sourceCommit": "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b",
+        "blob": "e34792e78fdf44c69e27937401693766043584e4",
+        "sha256": "f36011114b863d5ef1324a569f5a1b000f087de2288e9093990c648f6b97f25c",
+        "bytes": 4813,
+        "readScope": "FULL_TEXT",
+        "lineRanges": [
+          [
+            1,
+            114
+          ]
+        ],
+        "basis": "Complete text displayed/read in this independent review; not inferred from hashing or automated parse."
+      }
+    ],
+    "scope": "Only two existing223source rows acquire genuine later8ddfull-read bindings. All prior five-column cells and their complete earlier d823read/reopening rows are preserved. The other18receipt entries do not trigger blanket promotion/rebinding."
   }
 }

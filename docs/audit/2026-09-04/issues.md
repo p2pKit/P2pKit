@@ -1,29 +1,34 @@
 # Issue disposition index
 
-Checkpoint inventory: **182 issues; 70 reviewed repository repairs (38.5%), 112 remaining rows (61.5%)**.
+Checkpoint inventory: **182 issues; 71 reviewed repository repairs (39.0%), 111 remaining rows (61.0%)**.
 
 This dated ledger is not GitHub live state, effort or production readiness. Issues remain open at their recorded
-list/individual observations; none was closed by these fixes. #368 is independently APPROVED/pushed at
-`c221d54b549d`; [Linux passes and preserved failures](repairs/368.md) have exact source/evidence bindings.
-#367 remains approved at `0d88be3e3769`; [its original full-check failures](repairs/367.md) stay historical
-and Windows/Intel acceptance unexecuted. #145/#144/#360 and earlier approvals are unchanged. Next active
-**#223** has a fresh isolated Linux checkout baseline, not a repair approval here; then serialized hosted work/queue.
-Pending repairs: **89 Low and one informational (#333)**. There are **49 new-audit findings**.
+list/individual observations; none was closed by these fixes. #223 is independently APPROVED/pushed at
+`8dd65ce3f4e8`; [its Linux checkout/policy report](repairs/223.md) preserves exact source/evidence bindings.
+Thirteen final static/policy/range gates pass; no new product Gradle check is inferred. #368 remains approved
+at `c221d54b549d`; [its last product passes and prior failures](repairs/368.md) stay source-bound.
+#367 remains approved at `0d88be3e3769`; [its original full-check failures](repairs/367.md) remain historical
+and Windows/Intel acceptance unexecuted. #145/#144/#360 and earlier approvals are unchanged. Active work is
+private, **unapproved/unexecuted hosted facility preparation**; planned #268 is **NOT_STARTED**, after any
+freshly reproduced prerequisites and their sequential independent reviews. Continue the remaining queue.
+Pending repairs: **88 Low and one informational (#333)**. There are **49 new-audit findings**.
 
-The exhaustive 10:24–10:30 UTC capture has 288 issues/181 open/79 PRs: all 367 issue-style histories and
+The latest all-state list completed **12:28:25 UTC**: 289 issues/182 open/79 PRs (7 open), not fresh full histories.
+The exhaustive 10:24–10:30 capture remains 288 issues/181 open/79 PRs: all 367 issue-style histories and
 79 PR metadata sets freshly fetched, 1,519 GETs, no reused current histories. #368's individual 10:50:42 addition
-gives known 289 issues/182 open; #367's 11:01 and #368's 11:49:57 outcomes are individual, not new full refreshes.
-Earlier captures remain historical. See [checkpoint metadata](checkpoint.json) for exact bindings/limitations.
+and #367/#368 outcomes remain historical; #223's 12:36:30 outcome is also individual, not a post-write full refresh.
+Earlier captures remain unchanged. See [checkpoint metadata](checkpoint.json) for exact bindings/limitations.
 #133 independent interoperability stays NOT_STARTED; external acceptance on approved rows is not counted complete.
 #325's protected-AGENTS exception remains. #240 dependency `0` was a parser mistake (`transport #0` in the body),
 not a GitHub issue; its removal is not a product repair, new finding or count change.
 
 Read [full records](issues.json), [root handoff](../../../AUDIT_CHECKPOINT.md) and
-[unverified follow-ups](followups.md). Historical assessments retain original scope. Overall **NOT_READY**;
+[unverified follow-ups](followups.md). Historical assessments retain original scope; the old #360 assessment's
+then-pending #223 note is superseded by the current #223 record, not rewritten. Overall **NOT_READY**.
 GitHub Actions authorization is not an executed hosted/external gate. Severity `SEE_FULL_ISSUE` is an inherited
 gap, not a new severity assignment. A blank revision means no completed repair/review cycle was recorded.
 
-## Repairs with recorded independent approval (70)
+## Repairs with recorded independent approval (71)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -57,6 +62,7 @@ gap, not a new severity assignment. A blank revision means no completed repair/r
 | [#203: [WSF-07] JVM samples flip the library's off-by-default LAN/frame traces on (CLI has an opt-out, Desktop UI has none)](https://github.com/p2pKit/P2pKit/issues/203) | medium | Existing | `fc3c14b2c367` |
 | [#208: [WSH-06] local.md fast-gate list omits check-markdown-links.sh and git diff --check (CI runs both)](https://github.com/p2pKit/P2pKit/issues/208) | low | Existing | `3a96a775c379` |
 | [#214: [WSH-10] Operational limits documented only in internal source; one of ~40 reaches docs/](https://github.com/p2pKit/P2pKit/issues/214) | medium | Existing | `68170b99a2e7` |
+| [#223: [BUILD-25] .gitattributes pins gradlew.bat line endings but leaves gradlew to core.autocrlf](https://github.com/p2pKit/P2pKit/issues/223) | low | Existing | `8dd65ce3f4e8` |
 | [#225: [BUILD-33] Version pins duplicated as literals in 4 policy scripts; 10 of 12 sites are deliberate tripwires](https://github.com/p2pKit/P2pKit/issues/225) | low | Existing | `46ed124ded59` |
 | [#226: [BUILD-43] review-dependency-verification.sh hardcodes /tmp, ignoring TMPDIR (mktemp+trap intact)](https://github.com/p2pKit/P2pKit/issues/226) | low | Existing | `f085dc8a59f6` |
 | [#228: [BUILD-44] iOS launcher lock leaks on EVERY run (trap reads main's local under set -u); mkdir IS atomic](https://github.com/p2pKit/P2pKit/issues/228) | medium | Existing | `d4be234161a5` |
@@ -98,7 +104,7 @@ gap, not a new severity assignment. A blank revision means no completed repair/r
 | [#367: [AUDIT][Medium] Host-toolchain checksums omit Linux/Windows and Intel Native archives](https://github.com/p2pKit/P2pKit/issues/367) | medium | New audit | `0d88be3e3769` |
 | [#368: [AUDIT][Low] API24 export-failure fixture targets an unnormalized filename on case-sensitive filesystems](https://github.com/p2pKit/P2pKit/issues/368) | low | New audit | `c221d54b549d` |
 
-## Pending remediation (90)
+## Pending remediation (89)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -127,7 +133,6 @@ gap, not a new severity assignment. A blank revision means no completed repair/r
 | [#218: [WSG-07] runCatching{}.isFailure immutability assertions accept any throwable, not just rejection](https://github.com/p2pKit/P2pKit/issues/218) | low | Existing | — |
 | [#219: [WSH-12] Public transport SPI lacks an integration and security contract](https://github.com/p2pKit/P2pKit/issues/219) | low | Existing | — |
 | [#220: [WSG-17] Relay concurrency test collects after awaitAll; only the non-diff branch runs](https://github.com/p2pKit/P2pKit/issues/220) | low | Existing | — |
-| [#223: [BUILD-25] .gitattributes pins gradlew.bat line endings but leaves gradlew to core.autocrlf](https://github.com/p2pKit/P2pKit/issues/223) | low | Existing | — |
 | [#230: [BUILD-54] Release metadata gate matches whole prose sentences via grep -F; two guards fail open](https://github.com/p2pKit/P2pKit/issues/230) | low | Existing | — |
 | [#232: [F-09] DataTransport.start() documents "transports do not throw" but suspend cancellation must escape](https://github.com/p2pKit/P2pKit/issues/232) | low | Existing | — |
 | [#235: [F-17] Post-cancellation socket read discards its result and rethrows into the platform default handler](https://github.com/p2pKit/P2pKit/issues/235) | low | Existing | — |
