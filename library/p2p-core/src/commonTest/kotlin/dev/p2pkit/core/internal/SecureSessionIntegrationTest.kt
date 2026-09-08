@@ -25,6 +25,7 @@ import dev.p2pkit.core.testfixtures.CopyingRawConnection
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.MemorySecureIdentityStorage
+import dev.p2pkit.core.testfixtures.WireDelivery
 import dev.p2pkit.core.testfixtures.createSecureTestKit
 import dev.p2pkit.core.testfixtures.runWireBlocking
 import dev.p2pkit.core.transport.RawConnection
@@ -49,10 +50,12 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
@@ -65,6 +68,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlinx.io.Buffer
+import kotlinx.io.IOException
 import kotlinx.io.RawSink
 import kotlinx.io.RawSource
 import kotlinx.io.readByteArray
@@ -521,6 +525,18 @@ class SecureSessionIntegrationTest {
 
     @Test
     fun destinationAuthenticationFailureIsIsolatedFromPinnedSecureSessions() = runWireBlocking { delivery ->
+        assertDestinationFailureIsolatedFromPinnedSessions(delivery, cancelDuringAbort = false)
+    }
+
+    @Test
+    fun cancelledDestinationFailureCleanupIsIsolatedFromPinnedSecureSessions() = runWireBlocking { delivery ->
+        assertDestinationFailureIsolatedFromPinnedSessions(delivery, cancelDuringAbort = true)
+    }
+
+    private suspend fun CoroutineScope.assertDestinationFailureIsolatedFromPinnedSessions(
+        delivery: WireDelivery,
+        cancelDuringAbort: Boolean
+    ) {
         val appId = AppId("secure.session.destination-auth-failure")
         val aliceStore = MemorySecureIdentityStorage()
         val bobStore = MemorySecureIdentityStorage()
@@ -529,6 +545,8 @@ class SecureSessionIntegrationTest {
         var bobIdentity: LocalSecureIdentity? = null
         var alice: P2pKit? = null
         var bob: P2pKit? = null
+        val acceptingCaller = Job(coroutineContext[Job])
+        val abortRelease = CompletableDeferred<Unit>()
         try {
             val aliceLocal = previewIdentity(appId, aliceStore).also { aliceIdentity = it }
             val bobLocal = previewIdentity(appId, bobStore).also { bobIdentity = it }
@@ -572,7 +590,11 @@ class SecureSessionIntegrationTest {
             val offers = withTimeout(5_000) { incoming.pendingFileOffers.first { it.size == 2 } }
             val failedOffer = offers.single { it.id == failedSender.id }
             val goodOffer = offers.single { it.id == goodSender.id }
-            val callbackFailure = P2pError.AuthenticationFailed("synthetic local destination credential failure")
+            val callbackFailure = if (cancelDuringAbort) {
+                IOException("synthetic local destination open failure")
+            } else {
+                P2pError.AuthenticationFailed("synthetic local destination credential failure")
+            }
             val openCount = AtomicInt(0)
             val commitCount = AtomicInt(0)
             val abortCount = AtomicInt(0)
@@ -590,10 +612,26 @@ class SecureSessionIntegrationTest {
                 override suspend fun abort(cause: P2pError.FileTransferFailed?) {
                     abortCount.addAndFetch(1)
                     aborted.complete(cause)
+                    if (cancelDuringAbort) abortRelease.await()
                 }
             }
-            val error = assertFailsWith<P2pError.FileTransferFailed> {
-                withTimeout(5_000) { failedOffer.accept(destination) }
+            val error = if (cancelDuringAbort) {
+                val failureAtCallBoundary = CompletableDeferred<Throwable?>()
+                val accepting = CoroutineScope(coroutineContext + acceptingCaller).async {
+                    runCatching { failedOffer.accept(destination) }.also {
+                        failureAtCallBoundary.complete(it.exceptionOrNull())
+                    }
+                }
+                val abortCause = withTimeout(5_000) { aborted.await() }
+                acceptingCaller.cancel(CancellationException("external cancellation during destination abort"))
+                abortRelease.complete(Unit)
+                assertFailsWith<CancellationException> { withTimeout(5_000) { accepting.await() } }
+                assertIs<CancellationException>(withTimeout(5_000) { failureAtCallBoundary.await() })
+                assertNotNull(abortCause)
+            } else {
+                assertFailsWith<P2pError.FileTransferFailed> {
+                    withTimeout(5_000) { failedOffer.accept(destination) }
+                }
             }
             assertEquals(FileTransferFailureKind.STORAGE, error.kind)
             assertEquals(FileTransferPhase.ACCEPT, error.phase)
@@ -638,6 +676,8 @@ class SecureSessionIntegrationTest {
             assertEquals(ConnectionState.Connected, incoming.state.value)
         } finally {
             withContext(NonCancellable) {
+                abortRelease.complete(Unit)
+                acceptingCaller.cancelAndJoin()
                 try {
                     alice?.stop()
                 } finally {

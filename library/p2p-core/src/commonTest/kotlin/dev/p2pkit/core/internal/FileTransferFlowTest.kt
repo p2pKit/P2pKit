@@ -33,6 +33,7 @@ import dev.p2pkit.core.testfixtures.runWireBlocking
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transfer.FileTransferDestination
 import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transfer.PreparedFileSource
 import dev.p2pkit.core.transfer.Sha256Digest
 import dev.p2pkit.core.transfer.StorageCapacityCheckingFileTransferDestination
@@ -68,6 +69,7 @@ import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -3989,6 +3991,342 @@ class FileTransferFlowTest {
             caller.cancelAndJoin()
             dispatcher.closeAll("caller cancellation regression cleanup")
             runCurrent()
+        }
+    }
+
+    @Test
+    fun callerCancellationDuringIoFailureAbortStillTerminalizesTransfer() = runTest {
+        assertFailedDestinationAbortCancellation(IOException("synthetic destination open failure"))
+    }
+
+    @Test
+    fun callerCancellationDuringAuthenticationFailureAbortStillTerminalizesTransfer() = runTest {
+        assertFailedDestinationAbortCancellation(
+            P2pError.AuthenticationFailed("synthetic local destination credential failure")
+        )
+    }
+
+    @Test
+    fun destinationAbortCallbackCancellationDoesNotCancelAcceptanceCleanup() = runTest {
+        assertFailedDestinationAbortCancellation(
+            IOException("synthetic destination open failure"),
+            cancelCaller = false
+        )
+    }
+
+    @Test
+    fun cancelledDestinationFailureSurvivesAbortAndNotificationErrors() = runTest {
+        assertFailedDestinationAbortCancellation(
+            IOException("synthetic destination open failure"),
+            failCleanup = true
+        )
+    }
+
+    @Test
+    fun destinationPreflightFailureCleanupSurvivesCallerCancellation() = runTest {
+        assertFailedDestinationAbortCancellation(
+            IOException("synthetic destination preflight failure"),
+            failInPreflight = true
+        )
+    }
+
+    private suspend fun TestScope.assertFailedDestinationAbortCancellation(
+        openFailure: Throwable,
+        cancelCaller: Boolean = true,
+        failCleanup: Boolean = false,
+        failInPreflight: Boolean = false
+    ) {
+        val recordedProtocol = RecordingFileProtocol()
+        var notificationAttempts = 0
+        val protocol = object : P2pProtocol by recordedProtocol {
+            override suspend fun sendFileResult(connection: RawConnection, result: SecureFileResult) {
+                notificationAttempts++
+                if (failCleanup && notificationAttempts == 1) {
+                    throw IOException("synthetic result write failure")
+                }
+                recordedProtocol.sendFileResult(connection, result)
+            }
+        }
+        val config = FileTransferConfig(
+            maxFileSizeBytes = 1L,
+            maxConcurrentIncomingBytes = 1L,
+            chunkSizeBytes = 1,
+            offerTimeoutMillis = 100L
+        )
+        val dispatcher = directDispatcher(
+            backgroundScope,
+            protocol,
+            config,
+            protocolState = secureProtocolState(),
+            independentOperationDispatcher = StandardTestDispatcher(testScheduler)
+        )
+        val caller = Job(backgroundScope.coroutineContext[Job])
+        val bytes = byteArrayOf(8)
+        val id = MessageId.random(Random(8_032))
+        val payload = FileOfferPayload("cancelled-cleanup.bin", 1L)
+        val offer = SecureFileOffer.create(id, payload.name, 1L, null, sha256(bytes))
+        val recordedDestination = RecordingDestination(openFailure = openFailure)
+        val abortingDestination = object : FileTransferDestination by recordedDestination {
+            override suspend fun abort(cause: P2pError.FileTransferFailed?) {
+                recordedDestination.abort(cause)
+                if (cancelCaller) {
+                    caller.cancel(CancellationException("accepting caller cancelled during abort"))
+                    if (failCleanup) throw IOException("synthetic destination abort failure")
+                } else {
+                    throw CancellationException("destination abort callback cancelled itself")
+                }
+            }
+        }
+        val destination = if (failInPreflight) {
+            object : FileTransferDestination by abortingDestination, StorageCapacityCheckingFileTransferDestination {
+                override fun requireAvailableStorage(expectedSizeBytes: Long) {
+                    assertEquals(1L, expectedSizeBytes)
+                    throw openFailure
+                }
+            }
+        } else {
+            abortingDestination
+        }
+        try {
+            dispatcher.onFileOffer(id, payload, offer)
+            val pending = dispatcher.pendingFileOffers.value.single()
+            val retainedTransfer = assertIs<P2pFileTransfer>(pending)
+            if (cancelCaller) {
+                val failureAtCallBoundary = CompletableDeferred<Throwable?>()
+                val accepting = CoroutineScope(coroutineContext + caller).async {
+                    runCatching { pending.accept(destination) }.also {
+                        failureAtCallBoundary.complete(it.exceptionOrNull())
+                    }
+                }
+                assertFailsWith<CancellationException> { accepting.await() }
+                // A cancelled Deferred throws even when its body catches a different
+                // exception. Check the accept boundary itself, not only await().
+                assertIs<CancellationException>(failureAtCallBoundary.await())
+            } else {
+                val error = assertFailsWith<P2pError.FileTransferFailed> { pending.accept(destination) }
+                assertTrue(error.cause === openFailure)
+            }
+            advanceTimeBy(config.offerTimeoutMillis + 1L)
+            runCurrent()
+            val stateAfterAbort = retainedTransfer.state.value
+            val initialResults = recordedProtocol.fileResults.toList()
+            assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+            assertEquals(if (failInPreflight) 0 else 1, recordedDestination.openCount)
+            assertEquals(1, recordedDestination.abortCount)
+            assertEquals(0, recordedDestination.commitCount)
+            val abortCause = assertIs<P2pError.FileTransferFailed>(recordedDestination.abortCauses.single())
+            assertTrue(abortCause.cause === openFailure)
+            assertEquals(FileTransferFailureKind.STORAGE, abortCause.kind)
+            assertEquals(FileTransferPhase.ACCEPT, abortCause.phase)
+            assertEquals(Retryability.RETRY_AFTER_USER_ACTION, abortCause.retryability)
+            assertTrue(recordedProtocol.fileAcceptConnections.isEmpty())
+            assertTrue(recordedProtocol.fileCommits.isEmpty())
+
+            // The ledger and byte capacity have already retired even in the
+            // broken path; neither replay nor later shutdown repairs its state.
+            dispatcher.onFileOffer(id, payload.copy(), offer)
+            assertEquals(initialResults.size + 1, recordedProtocol.fileResults.size)
+            val replay = recordedProtocol.fileResults.last()
+            assertEquals(FileResultCode.STORAGE_FAILURE, replay.code)
+            assertEquals("receiver storage failure", replay.reason)
+            assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+            retainedTransfer.cancel("already retired")
+            assertFailsWith<IllegalStateException> { pending.reject("already retired") }
+
+            val replacementId = MessageId.random(Random(8_033))
+            val replacement = SecureFileOffer.create(replacementId, payload.name, 1L, null, sha256(bytes))
+            dispatcher.onFileOffer(replacementId, payload, replacement)
+            val recovered = dispatcher.pendingFileOffers.value.single()
+            val successfulDestination = RecordingDestination()
+            val recoveredTransfer = recovered.accept(successfulDestination)
+            dispatcher.onFileData(fileFrame(replacementId, bytes))
+            dispatcher.onFileFinish(SecureFileFinish(replacementId, 1L, 1, sha256(bytes), replacement.offerHash))
+            assertIs<FileTransferState.Completed>(recoveredTransfer.state.value)
+            assertEquals(1, successfulDestination.commitCount)
+            assertEquals(0, successfulDestination.abortCount)
+            assertContentEquals(bytes, successfulDestination.buffer.readByteArray())
+            dispatcher.closeAll("after failed acceptance")
+            runCurrent()
+
+            val failed = assertIs<FileTransferState.Failed>(
+                stateAfterAbort,
+                "pending=0, aborts=${recordedDestination.abortCount}, initialResults=${initialResults.size}, " +
+                    "replayResults=${recordedProtocol.fileResults.size}, replacement=Completed, " +
+                    "afterShutdown=${retainedTransfer.state.value}"
+            )
+            assertTrue(failed.error === abortCause)
+            assertTrue(retainedTransfer.state.value === stateAfterAbort)
+            assertEquals(if (failCleanup) emptyList() else listOf(replay), initialResults)
+            assertEquals(2, notificationAttempts)
+            assertEquals(1, recordedDestination.abortCount)
+        } finally {
+            caller.cancelAndJoin()
+            dispatcher.closeAll("failed destination abort cancellation regression")
+            runCurrent()
+        }
+    }
+
+    @Test
+    fun externalCancellationDuringSuspendedDestinationAbortStillSettlesFailure() = runTest {
+        assertCancelledSuspendedDestinationAbort()
+    }
+
+    @Test
+    fun cancelledDestinationFailureCleanupBoundsNonCooperativeAbort() = runTest {
+        assertCancelledSuspendedDestinationAbort(timeoutAbort = true)
+    }
+
+    @Test
+    fun cancelledDestinationFailureCleanupCannotWriteIntoReopenedEpoch() = runTest {
+        assertCancelledSuspendedDestinationAbort(reopenDuringAbort = true)
+    }
+
+    private suspend fun TestScope.assertCancelledSuspendedDestinationAbort(
+        timeoutAbort: Boolean = false,
+        reopenDuringAbort: Boolean = false
+    ) {
+        val protocol = RecordingFileProtocol()
+        val config = FileTransferConfig(
+            maxFileSizeBytes = 1L,
+            maxConcurrentIncomingBytes = 1L,
+            chunkSizeBytes = 1,
+            offerTimeoutMillis = 100L
+        )
+        val originalPair = FakeConnectionPair()
+        val replacementPair = FakeConnectionPair()
+        var connection = originalPair.a
+        val sendMutex = Mutex()
+        val dispatcher = directDispatcher(
+            backgroundScope,
+            protocol,
+            config,
+            protocolState = secureProtocolState(),
+            connectionProvider = { connection },
+            sendMutex = sendMutex,
+            independentOperationDispatcher = StandardTestDispatcher(testScheduler)
+        )
+        val caller = Job(backgroundScope.coroutineContext[Job])
+        val abortEntered = CompletableDeferred<Unit>()
+        val abortRelease = CompletableDeferred<Unit>()
+        val abortExited = CompletableDeferred<Unit>()
+        val failureAtCallBoundary = CompletableDeferred<Throwable?>()
+        val bytes = byteArrayOf(9)
+        val id = MessageId.random(Random(8_034))
+        val payload = FileOfferPayload("suspended-abort.bin", 1L)
+        val offer = SecureFileOffer.create(id, payload.name, 1L, null, sha256(bytes))
+        val openFailure = IOException("synthetic destination open failure")
+        val recordedDestination = RecordingDestination(openFailure = openFailure)
+        val destination = object : FileTransferDestination by recordedDestination {
+            override suspend fun abort(cause: P2pError.FileTransferFailed?) {
+                recordedDestination.abort(cause)
+                abortEntered.complete(Unit)
+                try {
+                    if (timeoutAbort) {
+                        withContext(NonCancellable) { abortRelease.await() }
+                    } else {
+                        abortRelease.await()
+                    }
+                } finally {
+                    abortExited.complete(Unit)
+                }
+            }
+        }
+        try {
+            dispatcher.onFileOffer(id, payload, offer)
+            val pending = dispatcher.pendingFileOffers.value.single()
+            val retainedTransfer = assertIs<P2pFileTransfer>(pending)
+            val accepting = CoroutineScope(coroutineContext + caller).async {
+                runCatching { pending.accept(destination) }.also {
+                    failureAtCallBoundary.complete(it.exceptionOrNull())
+                }
+            }
+            runCurrent()
+            assertTrue(abortEntered.isCompleted)
+            assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+            caller.cancel(CancellationException("external cancellation while destination abort is suspended"))
+            runCurrent()
+            assertFalse(accepting.isCompleted, "cleanup must settle or reach its own deadline first")
+            assertFalse(abortExited.isCompleted)
+
+            if (reopenDuringAbort) {
+                dispatcher.closeAll("replace connection during failed destination cleanup")
+                sendMutex.withLock {
+                    connection = replacementPair.a
+                    dispatcher.reopen()
+                }
+                // Reusing the same id in a fresh epoch must not let the old cleanup
+                // remove or terminalize the new offer, nor notify its new stream.
+                dispatcher.onFileOffer(id, payload.copy(), offer)
+                assertTrue(dispatcher.pendingFileOffers.value.single() !== pending)
+            }
+            if (timeoutAbort) {
+                advanceTimeBy(config.offerTimeoutMillis - 1L)
+                runCurrent()
+                assertFalse(accepting.isCompleted)
+                advanceTimeBy(1L)
+                runCurrent()
+                assertTrue(accepting.isCompleted, "a non-cooperative abort must not extend its deadline")
+                assertFalse(abortExited.isCompleted, "the worker is deliberately still running")
+            } else {
+                abortRelease.complete(Unit)
+                runCurrent()
+                assertTrue(abortExited.isCompleted)
+            }
+            assertFailsWith<CancellationException> { accepting.await() }
+            assertIs<CancellationException>(failureAtCallBoundary.await())
+            val stateAfterAbort = assertIs<FileTransferState.Failed>(retainedTransfer.state.value)
+            val error = assertIs<P2pError.FileTransferFailed>(stateAfterAbort.error)
+            assertTrue(error.cause === openFailure)
+            assertEquals(FileTransferFailureKind.STORAGE, error.kind)
+            assertEquals(FileTransferPhase.ACCEPT, error.phase)
+            assertEquals(Retryability.RETRY_AFTER_USER_ACTION, error.retryability)
+            assertTrue(recordedDestination.abortCauses.single() === error)
+            assertEquals(1, recordedDestination.openCount)
+            assertEquals(1, recordedDestination.abortCount)
+            assertEquals(0, recordedDestination.commitCount)
+            assertTrue(protocol.fileAcceptConnections.isEmpty())
+            assertTrue(protocol.fileCommits.isEmpty())
+
+            if (reopenDuringAbort) {
+                assertTrue(protocol.fileResults.isEmpty(), "old cleanup must not write into the new epoch")
+            } else {
+                val result = protocol.fileResults.single()
+                assertEquals(FileResultCode.STORAGE_FAILURE, result.code)
+                assertEquals("receiver storage failure", result.reason)
+                dispatcher.onFileOffer(id, payload.copy(), offer)
+                assertEquals(listOf(result, result), protocol.fileResults)
+                assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+            }
+            retainedTransfer.cancel("already retired")
+            assertFailsWith<IllegalStateException> { pending.reject("already retired") }
+
+            val replacementId = if (reopenDuringAbort) id else MessageId.random(Random(8_035))
+            val replacement = SecureFileOffer.create(replacementId, payload.name, 1L, null, sha256(bytes))
+            if (!reopenDuringAbort) dispatcher.onFileOffer(replacementId, payload, replacement)
+            val successfulDestination = RecordingDestination()
+            val recovered = dispatcher.pendingFileOffers.value.single().accept(successfulDestination)
+            dispatcher.onFileData(fileFrame(replacementId, bytes))
+            dispatcher.onFileFinish(SecureFileFinish(replacementId, 1L, 1, sha256(bytes), replacement.offerHash))
+            assertIs<FileTransferState.Completed>(recovered.state.value)
+            assertEquals(1, successfulDestination.commitCount)
+            assertEquals(0, successfulDestination.abortCount)
+            assertContentEquals(bytes, successfulDestination.buffer.readByteArray())
+            assertTrue(protocol.fileAcceptConnections.single() === connection)
+            assertTrue(dispatcher.pendingFileOffers.value.isEmpty())
+            dispatcher.closeAll("after failed acceptance")
+            runCurrent()
+            assertTrue(retainedTransfer.state.value === stateAfterAbort)
+            assertEquals(1, recordedDestination.abortCount)
+        } finally {
+            abortRelease.complete(Unit)
+            caller.cancelAndJoin()
+            dispatcher.closeAll("suspended destination abort regression cleanup")
+            runCurrent()
+            originalPair.a.close()
+            originalPair.b.close()
+            replacementPair.a.close()
+            replacementPair.b.close()
+            if (abortEntered.isCompleted) assertTrue(abortExited.isCompleted)
         }
     }
 

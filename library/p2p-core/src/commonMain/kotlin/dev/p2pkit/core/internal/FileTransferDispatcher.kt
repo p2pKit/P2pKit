@@ -661,24 +661,7 @@ internal class FileTransferDispatcher(
                 "destination open failed",
                 e
             )
-            val response = incomingFailureResponse(session.transferId, error)
-            val removed = removeIncomingTerminal(session.transferId, entry, response)
-            removed?.cancelJobs()
-            abortUnownedDestination(
-                destination,
-                cause = error,
-                label = "failed destination open for ${session.transferId}"
-            )
-            session.markFailed(error)
-            if (removed != null) {
-                sendIncomingTerminalResponse(
-                    session.transferId,
-                    response,
-                    entry.writeEpoch,
-                    "failed destination open"
-                )
-            }
-            throw error
+            failDestinationSetup(entry, destination, error, "failed destination open")
         }
         val installed = try {
             session.installReceiver(sink, destination)
@@ -712,24 +695,7 @@ internal class FileTransferDispatcher(
                 "destination install failed",
                 e
             )
-            val response = incomingFailureResponse(session.transferId, error)
-            val removed = removeIncomingTerminal(session.transferId, entry, response)
-            removed?.cancelJobs()
-            abortUnownedDestination(
-                destination,
-                cause = error,
-                label = "failed destination install for ${session.transferId}"
-            )
-            session.markFailed(error)
-            if (removed != null) {
-                sendIncomingTerminalResponse(
-                    session.transferId,
-                    response,
-                    entry.writeEpoch,
-                    "failed destination install"
-                )
-            }
-            throw error
+            failDestinationSetup(entry, destination, error, "failed destination install")
         }
         if (!installed) {
             val response = IncomingTerminalResponse.Cancel("receiver acceptance did not commit")
@@ -2672,6 +2638,33 @@ internal class FileTransferDispatcher(
         if (issue != null) {
             logCleanupIssues(logger, "outgoing file source cleanup", listOf(issue))
         }
+    }
+
+    /**
+     * Once setup fails, retirement, bounded abort and terminal publication are
+     * one cleanup transaction. Caller cancellation during abort must not strand
+     * a retired session before Failed publication or its bounded epoch-fenced
+     * notification. Preserve that cancellation after settlement, not instead of it.
+     */
+    private suspend fun failDestinationSetup(
+        entry: IncomingEntry,
+        destination: FileTransferDestination,
+        error: P2pError.FileTransferFailed,
+        label: String
+    ): Nothing {
+        withContext(NonCancellable) {
+            val session = entry.session
+            val response = incomingFailureResponse(session.transferId, error)
+            val removed = removeIncomingTerminal(session.transferId, entry, response)
+            removed?.cancelJobs()
+            abortUnownedDestination(destination, error, "$label for ${session.transferId}")
+            session.markFailed(error)
+            if (removed != null) {
+                sendIncomingTerminalResponse(session.transferId, response, entry.writeEpoch, label)
+            }
+        }
+        currentCoroutineContext().ensureActive()
+        throw error
     }
 
     /** Destination ownership has not been installed in [IncomingFileSession]. */
