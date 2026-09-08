@@ -243,7 +243,9 @@ Read the [safe repair report](docs/audit/2026-09-04/repairs/325.md) and
 
 | Evidence | Result and limitation |
 | --- | --- |
-| Latest clean `check` plus Android assembly at **`1847ed3`** | **2,389 passes**, zero failures/errors, one unchanged manual skip; 290 XMLs, 246 executed tasks. Actual ABI/constants, lint and Android assembly pass |
+| Latest clean `check`, Android assembly and strict core Dokka at **`a5d3145`** | **2,407 passes**, zero failures/errors, one unchanged manual skip; 295 XMLs, 257 executed tasks. Actual ABI/constants, lint, Android assembly and eight volatile-field inspections pass |
+| #137 scoped regression checks | Original production plus regressions: eight structural failures/six controls; corrected focused 72 passes; five mutation controls rejected as intended. Fourteen static gates pass. Compatible visibility/contract coverage, not proof of an active stale-read race |
+| Earlier clean `check` plus Android assembly at **`1847ed3`** | **2,389 passes**, zero failures/errors, one unchanged manual skip; 290 XMLs, 246 executed tasks. Actual ABI/constants, lint and Android assembly pass |
 | #130 scoped regression checks | Selected old unit suites accepted omitted pins (67 passes); corrected focused 4 and module 161 passes; eight mutations rejected at the intended assertions. Fourteen static gates pass. Test coverage, not a production security correction |
 | Earlier clean `check` plus Android assembly at **`78ef361`** | **2,387 passes**, zero failures/errors, one unchanged manual skip; 290 XMLs, 246 executed tasks. Actual ABI/constants, lint and Android assembly pass |
 | #332 Apple transition regression checks | Ten intended baseline failures/four controls; 20 final methods/both profiles; 480 focused LAN passes/one manual skip; eight mutations detected. Fourteen final static gates pass. Native-input/control-state evidence, not live multicast/TCP-handshake proof |
@@ -271,9 +273,10 @@ Read the [safe repair report](docs/audit/2026-09-04/repairs/325.md) and
 
 The latest successful integrated run includes JVM, Android host and Kotlin/Native arm64 iOS simulator tests,
 **not Swift XCTest**, Intel execution, ART/OEM or physical devices. #133 publication/isolated-consumer checks executed
-at `7127616`, not rerun for #130; complete release/XCFramework/Swift gates remain pending. Exploratory harness/environment
-failures are preserved separately, not acceptance evidence. #130's 30, #332 Apple's 28 and #356's 28 cleanup receipts, #229's 34 and #357's six additional own
-receipts, plus #226's 37, #225's 101, #208's ten, #152's 33 and #133's earlier 54 receipts are finalized, including failed and negative attempts; required evidence remains.
+at `7127616`, not rerun for #137; complete release/XCFramework/Swift gates remain pending. Exploratory harness/environment
+failures are preserved separately, not acceptance evidence. #137's 25, #130's 30, #332 Apple's 28 and #356's 28 cleanup
+receipts, #229's 34 and #357's six additional own receipts, plus #226's 37, #225's 101, #208's ten, #152's 33 and
+#133's earlier 54 receipts are finalized, including failed and negative attempts; required evidence remains.
 Do not add overlapping test totals. Controller/fake-manager tests and source wiring assertions are not rendered
 Android UI, restoration, ART/OEM or physical-device proof. Final audit/release gates need the eventual combined tree;
 whole-repository corroboration, eventual combined-tree release/consumer gates and external validation remain incomplete.
@@ -281,10 +284,10 @@ whole-repository corroboration, eventual combined-tree release/consumer gates an
 Earlier #317 corrected the diagnostic revision subscription and successful-clear invalidation through `f273b1b`.
 Its [report](docs/audit/2026-09-04/repairs/317.md) preserves the real Compose regression evidence and the correction
 to test-runtime wording: actual sample executor JDK21.0.7, not inferred from the JDK17 launcher. The latest passing integrated
-tests at `1847ed3` include those regressions; host snapshots are not rendered/device performance measurements.
+tests at `a5d3145` include those regressions; host snapshots are not rendered/device performance measurements.
 Earlier #354 corrected the hotspot Failed card's cleanup retry and stale permission-admission callbacks through
 `b6af5b8`; its [review report](docs/audit/2026-09-04/repairs/354.md) retains exact historical evidence. The latest passing
-integrated run at `1847ed3` also includes that correction; earlier `12e6cfa` results alone did not.
+integrated run at `a5d3145` also includes that correction; earlier `12e6cfa` results alone did not.
 Earlier #337 corrected independent provisioning-card lifetimes and dismissal identity through `170cc86`:
 [repair summary](docs/audit/2026-09-04/repairs/337.md). Its earlier full-check results are not a new run.
 Inherited #352 corrected selective diagnostic clearing and truthful storage failures, ending at
