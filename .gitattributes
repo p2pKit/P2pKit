@@ -7,3 +7,11 @@
 # Windows accepts LF batch files, while a CRLF blob makes `git diff --check`
 # report every added line as trailing whitespace on the protected PR range.
 gradlew.bat text eol=lf
+
+# These immutable records predate the current whitespace policy. Preserve their
+# exact bytes (including on autocrlf hosts) and only their original formatting
+# exception. Both whitespace entry points verify their SHA-256 in the compared
+# head, index and worktree via scripts/check-archive-whitespace.sh.
+docs/archive/evidence/v0.3/jvm-cli.log -text whitespace=-blank-at-eol
+docs/archive/remediation/2026-06/PROBLEMS_P2PKIT.md -text whitespace=-blank-at-eol
+docs/archive/remediation/2026-07/OPEN_DECISIONS_2026-07.md -text whitespace=-blank-at-eof

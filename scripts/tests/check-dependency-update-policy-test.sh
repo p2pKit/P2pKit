@@ -33,6 +33,15 @@ new_fixture() {
     mkdir -p "$fixture/gradle/wrapper" "$fixture/scripts/tests"
     cp "$ROOT/scripts/check-dependency-verification.sh" "$fixture/scripts/"
     cp "$ROOT/scripts/check-dependency-update.sh" "$fixture/scripts/"
+    cp "$ROOT/scripts/check-archive-whitespace.sh" "$fixture/scripts/"
+    cp "$ROOT/.gitattributes" "$fixture/"
+    for path in \
+        docs/archive/evidence/v0.3/jvm-cli.log \
+        docs/archive/remediation/2026-06/PROBLEMS_P2PKIT.md \
+        docs/archive/remediation/2026-07/OPEN_DECISIONS_2026-07.md; do
+        mkdir -p "$(dirname "$fixture/$path")"
+        cp "$ROOT/$path" "$fixture/$path"
+    done
     cp "$ROOT/scripts/review-dependency-verification.sh" "$fixture/scripts/"
     cp "$ROOT/scripts/validate-gradle-plugin-marker.sh" "$fixture/scripts/"
     cp "$ROOT/scripts/validate-gradle-plugin-metadata.py" "$fixture/scripts/"
@@ -135,6 +144,19 @@ git -C "$whitespace_fixture" commit -qm "complete dependency update"
 whitespace_head="$(git -C "$whitespace_fixture" rev-parse HEAD)"
 expect_failure "earlier update-range whitespace" "trailing whitespace" \
     bash -c "cd '$whitespace_fixture' && scripts/check-dependency-update.sh '$whitespace_base' '$whitespace_head'"
+
+archive_fixture="$(new_fixture archive-integrity)"
+archive_base="$(git -C "$archive_fixture" hash-object -t tree /dev/null)"
+archive_head="$(git -C "$archive_fixture" rev-parse HEAD)"
+(cd "$archive_fixture" && scripts/check-dependency-update.sh "$archive_base" "$archive_head" >/dev/null)
+archive_path='docs/archive/evidence/v0.3/jvm-cli.log'
+printf 'whitespace-clean replacement\n' >"$archive_fixture/$archive_path"
+git -C "$archive_fixture" add -- "$archive_path"
+git -C "$archive_fixture" commit -qm 'changed archive'
+archive_head="$(git -C "$archive_fixture" rev-parse HEAD)"
+git -C "$archive_fixture" checkout HEAD^ -- "$archive_path"
+expect_failure "changed archived head despite clean index/worktree" "bytes changed in range head" \
+    bash -c "cd '$archive_fixture' && scripts/check-dependency-update.sh '$archive_base' '$archive_head'"
 
 trust_fixture="$(new_fixture trust)"
 sed -i.bak '/<components>/i\

@@ -39,6 +39,7 @@ is_commit "$head" || fail "dependency-update head is not an available commit"
 # Dependabot updates can span several commits (for example AGP + wrapper +
 # maintainer corrections), so a defect in an earlier bot commit must fail the
 # local pre-push check before CI constructs its synthetic merge commit.
+(cd "$ROOT" && scripts/check-archive-whitespace.sh "$head")
 git -C "$ROOT" diff --check "$base" "$head" --
 
 changed="$(mktemp "${TMPDIR:-/tmp}/p2pkit-dependency-changed.XXXXXX")"

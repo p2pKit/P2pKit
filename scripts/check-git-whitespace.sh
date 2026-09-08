@@ -37,6 +37,9 @@ else
     fi
 fi
 
+# The attributes permit only known immutable archive formatting; validate all
+# three layers before those exceptions can hide a newly changed archive byte.
+"$(cd "$(dirname "$0")" && pwd)/check-archive-whitespace.sh" "$range_head_commit"
 git diff --check "$base_commit" "$range_head_commit" --
 git diff --cached --check --
 git diff --check --

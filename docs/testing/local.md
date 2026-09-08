@@ -32,6 +32,13 @@ URLs, anchors, or fenced code. `git diff --check` checks unstaged changes; also 
 when reviewing staged changes. Run `./gradlew --stop` after checks, including failure, and preserve reports before cleaning
 only your disposable generated outputs.
 
+The CI/release wrapper `scripts/check-git-whitespace.sh [<base> <head>]` checks the committed range, index and worktree.
+Three immutable, pre-policy archives have exact-path formatting exceptions in `.gitattributes`; its helper
+`scripts/check-archive-whitespace.sh` verifies their SHA-256 in all three layers. The dependency-update range gate
+enforces the same integrity check. Plain `git diff --check` honors the attributes but does **not** verify those hashes.
+Do not normalize or replace these historical bytes to satisfy a check, or extend the exceptions to new archived material.
+If an older checkout converted their line endings, compare with a fresh checkout without overwriting local changes.
+
 Release-shape checks:
 
 ```bash
