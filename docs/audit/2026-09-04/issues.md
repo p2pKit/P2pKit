@@ -6,21 +6,33 @@ This dated ledger is not GitHub live state, effort or production readiness. Issu
 list/individual observations; none was closed by these fixes. #223 is independently APPROVED/pushed at
 `8dd65ce3f4e8`; [its Linux checkout/policy report](repairs/223.md) preserves exact source/evidence bindings.
 Thirteen final static/policy/range gates pass; no new product Gradle check is inferred. #368 remains approved
-at `c221d54b549d`; [its last product passes and prior failures](repairs/368.md) stay source-bound.
+at `c221d54b549d`; [its source-bound product passes and prior failures](repairs/368.md) stay source-bound.
 #367 remains approved at `0d88be3e3769`; [its original full-check failures](repairs/367.md) remain historical
-and Windows/Intel acceptance unexecuted. #145/#144/#360 and earlier approvals are unchanged. Active work is
-private, **unapproved/unexecuted hosted facility preparation**; planned #268 is **NOT_STARTED**, after any
-freshly reproduced prerequisites and their sequential independent reviews. Continue the remaining queue.
+and Windows/Intel acceptance unexecuted. #145/#144/#360 and earlier approvals are unchanged. Active facility
+source731/tree6b259 is independently **APPROVED**, locally committed, not established as pushed/hosted-executed
+here. [Its report](hosted-validation.md) separately binds the fresh precommitLinux1607-case check/sample/Dokka
+result at6a32+stageda95 and laterclean731rootcheck/CLI/Desktop1607/199XML/205tasks, independently
+corroborated; scopes are not interchangeable. Planned #268 is **NOT_STARTED**, after any actually reproduced
+prerequisites and their sequential independent reviews. The unnumbered facility adds no approved issue row.
 Pending repairs: **88 Low and one informational (#333)**. There are **49 new-audit findings**.
 
-The latest all-state list completed **12:28:25 UTC**: 289 issues/182 open/79 PRs (7 open), not fresh full histories.
+The earlier **12:28:25 UTC** all-state list observes289issues/182open/79PRs(7open), not fresh full histories.
 The exhaustive 10:24–10:30 capture remains 288 issues/181 open/79 PRs: all 367 issue-style histories and
 79 PR metadata sets freshly fetched, 1,519 GETs, no reused current histories. #368's individual 10:50:42 addition
 and #367/#368 outcomes remain historical; #223's 12:36:30 outcome is also individual, not a post-write full refresh.
-Earlier captures remain unchanged. See [checkpoint metadata](checkpoint.json) for exact bindings/limitations.
+Latest fresh local capture **16:02:38–16:08:26UTC**:289issues/182open/79PRs(7open), all368 local histories/
+79PR collections fresh; zero reuse. All182open IDs reconcile.117first-hop upstream PRs were captured;109count-
+complete, eight still lack7reported inline/3conversation records.2927GETall200,402local/33upstream patch
+fields omitted. The16:33:33Actions/ref idle point is not an execution lease; refresh before any trigger.
+Later18:28freshlists remain identical;all368histories/79PRsetsREUSED16:02–16:08, not new18hcomments/
+timelines.18:28:51idle/refpoint is not prepushidleproof/lease. Initialcollectorerror retained;correctedcapture
+succeeds,all28HTTP200. Earlier captures/row states unchanged. See [checkpoint metadata](checkpoint.json)
+and [the facility report](hosted-validation.md) for exact bindings/limitations.
 #133 independent interoperability stays NOT_STARTED; external acceptance on approved rows is not counted complete.
 #325's protected-AGENTS exception remains. #240 dependency `0` was a parser mistake (`transport #0` in the body),
-not a GitHub issue; its removal is not a product repair, new finding or count change.
+not a GitHub issue; its removal is not a product repair, new finding or count change. Likewise, the old368
+checkpoint pointer now names `previousAffectedGateAttempt368`; original text/history are retained. This narrow
+administrative correction does not modify a product outcome, the original223 assessment or a repair count.
 
 Read [full records](issues.json), [root handoff](../../../AUDIT_CHECKPOINT.md) and
 [unverified follow-ups](followups.md). Historical assessments retain original scope; the old #360 assessment's

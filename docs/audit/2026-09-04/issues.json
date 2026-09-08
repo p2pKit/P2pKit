@@ -4,7 +4,7 @@
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
   "githubIssueListRefreshedUtc": "2026-09-08T10:30:05.205645+00:00",
-  "provenance": "Curated recovery/continuation record; original inventorySnapshotUtc and historical assessments keep their original scope. Full issue discussions/current callers govern repairs; rawprivate evidence is not inGit. Exhaustive10:24-10:30UTC full-history capture and368individualaddition remain unchanged. Latest12:28:25all-state list observes289issues/182open/79PRs, not fresh fullhistories; explicit latestGithubListObservation avoids rebinding older row state. 223source approval/static verification is bound to8dd65ce; source ref-verified12:30:53 and outcome individually refetched12:36:30, issueOPEN. Lastproductchecks remain368sourcec221d54, not223or lateradministration. Earlier145/367/368failures and all181otherrows are preserved; old360assessment then-pending223wording is superseded by the current223record without rewriting it. Private hostedfacility preparation is unapproved/unexecuted here,268onlyplannedNOT_STARTED; no checkpointstop. Source approval does not complete foreignhost/device/independentacceptance, closeissues, merge or release. WholeauditNOT_READY;133NOT_STARTED.",
+  "provenance": "Curated recovery/continuation record; original inventorySnapshotUtc and row assessments retain their recorded scope. Raw evidence stays private. Latest16:02:38-16:08:26 fresh local capture records289issues/182open/79PRs,368histories and79PRmetadata sets fresh,zero reuse; all182openIDs reconcile. Separate117first-hop upstream records have109complete expected counts and8reported-comment visibility gaps;2927GETall200 is not complete upstream-content visibility. Earlier10:30capture,12:28list,368addition and individual223/367/368outcomes remain unchanged. Exact unnumbered facility731/tree6b259/sourcepatcha95 independently approved and locally committed; no verified push/hosted execution established here. Fresh Linuxcheck/sample/Dokka1607/199XML/234tasks is at6a32+stageda95, not clean731, sourceapproval or newhostedexecutor. All taskqualifiedcase identities/outcomes match prior368; do not sumoverlappingruns.223 remains last numberedrepair; original223 assessment is unchanged with a dated successor field.71/182 staysapproved,268NOT_STARTED,133independentNOT_STARTED,wholeauditNOT_READY. Earlierfailures,protectedguides,archive/releasebytes and0.8.0+ restrictions preserved; no issueclosure/mainmerge/release/settings/tagchange authorized. Later clean731 rootcheck/CLI/Desktop passes1607/199XML/205tasks with independentCORROBORATED evidence; not Androidassembly/Dokka or productlaunch/contentsinspection. Latest18:28freshlists equal16:08; all368histories/79PRsets explicitlyREUSED, not fresh18h, and unchanged count/updated_at/body fields do not establish unchanged comments/timelines. LatestActions/refpoint18:28:51active0 is not prepushidleproof/lease.",
   "issues": [
     {
       "number": 21,
@@ -2151,7 +2151,15 @@
         "scope": "Individually verified approved-source outcome; native Windows/macOS and all-text checkout acceptance remain separate, whole audit NOT_READY."
       },
       "externalAcceptanceStatus": "NOT_EXECUTED",
-      "externalAcceptanceScope": "NativeWindows/macOS and all-text checkout acceptance were not executed by223. No Apple/ART/physicaldevice/hostilenetwork/independentinteroperability/professionalcrypto/finalisolatedconsumer/release acceptance follows from Linuxlauncherfixtures."
+      "externalAcceptanceScope": "NativeWindows/macOS and all-text checkout acceptance were not executed by223. No Apple/ART/physicaldevice/hostilenetwork/independentinteroperability/professionalcrypto/finalisolatedconsumer/release acceptance follows from Linuxlauncherfixtures.",
+      "subsequentFacilityContext20260908": {
+        "recordedUtc": "2026-09-08T18:50:12.220310+00:00",
+        "sourceCommit": "731f98db90668f098c6025d3a0df6e863a951197",
+        "sourceTree": "6b259c267299be73f5c089fc401b965eea48c307",
+        "status": "SOURCE_APPROVED_LOCALLY_COMMITTED_PENDING_PUBLICATION_HOSTED_NOT_EXECUTED",
+        "report": "docs/audit/2026-09-04/hosted-validation.md",
+        "scope": "Additive successor only: original assessmentAtCheckpoint, original8ddsource/static evidence and then-next facility note remain verbatim historical. Later unnumbered facility18source approval/localcommit and precommitLinuxcheck are separately recorded, not a new223repair/check/foreign-host acceptance. Publication/hosted execution unestablished;268NOT_STARTED;133independentNOT_STARTED;auditNOT_READY. Clean731Linuxrootcheck/CLI/Desktop1607/199XML/205tasks independentlyCORROBORATED as separate later verification; no retroactive223orhostacceptance."
+      }
     },
     {
       "number": 225,
@@ -4833,7 +4841,7 @@
       "externalAcceptanceScope": "No fresh Windows/macOS/Apple/ART/physical-device execution, hostile-network, independent interoperability, professional cryptographic, final isolated-consumer or release acceptance from this host fixture repair."
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-08T13:18:49.492924+00:00",
+  "lastDispositionUpdateUtc": "2026-09-08T18:58:47.263085+00:00",
   "githubRefreshEvidence": {
     "startedUtc": "2026-09-08T10:24:33.734412+00:00",
     "endedUtc": "2026-09-08T10:30:05.205645+00:00",
@@ -4926,6 +4934,21 @@
   "previousDispositionUpdateUtc368": "2026-09-08T12:25:06.517016+00:00",
   "previousProvenance368": "Curated recovery/continuation record; original inventorySnapshotUtc stays historical. Full issue discussions and affected callers, not excerpts, govern repairs. Earlier assessments/outcomes are not fresh executions; raw private evidence is not inGit. Rows reconcile the exhaustive 10:24–10:30UTC fresh-history capture plus individually filed/refetched368 at10:50:42UTC. 367 and368 source approvals/pushes/outcomes are later scoped disposition/publication observations, not post-outcome complete GitHub refreshes, closure, merge or release. Current368approval/verification is bound to c221d54; earlier367/145 assessments/failures retain their original scope, and later223work is not approved here. Previous145 verification and refresh fields are preserved under explicit historical keys. Approved repository scope excludes unexecuted foreign-host/device/independent acceptance; whole audit NOT_READY.",
   "latestGithubListObservation": {
+    "startedUtc": "2026-09-08T18:28:41.929318+00:00",
+    "endedUtc": "2026-09-08T18:28:47.756256+00:00",
+    "issues": 289,
+    "openIssues": 182,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "freshCompleteHistories": false,
+    "scope": "Fresh18:28lists only; all368own histories/79PRsets reused16:02-16:08, upstream117context/gaps reused. Fresh ownbody/count/updated_at/list equality cannot prove unchanged comment payloads or timeline-only decisions. Original collector partial/error and corrected26GET capture remain distinct; all28GET200 is not no analysis failure. Operational idle/ref points are not a pre-push proof or lease.",
+    "safeIncrementalProjectionSha256": "f13d5908309adf601657fdde23003430055a11f19aa66ecbc5b0a45420c50fa7",
+    "completeHistoryCaptureReference": "latestGithubFullRefresh; not an18:28history capture"
+  },
+  "previousDispositionUpdateUtc223": "2026-09-08T13:18:49.492924+00:00",
+  "previousGithubListObservation223": {
     "startedUtc": "2026-09-08T12:28:21.418285+00:00",
     "endedUtc": "2026-09-08T12:28:25.847519+00:00",
     "issues": 289,
@@ -4937,5 +4960,220 @@
     "allStateListSha256": "06bae6da0253a48f71f3190baae08964e8d707d9dd1f24f19c0a3e1a38decb37",
     "freshCompleteHistories": false,
     "scope": "Later all-state list only, before223source/outcome publication; not new complete bodies/comments/timelines/PRdetails capture. Earlier githubIssueListRefreshedUtc/refresh evidence/addition fields retain their10:30scope, including368absence from that older list. The12:36outcome verification is individual, not a complete post-write refresh. Refresh live state before relying on it."
+  },
+  "latestGithubFullRefresh": {
+    "startedUtc": "2026-09-08T16:02:38.964754+00:00",
+    "endedUtc": "2026-09-08T16:08:26.627459+00:00",
+    "issues": 289,
+    "openIssues": 182,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "freshCompleteIssueStyleHistories": 368,
+    "exactSealedHistoriesReused": 0,
+    "freshLocalPullDetails": 79,
+    "ownComments": 490,
+    "timelineEvents": 4204,
+    "pullReviews": 0,
+    "pullInlineComments": 0,
+    "pullFileEntries": 1817,
+    "pullCommitEntries": 277,
+    "localGetAttempts": 1534,
+    "allStateListStableAcrossCapture": true,
+    "all182OpenIdsMatchInventory": true,
+    "missingLedgerIssues": [],
+    "newDistinctDefectConfirmed": false,
+    "newArchitectureDecision": false,
+    "reportSha256": "222c6c58e604c75950fd8eba2c1c1d208d18d11d41eb2b471b3e35eb719312da",
+    "manifestSha256": "a87ea8b3356129c2348413a15fb4e367ff7f10741383836fb9e306ccbad9b9a1",
+    "reconciliationSha256": "031963dcf9aa92c5e43ce07b009bad622d813f381cbda6a6de055d6c7b1b11a1",
+    "sealedFiles": 9535,
+    "sealedBytes": 438832855,
+    "firstHopUpstream": {
+      "selectedPRs": 117,
+      "urlOccurrences": 138,
+      "completeReturnedPages": true,
+      "expectedAggregateCountsReconciled": 109,
+      "remainingCountDiscrepancies": 8,
+      "reportedInlineRecordsNotReturned": 7,
+      "reportedConversationRecordsNotReturned": 3,
+      "affectedPRs": [
+        "actions/checkout#1941",
+        "actions/checkout#1977",
+        "actions/checkout#2044",
+        "actions/checkout#2194",
+        "actions/checkout#2286",
+        "actions/checkout#2356",
+        "actions/checkout#2454",
+        "actions/dependency-review-action#1077"
+      ],
+      "mainStartedUtc": "2026-09-08T16:26:56.860028+00:00",
+      "mainEndedUtc": "2026-09-08T16:33:34.452348+00:00",
+      "supplementStartedUtc": "2026-09-08T16:38:22.211942+00:00",
+      "supplementEndedUtc": "2026-09-08T16:38:36.390694+00:00",
+      "getAttempts": 1393,
+      "recursiveExpansion": false,
+      "scope": "All returned own bodies/comments/timelines and PR metadata/reviews/inline/files/commits captured; not semantic audit of every upstream patch or complete reported-comment visibility for eight objects. Redirect aliases were normalized after retaining the original parser limitation. These are dependency context, not additional audit rows."
+    },
+    "totalGetAttempts": 2927,
+    "allResponsesHttp200": true,
+    "failedOrTimedOutAttempts": 0,
+    "omittedLocalPatchFields": 402,
+    "omittedUpstreamPatchFields": 33,
+    "lastOperationalObservation": {
+      "startedUtc": "2026-09-08T16:33:29.938656+00:00",
+      "endedUtc": "2026-09-08T16:33:33.620426+00:00",
+      "activeUnion": 0,
+      "auditCommit": "6a32df43bc04742075fd124306eacb4515c0fb03",
+      "mainCommit": "eb444cccfc290be5435c5c10629c24183293606f",
+      "scope": "Point observation only; not current idle proof, scheduling reservation or global execution lease. Root must refresh before trigger."
+    },
+    "scope": "Fresh complete local histories and all PR returned collections, including relevant closed decisions. Raw contents were captured and programmatically compared; not a new whole-corpus semantic/current-caller audit. No remote writes, tests, source edits, issue closure or new approvals. Original10:30 capture/individual outcomes remain unchanged. API-omitted patches were not reconstructed; upstream retries do not extend local-history freshness."
+  },
+  "previousProvenance223": "Curated recovery/continuation record; original inventorySnapshotUtc and historical assessments keep their original scope. Full issue discussions/current callers govern repairs; rawprivate evidence is not inGit. Exhaustive10:24-10:30UTC full-history capture and368individualaddition remain unchanged. Latest12:28:25all-state list observes289issues/182open/79PRs, not fresh fullhistories; explicit latestGithubListObservation avoids rebinding older row state. 223source approval/static verification is bound to8dd65ce; source ref-verified12:30:53 and outcome individually refetched12:36:30, issueOPEN. Lastproductchecks remain368sourcec221d54, not223or lateradministration. Earlier145/367/368failures and all181otherrows are preserved; old360assessment then-pending223wording is superseded by the current223record without rewriting it. Private hostedfacility preparation is unapproved/unexecuted here,268onlyplannedNOT_STARTED; no checkpointstop. Source approval does not complete foreignhost/device/independentacceptance, closeissues, merge or release. WholeauditNOT_READY;133NOT_STARTED.",
+  "unnumberedFacilityContext20260908": {
+    "sourceCommit": "731f98db90668f098c6025d3a0df6e863a951197",
+    "sourceTree": "6b259c267299be73f5c089fc401b965eea48c307",
+    "diffSha256": "a95f3cb5817cf20c9ac2c373fbe58a6682c480b00584a8925c50ee98c955a32a",
+    "status": "SOURCE_APPROVED_LOCALLY_COMMITTED_PENDING_PUBLICATION_HOSTED_NOT_EXECUTED",
+    "report": "docs/audit/2026-09-04/hosted-validation.md",
+    "changesIssueCount": false,
+    "scope": "See checkpoint.hostedValidationFacility for exact source/review/execution/cleanup boundaries. No original numbered status,assessment,review,commit or external acceptance was rewritten."
+  },
+  "previousGithubListObservationHosted1608": {
+    "startedUtc": "2026-09-08T16:08:14.099011+00:00",
+    "endedUtc": "2026-09-08T16:08:18.882642+00:00",
+    "issues": 289,
+    "openIssues": 182,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "allStateListSha256": "d4866aa4cf570e77ffe9c2068c095d84d94bfebc1739c97458a36fe9ff3ff6b1",
+    "freshCompleteHistories": true,
+    "scope": "List endpoint within the separate16:02:38-16:08:26 fresh local history capture recorded in latestGithubFullRefresh. Per-endpoint, not transactional/permanently current. Earlier12:28 list,10:30 full histories and individual outcomes remain historical; row-level githubStateAtListRefresh fields are not retrospectively rebound."
+  },
+  "latestGithubIncrementalObservation": {
+    "schemaVersion": 1,
+    "observationKind": "INCREMENTAL_ALL_STATE_LIST_REFRESH_WITH_EXPLICIT_REUSED_HISTORIES",
+    "captureWindowUtc": [
+      "2026-09-08T18:28:29.801258+00:00",
+      "2026-09-08T18:28:54.005611+00:00"
+    ],
+    "finalFreshListWindowUtc": [
+      "2026-09-08T18:28:41.929318+00:00",
+      "2026-09-08T18:28:47.756256+00:00"
+    ],
+    "counts": {
+      "issueStyleObjects": 368,
+      "issues": 289,
+      "pullRequests": 79,
+      "openIssues": 182,
+      "closedIssues": 107,
+      "openPullRequests": 7,
+      "closedPullRequests": 72
+    },
+    "freshScope": {
+      "allStateIssueStyleObjectsWithOwnBodies": 368,
+      "dedicatedPrListObjects": 79,
+      "completeOwnCommentsAndTimelineHistories": 0,
+      "fullPrDetailReviewsInlineFilesCommitsSets": 0,
+      "newOrSubstantivelyChangedObjects": 0,
+      "newDirectlyImplicatedDecisions": 0
+    },
+    "reusedScope": {
+      "localOwnHistories": 368,
+      "prDetailAndHistorySets": 79,
+      "historicalLocalWindowUtc": [
+        "2026-09-08T16:02:38.964754+00:00",
+        "2026-09-08T16:08:26.627459+00:00"
+      ],
+      "upstreamPrContext": 117,
+      "upstreamVisibilityGaps": 8
+    },
+    "listChanges": {
+      "added": 0,
+      "removed": 0,
+      "ownBodyChanged": 0,
+      "ownCommentCountChanged": 0,
+      "ownUpdatedAtChanged": 0,
+      "titleStateLabelsChanged": 0,
+      "embeddedRepositoryCounterOrMetadataChanged": 0
+    },
+    "sourceCommentPayloadDelta": "NOT_FRESHLY_MEASURED; all368 own comments/timelines reused. Equality of fresh count/updated_at/body fields does not prove unchanged comment payloads or timeline decisions.",
+    "timelineEmbeddedPayloadDelta": "NOT_FRESHLY_MEASURED; no timeline refresh selected by substantive list change. Prior source-comment-vs-repository-counter classification remains historical, not extended to this timestamp.",
+    "repositoryRepairRows": {
+      "denominator": 182,
+      "approved": 71,
+      "remaining": 111,
+      "pendingRepairs": 89,
+      "externalValidationRows": 21,
+      "architectureDecisionRows": 1,
+      "approvedPercentRounded1dp": 39.0,
+      "remainingPercentRounded1dp": 61.0,
+      "denominatorMeaning": "independently approved repository-repair rows, not effort/GitHub closure/external acceptance"
+    },
+    "ledgerReconciliation": {
+      "all182RowsReconciled": true,
+      "newOpenIssuesNotInLedger": [],
+      "ledgerRowsNoLongerOpen": [],
+      "titleDifferences": [],
+      "historicalStateFieldsPreserved": true,
+      "issue368HistoricalNullFullListStatePreserved": true,
+      "newDispositionsAssigned": false
+    },
+    "upstreamVisibilityGapsRetained": [
+      "actions/checkout#1941",
+      "actions/checkout#1977",
+      "actions/checkout#2044",
+      "actions/checkout#2194",
+      "actions/checkout#2286",
+      "actions/checkout#2356",
+      "actions/checkout#2454",
+      "actions/dependency-review-action#1077"
+    ],
+    "operationalObservation": {
+      "lastWindowUtc": [
+        "2026-09-08T18:28:48.059338+00:00",
+        "2026-09-08T18:28:51.724627+00:00"
+      ],
+      "activeStatusQueries": [
+        "queued",
+        "in_progress",
+        "requested",
+        "waiting",
+        "pending"
+      ],
+      "activeUnionAtObservation": 0,
+      "auditRefAtObservation": "6a32df43bc04742075fd124306eacb4515c0fb03",
+      "mainRefAtObservation": "eb444cccfc290be5435c5c10629c24183293606f",
+      "notPrepushIdleProof": true,
+      "notAnExecutionLease": true,
+      "requiresParentRefreshImmediatelyBeforeTrigger": true
+    },
+    "localSourceAtCapture": {
+      "head": "731f98db90668f098c6025d3a0df6e863a951197",
+      "tree": "6b259c267299be73f5c089fc401b965eea48c307",
+      "clean": true,
+      "ahead": 1,
+      "metadataObservationNotNewSourceApprovalOrProductVerification": true
+    },
+    "preservedCaptureHistory": {
+      "initialCollectorStoppedOnKnownNumericRepositoryAlias": true,
+      "firstPartialListNotUsedAsComplete": true,
+      "httpGetAttempts": 28,
+      "httpFailures": 0,
+      "successfulCompleteCollections": 14,
+      "successfulCompletePages": 20
+    },
+    "wholeAuditStatus": "NOT_READY",
+    "independentInteroperability133": "NOT_STARTED",
+    "noBuildsTestsGitMutationsOrRemoteWrites": true,
+    "projectionNotALedgerRewrite": true,
+    "reportSha256": "771874f6b78359c0e1aff94ccc1fe4cd429f3a8e85e4bc19b80237bbe3e9fa19",
+    "manifestSha256": "880bed193de749fcab8d5c84afe6dd27f7db29bef109594c1ba0c979c0ebcc9b",
+    "safeProjectionSha256": "f13d5908309adf601657fdde23003430055a11f19aa66ecbc5b0a45420c50fa7",
+    "scope": "Fresh18:28lists only; all368own histories/79PRsets reused16:02-16:08, upstream117context/gaps reused. Fresh ownbody/count/updated_at/list equality cannot prove unchanged comment payloads or timeline-only decisions. Original collector partial/error and corrected26GET capture remain distinct; all28GET200 is not no analysis failure. Operational idle/ref points are not a pre-push proof or lease."
   }
 }

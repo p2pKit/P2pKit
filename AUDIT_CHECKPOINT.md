@@ -4,11 +4,13 @@
 The completed transfer stop is superseded by the owner's authorization to continue. #223's two-file wrapper LF
 checkout-policy correction is independently approved and pushed at `8dd65ce`; #368, #145, #367, #144/#360 and
 all earlier approvals remain intact. **71/182 repository-repair rows reviewed (39.0%); 111 remain (61.0%).**
-**Active work: private preparation of the serialized hosted Mac/Windows/Apple validation facility**; no facility
-approval or execution is recorded here. Planned #268 is **NOT_STARTED**, after any freshly reproduced prerequisites.
+**Active work: approved serialized hosted Mac/Windows/Apple validation facility**, locally committed at `731f98d`;
+publication and hosted execution are **NOT_RECORDED / NOT_EXECUTED** here. Planned #268 is **NOT_STARTED**,
+after any freshly reproduced prerequisites. See [the facility report](docs/audit/2026-09-04/hosted-validation.md).
 Thirteen final #223 static/policy/range gates pass at clean `8dd65ce`; this is not a new product Gradle check.
-The latest recorded product checks remain `c221d54`: strict combined check/Android sample/Dokka and separate root
-check each pass **1,607/1,607**. Earlier failures and controls retain their original outcomes and source bindings.
+Latest clean731 Linux rootcheck/CLI/Desktop gates **PASS1,607/199XML/205tasks**, independently corroborated.
+The earlier precommit check/Android sample/Dokka **PASS1,607/199XML/234tasks** remains at6a32+stageda95,
+not retroactively clean731. Same identities, not additive. Earlier checks/failures retain their source bindings.
 Preserve later commits/user changes; never reset to a checkpoint. #133 independent interoperability remains
 **NOT_STARTED**; whole audit **NOT_READY**. Read unchanged `AGENTS.md`/`CLAUDE.md` and complete ledgers.
 GitHub Actions is authorized for supported host/simulator gates, not a substitute for physical-device or independent
@@ -38,13 +40,26 @@ not an account login, a native chat export, running agents or build processes.
 - Repository: <https://github.com/p2pKit/P2pKit>; branch `audit/complete-2026-09-04`, not merged into `main`.
 - Completed transfer baseline: `d823bb9cc0d187ec746714af67b08904a28331b6`, tree
   `44cd608fb05d16d3593d496b355e690af928a247`. Preserve every later commit and working change; never reset to it.
-- Latest independently reviewed source: **`8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b`** (#223), tree
+- Latest independently reviewed source: **`731f98db90668f098c6025d3a0df6e863a951197`** (unnumbered facility), tree
+  **`6b259c267299be73f5c089fc401b965eea48c307`**; parent `6a32df43bc04742075fd124306eacb4515c0fb03`,
+  tree `e48b5f527b4079612f3544f2e8efb5974f787ec0`. Eighteen paths,12 additions/six modifications;
+  exact diff `a95f3cb5817cf20c9ac2c373fbe58a6682c480b00584a8925c50ee98c955a32a`.
+  All three independent scoped reviewers **APPROVE** source publication/controlled trial. Local commit18:14:47UTC;
+  clean731Linuxrootcheck/CLI/Desktop evidence is separately corroborated; no push/hosted execution inferred.
+  This is not a new numbered repair.
+- Latest numbered independently reviewed source: **`8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b`** (#223), tree
   **`facccdaae07e66ae7d3017ef8525c09611b2c70a`**. Exactly two attributes/regression files, 77 insertions/1 deletion;
   parent `dfdb36744ea2a33f4b9e6455b4359e4639e8a359`. Thirteen final static/policy/range gates pass; no product check rerun.
 - Previous #368 administration: **`b4a9248c78ec8088ac5d5ea10fb71e2f741c89e1`**, tree
   **`e34b9f583d8c480d36b67fc3a8f60c990fb63617`**. This is the exact administrative input to the #223 increment,
   not a product-verification revision or an inferred later administrative publication.
-- Latest recorded product verification: **`c221d54b549d7d65d19fb47457416ac3e43e6b37`** (#368), tree
+- Latest recorded product invocation: `hosted-731-clean-linux-check-samples`,18:16:25–18:24:24UTC, clean731,
+  **PASS1607/199XML/205tasks**:rootcheck+CLIcheck/installDist+Desktoptest/runtime/argfile/distributable.
+  Independent evidence **CORROBORATED**; no sample launch/package-content inspection or Androidassembly/Dokka.
+  Earlier `hosted-final-r1-linux-integrated`,17:41:47–17:50:31UTC, **PASS1607/199XML/234tasks** at6a32+stageda95,
+  separately covers check/Androidsample/Dokka. Same task-qualified identities, not additive. Exact commands,
+  reviews and cleanup are in [the facility report](docs/audit/2026-09-04/hosted-validation.md).
+- Previous clean product verification: **`c221d54b549d7d65d19fb47457416ac3e43e6b37`** (#368), tree
   **`c72ba8380a510c187298aa69efc721453c07f6c8`**. Exactly two test files; parent `0d88be3e3769b5133a985e4fe2fca782ba0ef2a6`.
   Clean strict Linux combined check/Android sample/Dokka **PASS 1,607/1,607**, 199 XMLs/234 tasks;
   separate root check **PASS 1,607/1,607**, 199 XMLs/194 tasks. No XML failures/errors/skips; not Apple execution.
@@ -117,7 +132,32 @@ Recorded cycles include dependency/provenance/publication gates, coroutine cance
 secure-v2 tests, provisioning callbacks, sample pairing/privacy, file source/destination safeguards, diagnostics,
 Android API24/25 diagnostics and iOS integration. These are scoped repairs, not proof of complete subsystem correctness.
 
-## Latest #223 wrapper LF checkout-policy correction
+## Current unnumbered hosted-validation facility
+
+[The separate facility report](docs/audit/2026-09-04/hosted-validation.md) binds the exact18 source files,
+three final independent **APPROVE** verdicts, staged-source22fixture/static gates and independent Linux
+product corroboration for precommit234-task and later clean731205-task scopes. Earlier requested changes,
+red mutation/cancellation results and cleanup limitations
+remain preserved. Source approval/commit, administrative approval, verified push, host execution, artifact
+inspection and issue-specific external acceptance are separate events. None changes the **71/182** denominator.
+
+The latest full local GitHub refresh is **16:02:38–16:08:26UTC**:289 issues/182 open,79PRs/7open;
+all368 local bodies/comments/timelines and79PRcollections freshly captured. All182 open IDs match.
+117first-hop upstream PRs were captured;109 expected-count-complete, eight still missing7reported inline/
+3conversation records despite retries.2927GETs all200;402local/33upstream patch fields omitted, no fullpatch
+reconstruction. LastActions/ref observation16:33:33active0 is **not a current execution lease**.
+Later18:28freshlists are unchanged;all368histories/79PRsets explicitly reused16:02–16:08, not freshly
+refetched. Fresh counts/updated_at/bodies cannot prove unchanged comment/timeline payloads. LatestActions/ref
+18:28:51active0/audit6a32 is not prepushidleproof/lease. Initial collector2GETerror retained; corrected26GETs
+complete,all28HTTP200. Historical captures/individual outcomes remain; refresh immediately before trigger.
+
+The coverage increment is18 honest source-read bindings (nine full-text,nine semantic-delta), plus this report:
+**1,060 paths;783 full-text,10 semantic-delta,259 structural,one partial,six reopened,one self-excluded**.
+All5,235 previous historical cells and the six reopened/self rows remain unchanged. Reads are not entire-
+repository correctness or platform execution. The old368 navigation pointer is narrowly corrected with its
+original diagnosis retained; no product issue/count change. Final authored administration needs independent review.
+
+## Latest numbered #223 wrapper LF checkout-policy correction
 
 The two-file correction is independently **APPROVED** and pushed at
 `8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b`, tree `facccdaae07e66ae7d3017ef8525c09611b2c70a`.
@@ -138,14 +178,15 @@ The reviewer independently rehashed **215 files / 3,129,690 bytes**. Seventeen o
 separate sealer finalized with stop exit zero/no owned survivors; sealer cleanup ended **12:22:07 UTC**.
 
 This is **Linux Git/shell evidence**, not native Windows/macOS or all-text checkout certification. No product
-`check` was rerun for #223: the latest recorded product checks remain the separate #368 `c221d54` runs below.
-Do not blanket-renormalize or overwrite existing clones/user changes. Next is the serialized hosted-validation facility
-(currently private, unapproved/unexecuted preparation; fresh independent review required), then #268 after any
-freshly reproduced prerequisites and the remaining dependency-aware queue. #268 is not started;
+`check` was rerun in the #223 repair cycle; its then-latest product checks were the #368 `c221d54` runs below.
+The later facility's precommit Linux check and independent source approvals are recorded separately, not
+retroactively attributed to #223. Do not blanket-renormalize or overwrite existing clones/user changes.
+The approved facility is locally committed, not recorded as published/hosted-executed here; #268 is not started,
+after any freshly reproduced prerequisites and the remaining dependency-aware queue;
 #367 foreign-host acceptance remains **NOT_EXECUTED**.
 **#133 NOT_STARTED; whole audit NOT_READY.** Continue feasible work without a checkpoint stop.
 
-## Previous #368 correction and latest recorded product checks
+## Previous #368 correction and its clean product checks
 
 The two-test-file repair is independently **APPROVED** and pushed at
 `c221d54b549d7d65d19fb47457416ac3e43e6b37`, tree `c72ba8380a510c187298aa69efc721453c07f6c8`.
@@ -176,7 +217,7 @@ These are **Linux host/classloader/shadow results**, not ART/device or fresh Win
 Apple skips and cinterop/ABI-unavailable diagnostics remain in the logs; zero skipped XML cases does not mean
 Apple ran. #367 Windows/Intel acceptance, final consumer/release gates and physical/hostile-network/independent/
 professional-crypto validation remain pending. #133 is **NOT_STARTED**; whole audit **NOT_READY**.
-The then-next #223 repair is approved above; current active work is private hosted-facility preparation, not #268.
+The then-next #223 repair is approved above; current work is approved facility validation/publication, not #268.
 
 ## Historical #367 repository-source correction
 
@@ -211,7 +252,7 @@ The original #145 failures below and both #367 full-check failures remain histor
 #367 checkpoint the last successful integration was historical `6995130`, not `0d88be3`; later #368
 Linux passes are recorded separately above. Windows/Intel/Apple acceptance is **NOT_EXECUTED** in that
 cycle and not discharged by source approval. Former next repairs #368 and #223 are now approved above;
-private hosted-facility preparation is current, with #268 only planned. #133 remains **NOT_STARTED**;
+approved facility validation/publication is current, with #268 only planned. #133 remains **NOT_STARTED**;
 physical-device/ART, hostile-network, independent-implementation and professional-crypto acceptance remain
 separate. Whole audit **NOT_READY**. No merge, closure, release, tag or settings change is authorized.
 
@@ -607,14 +648,22 @@ exit zero and no owned survivors remain. Fixture removal is verified; these were
 Source/protected files, shared caches, private evidence and unrelated tasks remain. No later hosted-facility
 cleanup or execution is inferred from the #223 receipts.
 
+The later facility22-gate cohort and precommitLinux product run have their own finalized receipts:all stops0,
+no final owned survivors. Product11disposable output roots/948,478,230bytes were removed after evidence
+retention. The independent product review corroborates retained records, not live historical removal. Preserve
+all source, shared caches, required private logs and unrelated workers. Later clean731product cleanup has
+its own stop0/no-survivor record:11roots/1,196,181,541bytes removed; not live historical removal observation.
+See the separate facility report.
+
 ## Next: hosted validation facility, then the remaining queue
 
 1. The transfer stop is completed and superseded. #223, #368, #145, #367, #360, #144 and earlier scoped corrections
    are approved/pushed; do not reimplement them or relabel earlier failures. Preserve protected files, immutable
    archives/releases and all **0.8.0+** admission-tightening restrictions (#229/#356/#332/#145).
-2. The **sole active implementation** is the serialized Mac/Windows/Apple hosted-validation facility, currently
-   **private preparation, unapproved and unexecuted** in this record. Finish its focused implementation, evidence
-   and fresh independent review before use. Preserve any newer work rather than resetting to this checkpoint.
+2. The **sole active work item** is the serialized Mac/Windows/Apple facility: final18 source paths independently
+   approved and locally committed at731/tree6b259; cleanLinuxcheck/sample evidence separately corroborated,
+   publication/hosted execution not recorded here. Obtain independent administrative review before the controlled hosted
+   trial. Preserve final reviews, earlier failures and any newer work; never reset to this checkpoint.
 3. Any freshly reproduced hosted prerequisites need their own sequential correction and fresh final-revision
    review before planned [#268](https://github.com/p2pKit/P2pKit/issues/268), then the remaining dependency-aware
    inventory. #268 is **NOT_STARTED**, not active while facility work proceeds. Preserve Binary defensive ownership;
@@ -638,9 +687,9 @@ corroboration and combined-source consumer/release/Swift/XCFramework gates remai
    [unverified follow-ups](docs/audit/2026-09-04/followups.md). Preserve all existing user changes.
 2. Record exact branch/commit/tree/status and refresh full GitHub issues/comments/linked PRs. Reconcile new evidence
    by underlying cause, not similar titles. Use exact local drafts if access is unavailable; never claim remote writes.
-3. Continue all actionable issues sequentially, prioritizing dependencies: private hosted facility first, any
-   freshly reproduced prerequisites next, planned #268 then remaining inventory. Refresh full histories/current
-   callers and deduplicate new concerns; private preparation is not an approved or executed gate.
+3. Continue all actionable issues sequentially: complete the approved facility's controlled validation/publication,
+   any freshly reproduced prerequisites next, planned #268 then remaining inventory. Refresh histories/current
+   callers and deduplicate concerns; source approval/local commit is not a push, hosted run or external acceptance.
 4. Track verified distinct discoveries with severity, platforms, paths/lines, reproduction, root cause, impact,
    correction and regression plan. Respect `SECURITY.md`. Keep suspicions separate; do not duplicate existing issues.
 5. For every issue: confirm behavior/callers, fix the whole root cause, add meaningful regressions, run focused checks,
@@ -703,19 +752,29 @@ verification scope, blockers, cleanup and practical readiness limits at each han
 > Final13static/policy/range gatesPASS atclean8dd; real isolatedLinux checkout reproduces original true-mode
 > rejection/248CRbytes with false/input controls. Two attribute mutations and four oldtamper controls retained;
 > original-attributes/final-tests FAIL1 remains intended evidence. No productGradle check rerun for223.
-> Lastproductchecks remain368source c221d54b549d7d65d19fb47457416ac3e43e6b37: combinedcheck/Androidsample/
-> coreDokka PASS1607/199XML/234tasks; separatecheck PASS1607/199XML/194tasks. Counts overlap, not new223results.
+> Previousclean productchecks stay368source c221d54b549d7d65d19fb47457416ac3e43e6b37: combinedcheck/sample/
+> Dokka PASS1607/199XML/234tasks; separatecheck PASS1607/199XML/194tasks. Fresh17:41–17:50Linux combinedrun
+> PASS1607/199XML/234tasks at6a32+stageda95, independentlyCORROBORATED, not clean731 or the hostedexecutor.
+> Later clean731rootcheck/CLI/Desktop PASS1607/199XML/205tasks,18:16–18:24, freshindependentCORROBORATED.
+> NoAndroidassembly/Dokka/samplelaunch or retainedpackagecontents inthiscleanrun. Same1607task-qualified
+> identities/outcomes,noadded/lost/duplicates;donotsum overlappingruns.
 > Earlier367wholeFAIL1297+1/151XML/172tasks,145failures,first368uppercase-oracleFAIL9+1 and intendedraw-ID
 > mutation remain failures. Historical6995130 PASS2459/one manualskip has different platform scope.
 > Preserve0.8.0+ admission restrictions, security/ownership and immutable archive/release bytes. Do not repeat
 > #223/#368/#145/#367/#144/#360. #145 estimate is not universal heap/Native/zero-allocation proof.
-> ActiveWorkItem is private,unapproved,unexecuted serialized hosted Mac/Windows/Apple facility; activeIssue=null.
-> Finish its separate implementation/fresh review. Any freshly reproduced prerequisites require sequentialrepair/
-> independentreview before planned#268(NOT_STARTED), then remainingdependency-aware inventory. PreserveBinary
-> defensivecopies; source review is not foreign-host acceptance. #367Windows/Intel remainsNOT_EXECUTED.
-> Latestall-state list12:28:25UTC:289issues/182open/79PRs(7open), not freshfullhistories. Exhaustive10:24–10:30
-> capture remains288issues/181open/79PRs,all367histories/79PRdetails fresh,1519GETs. 223source12:30:53 and
-> outcome12:36:30 are individualobservations, not post-write complete refresh. Preserveearliercaptures; refreshlive.
+> ActiveWorkItem: final18 hostedfacility sourceAPPROVED bynative/consumer/workflow independentreviewers,
+> locallycommitted731f98db90668f098c6025d3a0df6e863a951197/tree6b259c267299be73f5c089fc401b965eea48c307,
+> sourcepatcha95f3cb5817cf20c9ac2c373fbe58a6682c480b00584a8925c50ee98c955a32a. Publication/hostedexecution
+> not establishedhere; activeIssue=null. Preserve cleanlocalgates/cleanup and obtain independentadminreview,
+> then controlledserializedhosttrial. Newprerequisites require sequentialrepair/independentreview before268
+> NOT_STARTED andremainingqueue. PreserveBinary defensivecopies;367Windows/Intel remainsNOT_EXECUTED.
+> Latestfull localcapture16:02:38–16:08:26UTC:289issues/182open/79PRs(7open),all368histories/79PRdetails
+> fresh,zero reused. All182openIDs reconcile.117firsthopupstreamPRs captured;109countcomplete,eightstillmissing
+> reported7inline+3conversation despitecontrols.2927GETall200;local402/upstream33patchfieldomissions.
+> LatestActions/refpoint16:33:33active0/audit6a32/main eb444ccc is NOT currentidleproof or globallease.
+> Latest18:28freshlists unchanged;all368histories/79PRsetsREUSED16:02–16:08,zero18hfullrefetch; unchanged
+> listcounters/updated_at/body do not prove comments/timelinesunchanged.18:28:51idle/refpointnotlease.
+> Preserve10:30/12:28/individualoutcome histories andoldrowbindings;refreshlivebeforetrigger.
 > One active implementation at a time. Delegate bounded independent investigations/reviews; create a fresh reviewer
 > after every fix, give fullissue/exactdiff/callers/platform/evidence and resolve every actionable finding first.
 > Never overlap local/hosted builds. Use boundedmemory,twoGradleworkers,noparallel,strictverification; preserve

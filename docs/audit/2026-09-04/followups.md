@@ -4,8 +4,10 @@ This file distinguishes unverified hypotheses from separately promoted/repaired 
 the current tree and read complete related issue histories before tracking a new defect. Record negative results
 as well as confirmations. Promoted findings below are not unfiled concerns or repair-completion claims unless
 an exact independent approval is stated. The transfer stop is superseded; #223/#367/#368 have scoped source
-approvals below. Active work is private, unapproved/unexecuted hosted-facility preparation; #268 is only planned
-after any freshly reproduced prerequisites and sequential independent reviews. Continue feasible work.
+approvals below. Active facility source is independently approved and locally committed731/tree6b259;
+publication/hosted execution not established here. #268 is **NOT_STARTED**, after any actually reproduced
+prerequisites and sequential independent final-revision reviews. See [the facility report](hosted-validation.md).
+Continue feasible work; unnumbered infrastructure does not change71/182 or whole-audit NOT_READY.
 
 ## Desktop large-text/RTL sidebar applicability
 
@@ -157,8 +159,12 @@ and real checkout regressions preserve wrappers/pins, batch/ABI/archive rules an
 Thirteen final static/policy/range gates pass; original-attributes rejection and two attribute mutations remain
 meaningful negative evidence. No product Gradle check or native Windows/macOS acceptance follows from this cycle.
 Do not refile this cause, blanket-renormalize existing clones, or reinterpret the unchanged #360 report's historical
-pending note as current. Active hosted-facility preparation remains private/unapproved/unexecuted here, with #268
-only planned after any freshly reproduced prerequisites; no checkpoint stop or whole-audit readiness is implied.
+pending note as current. The later facility source is independently approved/locally committed731; its fresh
+precommitLinux1607-case result and laterclean731rootcheck/CLI/Desktop1607-case result are separately
+bound, not attributed to the #223 cycle or added as new case identities. Publication/hosted
+execution remain unestablished here; #268 stays NOT_STARTED after any freshly reproduced prerequisites.
+The old368 checkpoint navigation pointer is corrected with its history preserved, not treated as a new product
+finding or approved repair row. No checkpoint stop or whole-audit readiness is implied.
 
 ## Resumed corroboration: confirmed and filed #361–#368
 
