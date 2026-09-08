@@ -3,6 +3,10 @@
 # damage during the repository diff gate.
 **/*.api whitespace=-blank-at-eof
 
+# The POSIX launcher and its reviewed worktree checksum require LF on every host,
+# including checkouts with core.autocrlf=true. Do not rewrite the wrapper bytes.
+gradlew text eol=lf
+
 # Keep the generated Windows launcher byte-stable across maintainer hosts.
 # Windows accepts LF batch files, while a CRLF blob makes `git diff --check`
 # report every added line as trailing whitespace on the protected PR range.
