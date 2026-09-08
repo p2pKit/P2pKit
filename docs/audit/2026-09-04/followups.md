@@ -44,17 +44,32 @@ Android defect**, a lossless/replay guarantee, or a new issue claim.
 
 ## File destination authentication-error casts
 
-During #137 review at `a5d3145`, the unchanged `FileTransferDispatcher.acceptOffer(destination)` was noted to cast
-`failureFromCause(...)` to `P2pError.FileTransferFailed` at
-`library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/FileTransferDispatcher.kt:656-663,707-714`, while the
-helper at `2724-2743` deliberately preserves `P2pError.AuthenticationFailed`. Investigate whether a destination's
-prepare/open callback throwing that type reaches a `ClassCastException` before abort, failure publication or ledger
-retirement. Trace both destination overloads, cancellation, resource ownership and retry/terminal states.
+The #137 reviewer observation was **confirmed, filed as [#358](https://github.com/p2pKit/P2pKit/issues/358), and
+independently repaired/pushed** through `d424a23` on 8 September. Original JVM production plus regressions produces
+two intended cast failures/three controls; Android original-production control produces three failures/five controls.
+The public custom open callback and synthetic internal preflight reproduce `ClassCastException` before retirement,
+abort and Failed/result publication. No current application-authentication callback during install was demonstrated.
 
-This is **unverified**, not a #137 regression or a confirmed new issue. The independent reviewer ran no reproducer;
-its preliminary inventory search is not full fresh deduplication. Read related issue/closed-fix histories and obtain
-a concrete execution trace or bounded regression before filing. Do not generalize this to normal I/O failures,
-an authentication bypass, or a demonstrated data-loss condition without evidence.
+Both destination catches now require a statically typed file failure; the general classifier still preserves genuine
+channel authentication. See [the repair report](repairs/358.md) and
+[verified outcome](https://github.com/p2pKit/P2pKit/issues/358#issuecomment-5578319370). Do not refile this cast root or
+rewrite historical #137 evidence as if its then-unverified observation had already been reproduced. This remains
+local integration/lifecycle correctness, not an authentication bypass or demonstrated data loss.
+
+## File destination cleanup cancellation
+
+During #358 review at `d424a23`, the unchanged generic setup-error cleanup in
+`library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/FileTransferDispatcher.kt:655-681,706-732` was noted
+to retire the active offer before awaiting `abortUnownedDestination`, then publish `session.markFailed` afterward.
+Investigate whether cancellation of the accepting caller while abort is awaited propagates structural cancellation
+through `captureCleanupIssue` before the public session becomes terminal or the first terminal response is attempted.
+An ordinary IOException open failure may reach the same path; this is not the #358 classifier/cast root.
+
+This is **unverified**. The reviewer ran no reproducer, and #358's open-result cancellation test does not exercise
+cancellation during abort. Search full issue/closed-fix histories, then use a bounded deterministic caller-cancel/abort
+interleaving to check final state, retired entry/byte budget, replay, repeated operations and cancellation propagation.
+Do not infer a confirmed leak, lost data, permanent remote failure or repair from this source hypothesis. Track a
+distinct issue only if reproduced and not already covered; preserve #358's independently approved classification.
 
 ## XcodeGen version-probe status and failed-install cleanup
 

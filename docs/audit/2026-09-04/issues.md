@@ -1,19 +1,20 @@
 # Issue disposition index
 
-Checkpoint inventory: **171 issues; 63 reviewed repository repairs (36.8%), 108 remaining issue rows (63.2%)**.
+Checkpoint inventory: **172 issues; 64 reviewed repository repairs (37.2%), 108 remaining issue rows (62.8%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed fixes are in the audit branch, not merged/released. #137's compatible cause-visibility correction
-is independently approved at `a5d3145`; volatile is not immutable and no active stale-read race was observed. #130,
-#332 Apple and earlier approvals remain intact. #133's independent interoperability remains NOT STARTED. Percentages
-do not count external acceptance attached to approved rows. The #325 protected-AGENTS exception remains.
+refresh. Reviewed fixes are in the audit branch, not merged/released. #358's four-file destination-error classification
+correction is independently approved at `d424a23`; genuine channel authentication remains unchanged. A separate
+cancellation-during-abort hypothesis is unverified and needs investigation before the planned #144 repair. Prior
+approvals remain intact. #133's independent interoperability remains NOT STARTED; percentages do not count external
+acceptance attached to approved rows. The #325 protected-AGENTS exception remains.
 Read [the full records](issues.json) for scope, dependencies, commits and public outcomes, and [the root handoff](../../../AUDIT_CHECKPOINT.md)
 for evidence limits and cleanup rules. Historical assessment text retains its original review-time scope.
 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (63)
+## Repairs with recorded independent approval (64)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -80,6 +81,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#355: [AUDIT][Low] Terminal kit shutdown misreports inbound completion and retries closed acceptance](https://github.com/p2pKit/P2pKit/issues/355) | low | New audit | `182063131438` |
 | [#356: [AUDIT][Low] Apple Bonjour aliases NUL-containing TXT keys into canonical fields](https://github.com/p2pKit/P2pKit/issues/356) | low | New audit | `183b6c917faf` |
 | [#357: [AUDIT][Low] LAN watcher test races a real executor against a virtual timeout](https://github.com/p2pKit/P2pKit/issues/357) | low | New audit | `6d9cd3c74724` |
+| [#358: [AUDIT][Low] Destination AuthenticationFailed escapes as ClassCastException and skips acceptance cleanup](https://github.com/p2pKit/P2pKit/issues/358) | low | New audit | `d424a23b00fb` |
 
 ## Pending remediation (86)
 

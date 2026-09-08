@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-08T01:09:03.913712+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-08T02:33:45.084350+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -4385,7 +4385,39 @@
         "https://github.com/p2pKit/P2pKit/issues/357",
         "https://github.com/p2pKit/P2pKit/issues/357#issuecomment-5574770193"
       ]
+    },
+    {
+      "number": 358,
+      "title": "[AUDIT][Low] Destination AuthenticationFailed escapes as ClassCastException and skips acceptance cleanup",
+      "url": "https://github.com/p2pKit/P2pKit/issues/358",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "githubStateAtListRefresh": "open",
+      "reportedProblemExcerpt": "Destination preflight/open AuthenticationFailed passes through a general classifier then fails an unchecked FileTransferFailed cast before acceptance retirement, abort, Failed state or result.",
+      "affectedComponentsExcerpt": "Common FileTransferDispatcher destination acceptance; common dispatcher and real pinned secure-kit regressions, Android-host wrappers. All declared core targets share the correction.",
+      "relatedIssuesAndDependencies": [
+        126,
+        137,
+        172,
+        174,
+        176,
+        191,
+        213,
+        351
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "repositoryScopeStatus": "APPROVED",
+      "assessmentAtCheckpoint": "Complete four-file series independently approved at d424a23, pushed to audit branch, not merged/released. Both local catches use statically typed fileFailureFromCause; retain original local cause/existing file-error identity, while genuine channel authentication remains unchanged. Public open and synthetic internal preflight reproduce cast; no auth-throwing install callback was established. Original JVM5tests/2intended failures/3controls; Android baseline8tests/3intended failures/5controls. First focused compilation failure retained; corrected focused21passes. Three restored mutation controls. Clean check+Android assembly+strict core Dokka:2433passes/0failures/errors/1unchanged manual skip, 296XMLs/256executed tasks;14static gates. Real pinned same-implementation kits over exact/fragmented/coalesced in-memory wires prove another transfer/message survives. No API/ABI/protocol/auth policy/dependency/durability change. Separate cancellation-during-abort suspicion remains unverified, not covered by this cast approval. Host/Native simulator are not ART/OEM/physical/Swift/independent evidence. IssueOPEN; final whole-audit/release/external gates pending; overallNOT READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "f7ba814d65a4b002493690e0783ff3cf080edd49",
+        "d424a23b00fb43b97d0ce318eb0c73b4c4d1cef2"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_358_r1 APPROVE at d424a23/tree02275e18: complete four-file series, surrounding classifiers/callers/platform destinations and contracts;1736sealed entries, 296finalXMLs,26targeted full-run executions,26finalized cleanup receipts independently verified. No actionable #358 findings or reviewer builds/workers. Separate cleanup-cancellation suspicion remains unverified. Report SHA256 e89611a7715b7bfdbbdc75e250f9bda8f296994c89e585c9cc50649d012e997f.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/358",
+        "https://github.com/p2pKit/P2pKit/issues/358#issuecomment-5578319370"
+      ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-08T01:24:59.128281+00:00"
+  "lastDispositionUpdateUtc": "2026-09-08T02:48:10.954405+00:00"
 }
