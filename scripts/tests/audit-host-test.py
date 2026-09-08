@@ -718,6 +718,105 @@ class HostInvocationTest(unittest.TestCase):
             self.assertEqual([str(tools["git"]), "--version"], observed["tools"]["git"]["command"])
             self.assertEqual(tools["environment"], self.host.environment)
 
+    def assert_observed_cygwin_git_bash_reaches_both_callers(self, layout):
+        # Actual Git-for-Windows 2.55.0.windows.5 banner from hosted trial2.
+        banner = "GNU bash, version 5.3.15(2)-release (x86_64-pc-cygwin)\n"
+        with windows_tool_boundary(self, self.host, layout=layout, bash_result=(0, banner, "")) as tools:
+            try:
+                self.host.prerequisites()
+            except ValueError:
+                print((self.host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+                raise
+            observed = json.loads((self.host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+            self.assertEqual(banner, observed["tools"]["bash"]["stdout"])
+            self.assertEqual("git version 2.55.0.windows.5\n", observed["tools"]["git"]["stdout"])
+            self.assertEqual([str(tools["bash"]), "--version"], observed["tools"]["bash"]["command"])
+            with mock.patch.object(self.host, "check", return_value=True), \
+                    mock.patch.object(self.host, "clean_outputs") as clean:
+                self.host.windows()
+            self.assertEqual(2, clean.call_count)
+            self.assertEqual(3, len(self.calls))
+            wrapper, libraries, desktop = self.calls
+            command = wrapper["command"]
+            self.assertEqual([str(tools["bash"]), "scripts/tests/check-gradle-wrapper-test.sh"],
+                             command[command.index("--") + 1:])
+            self.assertEqual("command", command[command.index("--kind") + 1])
+            bash_probe = next(row for row in tools["calls"] if row["command"][0] == str(tools["bash"]))
+            self.assertEqual(bash_probe["options"]["env"]["PATH"], wrapper["options"]["env"]["PATH"])
+            self.assertEqual(observed["windowsShell"]["PATH"], wrapper["options"]["env"]["PATH"])
+            for call in (libraries, desktop):
+                self.assertEqual(tools["environment"]["PATH"], call["options"]["env"]["PATH"])
+                self.assertEqual("gradle", call["command"][call["command"].index("--kind") + 1])
+            for call in self.calls:
+                self.assertEqual([sys.executable, str(self.host.runner)], call["command"][:2])
+                self.assertEqual(str(self.repo / "gradlew.bat"),
+                                 call["command"][call["command"].index("--wrapper") + 1])
+            self.assertTrue(WINDOWS_TASKS <= set(libraries["command"]))
+            self.assertEqual(HOST.DESKTOP_TASKS, desktop["command"][desktop["command"].index("--") + 1:])
+            self.assertEqual(tools["environment"], self.host.environment)
+            self.assertEqual(tools["environment"]["PATH"], os.environ["PATH"])
+            self.assertFalse(any(row["command"][0] == "bash" for row in tools["calls"]))
+            self.assertTrue(all(row["result"] == "PASS" and row["cleanupComplete"] for row in self.host.rows))
+
+    def test_observed_cygwin_git_bash_cmd_layout_reaches_both_callers(self):
+        self.assert_observed_cygwin_git_bash_reaches_both_callers("cmd")
+
+    def test_observed_cygwin_git_bash_bin_layout_reaches_both_callers(self):
+        self.assert_observed_cygwin_git_bash_reaches_both_callers("bin")
+
+    def test_windows_bash_rejects_other_or_malformed_build_targets(self):
+        banners = (
+            "GNU bash, version 5.3 (i686-pc-cygwin)\n",
+            "GNU bash, version 5.3 (aarch64-pc-cygwin)\n",
+            "GNU bash, version 5.3 (i686-pc-msys)\n",
+            "GNU bash, version 5.3 (x86_64-pc-linux-gnu)\n",
+            "GNU bash, version 5.3 (x86_64-pc-cygwin-extra)\n",
+            "GNU bash, version 5.3 (x86_64-pc-msys2)\n",
+            "GNU bash, version 5.3 (x86_64-pc-cygwin\n",
+            "Not GNU bash, version 5.3 (x86_64-pc-cygwin)\n",
+            "Windows Subsystem for Linux has no installed distributions.\n",
+            "",
+        )
+        for index, banner in enumerate(banners):
+            # Each prerequisite report is write-once, including rejected probes.
+            host = HOST.Host("windows-x64", self.work / ("rejected-banner-" + str(index)))
+            host.evidence.mkdir(parents=True)
+            host.owns_state = True
+            host.state_identity = host.identity(host.state)
+            with self.subTest(banner=banner), \
+                    windows_tool_boundary(self, host, bash_result=(0, banner, "")):
+                with self.assertRaisesRegex(ValueError, "Git for Windows Bash"):
+                    host.prerequisites()
+                observed = json.loads((host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+                self.assertEqual(banner, observed["tools"]["bash"]["stdout"])
+                self.assertEqual(0, observed["tools"]["bash"]["exitCode"])
+                self.assertIsNone(host.windows_shell)
+                self.assertEqual([], self.calls)
+
+    def test_cygwin_git_bash_banner_does_not_override_failed_version_query(self):
+        banner = "GNU bash, version 5.3.15(2)-release (x86_64-pc-cygwin)\n"
+        with windows_tool_boundary(self, self.host, bash_result=(7, banner, "synthetic failure\n")):
+            with self.assertRaisesRegex(ValueError, "Required tool version query failed"):
+                self.host.prerequisites()
+        observed = json.loads((self.host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+        self.assertEqual(7, observed["tools"]["bash"]["exitCode"])
+        self.assertEqual(banner, observed["tools"]["bash"]["stdout"])
+        self.assertEqual("synthetic failure\n", observed["tools"]["bash"]["stderr"])
+        self.assertIsNone(self.host.windows_shell)
+        self.assertEqual([], self.calls)
+
+    def test_cygwin_git_bash_banner_does_not_admit_non_windows_git(self):
+        banner = "GNU bash, version 5.3.15(2)-release (x86_64-pc-cygwin)\n"
+        with windows_tool_boundary(self, self.host, bash_result=(0, banner, ""),
+                                   git_version="git version 2.55.0\n"):
+            with self.assertRaisesRegex(ValueError, "Git for Windows version"):
+                self.host.prerequisites()
+        observed = json.loads((self.host.evidence / "prerequisites.json").read_text(encoding="utf-8"))
+        self.assertEqual(banner, observed["tools"]["bash"]["stdout"])
+        self.assertEqual("git version 2.55.0\n", observed["tools"]["git"]["stdout"])
+        self.assertIsNone(self.host.windows_shell)
+        self.assertEqual([], self.calls)
+
     def test_missing_windows_git_retains_failed_resolution_and_other_version_diagnostics(self):
         with windows_tool_boundary(self, self.host, missing="git"):
             with self.assertRaisesRegex(ValueError, "Required tool version query failed"):

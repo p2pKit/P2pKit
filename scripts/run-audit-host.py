@@ -566,7 +566,9 @@ class Host:
         else:
             require(re.search(r"^git version [^\r\n]+\.windows\.[0-9]+", results["git"]["stdout"], re.M),
                     "Not a Git for Windows version")
-            require(re.search(r"^GNU bash, version [^\r\n]+\(x86_64-pc-msys\)", results["bash"]["stdout"], re.M),
+            # The bundled MSYS2 Bash can report either supported x64 runtime triplet.
+            require(re.search(r"^GNU bash, version [^\r\n]+\(x86_64-pc-(?:msys|cygwin)\)",
+                              results["bash"]["stdout"], re.M),
                     "Not native x64 Git for Windows Bash")
             self.windows_shell = shell
 

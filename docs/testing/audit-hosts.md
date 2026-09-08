@@ -66,7 +66,9 @@ A sample packaging pass is not rendered headful Desktop observation.
 
 Windows shell prerequisites use Git for Windows: the driver resolves native
 `git.exe` from its `cmd` or `bin` installation layout, requires that installation's
-`bin/bash.exe` and `usr/bin` tools, and validates the Git/MSYS Bash version output.
+`bin/bash.exe` and `usr/bin` tools, and validates native Git's `.windows.N` version
+and Bash's `x86_64-pc-msys` or `x86_64-pc-cygwin` build target. The Cygwin target is
+also used by bundled Git-for-Windows Bash; it does not admit standalone Cygwin Git.
 The same absolute Bash executable is recorded and used for the wrapper-checkout
 fixture, even if the ambient `bash` command selects WSL. Only its version probe and
 fixture receive the Git `bin`/`usr/bin` PATH prefix for nested shell utilities;
