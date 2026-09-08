@@ -2,9 +2,10 @@
 
 This reference describes the current **0.7.0-SNAPSHOT post-RC3 source**, not a
 retroactive guarantee about published RC3 binaries. Use the source and docs for
-the exact version you deploy. `KiB`, `MiB`, and `GiB` are binary units; byte caps
-on text mean UTF-8 bytes, while character caps mean Kotlin `String.length`
-(UTF-16 code units), not displayed glyphs.
+the exact version you deploy. `KiB`, `MiB`, and `GiB` are binary units. Encoded
+text caps mean UTF-8 bytes; character caps mean Kotlin `String.length`
+(UTF-16 code units), not displayed glyphs. The application receive backlog
+instead uses the approximate retention-policy charge described below.
 
 Except for the public settings below, these are **internal policy**, documented
 for diagnosis and capacity planning, not consumer-tunable API or permanent
@@ -75,8 +76,31 @@ These are **not** supported mesh-size or whole-process memory guarantees.
 | `MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE` | `2` connections/source | Per LAN transport, held until handshake settlement/close. A further connection from that source is refused before core admission; source address is not authenticated identity. | [PerSourceAdmissionLimiter.kt:89](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/PerSourceAdmissionLimiter.kt#L89) |
 | `MAX_TRACKED_PRE_HANDSHAKE_SOURCES` | `96` sources | Per LAN transport, bounds distinct keys with outstanding admission leases. A new source is refused at capacity; this does not authorize 192 concurrent core setups. | [PerSourceAdmissionLimiter.kt:92](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/PerSourceAdmissionLimiter.kt#L92) |
 | `MAX_BUFFERED_INBOUND_CONNECTIONS` | `16` connections | Apple-only accepted-connection queue, distinct from active sessions. A connection that cannot be queued is cancelled. | [IosLanDataTransport.kt:1256](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosLanDataTransport.kt#L1256) |
-| `MAX_QUEUED_APPLICATION_MESSAGES` | `64` messages | Per session, includes the message currently being emitted to incoming. Further admission fails the session and logs the receive-backlog reason. | [P2pSessionImpl.kt:1624](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1624) |
-| `MAX_QUEUED_APPLICATION_BYTES` | `8,388,608` bytes (8 MiB) | Same backlog: accounted payload plus UTF-8 metadata bytes. Exceeding it fails the session; excludes object/string overhead and other protocol buffers, so it is not a heap cap. | [P2pSessionImpl.kt:1625](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1625) |
+| `MAX_QUEUED_APPLICATION_MESSAGES` | `64` messages | Per session, includes the message currently being emitted to incoming. Further admission fails the session and logs the receive-backlog reason. | [P2pSessionImpl.kt:1635](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1635) |
+| `MAX_QUEUED_APPLICATION_BYTES` | `8,388,608` bytes (8 MiB) | Same backlog: approximate retention-policy charge, including the in-flight message. Exceeding it fails the session; not wire bytes or a whole-session/process heap cap. | [P2pSessionImpl.kt](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt) |
+
+Backlog accounting charges **512 bytes per message**, plus **two bytes per
+UTF-16 code unit** of text content (or the binary payload's actual private
+array length). Each metadata pair adds **256 bytes**, plus two bytes per key
+and value code unit. These fixed allowances account conservatively for
+message/wrapper/channel, map/entry and string/array containers; they are policy
+values, not measured universal object-layout upper bounds. Compact strings or
+shared objects may cost less. Other protocol/reassembly/crypto buffers and
+application-held references are outside this budget.
+
+Measurement does not encode/copy content or metadata strings, or read the
+copying public `Binary.bytes` accessor. Its work is independent of payload
+length and linear in the protocol-bounded metadata entry count (at most 64);
+iteration can still allocate a small iterator. The count cap is checked first.
+Each admitted message retains its exact charge until delivery, failed-send
+rollback or terminal drain releases that ownership.
+
+This is **tighter admission, reserved for 0.8.0+**, not an unchanged 0.7 promise.
+The wire-content ceiling remains 4 MiB, but a legal message is not necessarily
+admissible: with no metadata or other backlog, 4,194,048 ASCII code units cost
+exactly 8 MiB; one more is refused, and a maximum 4 MiB ASCII message costs
+8 MiB + 512 bytes and fails the session even into an empty backlog. Metadata
+lowers that threshold further. Neither the 64-message nor 8 MiB cap is raised.
 
 JVM/Android accepted-connection `callbackFlow` uses the coroutine library's
 default buffer (normally 64, subject to its JVM default-buffer property), not

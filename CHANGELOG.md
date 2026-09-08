@@ -37,6 +37,21 @@ remain pending; no stable-release readiness claim is implied.
   obtain an explicit owner decision before changing it; no version/tag or
   publication authorization is implied here.
 
+### Audit-branch receive-backlog accounting — reserved for 0.8.0+
+
+- #145: receive admission no longer creates UTF-8 arrays just to measure text
+  or metadata. The unchanged 64-message/8 MiB caps now use an approximate
+  retention-policy charge: 512 bytes/message, two bytes/text UTF-16 code unit
+  (or actual binary payload length), and 256 bytes/metadata pair plus two
+  bytes/key and value code unit. Recorded ownership is released on delivery,
+  failed-send rollback and terminal drain; defensive binary copies remain.
+- This tightens admission, not the wire format or public ABI. A legal 4 MiB
+  ASCII message alone exceeds the budget by 512 bytes and fails the receiving
+  session. See [operational limits](docs/reference/limits.md). The estimate is
+  not an exact platform or whole-session heap bound. This unmerged change is
+  **not approved for a 0.7 release**; honor the 0.8.0+ target or obtain a new
+  explicit owner decision. No version/tag/publication is authorized here.
+
 ## 0.7.0-rc3 — release candidate (2026-08-09)
 
 This candidate preserves the RC2 public API and secure-v2 wire format while

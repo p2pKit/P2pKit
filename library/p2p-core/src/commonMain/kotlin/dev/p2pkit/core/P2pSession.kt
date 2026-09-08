@@ -26,8 +26,15 @@ import kotlinx.io.RawSource
  *
  * [incoming] is a hot [SharedFlow] with `replay = 0`. Decoded application
  * messages wait in a separately bounded internal queue (at most 64 messages
- * and 8 MiB) while a subscriber is slow; exceeding that bound fails the
- * session instead of growing memory without limit. **Subscribe immediately
+ * and an approximate 8 MiB retention-policy budget, including in-flight
+ * delivery) while a subscriber is slow; exceeding either bound fails the
+ * session. Each message costs 512 bytes plus two bytes per text UTF-16 code
+ * unit (or the binary payload length), and each metadata pair costs 256 bytes
+ * plus two bytes per key/value code unit. These are conservative policy
+ * allowances, not an exact platform heap bound; other protocol buffers and
+ * application-held references are excluded. The 4 MiB wire-content limit
+ * does not guarantee admission: even one maximum-sized ASCII text message
+ * exceeds this retention budget. **Subscribe immediately
  * after `connect()` or when accepting an incoming session** — messages
  * delivered before any subscriber attaches are not retained.
  *

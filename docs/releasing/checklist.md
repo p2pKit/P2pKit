@@ -6,7 +6,8 @@ a tag or Maven Central publication.
 Before selecting a version, review the unreleased behavior notes. The audit
 branch's [#229 discovery-admission tightening](https://github.com/p2pKit/P2pKit/issues/229)
 and its related [#356 Apple TXT decoder correction](https://github.com/p2pKit/P2pKit/issues/356)
-and [#332 Apple invalid-resolution withdrawal](https://github.com/p2pKit/P2pKit/issues/332)
+and [#332 Apple invalid-resolution withdrawal](https://github.com/p2pKit/P2pKit/issues/332),
+as well as [#145 receive-backlog admission tightening](https://github.com/p2pKit/P2pKit/issues/145),
 are reserved for **0.8.0+**, despite the current snapshot label. Do not include
 them in a 0.7 release without a new explicit owner decision. This checkpoint
 neither changes the release version nor authorizes a merge/publication.

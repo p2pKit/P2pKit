@@ -527,7 +527,7 @@ class KeepAliveTest {
 
             deliveryDrainCompleted.await()
             assertEquals(
-                1 to "retained".encodeToByteArray().size.toLong(),
+                1 to 528L, // 512-byte message allowance + 2 * 8 UTF-16 code units.
                 session.applicationBacklogForTest(),
                 "only the cancellation-ignoring in-flight message remains owned"
             )

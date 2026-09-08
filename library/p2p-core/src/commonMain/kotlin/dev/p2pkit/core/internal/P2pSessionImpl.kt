@@ -1121,12 +1121,12 @@ internal class P2pSessionImpl(
     }
 
     private suspend fun enqueueApplicationMessage(message: P2pMessage): Boolean {
-        val messageBytes = message.retainedSizeBytes()
         return applicationMessageQueueLock.withLock {
-            if (
-                queuedApplicationMessages >= MAX_QUEUED_APPLICATION_MESSAGES ||
-                messageBytes > MAX_QUEUED_APPLICATION_BYTES - queuedApplicationBytes
-            ) {
+            if (queuedApplicationMessages >= MAX_QUEUED_APPLICATION_MESSAGES) {
+                return@withLock false
+            }
+            val messageBytes = message.retainedSizeBytes()
+            if (messageBytes > MAX_QUEUED_APPLICATION_BYTES - queuedApplicationBytes) {
                 return@withLock false
             }
             queuedApplicationMessages += 1
@@ -1185,17 +1185,28 @@ internal class P2pSessionImpl(
         }
     }
 
+    /**
+     * Conservative retention-policy charge, not an exact platform heap measurement.
+     * Strings cost two bytes per UTF-16 code unit even on compact-string runtimes;
+     * fixed allowances account for message/queue containers and metadata entries.
+     * No payload or string is copied/encoded to measure it. Work is independent of
+     * payload length and O(metadata entries), bounded at 64 by protocol validation;
+     * the immutable metadata snapshot's small iterator may still allocate.
+     */
     private fun P2pMessage.retainedSizeBytes(): Long {
         val payloadBytes = when (this) {
-            is P2pMessage.Text -> value.encodeToByteArray().size.toLong()
+            is P2pMessage.Text -> value.length.toLong() * RETENTION_BYTES_PER_CODE_UNIT
             is P2pMessage.Binary -> payloadSizeBytes.toLong()
         }
         val metadata = when (this) {
             is P2pMessage.Text -> metadata
             is P2pMessage.Binary -> metadata
         }
-        return metadata.entries.fold(payloadBytes) { total, (key, value) ->
-            total + key.encodeToByteArray().size + value.encodeToByteArray().size
+        return metadata.entries.fold(
+            APPLICATION_MESSAGE_RETENTION_ALLOWANCE_BYTES + payloadBytes
+        ) { total, (key, value) ->
+            total + METADATA_ENTRY_RETENTION_ALLOWANCE_BYTES +
+                (key.length.toLong() + value.length.toLong()) * RETENTION_BYTES_PER_CODE_UNIT
         }
     }
 
@@ -1622,7 +1633,14 @@ internal class P2pSessionImpl(
         const val SESSION_RUNTIME_CLOSE_TIMEOUT_MS: Long = 2_000
 
         const val MAX_QUEUED_APPLICATION_MESSAGES: Int = 64
+
+        /** Approximate retention-policy budget for queued and in-flight application messages, not wire/total heap. */
         const val MAX_QUEUED_APPLICATION_BYTES: Long = 8L * 1024L * 1024L
+
+        // Policy allowances, not portable object-layout measurements. Keep these properties explicitly private.
+        private const val APPLICATION_MESSAGE_RETENTION_ALLOWANCE_BYTES: Long = 512L
+        private const val METADATA_ENTRY_RETENTION_ALLOWANCE_BYTES: Long = 256L
+        private const val RETENTION_BYTES_PER_CODE_UNIT: Long = 2L
 
         /**
          * Threshold for the stuck-Reconnecting watchdog. Generous enough to
