@@ -11,20 +11,32 @@ Start with the root [continuation checkpoint](../../../AUDIT_CHECKPOINT.md). Clo
 - [Coverage ledger](coverage.tsv): inherited per-path review claims, provenance revisions and reopened work.
 - [Unverified follow-ups](followups.md): hypotheses needing reproduction and deduplication, not confirmed bug claims.
 
-The inventory snapshot is a continuation aid, not GitHub's live state. It contains 62 repository repairs with recorded
-independent approval, 87 pending repairs, 21 external-validation items and one architecture decision: **36.3% reviewed
-repository repairs, 63.7% remaining issue rows**. These percentages do not count external acceptance still attached
+The inventory snapshot is a continuation aid, not GitHub's live state. It contains 63 repository repairs with recorded
+independent approval, 86 pending repairs, 21 external-validation items and one architecture decision: **36.8% reviewed
+repository repairs, 63.2% remaining issue rows**. These percentages do not count external acceptance still attached
 to approved rows (including #133); independent interoperability remains separately pending. Thirty-eight entries
 originated in the audit. Branch availability does not imply merge/release or a new verification result.
 
-#130's complete two-test-file correction is approved/pushed at `1847ed3`, tree
+#137's complete five-file compatible correction is approved/pushed at `a5d3145`, tree
+`bcef6e91cd92e990ac37efd3e2e2840cd89ff2f9`. Four diagnostic slots are volatile; KDoc states the prepublication-only
+attachment invariant, retained unsupported Java setters and deliberate cause-dropping copies. All 19 production
+attachment sites and constructors/value/ABI/protocol/security policy are unchanged; no active stale-read race or
+immutable-error guarantee is claimed. Baseline 14 tests give eight structural failures/six controls; corrected focused
+checks pass 72/72. Five mutation controls, fourteen static gates, eight actual compiled-field inspections and strict
+Dokka pass. Full check/Android assembly: **2,407 passes, zero failures/errors, one unchanged manual skip; 295 XMLs,
+257 tasks**. The reviewer verified all 1,798 sealed entries and 25 finalized cleanup receipts. See
+[the #137 report](repairs/137.md). Planned next: read #144 completely; separately deduplicate/reproduce the
+[unverified file-destination cast concern](followups.md#file-destination-authentication-error-casts) before filing.
+Different-thread StateFlow tests use a real secure kit, not physical devices or proof of a race.
+
+Earlier #130's complete two-test-file correction is approved/pushed at `1847ed3`, tree
 `3fe527a16a52e536dedad610aebff53a7a026cdb`. Both recorders retain pins; repeated distinct remote values and intentional
 legacy null delegation are asserted. Production pin forwarding already worked; no production/API/ABI/security change.
 Selected old manager unit classes accepted omitted pins (67 passes; Desktop integration excluded); corrected focused
 4/4 and module 161/161 checks pass. Eight mutation controls, fourteen static gates and the full check/Android assembly
 pass: **2,389 passes, zero failures/errors, one unchanged manual skip; 290 XMLs, 246 tasks**. The reviewer verified
-1,930 sealed entries and 30 finalized cleanup receipts. See [the #130 report](repairs/130.md). The planned next issue
-is #137; read its complete history before repair. Host/fake tests are not physical Wi-Fi or ART/OEM validation.
+1,930 sealed entries and 30 finalized cleanup receipts. See [the #130 report](repairs/130.md).
+Host/fake tests are not physical Wi-Fi or ART/OEM validation.
 
 Earlier #332's complete four-file Apple follow-up is approved/pushed at `78ef361`, tree
 `0f8ab1465d257baac8110e3bd1ecf95859abe93c`. Invalid current-browser re-resolution withdraws only the admitted native
@@ -99,8 +111,8 @@ artifacts are necessary, request the private backup; otherwise run fresh, scoped
 
 Coverage rows preserve the last recorded scoped assessment at their recorded revisions. This is not complete current
 coverage: later changes invalidate affected paths/callers; the original full audit must be corroborated before final
-completion. The #130, #332 Apple, #356, #229, #357, #226, #225, #208, #152, #133, #355, #187, #190 and #325 paths have scoped final review records;
-other domains still need current corroboration. The ledger inventories **1,025 paths with 322 recorded blob bindings**;
+completion. The #137, #130, #332 Apple, #356, #229, #357, #226, #225, #208, #152, #133, #355, #187, #190 and #325 paths have scoped final review records;
+other domains still need current corroboration. The ledger inventories **1,030 paths with 326 recorded blob bindings**;
 inventory is not equivalent to completed review.
 Added handoff documents are inventory entries, not runtime-verification claims.
 

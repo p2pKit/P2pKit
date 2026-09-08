@@ -5,22 +5,22 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "1847ed330e3a15212982994a84a55d2b9e3ae49d",
-  "sourceCheckpointTree": "3fe527a16a52e536dedad610aebff53a7a026cdb",
+  "sourceCheckpointCommit": "a5d3145d9cfbfa633569d48c875a20befc48dbde",
+  "sourceCheckpointTree": "bcef6e91cd92e990ac37efd3e2e2840cd89ff2f9",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
-  "activeIssue": 137,
+  "activeIssue": 144,
   "activeIssueState": "NEXT_PENDING_READ_COMPLETE_ISSUE_BEFORE_REPAIR",
   "issueCountDenominator": 171,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
-    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 62,
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 63,
     "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
-    "PENDING_REMEDIATION": 87
+    "PENDING_REMEDIATION": 86
   },
-  "completedIssueCount": 62,
-  "remainingIssueCount": 109,
+  "completedIssueCount": 63,
+  "remainingIssueCount": 108,
   "percentageMeaning": "Reviewed repository-repair rows /171, not effort, issue closure or readiness. External acceptance still attached to approved rows (including #133) is not counted complete; independent interoperability remains separately NOT_STARTED.",
-  "githubIssueListRefreshedUtc": "2026-09-07T23:37:19.844911+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-08T01:09:03.913712+00:00",
   "githubTotalIssuesAtRefresh": 278,
   "githubOpenIssuesAtRefresh": 171,
   "newAuditIssueCount": 38,
@@ -29,41 +29,42 @@
   "scope": "Branch continuation only; not a merge, release, independent crypto assurance, or physical-device completion.",
   "preservedDraftCommit": "eb564e9487f2887f83f519575c82d4e7657864cb",
   "preservedDraftTree": "69161ac65e02bbf33d390bde2575d3131a9d7996",
-  "lastReviewedIssue": 130,
+  "lastReviewedIssue": 137,
   "lastIntegratedCheck": {
-    "commit": "1847ed330e3a15212982994a84a55d2b9e3ae49d",
-    "tree": "3fe527a16a52e536dedad610aebff53a7a026cdb",
-    "passed": 2389,
+    "commit": "a5d3145d9cfbfa633569d48c875a20befc48dbde",
+    "tree": "bcef6e91cd92e990ac37efd3e2e2840cd89ff2f9",
+    "passed": 2407,
     "failures": 0,
     "errors": 0,
     "skipped": 1,
-    "scope": "Clean full check+Android assembleDebug, strict/rerun/no-cache/bounded;246executed tasks,290XMLs, 2389passes/0failure/error/1unchanged manual LAN interop-capture skip. JVM,Android host,Kotlin/Native arm64 iOS simulator, actual ABI/lint/sample assembly; not Swift XCTest,Intel runtime,ART/OEM,physical devices or independent interoperability. Final release/publication/isolated-consumer/Swift/XCFramework pending;#133 consumer evidence still bound to7127616, not rerun for this test-only correction."
+    "scope": "Clean full check+Android assembleDebug+strict core Dokka and read-only compiler-output query; strict/rerun/no-cache/bounded;257executed tasks,295XMLs,2407passes/0failure/error/1unchanged manual LAN interop-capture skip. JVM,Android host,Kotlin/Native arm64 iOS simulator,actual ABI/lint/sample assembly. Eight volatile field javaps; no ABI baseline change. Not Swift XCTest,Intel runtime,ART/OEM,physical devices or independent interoperability. Final release/publication/isolated-consumer/Swift/XCFramework pending;#133 consumer evidence remains bound to7127616,not rerun for#137."
   },
   "protectedInstructionFilesCaveat": "Issue325 feasible correction preserves AGENTS.md:9 library-only SDK wording by owner instruction. Canonical setup explicitly warns about missing sample SDK. Literal alignment requires new owner authorization; not claimed fixed. CLAUDE.md unchanged.",
   "lastScopedVerification": {
-    "issue": 130,
+    "issue": 137,
     "platforms": [
-      "JVM Desktop",
-      "Android host"
+      "JVM",
+      "Android host",
+      "Kotlin/Native arm64 iOS simulator"
     ],
-    "commit": "1847ed330e3a15212982994a84a55d2b9e3ae49d",
-    "tree": "3fe527a16a52e536dedad610aebff53a7a026cdb",
+    "commit": "a5d3145d9cfbfa633569d48c875a20befc48dbde",
+    "tree": "bcef6e91cd92e990ac37efd3e2e2840cd89ff2f9",
     "staticGates": 14,
-    "negativeControls": 8,
-    "reviewSha256": "3b57e2b49efa08dfd57150d4dd58fefa09bcf8e1537f860abc8522a0a4416101",
-    "manifestSha256": "fe61ea37a064ad8f2e9344b6de0ca96240f8195e4d500ec2d7bfdd7ab1f31990",
-    "scope": "Complete two-test-file pin-delegation correction APPROVED/pushed; no production changes. Baseline selected old unit classes accepted dropped pins:67passes, not whole-suite acceptance. Corrected4focused/161modulepasses;8intended assertion reds restored. Both precommit green patches equal complete committed diff. Final full2389pass/0failure/error/1manual skip;14static gates; 1930sealed entries/30cleanup receipts. Value-class pin equality and deliberate legacy null delegation preserved; not physical Wi-Fi/ART/OEM/independent crypto proof."
+    "negativeControls": 5,
+    "reviewSha256": "a1e881522f2ef23ba5758c695eeb413948a0ca16a321eae2e09125aefd8238e5",
+    "manifestSha256": "97dbbf87ac08e1d9656b0589883f35a37ada7f17068abcd222ce2d3b3b5b2aed",
+    "scope": "Complete five-file correction APPROVED/pushed. Four cause slots volatile,19production attachments unchanged. Baseline14tests/8structural assertion failures/6controls;focused72passes;5restored mutation controls. Precommit focused patch equals committed diff. Final2407pass/0failure/error/1manual skip; 14static gates;1798sealed entries/25cleanup receipts;8actual volatile-field javaps and public Dokka. No observed stale-read race, no immutable-throwable claim; unsupported JVM setters/copy omission retained. No constructor/value/ABI/protocol/security-policy/dependency change. Physical/ART/OEM/independent gates pending."
   },
   "lastIntegratedAttempt": {
-    "commit": "1847ed330e3a15212982994a84a55d2b9e3ae49d",
-    "tree": "3fe527a16a52e536dedad610aebff53a7a026cdb",
+    "commit": "a5d3145d9cfbfa633569d48c875a20befc48dbde",
+    "tree": "bcef6e91cd92e990ac37efd3e2e2840cd89ff2f9",
     "result": "PASS",
-    "executedTasks": 246,
-    "executedTestResultsPassed": 2389,
+    "executedTasks": 257,
+    "executedTestResultsPassed": 2407,
     "testFailures": 0,
     "testErrors": 0,
     "testSkips": 1,
-    "scope": "Clean combined check and Android assembly after#130 test-only correction. Not whole-audit/release/device or independent interoperability completion."
+    "scope": "Clean combined check,Android assembly,strict core Dokka and compiled-field capture after#137. Not whole-audit/release/device or independent interoperability completion."
   },
   "resolvedDrafts": [
     {
@@ -159,5 +160,29 @@
     "publicEvidence": "https://github.com/p2pKit/P2pKit/issues/130#issuecomment-5576541032",
     "scope": "Temporary omission in both production overloads, selected old manager unit classes only; compensating Desktop loopback integration deliberately excluded. Sources restored exactly.",
     "finalStatus": "TEST_ONLY_CORRECTION_APPROVED_AT_1847ed3"
+  },
+  "previousVerifiedIntegratedCheck130": {
+    "commit": "1847ed330e3a15212982994a84a55d2b9e3ae49d",
+    "tree": "3fe527a16a52e536dedad610aebff53a7a026cdb",
+    "passed": 2389,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1,
+    "scope": "Clean full check+Android assembleDebug, strict/rerun/no-cache/bounded;246executed tasks,290XMLs, 2389passes/0failure/error/1unchanged manual LAN interop-capture skip. JVM,Android host,Kotlin/Native arm64 iOS simulator, actual ABI/lint/sample assembly; not Swift XCTest,Intel runtime,ART/OEM,physical devices or independent interoperability. Final release/publication/isolated-consumer/Swift/XCFramework pending;#133 consumer evidence still bound to7127616, not rerun for this test-only correction."
+  },
+  "completedInvestigation137": {
+    "issue": 137,
+    "baselineCommit": "dd380c0b3bef4716bf88766fb9a303828f4cb8c7",
+    "baselineTree": "6cb62ecf5113522dec7b4e203a968b661cbe862c",
+    "result": "FOUR_NON_VOLATILE_FIELDS_FAIL_ON_BOTH_JVM_AND_ANDROID_HOST",
+    "tests": 14,
+    "passed": 6,
+    "failures": 8,
+    "errors": 0,
+    "skipped": 0,
+    "xmlFiles": 4,
+    "publicEvidence": "https://github.com/p2pKit/P2pKit/issues/137#issuecomment-5577176739",
+    "scope": "Original production plus new tests. Structural flag assertions only; all19SDKattachments are construction-adjacent. No observed stale-read race or write after publication; StateFlow controls pass.",
+    "finalStatus": "COMPATIBLE_CORRECTION_APPROVED_AT_A5D3145"
   }
 }

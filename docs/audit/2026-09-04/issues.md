@@ -1,25 +1,26 @@
 # Issue disposition index
 
-Checkpoint inventory: **171 issues; 62 reviewed repository repairs (36.3%), 109 remaining issue rows (63.7%)**.
+Checkpoint inventory: **171 issues; 63 reviewed repository repairs (36.8%), 108 remaining issue rows (63.2%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed fixes are in the audit branch, not merged/released. #130's two-file test correction is independently
-approved at `1847ed3`; production pin forwarding was already correct. The #332 Apple follow-up and earlier approvals
-remain intact. #133's independent interoperability remains NOT STARTED. Percentages do not count external acceptance
-attached to approved rows. The #325 protected-AGENTS exception remains.
+refresh. Reviewed fixes are in the audit branch, not merged/released. #137's compatible cause-visibility correction
+is independently approved at `a5d3145`; volatile is not immutable and no active stale-read race was observed. #130,
+#332 Apple and earlier approvals remain intact. #133's independent interoperability remains NOT STARTED. Percentages
+do not count external acceptance attached to approved rows. The #325 protected-AGENTS exception remains.
 Read [the full records](issues.json) for scope, dependencies, commits and public outcomes, and [the root handoff](../../../AUDIT_CHECKPOINT.md)
 for evidence limits and cleanup rules. Historical assessment text retains its original review-time scope.
 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (62)
+## Repairs with recorded independent approval (63)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
 | [#130: [WSE-02] Both provisioning test registrars discard expectedFingerprint — pin propagation is untested](https://github.com/p2pKit/P2pKit/issues/130) | low | Existing | `1847ed330e3a` |
 | [#133: [WSG-02] No cross-implementation or cross-version interop test exists anywhere](https://github.com/p2pKit/P2pKit/issues/133) | medium | Existing | `71276169a7d0` |
 | [#135: [WSF-04] Desktop UI sample uses the risky policy and auto-mesh with zero warning anywhere](https://github.com/p2pKit/P2pKit/issues/135) | medium | Existing | `2386057d5721` |
+| [#137: [WSD-02] Four P2pError variants expose a mutable non-volatile `underlying` slot behind `cause`](https://github.com/p2pKit/P2pKit/issues/137) | low | Existing | `a5d3145d9cfb` |
 | [#138: [WSG-01] Kit/session integration tests do not exercise fragmented raw reads](https://github.com/p2pKit/P2pKit/issues/138) | medium | Existing | `02acee835200` |
 | [#141: [WSG-12] CI runs full `check` on macOS only; Windows/Linux defect class is invisible](https://github.com/p2pKit/P2pKit/issues/141) | high | Existing | `d859e20252d2` |
 | [#142: [BUILD-26] resolveAndLockAll write-locks guard is bypassable via task-name matching](https://github.com/p2pKit/P2pKit/issues/142) | low | Existing | `639167cc1432` |
@@ -80,11 +81,10 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#356: [AUDIT][Low] Apple Bonjour aliases NUL-containing TXT keys into canonical fields](https://github.com/p2pKit/P2pKit/issues/356) | low | New audit | `183b6c917faf` |
 | [#357: [AUDIT][Low] LAN watcher test races a real executor against a virtual timeout](https://github.com/p2pKit/P2pKit/issues/357) | low | New audit | `6d9cd3c74724` |
 
-## Pending remediation (87)
+## Pending remediation (86)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
-| [#137: [WSD-02] Four P2pError variants expose a mutable non-volatile `underlying` slot behind `cause`](https://github.com/p2pKit/P2pKit/issues/137) | low | Existing | — |
 | [#144: [BUILD-18] Docs-only CI shortcut reuses main-merge results from graph shape, not check evidence](https://github.com/p2pKit/P2pKit/issues/144) | low | Existing | — |
 | [#145: [WSA1-05] Receive-backlog byte cap allocates a full payload copy to measure and under-counts heap](https://github.com/p2pKit/P2pKit/issues/145) | low | Existing | — |
 | [#156: [F-07] TCP_NODELAY is unset and transport liveness relies on core deadlines](https://github.com/p2pKit/P2pKit/issues/156) | low | Existing | — |

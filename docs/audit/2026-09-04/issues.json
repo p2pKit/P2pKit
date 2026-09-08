@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-07T23:37:19.844911+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-08T01:09:03.913712+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -621,7 +621,7 @@
       "origin": "PRE_EXISTING",
       "severityAtCheckpoint": "low",
       "reportedProblemExcerpt": "Four `P2pError` variants — `LocalIdentityUnavailable`, `ConnectionFailed`, `FileTransferFailed` and `AuthenticationFailed` — store their causal exception in a mutable, non-`@Volatile` `internal var underlying: Throwable?` that is written *after* construction and read through an `override val cause`. Verified in the source and in the compiled JVM bytecode: the field is a plain mutable instance field with no final-field freeze guarantee, and on the JVM `internal` compiles to a **public** name-mangled setter (`setUnderlying$p2p_core`) that Java consumers can call on a retained error object.",
-      "affectedComponentsExcerpt": "All line numbers below are the **current** ones and match the audit's stated ranges (`93–95, 115–120, 131–142, 182–185`) with no drift.",
+      "affectedComponentsExcerpt": "Four diagnostic cause slots in core Errors.kt; portable cause/value/copy contracts, JVM/Android-host emitted-field checks and real-kit cross-dispatcher feature-failure publication tests. All nineteen production attachment sites remain construction-adjacent and unchanged.",
       "relatedIssuesAndDependencies": [
         1,
         2,
@@ -632,16 +632,24 @@
         110,
         127,
         128,
-        129
+        129,
+        149,
+        193,
+        263
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "assessmentAtCheckpoint": "Low-severity compatible visibility/maintenance correction approved at a5d3145, pushed to audit branch, not merged/released. Four slots now kotlin.concurrent.Volatile; KDoc states attachment at most once before publication and the retained unsupported Java-mangled setters. Volatile is not immutable; copy deliberately drops diagnostic cause. No observed stale read or SDK mutation after publication. Original production plus regressions:14 tests/8 intended field assertion failures/6 controls. Corrected focused72passes; five independently restored mutation controls. Clean full check+Android assembly+strict core Dokka:2407passes/0failures/errors/1unchanged manual skip,295XMLs/257executed tasks. Eight actual JVM/Android field javaps; unchanged ABI baselines;14static gates. StateFlow already supplies synchronization; publication tests protect observable contracts, not a demonstrated race. No constructor/value/ABI/protocol/security/dependency change. Android host and Native arm64 simulator are not physical/ART/OEM/independent interoperability or cryptographic evidence. Constructor redesign is a future ABI/product decision. IssueOPEN; final whole-audit/release/external gates pending; overallNOT READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "a5d3145d9cfbfa633569d48c875a20befc48dbde"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_137_r1 APPROVE at a5d3145/tree bcef6e9:complete five-file correction, all nineteen attachments, surrounding platform/caller/contracts, regressions and sealed evidence.1798sealed entries,295finalXMLs,25finalized cleanup receipts. No actionable #137 finding or reviewer builds/workers. Separate unchanged transfer-cast suspicion is unverified. Report SHA256 a1e881522f2ef23ba5758c695eeb413948a0ca16a321eae2e09125aefd8238e5.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/137#issuecomment-5406152733"
-      ]
+        "https://github.com/p2pKit/P2pKit/issues/137#issuecomment-5406152733",
+        "https://github.com/p2pKit/P2pKit/issues/137#issuecomment-5577176739",
+        "https://github.com/p2pKit/P2pKit/issues/137#issuecomment-5577645103"
+      ],
+      "repositoryScopeStatus": "APPROVED"
     },
     {
       "number": 138,
@@ -4379,5 +4387,5 @@
       ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-07T23:50:23.277652+00:00"
+  "lastDispositionUpdateUtc": "2026-09-08T01:24:59.128281+00:00"
 }

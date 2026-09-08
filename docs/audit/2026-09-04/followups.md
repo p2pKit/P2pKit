@@ -42,6 +42,20 @@ with a different Pending-producing adapter, specify failure attribution during c
 actual producer. This is a future-adapter applicability concern from independent #337 review, **not a verified current
 Android defect**, a lossless/replay guarantee, or a new issue claim.
 
+## File destination authentication-error casts
+
+During #137 review at `a5d3145`, the unchanged `FileTransferDispatcher.acceptOffer(destination)` was noted to cast
+`failureFromCause(...)` to `P2pError.FileTransferFailed` at
+`library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/FileTransferDispatcher.kt:656-663,707-714`, while the
+helper at `2724-2743` deliberately preserves `P2pError.AuthenticationFailed`. Investigate whether a destination's
+prepare/open callback throwing that type reaches a `ClassCastException` before abort, failure publication or ledger
+retirement. Trace both destination overloads, cancellation, resource ownership and retry/terminal states.
+
+This is **unverified**, not a #137 regression or a confirmed new issue. The independent reviewer ran no reproducer;
+its preliminary inventory search is not full fresh deduplication. Read related issue/closed-fix histories and obtain
+a concrete execution trace or bounded regression before filing. Do not generalize this to normal I/O failures,
+an authentication bypass, or a demonstrated data-loss condition without evidence.
+
 ## XcodeGen version-probe status and failed-install cleanup
 
 During #225 source/evidence review, the unchanged `scripts/install-xcodegen.sh` version probe was noted as unquoted
