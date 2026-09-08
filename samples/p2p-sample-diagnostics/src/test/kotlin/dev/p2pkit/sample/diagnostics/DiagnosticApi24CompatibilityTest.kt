@@ -106,12 +106,14 @@ class DiagnosticApi24CompatibilityTest {
 
     @Test
     fun exportFailureWithoutApi26CleansOwnedStagingAndKeepsDestination() {
-        val directory = Files.createTempDirectory("p2pkit-api24-export-failure").toFile()
-        try {
-            assertEquals("preserved", invokeWithoutApi26("failedExport", directory))
-            assertTrue(directory.listFiles().orEmpty().none { it.name.endsWith(".part") })
-        } finally {
-            directory.deleteRecursively()
+        for (sdk in listOf(null, 24, 25)) {
+            val directory = Files.createTempDirectory("p2pkit-api24-export-failure").toFile()
+            try {
+                assertEquals("preserved", invokeWithoutApi26("failedExport", directory, sdk = sdk))
+                assertTrue(directory.listFiles().orEmpty().none { it.name.endsWith(".part") })
+            } finally {
+                assertTrue(directory.deleteRecursively())
+            }
         }
     }
 

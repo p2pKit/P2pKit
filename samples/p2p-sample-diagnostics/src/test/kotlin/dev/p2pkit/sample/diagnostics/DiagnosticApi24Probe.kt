@@ -98,18 +98,28 @@ object DiagnosticApi24Probe {
     fun failedExport(directory: File): String {
         val recorder = recorder()
         recorder.startSession("test", "sender", "session")
+        val summary = recorder.summary()
+        val timestamp = requireNotNull(summary.startTimestamp)
         val target = File(
             directory,
             DiagnosticEvidenceExporter.evidenceFilename(
-                "test", "android", requireNotNull(recorder.summary().startTimestamp), "session"
+                summary.testId, summary.platform, timestamp, summary.testSessionId
             )
         )
+        // File equality can hide a raw/normalized ID mismatch on case-insensitive hosts.
+        check(target.name == DiagnosticEvidenceExporter.evidenceFilename("TEST", "android", timestamp, "session")) {
+            "Failure obstacle must use the normalized exporter filename"
+        }
         check(target.mkdir())
         val existing = File(target, "unrelated").apply { writeText("preserved") }
         val failure = runCatching { DiagnosticEvidenceExporter.export(recorder, directory) }.exceptionOrNull()
         check(failure is IOException)
         check(existing.readText() == "preserved")
         check(recorder.snapshot().none { it.eventName == DiagnosticEventNames.EVIDENCE_EXPORTED })
+        val failureEvent = recorder.snapshot().single { it.eventName == DiagnosticEventNames.DIAGNOSTIC_FAILURE }
+        check(failureEvent.errorCode == "evidence_export_failed")
+        check(failureEvent.outcome == DiagnosticOutcome.FAILURE)
+        check(failureEvent.severity == DiagnosticSeverity.ERROR)
         return "preserved"
     }
 
