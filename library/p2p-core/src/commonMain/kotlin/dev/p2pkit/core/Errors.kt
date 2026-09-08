@@ -74,6 +74,14 @@ public enum class Retryability {
  * are reserved for API misuse and unsupported stubs — e.g. lifecycle calls
  * after [P2pKit.stop], responding to an already-terminal file offer, or
  * `createManualPeer` on the `Unsupported` provisioning manager.
+ *
+ * [LocalIdentityUnavailable], [ConnectionFailed], [FileTransferFailed], and
+ * [AuthenticationFailed] keep an optional diagnostic cause outside their
+ * constructor/value semantics for compatibility; `copy()` drops it. The SDK
+ * attaches that cause at most once, before publishing the error, and never
+ * changes the slot afterward. These slots are volatile, not immutable:
+ * Kotlin `internal` is not a JVM access-control boundary, and calling their
+ * mangled setters from Java is unsupported.
  */
 public sealed class P2pError(message: String? = null, cause: Throwable? = null) : Exception(message, cause) {
 
@@ -90,6 +98,8 @@ public sealed class P2pError(message: String? = null, cause: Throwable? = null) 
         val recovery: LocalIdentityRecovery,
         val reason: String
     ) : P2pError("Local secure identity unavailable ($kind): $reason") {
+        /** Diagnostic [cause]; attach at most once before publication, never afterward. */
+        @kotlin.concurrent.Volatile
         internal var underlying: Throwable? = null
 
         override val cause: Throwable? get() = underlying
@@ -113,7 +123,8 @@ public sealed class P2pError(message: String? = null, cause: Throwable? = null) 
      * the cause.
      */
     public data class ConnectionFailed(val reason: String) : P2pError(reason) {
-        /** Backing slot for [cause]; internal so only the SDK can attach it. */
+        /** Diagnostic [cause]; attach at most once before publication, never afterward. */
+        @kotlin.concurrent.Volatile
         internal var underlying: Throwable? = null
 
         override val cause: Throwable? get() = underlying
@@ -135,7 +146,8 @@ public sealed class P2pError(message: String? = null, cause: Throwable? = null) 
         val transferId: String?,
         val reason: String
     ) : P2pError(reason) {
-        /** Backing slot for [cause]; internal so only the SDK can attach it. */
+        /** Diagnostic [cause]; attach at most once before publication, never afterward. */
+        @kotlin.concurrent.Volatile
         internal var underlying: Throwable? = null
 
         override val cause: Throwable? get() = underlying
@@ -180,6 +192,8 @@ public sealed class P2pError(message: String? = null, cause: Throwable? = null) 
 
     /** Secure preface, Noise key exchange, record authentication, or key proof failed. */
     public data class AuthenticationFailed(val reason: String) : P2pError(reason) {
+        /** Diagnostic [cause]; attach at most once before publication, never afterward. */
+        @kotlin.concurrent.Volatile
         internal var underlying: Throwable? = null
         override val cause: Throwable? get() = underlying
     }
