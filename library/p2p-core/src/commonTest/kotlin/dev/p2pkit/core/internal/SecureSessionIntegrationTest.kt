@@ -14,6 +14,7 @@ import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.ReconnectPolicy
+import dev.p2pkit.core.Retryability
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.security.LocalSecureIdentity
@@ -52,6 +53,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
@@ -59,6 +61,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlinx.io.Buffer
@@ -513,6 +516,143 @@ class SecureSessionIntegrationTest {
         } finally {
             alice.stop()
             bob.stop()
+        }
+    }
+
+    @Test
+    fun destinationAuthenticationFailureIsIsolatedFromPinnedSecureSessions() = runWireBlocking { delivery ->
+        val appId = AppId("secure.session.destination-auth-failure")
+        val aliceStore = MemorySecureIdentityStorage()
+        val bobStore = MemorySecureIdentityStorage()
+        val pair = FakeConnectionPair(delivery)
+        var aliceIdentity: LocalSecureIdentity? = null
+        var bobIdentity: LocalSecureIdentity? = null
+        var alice: P2pKit? = null
+        var bob: P2pKit? = null
+        try {
+            val aliceLocal = previewIdentity(appId, aliceStore).also { aliceIdentity = it }
+            val bobLocal = previewIdentity(appId, bobStore).also { bobIdentity = it }
+            val aliceKit = createSecureTestKit(
+                appId,
+                "Alice",
+                aliceStore,
+                FakeDataTransport(outgoingConnection = { CopyingRawConnection(pair.a) }),
+                PeerAuthorizationPolicy.PinnedOnly(setOf(bobLocal.fingerprint))
+            ).also { alice = it }
+            val bobKit = createSecureTestKit(
+                appId,
+                "Bob",
+                bobStore,
+                FakeDataTransport(preStagedIncoming = listOf(CopyingRawConnection(pair.b))),
+                PeerAuthorizationPolicy.PinnedOnly(setOf(aliceLocal.fingerprint))
+            ).also { bob = it }
+            val incomingReady = CompletableDeferred<Unit>()
+            val incomingDeferred = async {
+                withTimeout(5_000) {
+                    bobKit.incomingSessions.onSubscription { incomingReady.complete(Unit) }.first()
+                }
+            }
+            withTimeout(5_000) { incomingReady.await() }
+            bobKit.start()
+            val outgoing = withTimeout(5_000) { aliceKit.connect(peerFor(bobKit)) }
+            val incoming = incomingDeferred.await()
+            assertEquals(bobLocal.fingerprint, outgoing.peerIdentity.fingerprint)
+            assertEquals(aliceLocal.fingerprint, incoming.peerIdentity.fingerprint)
+
+            val bytes = ByteArray(4_096) { (it * 31).toByte() }
+            val sourceOpens = AtomicInt(0)
+            val failedSource = object : PreparedFileSource by TestPreparedSource(bytes) {
+                override fun open(): RawSource {
+                    sourceOpens.addAndFetch(1)
+                    return Buffer().apply { write(bytes) }
+                }
+            }
+            val failedSender = outgoing.sendFile("destination-fails.bin", null, failedSource)
+            val goodSender = outgoing.sendFile("unaffected.bin", null, TestPreparedSource(bytes))
+            val offers = withTimeout(5_000) { incoming.pendingFileOffers.first { it.size == 2 } }
+            val failedOffer = offers.single { it.id == failedSender.id }
+            val goodOffer = offers.single { it.id == goodSender.id }
+            val callbackFailure = P2pError.AuthenticationFailed("synthetic local destination credential failure")
+            val openCount = AtomicInt(0)
+            val commitCount = AtomicInt(0)
+            val abortCount = AtomicInt(0)
+            val aborted = CompletableDeferred<P2pError.FileTransferFailed?>()
+            val destination = object : FileTransferDestination {
+                override fun openSink(): RawSink {
+                    openCount.addAndFetch(1)
+                    throw callbackFailure
+                }
+
+                override suspend fun commit() {
+                    commitCount.addAndFetch(1)
+                }
+
+                override suspend fun abort(cause: P2pError.FileTransferFailed?) {
+                    abortCount.addAndFetch(1)
+                    aborted.complete(cause)
+                }
+            }
+            val error = assertFailsWith<P2pError.FileTransferFailed> {
+                withTimeout(5_000) { failedOffer.accept(destination) }
+            }
+            assertEquals(FileTransferFailureKind.STORAGE, error.kind)
+            assertEquals(FileTransferPhase.ACCEPT, error.phase)
+            assertEquals(Retryability.RETRY_AFTER_USER_ACTION, error.retryability)
+            assertTrue(error.cause === callbackFailure)
+            assertTrue(withTimeout(5_000) { aborted.await() } === error)
+            val failedReceiver = assertIs<IncomingFileSession>(failedOffer)
+            assertTrue(assertIs<FileTransferState.Failed>(failedReceiver.state.value).error === error)
+            assertFalse(failedReceiver.retainsReceiver())
+            val remoteError = assertIs<P2pError.FileTransferFailed>(
+                assertIs<FileTransferState.Failed>(
+                    withTimeout(5_000) { failedSender.state.first { it is FileTransferState.Failed } }
+                ).error
+            )
+            assertEquals(FileTransferFailureKind.STORAGE, remoteError.kind)
+            assertEquals(FileTransferPhase.ACCEPT, remoteError.phase)
+            assertEquals(Retryability.RETRY_AFTER_USER_ACTION, remoteError.retryability)
+            assertEquals("receiver storage failure", remoteError.reason)
+            assertEquals(0, sourceOpens.load(), "a failed destination must never accept the source")
+            assertEquals(1, openCount.load())
+            assertEquals(1, abortCount.load())
+            assertEquals(0, commitCount.load())
+            assertEquals(listOf(goodOffer.id), incoming.pendingFileOffers.value.map { it.id })
+
+            val goodDestination = TestCommitDestination()
+            val goodReceiver = withTimeout(5_000) { goodOffer.accept(goodDestination) }
+            withTimeout(5_000) { goodSender.state.first { it is FileTransferState.Completed } }
+            withTimeout(5_000) { goodReceiver.state.first { it is FileTransferState.Completed } }
+            assertTrue(goodDestination.committed)
+            assertContentEquals(bytes, goodDestination.buffer.readByteArray())
+            assertTrue(incoming.pendingFileOffers.value.isEmpty())
+            val messageReady = CompletableDeferred<Unit>()
+            val message = async {
+                withTimeout(5_000) {
+                    incoming.incoming.onSubscription { messageReady.complete(Unit) }.first()
+                }
+            }
+            withTimeout(5_000) { messageReady.await() }
+            withTimeout(5_000) { outgoing.send(P2pMessage.Text("session survives local storage failure")) }
+            assertEquals(P2pMessage.Text("session survives local storage failure"), message.await())
+            assertEquals(ConnectionState.Connected, outgoing.state.value)
+            assertEquals(ConnectionState.Connected, incoming.state.value)
+        } finally {
+            withContext(NonCancellable) {
+                try {
+                    alice?.stop()
+                } finally {
+                    try {
+                        bob?.stop()
+                    } finally {
+                        pair.a.close()
+                        pair.b.close()
+                        aliceIdentity?.clearPrivate()
+                        bobIdentity?.clearPrivate()
+                        aliceStore.clear()
+                        bobStore.clear()
+                    }
+                }
+            }
         }
     }
 

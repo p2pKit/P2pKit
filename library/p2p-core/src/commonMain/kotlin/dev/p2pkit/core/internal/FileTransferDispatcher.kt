@@ -653,14 +653,14 @@ internal class FileTransferDispatcher(
             }
             throw e
         } catch (e: Throwable) {
-            val error = failureFromCause(
+            val error = fileFailureFromCause(
                 FileTransferFailureKind.STORAGE,
                 FileTransferPhase.ACCEPT,
                 Retryability.RETRY_AFTER_USER_ACTION,
                 session.transferId,
                 "destination open failed",
                 e
-            ) as P2pError.FileTransferFailed
+            )
             val response = incomingFailureResponse(session.transferId, error)
             val removed = removeIncomingTerminal(session.transferId, entry, response)
             removed?.cancelJobs()
@@ -704,14 +704,14 @@ internal class FileTransferDispatcher(
             }
             throw e
         } catch (e: Throwable) {
-            val error = failureFromCause(
+            val error = fileFailureFromCause(
                 FileTransferFailureKind.STORAGE,
                 FileTransferPhase.ACCEPT,
                 Retryability.RETRY_AFTER_USER_ACTION,
                 session.transferId,
                 "destination install failed",
                 e
-            ) as P2pError.FileTransferFailed
+            )
             val response = incomingFailureResponse(session.transferId, error)
             val removed = removeIncomingTerminal(session.transferId, entry, response)
             removed?.cancelJobs()
@@ -2729,8 +2729,25 @@ internal class FileTransferDispatcher(
         prefix: String,
         cause: Throwable
     ): P2pError = when (cause) {
-        is P2pError.FileTransferFailed -> cause
         is P2pError.AuthenticationFailed -> cause
+        else -> fileFailureFromCause(kind, phase, retryability, transferId, prefix, cause)
+    }
+
+    /**
+     * Local destination setup is a file operation, not a channel authentication
+     * signal, even when the callback throws [P2pError.AuthenticationFailed].
+     * Its cleanup and wire result require a typed file failure. Channel operations
+     * use [failureFromCause] instead to preserve genuine authentication failures.
+     */
+    private fun fileFailureFromCause(
+        kind: FileTransferFailureKind,
+        phase: FileTransferPhase,
+        retryability: Retryability,
+        transferId: MessageId?,
+        prefix: String,
+        cause: Throwable
+    ): P2pError.FileTransferFailed = when (cause) {
+        is P2pError.FileTransferFailed -> cause
         else -> fileFailure(
             kind = kind,
             phase = phase,
