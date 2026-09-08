@@ -206,4 +206,3 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
 | [#120: [WSA2-01] Hostile LAN host can exhaust the discovery budget and lock out all real peers](https://github.com/p2pKit/P2pKit/issues/120) | high | Existing | — |
-
