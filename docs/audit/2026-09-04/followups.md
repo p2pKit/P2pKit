@@ -58,18 +58,21 @@ local integration/lifecycle correctness, not an authentication bypass or demonst
 
 ## File destination cleanup cancellation
 
-During #358 review at `d424a23`, the unchanged generic setup-error cleanup in
-`library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/FileTransferDispatcher.kt:655-681,706-732` was noted
-to retire the active offer before awaiting `abortUnownedDestination`, then publish `session.markFailed` afterward.
-Investigate whether cancellation of the accepting caller while abort is awaited propagates structural cancellation
-through `captureCleanupIssue` before the public session becomes terminal or the first terminal response is attempted.
-An ordinary IOException open failure may reach the same path; this is not the #358 classifier/cast root.
+The #358 review observation was **confirmed, filed as [#359](https://github.com/p2pKit/P2pKit/issues/359), and
+independently repaired/pushed** at `de88284` on 8 September. Original production plus three regressions produces
+two intended failures/one control: actual accepting-Job cancellation during abort leaves the retained transfer
+Offered despite successful ledger/budget retirement. Abort runs, replay works and a full-budget replacement succeeds.
+The skipped initial result can leave the sender waiting for its watchdog; no demonstrated file leak/loss, budget leak,
+authentication bypass or permanent remote retention was established. Callback-only cancellation remains distinct.
 
-This is **unverified**. The reviewer ran no reproducer, and #358's open-result cancellation test does not exercise
-cancellation during abort. Search full issue/closed-fix histories, then use a bounded deterministic caller-cancel/abort
-interleaving to check final state, retired entry/byte budget, replay, repeated operations and cancellation propagation.
-Do not infer a confirmed leak, lost data, permanent remote failure or repair from this source hypothesis. Track a
-distinct issue only if reproduced and not already covered; preserve #358's independently approved classification.
+Both generic setup catches now complete bounded settlement in NonCancellable context, then explicitly restore caller
+cancellation. Original typed causes, entry identity/epoch fencing and best-effort notification remain; shared bounded
+helpers, platform destinations, API/ABI, wire and durability guarantees are unchanged. The install sibling is aligned,
+not a separately demonstrated throwing application callback. See [the repair report](repairs/359.md) and
+[verified outcome](https://github.com/p2pKit/P2pKit/issues/359#issuecomment-5579078847). Final full check/Android assembly/strict core Dokka passes
+2,459/zero failures/errors/one unchanged manual skip; focused33passes,three mutation controls,14static gates.
+Do not refile this mechanism or rewrite historical #358 evidence as if its then-unverified observation was already
+confirmed. Host/arm64 simulator and synthetic pinned in-memory wires are not physical or independent interoperability.
 
 ## XcodeGen version-probe status and failed-install cleanup
 

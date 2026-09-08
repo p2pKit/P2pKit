@@ -3,7 +3,7 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-08T02:33:45.084350+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-08T04:04:42.803897+00:00",
   "provenance": "Curated recovery/continuation record. Machine-local path fragments are omitted. Historical assessments and public outcome comments are not fresh verification; raw private evidence is not in Git. Read full issues and discussions before fixing. FIXED_REVIEWED_IN_AUDIT_HISTORY is not merged or released.",
   "issues": [
     {
@@ -4417,7 +4417,37 @@
         "https://github.com/p2pKit/P2pKit/issues/358",
         "https://github.com/p2pKit/P2pKit/issues/358#issuecomment-5578319370"
       ]
+    },
+    {
+      "number": 359,
+      "title": "[AUDIT][Low] Caller cancellation during failed destination abort skips terminal settlement",
+      "url": "https://github.com/p2pKit/P2pKit/issues/359",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "githubStateAtListRefresh": "open",
+      "reportedProblemExcerpt": "Structural caller cancellation during abort after destination setup failure interrupts terminal-state publication and the initial response after ledger/budget retirement already succeeded.",
+      "affectedComponentsExcerpt": "Common FileTransferDispatcher failed destination setup; common dispatcher and pinned secure-kit integration tests, Android-host wrappers. All declared core platforms share the fix.",
+      "relatedIssuesAndDependencies": [
+        121,
+        126,
+        162,
+        172,
+        174,
+        351,
+        358
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "repositoryScopeStatus": "APPROVED",
+      "assessmentAtCheckpoint": "Complete four-file correction independently approved at de88284 and pushed to audit branch, not merged/released. Both generic catches finish NonCancellable retirement, bounded abort, original typed Failed publication and entry-epoch-fenced bounded notification; ensureActive restores structural caller cancellation afterward. Callback-only cancellation remains distinct. Original three-test repro:2intended failures/1control. Final-test original production JVM10/8failures/2controls and Android host16/7failures/9controls;three mutation controls restored exactly. Focused33passes;full check+Android assembly+strict core Dokka2459passes/0failure/error/1unchanged manual skip,297XMLs/256tasks;14static gates. Two compilation failures and initial evidence-verifier failure retained honestly. No auth bypass, budget leak, demonstrated file leak/loss or guaranteed remote completion. Shared bounded helper, platform destinations, API/ABI, wire, authentication and durability unchanged. In-memory pinned kits are not independent peers or physical/real-LAN/ART evidence. Whole-audit/release/external gates pending;NOT READY.",
+      "recordedFixCommitsOrFinalRevision": [
+        "de882840e1e24aa04339b2285e8cd753af265b40"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_359_r1 APPROVE of complete four-file correction at de88284/tree89c498a7; surrounding lifecycle/epoch/ownership/cancellation/security/platform contracts reviewed independently. Verified1797sealed entries,297finalXMLs,26new method executions,28cleanup receipts and14static gates. No actionable findings or reviewer builds/workers. Report SHA256 0dc939114f60bd666cc7dceba848a69a3c86e3c13c85f2ad984108d79a869f5b.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/359",
+        "https://github.com/p2pKit/P2pKit/issues/359#issuecomment-5579078847"
+      ]
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-08T02:48:10.954405+00:00"
+  "lastDispositionUpdateUtc": "2026-09-08T04:14:09.309450+00:00"
 }

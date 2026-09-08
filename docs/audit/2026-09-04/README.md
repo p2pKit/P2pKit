@@ -6,18 +6,34 @@ Start with the root [continuation checkpoint](../../../AUDIT_CHECKPOINT.md). Clo
 ## Records
 
 - [Checkpoint metadata](checkpoint.json): source revisions, issue-count denominator and evidence limitations.
-- [Issue index](issues.md): all 172 inventoried open issues grouped by checkpoint disposition.
+- [Issue index](issues.md): all 173 inventoried open issues grouped by checkpoint disposition.
 - [Issue records](issues.json): reported scope, dependencies, recorded commits and public investigation/outcome links.
 - [Coverage ledger](coverage.tsv): inherited per-path review claims, provenance revisions and reopened work.
 - [Unverified follow-ups](followups.md): hypotheses needing reproduction and deduplication, not confirmed bug claims.
 
-The inventory snapshot is a continuation aid, not GitHub's live state. It contains 64 repository repairs with recorded
-independent approval, 86 pending repairs, 21 external-validation items and one architecture decision: **37.2% reviewed
-repository repairs, 62.8% remaining issue rows**. These percentages do not count external acceptance still attached
-to approved rows (including #133); independent interoperability remains separately pending. Thirty-nine entries
+The inventory snapshot is a continuation aid, not GitHub's live state. It contains 65 repository repairs with recorded
+independent approval, 86 pending repairs, 21 external-validation items and one architecture decision: **37.6% reviewed
+repository repairs, 62.4% remaining issue rows**. These percentages do not count external acceptance still attached
+to approved rows (including #133); independent interoperability remains separately pending. Forty entries
 originated in the audit. Branch availability does not imply merge/release or a new verification result.
 
-#358 fixes destination setup error classification without reclassifying actual channel authentication.
+#359 completes failed-destination settlement despite caller cancellation during abort. Both generic
+setup catches retire ownership, perform independently bounded abort, publish the original typed failure and attempt
+the existing bounded entry-epoch-fenced terminal notice before restoring structural caller cancellation. Callback-only
+cancellation remains distinct; no shared bounded helper, API/ABI, wire, authentication or durability implementation
+changed. This is not an authentication bypass, budget leak or demonstrated file loss.
+
+Fresh `/root/review_359_r1` **APPROVED** the complete four-file correction at `de88284`, independently verifying
+1,797 sealed entries, 297 final XMLs, 26 new method executions and 28 finalized cleanup receipts. Original production
+with final tests gives eight intended JVM failures/two controls and seven Android-host failures/nine controls.
+Focused checks pass 33/33; three mutation controls and fourteen static gates pass. Full check, Android assembly and
+strict core Dokka: **2,459 passes, zero failures/errors, one unchanged manual skip; 256 executed tasks**. Two genuine
+compilation failures and the first evidence-verifier failure are retained, not counted as passes. Source and
+[verified outcome](https://github.com/p2pKit/P2pKit/issues/359#issuecomment-5579078847) are pushed/refetched; issue OPEN. See
+[the repair report](repairs/359.md). Real pinned kits over in-memory wires preserve another transfer
+and messaging; host/Native simulator results are not physical devices, real LAN or independent interoperability.
+
+Earlier #358 fixes destination setup error classification without reclassifying actual channel authentication.
 Both local catches are statically file-typed, preserving original local causes and existing file-error identity.
 Tests establish terminal retirement/abort, sanitized replay, restored admission capacity and same-session recovery.
 Pinned secure kits over exact/fragmented/coalesced in-memory wires retain another transfer and messaging.
@@ -31,9 +47,8 @@ failures/five controls. Corrected focused tests pass 21/21; three mutation contr
 Full check, Android assembly and strict core Dokka: **2,433 passes, zero failures/errors, one unchanged manual skip;
 256 executed tasks**. The first focused compilation failure is preserved, not counted as a pass. Source was pushed
 and the [verified outcome](https://github.com/p2pKit/P2pKit/issues/358#issuecomment-5578319370) refetched; issue OPEN.
-See [the repair report](repairs/358.md). The reviewer identified a separate
-[unverified cancellation-during-abort hypothesis](followups.md#file-destination-cleanup-cancellation),
-which requires duplicate review and a bounded probe; this approval does not cover every cancellation boundary.
+See [the repair report](repairs/358.md). Its then-unverified cancellation-during-abort observation was later
+reproduced and independently repaired as [#359](repairs/359.md); the historical cast report is unchanged.
 
 Earlier #137's complete five-file compatible correction is approved/pushed at `a5d3145`, tree
 `bcef6e91cd92e990ac37efd3e2e2840cd89ff2f9`. Four diagnostic slots are volatile; KDoc states the prepublication-only
@@ -45,8 +60,8 @@ Dokka pass. Full check/Android assembly: **2,407 passes, zero failures/errors, o
 257 tasks**. The reviewer verified all 1,798 sealed entries and 25 finalized cleanup receipts. See
 [the #137 report](repairs/137.md). Its then-unverified cast observation was later reproduced and repaired as #358;
 the historical report is unchanged. Different-thread StateFlow tests use a real secure kit, not physical devices or
-proof of a race. Planned next: probe the separate cleanup-cancellation hypothesis, then complete #144's linked-history
-and current-code verification before repair.
+proof of a race. The separate cleanup-cancellation observation is now repaired as #359. Next: complete #144's
+linked-history and current-code verification before repair.
 
 Earlier #130's complete two-test-file correction is approved/pushed at `1847ed3`, tree
 `3fe527a16a52e536dedad610aebff53a7a026cdb`. Both recorders retain pins; repeated distinct remote values and intentional
@@ -130,8 +145,8 @@ artifacts are necessary, request the private backup; otherwise run fresh, scoped
 
 Coverage rows preserve the last recorded scoped assessment at their recorded revisions. This is not complete current
 coverage: later changes invalidate affected paths/callers; the original full audit must be corroborated before final
-completion. The #358, #137, #130, #332 Apple, #356, #229, #357, #226, #225, #208, #152, #133, #355, #187, #190 and #325 paths have scoped final review records;
-other domains still need current corroboration. The ledger inventories **1,032 paths with 327 recorded blob bindings**;
+completion. The #359, #358, #137, #130, #332 Apple, #356, #229, #357, #226, #225, #208, #152, #133, #355, #187, #190 and #325 paths have scoped final review records;
+other domains still need current corroboration. The ledger inventories **1,034 paths with 328 recorded blob bindings**;
 inventory is not equivalent to completed review.
 Added handoff documents are inventory entries, not runtime-verification claims.
 

@@ -1,20 +1,21 @@
 # Issue disposition index
 
-Checkpoint inventory: **172 issues; 64 reviewed repository repairs (37.2%), 108 remaining issue rows (62.8%)**.
+Checkpoint inventory: **173 issues; 65 reviewed repository repairs (37.6%), 108 remaining issue rows (62.4%)**.
 
 This is a dated continuation ledger, not GitHub live state or production readiness. All issues were open at the list
-refresh. Reviewed fixes are in the audit branch, not merged/released. #358's four-file destination-error classification
-correction is independently approved at `d424a23`; genuine channel authentication remains unchanged. A separate
-cancellation-during-abort hypothesis is unverified and needs investigation before the planned #144 repair. Prior
-approvals remain intact. #133's independent interoperability remains NOT STARTED; percentages do not count external
-acceptance attached to approved rows. The #325 protected-AGENTS exception remains.
-Read [the full records](issues.json) for scope, dependencies, commits and public outcomes, and [the root handoff](../../../AUDIT_CHECKPOINT.md)
-for evidence limits and cleanup rules. Historical assessment text retains its original review-time scope.
+refresh. Reviewed fixes are in the audit branch, not merged/released. #359's complete failed-destination cleanup
+correction is independently approved at `de88284`; #358's channel-authentication distinction is preserved. The
+cleanup-cancellation hypothesis is now resolved, not an unfiled suspicion. Next: complete #144's linked-history and
+current-code verification before repair. Prior approvals remain intact. #133 independent interoperability remains
+NOT STARTED; percentages exclude external acceptance attached to approved rows. The #325 protected-AGENTS exception
+remains. Read [full records](issues.json) for scope, dependencies, commits and public outcomes, and
+[the root handoff](../../../AUDIT_CHECKPOINT.md) for evidence limits and cleanup rules. Historical assessments retain
+their original review-time scope.
 
 Severity values such as `SEE_FULL_ISSUE` are inherited gaps, not newly assigned severities; read the complete issue.
 A blank fix revision means no completed repair/review cycle was recorded, not that an issue has no prior investigation.
 
-## Repairs with recorded independent approval (64)
+## Repairs with recorded independent approval (65)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -82,6 +83,7 @@ A blank fix revision means no completed repair/review cycle was recorded, not th
 | [#356: [AUDIT][Low] Apple Bonjour aliases NUL-containing TXT keys into canonical fields](https://github.com/p2pKit/P2pKit/issues/356) | low | New audit | `183b6c917faf` |
 | [#357: [AUDIT][Low] LAN watcher test races a real executor against a virtual timeout](https://github.com/p2pKit/P2pKit/issues/357) | low | New audit | `6d9cd3c74724` |
 | [#358: [AUDIT][Low] Destination AuthenticationFailed escapes as ClassCastException and skips acceptance cleanup](https://github.com/p2pKit/P2pKit/issues/358) | low | New audit | `d424a23b00fb` |
+| [#359: [AUDIT][Low] Caller cancellation during failed destination abort skips terminal settlement](https://github.com/p2pKit/P2pKit/issues/359) | low | New audit | `de882840e1e2` |
 
 ## Pending remediation (86)
 
