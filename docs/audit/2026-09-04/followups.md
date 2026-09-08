@@ -3,11 +3,14 @@
 This file distinguishes unverified hypotheses from separately promoted/repaired findings. Reproduce suspicions at
 the current tree and read complete related issue histories before tracking a new defect. Record negative results
 as well as confirmations. Promoted findings below are not unfiled concerns or repair-completion claims unless
-an exact independent approval is stated. The transfer stop is superseded; #223/#367/#368 have scoped source
-approvals below. Active facility source is independently approved and locally committed731/tree6b259;
-publication/hosted execution not established here. #268 is **NOT_STARTED**, after any actually reproduced
-prerequisites and sequential independent final-revision reviews. See [the facility report](hosted-validation.md).
-Continue feasible work; unnumbered infrastructure does not change71/182 or whole-audit NOT_READY.
+an exact independent approval is stated. The transfer stop is superseded; #223/#367/#368 approvals remain.
+Current counts are **72/183 approved (39.3%), 111 remaining (60.7%)**. Separate #369 source is independently
+APPROVED/localbd61175, **NOT_PUSHED; native rerun NOT_EXECUTED** here. Prior facility/administration was
+published asbb0; actualtrial1 failed before audit nativecontrols/build/tests. Its unsafe handoff, partial salvage
+and full-tree/remote cleanup **NOT_PROVEN** remain unchanged. See [the dated facility report](hosted-validation.md).
+#268 and independent #133 remain **NOT_STARTED**; sequentially review/publish369administration, rerun controlled
+native gates and resolve any newly confirmed prerequisites with fresh final reviews. The old facility-only71/182
+scope remains historical in that report. Continue all feasible work; whole audit **NOT_READY**.
 
 ## Desktop large-text/RTL sidebar applicability
 
@@ -159,11 +162,12 @@ and real checkout regressions preserve wrappers/pins, batch/ABI/archive rules an
 Thirteen final static/policy/range gates pass; original-attributes rejection and two attribute mutations remain
 meaningful negative evidence. No product Gradle check or native Windows/macOS acceptance follows from this cycle.
 Do not refile this cause, blanket-renormalize existing clones, or reinterpret the unchanged #360 report's historical
-pending note as current. The later facility source is independently approved/locally committed731; its fresh
-precommitLinux1607-case result and laterclean731rootcheck/CLI/Desktop1607-case result are separately
-bound, not attributed to the #223 cycle or added as new case identities. Publication/hosted
-execution remain unestablished here; #268 stays NOT_STARTED after any freshly reproduced prerequisites.
-The old368 checkpoint navigation pointer is corrected with its history preserved, not treated as a new product
+pending note as current. At the prior checkpoint, the later facility source was independently approved/locally
+committed731; its fresh precommitLinux1607-case result and laterclean731rootcheck/CLI/Desktop1607-case result
+are separately bound, not attributed to the #223 cycle or added as new case identities. Publication/hosted
+execution were then unestablished. The current opening records later bb0 publication, actual trial1 failure, and
+approved/local #369 source with native rerun pending; #268 stays NOT_STARTED after any freshly reproduced
+prerequisites. The old368 checkpoint navigation pointer is corrected with its history preserved, not treated as a new product
 finding or approved repair row. No checkpoint stop or whole-audit readiness is implied.
 
 ## Resumed corroboration: confirmed and filed #361–#368
@@ -233,7 +237,7 @@ The original #145/#367 reports remain unchanged.
 - **SecurityConfig wording:** cryptographic preparation may use a shorthand for the DSL builder rather than a literal
   public type. Trace the current entry point before filing an API/documentation finding.
 
-These suspicions are not included in the 182-row denominator or counted as repairs. Preserve historical/private raw
+These suspicions are not included in the current issue-row denominator or counted as repairs. Preserve historical/private raw
 artifacts, full external acceptance criteria and protected files while investigating; do not manufacture device,
 network, independent-implementation or professional-cryptography results from source inspection.
 
@@ -243,3 +247,21 @@ network, independent-implementation or professional-cryptography results from so
 `transport #0` twice, referring to the zero-indexed first transport, not a GitHub issue. Only
 that extraction error is corrected. Original source/body, all real dependencies, severity, pending
 status and repair denominator are otherwise unchanged; no new GitHub defect or #240 fix is claimed.
+
+## Windows shell checkout CRLF interaction — unconfirmed, separate from #369
+
+A source-only follow-up notes that the hosted workflow does not explicitly override `core.autocrlf`, while
+.gitattributes pins the wrappers/immutable archives but not every shell fixture, nested checker or wrapper
+properties file. A converting checkout policy could expose a later shebang/options/property interaction.
+**No actual CRLF/eol failure has been captured.** Trial1stopped at bare-Bash prerequisite selection before
+these files executed; a cleanGitstatus would not establish LF bytes. No fresh newline fixture experiment was
+performed for this planning suspicion. Keep it **UNCONFIRMED**, not a reported Windows failure, additional
+issue/count, bundled369repair or reason to reimplement #223. Reproduce exact checked-out bytes/policy and
+actual callers, then deduplicate the underlying cause before any filing or source change.
+
+Separately, the actual trial1WSL-vs-Git-Bash selection defect was confirmed, deduplicated and filed as
+[#369](https://github.com/p2pKit/P2pKit/issues/369). Its [four-file source repair](repairs/369.md) is independently
+APPROVED/localbd61175, not pushed/native-rerun-accepted here. Both real shell callers share the validated
+binding/scopedtools; nativeproductrouting and223policy stay unchanged. The hosted failure/partialsalvage/
+unsafehandoff/remote cleanup NOT_PROVEN remain historical. A corrected private artifact-inspector syntax
+oracle is analysis history, not a repository defect or an acceptance upgrade.

@@ -1,3 +1,7 @@
+> **Current state:** #369 source APPROVED/localbd61175, NOT_PUSHED; trial1 failed before audit build/test
+> invocations, remote cleanup/full-tree NOT_PROVEN. See the dated continuation sections below.
+> The original250-line pre-trial report is preserved as historical evidence, not current publication/host status.
+
 # Serialized hosted validation facility — source and Linux evidence
 
 **8 September 2026: approved source, locally committed; publication and hosted execution are not recorded here.**
@@ -248,3 +252,117 @@ Next steps, without a checkpoint stop:
 Raw evidence, credentials, payloads, device identifiers and generated artifacts stay outside Git. Push only
 focused approved source and safe checkpoint documents to the audit branch; no force-push, main merge,
 settings/tag change, release publication or issue closure is authorized.
+
+## Prior administrative approval and verified publication
+
+The original250-line pre-trial report above is preserved verbatim; its publication/hosted-pending statements,
+71/182 counts and then-next steps are historical, not the current state. The exact eight administrative files
+were independently **APPROVED** by `/root/review_host_admin`:616initial comparisons/zero discrepancies,
+then applied-state98comparisons plus112immutable rechecks/zero discrepancies. Review SHA-256
+`acb7332405c101ef54bff5c844a3e7cd6dc759a7596324f2615c2c76ab90cb42`; applied addendum
+`65d9091555342c4ee1670a5146a0723131a01020c36ec463157c61b7676a8e25`.
+Eight serialized application/static gates19:12:24–19:12:33UTC passed:4,980invariants;354links/72active files;
+10projects/15layout negatives;10OSVlocks;release metadata;whitespace;both diff checks. All command/stop/final
+exits0, no owned survivors or deleted outputs; zero product XML. Original private newline-oracle false
+findings and corrected inspection are retained; no product failure was erased.
+
+Administrative commit **`bb0fd25f9ac40ca9bceb8bdfbb0ad104baae6d63`**, tree
+`7568fd93ac50fafe09f5fad91f03f5d8be138622`, parent731, committed19:20:06UTC.
+Push19:21:43.614854–19:21:46.322010UTC returned0. Its receipt explicitly did not verify the remote ref;
+a **separate19:22:14.560386–19:22:22.361426UTC** observation matched auditbb0 and main
+`eb444cccfc290be5435c5c10629c24183293606f`, and observed the resulting active run below.
+This publishes the facility and approved safe administration, not a product/host acceptance or later369push.
+
+## First hosted trial — terminal prerequisite failure
+
+**CORROBORATED terminal prerequisite failure before audit build/test invocations**, not infrastructure,
+product, cleanup, release or external approval. Run **[34268510397](https://github.com/p2pKit/P2pKit/actions/runs/34268510397)**,
+attempt1, audit-branch push, sourcebb0/tree7568. Windows job102203889802 ran19:21:53–19:22:16UTC on
+windows-2025, image `win25-vs2026`/`20260824.214.3`; driver19:22:05–19:22:09.
+Host summary19:22:06.236774–19:22:09.765212; handoff19:22:09.898192; upload19:22:11.447717.
+ARM102204036742 and Intel102204037776 were skipped without steps or allocated runners.
+
+Native Python's `Host.prerequisites` used bare `["bash", "--version"]`; it returned1 with WSL's
+no-installed-distributions diagnostic. Python/Git/Java17/Java21 queries returned0; RAM17,174,360,064bytes.
+Exception: `Required tool version query failed`. The log identifies Git's native executable but establishes
+neither an exact Bash executable path nor Git Bash's existence/success. The same ambiguous bare Bash
+also existed in the later wrapper fixture. This distinct cause is [#369](repairs/369.md), not #223 or #367.
+
+Admission/initialization/source/native/JDK/version subprocesses ran. Initialization is not a Gradle invocation
+or native ownership test suite. Bound source ordering plus `components=[]` establish failure before first
+`invoke`: **native controls, Android setup, wrapper fixture, Windows library/Desktop builds and all Apple
+components NOT_STARTED**. No audit build/test leaf began, so **no applicable Gradle stop existed; none ran**.
+This does not imply no host subprocesses or prove their descendants retired.
+
+Artifact **10072826523**, `audit-host-windows-x64-34268510397-1`, has7,741bytes, SHA-256
+`7ff7102aa8deaa509ca2e065e70566bf6247b69feeb3ffd6ce66d811fbd10816`.
+Fresh independent `/root/corroborate_host_trial1` decoded saved authenticated run/job/commit/acquisition/
+upload records and CRC/SHA-inspected all13members/13,435expanded bytes offline, without another authenticated
+GET. Returned bootstrap12entries/12,239bytes, salvage7/9,462 and nested5/8,440 manifests match; these sets
+overlap and are not additive. Salvage copied6files/8,864bytes with0omissions, yet full-tree completeness
+explicitly remains **NOT_PROVEN**. No omissions is not a remote-tree or process-ownership proof.
+
+**Preserve `safeToContinue=false`, `driverSafeOutput=false`, `PARTIAL_SALVAGE`, full-tree/remote cleanup
+NOT_PROVEN.** Unsafe finalization skipped output/work disposal; terminal job/orphan-cleanup text is not
+per-identity retirement. Original private inspector falsely rejected the real no-colon/is Artifact ID syntax;
+independent identity corroboration resolves that parsing diagnosis only. Its valid partial-evidence finding,
+original failed inspection and all raw bytes remain. Private parser correction does not create a repo issue.
+
+Operator reconciliation19:57:07.281264UTC retained archive/raw failure evidence and recorded **no raw/archive/
+remote-state/local-output deletion**. An all-five-active-status-empty observation19:55:59.733652–19:56:06.576158
+returned auditbb0/mainunchanged, but is a point observation, not a current/server-side lease. The **local
+cooperative build lock only** was released19:57:23.815919, with no source-freeze violations, on the narrow
+terminal-pre-first-audit-invocation basis. This does not turn the remote unsafe handoff into safe continuation,
+certify cleanup or accept a host/component. Subsequent trials require a fresh lease and evidence of their own.
+
+- Independent trial report SHA-256: `9abcdd77bf321eb304c5fbb06e17f2414a5d9775be1618edc861b48d8462e65f`.
+- Exact safe retention/ref/release bindings are recorded in [checkpoint metadata](checkpoint.json), not private paths.
+
+## Later complete GitHub capture and individual #369 addition
+
+Fresh local own histories/PRsets **19:17:06.237470–19:22:50.252664UTC**:289issues/182open/107closed,
+79PRs/7open/72closed; all368histories and79PRdetailsets fresh, zero reuse.490comments/4,204timeline/
+0reviews/0inline/1,817files/277commits. All182then-open IDs reconcile. Actual complete own body/comment/
+timeline payload comparisons versus16h find0changes;44PRdetails differ only embedded pushed_at,
+79PRlist records only embedded repository metadata. This is not inferred from equal counters.
+
+117first-hop PRs were freshly captured19:24:05.838850–19:30:42.647956, supplemented19:33:09.567975–19:33:23.885385.
+109count-complete; same8upstream gaps/7reported inline+3conversation records persist.465existing timeline
+payload deltas are metadata only:457repository,5nested milestone,3nested author-association. No body/decision
+change or new defect was established by that capture.402local/33upstream patch omissions remain.
+**2,927GETs/0failures;1,891collections/1,982pages**. The seal binds9,556files/432,388,200bytes,
+manifest SHA-256 `095bb682626fdf4c39b1858cbfebcaa4dfd1eb7f51ad007c87856d86b36b10a5`;
+report `9334f2dd63347a2518459233e32a67597e802b92e8747c8766dca6123d8c285b`.
+Sealing19:50:01 does not extend local freshness; first-hop collection is bounded, not a semantic re-audit
+of every unchanged narrative/caller or reconstruction of missing text. Earlier captures/gaps remain intact.
+
+A fresh **19:59:24.646456–19:59:29.370117UTC list-only** preflight is unchanged. #369 was individually
+created20:00:00Z/refetched20:00:01.894153UTC, OPEN; known totals then290issues/183open/79PRs, not a
+post-addition full inventory capture. The initial71/183approved,112remaining,90repair filing state stays
+historical. Its later independent source approval changes the current repair numerator separately.
+
+## Current continuation after the #369 source approval
+
+[#369's exact four-file repair](repairs/369.md) is final independently **APPROVED** with no findings and locally
+committed **`bd61175167337fee585855cbbe5bfae9c0122dc5`**, tree`95bb599cebc45d80d0a5c632fb2b84e240e14a30`.
+Its19final Linux fixture/static gates pass atbb0+staged1187, not cleanbd61175;24total leaves retain earlier
+mistakes/intended failures. Verification manifest binds203files/11,950,534bytes. No product Gradle check,
+native rerun, push or public outcome is recorded for369; no second trial is invented. Original731/precommit
+product results remain at their own source and are not rebound. Release monolith remains
+**NOT_EXECUTED_COMPONENT_REPLAY**. Source approval alone does not complete #367 foreign-host acceptance.
+
+Current counts: **72/183approved(39.3%),111remaining(60.7%)**,89repairs/21external/#120;50new auditfindings.
+The new report adds one coverage path; four changed source rows have actual complete final precommit reads
+by the fresh369reviewer. Earlier5,300historical cells and all prior source/read records remain; six reopened
+admin rows/self-excluded output are not promoted. Final report reads and independent administration approval
+are separate from the source approval. A shell-CRLF checkout-policy concern is **unconfirmed**, not an actual
+trial failure; no speculative repair/issue is bundled. #268 and independent#133 remainNOT_STARTED.
+
+Obtain independent final-byte administrative review, then publish safe source/ledgers only to auditbranch and
+record matching ref/outcome separately. Refresh live Actions, freeze exact source under one global local/hosted
+build lease, rerun Windows→ARM Mac→Intel Mac with mandatory native controls and inspected strict/source/
+stop/ownership/full-artifact receipts; failed/uncertain components stay red. Serialize bounded-memory builds,
+at most two Gradle workers/no parallel. Retain required logs, stop only owned invocations/workers and remove
+only confirmed disposable outputs after dependent checks; preserve shared caches/source/user work/private evidence.
+Continue all feasible sequential repairs without a checkpoint stop; physical devices, hostile networks,
+independent interoperability, professional crypto and #120 decision remain separate. Whole audit **NOT_READY**.

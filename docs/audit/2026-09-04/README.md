@@ -6,16 +6,16 @@ Start with the root [continuation checkpoint](../../../AUDIT_CHECKPOINT.md). Clo
 ## Records
 
 - [Checkpoint metadata](checkpoint.json): source revisions, issue-count denominator and evidence limitations.
-- [Issue index](issues.md): all 182 inventoried issue rows grouped by checkpoint disposition.
+- [Issue index](issues.md): all 183 inventoried issue rows grouped by checkpoint disposition.
 - [Issue records](issues.json): reported scope, dependencies, recorded commits and public investigation/outcome links.
 - [Coverage ledger](coverage.tsv): inherited per-path review claims, provenance revisions and reopened work.
 - [Unverified follow-ups](followups.md): hypotheses needing reproduction and deduplication, not confirmed bug claims.
-- [Hosted-validation facility](hosted-validation.md): exact approved source, separate Linux evidence and pending host/publication scope.
+- [Hosted-validation facility](hosted-validation.md): exact approved source, separate Linux evidence and actual trial1 failure, prior publication and current native-rerun scope.
 
-The inventory is a continuation aid, not live GitHub state: **71 independently approved repository repairs,
-89 pending repairs, 21 external-validation rows and one architecture decision**. Using **182 rows**, this is
-**39.0% reviewed / 61.0% remaining**; pending repairs are 88 Low and one informational (#333).
-**49 findings** originated in this audit. #223 is independently approved/pushed at `8dd65ce`, with thirteen
+The inventory is a continuation aid, not live GitHub state: **72 independently approved repository repairs,
+89 pending repairs, 21 external-validation rows and one architecture decision**. Using **183 rows**, this is
+**39.3% reviewed / 60.7% remaining**; pending repairs are 88 Low and one informational (#333).
+**50 findings** originated in this audit. #223 is independently approved/pushed at `8dd65ce`, with thirteen
 final static/policy/range gates passing on that clean source. No product Gradle check was rerun for #223.
 The later facility's fresh Linux combined check/Android sample/Dokka passes1,607 cases/199XML/234tasks
 on `6a32df4` plus staged `a95f3cb…`, not clean731 or the new hosted executor. Independent evidence
@@ -24,11 +24,11 @@ Later **clean731** rootcheck/CLI/Desktop passes **1,607/199XML/205tasks**, indep
 no Androidassembly/Dokka, sample launch or retained-package-content inspection in that run. Same cases,
 not additive. Older #368 checks,#367/#145 failures and #368/#223 controls keep their original bindings.
 #133 independent interoperability remains **NOT_STARTED**; #367 Windows/Intel acceptance is **NOT_EXECUTED**.
-These are not effort, closure or readiness percentages. The transfer stop is superseded. Active work is the
-serialized hosted Mac/Windows/Apple facility: exact18 source paths independently **APPROVED**, locally
-committed731/tree6b259; publication/hosted execution not established here. #268 remains **NOT_STARTED**,
-after any actually reproduced prerequisites receive sequential repair/final independent review. Continue
-remaining dependency-aware work without a checkpoint stop. Overall **NOT_READY**.
+These are not effort, closure or readiness percentages. The transfer stop is superseded. #369 is final
+**APPROVED/localbd61175**, NOT_PUSHED/no native rerun here; safe administration/publication and controlled
+host rerun are current. Priorbb0administration was independentlyapproved/pushed; actualtrial1failed preinvocation
+with unsafehandoff/partialsalvage/remote cleanup NOT_PROVEN. #268 remains **NOT_STARTED**, after hosted
+prerequisites and fresh final reviews. Continue feasible dependency-aware work without a stop. Overall **NOT_READY**.
 Source verification is not rebound to later administrative/facility revisions.
 
 The exhaustive **10:24:33–10:30:05 UTC** GitHub capture refreshed all 288 issues (181 open/107 closed),
@@ -42,7 +42,7 @@ See [checkpoint metadata](checkpoint.json) for exact bindings, retained prior ev
 The later **12:28:25 UTC all-state list** observes **289 issues/182 open/79 PRs (7 open)**, not refreshed
 full histories. #223 source verification at **12:30:53 UTC** and outcome verification at **12:36:30 UTC**
 are individual observations, not a complete post-write refresh. Older list-bound row states stay historical.
-A newer complete local capture at **16:02:38–16:08:26UTC** obtains289issues/182open/79PRs(7open), all368
+A historical complete local capture at **16:02:38–16:08:26UTC** obtains289issues/182open/79PRs(7open), all368
 own histories and79PR collections fresh, zero reused; all182open IDs reconcile.117first-hop upstream PRs
 have all returned pages captured;109expected-count-complete, eight still lack7reported inline/3conversation
 records despite retries.2927GETs all200;local402/upstream33patch fields omitted, no fullpatch reconstruction.
@@ -53,7 +53,7 @@ prepushlease. Initial2GETcollector failure remains; corrected26GETcapture succee
 Earlier observations/row states remain unchanged. See [the facility report](hosted-validation.md) for exact
 hashes/times/limits. GitHub snapshots are per-endpoint, not transactional or permanently current; refresh before work.
 
-## Current unnumbered hosted-validation facility
+## Historical facility state before first hosted trial
 
 See [the source/evidence report](hosted-validation.md) and [operational guide](../../testing/audit-hosts.md).
 Exact source731/tree6b259, parent6a32, diffa95 has final **APPROVE** verdicts from independent native,
@@ -68,7 +68,45 @@ or cleanup uncertainty stay red. Release monolith **NOT_EXECUTED_COMPONENT_REPLA
 does not prove Windows Native/AAPT2/#367 complete. No additional issue row, host/device/independent acceptance,
 #120 decision, merge/release/closure or whole-audit readiness follows from this facility's source approval.
 
-## Latest numbered #223 wrapper LF checkout-policy correction
+## Latest numbered #369 Windows audit shell-selection correction
+
+[#369](repairs/369.md) is final independently **APPROVED**, no actionable findings, and locally committed at
+`bd61175167337fee585855cbbe5bfae9c0122dc5`, tree `95bb599cebc45d80d0a5c632fb2b84e240e14a30`, parentbb0.
+Four files/308additions/4deletions; diff `1187b99c56c1798cbf2a137857d15cdabb362ca0f46c425cf9ec5a4c48f81b3f`.
+Fresh `/root/review_369_r1` read all four final source files completely and inspected actual callers and evidence.
+This binds validated absolute Git-for-Windows Bash plus scoped shell tools to both prerequisite and wrapper
+fixture callers. Native product PATH/gradlew.bat, security, required checks, ownership and #223 stay unchanged.
+
+Final **19Linuxfixture/static gates PASS**,20:24:25–20:26:48UTC, atbb0+staged1187, not cleanbd61175:
+host78(original65unchanged+13new),workflow51,leaf27,consumer32; exact-original/four mutations fail inside
+successful control oracles, unchanged-control and wrapper/layout/OSVlock/docs/metadata/whitespace/diff gates pass.
+Seal203files/11,950,534bytes;24total finalized leaves retain the firstfixtureKeyError, intendedoriginalr2/r3
+failures and earlier74/78runs. All24stop0/noowned survivors/nooutput deletions; **zero new product XML**.
+No productGradle check/native rerun, verified push or public outcome for369 is recorded here.
+
+The separately approved eight-file administration was pushed asbb0/tree7568 at19:21:46 and ref-observed19:22:22.
+Its actual first hostedrun34268510397/attempt1 failed on bare Bash resolving to WSL before any audit native
+control/build/test leaf. Both Apple jobs skipped. Artifact10072826523/7,741bytes was independently corroborated,
+but **PARTIAL_SALVAGE, safeToContinue=false, remote cleanup/full-tree NOT_PROVEN** stay red. No applicable
+Gradle stop existed or ran. Setup/version subprocesses did run; descendant retirement not proved.
+The19:57local cooperative-lock release is not remote cleanup or a safe handoff. No second trial recorded.
+
+Source369approval is not nativeWindows/#367, Apple/release/external acceptance. Obtain independent final-byte
+administrative approval, publish onlyauditbranch with ref/outcome verification, refresh live Actions/global lease,
+and inspect a new serialized native trial before accepting components. #268/#133NOT_STARTED; wholeauditNOT_READY.
+
+The latest complete local GitHub capture is **19:17:06–19:22:50UTC**:289issues/182open/107closed,
+79PRs/7open/72closed; all368own histories and79PRsets freshly fetched, zero reused. Actual body/comment/
+timeline payload comparison versus16h finds0changes (490comments/4,204events), not just equal counters.
+117first-hop PRs were freshly captured19:24–19:30 plus19:33supplement;109count-complete, same8gaps/
+7reported inline+3conversation records.465timeline deltas are metadata only;402local/33upstream patch
+omissions remain.2,927GETs/0failures,1,891collections/1,982pages. A19:59fresh list was unchanged;
+**#369 individually filed/refetched20:00:01UTC** raises known totals to290issues/183open/79PRs, not a
+post-addition full refresh. Earlier10h/16h/18h captures, historical row states and omissions are preserved.
+The19:55:59–19:56:06Actions/ref empty-active point is not current idleproof or a server-side lease. Refresh
+before trigger; complete capture/hashing is not a new semantic audit of every unchanged claim/current caller.
+
+## Previous numbered #223 wrapper LF checkout-policy correction
 
 The two-file correction is independently **APPROVED** and pushed at
 `8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b`, tree `facccdaae07e66ae7d3017ef8525c09611b2c70a`.
@@ -92,8 +130,8 @@ This is **Linux Git/shell evidence**, not native Windows/macOS or all-text check
 `check` was rerun in the #223 repair cycle; its then-latest product checks were the #368 `c221d54` runs below.
 The later facility's precommit Linux check and independent source approvals are recorded separately, not
 retroactively attributed to #223. Do not blanket-renormalize or overwrite existing clones/user changes.
-The approved facility is locally committed, not recorded as published/hosted-executed here; #268 is not started,
-after any freshly reproduced prerequisites and the remaining dependency-aware queue;
+The pre-trial facility publication state is superseded by datedbb0/trial1/369records above; #268 is not started,
+after the current native rerun and any newly confirmed prerequisites;
 #367 foreign-host acceptance remains **NOT_EXECUTED**.
 **#133 NOT_STARTED; whole audit NOT_READY.** Continue feasible work without a checkpoint stop.
 
@@ -128,7 +166,7 @@ These are **Linux host/classloader/shadow results**, not ART/device or fresh Win
 Apple skips and cinterop/ABI-unavailable diagnostics remain in the logs; zero skipped XML cases does not mean
 Apple ran. #367 Windows/Intel acceptance, final consumer/release gates and physical/hostile-network/independent/
 professional-crypto validation remain pending. #133 is **NOT_STARTED**; whole audit **NOT_READY**.
-The then-next #223 repair is approved above; current work is approved facility validation/publication, not #268.
+The then-next #223 repair remains approved; current369publication/native rerun is separate, not #268.
 
 ## Historical #367 repository-source correction
 
@@ -163,7 +201,7 @@ The original #145 failures below and both #367 full-check failures remain histor
 #367 checkpoint the last successful integration was historical `6995130`, not `0d88be3`; later #368
 Linux passes are recorded separately above. Windows/Intel/Apple acceptance is **NOT_EXECUTED** in that
 cycle and not discharged by source approval. Former next repairs #368 and #223 are now approved above;
-approved facility validation/publication is current, with #268 only planned. #133 remains **NOT_STARTED**;
+current369publication/native rerun is separate, with #268 only planned. #133 remains **NOT_STARTED**;
 physical-device/ART, hostile-network, independent-implementation and professional-crypto acceptance remain
 separate. Whole audit **NOT_READY**. No merge, closure, release, tag or settings change is authorized.
 
@@ -403,14 +441,14 @@ all5,230 cells from the1,046-row `b4a9248` projection and **all5,235** from the 
 projection. The prior `c221d54` reading cohort, #223 two-file complete reads, three genuine uncommitted repair-
 report reads and previous projections remain historical. Source approvals/executions are separate from read scope.
 
-The current facility adds12source paths, rebinds six actually changed existing source rows, and adds its safe
-report: **1,060 projected paths**, checked against actual tracked membership. The18source bindings are
+The prior facility projection added12source paths, rebound six actually changed existing source rows, and added its safe
+report: **1,060 projected paths**, checked against then-current tracked membership. Those18source bindings were
 **nine complete-text final-byte reads and nine semantic-delta compositions**. Reused complete prior source
 plus every correction delta is not called a fresh full final scan. Final reviewers' per-path SHA/blob/attribution
 and all six old current-read rows are retained in checkpoint metadata. These precommit readings retain
 `NOT_RECORDED` readCommit even after exact bytes become commit731; no future read event is invented.
 
-With a separately recorded actual full-text read of the uncommitted new report, the projection is **783 full-text**,
+With its separately recorded full-text read of the then-uncommitted report, that historical projection was **783 full-text**,
 **10 semantic-delta**, **259 structural-only**, **one partial XML**, **six reopened administrative paths** and
 **one self-excluded output**. Six admin rows and the coverage self-row remain byte-identically unchanged;
 authored-delta review/report reading cannot promote their historical input bindings. Unchanged callers are not
@@ -419,10 +457,19 @@ their own final-byte review. No self-hash, future commit or whole-current-HEAD s
 
 The earlier0d88input/output full counts783/782, #367's1,045-path, #368's1,046-path and #223's1,047-path/779full
 projections remain historical. Private receipt names are provenance identifiers, not raw evidence transferred by
-cloning. Read counts do not alter **71/182** repair progress or rebind the old product runs to later source.
+cloning. That historical projection did not alter its then71/182repair progress or rebind old product runs to later source.
 The fresh facility Linux product result is separately tied to6a32+stageda95, not clean731/administration;
 the later clean731rootcheck/CLI/Desktop is separately corroborated. Whole-repository corroboration and
 actual supported host/sample/consumer/release gates remain required.
+
+Current369increment: **1,061projected paths**, after adding its repair report. All**5,300historical cells**
+of the preceding1,060rows remain unchanged, as do six reopened administrative rows and the self-excluded output.
+Four changed source paths have genuine complete precommit final-text reads by `/root/review_369_r1`; three
+previous semantic-delta rows now have complete readings, the already-full guide is rebound. Prior source/report
+bindings are saved in checkpoint metadata. After actual final-byte author reads of both reports, the projection
+is **787full-text,7semantic-delta,259structural,onepartial,sixreopened,oneself-excluded**. No readCommit is
+invented, unchanged callers are not reapproved and report authorship/read is not independent administrative
+approval. Product runs/oldfacility approvals remain at their exact historical source; no native/external acceptance.
 
 ## Maintaining cloneable progress
 

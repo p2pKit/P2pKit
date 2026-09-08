@@ -1,6 +1,6 @@
 # Issue disposition index
 
-Checkpoint inventory: **182 issues; 71 reviewed repository repairs (39.0%), 111 remaining rows (61.0%)**.
+Checkpoint inventory: **183 issues; 72 reviewed repository repairs (39.3%), 111 remaining rows (60.7%)**.
 
 This dated ledger is not GitHub live state, effort or production readiness. Issues remain open at their recorded
 list/individual observations; none was closed by these fixes. #223 is independently APPROVED/pushed at
@@ -8,19 +8,19 @@ list/individual observations; none was closed by these fixes. #223 is independen
 Thirteen final static/policy/range gates pass; no new product Gradle check is inferred. #368 remains approved
 at `c221d54b549d`; [its source-bound product passes and prior failures](repairs/368.md) stay source-bound.
 #367 remains approved at `0d88be3e3769`; [its original full-check failures](repairs/367.md) remain historical
-and Windows/Intel acceptance unexecuted. #145/#144/#360 and earlier approvals are unchanged. Active facility
-source731/tree6b259 is independently **APPROVED**, locally committed, not established as pushed/hosted-executed
-here. [Its report](hosted-validation.md) separately binds the fresh precommitLinux1607-case check/sample/Dokka
+and Windows/Intel acceptance unexecuted. #145/#144/#360 and earlier approvals are unchanged. Prior facility
+source731/tree6b259 remains independently **APPROVED**, later published with approvedbb0administration;
+actualtrial1failed before audit nativecontrols/build/tests, not cleanup/host acceptance. [Its report](hosted-validation.md) separately binds the fresh precommitLinux1607-case check/sample/Dokka
 result at6a32+stageda95 and laterclean731rootcheck/CLI/Desktop1607/199XML/205tasks, independently
 corroborated; scopes are not interchangeable. Planned #268 is **NOT_STARTED**, after any actually reproduced
-prerequisites and their sequential independent reviews. The unnumbered facility adds no approved issue row.
-Pending repairs: **88 Low and one informational (#333)**. There are **49 new-audit findings**.
+prerequisites and their sequential independent reviews. The unnumbered facility added no approved issue row; separate369is now independentlyapproved/localbd61175, NOT_PUSHED/no native rerun here.
+Pending repairs: **88 Low and one informational (#333)**. There are **50 new-audit findings**.
 
 The earlier **12:28:25 UTC** all-state list observes289issues/182open/79PRs(7open), not fresh full histories.
 The exhaustive 10:24–10:30 capture remains 288 issues/181 open/79 PRs: all 367 issue-style histories and
 79 PR metadata sets freshly fetched, 1,519 GETs, no reused current histories. #368's individual 10:50:42 addition
 and #367/#368 outcomes remain historical; #223's 12:36:30 outcome is also individual, not a post-write full refresh.
-Latest fresh local capture **16:02:38–16:08:26UTC**:289issues/182open/79PRs(7open), all368 local histories/
+Historical fresh local capture **16:02:38–16:08:26UTC**:289issues/182open/79PRs(7open), all368 local histories/
 79PR collections fresh; zero reuse. All182open IDs reconcile.117first-hop upstream PRs were captured;109count-
 complete, eight still lack7reported inline/3conversation records.2927GETall200,402local/33upstream patch
 fields omitted. The16:33:33Actions/ref idle point is not an execution lease; refresh before any trigger.
@@ -40,7 +40,21 @@ then-pending #223 note is superseded by the current #223 record, not rewritten. 
 GitHub Actions authorization is not an executed hosted/external gate. Severity `SEE_FULL_ISSUE` is an inherited
 gap, not a new severity assignment. A blank revision means no completed repair/review cycle was recorded.
 
-## Repairs with recorded independent approval (71)
+The latest complete local GitHub capture is **19:17:06–19:22:50UTC**:289issues/182open/107closed,
+79PRs/7open/72closed; all368own histories and79PRsets freshly fetched, zero reused. Actual body/comment/
+timeline payload comparison versus16h finds0changes (490comments/4,204events), not just equal counters.
+117first-hop PRs were freshly captured19:24–19:30 plus19:33supplement;109count-complete, same8gaps/
+7reported inline+3conversation records.465timeline deltas are metadata only;402local/33upstream patch
+omissions remain.2,927GETs/0failures,1,891collections/1,982pages. A19:59fresh list was unchanged;
+**#369 individually filed/refetched20:00:01UTC** raises known totals to290issues/183open/79PRs, not a
+post-addition full refresh. Earlier10h/16h/18h captures, historical row states and omissions are preserved.
+The19:55:59–19:56:06Actions/ref empty-active point is not current idleproof or a server-side lease. Refresh
+before trigger; complete capture/hashing is not a new semantic audit of every unchanged claim/current caller.
+
+[#369repair report](repairs/369.md):4files/finalAPPROVE/nofindings,19finalLinuxfixture/static gates,24totalleaves;
+zero productXML. Partialtrial1/unsafehandoff/remote cleanup NOT_PROVEN and oldproductsource bindings remain.
+
+## Repairs with recorded independent approval (72)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -115,6 +129,7 @@ gap, not a new severity assignment. A blank revision means no completed repair/r
 | [#360: [AUDIT][Low] All-tree CI whitespace gates reject immutable historical archives](https://github.com/p2pKit/P2pKit/issues/360) | low | New audit | `6995130bcdb2` |
 | [#367: [AUDIT][Medium] Host-toolchain checksums omit Linux/Windows and Intel Native archives](https://github.com/p2pKit/P2pKit/issues/367) | medium | New audit | `0d88be3e3769` |
 | [#368: [AUDIT][Low] API24 export-failure fixture targets an unnormalized filename on case-sensitive filesystems](https://github.com/p2pKit/P2pKit/issues/368) | low | New audit | `c221d54b549d` |
+| [#369: [AUDIT][Low] Hosted Windows audit resolves Bash to WSL instead of Git Bash](https://github.com/p2pKit/P2pKit/issues/369) | low | New audit | `bd6117516733` |
 
 ## Pending remediation (89)
 
