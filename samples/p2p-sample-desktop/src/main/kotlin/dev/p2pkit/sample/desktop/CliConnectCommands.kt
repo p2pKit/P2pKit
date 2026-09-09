@@ -16,7 +16,7 @@ internal class CliConnectCommands(
     private val kit: P2pKit,
     private val scope: CoroutineScope,
     private val sessions: Map<String, P2pSession>,
-    private val pendingConnects: MutableSet<String>,
+    private val pendingConnects: CliPendingConnects,
     private val onAttempt: (Peer) -> Unit,
     private val onConnected: (P2pSession) -> Unit,
     private val output: (String) -> Unit = ::println,
@@ -58,10 +58,12 @@ internal class CliConnectCommands(
         // An explicit pin must reach the SDK even when an unpinned auto-mesh/user
         // attempt is pending. The SDK joins that attempt and checks this caller's
         // pin (or retries a differently-authorized failure); a UI guard cannot.
+        var admittedSession: P2pSession? = null
         return scope.launch {
             try {
                 onAttempt(peer)
                 val session = if (pin != null) connectPinnedPeer(kit, peer, pin) else kit.connect(peer)
+                admittedSession = session
                 // The caller registers collectors once per SDK session, including
                 // when both a pending owner and a pinned waiter obtain that session.
                 onConnected(session)
@@ -75,7 +77,9 @@ internal class CliConnectCommands(
             // A waiter must not remove another attempt's marker. A completion
             // handler also releases our own marker if the scope was already
             // cancelled and the coroutine body never got a chance to start.
-            if (ownsPendingMarker) job.invokeOnCompletion { pendingConnects.remove(peerId) }
+            job.invokeOnCompletion {
+                pendingConnects.complete(peerId, ownsPendingMarker, admittedSession)
+            }
         }
     }
 }

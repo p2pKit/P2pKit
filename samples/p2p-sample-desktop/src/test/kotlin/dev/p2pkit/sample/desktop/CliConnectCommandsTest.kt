@@ -18,8 +18,10 @@ import dev.p2pkit.transport.lan.lan
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -163,6 +165,80 @@ class CliConnectCommandsTest {
         assertFalse(fixture.output.any { fixture.qr in it })
     }
 
+    @Test
+    fun commandOwnedAdmissionLossWakesMeshOnlyAfterTheCommandReleasesItsMarker() = scenario { fixture ->
+        val owner = SupervisorJob(coroutineContext[Job])
+        val scope = CoroutineScope(Dispatchers.Unconfined + owner)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val meshCalls = mutableListOf<Peer>()
+        fixture.unpinned = {
+            fixture.sdkSessions.value = listOf(fixture.session)
+            entered.complete(Unit)
+            release.await()
+            fixture.session
+        }
+        try {
+            val command = assertNotNull(fixture.commands(scope).execute("connect", "receiver"))
+            entered.await()
+            launchCliAutoMesh(
+                scope, MutableStateFlow(true), MutableStateFlow(listOf(fixture.peer)),
+                fixture.sdkSessions, "aaa-owner", fixture.pending
+            ) { peer ->
+                meshCalls += peer
+                fixture.sdkSessions.value = listOf(fixture.session)
+                fixture.session
+            }
+            assertTrue(meshCalls.isEmpty())
+            fixture.sdkSessions.value = emptyList()
+            assertTrue(meshCalls.isEmpty())
+            assertTrue(fixture.peer.id.value in fixture.pending)
+            release.complete(Unit)
+            command.join()
+            assertEquals(listOf(fixture.peer), meshCalls)
+            assertEquals(listOf(fixture.session), fixture.sdkSessions.value)
+            assertTrue(fixture.pending.isEmpty())
+            assertTrue(fixture.errors.isEmpty())
+        } finally {
+            owner.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun bareCommandFailureDoesNotWakeAnOtherwiseStableMesh() = scenario { fixture ->
+        val owner = SupervisorJob(coroutineContext[Job])
+        val scope = CoroutineScope(Dispatchers.Unconfined + owner)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val meshCalls = mutableListOf<Peer>()
+        fixture.unpinned = {
+            entered.complete(Unit)
+            release.await()
+            throw P2pError.ConnectionFailed("synthetic dial failure")
+        }
+        try {
+            val command = assertNotNull(fixture.commands(scope).execute("connect", "receiver"))
+            entered.await()
+            launchCliAutoMesh(
+                scope, MutableStateFlow(true), MutableStateFlow(listOf(fixture.peer)),
+                fixture.sdkSessions, "aaa-owner", fixture.pending
+            ) { peer ->
+                meshCalls += peer
+                fixture.sdkSessions.value = listOf(fixture.session)
+                fixture.session
+            }
+            assertTrue(meshCalls.isEmpty())
+            release.complete(Unit)
+            command.join()
+            assertTrue(meshCalls.isEmpty())
+            assertTrue(fixture.sdkSessions.value.isEmpty())
+            assertTrue(fixture.pending.isEmpty())
+            assertEquals(1, fixture.errors.size)
+        } finally {
+            owner.cancelAndJoin()
+        }
+    }
+
     private fun scenario(block: suspend CoroutineScope.(Fixture) -> Unit): Unit = runBlocking {
         withTimeout(5_000) {
             val fixture = Fixture()
@@ -202,7 +278,8 @@ class CliConnectCommandsTest {
             ): P2pFileTransfer = error("not used")
         }
         val sessions = ConcurrentHashMap<String, P2pSession>()
-        val pending: MutableSet<String> = ConcurrentHashMap.newKeySet()
+        val pending = CliPendingConnects()
+        val sdkSessions = MutableStateFlow<List<P2pSession>>(emptyList())
         val calls = mutableListOf<PeerFingerprint?>()
         val connected = mutableListOf<P2pSession>()
         val output = mutableListOf<String>()
@@ -214,6 +291,7 @@ class CliConnectCommandsTest {
         }
         private val kit = object : P2pKit by base {
             override val peers = MutableStateFlow(listOf(peer))
+            override val sessions = sdkSessions
             override suspend fun connect(peer: Peer): P2pSession {
                 assertSame(this@Fixture.peer, peer)
                 calls += null

@@ -40,6 +40,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
@@ -169,7 +170,7 @@ private fun runCli(appId: AppId, deviceName: String, reconnect: ReconnectPolicy)
     // or a user command. Unpinned requests consult this set to suppress
     // duplicate output. Explicitly pinned requests must still reach the SDK
     // to join/verify an existing attempt against that caller's required pin.
-    val pendingConnects: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    val pendingConnects = CliPendingConnects()
     val pendingFileOffers = ConcurrentHashMap<SessionTransferKey, P2pFileOffer>()
     // AUDIT-2026-06 (B-G9-samples-desktop-ios-10): session ids whose collectors
     // are already wired. p2p.connect() is idempotent and can return the SAME
@@ -221,46 +222,32 @@ private fun runCli(appId: AppId, deviceName: String, reconnect: ReconnectPolicy)
         }
         .launchIn(scope)
 
-    // Auto-mesh: when on, initiate connect to every newly-discovered peer
-    // when our local PeerId is lexicographically less than theirs. The
-    // tie-break guarantees exactly one side per pair initiates, avoiding the
-    // simultaneous-open race.
-    scope.launch {
-        combine(autoMesh, p2p.peers) { enabled, peers -> enabled to peers }
-            .collect { (enabled, peers) ->
-                if (!enabled) return@collect
-                val myId = p2p.localPeerId.value
-                for (peer in peers) {
-                    if (sessions.containsKey(peer.id.value)) continue
-                    if (myId >= peer.id.value) continue
-                    if (!pendingConnects.add(peer.id.value)) continue
-                    System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.consoleId}")
-                    scope.launch {
-                        try {
-                            runCatching {
-                                CliDiagnostics.recorder.record(
-                                    DiagnosticRecord(
-                                        peerId = peer.id.value,
-                                        connectionId = CliDiagnostics.connectionIdFor(peer.id.value),
-                                        category = "connection",
-                                        eventName = DiagnosticEventNames.CONNECTION_ATTEMPTED,
-                                        currentState = "connecting"
-                                    )
-                                )
-                                val s = p2p.connect(peer)
-                                registerSession(s, scope, sessions, wiredSessionIds, pendingFileOffers)
-                            }.onFailure {
-                                System.err.println(
-                                    "[p2pkit WARN] auto-mesh connect to ${peer.consoleId} failed: " +
-                                        SampleConsole.failure(it)
-                                )
-                            }
-                        } finally {
-                            pendingConnects.remove(peer.id.value)
-                        }
-                    }
-                }
-            }
+    // Stable discovery does not imply a live session: session removal must also
+    // trigger the designated owner's mesh pass, as in the Android/Desktop UI samples.
+    launchCliAutoMesh(scope, autoMesh, p2p.peers, p2p.sessions, p2p.localPeerId.value, pendingConnects) { peer ->
+        System.err.println("[p2pkit] auto-mesh: initiating connect to ${peer.consoleId}")
+        var admittedSession: P2pSession? = null
+        try {
+            CliDiagnostics.recorder.record(
+                DiagnosticRecord(
+                    peerId = peer.id.value,
+                    connectionId = CliDiagnostics.connectionIdFor(peer.id.value),
+                    category = "connection",
+                    eventName = DiagnosticEventNames.CONNECTION_ATTEMPTED,
+                    currentState = "connecting"
+                )
+            )
+            val session = p2p.connect(peer)
+            admittedSession = session
+            registerSession(session, scope, sessions, wiredSessionIds, pendingFileOffers)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            System.err.println(
+                "[p2pkit WARN] auto-mesh connect to ${peer.consoleId} failed: ${SampleConsole.failure(failure)}"
+            )
+        }
+        admittedSession
     }
 
     runBlocking {
@@ -307,6 +294,56 @@ private fun runCli(appId: AppId, deviceName: String, reconnect: ReconnectPolicy)
     }
 }
 
+/** The CLI's mesh collector; the SDK session flow, not the asynchronous display map, owns liveness. */
+internal fun launchCliAutoMesh(
+    scope: CoroutineScope,
+    autoMesh: StateFlow<Boolean>,
+    peers: StateFlow<List<Peer>>,
+    sessions: StateFlow<List<P2pSession>>,
+    localPeerId: String,
+    pendingConnects: CliPendingConnects,
+    connect: suspend (Peer) -> P2pSession?
+): Job = scope.launch {
+    var previousInputs: Triple<Boolean, List<Peer>, List<P2pSession>>? = null
+    var previousSessionPeerIds = emptySet<String>()
+    val deferredSessionLosses = mutableSetOf<String>()
+    combine(autoMesh, peers, sessions) { enabled, available, active -> Triple(enabled, available, active) }
+        .combine(pendingConnects.completions) { inputs, _ -> inputs }
+        .collect { inputs ->
+            val (enabled, available, active) = inputs
+            val inputsChanged = inputs != previousInputs
+            previousInputs = inputs
+            val sessionPeerIds = active.mapTo(mutableSetOf()) { it.peer.id.value }
+            deferredSessionLosses += previousSessionPeerIds - sessionPeerIds
+            deferredSessionLosses += pendingConnects.takeCompletedAdmissions()
+            previousSessionPeerIds = sessionPeerIds
+            deferredSessionLosses.retainAll(available.map { it.id.value })
+            deferredSessionLosses.removeAll(sessionPeerIds)
+            if (!enabled) return@collect
+            for (peer in available) {
+                if (peer.id.value in sessionPeerIds || localPeerId >= peer.id.value) continue
+                // Completion alone never retries a failed dial. Only an SDK loss
+                // deferred behind a shared pending owner needs that extra wakeup.
+                if (!inputsChanged && peer.id.value !in deferredSessionLosses) continue
+                if (!pendingConnects.add(peer.id.value)) continue
+                deferredSessionLosses.remove(peer.id.value)
+                var admittedSession: P2pSession? = null
+                scope.launch {
+                    // An operator toggle or SDK admission can win while this child is queued.
+                    if (
+                        autoMesh.value && peers.value.any { it.id == peer.id } &&
+                        sessions.value.none { it.peer.id == peer.id }
+                    ) {
+                        admittedSession = connect(peer)
+                    }
+                }.invokeOnCompletion {
+                    // Also release our marker when teardown cancels the child before it starts.
+                    pendingConnects.complete(peer.id.value, ownsMarker = true, admittedSession)
+                }
+            }
+        }
+}
+
 private fun parseReconnect(arg: String?): ReconnectPolicy {
     if (arg == null) return ReconnectPolicy.Disabled
     val payload = arg.removePrefix("reconnect=")
@@ -338,7 +375,7 @@ private suspend fun repl(
     // Shared with the auto-mesh loop in main() so both paths consult the
     // same in-flight-connect set. Explicit pins bypass the output-dedup guard,
     // never the SDK's authentication check.
-    pendingConnects: MutableSet<String>,
+    pendingConnects: CliPendingConnects,
     // AUDIT-2026-06 (B-G9-samples-desktop-ios-10): shared wired-collector set,
     // see registerSession.
     wiredSessionIds: MutableSet<String>,
