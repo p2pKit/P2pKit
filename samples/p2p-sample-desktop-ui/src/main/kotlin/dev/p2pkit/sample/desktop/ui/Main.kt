@@ -111,11 +111,14 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -441,14 +444,7 @@ internal class DesktopP2pState(
         scope.launch { newKit.peers.collect { _peers.value = it } }
         scope.launch { newKit.sessions.collect { reconcileSessions(it, scope) } }
         scope.launch {
-            // Refresh manual connection info on a slow cadence so the UI shows
-            // the latest local host(s) without spamming the provisioning impl.
-            while (true) {
-                _manualConnectionInfo.value = runCatchingCancellable {
-                    newKit.networkProvisioning.getManualConnectionInfo()
-                }.getOrNull()
-                kotlinx.coroutines.delay(5_000)
-            }
+            pollManualConnectionInfo(newKit.networkProvisioning::getManualConnectionInfo)
         }
         scope.launch {
             // Treat advertise/discover as one startup transaction. Cancellation
@@ -775,6 +771,25 @@ internal class DesktopP2pState(
                         }
                 }
             }
+        }
+    }
+
+    /** Refresh for the lifetime of the run scope, including listener port changes. */
+    internal suspend fun pollManualConnectionInfo(
+        getInfo: suspend () -> ManualConnectionInfo?,
+        awaitNextPoll: suspend (Long) -> Unit = { delay(it) }
+    ) {
+        var failureReported = false
+        while (currentCoroutineContext().isActive) {
+            _manualConnectionInfo.value = runCatchingCancellable { getInfo() }
+                .onSuccess { failureReported = false }
+                .onFailure { error ->
+                    if (!failureReported) {
+                        appendSystemMessage("Manual connection info unavailable: ${SampleConsole.failure(error)}")
+                        failureReported = true
+                    }
+                }.getOrNull()
+            awaitNextPoll(MANUAL_CONNECTION_REFRESH_MILLIS)
         }
     }
 
@@ -1473,6 +1488,7 @@ internal class DesktopP2pState(
     }
 
     companion object {
+        private const val MANUAL_CONNECTION_REFRESH_MILLIS = 5_000L
         const val DEFAULT_APP_ID = "p2pkit-desktop-sample"
         const val LOG_TAIL_CAPACITY = 30
         const val FILE_TRANSFER_HISTORY_CAPACITY = 24
