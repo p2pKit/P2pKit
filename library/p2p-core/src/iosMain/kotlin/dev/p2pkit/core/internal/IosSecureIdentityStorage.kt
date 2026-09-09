@@ -100,7 +100,7 @@ internal class IosSecureIdentityStorage(
         namespace: IdentityNamespace,
         fingerprintDigest: (EncodedIdentityKeyPair) -> ByteArray,
         generate: () -> EncodedIdentityKeyPair
-    ): EncodedIdentityKeyPair = withProcessLock {
+    ): EncodedIdentityKeyPair = withProcessLock(namespace) {
         ensureNoResetPending(namespace)
         val account = namespace.storageKey
         val record = keychain.read(account)
@@ -144,7 +144,7 @@ internal class IosSecureIdentityStorage(
         }
 
     private fun resetWhileExclusive(namespace: IdentityNamespace) {
-        withProcessLock {
+        withProcessLock(namespace) {
             // Reset is already an explicit destructive authorization. Replace
             // any malformed marker from a torn/corrupted prior transaction so
             // the caller has a recovery path; ordinary load remains fail-closed.
@@ -359,18 +359,9 @@ internal class IosSecureIdentityStorage(
         cause = cause
     )
 
-    private inline fun <T> withProcessLock(block: () -> T): T {
-        processLock.lock()
-        return try {
-            block()
-        } finally {
-            processLock.unlock()
-        }
-    }
+    private fun <T> withProcessLock(namespace: IdentityNamespace, block: () -> T): T =
+        IosSecureIdentityOperationLocks.withLock(namespace.storageKey, block)
 
-    private companion object {
-        private val processLock = NSLock()
-    }
 }
 
 /** Process-local exclusion between live kits and explicit reset calls. */

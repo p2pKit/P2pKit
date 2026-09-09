@@ -20,7 +20,6 @@ import dev.p2pkit.core.security.constantTimeEquals
 import dev.p2pkit.core.security.localIdentityError
 import java.io.File
 import java.io.FileNotFoundException
-import java.io.RandomAccessFile
 import java.security.KeyStore
 import java.security.UnrecoverableKeyException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -536,42 +535,18 @@ internal class AndroidSecureIdentityStorage(
         onCommitted = onCommitted
     )
 
-    private inline fun <T> withNamespaceLock(
+    private fun <T> withNamespaceLock(
         namespace: IdentityNamespace,
         block: (NamespacePaths) -> T
-    ): T = synchronized(processLock) {
+    ): T {
         val paths = namespacePaths(namespace)
-        try {
-            if (!paths.directory.isDirectory) paths.directory.mkdirs()
-            if (!paths.directory.isDirectory) {
-                throw IllegalStateException("Could not create Android identity storage directory")
-            }
-            RandomAccessFile(paths.lockFile, "rw").use { randomAccess ->
-                randomAccess.channel.use { channel ->
-                    channel.lock().use {
-                        block(paths)
-                    }
-                }
-            }
-        } catch (error: P2pError.LocalIdentityUnavailable) {
-            throw error
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            throw localIdentityError(
-                kind = LocalIdentityFailureKind.PERSISTENCE_FAILED,
-                recovery = LocalIdentityRecovery.RETRY,
-                reason = "Could not lock Android secure identity state",
-                cause = error
-            )
-        }
+        return withAndroidIdentityStorageLock(namespace.storageKey, paths.directory) { block(paths) }
     }
 
     private fun namespacePaths(namespace: IdentityNamespace): NamespacePaths {
         val directory = File(noBackupRoot, "p2pkit/identity-v2/${namespace.storageKey}")
         return NamespacePaths(
             directory = directory,
-            lockFile = File(directory, "identity.lock"),
             identityBlob = AtomicFile(File(directory, "identity.blob")),
             resetPending = AtomicFile(File(directory, "reset.pending"))
         )
@@ -606,7 +581,6 @@ internal class AndroidSecureIdentityStorage(
 
     private data class NamespacePaths(
         val directory: File,
-        val lockFile: File,
         val identityBlob: AtomicFile,
         val resetPending: AtomicFile
     )
@@ -617,7 +591,6 @@ internal class AndroidSecureIdentityStorage(
         private const val AES_GCM_TRANSFORMATION = "AES/GCM/NoPadding"
         private const val AES_KEY_SIZE_BITS = 256
         private const val GCM_TAG_BITS = 128
-        private val processLock = Any()
     }
 }
 
