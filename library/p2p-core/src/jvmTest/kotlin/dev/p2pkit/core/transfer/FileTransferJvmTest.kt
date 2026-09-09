@@ -366,30 +366,37 @@ class FileTransferJvmTest {
         val directory = Files.createTempDirectory("p2pkit-durable-close-retry-").toFile()
         tempFiles.add(directory)
         val target = File(directory, "received.bin")
+        val closeFailure = IOException("injected sink close failure")
         var closeAttempts = 0
         var deleteAttempts = 0
         val destination = JvmDurableFileDestination(
             target = target,
             closeSink = { opened ->
                 closeAttempts += 1
-                if (closeAttempts == 1) throw IOException("injected sink close failure")
+                // Release the handle before reporting failure so deletion is real on Windows too.
                 opened.close()
+                if (closeAttempts == 1) throw closeFailure
             },
             deleteTemp = { staging ->
                 deleteAttempts += 1
                 staging.delete()
             }
         )
-        destination.openSink()
+        val sink = destination.openSink()
+        try {
+            val failure = assertFailsWith<IOException> { destination.abort(cause = null) }
+            assertSame(closeFailure, failure.cause)
+            assertEquals(0, failure.suppressedExceptions.size)
+            assertEquals(1, closeAttempts)
+            assertEquals(1, deleteAttempts)
+            assertTrue(directory.listFiles().isNullOrEmpty())
 
-        assertFailsWith<IOException> { destination.abort(cause = null) }
-        assertEquals(1, closeAttempts)
-        assertEquals(1, deleteAttempts)
-        assertTrue(directory.listFiles().isNullOrEmpty())
-
-        destination.abort(cause = null)
-        assertEquals(2, closeAttempts)
-        assertEquals(1, deleteAttempts)
+            destination.abort(cause = null)
+            assertEquals(2, closeAttempts)
+            assertEquals(1, deleteAttempts)
+        } finally {
+            sink.close()
+        }
     }
 }
 
