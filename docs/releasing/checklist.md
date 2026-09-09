@@ -65,3 +65,29 @@ cannot roll back an immutable Central release. XCFramework checks cover a
 separate source-built Apple output, not the Maven bundle. A secret-free dry run
 does not execute the protected publisher; record that job's exact SHA and
 evidence on the next authorized release rather than inferring it from CI.
+
+## Archive license policy
+
+For future candidate builds, the root `Jar`/`BundleAar` rules copy the repository
+`LICENSE` rather than maintaining per-module legal text. The existing
+`scripts/check-publish-artifacts.sh [existing-repo-dir]` gate enforces:
+
+| Artifact class | Required content / inspection |
+| --- | --- |
+| Main JVM and KMP-metadata JARs; Android AARs | Exactly one `META-INF/LICENSE`, byte-identical to repository `LICENSE`. |
+| Every publication's `-sources.jar` and Dokka `-javadoc.jar`, including iOS coordinates | The same single canonical embedded license, in addition to the existing source/index checks. |
+| Kotlin/Native main `.klib` | Explicit **embedded-license-check exemption**: not produced by `Jar`/`BundleAar`, and not rewritten. The gate still requires the sibling POM's Apache-2.0 metadata and the existing readable-artifact/KLIB-identity checks. It prints `EXEMPT`, not an embedded-license pass. |
+| Source-built `P2pKitShared.xcframework` | Separate Apple output, not an artifact in this Maven publication set. Its provenance/minimum-OS checks do not certify license embedding. A redistributor must separately include the applicable license/notice material. |
+
+Every checked publication produces success, failure or an explicit KLIB-main
+exception; missing, changed or duplicate license entries in a covered JAR/AAR
+fail the gate. Non-macOS omission of the six iOS publication rows is a host
+execution limitation, **not** that license exception or a complete release pass.
+Retain a macOS inspection of the complete publication set before release.
+
+This describes packaging/check scope, not legal advice or a waiver of Apache-2.0
+redistribution obligations. A vendored KLIB without its POM is not promised to
+carry license text. Include the repository license and applicable notices when
+redistributing; do not infer compliance from `EXEMPT`. Previously published RC
+artifacts/tags remain immutable; their embedded contents require their own byte
+inspection and are not inferred from today's build rules.

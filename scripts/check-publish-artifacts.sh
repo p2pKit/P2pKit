@@ -96,21 +96,35 @@ check() {
     [[ "$javadoc_entries" =~ (^|$'\n')([^$'\n']*/)?index\.html($|$'\n') ]] ||
         invalid="$invalid javadoc-without-index"
 
-    # Published JVM jars and Android AARs must carry the exact canonical
-    # repository license, not merely a POM URL.
+    # Embedded-license policy: main JAR/AAR plus every sources/Dokka JAR.
+    # Keep the KLIB packaging exception explicit; it is not a legal waiver.
+    local license_archives=("$sources" "$javadoc")
+    case "$main_suffix" in
+        .jar|.aar) license_archives+=("$main") ;;
+        .klib)
+            echo "EXEMPT $artifact main KLIB — embedded-license check only; POM license remains required"
+            ;;
+        *) invalid="$invalid unsupported-main-license-policy" ;;
+    esac
+    local license_archive license_entries license_count
     local license_copy="$INSPECTION_DIR/$artifact-LICENSE"
-    if [[ "$main_suffix" == ".aar" ]]; then
-        if ! unzip -p "$main" META-INF/LICENSE >"$license_copy"; then
-            invalid="$invalid missing-embedded-license"
+    for license_archive in "${license_archives[@]}"; do
+        if ! license_entries="$(unzip -Z1 "$license_archive" 2>/dev/null)"; then
+            invalid="$invalid unreadable-license-archive-$(basename "$license_archive")"
+            continue
         fi
-    elif [[ "$main_suffix" == ".jar" ]]; then
-        if ! unzip -p "$main" META-INF/LICENSE >"$license_copy"; then
-            invalid="$invalid missing-embedded-license"
+        license_count="$(awk '$0 == "META-INF/LICENSE" { n++ } END { print n+0 }' <<<"$license_entries")"
+        if [[ "$license_count" != "1" ]]; then
+            invalid="$invalid missing-or-duplicate-license-$(basename "$license_archive")"
+        elif ! unzip -p "$license_archive" META-INF/LICENSE >"$license_copy" 2>/dev/null; then
+            invalid="$invalid unreadable-license-$(basename "$license_archive")"
+        elif ! cmp -s "$ROOT/LICENSE" "$license_copy"; then
+            invalid="$invalid noncanonical-license-$(basename "$license_archive")"
+        else
+            echo "OK   $(basename "$license_archive")  (one canonical META-INF/LICENSE)"
         fi
-    fi
-    if [[ -f "$license_copy" ]] && ! cmp -s "$ROOT/LICENSE" "$license_copy"; then
-        invalid="$invalid noncanonical-embedded-license"
-    fi
+    done
+    # End embedded-license policy.
 
     xmllint --noout "$pom" >/dev/null 2>&1 || invalid="$invalid malformed-pom"
     local pom_group pom_artifact pom_version pom_name pom_description pom_url

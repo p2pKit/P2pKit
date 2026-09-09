@@ -500,9 +500,10 @@ tasks.cyclonedxBom {
 subprojects {
     val sub = this
 
-    // Every distributable archive carries the exact repository license. This
-    // covers JVM/KMP metadata jars and Android KMP AARs without copying or
-    // maintaining per-module legal text.
+    // Embed the canonical license in Jar outputs (main, sources and Dokka)
+    // and Android AARs. Kotlin/Native KLIBs are not Jar tasks and are not
+    // rewritten here; their license metadata is in the sibling POM. See
+    // docs/releasing/checklist.md#archive-license-policy for scope and checks.
     tasks.withType(Jar::class.java).configureEach {
         from(rootProject.layout.projectDirectory.file("LICENSE")) {
             into("META-INF")
