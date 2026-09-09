@@ -34,6 +34,7 @@ POLICY = json.loads((ROOT / "gradle/platform-test-policy.json").read_text(encodi
 TOKEN = "abcdef0123456789abcdef0123456789"
 WINDOWS_TASKS = {":p2p-core:jvmTest", ":p2p-transport-lan:jvmTest",
                  ":p2p-network-provisioning-desktop:test"}
+WINDOWS_FOLLOWUP_TASKS = {":p2p-core:jvmTest", ":p2p-core:testAndroidHostTest"}
 SWIFT_TARGETS = ("p2pkit-sample-tests", "p2pkit-sample-uitests")
 
 
@@ -46,15 +47,15 @@ def temporary(test):
     return Path(directory.name)
 
 
-def windows_report():
+def windows_report(required_tasks=WINDOWS_TASKS):
     tasks = {task for entry in POLICY["model"].values() for task in entry["tests"]}
     return {
         "schema": 1, "token": TOKEN, "buildFailed": False, "dryRun": False,
         "host": {"os": "Windows Server 2025", "arch": "amd64"},
         "model": copy.deepcopy(POLICY["model"]),
-        "tests": {task: {"outcome": "EXECUTED" if task in WINDOWS_TASKS else "NOT_REQUESTED",
-                         "enabled": task in WINDOWS_TASKS, "inGraph": task in WINDOWS_TASKS,
-                         "passed": 3 if task in WINDOWS_TASKS else 0, "failed": 0, "skipped": 0}
+        "tests": {task: {"outcome": "EXECUTED" if task in required_tasks else "NOT_REQUESTED",
+                         "enabled": task in required_tasks, "inGraph": task in required_tasks,
+                         "passed": 3 if task in required_tasks else 0, "failed": 0, "skipped": 0}
                   for task in tasks},
     }
 
@@ -230,6 +231,7 @@ class AdmissionTest(unittest.TestCase):
                 self.assertEqual(self.before, admission["before"])
                 self.assertEqual(HOST.REF, admission["ref"])
                 self.assertEqual(role, admission["role"])
+                self.assertEqual("full", admission["requestedScope"])
                 self.assertEqual([HOST.WORKFLOW], admission["changedPaths"])
                 self.assertEqual("101", admission["runId"])
                 self.assertEqual("2", admission["runAttempt"])
@@ -353,6 +355,32 @@ class WindowsAssessmentTest(unittest.TestCase):
                     report["tests"][task][field] = value
                     with self.assertRaises(ValueError):
                         self.assess(report)
+
+    def test_focused_task_pair_keeps_complete_model_and_cannot_pass_as_full_windows(self):
+        report = windows_report(WINDOWS_FOLLOWUP_TASKS)
+        self.assertEqual(WINDOWS_FOLLOWUP_TASKS, set(HOST.assess_windows(
+            report, POLICY, TOKEN, WINDOWS_FOLLOWUP_TASKS)))
+        with self.assertRaises(ValueError):
+            self.assess(report)
+        for task in WINDOWS_FOLLOWUP_TASKS:
+            for field, value in (("outcome", "FROM-CACHE"), ("passed", 0), ("failed", 1), ("inGraph", False)):
+                mutated = copy.deepcopy(report)
+                mutated["tests"][task][field] = value
+                with self.subTest(task=task, field=field), self.assertRaises(ValueError):
+                    HOST.assess_windows(mutated, POLICY, TOKEN, WINDOWS_FOLLOWUP_TASKS)
+        for required in (set(), {":p2p-core:jvmTest"}, {":unclassified:test"}):
+            with self.subTest(required=required), self.assertRaises(ValueError):
+                HOST.assess_windows(report, POLICY, TOKEN, required)
+        for change in ("failed-unrequested", "missing-inventory", "stale-token"):
+            mutated = copy.deepcopy(report)
+            if change == "failed-unrequested":
+                mutated["tests"][":p2p-transport-lan:jvmTest"]["failed"] = 1
+            elif change == "missing-inventory":
+                del mutated["tests"][":p2p-transport-lan:jvmTest"]
+            else:
+                mutated["token"] = "stale"
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                HOST.assess_windows(mutated, POLICY, TOKEN, WINDOWS_FOLLOWUP_TASKS)
 
     def test_stale_dry_failed_wrong_host_and_malformed_reports_cannot_pass(self):
         for field, value in (("schema", True), ("schema", 2), ("token", "previous-token"),
@@ -518,7 +546,7 @@ class HostInvocationTest(unittest.TestCase):
         self.context_bytes = (json.dumps(self.context, indent=2) + "\n").encode("utf-8")
         (self.state / "context.json").write_bytes(self.context_bytes)
         self.host.admission = {"commit": self.source["commit"], "tree": self.source["tree"],
-                               "ref": HOST.REF, "role": self.host.role}
+                               "ref": HOST.REF, "role": self.host.role, "requestedScope": "full"}
         self.host.context = copy.deepcopy(self.context)
         self.host.context_hash = hashlib.sha256(self.context_bytes).hexdigest()
         self.host.owns_state = True
@@ -628,6 +656,39 @@ class HostInvocationTest(unittest.TestCase):
     def invoke(self, label="fixture-leaf", **kwargs):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return self.host.invoke(label, self.arguments, timeout=60, **kwargs)
+
+    def test_unknown_or_mismatched_scope_is_rejected_before_state_or_process_creation(self):
+        for role, scope in (("windows-x64", "invented"), ("macos-arm64", "windows-followup"),
+                             ("macos-x64", "windows-followup"), ("unknown", "full")):
+            state = self.work / (role + "-" + scope)
+            with self.subTest(role=role, scope=scope), self.assertRaisesRegex(ValueError, "role/scope"):
+                HOST.Host(role, state, scope=scope)
+            self.assertFalse(state.exists())
+        self.assertEqual([], self.calls)
+
+    def test_windows_followup_has_one_filtered_graph_assessment_and_cleanup(self):
+        gate = HOST.load_gate()
+        expected = [
+            ":p2p-core:jvmTest", "--tests", "dev.p2pkit.core.transfer.FileTransferJvmTest",
+            ":p2p-core:testAndroidHostTest", "--tests",
+            "dev.p2pkit.core.transfer.AndroidDurableFileDestinationAndroidHostTest",
+            ":p2p-sample-desktop-ui:checkRuntime", ":p2p-sample-desktop-ui:createDistributable",
+            "--continue", "--init-script", str(self.repo / "gradle/platform-test-coverage.init.gradle"),
+            "-Pp2pkit.testCoverageRoot=" + str(self.repo), "-Pp2pkit.testCoverageToken=" + TOKEN,
+        ]
+        for success in (True, False):
+            with self.subTest(success=success), \
+                    mock.patch.object(HOST.uuid, "uuid4", return_value=types.SimpleNamespace(hex=TOKEN)), \
+                    mock.patch.object(self.host, "invoke", return_value=success) as invoke, \
+                    mock.patch.object(self.host, "clean_outputs") as clean, \
+                    mock.patch.object(HOST, "load_gate", return_value=gate), \
+                    mock.patch.object(gate, "read_json", side_effect=[windows_report(WINDOWS_FOLLOWUP_TASKS), POLICY]) as read:
+                self.host.windows_followup()
+            invoke.assert_called_once_with("windows-followup", expected)
+            clean.assert_called_once_with()
+            self.assertEqual(2 if success else 0, read.call_count)
+        self.assertEqual([{"component": "windows-followup-execution", "result": "PASS", "inspectionOnly": True}],
+                         self.host.rows)
 
     def test_constructor_does_not_borrow_foreign_state_or_caller_opt_ins(self):
         foreign = self.work / "foreign prior attempt"
@@ -1966,15 +2027,15 @@ class SdkSetupTest(unittest.TestCase):
                     self.assert_manager_receipt(fixture, sdk, manager)
                     self.assertFalse((fixture.host.evidence / "android-platforms.json").exists())
 
-    def run_fixture(self, fixture, sdk, *, manager_status=0):
+    def run_fixture(self, fixture, sdk, *, manager_status=0, scope="full"):
         # Recreate only this owned temporary context through real initialize/run.
         role = fixture.host.role
         shutil.rmtree(fixture.state)
-        fixture.host = HOST.Host(role, fixture.state)
+        fixture.host = HOST.Host(role, fixture.state, scope=scope)
         host = fixture.host
         host.environment["ANDROID_HOME"] = str(sdk)
         admission = {"commit": fixture.source["commit"], "tree": fixture.source["tree"],
-                     "ref": HOST.REF, "role": role}
+                     "ref": HOST.REF, "role": role, "requestedScope": scope}
         host.admission = admission
         event = fixture.work / "event.json"
         event.write_text("{}", encoding="utf-8")
@@ -1998,33 +2059,39 @@ class SdkSetupTest(unittest.TestCase):
                 mock.patch.object(HOST, "source_snapshot", return_value=copy.deepcopy(fixture.source)), \
                 mock.patch.object(host, "prerequisites"), \
                 mock.patch.object(host, "windows", side_effect=products) as windows, \
+                mock.patch.object(host, "windows_followup", side_effect=products) as followup, \
                 mock.patch.object(host, "mac", side_effect=products) as mac, \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             result = host.run()
-        return result, windows.call_count, mac.call_count
+        return result, windows.call_count, mac.call_count, followup.call_count
 
     def test_run_routes_all_roles_only_after_sdk_validation(self):
-        for role in HOST.ROLES:
-            with self.subTest(role=role), self.fixture(role) as data:
+        for role, scope in [*((role, "full") for role in HOST.ROLES), ("windows-x64", "windows-followup")]:
+            with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, _ = data
-                result, windows, mac = self.run_fixture(fixture, sdk)
+                result, windows, mac, followup = self.run_fixture(fixture, sdk, scope=scope)
                 self.assertEqual(0, result)
-                self.assertEqual(int(role == "windows-x64"), windows)
+                self.assertEqual(int(role == "windows-x64" and scope == "full"), windows)
+                self.assertEqual(int(scope == "windows-followup"), followup)
                 self.assertEqual(int(role == "macos-arm64"), mac)
                 expected = ["executor-native-controls", "android-platforms"]
                 if role == "macos-x64":
                     expected.append("intel-platform")
                 self.assertEqual(expected, [row["component"] for row in fixture.host.rows])
                 self.assertEqual("PASS", fixture.summary()["result"])
+                self.assertEqual(scope, fixture.summary()["requestedScope"])
+                self.assertEqual(scope, fixture.summary()["source"]["requestedScope"])
+                self.assertEqual("FULL_COMPONENT_SCOPE" if scope == "full" else
+                                 "NOT_ESTABLISHED_BY_FOCUSED_SCOPE", fixture.summary()["hostQualification"])
                 self.assertTrue(fixture.summary()["safeToContinue"])
 
     def test_run_blocks_all_products_and_finalizes_invalid_metadata(self):
-        for role in HOST.ROLES:
-            with self.subTest(role=role), self.fixture(role) as data:
+        for role, scope in [*((role, "full") for role in HOST.ROLES), ("windows-x64", "windows-followup")]:
+            with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, properties = data
                 properties["android-37.0"].write_text("AndroidVersion.ApiLevel=37.1\n", encoding="utf-8")
-                result, windows, mac = self.run_fixture(fixture, sdk)
-                self.assertEqual((1, 0, 0), (result, windows, mac))
+                result, windows, mac, followup = self.run_fixture(fixture, sdk, scope=scope)
+                self.assertEqual((1, 0, 0, 0), (result, windows, mac, followup))
                 self.assertEqual(["executor-native-controls", "android-platforms"],
                                  [row["component"] for row in fixture.host.rows])
                 self.assertIn("Wrong Android platform metadata: android-37.0", fixture.summary()["error"])
@@ -2034,11 +2101,11 @@ class SdkSetupTest(unittest.TestCase):
                 self.assertNotIn("safe_to_continue=true", fixture.output.read_text(encoding="utf-8"))
 
     def test_run_blocks_all_products_and_finalizes_failed_sdk_installation(self):
-        for role in HOST.ROLES:
-            with self.subTest(role=role), self.fixture(role) as data:
+        for role, scope in [*((role, "full") for role in HOST.ROLES), ("windows-x64", "windows-followup")]:
+            with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, _ = data
-                result, windows, mac = self.run_fixture(fixture, sdk, manager_status=7)
-                self.assertEqual((1, 0, 0), (result, windows, mac))
+                result, windows, mac, followup = self.run_fixture(fixture, sdk, manager_status=7, scope=scope)
+                self.assertEqual((1, 0, 0, 0), (result, windows, mac, followup))
                 self.assertEqual(["executor-native-controls", "android-platforms"],
                                  [row["component"] for row in fixture.host.rows])
                 self.assertEqual("FAIL", fixture.host.rows[-1]["result"])

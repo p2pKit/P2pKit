@@ -116,7 +116,7 @@ def python_body(name):
 HANDOFF_BODY = python_body("handoff")
 HANDOFF_AST = ast.parse(HANDOFF_BODY, filename=str(WORKFLOW) + ":handoff")
 MAIN_INDEX = next(index for index, node in enumerate(HANDOFF_AST.body) if isinstance(node, ast.Try))
-if not any(isinstance(node, ast.FunctionDef) and node.name == "salvage_evidence"
+if not any(isinstance(node, ast.FunctionDef) and node.name == "salvage_text"
            for node in HANDOFF_AST.body[:MAIN_INDEX]):
     raise AssertionError("Handoff no longer defines actual salvage before bootstrap admission")
 HANDOFF_SETUP = compile(ast.Module(body=HANDOFF_AST.body[:MAIN_INDEX], type_ignores=[]),
@@ -160,7 +160,7 @@ def temporary(test):
 
 
 class Fixture:
-    def __init__(self, test, role="windows-x64", controls=True, logs=True):
+    def __init__(self, test, role="windows-x64", controls=True, logs=True, scope=None):
         self.test = test
         self.work = temporary(test)
         self.root = self.work / "checkout with spaces Ω"
@@ -173,6 +173,7 @@ class Fixture:
         self.evidence = self.state / "evidence"
         self.evidence.mkdir(parents=True)
         self.role = role
+        self.scope = scope or ("windows-followup" if role == "windows-x64" else "full")
         self.current = {"commit": COMMIT, "tree": TREE, "status": "", "diffSha256": EMPTY_HASH}
         self.git_current = copy.deepcopy(self.current)
         self.git_diff = b""
@@ -184,12 +185,13 @@ class Fixture:
             "GITHUB_SHA": COMMIT, "GITHUB_RUN_ID": "101", "GITHUB_RUN_ATTEMPT": "2",
             "GITHUB_REPOSITORY": "p2pKit/P2pKit", "GITHUB_EVENT_NAME": "push", "GITHUB_REF": REF,
             "GITHUB_ENV": str(self.work / "github.env"), "P2PKIT_AUDIT_ROLE": role,
+            "P2PKIT_AUDIT_SCOPE": self.scope,
             "P2PKIT_AUDIT_BOOTSTRAP_DIR": str(self.bootstrap), "P2PKIT_AUDIT_STATE_DIR": str(self.state),
             "P2PKIT_AUDIT_DRIVER_TIMEOUT_SECONDS": "8400", "AUDIT_DRIVER_SAFE": "true",
             **{"AUDIT_" + name + "_OUTCOME": "success"
                for name in ("CHECKOUT", "JAVA21", "KEEP_JAVA21", "JAVA17", "DRIVER")},
         }
-        self.allocation = {"schema": 1, "role": role, "expectedCommit": COMMIT,
+        self.allocation = {"schema": 1, "role": role, "requestedScope": self.scope, "expectedCommit": COMMIT,
                            "runId": "101", "runAttempt": "2", "sourceAdmitted": False}
         put(self.bootstrap / "workflow-start.json", self.allocation)
         if logs:
@@ -200,8 +202,10 @@ class Fixture:
                        "expectedCommit": COMMIT, "tree": TREE, "source": copy.deepcopy(self.current)}
             put(self.evidence / "context.json", context)
             self.summary = {
-                "schema": 1, "role": role, "safeToContinue": True, "result": "PASS",
-                "source": {"commit": COMMIT, "tree": TREE, "role": role, "ref": REF,
+                "schema": 1, "role": role, "safeToContinue": True, "result": "PASS", "requestedScope": self.scope,
+                "hostQualification": "FULL_COMPONENT_SCOPE" if self.scope == "full" else
+                    "NOT_ESTABLISHED_BY_FOCUSED_SCOPE",
+                "source": {"commit": COMMIT, "tree": TREE, "role": role, "ref": REF, "requestedScope": self.scope,
                            "runId": "101", "runAttempt": "2"},
                 "sourceAfter": copy.deepcopy(self.current), "components": [
                     {"component": "executor-native-controls", "result": "PASS", "exitCode": 0,
@@ -416,6 +420,21 @@ class WorkflowTestCase(unittest.TestCase):
 
 
 class HandoffTest(WorkflowTestCase):
+    def test_focused_scope_cannot_be_relabelled_as_full_qualification(self):
+        for scope in ("full", "windows-followup"):
+            case = Fixture(self, scope=scope)
+            self.assert_safe(case, case.invoke())
+        for target, key, value in (("summary", "requestedScope", "full"),
+                                   ("source", "requestedScope", "full"),
+                                   ("summary", "hostQualification", "FULL_COMPONENT_SCOPE")):
+            with self.subTest(target=target, key=key):
+                case = Fixture(self)
+                destination = case.summary if target == "summary" else case.summary["source"]
+                destination[key] = value
+                case.save_summary()
+                case.seal()
+                self.assert_salvaged(case, case.invoke())
+
     def test_full_walk_entry_limit_includes_empty_directories(self):
         case = Fixture(self)
         # Leave room for the bootstrap/salvage tree, which has its own strict scan.
@@ -749,7 +768,8 @@ class HandoffTest(WorkflowTestCase):
                 self.assert_salvaged(case, case.invoke(limits={limit: value}))
 
     def test_bootstrap_allocation_is_exactly_bound_before_any_path_is_exported(self):
-        for key, value in (("schema", True), ("role", "other-host"), ("expectedCommit", "8" * 40),
+        for key, value in (("schema", True), ("role", "other-host"), ("requestedScope", "full"),
+                           ("expectedCommit", "8" * 40),
                            ("runId", "100"), ("runAttempt", "1"), ("runId", 101), ("runAttempt", 2)):
             with self.subTest(key=key, value=value):
                 case = Fixture(self)
@@ -1122,7 +1142,7 @@ def expression_value(expression, values, cancelled=False):
 
 class WorkflowOrchestrationTest(WorkflowTestCase):
     def test_handoff_job_output_requires_successful_step_and_literal_safe_value(self):
-        expression = yaml_value(job_block("windows_x64"), "safe_to_continue", 6)
+        expression = yaml_value(job_block("selected_host"), "safe_to_continue", 6)
         for outcome, safe in itertools.product(("success", "failure", "cancelled", "skipped", ""),
                                                 ("true", "false", "", "TRUE")):
             with self.subTest(outcome=outcome, safe=safe):
@@ -1130,7 +1150,7 @@ class WorkflowOrchestrationTest(WorkflowTestCase):
                 self.assertEqual(outcome == "success" and safe == "true", expression_value(expression, values))
         self.assertIs(expression_value(expression, {"steps": {}}), False)
 
-    def test_late_summary_write_failure_blocks_next_host_despite_emitted_outputs(self):
+    def test_late_summary_write_failure_blocks_safe_output_despite_emitted_outputs(self):
         case = Fixture(self)
 
         def fail_write(stream, value):
@@ -1144,18 +1164,13 @@ class WorkflowOrchestrationTest(WorkflowTestCase):
         self.assert_manifest(case.bootstrap, "bootstrap-manifest.sha256")
         values = {"steps": {"handoff": {"outcome": "failure", "outputs": result.outputs},
                              "evidence": {"outcome": "success", "outputs": {"artifact-id": "947"}}}}
-        block = job_block("windows_x64")
+        block = job_block("selected_host")
         safe = expression_value(yaml_value(block, "safe_to_continue", 6), values)
         self.assertIs(safe, False, "Failed handoff must not export a safe job outcome")
         uploaded = expression_value(yaml_value(block, "artifact_uploaded", 6), values)
         self.assertIs(uploaded, True, "Retaining already-proved evidence is still allowed")
-        for host, previous in (("macos_arm64", "windows_x64"), ("macos_x64", "macos_arm64")):
-            following = {"needs": {previous: {"result": "failure", "outputs": {
-                "safe_to_continue": str(safe).lower(), "artifact_uploaded": str(uploaded).lower(),
-                "artifact_id": "947"}}}}
-            self.assertIs(expression_value(yaml_value(job_block(host), "if", 4), following), False)
 
-    def test_actual_native_python_run_literals_fit_actions_limit_and_share_identical_host_steps(self):
+    def test_actual_native_python_run_literals_fit_actions_limit_for_one_selected_host(self):
         for name in ("allocate", "keep_java21", "run_host", "handoff"):
             with self.subTest(name=name):
                 body = python_body(name)
@@ -1163,41 +1178,26 @@ class WorkflowOrchestrationTest(WorkflowTestCase):
                                      "GitHub run script exceeds its limit; fixtures must not validate an unrunnable workflow")
                 ast.parse(body, filename=str(WORKFLOW) + ":" + name)
         self.assertEqual(re.findall(r"^  ([a-z][a-z0-9_]*):\s*$", TEXT.split("\njobs:\n", 1)[1], re.MULTILINE),
-                         ["windows_x64", "macos_arm64", "macos_x64"])
+                         ["selected_host"])
         self.assertNotIn("matrix:", TEXT)
         self.assertNotIn("continue-on-error:", TEXT)
         self.assertIn("cancel-in-progress: false", TEXT)
-        for name, predecessor in (("macos_arm64", "windows_x64"), ("macos_x64", "macos_arm64")):
-            block = job_block(name)
-            self.assertEqual(yaml_value(block, "needs", 4), predecessor)
-            self.assertIn("    outputs: *host_outputs", block)
-            for anchor in ("allocate", "checkout", "java21", "keep_java21", "java17", "handoff", "evidence"):
-                self.assertEqual(block.count("      - *" + anchor + "\n"), 1)
-            self.assertEqual(block.count("        run: *run_host"), 1)
+        self.assertNotIn("needs:", TEXT)
+        block = job_block("selected_host")
+        self.assertEqual(yaml_value(block, "name", 4), "Audit native Windows x64")
+        self.assertEqual(yaml_value(block, "runs-on", 4), "windows-2025")
+        self.assertEqual(yaml_value(block, "shell", 8), "python {0}")
+        self.assertEqual(yaml_value(block, "P2PKIT_AUDIT_ROLE", 6), "windows-x64")
+        self.assertEqual(yaml_value(block, "P2PKIT_AUDIT_SCOPE", 6), "windows-followup")
 
     def test_actual_artifact_output_requires_success_and_a_nonempty_upload_id(self):
-        expression = yaml_value(job_block("windows_x64"), "artifact_uploaded", 6)
+        expression = yaml_value(job_block("selected_host"), "artifact_uploaded", 6)
         for outcome, identity in itertools.product(("success", "failure", "cancelled", "skipped", ""), ("947", "")):
             with self.subTest(outcome=outcome, identity=identity):
                 values = {"steps": {"evidence": {"outcome": outcome, "outputs": {"artifact-id": identity}}}}
                 self.assertEqual(expression_value(expression, values), outcome == "success" and bool(identity))
         self.assertIs(expression_value(expression, {"steps": {"evidence": {"outcome": "success", "outputs": {}}}}), False)
         self.assertIs(expression_value(expression, {"steps": {}}), False)
-
-    def test_actual_next_host_conditions_require_safe_uploaded_nonempty_id_and_no_cancellation(self):
-        for host, previous in (("macos_arm64", "windows_x64"), ("macos_x64", "macos_arm64")):
-            expression = yaml_value(job_block(host), "if", 4)
-            self.assertIn("always()", expression)
-            for safe, uploaded, identity, cancelled, previous_result in itertools.product(
-                    ("true", "false", ""), ("true", "false", ""), ("947", ""), (True, False),
-                    ("success", "failure", "cancelled", "skipped")):
-                with self.subTest(host=host, safe=safe, uploaded=uploaded, identity=identity,
-                                  cancelled=cancelled, previous_result=previous_result):
-                    values = {"needs": {previous: {"result": previous_result, "outputs": {
-                        "safe_to_continue": safe, "artifact_uploaded": uploaded, "artifact_id": identity}}}}
-                    self.assertEqual(expression_value(expression, values, cancelled),
-                                     safe == "true" and uploaded == "true" and identity != "" and not cancelled)
-            self.assertIs(expression_value(expression, {"needs": {previous: {"outputs": {}}}}), False)
 
     def test_actual_upload_runs_after_failure_only_for_proved_paths_and_includes_hidden_evidence(self):
         block = anchored_step("evidence")
@@ -1216,9 +1216,9 @@ class WorkflowOrchestrationTest(WorkflowTestCase):
         self.assertEqual(yaml_value(block, "if-no-files-found", 10), "error")
         self.assertEqual(yaml_value(block, "overwrite", 10), "false")
         self.assertRegex(yaml_value(block, "uses", 8), r"^actions/upload-artifact@[0-9a-f]{40}(?:\s|$)")
-        self.assertEqual(yaml_value(job_block("windows_x64"), "safe_to_continue", 6),
+        self.assertEqual(yaml_value(job_block("selected_host"), "safe_to_continue", 6),
                          "${{ steps.handoff.outcome == 'success' && steps.handoff.outputs.safe_to_continue == 'true' }}")
-        self.assertEqual(yaml_value(job_block("windows_x64"), "artifact_id", 6),
+        self.assertEqual(yaml_value(job_block("selected_host"), "artifact_id", 6),
                          "${{ steps.evidence.outputs['artifact-id'] }}")
 
     def test_handoff_itself_requires_successful_allocation_but_preserves_cancelled_driver_attempts(self):
@@ -1265,8 +1265,8 @@ class WorkflowOrchestrationTest(WorkflowTestCase):
             self.assertFalse(state.exists(), "Only the admitted driver may create/own its state")
             record = json_file(bootstrap / "workflow-start.json")
             self.assertIs(record["sourceAdmitted"], False)
-            self.assertEqual({key: record[key] for key in ("role", "expectedCommit", "runId", "runAttempt")},
-                             {key: case.allocation[key] for key in ("role", "expectedCommit", "runId", "runAttempt")})
+            self.assertEqual({key: record[key] for key in ("role", "requestedScope", "expectedCommit", "runId", "runAttempt")},
+                             {key: case.allocation[key] for key in ("role", "requestedScope", "expectedCommit", "runId", "runAttempt")})
         self.assertNotEqual(*allocations)
         env_lines = Path(case.environment["GITHUB_ENV"]).read_text(encoding="utf-8").splitlines()
         self.assertEqual(len(env_lines), 4)
@@ -1302,7 +1302,8 @@ class WorkflowOrchestrationTest(WorkflowTestCase):
 
                 def run(path, **kwargs):
                     calls.append((path, kwargs))
-                    self.assertEqual(sys.argv, [str(driver), case.role, "--timeout-seconds", "8400"])
+                    self.assertEqual(sys.argv, [str(driver), case.role, "--timeout-seconds", "8400",
+                                                "--scope", case.scope])
                     raise SystemExit(exit_code)
 
                 with mock.patch.dict(os.environ, case.environment, clear=True), \

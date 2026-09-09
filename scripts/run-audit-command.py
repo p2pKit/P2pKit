@@ -38,6 +38,7 @@ MAX_JSON_BYTES = 4 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 MAX_ARCHIVE_FILES = 20000
 MAX_CLEANUP_ENTRIES = 250000
+MAX_REMOVAL_DETAIL_BYTES = 32768
 LOCK_NAME = "gradle.lock"
 
 
@@ -965,6 +966,57 @@ def inspect_disposable_tree(path: Path) -> dict[str, Any]:
             "noTargetTraversal": True, "removal": "shutil.rmtree; child symlinks/junctions are unlinked"}
 
 
+def removal_failure_detail(root: Path, operation: Any, entry: Any, error: BaseException) -> dict[str, Any]:
+    """Bounded post-failure metadata, never a retry or an inspection of a link target."""
+    observation = {"observedUtc": utc(), "status": "UNAVAILABLE"}
+    detail = {"failedRoot": str(root) if len(str(root)) <= 1024 else "UNAVAILABLE",
+              "operation": "UNAVAILABLE",
+              "relativePath": "UNAVAILABLE", "exceptionType": type(error).__name__[:128],
+              "errno": None, "winerror": None,
+              "metadataObservation": observation}
+
+    def number(value, minimum=-(2 ** 31)):
+        return value if type(value) is int and minimum <= value < 2 ** 32 else None
+
+    try:
+        name = getattr(operation, "__name__", None)
+        if name in ("unlink", "rmdir", "open", "scandir", "lstat", "listdir", "close"):
+            detail["operation"] = name
+        detail["errno"] = number(getattr(error, "errno", None))
+        detail["winerror"] = number(getattr(error, "winerror", None))
+        if entry is None:
+            return detail
+        require(len(os.fspath(entry)) <= 32768, "Failure path exceeds diagnostic bound")
+        path = Path(entry)  # Lexical admission only: never resolve a failed filename.
+        require(path.is_absolute() and ".." not in path.parts and within(path, root), "Outside failed output root")
+        relative = path.relative_to(root).as_posix()
+        require(len(relative) <= 1024 and len(path.parts) <= 512, "Failure path exceeds diagnostic bound")
+        detail["relativePath"] = relative
+        # Check from the filesystem root toward the parent before lstat of the
+        # leaf: even lstat follows links in intermediate path components.
+        for parent in reversed(path.parents):
+            info = parent.lstat()
+            require(stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode) and
+                    not (getattr(info, "st_file_attributes", 0) & 0x400), "Nonphysical failure ancestor")
+        info = path.lstat()
+        mode = number(info.st_mode, minimum=0)
+        require(mode is not None, "Invalid failure metadata mode")
+        attributes = number(getattr(info, "st_file_attributes", None), minimum=0)
+        tag = number(getattr(info, "st_reparse_tag", None), minimum=0)
+        observation.update({"status": "OBSERVED", "mode": mode,
+                            "type": "symlink" if stat.S_ISLNK(mode) else
+                                "directory" if stat.S_ISDIR(mode) else "file" if stat.S_ISREG(mode) else "other",
+                            "fileAttributes": attributes, "reparseTag": tag,
+                            "readOnly": bool(attributes & 1) if attributes is not None else None})
+    except FileNotFoundError:
+        observation["status"] = "ABSENT"
+    except (AuditError, TypeError, ValueError):
+        observation["status"] = "REFUSED"
+    except Exception:
+        observation["status"] = "UNAVAILABLE"
+    return detail
+
+
 def cleanup(args: argparse.Namespace) -> int:
     state, context = context_at(args.state)
     root = Path(context["root"])
@@ -996,19 +1048,44 @@ def cleanup(args: argparse.Namespace) -> int:
             targets.append(path)
         record = {"schema": 1, "id": uuid.uuid4().hex, "jobId": context["id"], "startedUtc": utc(),
                   "paths": [str(path) for path in targets], "inspections": inspections, "removed": [], "errors": []}
-        require(len(json_bytes(record)) <= MAX_JSON_BYTES, "Combined cleanup evidence exceeds its bound")
+        require(len(json_bytes({**record, "removed": record["paths"]})) + MAX_REMOVAL_DETAIL_BYTES + 1024 <=
+                MAX_JSON_BYTES, "Combined cleanup evidence exceeds its bound")
         # Retain no-follow provenance before deletion, not just after successful
         # removal. The final record separately reports partial failures.
         write_new_json(state / "evidence" / f"cleanup-{record['id']}-start.json", record)
-        for path in targets:
+        for index, path in enumerate(targets):
+            detail = None
+
+            def failed(operation, entry, exception):
+                nonlocal detail
+                try:
+                    detail = removal_failure_detail(path, operation, entry, exception[1])
+                finally:
+                    # Python 3.8+ onerror: retain the exact failing operation,
+                    # then immediately rethrow the same error without remediation.
+                    raise exception[1].with_traceback(exception[2])
+
             try:
                 reject_symlinks(path)
-                shutil.rmtree(path)
+                shutil.rmtree(path, onerror=failed)
                 record["removed"].append(str(path))
             except (OSError, AuditError) as error:
                 record["errors"].append(f"Removal failed: {type(error).__name__}")
+                try:
+                    if detail is None:
+                        detail = removal_failure_detail(path, None, None, error)
+                    detail["failedRootIndex"] = index  # Exact root remains in paths if its display is too long.
+                    require(len(json_bytes(detail)) <= MAX_REMOVAL_DETAIL_BYTES, "Removal diagnostic exceeds its bound")
+                except Exception:
+                    # Diagnostic/encoding failures must not erase the original removal failure.
+                    detail = {"failedRootIndex": index, "failedRoot": "UNAVAILABLE", "operation": "UNAVAILABLE",
+                              "relativePath": "UNAVAILABLE", "exceptionType": type(error).__name__[:128],
+                              "errno": None, "winerror": None,
+                              "metadataObservation": {"observedUtc": None, "status": "UNAVAILABLE"}}
+                record["failureDetail"] = detail
                 break
         record["endedUtc"] = utc()
+        require(len(json_bytes(record)) <= MAX_JSON_BYTES, "Final cleanup evidence exceeds its bound")
         write_new_json(state / "evidence" / f"cleanup-{record['id']}.json", record)
         return INFRASTRUCTURE_EXIT if record["errors"] else 0
     finally:

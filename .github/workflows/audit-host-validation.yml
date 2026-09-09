@@ -21,7 +21,7 @@ env:
   PYTHONUNBUFFERED: "1"
 
 jobs:
-  windows_x64:
+  selected_host:
     name: Audit native Windows x64
     runs-on: windows-2025
     timeout-minutes: 180
@@ -30,13 +30,14 @@ jobs:
         shell: python {0}
     env:
       P2PKIT_AUDIT_ROLE: windows-x64
+      P2PKIT_AUDIT_SCOPE: windows-followup
       P2PKIT_AUDIT_DRIVER_TIMEOUT_SECONDS: "8400"
     outputs: &host_outputs
       safe_to_continue: ${{ steps.handoff.outcome == 'success' && steps.handoff.outputs.safe_to_continue == 'true' }}
       artifact_uploaded: ${{ steps.evidence.outcome == 'success' && steps.evidence.outputs['artifact-id'] != '' }}
       artifact_id: ${{ steps.evidence.outputs['artifact-id'] }}
     steps:
-      # Plain anchors reuse identical steps without a matrix, merge keys or shell changes.
+      # Named steps keep inline-body checks bound to the executed source.
       - &allocate
         name: Allocate fresh external state parent and bootstrap evidence
         id: allocate
@@ -59,7 +60,7 @@ jobs:
           bootstrap.mkdir(mode=0o700)
           state = parent / "state"  # The driver, not this step, creates/owns state after admission.
           record = {
-              "schema": 1, "role": role, "startedUtc": datetime.now(timezone.utc).isoformat(),
+              "schema": 1, "role": role, "requestedScope": os.environ["P2PKIT_AUDIT_SCOPE"], "startedUtc": datetime.now(timezone.utc).isoformat(),
               "expectedCommit": os.environ["GITHUB_SHA"], "repository": os.environ["GITHUB_REPOSITORY"],
               "runId": os.environ["GITHUB_RUN_ID"], "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "event": os.environ["GITHUB_EVENT_NAME"], "ref": os.environ["GITHUB_REF"],
@@ -137,7 +138,7 @@ jobs:
           # The real driver's ownership, deadline and signal finalizers remain in charge.
           os.chdir(root)
           sys.argv = [str(driver), os.environ["P2PKIT_AUDIT_ROLE"], "--timeout-seconds",
-                      os.environ["P2PKIT_AUDIT_DRIVER_TIMEOUT_SECONDS"]]
+                      os.environ["P2PKIT_AUDIT_DRIVER_TIMEOUT_SECONDS"], "--scope", os.environ["P2PKIT_AUDIT_SCOPE"]]
           try:
               runpy.run_path(str(driver), run_name="__main__")
           finally:
@@ -183,15 +184,14 @@ jobs:
           bootstrap = Path(os.environ["P2PKIT_AUDIT_BOOTSTRAP_DIR"])
           evidence = state / "evidence"
           role = os.environ["P2PKIT_AUDIT_ROLE"]
-          safe = False
-          error = None
-          summary = None
+          scope = os.environ["P2PKIT_AUDIT_SCOPE"]
+          safe, error, summary = False, None, None
           attempt = {"schema": 1, "role": role, "commit": os.environ["GITHUB_SHA"],
-                     "runId": os.environ["GITHUB_RUN_ID"], "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"]}
+              "runId": os.environ["GITHUB_RUN_ID"], "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"]}
           outcomes = {name: os.environ.get("AUDIT_" + name.upper() + "_OUTCOME", "")
-                      for name in ("checkout", "java21", "keep_java21", "java17", "driver")}
+              for name in ("checkout", "java21", "keep_java21", "java17", "driver")}
 
-          def require(condition, message):
+          def need(condition, message):
               if not condition:
                   raise ValueError(message)
 
@@ -201,101 +201,100 @@ jobs:
               count = 0
               for row in os.walk(path, followlinks=False, onerror=fail):
                   count += len(row[1]) + len(row[2])
-                  require(count <= MAX_FILES, "Traversal cap")
+                  need(count <= MAX_FILES, "Traversal cap")
                   yield row
 
           def physical(path):
-              require(path.is_absolute() and ".." not in path.parts, "Unsafe absolute path")
+              need(path.is_absolute() and ".." not in path.parts, "Unsafe absolute path")
               for item in (path, *path.parents):
                   info = item.lstat()
-                  require(not stat.S_ISLNK(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400,
-                          "Link/reparse path")
+                  need(not stat.S_ISLNK(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400,
+                      "Link/reparse path")
               return path.stat()
 
           def bounded(path, limit):
               info = physical(path)
-              require(stat.S_ISREG(info.st_mode) and 0 < info.st_size <= limit, "Invalid control file")
+              need(stat.S_ISREG(info.st_mode) and 0 < info.st_size <= limit, "Invalid control file")
               with path.open("rb") as stream:
                   raw = stream.read(limit + 1)
-              require(len(raw) == info.st_size and len(raw) <= limit, "Changed/oversize control")
+              need(len(raw) == info.st_size and len(raw) <= limit, "Changed/oversize control")
               return raw
 
           def pairs(values):
               result = {}
               for key, value in values:
-                  require(key not in result, "Duplicate JSON key")
+                  need(key not in result, "Duplicate JSON key")
                   result[key] = value
               return result
 
           def read_json(path):
               value = json.loads(bounded(path, MAX_JSON), object_pairs_hook=pairs,
-                                parse_constant=lambda _: require(False, "Nonfinite JSON"))
-              require(type(value) is dict, "Non-object control")
+                  parse_constant=lambda _: need(False, "Nonfinite JSON"))
+              need(type(value) is dict, "Non-object control")
               return value
 
-          def relative_name(name):
+          def safe_name(name):
               parts = PurePosixPath(name)
-              require(not parts.is_absolute() and name == parts.as_posix() and
-                      all(part not in ("", ".", "..") for part in name.split("/")) and
-                      not any(char in name for char in "\\:") and
-                      not any(ord(char) < 32 or ord(char) == 127 for char in name),
-                      "Unsafe relative path")
+              need(not parts.is_absolute() and name == parts.as_posix() and
+                  all(part not in ("", ".", "..") for part in name.split("/")) and
+                  not any(char in name for char in "\\:") and
+                  not any(ord(char) < 32 or ord(char) == 127 for char in name),
+                  "Unsafe relative path")
               name.encode("utf-8", errors="strict")
               return name
 
           def state_path():
-              require(state.is_absolute() and state.name == "state" and state.parent == bootstrap.parent and
-                      not state.is_relative_to(root) and not root.is_relative_to(state),
-                      "Wrong allocated state")
-              require(stat.S_ISDIR(physical(evidence).st_mode), "Nonphysical evidence root")
+              need(state.is_absolute() and state.name == "state" and state.parent == bootstrap.parent and
+                  not state.is_relative_to(root) and not root.is_relative_to(state),
+                  "Wrong allocated state")
+              need(stat.S_ISDIR(physical(evidence).st_mode), "Nonphysical evidence root")
 
           def git(*args):
-              environment = dict(os.environ)
+              env = dict(os.environ)
               for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
-                           "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_EXTERNAL_DIFF"):
-                  environment.pop(name, None)
+                  "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_EXTERNAL_DIFF"):
+                  env.pop(name, None)
               return subprocess.check_output(["git", "--no-replace-objects", "-C", str(root), *args],
-                                             env=environment, stderr=subprocess.PIPE, timeout=30)
+                  env=env, stderr=subprocess.PIPE, timeout=30)
 
           def file_hash(path):
               before = physical(path)
-              require(stat.S_ISREG(before.st_mode) and before.st_size <= MAX_FILE_BYTES, "Invalid/oversize file")
-              value = hashlib.sha256()
-              size = 0
+              need(stat.S_ISREG(before.st_mode) and before.st_size <= MAX_FILE_BYTES, "Invalid/oversize file")
+              value, size = hashlib.sha256(), 0
               with path.open("rb") as stream:
                   for block in iter(lambda: stream.read(262144), b""):
                       size += len(block)
-                      require(size <= MAX_FILE_BYTES, "Growing/oversize file")
+                      need(size <= MAX_FILE_BYTES, "Growing/oversize file")
                       value.update(block)
               after = physical(path)
-              require(size == before.st_size == after.st_size and before.st_mtime_ns == after.st_mtime_ns
-                      and before.st_ino == after.st_ino, "Evidence changed")
+              need(size == before.st_size == after.st_size and before.st_mtime_ns == after.st_mtime_ns
+                  and before.st_ino == after.st_ino, "Evidence changed")
               return value.hexdigest(), size
 
           def finalized(receipt, identity=None, purpose=None, status=None):
-              require(type(receipt.get("schema")) is int and receipt["schema"] == 1 and
-                      type(receipt.get("id")) is str and re.fullmatch(r"[0-9a-f]{32}", receipt["id"]) and
-                      receipt.get("jobId") == context["id"] and receipt.get("host") == role, "Wrong invocation identity")
-              require((identity is None or receipt["id"] == identity) and
-                      (purpose is None or receipt.get("purpose") == purpose), "Wrong invocation binding")
-              require(receipt.get("sourceBefore") == current == receipt.get("sourceAfter") and
-                      receipt.get("sourceUnchanged") is True, "Invocation source changed")
-              require(type(receipt.get("stopExitCode")) is int and receipt["stopExitCode"] == 0 and
-                      type(receipt.get("finalExitCode")) is int and receipt["finalExitCode"] != 125 and
-                      (status is None or receipt["finalExitCode"] == status) and
-                      all(type(receipt.get(key)) is list and receipt[key] == [] for key in ("errors", "ownedSurvivors")),
-                      "Unsafe invocation")
+              need(type(receipt.get("schema")) is int and receipt["schema"] == 1 and
+                  type(receipt.get("id")) is str and re.fullmatch(r"[0-9a-f]{32}", receipt["id"]) and
+                  receipt.get("jobId") == context["id"] and receipt.get("host") == role, "Wrong invocation identity")
+              need((identity is None or receipt["id"] == identity) and
+                  (purpose is None or receipt.get("purpose") == purpose), "Wrong invocation binding")
+              need(receipt.get("sourceBefore") == current == receipt.get("sourceAfter") and
+                  receipt.get("sourceUnchanged") is True, "Invocation source changed")
+              need(type(receipt.get("stopExitCode")) is int and receipt["stopExitCode"] == 0 and
+                  type(receipt.get("finalExitCode")) is int and receipt["finalExitCode"] != 125 and
+                  (status is None or receipt["finalExitCode"] == status) and
+                  all(type(receipt.get(key)) is list and receipt[key] == [] for key in ("errors", "ownedSurvivors")),
+                  "Unsafe invocation")
 
-          def salvage_evidence(reason):
+          def salvage_text(reason):
               salvage = bootstrap / "evidence-salvage"
-              require(not salvage.exists(), "Nonfresh salvage")
+              need(not salvage.exists(), "Nonfresh salvage")
               salvage.mkdir(mode=0o700)
-              records, omissions, omission_count, total = [], [], 0, 0
+              records, omissions, omitted, total = [], [], 0, 0
               candidates, scanned = [], 0
 
               def omit(name, why):
-                  nonlocal omission_count
-                  omission_count += 1
+                  nonlocal omitted
+                  omitted += 1
                   if len(omissions) < MAX_OMISSION_DETAILS:
                       omissions.append({"path": str(name)[:4096], "reason": str(why)[:4096]})
 
@@ -305,15 +304,15 @@ jobs:
                   while pending:
                       directory = pending.pop()
                       try:
-                          require(stat.S_ISDIR(physical(directory).st_mode), "Not a physical directory")
+                          need(stat.S_ISDIR(physical(directory).st_mode), "Not a physical directory")
                           with os.scandir(directory) as entries:
                               for entry in entries:
                                   scanned += 1
-                                  require(scanned <= MAX_FILES, "Salvage entry cap")
+                                  need(scanned <= MAX_FILES, "Salvage entry cap")
                                   path = directory / entry.name
                                   name = path.relative_to(evidence).as_posix()
                                   try:
-                                      relative_name(name)
+                                      safe_name(name)
                                       info = physical(path)
                                       if stat.S_ISDIR(info.st_mode):
                                           pending.append(path)
@@ -332,21 +331,21 @@ jobs:
               except PATH_ERRORS as failure:
                   omit(".", "Evidence root unavailable: " + str(failure))
 
-              priority_names = {"receipt.json", "start.json", "context.json", "admission.json", "host-summary.json",
-                                "product.stdout.log", "product.stderr.log", "stop.stdout.log", "stop.stderr.log"}
-              candidates.sort(key=lambda path: (path.name not in priority_names,
-                                                len(path.relative_to(evidence).parts),
-                                                path.relative_to(evidence).as_posix()))
+              priority = {"receipt.json", "start.json", "context.json", "admission.json", "host-summary.json",
+                  "product.stdout.log", "product.stderr.log", "stop.stdout.log", "stop.stderr.log"}
+              candidates.sort(key=lambda path: (path.name not in priority,
+                  len(path.relative_to(evidence).parts),
+                  path.relative_to(evidence).as_posix()))
               for path in candidates:
                   name = path.relative_to(evidence).as_posix()
                   target = salvage / "files" / name
                   created = False
                   try:
                       before = physical(path)
-                      require(stat.S_ISREG(before.st_mode) and before.st_size <= MAX_SALVAGE_FILE_BYTES,
-                              "Invalid salvage file")
-                      require(len(records) < MAX_SALVAGE_FILES and total + before.st_size <= MAX_SALVAGE_BYTES,
-                              "Salvage size cap")
+                      need(stat.S_ISREG(before.st_mode) and before.st_size <= MAX_SALVAGE_FILE_BYTES,
+                          "Invalid salvage file")
+                      need(len(records) < MAX_SALVAGE_FILES and total + before.st_size <= MAX_SALVAGE_BYTES,
+                          "Salvage size cap")
                       parent = salvage
                       for part in ("files", *PurePosixPath(name).parts[:-1]):
                           parent = parent / part
@@ -354,30 +353,30 @@ jobs:
                               parent.mkdir(mode=0o700)
                           except FileExistsError:
                               pass
-                          require(stat.S_ISDIR(physical(parent).st_mode), "Unsafe salvage directory")
+                          need(stat.S_ISDIR(physical(parent).st_mode), "Unsafe salvage directory")
                       value, size = hashlib.sha256(), 0
                       with path.open("rb") as incoming, target.open("xb") as outgoing:
                           created = True
                           for block in iter(lambda: incoming.read(262144), b""):
                               size += len(block)
-                              require(size <= MAX_SALVAGE_FILE_BYTES and total + size <= MAX_SALVAGE_BYTES,
-                                      "Salvage file grew")
+                              need(size <= MAX_SALVAGE_FILE_BYTES and total + size <= MAX_SALVAGE_BYTES,
+                                  "Salvage file grew")
                               outgoing.write(block)
                               value.update(block)
                           outgoing.flush()
                           os.fsync(outgoing.fileno())
                       after = physical(path)
-                      require(size == before.st_size == after.st_size and before.st_mtime_ns == after.st_mtime_ns
-                              and before.st_ino == after.st_ino, "Salvage source changed")
+                      need(size == before.st_size == after.st_size and before.st_mtime_ns == after.st_mtime_ns
+                          and before.st_ino == after.st_ino, "Salvage source changed")
                       copied, copied_size = file_hash(target)
-                      require(copied == value.hexdigest() and copied_size == size, "Salvage copy changed")
+                      need(copied == value.hexdigest() and copied_size == size, "Salvage copy changed")
                       records.append({"path": target.relative_to(salvage).as_posix(), "sha256": copied, "bytes": size})
                       total += size
                   except PATH_ERRORS as failure:
                       omit(name, type(failure).__name__ + ": " + str(failure))
                       if created:
                           try:
-                              require(stat.S_ISREG(physical(target).st_mode), "Partial copy changed")
+                              need(stat.S_ISREG(physical(target).st_mode), "Partial copy changed")
                               target.unlink()
                           except PATH_ERRORS as removal_failure:
                               raise ValueError("Unsafe partial-copy removal") from removal_failure
@@ -386,10 +385,10 @@ jobs:
                   **attempt,
                   "fullTreeCompleteness": "NOT_PROVEN", "reason": reason,
                   "retainedFiles": len(records), "retainedBytes": total,
-                  "omissionCount": omission_count, "omissions": omissions,
-                  "omissionDetailsTruncated": omission_count > len(omissions),
+                  "omissionCount": omitted, "omissions": omissions,
+                  "omissionDetailsTruncated": omitted > len(omissions),
                   "limits": {"files": MAX_SALVAGE_FILES, "fileBytes": MAX_SALVAGE_FILE_BYTES,
-                             "totalBytes": MAX_SALVAGE_BYTES, "traversedEntries": MAX_FILES},
+                  "totalBytes": MAX_SALVAGE_BYTES, "traversedEntries": MAX_FILES},
                   "limitation": "Partial historical text; no cleanup, completeness or acceptance proof.",
               }
               with (salvage / "salvage-summary.json").open("x", encoding="utf-8") as stream:
@@ -404,124 +403,129 @@ jobs:
               return details
 
           try:
-              require(bootstrap.is_absolute() and bootstrap.name == "bootstrap-evidence" and
-                      bootstrap.parent.name.startswith("p2pkit-audit-" + role + "-") and
-                      not bootstrap.is_relative_to(root) and not root.is_relative_to(bootstrap.parent) and
-                      stat.S_ISDIR(physical(bootstrap).st_mode), "Wrong bootstrap allocation")
+              need(bootstrap.is_absolute() and bootstrap.name == "bootstrap-evidence" and
+                  bootstrap.parent.name.startswith("p2pkit-audit-" + role + "-") and
+                  not bootstrap.is_relative_to(root) and not root.is_relative_to(bootstrap.parent) and
+                  stat.S_ISDIR(physical(bootstrap).st_mode), "Wrong bootstrap allocation")
               allocation = read_json(bootstrap / "workflow-start.json")
-              require(type(allocation.get("schema")) is int and allocation["schema"] == 1 and
-                      allocation.get("role") == role and allocation.get("expectedCommit") == attempt["commit"] and
-                      allocation.get("runId") == attempt["runId"] and
-                      allocation.get("runAttempt") == attempt["runAttempt"], "Bootstrap allocation differs")
+              need(type(allocation.get("schema")) is int and allocation["schema"] == 1 and
+                  allocation.get("role") == role and allocation.get("requestedScope") == scope and
+                  allocation.get("expectedCommit") == attempt["commit"] and
+                  allocation.get("runId") == attempt["runId"] and
+                  allocation.get("runAttempt") == attempt["runAttempt"], "Bootstrap allocation differs")
           except (OSError, ValueError, KeyError, TypeError) as failure:
               print("FATAL: unsafe bootstrap: " + str(failure), file=sys.stderr)
               raise SystemExit(1)
 
           try:
-              require(all(outcomes[name] == "success" for name in ("checkout", "java21", "keep_java21", "java17")),
-                      "Setup failed")
-              require(outcomes["driver"] in ("success", "failure") and os.environ.get("AUDIT_DRIVER_SAFE") == "true",
-                      "Unsafe driver output")
+              need(all(outcomes[name] == "success" for name in ("checkout", "java21", "keep_java21", "java17")),
+                  "Setup failed")
+              need(outcomes["driver"] in ("success", "failure") and os.environ.get("AUDIT_DRIVER_SAFE") == "true",
+                  "Unsafe driver output")
               state_path()
               manifest = {}
               for line in bounded(evidence / "manifest.sha256", MAX_MANIFEST).decode("utf-8").splitlines():
                   match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
-                  require(match is not None, "Malformed manifest record")
-                  name = relative_name(match[2])
-                  require(name != "manifest.sha256", "Self-referential manifest path")
-                  require(name not in manifest and len(manifest) < MAX_FILES, "Manifest duplicate/cap")
+                  need(match is not None, "Malformed manifest record")
+                  name = safe_name(match[2])
+                  need(name != "manifest.sha256", "Self-referential manifest path")
+                  need(name not in manifest and len(manifest) < MAX_FILES, "Manifest duplicate/cap")
                   manifest[name] = match[1]
-              require(manifest, "Empty evidence manifest")
+              need(manifest, "Empty evidence manifest")
               observed = set()
-              total_bytes = 0
+              total = 0
               for directory, children, files in strict_walk(evidence):
                   for name in children:
-                      require(stat.S_ISDIR(physical(Path(directory) / name).st_mode), "Invalid directory")
+                      need(stat.S_ISDIR(physical(Path(directory) / name).st_mode), "Invalid directory")
                   for name in files:
                       path = Path(directory) / name
                       physical(path)
                       if path == evidence / "manifest.sha256":
                           continue
-                      relative = path.relative_to(evidence).as_posix()
-                      require(relative in manifest and len(observed) < MAX_FILES, "Unlisted/capped evidence")
+                      rel = path.relative_to(evidence).as_posix()
+                      need(rel in manifest and len(observed) < MAX_FILES, "Unlisted/capped evidence")
                       actual, size = file_hash(path)
-                      require(actual == manifest[relative], "Evidence hash mismatch")
-                      total_bytes += size
-                      require(total_bytes <= MAX_TOTAL_BYTES, "Evidence size cap")
-                      observed.add(relative)
-              require(observed == set(manifest), "Missing manifest files")
+                      need(actual == manifest[rel], "Evidence hash mismatch")
+                      total += size
+                      need(total <= MAX_TOTAL_BYTES, "Evidence size cap")
+                      observed.add(rel)
+              need(observed == set(manifest), "Missing manifest files")
               summary = read_json(evidence / "host-summary.json")
-              require(type(summary.get("schema")) is int and summary["schema"] == 1, "Bad summary schema")
-              require(summary.get("role") == role and summary.get("safeToContinue") is True, "Unsafe/wrong-role summary")
-              require(summary.get("result") in ("PASS", "FAIL"), "Unknown result")
-              expected_outcome = "success" if summary["result"] == "PASS" else "failure"
-              require(outcomes["driver"] == expected_outcome, "Step/result mismatch")
+              need(type(summary.get("schema")) is int and summary["schema"] == 1, "Bad summary schema")
+              need(summary.get("role") == role and summary.get("safeToContinue") is True, "Unsafe/wrong-role summary")
+              need(summary.get("requestedScope") == scope and summary.get("hostQualification") ==
+                  ("FULL_COMPONENT_SCOPE" if scope == "full" else "NOT_ESTABLISHED_BY_FOCUSED_SCOPE"),
+                  "Wrong scope/qualification")
+              need(summary.get("result") in ("PASS", "FAIL"), "Unknown result")
+              expected = "success" if summary["result"] == "PASS" else "failure"
+              need(outcomes["driver"] == expected, "Step/result mismatch")
               current = {
                   "commit": git("rev-parse", "HEAD").decode("ascii").strip(),
                   "tree": git("rev-parse", "HEAD^{tree}").decode("ascii").strip(),
                   "status": git("status", "--porcelain=v1", "--untracked-files=all").decode("utf-8", errors="surrogateescape"),
                   "diffSha256": hashlib.sha256(git("diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD", "--")).hexdigest(),
               }
-              require(current["commit"] == attempt["commit"] and current["status"] == "" and
-                      current["diffSha256"] == hashlib.sha256(b"").hexdigest() and
-                      re.fullmatch(r"[0-9a-f]{40}", current["tree"]), "Wrong/dirty source")
+              need(current["commit"] == attempt["commit"] and current["status"] == "" and
+                  current["diffSha256"] == hashlib.sha256(b"").hexdigest() and
+                  re.fullmatch(r"[0-9a-f]{40}", current["tree"]), "Wrong/dirty source")
               source = summary.get("source")
-              require(type(source) is dict and all(source.get(key) == value for key, value in {
-                  "commit": current["commit"], "tree": current["tree"], "role": role,
+              need(type(source) is dict and all(source.get(key) == value for key, value in {
+                  "commit": current["commit"], "tree": current["tree"], "role": role, "requestedScope": scope,
                   "ref": "refs/heads/audit/complete-2026-09-04", "runId": attempt["runId"],
                   "runAttempt": attempt["runAttempt"],
               }.items()) and summary.get("sourceAfter") == current, "Source/attempt differs")
               context = read_json(evidence / "context.json")
-              require(type(context.get("schema")) is int and context["schema"] == 1 and context.get("host") == role and
-                      context.get("expectedCommit") == current["commit"] and context.get("tree") == current["tree"] and
-                      context.get("source") == current and context.get("root") == str(root) and
-                      type(context.get("id")) is str and re.fullmatch(r"[0-9a-f]{32}", context["id"]), "Wrong context")
+              need(type(context.get("schema")) is int and context["schema"] == 1 and context.get("host") == role and
+                  context.get("expectedCommit") == current["commit"] and context.get("tree") == current["tree"] and
+                  context.get("source") == current and context.get("root") == str(root) and
+                  type(context.get("id")) is str and re.fullmatch(r"[0-9a-f]{32}", context["id"]), "Wrong context")
               rows = summary.get("components")
-              require(type(rows) is list and rows, "No components")
+              need(type(rows) is list and rows, "No components")
               names = set()
               for row in rows:
-                  require(type(row) is dict and type(row.get("component")) is str and
-                          re.fullmatch(r"[a-z0-9-]+", row["component"]) and row["component"] not in names and
-                          row.get("result") in ("PASS", "FAIL"), "Invalid/duplicate component")
+                  need(type(row) is dict and type(row.get("component")) is str and
+                      re.fullmatch(r"[a-z0-9-]+", row["component"]) and row["component"] not in names and
+                      row.get("result") in ("PASS", "FAIL"), "Invalid/duplicate component")
                   names.add(row["component"])
                   if row.get("inspectionOnly") is True:
-                      require("cleanupComplete" not in row and "exitCode" not in row, "Mixed inspection/command row")
+                      need("cleanupComplete" not in row and "exitCode" not in row, "Mixed inspection/command row")
                       continue
-                  require("inspectionOnly" not in row and row.get("cleanupComplete") is True and
-                          type(row.get("exitCode")) is int and row["exitCode"] != 125 and
-                          row["result"] == ("PASS" if row["exitCode"] == 0 else "FAIL"), "Unsafe command")
-                  require(row.get("receipt") == "host-" + row["component"] + ".json", "Wrong receipt path")
+                  need("inspectionOnly" not in row and row.get("cleanupComplete") is True and
+                      type(row.get("exitCode")) is int and row["exitCode"] != 125 and
+                      row["result"] == ("PASS" if row["exitCode"] == 0 else "FAIL"), "Unsafe command")
+                  need(row.get("receipt") == "host-" + row["component"] + ".json", "Wrong receipt path")
                   receipt = read_json(evidence / row["receipt"])
                   finalized(receipt, purpose=row["component"], status=row["exitCode"])
-                  require(file_hash(evidence / row["receipt"])[0] ==
-                          file_hash(evidence / receipt["id"] / "receipt.json")[0], "Receipt copies differ")
-              invocation_count = 0
+                  need(file_hash(evidence / row["receipt"])[0] ==
+                      file_hash(evidence / receipt["id"] / "receipt.json")[0], "Receipt copies differ")
+              leaves = 0
               for directory in evidence.iterdir():
                   if not re.fullmatch(r"[0-9a-f]{32}", directory.name):
                       continue
-                  require(stat.S_ISDIR(physical(directory).st_mode), "Invalid invocation dir")
+                  need(stat.S_ISDIR(physical(directory).st_mode), "Invalid invocation dir")
                   receipt = read_json(directory / "receipt.json")
                   finalized(receipt, identity=directory.name)
-                  invocation_count += 1
-              require(invocation_count > 0, "No retained finalized invocations")
-              require(any(row["component"] == "executor-native-controls" and row["result"] == "PASS" and
-                          row.get("inspectionOnly") is not True for row in rows),
-                      "Native controls failed")
-              require(summary["result"] != "PASS" or all(row["result"] == "PASS" for row in rows),
-                      "False PASS summary")
-              require(summary.get("releaseGateMonolith") == "NOT_EXECUTED_COMPONENT_REPLAY", "Unexpected gate scope")
+                  leaves += 1
+              need(leaves > 0, "No retained finalized leaves")
+              need(any(row["component"] == "executor-native-controls" and row["result"] == "PASS" and
+                  row.get("inspectionOnly") is not True for row in rows),
+                  "Native controls failed")
+              need(summary["result"] != "PASS" or all(row["result"] == "PASS" for row in rows),
+                  "False PASS summary")
+              need(summary.get("releaseGateMonolith") == "NOT_EXECUTED_COMPONENT_REPLAY", "Unexpected gate scope")
               safe = True
           except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as failure:
               error = type(failure).__name__ + ": " + str(failure)[:4096]
           salvage = None
           if not safe:
-              salvage = salvage_evidence(error or "Driver cleanup/source/evidence handoff is not proved")
+              salvage = salvage_text(error or "Driver cleanup/source/evidence handoff is not proved")
           record = {
-              **attempt, "finishedUtc": datetime.now(timezone.utc).isoformat(), "setupAndDriverOutcomes": outcomes,
+              **attempt, "requestedScope": scope, "finishedUtc": datetime.now(timezone.utc).isoformat(),
+              "setupAndDriverOutcomes": outcomes,
               "driverSafeOutput": os.environ.get("AUDIT_DRIVER_SAFE", ""),
               "safeToContinue": safe, "handoffError": error,
               "evidenceUploadKind": "FULL_SEALED" if safe else
-                  "PARTIAL_SALVAGE" if salvage["retainedFiles"] else "BOOTSTRAP_ONLY",
+              "PARTIAL_SALVAGE" if salvage["retainedFiles"] else "BOOTSTRAP_ONLY",
               "fullTreeCompleteness": "PROVED" if safe else "NOT_PROVEN", "salvage": salvage,
               "hostResult": summary.get("result") if type(summary) is dict else None,
               "limitation": "Upload also required; not product/release/physical acceptance.",
@@ -529,24 +533,24 @@ jobs:
           with (bootstrap / "workflow-handoff.json").open("x", encoding="utf-8") as stream:
               json.dump(record, stream, indent=2, allow_nan=False)
               stream.write("\n")
-          bootstrap_files, bootstrap_bytes = {}, 0
+          hashes, bsize = {}, 0
           for directory, children, files in strict_walk(bootstrap):
               for name in children:
                   path = Path(directory) / name
-                  require(stat.S_ISDIR(physical(path).st_mode) and
-                          path.relative_to(bootstrap).parts[0] == "evidence-salvage", "Wrong bootstrap dir")
+                  need(stat.S_ISDIR(physical(path).st_mode) and
+                      path.relative_to(bootstrap).parts[0] == "evidence-salvage", "Wrong bootstrap dir")
               for name in files:
                   path = Path(directory) / name
-                  relative = relative_name(path.relative_to(bootstrap).as_posix())
-                  require(relative.split("/")[0] in ("workflow-start.json", "workflow-handoff.json",
-                          "driver.stdout.log", "driver.stderr.log", "evidence-salvage"), "Wrong bootstrap file")
+                  rel = safe_name(path.relative_to(bootstrap).as_posix())
+                  need(rel.split("/")[0] in ("workflow-start.json", "workflow-handoff.json",
+                      "driver.stdout.log", "driver.stderr.log", "evidence-salvage"), "Wrong bootstrap file")
                   checksum, size = file_hash(path)
-                  bootstrap_bytes += size
-                  require(len(bootstrap_files) < MAX_FILES and bootstrap_bytes <= MAX_TOTAL_BYTES,
-                          "Bootstrap size cap")
-                  bootstrap_files[relative] = checksum
+                  bsize += size
+                  need(len(hashes) < MAX_FILES and bsize <= MAX_TOTAL_BYTES,
+                      "Bootstrap size cap")
+                  hashes[rel] = checksum
           with (bootstrap / "bootstrap-manifest.sha256").open("x", encoding="utf-8") as stream:
-              for name, checksum in sorted(bootstrap_files.items()):
+              for name, checksum in sorted(hashes.items()):
                   stream.write(checksum + "  " + name + "\n")
           with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
               stream.write("bootstrap_path=" + str(bootstrap) + "\n")
@@ -576,67 +580,3 @@ jobs:
           include-hidden-files: true
           overwrite: false
           retention-days: 14
-
-  macos_arm64:
-    name: Audit native Apple Silicon components
-    needs: windows_x64
-    # A product failure stays red, but independent host work may follow ONLY
-    # proved source/cleanup/evidence finalization and a successful artifact upload.
-    if: >-
-      ${{ always() && !cancelled() &&
-          needs.windows_x64.outputs.safe_to_continue == 'true' &&
-          needs.windows_x64.outputs.artifact_uploaded == 'true' &&
-          needs.windows_x64.outputs.artifact_id != '' }}
-    runs-on: macos-26
-    timeout-minutes: 360
-    defaults:
-      run:
-        shell: python3 {0}
-    env:
-      P2PKIT_AUDIT_ROLE: macos-arm64
-      P2PKIT_AUDIT_DRIVER_TIMEOUT_SECONDS: "19200"
-      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
-    outputs: *host_outputs
-    steps:
-      - *allocate
-      - *checkout
-      - *java21
-      - *keep_java21
-      - *java17
-      - name: Execute source-bound Apple Silicon components and finalize ownership
-        id: audit
-        timeout-minutes: 330
-        run: *run_host
-      - *handoff
-      - *evidence
-
-  macos_x64:
-    name: Audit native Intel iOS simulator suites
-    needs: macos_arm64
-    if: >-
-      ${{ always() && !cancelled() &&
-          needs.macos_arm64.outputs.safe_to_continue == 'true' &&
-          needs.macos_arm64.outputs.artifact_uploaded == 'true' &&
-          needs.macos_arm64.outputs.artifact_id != '' }}
-    runs-on: macos-15-intel
-    timeout-minutes: 180
-    defaults:
-      run:
-        shell: python3 {0}
-    env:
-      P2PKIT_AUDIT_ROLE: macos-x64
-      P2PKIT_AUDIT_DRIVER_TIMEOUT_SECONDS: "8400"
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-    outputs: *host_outputs
-    steps:
-      - *allocate
-      - *checkout
-      - *java21
-      - *keep_java21
-      - *java17
-      - name: Execute source-bound native Intel components and finalize ownership
-        id: audit
-        timeout-minutes: 150
-        run: *run_host
-      - *handoff
-      - *evidence

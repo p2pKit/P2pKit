@@ -26,7 +26,9 @@ WORKFLOW = ".github/workflows/audit-host-validation.yml"
 REF = "refs/heads/audit/complete-2026-09-04"
 ROLES = {"windows-x64": ("Windows", "x64"), "macos-arm64": ("Darwin", "arm64"),
          "macos-x64": ("Darwin", "x64")}
+SCOPES = {"full": set(ROLES), "windows-followup": {"windows-x64"}}
 WINDOWS_TASKS = {":p2p-core:jvmTest", ":p2p-transport-lan:jvmTest", ":p2p-network-provisioning-desktop:test"}
+WINDOWS_FOLLOWUP_TASKS = {":p2p-core:jvmTest", ":p2p-core:testAndroidHostTest"}
 DESKTOP_TASKS = [":p2p-sample-desktop:check", ":p2p-sample-desktop:installDist", ":p2p-sample-desktop-ui:test",
                  ":p2p-sample-desktop-ui:checkRuntime", ":p2p-sample-desktop-ui:hotRunArgfile",
                  ":p2p-sample-desktop-ui:createDistributable"]
@@ -155,8 +157,9 @@ def load_gate(root=ROOT):
     return gate
 
 
-def admit(event, environment, role, root=ROOT):
+def admit(event, environment, role, root=ROOT, scope="full"):
     """Reject fallback push triggers, foreign refs, dirty inputs and cross-architecture substitution."""
+    require(scope in SCOPES and role in SCOPES[scope], "Unsupported audit role/scope pair")
     gate = load_gate(root)
     require(type(event) is dict and type(event.get("repository")) is dict, "Malformed push event")
     require(role in ROLES, "Unsupported audit host role")
@@ -183,12 +186,13 @@ def admit(event, environment, role, root=ROOT):
         require(translated.returncode in (0, 1) and translated.stdout.strip() in ("", "0"),
                 "Rosetta/unknown translated execution is not native host evidence")
     return {"commit": after, "tree": git("rev-parse", "HEAD^{tree}", root=root), "before": before,
-            "ref": REF, "role": role, "changedPaths": changed, "admittedUtc": now(),
+            "ref": REF, "role": role, "requestedScope": scope, "changedPaths": changed, "admittedUtc": now(),
             "runId": environment.get("GITHUB_RUN_ID"), "runAttempt": environment.get("GITHUB_RUN_ATTEMPT")}
 
 
-def assess_windows(report, policy, token):
+def assess_windows(report, policy, token, required_tasks=WINDOWS_TASKS):
     """Use real Gradle execution events, not stale XML or compilation as a test pass."""
+    require(required_tasks in (WINDOWS_TASKS, WINDOWS_FOLLOWUP_TASKS), "Unsupported Windows required-task set")
     gate = load_gate()
     gate.validate_policy(policy)
     require(type(report) is dict and type(report.get("schema")) is int and report["schema"] == 1,
@@ -200,7 +204,7 @@ def assess_windows(report, policy, token):
             gate.architecture(host.get("arch")) == "x64", "Not native Windows x64 execution")
     require(report.get("model") == policy["model"], "Windows configured target/task model differs")
     expected = {task for entry in policy["model"].values() for task in entry["tests"]}
-    require(WINDOWS_TASKS <= expected and type(report.get("tests")) is dict and
+    require(required_tasks <= expected and type(report.get("tests")) is dict and
             set(report["tests"]) == expected, "Missing or unclassified Windows test tasks")
     outcomes = {"EXECUTED", "FAILED", "NO_SOURCE", "SKIPPED", "UP-TO-DATE", "FROM-CACHE", "NOT_COMPLETED", "NOT_REQUESTED"}
     for task, result in report["tests"].items():
@@ -210,10 +214,10 @@ def assess_windows(report, policy, token):
         require(all(type(result.get(key)) is int and result[key] >= 0 for key in ("passed", "failed", "skipped")),
                 "Malformed Windows counts: " + task)
         require(result["failed"] == 0 and result["outcome"] != "FAILED", "Failed Windows task: " + task)
-        if task in WINDOWS_TASKS:
+        if task in required_tasks:
             require(result["outcome"] == "EXECUTED" and result["enabled"] and result["inGraph"] and result["passed"] > 0,
                     "Fresh nonzero Windows test execution is missing: " + task)
-    return {name: report["tests"][name] for name in sorted(WINDOWS_TASKS)}
+    return {name: report["tests"][name] for name in sorted(required_tasks)}
 
 
 def assess_swift(objects):
@@ -260,7 +264,9 @@ class InfrastructureFailure(RuntimeError):
 
 
 class Host:
-    def __init__(self, role, state, timeout_seconds=None):
+    def __init__(self, role, state, timeout_seconds=None, scope="full"):
+        require(scope in SCOPES and role in SCOPES[scope], "Unsupported audit role/scope pair")
+        self.scope = scope
         self.role, self.state = role, state
         self.evidence = state / "evidence"
         self.runner = ROOT / "scripts/run-audit-command.py"
@@ -606,6 +612,24 @@ class Host:
         self.invoke("windows-desktop-samples", DESKTOP_TASKS)
         self.clean_outputs()
 
+    def windows_followup(self):
+        """One focused durable-transfer/packaged-output graph, not full Windows qualification."""
+        token = uuid.uuid4().hex
+        success = self.invoke("windows-followup", [
+            ":p2p-core:jvmTest", "--tests", "dev.p2pkit.core.transfer.FileTransferJvmTest",
+            ":p2p-core:testAndroidHostTest", "--tests",
+            "dev.p2pkit.core.transfer.AndroidDurableFileDestinationAndroidHostTest",
+            ":p2p-sample-desktop-ui:checkRuntime", ":p2p-sample-desktop-ui:createDistributable",
+            "--continue", "--init-script", str(ROOT / "gradle/platform-test-coverage.init.gradle"),
+            "-Pp2pkit.testCoverageRoot=" + str(ROOT), "-Pp2pkit.testCoverageToken=" + token,
+        ])
+        if success:
+            gate = load_gate()
+            self.check("windows-followup-execution", lambda: assess_windows(
+                gate.read_json(ROOT / "build/reports/platform-tests" / token / "execution.json"),
+                gate.read_json(ROOT / "gradle/platform-test-policy.json"), token, WINDOWS_FOLLOWUP_TASKS))
+        self.clean_outputs()
+
     def mac_policies(self):
         # Preserve release-gate ordering; no no-op replacement of real graph/native probes.
         scripts = ["scripts/check-gradle-wrapper.sh", "scripts/check-dependency-verification.sh",
@@ -947,6 +971,9 @@ class Host:
         passed = bool(not failures and self.safe and self.rows and all(row["result"] == "PASS" for row in self.rows))
         try:
             self.write("host-summary.json", {"schema": 1, "role": self.role, "source": self.admission,
+                       "requestedScope": self.scope,
+                       "hostQualification": "FULL_COMPONENT_SCOPE" if self.scope == "full" else
+                           "NOT_ESTABLISHED_BY_FOCUSED_SCOPE",
                        "sourceAfter": after, "startedUtc": self.started, "finishedUtc": now(),
                        "result": "PASS" if passed else "FAIL", "safeToContinue": self.safe,
                        "error": "; ".join(failures) or None, "components": self.rows, "simulator": self.simulator,
@@ -1019,7 +1046,7 @@ class Host:
             physical(self.state)
             require(not self.state.exists(), "Audit state is not new; preserve prior attempts")
             event = load_gate().read_json(Path(os.environ["GITHUB_EVENT_PATH"]))
-            self.admission = admit(event, os.environ, self.role)
+            self.admission = admit(event, os.environ, self.role, scope=self.scope)
             self.initialize()
             self.prerequisites()
             # Native ownership/admission tests must pass before any product project task.
@@ -1028,7 +1055,9 @@ class Host:
                 raise InfrastructureFailure("Native executor controls failed; product execution is blocked")
             self.safe = True
             self.setup_sdk()
-            if self.role == "windows-x64":
+            if self.scope == "windows-followup":
+                self.windows_followup()
+            elif self.role == "windows-x64":
                 self.windows()
             elif self.role == "macos-arm64":
                 self.mac()
@@ -1053,11 +1082,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("role", choices=ROLES)
     parser.add_argument("--timeout-seconds", type=int)
+    parser.add_argument("--scope", choices=SCOPES, default="full")
     args = parser.parse_args()
+    require(args.role in SCOPES[args.scope], "Unsupported audit role/scope pair")
     state = Path(os.environ["P2PKIT_AUDIT_STATE_DIR"])
     require(state.is_absolute() and not state.is_symlink() and not state.resolve().is_relative_to(ROOT),
             "Audit state must be a new physical absolute directory outside source")
-    return Host(args.role, state, args.timeout_seconds).run()
+    return Host(args.role, state, args.timeout_seconds, scope=args.scope).run()
 
 
 if __name__ == "__main__":

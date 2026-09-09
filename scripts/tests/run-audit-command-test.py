@@ -308,6 +308,88 @@ def cleanup_metadata(test, *, cached_device=0, full_device=47, child_fields=None
 
 
 class PurePolicyTests(unittest.TestCase):
+    def test_removal_diagnostic_reads_only_owned_no_follow_metadata(self):
+        cases = ((stat.S_IFREG | 0o444, 1, 0, "file", True),
+                 (stat.S_IFLNK | 0o777, 0x400, 0xA000000C, "symlink", False),
+                 (stat.S_IFREG | 0o600, None, None, "file", None),
+                 (stat.S_IFREG | 0o600, 2 ** 80, "not a native tag", "file", None))
+        for mode, attributes, tag, kind, read_only in cases:
+            with self.subTest(kind=kind, attributes=attributes), cleanup_metadata(self) as fixture:
+                root, _, deeper, _ = fixture
+                leaf = deeper / "report.xml"
+                lstat, lookups = Path.lstat, []
+
+                def metadata(path, *args, **kwargs):
+                    lookups.append(path)
+                    actual = lstat(path, *args, **kwargs)
+                    return StatFields(actual, st_mode=mode, st_file_attributes=attributes, st_reparse_tag=tag) \
+                        if path == leaf else actual
+
+                error = PermissionError(errno.EACCES, "private exception text", "outside-private-filename")
+                error.winerror = 5
+                with mock.patch.object(Path, "lstat", new=metadata), \
+                        mock.patch.object(Path, "resolve") as resolve, mock.patch.object(os, "readlink") as readlink, \
+                        mock.patch.object(Path, "open") as opened:
+                    detail = runner.removal_failure_detail(root, os.unlink, str(leaf), error)
+                resolve.assert_not_called()
+                readlink.assert_not_called()
+                opened.assert_not_called()
+                self.assertEqual([*reversed(leaf.parents), leaf], lookups)
+                self.assertEqual(str(root), detail["failedRoot"])
+                self.assertEqual("nested/deeper/report.xml", detail["relativePath"])
+                self.assertEqual("unlink", detail["operation"])
+                self.assertEqual(("PermissionError", errno.EACCES, 5),
+                                 (detail["exceptionType"], detail["errno"], detail["winerror"]))
+                observation = detail["metadataObservation"]
+                self.assertEqual(("OBSERVED", mode, kind, read_only),
+                                 (observation["status"], observation["mode"], observation["type"], observation["readOnly"]))
+                self.assertTrue(observation["observedUtc"])
+                self.assertEqual(attributes if attributes is None or attributes < 2 ** 32 else None,
+                                 observation["fileAttributes"])
+                self.assertEqual(tag if type(tag) is int else None, observation["reparseTag"])
+                encoded = runner.json_bytes(detail)
+                self.assertLessEqual(len(encoded), runner.MAX_REMOVAL_DETAIL_BYTES)
+                for excluded in (b"private exception text", b"outside-private-filename", b"not a native tag"):
+                    self.assertNotIn(excluded, encoded)
+
+    def test_removal_diagnostic_refuses_foreign_relative_or_oversized_paths_before_stat(self):
+        with cleanup_metadata(self) as (root, _, _, _):
+            error = PermissionError(errno.EACCES, "private", "outside-private-filename")
+            for entry in (str(root.parent / "outside-private-filename"), "relative", str(root / ".." / "outside"),
+                          str(root / ("x" * 1025)), str(root / ("x" * 32769))):
+                with self.subTest(entry_length=len(entry)), mock.patch.object(Path, "lstat") as metadata:
+                    detail = runner.removal_failure_detail(root, os.unlink, entry, error)
+                metadata.assert_not_called()
+                self.assertEqual("REFUSED", detail["metadataObservation"]["status"])
+                self.assertEqual("UNAVAILABLE", detail["relativePath"])
+                self.assertNotIn(b"outside-private-filename", runner.json_bytes(detail))
+            error.errno, error.winerror = "private nonnumeric errno", 2 ** 80
+            with mock.patch.object(Path, "lstat") as metadata:
+                detail = runner.removal_failure_detail(root, None, None, error)
+            metadata.assert_not_called()
+            self.assertEqual((None, None, "UNAVAILABLE", "UNAVAILABLE"),
+                             (detail["errno"], detail["winerror"], detail["operation"], detail["relativePath"]))
+            self.assertNotIn(b"private nonnumeric errno", runner.json_bytes(detail))
+
+    def test_removal_diagnostic_stops_at_reparse_missing_or_unreadable_ancestor(self):
+        cases = (({"st_file_attributes": 0x400, "st_reparse_tag": 0xA0000003}, None, "REFUSED"),
+                 ({"st_mode": stat.S_IFLNK | 0o777}, None, "REFUSED"),
+                 ({}, FileNotFoundError("injected absent ancestor"), "ABSENT"),
+                 ({}, PermissionError("injected unreadable ancestor"), "UNAVAILABLE"))
+        for fields, error, status in cases:
+            with self.subTest(status=status, fields=fields), \
+                    cleanup_metadata(self, child_fields=fields, child_error=error) as fixture:
+                root, child, deeper, events = fixture
+                with mock.patch.object(Path, "resolve") as resolve, mock.patch.object(os, "readlink") as readlink, \
+                        mock.patch.object(Path, "open") as opened:
+                    detail = runner.removal_failure_detail(root, os.unlink, deeper / "report.xml", PermissionError())
+                self.assertEqual(status, detail["metadataObservation"]["status"])
+                self.assertIn(("lstat", child), events)
+                self.assertNotIn(("lstat", deeper), events)
+                resolve.assert_not_called()
+                readlink.assert_not_called()
+                opened.assert_not_called()
+
     def test_cleanup_directory_identity_uses_full_stat_not_cached_fields(self):
         for cached, full in ((0, 47), (47, 47), (0, 0), (47, 0)):
             with self.subTest(cached=cached, full=full), \
@@ -1133,6 +1215,73 @@ while True:
         self.assertEqual((self.state / "context.json").read_bytes(), context_bytes)
         self.assertEqual((self.root / "source.txt").read_text(), "original source\n")
         self.assertTrue((self.root / "buildSrc/src/main/java/dev/p2pkit/build/Source.java").is_file())
+
+    def assert_cleanup_stops_on_original_removal_failure(self):
+        first, second, third = self.root / "build", self.state / "fixtures", self.state / "xcode-deriveddata"
+        for directory in (first, second, third):
+            directory.mkdir()
+            (directory / "keep.txt").write_bytes(b"synthetic cleanup output\n")
+        failed_path = second / "keep.txt"
+        original = PermissionError(errno.EACCES, "unretained exception text", "unretained filename")
+        original.winerror = 5
+        real_rmtree, calls, rethrown = shutil.rmtree, [], []
+
+        def remove(path, *, onerror):
+            calls.append(path)
+            if path == first:
+                return real_rmtree(path, onerror=onerror)
+            self.assertEqual(second, path, "No retry or removal of a later root is permitted")
+            try:
+                raise original
+            except PermissionError:
+                exception = sys.exc_info()
+            try:
+                onerror(os.unlink, str(failed_path), exception)
+            except BaseException as error:
+                self.assertIs(original, error, "Diagnostics must rethrow the same removal exception")
+                rethrown.append(error)
+                raise
+            self.fail("The removal callback suppressed its error")
+
+        with mock.patch.object(shutil, "rmtree", side_effect=remove), mock.patch.object(os, "chmod") as chmod:
+            result = runner.cleanup(argparse.Namespace(state=str(self.state),
+                                                      path=[str(first), str(second), str(third)]))
+        chmod.assert_not_called()
+        self.assertEqual(125, result)
+        self.assertEqual([first, second], calls)
+        self.assertEqual([original], rethrown)
+        self.assertFalse(first.exists())
+        self.assertEqual(b"synthetic cleanup output\n", failed_path.read_bytes())
+        self.assertEqual(b"synthetic cleanup output\n", (third / "keep.txt").read_bytes())
+        self.assertEqual("original source\n", (self.root / "source.txt").read_text())
+        records = [json.loads(path.read_text()) for path in (self.state / "evidence").glob("cleanup-*.json")
+                   if not path.name.endswith("-start.json")]
+        self.assertEqual(1, len(records))
+        record = records[0]
+        self.assertEqual([str(first), str(second), str(third)], record["paths"])
+        self.assertEqual([str(first)], record["removed"])
+        self.assertEqual(["Removal failed: PermissionError"], record["errors"])
+        self.assertEqual(1, record["failureDetail"]["failedRootIndex"])
+        self.assertEqual("PermissionError", record["failureDetail"]["exceptionType"])
+        self.assertLessEqual(len(runner.json_bytes(record)), runner.MAX_JSON_BYTES)
+        self.assertNotIn(b"unretained", runner.json_bytes(record))
+        start = json.loads((self.state / "evidence" / f"cleanup-{record['id']}-start.json").read_text())
+        self.assertEqual([], start["removed"])
+        self.assertEqual(3, len(start["inspections"]))
+        return record["failureDetail"]
+
+    def test_cleanup_failure_keeps_partial_removal_and_original_error_without_remediation(self):
+        detail = self.assert_cleanup_stops_on_original_removal_failure()
+        self.assertEqual(str(self.state / "fixtures"), detail["failedRoot"])
+        self.assertEqual(("unlink", "keep.txt", errno.EACCES, 5),
+                         (detail["operation"], detail["relativePath"], detail["errno"], detail["winerror"]))
+        self.assertEqual("OBSERVED", detail["metadataObservation"]["status"])
+
+    def test_cleanup_diagnostic_failure_cannot_erase_original_removal_failure(self):
+        with mock.patch.object(runner, "removal_failure_detail", side_effect=RuntimeError("diagnostic unavailable")):
+            detail = self.assert_cleanup_stops_on_original_removal_failure()
+        self.assertEqual("UNAVAILABLE", detail["metadataObservation"]["status"])
+        self.assertEqual("UNAVAILABLE", detail["relativePath"])
 
     def test_cleanup_only_exact_new_xcode_project_and_preserves_preexisting_project(self):
         project = self.root / "samples/iosApp/p2pkit-sample.xcodeproj"

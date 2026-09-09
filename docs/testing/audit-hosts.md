@@ -27,7 +27,9 @@ Before that push, the operator must:
 
 1. Finish the current repair and obtain fresh independent approval of its final
    revision. Review the execution infrastructure before its first triggering push.
-2. Refresh queued/running Actions and hold the audit's **global build lease**.
+2. Reconcile the preceding terminal attempt and retain its evidence; refresh
+   queued/running Actions and hold the audit's **global build lease**. Require no
+   competing queued/running work before starting another independently allocated host.
    Pause local builds/tests and do not dispatch other workflows during this run,
    including cleanup and artifact retention. Do not cancel unrelated tasks.
 3. Freeze the exact source and record the expected commit/tree. Inspect toolchain,
@@ -36,7 +38,7 @@ Before that push, the operator must:
 4. Push normally to the audit branch, then verify the run API's `head_sha`, each
    checkout/admission record and retained artifacts against that exact revision.
 
-All three jobs use the same `${{ github.sha }}`, full Git history and
+The single `selected_host` job uses `${{ github.sha }}`, full Git history and
 `persist-credentials: false`. The token has only `contents: read`; actions are
 pinned by full commit. Runtime admission also verifies repository, existing-branch
 push, exact ref/SHA/tree, clean tracked/untracked state, ancestry, non-deletion and
@@ -44,22 +46,57 @@ non-force, and the workflow path in the actual before/after diff. A GitHub path
 filter fallback is not permission to execute a different event. A zero-before/new
 branch event is rejected rather than silently substituted with `main`.
 
-A single non-cancelling concurrency group and explicit `needs` jobs serialize this
-workflow. There is **no matrix**. The group cannot serialize other workflows or
-local builds, and GitHub can replace an older pending run even with
+A single non-cancelling concurrency group and **one literal native job** bound
+this workflow. There is no matrix, selector, dispatch input or automatic Apple
+chain. A later host requires a separate reviewed source change selecting its
+native role, runner label, tools and budgets. The group cannot serialize other
+workflows or local builds, and GitHub can replace an older pending run even with
 `cancel-in-progress: false`. Do not queue another triggering push while a run is
 active or pending; preserve earlier failure/cancellation records.
 
-## Ordered host scope
+## Selected Windows follow-up scope
 
-| Order | Role and fixed label | Selected tools | Components, not broader acceptance |
-| --- | --- | --- | --- |
-| 1 | Native Windows x64, `windows-2025` | Native Python, Java 21 then 17, checked-in `gradlew.bat` | Fresh core/LAN/provisioning library JVM suites; CLI/Desktop sample checks and distribution builds |
-| 2 | Native Apple Silicon, `macos-26` | Xcode 26.5, native Python 3, Java 21 then 17 | Full platform `check`, policy/script gates, Android/Desktop samples, ABI/Dokka/SBOM, local publications/isolated consumers, XCFramework and Swift build/unit/UI simulator tests |
-| 3 | Native Intel, `macos-15-intel` | Xcode 26.3, native Python 3, Java 21 then 17 | Original `ios-x64` platform profile: both core and LAN `iosX64Test` suites |
+The current literal job is `Audit native Windows x64` on `windows-2025`, using
+native Python, Java 21 then 17 and the checked-in `gradlew.bat`. Its finite
+`windows-followup` scope retains the unchanged native ownership controls and SDK
+admission, then runs one product graph:
+
+```text
+:p2p-core:jvmTest --tests dev.p2pkit.core.transfer.FileTransferJvmTest
+:p2p-core:testAndroidHostTest --tests dev.p2pkit.core.transfer.AndroidDurableFileDestinationAndroidHostTest
+:p2p-sample-desktop-ui:checkRuntime
+:p2p-sample-desktop-ui:createDistributable
+```
+
+The graph uses `--continue`, the source-bound platform-test init script and a fresh
+nonce, plus the executor's strict verification/resource/fresh-task flags. Each
+`--tests` option belongs to its immediately preceding test task. The event assessor
+requires both core tasks to execute nonzero successful cases on native Windows;
+it still validates the complete configured task inventory and rejects any failed
+event. Retain and independently inspect both selected class XMLs, including their
+close-only retry cases. Gradle exit zero alone is not portability evidence.
+
+`requestedScope` is bound across admission, summary and workflow bootstrap/handoff.
+For this scope, `hostQualification` is always
+`NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, including when the selected components pass.
+The CLI accepts only `full` for the existing roles or `windows-followup` for
+Windows, rejecting other pairs before state initialization. Full defaults remain
+unchanged; `FULL_COMPONENT_SCOPE` describes their requested scope, not a successful
+qualification. Omitted full-profile components are **NOT_EXECUTED by this run**,
+not waived. The focused graph does not repeat wrapper-checkout, LAN/provisioning,
+CLI or all Desktop UI suites. It targets durable transfer and packaged-output
+cleanup; failure to reproduce an earlier cleanup error does not establish a repair.
+
+### Full profiles retained by the driver, not selected by this workflow revision
+
+| Role and fixed label | Selected tools | Components, not broader acceptance |
+| --- | --- | --- |
+| Native Windows x64, `windows-2025` | Native Python, Java 21 then 17, checked-in `gradlew.bat` | Fresh core/LAN/provisioning library JVM suites; CLI/Desktop sample checks and distribution builds |
+| Native Apple Silicon, `macos-26` | Xcode 26.5, native Python 3, Java 21 then 17 | Full platform `check`, policy/script gates, Android/Desktop samples, ABI/Dokka/SBOM, local publications/isolated consumers, XCFramework and Swift build/unit/UI simulator tests |
+| Native Intel, `macos-15-intel` | Xcode 26.3, native Python 3, Java 21 then 17 | Original `ios-x64` platform profile: both core and LAN `iosX64Test` suites |
 
 `macos-15` without `-intel` is not the Intel role. Rosetta, cross-compilation and an
-ARM simulator pass do not establish native Intel execution. The Intel job's two
+ARM simulator pass do not establish native Intel execution. The Intel profile's two
 Kotlin suites are not an execution of the complete Swift bridge/sample `ENV-04`
 procedure. Windows product commands do not run through WSL or a POSIX wrapper.
 A sample packaging pass is not rendered headful Desktop observation.
@@ -69,8 +106,9 @@ Windows shell prerequisites use Git for Windows: the driver resolves native
 `bin/bash.exe` and `usr/bin` tools, and validates native Git's `.windows.N` version
 and Bash's `x86_64-pc-msys` or `x86_64-pc-cygwin` build target. The Cygwin target is
 also used by bundled Git-for-Windows Bash; it does not admit standalone Cygwin Git.
-The same absolute Bash executable is recorded and used for the wrapper-checkout
-fixture, even if the ambient `bash` command selects WSL. Only its version probe and
+The same absolute Bash executable is recorded and, in the full Windows profile,
+used for the wrapper-checkout fixture, even if the ambient `bash` command selects
+WSL. Only its version probe and
 fixture receive the Git `bin`/`usr/bin` PATH prefix for nested shell utilities;
 native Python and `gradlew.bat` product commands keep the original host PATH.
 Missing or unusable Git Bash fails closed with retained prerequisite diagnostics;
@@ -93,7 +131,7 @@ After the SDK manager succeeds, the driver requires each requested platform's
 package's canonical metadata. Both property contents and file hashes are retained;
 missing or mismatched metadata blocks product execution rather than skipping a platform.
 
-### What the Apple Silicon component replay retains
+### What the full Apple Silicon component replay requires
 
 The driver preserves actual policy/fixture checks and real full graph probes,
 including the lock-policy expected-red leaves, Android ABI graph, version/toolchain
@@ -205,17 +243,20 @@ The workflow redirects stdout/stderr to separate fresh bootstrap logs and invoke
 the exact checked-out driver with `runpy` in the **same native Python process**.
 There is no extra unsupervised wrapper child, launcher replacement or product
 monkeypatch. The driver's own deadline, cancellation and ownership finalizers run.
-Driver budgets are 8,400 seconds on Windows/Intel and 19,200 seconds on Apple Silicon;
-step/job ceilings are respectively 150/180 and 330/360 minutes. The driver reserves
+The selected Windows driver budget is 8,400 seconds, with step/job ceilings of
+150/180 minutes. Full driver defaults remain 8,400 seconds on Intel and 19,200 on
+Apple Silicon; a later source-selected Apple job must retain its matching native
+tools and budgets (Intel 150/180, Apple Silicon 330/360 minutes). The driver reserves
 finalization time before its deadline. These are resource ceilings, not relaxed
 product assertions or automatic retry allowances.
 
-A later host is admitted only after all of the following:
+A safe completed handoff requires all of the following; it does not dispatch a
+later host:
 
-1. The preceding driver emits literal `safe_to_continue=true` after source,
+1. The selected driver emits literal `safe_to_continue=true` after source,
    worker/stop cleanup and evidence finalization.
 2. The always-run handoff inspection validates the strict summary/context/receipt
-   schemas and types, exact SHA/tree/role/run/attempt, clean post-run source,
+   schemas and types, exact SHA/tree/role/scope/run/attempt, clean post-run source,
    successful native ownership controls, and every retained invocation's stop,
    source and empty-survivor/error records. It hashes the complete manifest/file
    set, rejecting duplicates, traversal, symlinks/reparse points, missing or
@@ -225,11 +266,12 @@ A later host is admitted only after all of the following:
    come from the validated handoff, not unchecked environment paths.
 
 A cleaned product failure keeps its driver step/job **failed**; there is no
-`continue-on-error`. It can permit the next independent host to collect evidence,
-but the workflow as a whole cannot be successful unless every required host succeeds.
+`continue-on-error`. A focused component pass is not whole-host qualification.
 A missing output/summary, failed handoff, failed upload, cancellation, source
-uncertainty or unresolved ownership blocks dependent jobs. A shell observation that
-no `java` process is visible is not proof of cleanup.
+uncertainty or unresolved ownership blocks a safe handoff. Any later independently
+allocated host still requires explicit terminal-attempt reconciliation, reviewed
+source selection and the global lease. A shell observation that no `java` process
+is visible is not proof of cleanup.
 
 ## Evidence, cleanup and recovery
 
@@ -255,7 +297,7 @@ Receipt/start/product/stop files take priority. Salvage is bounded to 10,000 fil
 nonregular nodes, binary reports, changed files and excess data are omitted with
 explicit reasons. If the evidence root is unsafe or absent, only bootstrap metadata
 and its omission explanation are uploaded. Salvage has its own checksum manifest,
-but **full-tree completeness remains `NOT_PROVEN` and downstream jobs stay blocked**.
+but **full-tree completeness remains `NOT_PROVEN` and safe continuation is not established**.
 It is partial historical evidence, not repaired cleanup or a fabricated complete
 artifact. Investigate unavailable required reports rather than claiming them.
 
@@ -284,10 +326,31 @@ retention; exclusions do not authorize reading or deleting a link's target.
 Do not delete an active iOS launcher lock/guard or a caller-owned fixture before its
 workers and consumers finish; see [launcher recovery](local.md#ios-launcher-cleanup-and-recovery).
 
+On a removal failure, the executor adds bounded diagnostics (at most 32 KiB) to
+the failed cleanup record: the admitted root/index, known removal operation,
+lexically relative failing path, exception class, numeric errno/WinError and
+timestamped metadata observation. Path admission precedes metadata access;
+physical ancestors are checked root-to-parent, then the leaf is inspected with
+`lstat`. No link target or payload is read, and arbitrary exception text/foreign
+filenames are not retained. Missing native attributes mean unknown, not false.
+Metadata can be `OBSERVED`, `ABSENT`, `REFUSED` or `UNAVAILABLE`; diagnostic or
+encoding failure cannot erase the original removal error. The callback immediately
+rethrows that same error: there is no retry, chmod, worker kill, suppression or
+continuation to another output root. Final cleanup JSON retains its existing
+4 MiB bound, with space reserved before deletion.
+
+These observations are post-failure, not an atomic statement about an earlier
+racing instant. A read-only attribute or WinError 5 does not alone establish the
+cause; WinError 32 would support a sharing violation without identifying an owner.
+Trial4 remains **failed**, with **PARTIAL_SALVAGE** and full remote cleanup
+**NOT_PROVEN**. Its scheduling lease release is not remote-cleanup acceptance.
+The focused scope and diagnostics do not automatically request another run; a
+fresh runner cannot clean or prove destruction of the earlier runner.
+
 There is no generic workflow recovery command that can retroactively prove cleanup
 following controller/runner/host loss. Abrupt termination can prevent Python finally
-or artifact upload. Such cleanup is **UNKNOWN**, not PASS; dependent jobs must not
-start. Preserve available ownership receipts/logs, identify any surviving workers
+or artifact upload. Such cleanup is **UNKNOWN**, not PASS; it cannot authorize safe
+automatic continuation. Preserve available ownership receipts/logs, identify any surviving workers
 through their actual recorded identities, and let the operator resolve the global
 execution lease. Never run a blanket kill, attach an ambient Gradle home for `--stop`,
 delete unknown output, force-push, or manufacture a safe output. A fresh verified
@@ -308,8 +371,8 @@ Independent secure-v2 interoperability (#133), professional cryptographic review
 and owner architecture/product decisions (#120) require their own participants,
 inputs and evidence. This facility does not supply them or change their dispositions.
 Actual OSV results and successful dependency submission also remain separate from
-policy fixtures/lockfile coverage. Linux corroboration is not supplied by this
-three-host workflow.
+policy fixtures/lockfile coverage. Linux corroboration is not supplied by the
+selected Windows workflow.
 
 Follow the [release checklist](../releasing/checklist.md) for any future release.
 The audit's 0.8.0+ compatibility decisions remain in force despite snapshot naming.
