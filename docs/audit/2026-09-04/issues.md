@@ -1,3 +1,45 @@
+# Current issue disposition — #373 approved; #372 pending
+
+**9 September 2026. #373 source independently APPROVED at `128136ff8ab040f0b5c61dc5402d2b9736d63c86`,
+tree `747189670275c32b9ef67b3f1842cb3fad3cb381`; locally committed NOT_PUSHED. Corrected native Windows
+suite/new junction test NOT_RUN; trial4 NOT_EXECUTED in this record. Whole audit NOT_READY.**
+75/187 independently approved repository-repair rows (40.1%); 112 remaining (59.9%): 90 repairs, 21 external-validation rows and architecture decision #120. There are 54 new audit findings.
+These count repair rows, not effort, GitHub closure, platform acceptance or readiness. Pending repairs:
+88 Low, one Medium (#372) and informational #333. #133 and #268 remain NOT_STARTED.
+
+Only two actual findings are added; only373 gains source approval. All185 old issue records and original
+Markdown rows retain their earlier assessments/approvals/filings. Current publicationAndTrial3Event extensions
+on369/370/371 supersede their preserved pre-trial3 publication/native fields without rewriting original claims.
+The four disposition table counts/rows below are current; introductory bafe narrative is historical.
+
+Fresh sealed GitHub API capture **02:54:57.716458–03:25:18.157018 UTC, 9 September**:
+**294 issues /187 open /107 closed;79 PRs /7 open /72 closed**,2,605 serial GETs all200/exit0,
+1,846 collections/1,916 pages. All373 local issue-style histories (including79 PRs and107 closed issues),
+79 detailed PR sets and117 first-hop upstream histories/PR sets were freshly returned; zero current-endpoint
+reuse, no second-hop refresh. All53 substantive candidates were reconciled: only372/373 are new relative
+to the latest applicable contexts; known outcomes/backlinks/nested metadata, no changed own closed decision.
+Full new text and substantive deltas were read; unchanged payload equality is not a new human reread of
+every historical issue. Eight upstream gaps persist (7 reported inline/3 conversation records),402 local/
+33 upstream omitted patch fields and the unknown-cause historical checkout2454 missing backlink.
+Report `53560a5c9e294a60f9799d86747586eb74f825bb5ceb4b6cd64af27784e85e35`, manifest
+`d2bf5ca1c65e2e5216b304a5108c39663a9ae6c0854ac408246c168550892f98`, seal
+`2fa8fb0b15d1ef3c1e1eeb74f570945792b9cb771af8e7a876d9de25809d07cd`:8,524 members/224,575,097 bytes.
+Endpoints have individual times; stable end lists/report sealing/later source observations are not an atomic
+snapshot or extended freshness, and no Actions/ref lease was captured. The collector's74/187 filing-only
+arithmetic is historical;75/187 separately depends on actual #373 final approval. Earlier captures remain
+unchanged. Refresh after later GitHub writes and before relying on live state.
+
+See [#373](repairs/373.md), [hosted evidence](hosted-validation.md), [full records](issues.json) and
+[root continuation](../../../AUDIT_CHECKPOINT.md). #372 requires fresh runtime/repair evidence; #373 needs
+corrected native Windows execution. No issue closure, audit completion or native/product/Apple acceptance.
+
+
+## Preserved bafe905 index narrative; current disposition tables
+
+The following bafe905 narrative retains its original statements as historical evidence; dated current source,
+counts, publication, trial and next-step states above supersede older ones. Original failures, scope limits,
+read bindings and applicable safety requirements are not erased.
+
 # Current issue disposition continuation — #369, #370 and #371
 
 **2026-09-09T01:18:20.220814+00:00. Same-#369 shell follow-up `aab8cab`, separate #370 SDK correction `d3c8120` and #371 native-fixture byte-emission correction `842d0aa` are independently source-APPROVED, locally committed and NOT_PUSHED in this record; trial3 NOT_EXECUTED. 74/185 independently approved repository-repair rows (40.0%), 111 remaining (60.0%): 89 repairs, 21 external validation rows and architecture decision #120; 52 new audit findings. Whole audit NOT_READY; no checkpoint stop.**
@@ -76,7 +118,7 @@ before trigger; complete capture/hashing is not a new semantic audit of every un
 [#369repair report](repairs/369.md):4files/finalAPPROVE/nofindings,19finalLinuxfixture/static gates,24totalleaves;
 zero productXML. Partialtrial1/unsafehandoff/remote cleanup NOT_PROVEN and oldproductsource bindings remain.
 
-## Repairs with recorded independent approval (74)
+## Repairs with recorded independent approval (75)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -154,8 +196,9 @@ zero productXML. Partialtrial1/unsafehandoff/remote cleanup NOT_PROVEN and oldpr
 | [#369: [AUDIT][Low] Hosted Windows audit resolves Bash to WSL instead of Git Bash](https://github.com/p2pKit/P2pKit/issues/369) | low | New audit | `bd6117516733`, `aab8cabf6895` |
 | [#370: Hosted SDK validation rejects canonical Android Platform 37.0 metadata](https://github.com/p2pKit/P2pKit/issues/370) | low | New audit | `d3c812020b41` |
 | [#371: Native executor fixture stop markers depend on text newline translation](https://github.com/p2pKit/P2pKit/issues/371) | low | New audit | `842d0aafa9d8` |
+| [#373: [AUDIT][Low] Windows audit cleanup rejects nested outputs using cached DirEntry device IDs](https://github.com/p2pKit/P2pKit/issues/373) | low | New audit | `128136ff8ab0` |
 
-## Pending remediation (89)
+## Pending remediation (90)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -248,6 +291,7 @@ zero productXML. Partialtrial1/unsafehandoff/remote cleanup NOT_PROVEN and oldpr
 | [#364: [AUDIT][Low] Interoperability catalog conflates security profile selection with optional features](https://github.com/p2pKit/P2pKit/issues/364) | low | New audit | — |
 | [#365: [AUDIT][Low] iOS validation recipe requests a bare fingerprint in a full pairing-QR field](https://github.com/p2pKit/P2pKit/issues/365) | low | New audit | — |
 | [#366: [AUDIT][Low] Android unknown-size URI KDoc recommends a JVM-only overload](https://github.com/p2pKit/P2pKit/issues/366) | low | New audit | — |
+| [#372: [AUDIT] Android targetSdk 37 raw LAN omits ACCESS_LOCAL_NETWORK integration](https://github.com/p2pKit/P2pKit/issues/372) | medium | New audit | — |
 
 ## External/platform validation pending (21)
 

@@ -1,3 +1,102 @@
+# Current audit continuation — #373 and actual trial3 evidence
+
+**9 September 2026. #373 source independently APPROVED at `128136ff8ab040f0b5c61dc5402d2b9736d63c86`,
+tree `747189670275c32b9ef67b3f1842cb3fad3cb381`; locally committed NOT_PUSHED. Corrected native Windows
+suite/new junction test NOT_RUN; trial4 NOT_EXECUTED in this record. Whole audit NOT_READY.**
+75/187 independently approved repository-repair rows (40.1%); 112 remaining (59.9%): 90 repairs, 21 external-validation rows and architecture decision #120. There are 54 new audit findings.
+These count repair rows, not effort, GitHub closure, platform acceptance or readiness. Pending repairs:
+88 Low, one Medium (#372) and informational #333. #133 and #268 remain NOT_STARTED.
+
+#369/#370/#371 were actually published with independently approved R4 administration at `bafe905ac030d090219352de8a2358695755b528`,
+tree `91d469eb09c8a612bf7dd9f7c5e2ce1f081634bb`; audit push0/ref verified02:00:44.154019 UTC after lease/freeze.
+Actual trial3/run34301487847 atbafe passed47/48 native methods but failed ordinary nested-output cleanup125;
+outer suite/stop/final1/0/1. Shell/banner and #371 byte methods have narrow native observations only. SDK/#370,
+wrapper-checkout, P2pKit product/sample/consumer and Apple gates did not start. Preserve unsafe/PARTIAL_SALVAGE,
+18 unavailable JSONL omissions, full remote tree/cleanup NOT_PROVEN, and the terminal-failure-only independent
+verdict. Local lease release02:42:38.431897 is not remote cleanup. Original trial1/2 failures remain historical.
+
+#373 corrects the distinct full-stat-versus-cached-device cause without weakening no-follow, real device,
+preflight, source/evidence/ownership or bounded cleanup checks. Final26 serialized Linux fixture/static gates
+pass; original red, nine mutation inner reds, three injected incomplete teardowns and reviewer-inspector
+reconciliations remain. Staged-source verification is not a clean128 or corrected Windows execution.
+#372 is separately source/official-policy confirmed: device37+/target37+ live ACCESS_LOCAL_NETWORK and
+consumer-owned sample integration are missing; Medium repair pending, Android17 runtime NOT_RUN. Preserve
+compile36/min24/target37, custom-transport scope and prior #287/#286 corrections. Filing alone did not approve
+it or #373:74/185 ->74/186 ->74/187; only actual final #373 source approval gave75/187.
+
+Latest independently corroborated Linux product event is now actual clean`d1523e889c6760098bf881c505971666d435f3aa`
+/tree`a70c3e214c30e80c0e3d6dbd702351e907fcd937`,04:05:04.253763–04:13:42.311535UTC:
+rootcheck +Android/CLI/Desktop sample builds +core-onlyDokka,1,607passes/199XML/12testtasks,
+245actionable/245executed,command/stop/final0/0/0. Prior cleanaab8 and staged source373/request evidence
+retain their original bindings, not additive or rebound to future administrative bytes. Launcher17,
+daemon21,one observed worker17; Apple tasks skipped/diagnostics retained. No corrected Windows373,
+Apple/ART/device/isolated-consumer/full-release/external acceptance. Exact review, cleanup and parser
+corrections are in the hosted report and lastIntegratedAttempt. Whole audit remains NOT_READY.
+#145/#144/#360 and earlier approvals remain intact; do not restart their completed repairs.
+
+### Separately approved operational trial4 request
+
+The workflow-only `Run revision:3 ->4` comment request is separately **APPROVED** and locally committed
+**NOT_PUSHED** at **`d1523e889c6760098bf881c505971666d435f3aa`**, tree
+`a70c3e214c30e80c0e3d6dbd702351e907fcd937`, parent128136ff,03:59:58.703113UTC. Exact diff SHA-256
+`618b8be8c94255ce851bcf18439afb7bccf658b5fedeb64b73de987e215c7df7`. Executable trigger/permissions/pins,
+allocation, strict admission, resource bounds, full/salvage handoff and sequential Windows ->ARM ->Intel
+semantics are unchanged. Workflow source is outside this twelve-document administrative patch.
+
+Fresh non-implementing `/root/review_trial4_request` verdict **APPROVE**, no findings:272 original
+comparisons plus37 actual commit bindings, zero discrepancies; neither number is a test count. Review
+SHA-256 `15d0dcf14ae4571a62c1548eddc110bb7474332a9968880864cba8be1d29a6bf`; committed addendum
+`570f2e79b69d1804da076661fc4a901476e8eb1e082541cf7e79035d5e11e47f`. The reviewer actually reread all
+642 committed workflow lines at04:03:01.785182UTC, blob`e1c206f051648be01ddb31d871ecfdb381232259`,
+SHA-256 `9c22e001f7c10e8a50f80cc242eef10fe24efe9a52049d50813f5ade18ccb397`. Its coverage row can bind
+this real committed read; old workflow cells remain historical. Five policy gates03:46:00.038432–03:46:12.814976
+passed0/0/0 at128 plus the exact staged618 patch, **not retroactively at d152**. They include51 workflow
+methods and20+16 release-policy methods, not products;39 retained files/64,901bytes, manifest
+`769425c6e6291309f77028746138599bc021abfd95760a3ba4cd56d7e54b9b8d`. No owned survivors/deletions.
+No new repair approval, hosted trial4 or corrected native Windows/Apple result follows from this request.
+Live Actions/ref verification and the held global lease/source freeze/local pause before push remain required.
+
+Fresh sealed GitHub API capture **02:54:57.716458–03:25:18.157018 UTC, 9 September**:
+**294 issues /187 open /107 closed;79 PRs /7 open /72 closed**,2,605 serial GETs all200/exit0,
+1,846 collections/1,916 pages. All373 local issue-style histories (including79 PRs and107 closed issues),
+79 detailed PR sets and117 first-hop upstream histories/PR sets were freshly returned; zero current-endpoint
+reuse, no second-hop refresh. All53 substantive candidates were reconciled: only372/373 are new relative
+to the latest applicable contexts; known outcomes/backlinks/nested metadata, no changed own closed decision.
+Full new text and substantive deltas were read; unchanged payload equality is not a new human reread of
+every historical issue. Eight upstream gaps persist (7 reported inline/3 conversation records),402 local/
+33 upstream omitted patch fields and the unknown-cause historical checkout2454 missing backlink.
+Report `53560a5c9e294a60f9799d86747586eb74f825bb5ceb4b6cd64af27784e85e35`, manifest
+`d2bf5ca1c65e2e5216b304a5108c39663a9ae6c0854ac408246c168550892f98`, seal
+`2fa8fb0b15d1ef3c1e1eeb74f570945792b9cb771af8e7a876d9de25809d07cd`:8,524 members/224,575,097 bytes.
+Endpoints have individual times; stable end lists/report sealing/later source observations are not an atomic
+snapshot or extended freshness, and no Actions/ref lease was captured. The collector's74/187 filing-only
+arithmetic is historical;75/187 separately depends on actual #373 final approval. Earlier captures remain
+unchanged. Refresh after later GitHub writes and before relying on live state.
+
+The honest incremental coverage projection has1,064 paths:792 full-text,5 semantic-delta,259 structural-only,
+6 reopened,1 partial and1 self-excluded. All5,315 historical five-column cells and1,056 entire old rows remain.
+Two373 source reads and one separately reviewed workflow read are exact source evidence; the five report
+reads are author reads, not independent administrative approval. Six reopened admin rows and the coverage
+self-binding boundary are unchanged. No whole-repository semantic completion or current runtime acceptance.
+
+See [hosted evidence](hosted-validation.md), [#373 repair](repairs/373.md),
+[current issue records](issues.json) and [checkpoint metadata](checkpoint.json).
+
+After final independent approval of the exact administrative bytes and the separately reviewed workflow request,
+refresh live Actions and audit/main/PR refs. Hold the one global local/hosted execution lease, freeze the exact
+approved source tree and pause all local builds/tests BEFORE any audit-branch push that triggers the workflow.
+With that lease/freeze already held, push only the audit branch, verify the actual remote commit/tree, and inspect
+the controlled Windows -> ARM Mac -> Intel Mac run under the same lease. Require native controls, SDK admission,
+strict dependency/source/stop/ownership checks and complete artifact/finalization evidence before advancement.
+Prior failed trials remain unsafe/partial; local lease release is not remote cleanup. Continue feasible sequential
+repairs, including pending #372; #268 and independent #133 remain NOT_STARTED. No checkpoint stop.
+
+## Preserved bafe905 overview
+
+The following bafe905 narrative retains its original statements as historical evidence; dated current source,
+counts, publication, trial and next-step states above supersede older ones. Original failures, scope limits,
+read bindings and applicable safety requirements are not erased.
+
 # Current audit continuation — #369 follow-up and distinct #370/#371
 
 **2026-09-09T01:18:20.220814+00:00. Same-#369 shell follow-up `aab8cab`, separate #370 SDK correction `d3c8120` and #371 native-fixture byte-emission correction `842d0aa` are independently source-APPROVED, locally committed and NOT_PUSHED in this record; trial3 NOT_EXECUTED. 74/185 independently approved repository-repair rows (40.0%), 111 remaining (60.0%): 89 repairs, 21 external validation rows and architecture decision #120; 52 new audit findings. Whole audit NOT_READY; no checkpoint stop.**
