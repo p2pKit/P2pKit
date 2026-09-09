@@ -95,8 +95,16 @@ The protected user-owned review files must not be copied into evidence,
 staged, or modified. Hash every generated file:
 
 ```sh
-find "$EVIDENCE" -type f -print0 | sort -z | xargs -0 shasum -a 256 > "$EVIDENCE/sha256sums.txt"
+(
+  cd "$EVIDENCE" &&
+    find . -type f ! -path './sha256sums.txt' -print0 |
+      sort -z | xargs -0 shasum -a 256 > sha256sums.txt
+)
 ```
+
+Only the root output manifest is excluded; nested files with the same name remain
+covered. Record the completed manifest's hash separately as required by the
+[evidence schema](evidence-schema.md).
 
 Record UTC timestamps, hostnames, OS versions, device model/build, app build
 number, SDK `BuildInfo.describe()` value, network SSID/BSSID (or an opaque
