@@ -18,6 +18,14 @@ RELEASE_IDENTITY_CHECK="$ROOT/scripts/check-release-identity.sh"
 BUNDLE_BUILDER="$ROOT/scripts/build-central-portal-bundle.sh"
 RELEASE_METADATA_CHECK="$ROOT/scripts/check-release-metadata.sh"
 
+is_local_workflow_reference() {
+    local root="$1" use="$2"
+    [[ "$use" =~ ^\./\.github/workflows/[a-zA-Z0-9_-]+\.ya?ml$ ]] &&
+        [[ ! -L "$root/.github" && ! -L "$root/.github/workflows" &&
+           -f "$root/${use#./}" && ! -L "$root/${use#./}" ]] &&
+        git -C "$root" ls-files --error-unmatch -- "${use#./}" >/dev/null 2>&1
+}
+
 [[ -f "$WORKFLOW" ]] || { echo "FATAL: Maven Central workflow is missing" >&2; exit 1; }
 [[ -f "$DESKTOP_WORKFLOW" ]] || { echo "FATAL: Desktop cross-host workflow is missing" >&2; exit 1; }
 ruby "$ROOT/scripts/tests/check-workflow-checkout-policy-test.rb"
@@ -29,10 +37,20 @@ ruby "$ROOT/scripts/tests/check-platform-test-policy-test.rb"
 python3 "$ROOT/scripts/tests/run-platform-tests-test.py"
 ruby "$ROOT/scripts/tests/check-publication-sbom-policy-test.rb"
 python3 "$ROOT/scripts/tests/check-sbom-test.py"
+python3 "$ROOT/scripts/tests/run-osv-scan-test.py"
 python3 "$ROOT/scripts/tests/check-release-metadata-test.py"
 while IFS= read -r -d '' workflow; do
     ruby -e 'require "yaml"; YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)' "$workflow"
     while IFS= read -r use; do
+        # Local reusable workflows execute from the caller's exact commit.
+        # Admit no traversal, symlink, missing path or mutable remote reference.
+        if [[ "$use" == .* || "$use" == /* ]]; then
+            is_local_workflow_reference "$ROOT" "$use" || {
+                echo "FATAL: invalid local workflow reference ($workflow): $use" >&2
+                exit 1
+            }
+            continue
+        fi
         revision="${use##*@}"
         revision="${revision%% *}"
         [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || {

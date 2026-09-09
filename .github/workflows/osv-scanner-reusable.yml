@@ -1,0 +1,88 @@
+name: OSV fail-closed scan
+
+on:
+  workflow_call:
+    inputs:
+      scan-args:
+        description: "One explicit --config or --lockfile argument per line"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  osv-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify lockfile and exception coverage
+        run: scripts/tests/check-osv-lockfile-coverage.sh
+      - name: Admit pinned standalone OSV scanner
+        id: prepare
+        shell: bash
+        run: |
+          directory="$(mktemp -d "${RUNNER_TEMP:?}/p2pkit-osv.XXXXXXXX")"
+          echo "directory=$directory" >> "$GITHUB_OUTPUT"
+          mkdir "$directory/tmp" "$directory/cache"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --connect-timeout 15 --max-time 180 --retry 2 --max-filesize 60000000 \
+            --output "$directory/osv-scanner" \
+            https://github.com/google/osv-scanner/releases/download/v2.5.0/osv-scanner_linux_amd64
+          (
+            cd "$directory"
+            echo 'edcfc41d257db36148f065055655fe3fcfc434b0b423ea67468a84c207524e0c  osv-scanner' | sha256sum --check
+          )
+          chmod 700 "$directory/osv-scanner"
+          "$directory/osv-scanner" --version
+      - name: Scan every explicit lock and preserve scanner failure
+        id: scan
+        shell: bash
+        env:
+          OSV_SCAN_ARGS: ${{ inputs.scan-args }}
+          OSV_DIR: ${{ steps.prepare.outputs.directory }}
+          GOMAXPROCS: "2"
+          GOMEMLIMIT: 768MiB
+        run: |
+          export TMPDIR="$OSV_DIR/tmp" XDG_CACHE_HOME="$OSV_DIR/cache"
+          python3 scripts/run-osv-scan.py "$OSV_DIR/osv-scanner" "$OSV_DIR/reports"
+      - name: Upload scan evidence
+        id: evidence
+        if: ${{ always() && steps.scan.outputs.report_dir != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: OSV Scanner evidence-${{ github.run_attempt }}
+          path: ${{ steps.scan.outputs.report_dir }}
+          if-no-files-found: error
+          retention-days: 5
+      - name: Upload genuine scan results to code scanning
+        if: ${{ !cancelled() && steps.scan.outputs.sarif_ready == 'true' }}
+        uses: github/codeql-action/upload-sarif@cdefb33c0f6224e58673d9004f47f7cb3e328b89 # v4.31.10
+        with:
+          sarif_file: ${{ steps.scan.outputs.report_dir }}/results.sarif
+      - name: Remove only this scan's disposable files
+        if: ${{ always() && steps.prepare.outputs.directory != '' }}
+        shell: bash
+        env:
+          OSV_DIR: ${{ steps.prepare.outputs.directory }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+        run: |
+          case "$OSV_DIR" in
+            "${RUNNER_TEMP:?}"/p2pkit-osv.*) ;;
+            *) echo 'Unexpected OSV workspace; refusing cleanup' >&2; exit 1 ;;
+          esac
+          rm -f -- "$OSV_DIR/osv-scanner"
+          rm -rf -- "$OSV_DIR/tmp" "$OSV_DIR/cache"
+          if [[ "$EVIDENCE_OUTCOME" == success || ! -d "$OSV_DIR/reports" ]]; then
+            rm -rf -- "$OSV_DIR"
+          else
+            echo "::warning::Scan reports retained at $OSV_DIR/reports because evidence upload did not succeed"
+          fi
