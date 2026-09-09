@@ -9,6 +9,7 @@ import android.util.AtomicFile
 import dev.p2pkit.core.LocalIdentityFailureKind
 import dev.p2pkit.core.LocalIdentityRecovery
 import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.security.EncodedIdentityKeyPair
 import dev.p2pkit.core.security.IdentityKeyRecordCodec
 import dev.p2pkit.core.security.IdentityNamespace
@@ -19,7 +20,6 @@ import dev.p2pkit.core.security.constantTimeEquals
 import dev.p2pkit.core.security.localIdentityError
 import java.io.File
 import java.io.FileNotFoundException
-import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.security.KeyStore
 import java.security.UnrecoverableKeyException
@@ -40,7 +40,8 @@ import kotlinx.coroutines.CancellationException
  * cross-process file lock are held.
  */
 internal class AndroidSecureIdentityStorage(
-    context: Context
+    context: Context,
+    private val logger: P2pLogger
 ) : SecureIdentityStorage {
     private val noBackupRoot: File = try {
         context.applicationContext.noBackupFilesDir
@@ -174,16 +175,17 @@ internal class AndroidSecureIdentityStorage(
             val wrappingKey = generateWrappingKey(alias)
             wrappedBlob = encryptRecord(namespace, record, wrappingKey)
             try {
-                writeAtomic(paths.identityBlob, wrappedBlob)
-                blobCommitted = true
+                writeAtomic(paths.identityBlob, wrappedBlob) { blobCommitted = true }
             } catch (error: Exception) {
-                failedWriteCleanupHandled = true
-                cleanupFailedAndroidIdentityBlobWrite(
-                    primaryFailure = error,
-                    deleteBlob = paths.identityBlob::delete,
-                    rereadBlob = { readIdentityBlobOrNull(paths) },
-                    deleteAlias = { deleteAliasIfPresent(keyStore, alias) }
-                )
+                if (!blobCommitted) {
+                    failedWriteCleanupHandled = true
+                    cleanupFailedAndroidIdentityBlobWrite(
+                        primaryFailure = error,
+                        deleteBlob = paths.identityBlob::delete,
+                        rereadBlob = { readIdentityBlobOrNull(paths) },
+                        deleteAlias = { deleteAliasIfPresent(keyStore, alias) }
+                    )
+                }
                 throw error
             }
 
@@ -520,29 +522,19 @@ internal class AndroidSecureIdentityStorage(
         )
     }
 
-    private fun writeAtomic(file: AtomicFile, bytes: ByteArray) {
-        var output: FileOutputStream? = null
-        try {
-            output = file.startWrite()
-            output.write(bytes)
-            file.finishWrite(output)
-            output = null
-        } catch (error: Exception) {
-            output?.let {
-                try {
-                    file.failWrite(it)
-                } catch (cleanupFailure: Exception) {
-                    error.addSuppressed(cleanupFailure)
-                }
-            }
-            throw localIdentityError(
-                kind = LocalIdentityFailureKind.PERSISTENCE_FAILED,
-                recovery = LocalIdentityRecovery.RETRY,
-                reason = "Failed to atomically write Android secure identity state",
-                cause = error
-            )
-        }
-    }
+    private fun writeAtomic(
+        file: AtomicFile,
+        bytes: ByteArray,
+        onCommitted: () -> Unit = {}
+    ) = writeAndroidIdentityAtomic(
+        bytes = bytes,
+        startWrite = file::startWrite,
+        finishWrite = file::finishWrite,
+        failWrite = file::failWrite,
+        syncDirectory = { syncAndroidIdentityParentDirectory(checkNotNull(file.baseFile.parentFile)) },
+        logger = logger,
+        onCommitted = onCommitted
+    )
 
     private inline fun <T> withNamespaceLock(
         namespace: IdentityNamespace,

@@ -17,5 +17,5 @@ internal actual fun defaultSecureIdentityStorage(
         recovery = LocalIdentityRecovery.CONFIGURE_STORE,
         reason = "P2pKitAndroid.initialize(applicationContext) is required for secure identity storage"
     )
-    return AndroidSecureIdentityStorage(context)
+    return AndroidSecureIdentityStorage(context, logger)
 }
