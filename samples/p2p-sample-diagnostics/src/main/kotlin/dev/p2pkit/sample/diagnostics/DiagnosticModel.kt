@@ -403,10 +403,6 @@ public class DiagnosticRecorder(
     public val activeRole: String
         get() = synchronized(lock) { sessionContext.role }
 
-    @Volatile
-    public var displayPaused: Boolean = false
-        private set
-
     init {
         require(maxEvents > 0) { "maxEvents must be positive" }
         require(maxEncodedBytes > 0) { "maxEncodedBytes must be positive" }
@@ -610,14 +606,6 @@ public class DiagnosticRecorder(
             ),
             manualEvidenceStillRequired = manualEvidence
         )
-    }
-
-    public fun pauseDisplay() {
-        displayPaused = true
-    }
-
-    public fun resumeDisplay() {
-        displayPaused = false
     }
 
     /** Clears active-session memory after fencing sink delivery. Busy/reentrant clears fail explicitly. */
