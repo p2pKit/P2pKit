@@ -268,10 +268,36 @@ public interface P2pKit {
     /** Last time the peer with [peerId] was observed by discovery, in epoch milliseconds. */
     public fun lastSeen(peerId: PeerId): Long?
 
-    /** Notify the SDK that the host app moved to the background. Applies the configured policy. */
+    /**
+     * Notify the SDK that the host app moved to the background.
+     *
+     * [BackgroundPolicy.CloseActiveSessions] schedules session closure and
+     * feature cleanup independently. The asynchronous session task closes a
+     * snapshot of active sessions; feature cleanup stops advertising, then discovery.
+     * This call returns without waiting for cleanup and provides no completion
+     * handle. Data listeners stay bound and the kit is not terminally stopped;
+     * this notification does not prevent new connections. [BackgroundPolicy.KeepRunning]
+     * leaves sessions and features unchanged, subject to host/OS background limits.
+     *
+     * Observe [advertisingState] and [discoveryState]: feature cleanup failures
+     * publish [FeatureState.Failed] with a typed [P2pError] and are also logged
+     * through the configured [P2pLogger]. A failure can leave native resources
+     * owned; returning from this notification is not proof that cleanup settled.
+     * To await feature cleanup and receive its failure directly, call the
+     * suspending [stopAdvertising] and [stopDiscovery], attempting each even if
+     * the other fails. These calls do not close sessions or terminally [stop] the kit.
+     *
+     * Foreground notification does not restart paused features. Once pending
+     * stops settle, the host must invoke [startAdvertising] / [startDiscovery]
+     * again according to its current intent.
+     */
     public fun notifyAppBackgrounded()
 
-    /** Notify the SDK that the host app returned to the foreground. */
+    /**
+     * Notify the SDK that the host app returned to the foreground. This does
+     * not restart advertising/discovery or recreate closed sessions; the host
+     * decides which operations to start again after pending cleanup settles.
+     */
     public fun notifyAppForegrounded()
 
     /**

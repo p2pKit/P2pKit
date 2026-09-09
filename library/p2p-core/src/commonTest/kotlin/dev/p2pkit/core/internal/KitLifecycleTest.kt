@@ -18,6 +18,7 @@ import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.FakeDiscoveryTransport
 import dev.p2pkit.core.testfixtures.MemorySecureIdentityStorage
+import dev.p2pkit.core.testfixtures.RecordingLogger
 import dev.p2pkit.core.testfixtures.createSecureTestKit
 import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.DataTransport
@@ -155,8 +156,82 @@ class KitLifecycleTest {
             }
             assertTrue(transport.advertisingStopped)
             assertTrue(transport.discoveryStopped)
+            assertEquals(P2pState.Running, kit.state.value)
+            assertFalse(transport.dataClosed, "backgrounding is not terminal kit stop")
+
+            kit.notifyAppForegrounded()
+            assertEquals(FeatureState.Idle, kit.advertisingState.value)
+            assertEquals(FeatureState.Idle, kit.discoveryState.value)
+            kit.startAdvertising()
+            kit.startDiscovery()
+            assertEquals(FeatureState.Active, kit.advertisingState.value)
+            assertEquals(FeatureState.Active, kit.discoveryState.value)
         } finally {
             kit.stop()
+        }
+    }
+
+    @Test
+    fun backgroundAdvertisingFailureIsObservableAndStillStopsEveryDiscoveryTransport() = runBlocking {
+        assertBackgroundStopFailureRemainsObservable(IllegalStateException("advertising cleanup failed"))
+    }
+
+    @Test
+    fun backgroundProviderCancellationIsObservableAndStillStopsEveryDiscoveryTransport() = runBlocking {
+        assertBackgroundStopFailureRemainsObservable(CancellationException("provider cleanup cancelled"))
+    }
+
+    // Characterization of existing cleanup semantics: both provider failures already become typed
+    // feature failures under NonCancellable cleanup; neither is structural cancellation of the kit.
+    private suspend fun assertBackgroundStopFailureRemainsObservable(providerFailure: Throwable) {
+        val failing = RollbackDiscoveryTransport(TransportKind.LAN).apply {
+            stopAdvertisingFailure = providerFailure
+        }
+        val healthy = RollbackDiscoveryTransport(TransportKind.BLE)
+        val recording = RecordingLogger()
+        val store = MemorySecureIdentityStorage()
+        val kit = P2pKit.create {
+            appId = AppId("background-stop-failure-channel")
+            deviceName = "Test"
+            secureIdentityStorage = store
+            strictSessionInvariants = true
+            security { mode = SecurityMode.AuthenticatedV2(PeerAuthorizationPolicy.RejectUnknown) }
+            logger = recording
+            transports {
+                register(RollbackDiscoveryFactory(failing))
+                register(RollbackDiscoveryFactory(healthy))
+            }
+        }
+        try {
+            kit.startAdvertising()
+            kit.startDiscovery()
+            kit.notifyAppBackgrounded()
+            val failed = withTimeout(5_000) {
+                assertIs<FeatureState.Failed>(kit.advertisingState.first { it is FeatureState.Failed })
+            }
+            withTimeout(5_000) { kit.discoveryState.first { it == FeatureState.Idle } }
+            val error = assertIs<P2pError.ConnectionFailed>(failed.error)
+            val aggregate = assertIs<CleanupAggregateException>(error.cause)
+            assertSame(providerFailure, aggregate.issues.single().cause)
+            assertEquals(1, failing.stopAdvertisingCalls)
+            assertEquals(1, healthy.stopAdvertisingCalls)
+            assertEquals(1, failing.stopDiscoveryCalls)
+            assertEquals(1, healthy.stopDiscoveryCalls)
+            assertTrue(failing.advertisingActive, "failed cleanup must not be presented as settled")
+            assertFalse(healthy.advertisingActive)
+            assertFalse(failing.discoveryActive)
+            assertFalse(healthy.discoveryActive)
+            assertEquals(P2pState.Running, kit.state.value)
+            val warning = recording.entries.single { it.message == "Background advertising stop failed" }
+            assertEquals(RecordingLogger.Level.WARN, warning.level)
+            assertSame(error, warning.throwable, "the logger and feature flow must describe the same failure")
+        } finally {
+            failing.stopAdvertisingFailure = null
+            try {
+                kit.stop()
+            } finally {
+                store.clear()
+            }
         }
     }
 
