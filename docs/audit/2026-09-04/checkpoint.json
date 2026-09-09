@@ -5,31 +5,31 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "d5d0c1ea72324fd8f04dc55deae93692f3d0fe0f",
-  "sourceCheckpointTree": "e0aaf19895def88732c68742d73687be612f01ef",
+  "sourceCheckpointCommit": "ffd92738009638d4a4832c575530d03c2b930e54",
+  "sourceCheckpointTree": "3baa110085b8a323fb8045fa5ad1e02641ab3ac5",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
   "activeIssue": null,
-  "activeIssueState": "NO_ACTIVE_ISSUE_IMPLEMENTATION;25_COHORT_ROWS_APPROVED;3_APPLE_SOURCE_PREPARED_PENDING_EXECUTION;LOCAL_PUBLICATION_AND_FOCUSED_WINDOWS_FOLLOWUP_PENDING",
-  "issueCountDenominator": 191,
+  "activeIssueState": "CONTINUING_REPAIRS; APPLIED_CANDIDATES_REQUIRE_FINAL_PER_ROW_APPROVAL; WHOLE_AUDIT_NOT_READY",
+  "issueCountDenominator": 193,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
     "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
-    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 100,
-    "PENDING_REMEDIATION": 69
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 145,
+    "PENDING_REMEDIATION": 26
   },
-  "completedIssueCount": 100,
-  "remainingIssueCount": 91,
-  "percentageMeaning": "100/191 independently approved repository-repair rows (52.4%); 91 remaining (47.6%): 69 Low repairs, 21 external-validation rows and architecture decision #120; 58 new audit findings. Counts are not effort, GitHub closure, platform acceptance or readiness.",
-  "githubIssueListRefreshedUtc": "2026-09-09T08:30:45.411979+00:00",
-  "githubTotalIssuesAtRefresh": 298,
-  "githubOpenIssuesAtRefresh": 191,
-  "newAuditIssueCount": 58,
+  "completedIssueCount": 145,
+  "remainingIssueCount": 48,
+  "percentageMeaning": "145/193 independently approved repository-repair rows (75.1%); 48 remaining (24.9%): 26 repair-category rows, 21 external-validation rows and architecture decision #120; 60 new audit findings. Counts are not effort, GitHub closures, platform acceptance or release readiness.",
+  "githubIssueListRefreshedUtc": "2026-09-09T12:04:20.651772+00:00",
+  "githubTotalIssuesAtRefresh": 300,
+  "githubOpenIssuesAtRefresh": 193,
+  "newAuditIssueCount": 60,
   "rawEvidenceIncludedInGit": false,
   "originalEvidenceContinuity": "Some original raw evidence and initial audit ledger were lost. Recovered summaries are not original logs. Later raw evidence remains private. Fresh corroboration and integrated verification required.",
   "scope": "Branch continuation only; not a merge, release, independent crypto assurance, or physical-device completion.",
   "preservedDraftCommit": "eb564e9487f2887f83f519575c82d4e7657864cb",
   "preservedDraftTree": "69161ac65e02bbf33d390bde2575d3131a9d7996",
-  "lastReviewedIssue": 377,
+  "lastReviewedIssue": 282,
   "lastIntegratedCheck": {
     "commit": "d1523e889c6760098bf881c505971666d435f3aa",
     "tree": "a70c3e214c30e80c0e3d6dbd702351e907fcd937",
@@ -995,35 +995,55 @@
     "scope": "Complete four-file failed-destination cleanup correction APPROVED/pushed. Three-test original repro2failures/1control;final-test original production JVM10/8failures/2controls,Android16/7failures/9controls;focused33passes;three restored mutations. Full2459passes/0failure/error/1manual skip;14static gates;1797sealed entries/28cleanup receipts. Two compilation failures and initial evidence-verifier failure retained. No API/ABI/wire/authentication/dependency/durability change. Physical/ART/OEM/independent gates pending."
   },
   "lastReviewedIssues": [
-    184,
-    188,
-    211,
-    267,
-    268,
-    285,
-    296,
-    306,
-    311,
-    314,
-    326,
-    327,
-    331,
-    333,
-    347,
-    361,
-    362,
-    364,
-    365,
-    366,
-    372,
-    374,
-    375,
-    376,
-    377
+    288,
+    312,
+    316,
+    239,
+    273,
+    276,
+    277,
+    243,
+    205,
+    206,
+    217,
+    281,
+    167,
+    169,
+    240,
+    241,
+    255,
+    245,
+    256,
+    249,
+    252,
+    218,
+    342,
+    272,
+    292,
+    220,
+    212,
+    219,
+    213,
+    215,
+    237,
+    216,
+    307,
+    309,
+    248,
+    168,
+    173,
+    232,
+    260,
+    271,
+    302,
+    230,
+    195,
+    278,
+    282
   ],
   "requestedStop": "NONE; owner resumed completed transfer checkpoint and authorized continued sequential repairs plus GitHub Actions for supported Mac/Windows/Apple gates.",
-  "lastSourceBaselineCommit": "6a2a78c9ba45038278641bd4770d841f0e863ac9",
-  "lastSourceBaselineTree": "aa6d47e595db885d785ccc9ada5b40cb77703e85",
+  "lastSourceBaselineCommit": "f58e13b4d0a11b545b5ab569127327e76b27782f",
+  "lastSourceBaselineTree": "8634a37ae2de07e77f72c5b4644c5474056657f9",
   "mainCommitAtSourcePush": "eb444cccfc290be5435c5c10629c24183293606f",
   "continuationDelivery": "Source and safe context on audit branch; clone cannot transfer accounts, private raw evidence, historical stashes or live agents/session. Record actual checkout HEAD/tree; administrative commits follow reviewed source without rebinding its verification.",
   "completedInvestigation144": {
@@ -1083,7 +1103,7 @@
     "scope": "Historical transfer-device cleanup at the prior checkpoint. Every source invocation stopped its task-isolated wrapper/owned workers. Three ignored unused project caches were removed after separate stop and no-open-descriptor checks. Shared caches, private evidence, settings, source/stashes and unrelated projects were preserved. Later admin/push receipts are separate."
   },
   "pendingRepairSeverities": {
-    "low": 69
+    "low": 26
   },
   "githubRefreshEvidence": {
     "startedUtc": "2026-09-08T10:24:33.734412+00:00",
@@ -1255,12 +1275,8 @@
     "invocationOwnedSurvivors": [],
     "scope": "Every #145 build/test/failure finalized its task-isolated wrapper stop and owned-worker cleanup; dependent disposable outputs removed. Source,protected files,required evidence,shared caches and unrelated tasks preserved. This receipt does not cover later#367 work."
   },
-  "continuationQueue": [
-    330,
-    341,
-    363
-  ],
-  "continuationQueueScope": "Publish only focused audit-branch source and safe ledgers after final source bindings, fresh Actions/ref observation and one held global local/hosted build lease. The current workflow selects only the bounded Windows durable-transfer follow-up; inspect its exact selected-class XML, platform event, source/stop/owned-output cleanup and complete/salvage artifact identity. It is not the former full Windows-to-Apple chain or full-host acceptance. A separately reviewed literal Apple selection/allocation is needed for330/341/363 and remaining Apple gates. Finish current Linux check, LAN strict Dokka and applicable consumer/release/whole-repository corroboration; then continue dependency-aware pending repairs. Preserve original trial failures and same-issue findings;133 independent NOT_STARTED. No checkpoint stop.",
+  "continuationQueue": [],
+  "continuationQueueScope": "Continue the next source-prepared cohort without counting unapplied/unapproved work. Complete focused Windows172/176/378, Apple156/158/250/261/275/279 plus prior330/341/363, and candidate publication-artifact/license236 validation. These hosted tasks are pending, not inherently unavailable hardware. Keep274/284 owner decisions and287 current-contract refutation in the denominator, and379 separate from approved173. Finish current whole-repository corroboration, ./gradlew check --console=plain, applicable sample/consumer and release gates. Prefer smallest meaningful scopes and shared cycles; serialize local/hosted resource-heavy runs and preserve every earlier failure and external limit.",
   "completedInvestigation145": {
     "issue": 145,
     "baselineCommit": "d823bb9cc0d187ec746714af67b08904a28331b6",
@@ -1274,7 +1290,7 @@
     "status": "OWNER_AUTHORIZED_TRIAL1_AND2_FAILED_PREINVOKE_TRIAL3_PENDING",
     "scope": "After final independent approval of the exact eleven administrative files and applied bytes, refresh live Actions and audit/main/PR refs, hold the one global local/hosted execution lease, freeze the exact approved source tree, and pause all local builds/tests BEFORE the audit-branch push that triggers the hosted workflow. With that lease and source freeze already held, push only the audit branch, verify its exact remote commit/tree and record the outcome separately, then inspect the controlled Windows -> ARM Mac -> Intel Mac trial under the same lease. Verify native controls, actual SDK admission, strict dependency/source/stop/ownership/full-artifact evidence before advancing. Both failed hosted trials remain unsafe/partial and remote cleanup/full-tree NOT_PROVEN; a local lease release is not remote cleanup. #268/#133 remain NOT_STARTED; continue all feasible sequential work. No new physical/hostile-network/independent/pro-crypto/main/settings/release authority."
   },
-  "lastDispositionUpdateUtc": "2026-09-09T08:46:16.352677+00:00",
+  "lastDispositionUpdateUtc": "2026-09-09T12:46:17.630027+00:00",
   "previousGithubRefreshEvidence145": {
     "startedUtc": "2026-09-08T09:17:23.275604+00:00",
     "endedUtc": "2026-09-08T09:28:07.480134+00:00",
@@ -2003,22 +2019,25 @@
     "tree": "db432eb14791d9637e812333305e811edceb834e"
   },
   "activeWorkItem": {
-    "name": "COHORT_PUBLICATION_FOCUSED_WINDOWS_FOLLOWUP_AND_REMAINING_VERIFICATION",
-    "status": "LOCAL_COMMITTED_NOT_PUSHED;CORRECTED_WINDOWS_AND_APPLE_NOT_RUN;WHOLE_AUDIT_NOT_READY",
+    "name": "REMAINING_REPAIRS_AND_AFFECTED_VERIFICATION",
+    "status": "IN_PROGRESS_NOT_READY",
     "owner": "primary agent",
-    "scope": "Publish only focused audit-branch source and safe ledgers after final source bindings, fresh Actions/ref observation and one held global local/hosted build lease. The current workflow selects only the bounded Windows durable-transfer follow-up; inspect its exact selected-class XML, platform event, source/stop/owned-output cleanup and complete/salvage artifact identity. It is not the former full Windows-to-Apple chain or full-host acceptance. A separately reviewed literal Apple selection/allocation is needed for330/341/363 and remaining Apple gates. Finish current Linux check, LAN strict Dokka and applicable consumer/release/whole-repository corroboration; then continue dependency-aware pending repairs. Preserve original trial failures and same-issue findings;133 independent NOT_STARTED. No checkpoint stop."
+    "scope": "Continue the next source-prepared cohort without counting unapplied/unapproved work. Complete focused Windows172/176/378, Apple156/158/250/261/275/279 plus prior330/341/363, and candidate publication-artifact/license236 validation. These hosted tasks are pending, not inherently unavailable hardware. Keep274/284 owner decisions and287 current-contract refutation in the denominator, and379 separate from approved173. Finish current whole-repository corroboration, ./gradlew check --console=plain, applicable sample/consumer and release gates. Prefer smallest meaningful scopes and shared cycles; serialize local/hosted resource-heavy runs and preserve every earlier failure and external limit."
   },
   "latestGithubListObservation": {
-    "startedUtc": "2026-09-09T08:30:40.086312+00:00",
-    "finishedUtc": "2026-09-09T08:30:45.411979+00:00",
-    "totalIssues": 298,
-    "openIssues": 191,
+    "startedUtc": "2026-09-09T12:04:11.725046+00:00",
+    "finishedUtc": "2026-09-09T12:04:20.651772+00:00",
+    "totalIssues": 300,
+    "openIssues": 193,
     "pullRequests": 79,
     "openPullRequests": 7,
-    "dedicatedPrListFinishedUtc": "2026-09-09T08:30:46.470229+00:00",
-    "scope": "Fresh all-state list/full bodies and five own histories373-377; no existing list/PR contract deltas versus06:49. All other03:25 full histories/PR/upstream sets explicitly historical; unseen timeline/upstream changes not excluded. Not repair approval or a lease.",
-    "reportSha256": "dde8a58f2a90b01ce0f5677c56aed5eedb4d1d992f27280efc0ad0ffacd01b52",
-    "reconciliationSha256": "a8090130f8288721a43bc09415c735c1c9c31b3f47da829e5aeaf3bcd1d4ad5b"
+    "issueStyleBodies": 379,
+    "conversationComments": 495,
+    "inlineReviewComments": 0,
+    "summarySha256": "50132ca90ab118d29dd73015f5d6e4ec84b66807411de87e1350fac7e96515fb",
+    "scope": "All repository issue/PR bodies and complete global conversation and inline-review comments freshly fetched; open PR list metadata fresh. Closed PR detailed reviews/commits/files and issue timelines retain previous complete captures; not a new full-history refresh, no Actions/ref execution lease. Initial unsupported --slurp attempt120329 made no HTTP request; retained separately.",
+    "freshCompleteHistories": false,
+    "previousFullCaptureReference": "latestGithubFullRefresh (historical, unchanged)"
   },
   "completedInvestigation223": {
     "issue": 223,
@@ -2407,8 +2426,8 @@
     "sealedUtc": "2026-09-08T19:50:01.960459+00:00",
     "scope": "Fresh complete local own histories and all returned local/first-hop PR collections, including closed decisions. Actual payload comparison, not equality inferred from counters. Eight upstream content gaps and omitted patches remain; no full textual patch reconstruction or semantic re-audit of every unchanged claim/current caller. Per-endpoint, not transactional/current indefinitely or an execution lease. Local freshness ends19:22:50; later upstream/analysis/sealing does not extend it. #369 not present in this capture; individually added later. Earlier10h/16h/18h records and historical row states remain unchanged."
   },
-  "sourceCheckpointScope": "Nine independently source-reviewed local commits after6a2a78c9; d5d0c1e is the separate focused hosted facility. Eight product/docs commits through59f6abc include three unexecuted Apple repairs; review/commit is not publication or native acceptance.",
-  "lastScopedVerificationRole": "Final373 staged-source Linux fixture/static verification and original controls, independently inspected. Not clean-commit or corrected native Windows/product/Apple execution. Separate operational request gates have their own binding.",
+  "sourceCheckpointScope": "Latest explicitly independently approved committed source recorded below, not later working-tree candidates, publication or foreign-platform acceptance.",
+  "lastScopedVerificationRole": "Latest scoped evidence is the continued cohort; prior373 verification preserved separately. Current whole-check still pending.",
   "latestAffectedGateAttemptRole": "Historical #223 wrapper fixture attempt binding retained unchanged; current373 fixture/static evidence is lastScopedVerification, not a new product command.",
   "hostedValidationFacility": {
     "name": "SERIALIZED_HOSTED_MAC_WINDOWS_APPLE_VALIDATION_FACILITY",
@@ -3128,7 +3147,7 @@
     "sealedBytes": 19280452,
     "scope": "Narrow fresh371addition/directbacklinkcontext and start/end allstate list observation; NOT another full postwrite history refresh. Fresh lists do not refresh365other histories/79PRsets/117upstream. Filing and parent source approval remain separate; no closure, new runtime/native acceptance or implementation approval by metadata task."
   },
-  "lastIntegratedCheckRole": "Last successful integrated check remains historical clean-d152 (1607/199XML). The later cohort r1 is a failed aggregate, and r2 is exactly one corrected case. See lastIntegratedAttempt; no current whole-check pass.",
+  "lastIntegratedCheckRole": "Last successful full integrated check remains historical clean-d152, not current source. Later focused successes do not convert failed aggregate checks into PASS.",
   "previousGithubFullRefreshHosted1608": {
     "startedUtc": "2026-09-08T16:02:38.964754+00:00",
     "endedUtc": "2026-09-08T16:08:26.627459+00:00",
@@ -5226,1239 +5245,17 @@
     "nativeAcceptance": "TRIAL3_NOT_EXECUTED;NO_NATIVE_SDK_RESULT"
   },
   "lastScopedVerification": {
-    "source": {
-      "recordedUtc": "2026-09-09T03:05:41.007449+00:00",
-      "baselineCommit": "bafe905ac030d090219352de8a2358695755b528",
-      "baselineTree": "91d469eb09c8a612bf7dd9f7c5e2ce1f081634bb",
-      "stagedTree": "747189670275c32b9ef67b3f1842cb3fad3cb381",
-      "diffSha256": "e0836d4312f918e3288dc1001dfdd6b635592ecdc11f39ba430a91f766818d18",
-      "paths": {
-        "scripts/run-audit-command.py": {
-          "sha256": "c3fa28adcde3efbacb0f2b6aa70c1c77906c7f2dd9688bd49cf2e75261139a17",
-          "gitBlob": "837f712733c0a5b102e203447c17b63f0ae785e2"
-        },
-        "scripts/tests/run-audit-command-test.py": {
-          "sha256": "83f955dbf888228e5cdfa4808b9c63917cffd91d76fc7d56e7dd2f632a025d1e",
-          "gitBlob": "d35fa8c5b6ed286931c82e79fa001758ca3d66c6"
-        }
-      },
-      "scope": "Staged two-file source; not a clean commit, independent approval, or native host execution"
-    },
-    "selectedFinalGates": [
-      {
-        "name": "issue-373-native-cleanup-r2",
-        "command": [
-          "python3",
-          "-B",
-          "scripts/tests/run-audit-command-test.py",
-          "--expected-host",
-          "linux-x64",
-          "--evidence-root",
-          "<private-373-verification>/native-fixture-evidence-r2"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "7dc2db648bab39bcfcd858257c9d1495562b274a476873593b27912e2965d2dc",
-        "startedUtc": "2026-09-09T03:08:21.924716+00:00",
-        "finishedUtc": "2026-09-09T03:09:31.326647+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": true
-      },
-      {
-        "name": "issue-373-final-r2-preservation",
-        "command": [
-          "python3",
-          "-B",
-          "<private-373-verification>/check-preservation.py"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "cd380ec7f7f6805431f53ae996f180870513c14e7cece41523a821f5e7d07b85",
-        "startedUtc": "2026-09-09T03:12:25.661022+00:00",
-        "finishedUtc": "2026-09-09T03:12:27.268760+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-focused",
-        "command": [
-          "python3",
-          "-B",
-          "<private-373-verification>/select-tests.py",
-          "--result",
-          "<private-373-verification>/focused-r2-result.json",
-          "PurePolicyTests.test_cleanup_directory_identity_uses_full_stat_not_cached_fields",
-          "PurePolicyTests.test_cleanup_rejects_actual_cross_device_before_descending",
-          "PurePolicyTests.test_cleanup_revalidates_directory_type_before_descending",
-          "PurePolicyTests.test_cleanup_revalidates_directory_reparse_before_descending",
-          "PurePolicyTests.test_cleanup_rejects_unknown_cached_reparse_before_path_stat",
-          "PurePolicyTests.test_cleanup_directory_full_stat_errors_fail_closed",
-          "PurePolicyTests.test_cleanup_scan_failures_and_entry_bound_stay_fail_closed",
-          "PurePolicyTests.test_cleanup_initial_special_file_is_rejected_before_path_stat"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "3d1e2f68ca33364231791d10442cc7eaa135a38ecac75fc077f961e5e0fe3b11",
-        "startedUtc": "2026-09-09T03:12:27.340751+00:00",
-        "finishedUtc": "2026-09-09T03:12:28.493767+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-mutation-cached-device",
-        "command": [
-          "python3",
-          "-B",
-          "<private-373-verification>/mutation-control.py",
-          "cached-device"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "3162a8a1916d91ac68ca5f23a9130df58479cf3ffe39ce96b9ae18d83ed8140c",
-        "startedUtc": "2026-09-09T03:12:28.566925+00:00",
-        "finishedUtc": "2026-09-09T03:12:29.714921+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-mutation-missing-device-guard",
-        "command": [
-          "python3",
-          "-B",
-          "<private-373-verification>/mutation-control.py",
-          "missing-device-guard"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "396a7d64a2a6ccc2716a9b8b922e5e45168c6fb06a8a0c669740007c28320e03",
-        "startedUtc": "2026-09-09T03:12:29.785589+00:00",
-        "finishedUtc": "2026-09-09T03:12:30.938071+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-mutation-zero-child-wildcard",
-        "command": [
-          "python3",
-          "-B",
-          "<private-373-verification>/mutation-control.py",
-          "zero-child-wildcard"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "57a446d193241fdefbfba72b81a77c8de30b642a3a7152c1c42f19f1fa700ea5",
-        "startedUtc": "2026-09-09T03:12:31.009712+00:00",
-        "finishedUtc": "2026-09-09T03:12:32.162912+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-mutation-zero-root-wildcard",
-        "command": [
-          "python3",
-          "-B",
-          "<private-373-verification>/mutation-control.py",
-          "zero-root-wildcard"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "8a0b13ec199e7d8fd81b8ac65e3e397768f5e6650e9c5ff0db02893291b410fd",
-        "startedUtc": "2026-09-09T03:12:32.234466+00:00",
-        "finishedUtc": "2026-09-09T03:12:33.386238+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-mutation-missing-type-guard",
-        "command": [
-          "python3",
-          "-B",
-          "<private-373-verification>/mutation-control.py",
-          "missing-type-guard"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "df16f84c9c0dcad1a439637e20d67f43a8b1884df0e5399c02f49ca6a77d6dcd",
-        "startedUtc": "2026-09-09T03:12:33.455937+00:00",
-        "finishedUtc": "2026-09-09T03:12:34.604559+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-mutation-missing-reparse-guard",
-        "command": [
-          "python3",
-          "-B",
-          "<private-373-verification>/mutation-control.py",
-          "missing-reparse-guard"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "51d4190ad48e8e613ad381ae1c8fc1ad65a9591937b164d157e74972bb394088",
-        "startedUtc": "2026-09-09T03:12:34.675874+00:00",
-        "finishedUtc": "2026-09-09T03:12:35.824054+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-mutation-following-path-stat",
-        "command": [
-          "python3",
-          "-B",
-          "<private-373-verification>/mutation-control.py",
-          "following-path-stat"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "ee5c142a83987bd74fea6c1cbcbda314a81d0259edfdaaea35af8ac695bd949f",
-        "startedUtc": "2026-09-09T03:12:35.895798+00:00",
-        "finishedUtc": "2026-09-09T03:12:37.050059+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-mutation-initial-path-stat",
-        "command": [
-          "python3",
-          "-B",
-          "<private-373-verification>/mutation-control.py",
-          "initial-path-stat"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "d83d0ecfe79d8d1feb22b5cbf77dfdedde50cfc02a80370a10a0069985c6f55d",
-        "startedUtc": "2026-09-09T03:12:37.122943+00:00",
-        "finishedUtc": "2026-09-09T03:12:38.274791+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-mutation-following-entry-stat",
-        "command": [
-          "python3",
-          "-B",
-          "<private-373-verification>/mutation-control.py",
-          "following-entry-stat"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "795845cb2a0678318edcb7c1037470a6d3f091dcbcf37f84cca4f57678f8b7e5",
-        "startedUtc": "2026-09-09T03:12:38.345975+00:00",
-        "finishedUtc": "2026-09-09T03:12:39.500568+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-host",
-        "command": [
-          "python3",
-          "-B",
-          "scripts/tests/audit-host-test.py",
-          "-v"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "53d1e493159f1b2376503806bca7a9b66154178cd864b7eb115708dff1bd35c2",
-        "startedUtc": "2026-09-09T03:12:39.571298+00:00",
-        "finishedUtc": "2026-09-09T03:12:46.427703+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-workflow",
-        "command": [
-          "python3",
-          "-B",
-          "scripts/tests/audit-host-workflow-test.py",
-          "-v"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "cdc3ffdd6a92bdc609366af33ca7ec4227ec6c2ad5dd2b4bd59398dda346f4c3",
-        "startedUtc": "2026-09-09T03:12:46.490220+00:00",
-        "finishedUtc": "2026-09-09T03:12:50.484522+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-leaf",
-        "command": [
-          "python3",
-          "-B",
-          "scripts/tests/audit-leaf-hooks-test.py",
-          "-v"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "d13323a5badf1bf6c653efc1c9ba05f9d9b243f0f59331ffbfbc04718e74f6c6",
-        "startedUtc": "2026-09-09T03:12:50.548460+00:00",
-        "finishedUtc": "2026-09-09T03:13:15.241067+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-consumer",
-        "command": [
-          "python3",
-          "-B",
-          "scripts/tests/audit-consumer-test.py",
-          "-v"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "b374cdc2ad1392ad66216eef1db98ff5a0cefb12b849474f92cf1135a17a0202",
-        "startedUtc": "2026-09-09T03:13:15.312944+00:00",
-        "finishedUtc": "2026-09-09T03:14:57.035146+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-wrapper",
-        "command": [
-          "bash",
-          "scripts/check-gradle-wrapper.sh"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "24c56f706fee7e898f90953a5311bcc53a5736030a35b45d150e9c6031487e6e",
-        "startedUtc": "2026-09-09T03:14:57.107960+00:00",
-        "finishedUtc": "2026-09-09T03:14:58.105647+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-wrapper-checkout",
-        "command": [
-          "bash",
-          "scripts/tests/check-gradle-wrapper-test.sh"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "62c278597c529f43d23889e49355ab93f1d6d810931f27ea19358ec3c361963d",
-        "startedUtc": "2026-09-09T03:14:58.174683+00:00",
-        "finishedUtc": "2026-09-09T03:15:00.132943+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-layout",
-        "command": [
-          "bash",
-          "scripts/tests/check-repository-layout.sh"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "e60e46a92111372e62766e5fe9d5e1581edf58faca334071996bfcb84cababd4",
-        "startedUtc": "2026-09-09T03:15:00.204518+00:00",
-        "finishedUtc": "2026-09-09T03:15:01.305658+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-osv-lock",
-        "command": [
-          "bash",
-          "scripts/tests/check-osv-lockfile-coverage.sh"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "1a57bd5e98b96c5e1a1ea3af81d4f4e898521878c22bb26dc27b6fe5316c55ea",
-        "startedUtc": "2026-09-09T03:15:01.376522+00:00",
-        "finishedUtc": "2026-09-09T03:15:02.369402+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-links",
-        "command": [
-          "bash",
-          "scripts/tests/check-markdown-links.sh"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "330c3b0c89a56bc8b8d060ae3cf01ab3783b6832a68060555d30d020155f4ddd",
-        "startedUtc": "2026-09-09T03:15:02.441323+00:00",
-        "finishedUtc": "2026-09-09T03:15:03.576398+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-metadata",
-        "command": [
-          "bash",
-          "scripts/check-release-metadata.sh"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "f4200a9bfa807fa59ee71201be06a33ba020eae0328d01681ed175633f4de207",
-        "startedUtc": "2026-09-09T03:15:03.660379+00:00",
-        "finishedUtc": "2026-09-09T03:15:04.763319+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-release-workflow",
-        "command": [
-          "bash",
-          "scripts/tests/release-workflow-test.sh"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "e46b3fe52cd2695c9185f5b9868cb296b018ea56c3167a6d917e97f1028d99bd",
-        "startedUtc": "2026-09-09T03:15:04.835859+00:00",
-        "finishedUtc": "2026-09-09T03:15:12.634873+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-whitespace",
-        "command": [
-          "bash",
-          "scripts/check-git-whitespace.sh"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "714e6488a7610519a49f1fa45c575070a683e4126f97eade0cc03b5c2adf3f1c",
-        "startedUtc": "2026-09-09T03:15:12.706096+00:00",
-        "finishedUtc": "2026-09-09T03:15:13.701037+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-working-diff",
-        "command": [
-          "git",
-          "diff",
-          "--check"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "e7fda5e5d83d9113c820f12c5b501e3bd359e7e8493618fc058e3531ea63bad2",
-        "startedUtc": "2026-09-09T03:15:13.772988+00:00",
-        "finishedUtc": "2026-09-09T03:15:14.670433+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      },
-      {
-        "name": "issue-373-final-r2-staged-diff",
-        "command": [
-          "git",
-          "diff",
-          "--cached",
-          "--check"
-        ],
-        "exitCode": 0,
-        "receiptSha256": "86069233d7ec4a0a49fb688d7a99961a2f0b1dfec7018b4e92f43ee3976b400b",
-        "startedUtc": "2026-09-09T03:15:14.739451+00:00",
-        "finishedUtc": "2026-09-09T03:15:15.630966+00:00",
-        "stopExitCode": 0,
-        "ownedSurvivors": {},
-        "removedOutputs": [],
-        "sourceUnchanged": true,
-        "alreadyCompletedSameRevisionNotRerun": false
-      }
+    "sourceCommit": "ffd92738009638d4a4832c575530d03c2b930e54",
+    "sourceTree": "3baa110085b8a323fb8045fa5ad1e02641ab3ac5",
+    "invocations": [
+      "cohort-0910-focused-r2",
+      "cohort-0911-focused-r1",
+      "cohort-0911-focused-r2",
+      "cohort-0911-focused-r3",
+      "cohort-0911-static-r3"
     ],
-    "allOwnLeaves": [
-      {
-        "name": "issue-373-original-cleanup-identity",
-        "sha256": "083f95711040ede80030e475aa03b518f19da9133e5dfd9a2c26bd55737d5aa5",
-        "startedUtc": "2026-09-09T02:57:33.292912+00:00",
-        "finishedUtc": "2026-09-09T02:57:34.390924+00:00",
-        "commandExitCode": 1,
-        "finalExitCode": 1,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-focused-cleanup-r1",
-        "sha256": "aebc59188a9dfeaec943adb88bb776d318e3d49f8ab4896dd57c66bb623fe01b",
-        "startedUtc": "2026-09-09T03:01:05.057626+00:00",
-        "finishedUtc": "2026-09-09T03:01:06.213025+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-native-cleanup-r2",
-        "sha256": "7dc2db648bab39bcfcd858257c9d1495562b274a476873593b27912e2965d2dc",
-        "startedUtc": "2026-09-09T03:08:21.924716+00:00",
-        "finishedUtc": "2026-09-09T03:09:31.326647+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-preservation",
-        "sha256": "cd380ec7f7f6805431f53ae996f180870513c14e7cece41523a821f5e7d07b85",
-        "startedUtc": "2026-09-09T03:12:25.661022+00:00",
-        "finishedUtc": "2026-09-09T03:12:27.268760+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-focused",
-        "sha256": "3d1e2f68ca33364231791d10442cc7eaa135a38ecac75fc077f961e5e0fe3b11",
-        "startedUtc": "2026-09-09T03:12:27.340751+00:00",
-        "finishedUtc": "2026-09-09T03:12:28.493767+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-mutation-cached-device",
-        "sha256": "3162a8a1916d91ac68ca5f23a9130df58479cf3ffe39ce96b9ae18d83ed8140c",
-        "startedUtc": "2026-09-09T03:12:28.566925+00:00",
-        "finishedUtc": "2026-09-09T03:12:29.714921+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-mutation-missing-device-guard",
-        "sha256": "396a7d64a2a6ccc2716a9b8b922e5e45168c6fb06a8a0c669740007c28320e03",
-        "startedUtc": "2026-09-09T03:12:29.785589+00:00",
-        "finishedUtc": "2026-09-09T03:12:30.938071+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-mutation-zero-child-wildcard",
-        "sha256": "57a446d193241fdefbfba72b81a77c8de30b642a3a7152c1c42f19f1fa700ea5",
-        "startedUtc": "2026-09-09T03:12:31.009712+00:00",
-        "finishedUtc": "2026-09-09T03:12:32.162912+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-mutation-zero-root-wildcard",
-        "sha256": "8a0b13ec199e7d8fd81b8ac65e3e397768f5e6650e9c5ff0db02893291b410fd",
-        "startedUtc": "2026-09-09T03:12:32.234466+00:00",
-        "finishedUtc": "2026-09-09T03:12:33.386238+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-mutation-missing-type-guard",
-        "sha256": "df16f84c9c0dcad1a439637e20d67f43a8b1884df0e5399c02f49ca6a77d6dcd",
-        "startedUtc": "2026-09-09T03:12:33.455937+00:00",
-        "finishedUtc": "2026-09-09T03:12:34.604559+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-mutation-missing-reparse-guard",
-        "sha256": "51d4190ad48e8e613ad381ae1c8fc1ad65a9591937b164d157e74972bb394088",
-        "startedUtc": "2026-09-09T03:12:34.675874+00:00",
-        "finishedUtc": "2026-09-09T03:12:35.824054+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-mutation-following-path-stat",
-        "sha256": "ee5c142a83987bd74fea6c1cbcbda314a81d0259edfdaaea35af8ac695bd949f",
-        "startedUtc": "2026-09-09T03:12:35.895798+00:00",
-        "finishedUtc": "2026-09-09T03:12:37.050059+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-mutation-initial-path-stat",
-        "sha256": "d83d0ecfe79d8d1feb22b5cbf77dfdedde50cfc02a80370a10a0069985c6f55d",
-        "startedUtc": "2026-09-09T03:12:37.122943+00:00",
-        "finishedUtc": "2026-09-09T03:12:38.274791+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-mutation-following-entry-stat",
-        "sha256": "795845cb2a0678318edcb7c1037470a6d3f091dcbcf37f84cca4f57678f8b7e5",
-        "startedUtc": "2026-09-09T03:12:38.345975+00:00",
-        "finishedUtc": "2026-09-09T03:12:39.500568+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-host",
-        "sha256": "53d1e493159f1b2376503806bca7a9b66154178cd864b7eb115708dff1bd35c2",
-        "startedUtc": "2026-09-09T03:12:39.571298+00:00",
-        "finishedUtc": "2026-09-09T03:12:46.427703+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-workflow",
-        "sha256": "cdc3ffdd6a92bdc609366af33ca7ec4227ec6c2ad5dd2b4bd59398dda346f4c3",
-        "startedUtc": "2026-09-09T03:12:46.490220+00:00",
-        "finishedUtc": "2026-09-09T03:12:50.484522+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-leaf",
-        "sha256": "d13323a5badf1bf6c653efc1c9ba05f9d9b243f0f59331ffbfbc04718e74f6c6",
-        "startedUtc": "2026-09-09T03:12:50.548460+00:00",
-        "finishedUtc": "2026-09-09T03:13:15.241067+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-consumer",
-        "sha256": "b374cdc2ad1392ad66216eef1db98ff5a0cefb12b849474f92cf1135a17a0202",
-        "startedUtc": "2026-09-09T03:13:15.312944+00:00",
-        "finishedUtc": "2026-09-09T03:14:57.035146+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-wrapper",
-        "sha256": "24c56f706fee7e898f90953a5311bcc53a5736030a35b45d150e9c6031487e6e",
-        "startedUtc": "2026-09-09T03:14:57.107960+00:00",
-        "finishedUtc": "2026-09-09T03:14:58.105647+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-wrapper-checkout",
-        "sha256": "62c278597c529f43d23889e49355ab93f1d6d810931f27ea19358ec3c361963d",
-        "startedUtc": "2026-09-09T03:14:58.174683+00:00",
-        "finishedUtc": "2026-09-09T03:15:00.132943+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-layout",
-        "sha256": "e60e46a92111372e62766e5fe9d5e1581edf58faca334071996bfcb84cababd4",
-        "startedUtc": "2026-09-09T03:15:00.204518+00:00",
-        "finishedUtc": "2026-09-09T03:15:01.305658+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-osv-lock",
-        "sha256": "1a57bd5e98b96c5e1a1ea3af81d4f4e898521878c22bb26dc27b6fe5316c55ea",
-        "startedUtc": "2026-09-09T03:15:01.376522+00:00",
-        "finishedUtc": "2026-09-09T03:15:02.369402+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-links",
-        "sha256": "330c3b0c89a56bc8b8d060ae3cf01ab3783b6832a68060555d30d020155f4ddd",
-        "startedUtc": "2026-09-09T03:15:02.441323+00:00",
-        "finishedUtc": "2026-09-09T03:15:03.576398+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-metadata",
-        "sha256": "f4200a9bfa807fa59ee71201be06a33ba020eae0328d01681ed175633f4de207",
-        "startedUtc": "2026-09-09T03:15:03.660379+00:00",
-        "finishedUtc": "2026-09-09T03:15:04.763319+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-release-workflow",
-        "sha256": "e46b3fe52cd2695c9185f5b9868cb296b018ea56c3167a6d917e97f1028d99bd",
-        "startedUtc": "2026-09-09T03:15:04.835859+00:00",
-        "finishedUtc": "2026-09-09T03:15:12.634873+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-whitespace",
-        "sha256": "714e6488a7610519a49f1fa45c575070a683e4126f97eade0cc03b5c2adf3f1c",
-        "startedUtc": "2026-09-09T03:15:12.706096+00:00",
-        "finishedUtc": "2026-09-09T03:15:13.701037+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-working-diff",
-        "sha256": "e7fda5e5d83d9113c820f12c5b501e3bd359e7e8493618fc058e3531ea63bad2",
-        "startedUtc": "2026-09-09T03:15:13.772988+00:00",
-        "finishedUtc": "2026-09-09T03:15:14.670433+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      },
-      {
-        "name": "issue-373-final-r2-staged-diff",
-        "sha256": "86069233d7ec4a0a49fb688d7a99961a2f0b1dfec7018b4e92f43ee3976b400b",
-        "startedUtc": "2026-09-09T03:15:14.739451+00:00",
-        "finishedUtc": "2026-09-09T03:15:15.630966+00:00",
-        "commandExitCode": 0,
-        "finalExitCode": 0,
-        "stopExitCode": 0,
-        "sourceUnchanged": true,
-        "ownedSurvivors": {},
-        "removedOutputs": []
-      }
-    ],
-    "suites": {
-      "native": {
-        "tests": 59,
-        "failures": 0,
-        "errors": 0,
-        "skips": 0,
-        "logSha256": "3ebb9089f75dd814b5dff9d485d8f18c7a938f21a65414a84afec8656cead515"
-      },
-      "host": {
-        "tests": 91,
-        "failures": 0,
-        "errors": 0,
-        "skips": 0,
-        "logSha256": "2b16353c91a085986e9bddeed403cf68cc02cc298588696521ba47946736ea42"
-      },
-      "workflow": {
-        "tests": 51,
-        "failures": 0,
-        "errors": 0,
-        "skips": 0,
-        "logSha256": "ffc51ee73b0a40fa4c60f0aed419e4660b7d03dd2e5f5824cad65a3cb76ab39b"
-      },
-      "leaf": {
-        "tests": 27,
-        "failures": 0,
-        "errors": 0,
-        "skips": 0,
-        "logSha256": "8856049c301183a1fe795ff163f2ea86c6c0746151c67ae92200e3580eeb31ac"
-      },
-      "consumer": {
-        "tests": 32,
-        "failures": 0,
-        "errors": 0,
-        "skips": 0,
-        "logSha256": "a6fe2d36f4cdb9192488776097c056e6516f40f4d2482be8ebe6024ebb17983d"
-      }
-    },
-    "originalReproduction": {
-      "methods": [
-        "PurePolicyTests.test_cleanup_directory_identity_uses_full_stat_not_cached_fields",
-        "PurePolicyTests.test_cleanup_rejects_unknown_cached_reparse_before_path_stat",
-        "PurePolicyTests.test_cleanup_initial_special_file_is_rejected_before_path_stat"
-      ],
-      "testsRun": 3,
-      "failures": 0,
-      "errors": 2,
-      "skipped": 0,
-      "successful": false,
-      "failedIds": [],
-      "errorIds": [
-        "cleanup_tests.PurePolicyTests.test_cleanup_directory_identity_uses_full_stat_not_cached_fields (cached=0, full=47)",
-        "cleanup_tests.PurePolicyTests.test_cleanup_directory_identity_uses_full_stat_not_cached_fields (cached=47, full=0)"
-      ],
-      "scope": "Actual source methods on Linux with modeled metadata; not native Windows/product acceptance"
-    },
-    "focused": {
-      "r1": {
-        "methods": [
-          "PurePolicyTests.test_cleanup_directory_identity_uses_full_stat_not_cached_fields",
-          "PurePolicyTests.test_cleanup_rejects_actual_cross_device_before_descending",
-          "PurePolicyTests.test_cleanup_revalidates_directory_type_before_descending",
-          "PurePolicyTests.test_cleanup_revalidates_directory_reparse_before_descending",
-          "PurePolicyTests.test_cleanup_rejects_unknown_cached_reparse_before_path_stat",
-          "PurePolicyTests.test_cleanup_directory_full_stat_errors_fail_closed",
-          "PurePolicyTests.test_cleanup_scan_failures_and_entry_bound_stay_fail_closed",
-          "PurePolicyTests.test_cleanup_initial_special_file_is_rejected_before_path_stat"
-        ],
-        "testsRun": 8,
-        "failures": 0,
-        "errors": 0,
-        "skipped": 0,
-        "successful": true,
-        "failedIds": [],
-        "errorIds": [],
-        "scope": "Actual source methods on Linux with modeled metadata; not native Windows/product acceptance"
-      },
-      "r2": {
-        "methods": [
-          "PurePolicyTests.test_cleanup_directory_identity_uses_full_stat_not_cached_fields",
-          "PurePolicyTests.test_cleanup_rejects_actual_cross_device_before_descending",
-          "PurePolicyTests.test_cleanup_revalidates_directory_type_before_descending",
-          "PurePolicyTests.test_cleanup_revalidates_directory_reparse_before_descending",
-          "PurePolicyTests.test_cleanup_rejects_unknown_cached_reparse_before_path_stat",
-          "PurePolicyTests.test_cleanup_directory_full_stat_errors_fail_closed",
-          "PurePolicyTests.test_cleanup_scan_failures_and_entry_bound_stay_fail_closed",
-          "PurePolicyTests.test_cleanup_initial_special_file_is_rejected_before_path_stat"
-        ],
-        "testsRun": 8,
-        "failures": 0,
-        "errors": 0,
-        "skipped": 0,
-        "successful": true,
-        "failedIds": [],
-        "errorIds": [],
-        "scope": "Actual source methods on Linux with modeled metadata; not native Windows/product acceptance"
-      }
-    },
-    "mutationOracles": [
-      {
-        "mutation": "cached-device",
-        "selectedActualMethod": "test_cleanup_directory_identity_uses_full_stat_not_cached_fields",
-        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
-        "mutatedFunctionSha256": "cab71adb3abd24b6c78073558f18091b986c98114e7a138c261083f808af7530",
-        "testsRun": 1,
-        "failures": 0,
-        "errors": 2,
-        "skipped": 0,
-        "expectedFailures": 0,
-        "expectedErrors": 2,
-        "requiredFailureMechanisms": [
-          "Cross-device descendant directory blocks cleanup"
-        ],
-        "oraclePass": true,
-        "sourceUnchanged": true,
-        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
-      },
-      {
-        "mutation": "missing-device-guard",
-        "selectedActualMethod": "test_cleanup_rejects_actual_cross_device_before_descending",
-        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
-        "mutatedFunctionSha256": "c27c2423a6027d0449b833367060201c01a0c5bcde98e89f978372a0efdd569a",
-        "testsRun": 1,
-        "failures": 6,
-        "errors": 0,
-        "skipped": 0,
-        "expectedFailures": 6,
-        "expectedErrors": 0,
-        "requiredFailureMechanisms": [
-          "AuditError not raised"
-        ],
-        "oraclePass": true,
-        "sourceUnchanged": true,
-        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
-      },
-      {
-        "mutation": "zero-child-wildcard",
-        "selectedActualMethod": "test_cleanup_rejects_actual_cross_device_before_descending",
-        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
-        "mutatedFunctionSha256": "d337bcc509c7ebb3122aec2e38bc99bb45f35bd864bd42b0527a3b89ea698d16",
-        "testsRun": 1,
-        "failures": 2,
-        "errors": 0,
-        "skipped": 0,
-        "expectedFailures": 2,
-        "expectedErrors": 0,
-        "requiredFailureMechanisms": [
-          "AuditError not raised"
-        ],
-        "oraclePass": true,
-        "sourceUnchanged": true,
-        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
-      },
-      {
-        "mutation": "zero-root-wildcard",
-        "selectedActualMethod": "test_cleanup_rejects_actual_cross_device_before_descending",
-        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
-        "mutatedFunctionSha256": "0088da915c904364788e9756c974f19960dbcbdc605c4ddeaad6dca83a6f0b3d",
-        "testsRun": 1,
-        "failures": 2,
-        "errors": 0,
-        "skipped": 0,
-        "expectedFailures": 2,
-        "expectedErrors": 0,
-        "requiredFailureMechanisms": [
-          "AuditError not raised"
-        ],
-        "oraclePass": true,
-        "sourceUnchanged": true,
-        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
-      },
-      {
-        "mutation": "missing-type-guard",
-        "selectedActualMethod": "test_cleanup_revalidates_directory_type_before_descending",
-        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
-        "mutatedFunctionSha256": "b2a7dfeef726eebfbee2191cb82b538fb3ef25413f9e52321c374510bef7586f",
-        "testsRun": 1,
-        "failures": 3,
-        "errors": 0,
-        "skipped": 0,
-        "expectedFailures": 3,
-        "expectedErrors": 0,
-        "requiredFailureMechanisms": [
-          "AuditError not raised",
-          "does not match"
-        ],
-        "oraclePass": true,
-        "sourceUnchanged": true,
-        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
-      },
-      {
-        "mutation": "missing-reparse-guard",
-        "selectedActualMethod": "test_cleanup_revalidates_directory_reparse_before_descending",
-        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
-        "mutatedFunctionSha256": "2ea90095fdfd0ec23627c12c2cc40648a8508388d5e6818e5a73b4ce85e98ccc",
-        "testsRun": 1,
-        "failures": 3,
-        "errors": 0,
-        "skipped": 0,
-        "expectedFailures": 3,
-        "expectedErrors": 0,
-        "requiredFailureMechanisms": [
-          "does not match"
-        ],
-        "oraclePass": true,
-        "sourceUnchanged": true,
-        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
-      },
-      {
-        "mutation": "following-path-stat",
-        "selectedActualMethod": "test_cleanup_directory_identity_uses_full_stat_not_cached_fields",
-        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
-        "mutatedFunctionSha256": "3a6eb9a22579f8a4590e30274d433128de89b27e87af68b1494c494c50dda9d7",
-        "testsRun": 1,
-        "failures": 4,
-        "errors": 0,
-        "skipped": 0,
-        "expectedFailures": 4,
-        "expectedErrors": 0,
-        "requiredFailureMechanisms": [
-          "Full stat must remain no-follow"
-        ],
-        "oraclePass": true,
-        "sourceUnchanged": true,
-        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
-      },
-      {
-        "mutation": "initial-path-stat",
-        "selectedActualMethod": "test_cleanup_rejects_unknown_cached_reparse_before_path_stat",
-        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
-        "mutatedFunctionSha256": "1b16c80d7642dea75a560c8c9e4f463a958c7c81e50340815e0b9a32b18b171a",
-        "testsRun": 1,
-        "failures": 1,
-        "errors": 0,
-        "skipped": 0,
-        "expectedFailures": 1,
-        "expectedErrors": 0,
-        "requiredFailureMechanisms": [
-          "Unknown reparse must be rejected before full path lookup"
-        ],
-        "oraclePass": true,
-        "sourceUnchanged": true,
-        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
-      },
-      {
-        "mutation": "following-entry-stat",
-        "selectedActualMethod": "test_cleanup_directory_identity_uses_full_stat_not_cached_fields",
-        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
-        "mutatedFunctionSha256": "341edc401caa502c15d3d716354bc167eafc844487ebf71d8fc8c47b768ad85e",
-        "testsRun": 1,
-        "failures": 4,
-        "errors": 0,
-        "skipped": 0,
-        "expectedFailures": 4,
-        "expectedErrors": 0,
-        "requiredFailureMechanisms": [
-          "Initial entry classification must remain no-follow"
-        ],
-        "oraclePass": true,
-        "sourceUnchanged": true,
-        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
-      }
-    ],
-    "preservation": {
-      "baseline": "bafe905ac030d090219352de8a2358695755b528",
-      "sourceBinding": {
-        "recordedUtc": "2026-09-09T03:05:41.007449+00:00",
-        "baselineCommit": "bafe905ac030d090219352de8a2358695755b528",
-        "baselineTree": "91d469eb09c8a612bf7dd9f7c5e2ce1f081634bb",
-        "stagedTree": "747189670275c32b9ef67b3f1842cb3fad3cb381",
-        "diffSha256": "e0836d4312f918e3288dc1001dfdd6b635592ecdc11f39ba430a91f766818d18",
-        "paths": {
-          "scripts/run-audit-command.py": {
-            "sha256": "c3fa28adcde3efbacb0f2b6aa70c1c77906c7f2dd9688bd49cf2e75261139a17",
-            "gitBlob": "837f712733c0a5b102e203447c17b63f0ae785e2"
-          },
-          "scripts/tests/run-audit-command-test.py": {
-            "sha256": "83f955dbf888228e5cdfa4808b9c63917cffd91d76fc7d56e7dd2f632a025d1e",
-            "gitBlob": "d35fa8c5b6ed286931c82e79fa001758ca3d66c6"
-          }
-        },
-        "scope": "Staged two-file source; not a clean commit, independent approval, or native host execution"
-      },
-      "unchangedOriginalTestFileDefinitions": 100,
-      "unchangedOriginalTestMethods": 56,
-      "addedTestMethods": [
-        [
-          "ExecutorFixtureTests",
-          "test_cleanup_preflights_all_targets_before_removing_any_output"
-        ],
-        [
-          "PurePolicyTests",
-          "test_cleanup_directory_full_stat_errors_fail_closed"
-        ],
-        [
-          "PurePolicyTests",
-          "test_cleanup_directory_identity_uses_full_stat_not_cached_fields"
-        ],
-        [
-          "PurePolicyTests",
-          "test_cleanup_initial_special_file_is_rejected_before_path_stat"
-        ],
-        [
-          "PurePolicyTests",
-          "test_cleanup_rejects_actual_cross_device_before_descending"
-        ],
-        [
-          "PurePolicyTests",
-          "test_cleanup_rejects_unknown_cached_reparse_before_path_stat"
-        ],
-        [
-          "PurePolicyTests",
-          "test_cleanup_revalidates_directory_reparse_before_descending"
-        ],
-        [
-          "PurePolicyTests",
-          "test_cleanup_revalidates_directory_type_before_descending"
-        ],
-        [
-          "PurePolicyTests",
-          "test_cleanup_scan_failures_and_entry_bound_stay_fail_closed"
-        ],
-        [
-          "WindowsNativeTests",
-          "test_windows_cleanup_nested_outputs_and_junction_preserve_external_sentinel"
-        ]
-      ],
-      "fixtureProgramUnchanged": true,
-      "nativeSelectionUnchanged": true,
-      "productionScope": "Exact two-line ordinary-directory block replacement; all other source bytes/guards unchanged",
-      "scope": "Source preservation inspection, not native Windows/product/cleanup approval"
-    },
-    "fixtureCleanup": {
-      "records": 38,
-      "uniqueBases": 35,
-      "historicalIncompleteRecords": 3,
-      "allFinalRecordsCompleteAndBasesAbsent": true,
-      "scope": "Retained Linux fixture attempts and final absent-base observations, not native Windows or remote cleanup."
-    },
-    "nestedInvocations": {
-      "unique": 46,
-      "identicalArchivedReceiptCopies": 3,
-      "finalOutcomes": {
-        "zero": 15,
-        "infrastructure125": 30,
-        "intentional7": 1
-      },
-      "stops": {
-        "zero": 23,
-        "nullAdmission": 21,
-        "intentional9": 1,
-        "timeoutMinus15": 1
-      }
-    },
-    "verificationManifestSha256": "ac6050abc693c2e1cdf2bc36c097df1b4479441f1bbf2b2c15afcdadad92b8d0",
-    "verificationSummarySha256": "030c61b9d272e4f024a42df248633b184b1b2275d4e52ff061753ea616b4d023",
-    "verificationSealSha256": "133f78d5023256a89f9fee4ff4b485c4aefdb63e93b24fefdd6d1d0c144b96ba",
-    "files": 1178,
-    "bytes": 2635900,
-    "ownLeaves": 28,
-    "finalGates": 26,
-    "sealerReceiptSha256": "bcf66a0982104b92c63aedb785badc99694c62f49f6896ae14638bda6785efe6",
-    "sealerFinalizedUtc": "2026-09-09T03:28:26.882699+00:00",
-    "sealerSeparateNotRecursive": true,
-    "sealerCommandStopFinal": [
-      0,
-      0,
-      0
-    ],
-    "reviewerInspectorHistory": {
-      "archiveFalseLabels": 54,
-      "archiveBindingsReconciled": 822,
-      "direct": 795,
-      "relocated": 27,
-      "copiedManifests": 8,
-      "supplementalArchiveComparisons": 1127,
-      "verboseSameLineFalseLabels": 4,
-      "selectedMethodOutcomesReconciled": 260,
-      "supplementalVerboseComparisons": 301,
-      "scope": "Original reviewer inspector outputs are retained; separate data reconciliations resolve assumptions without altering root evidence, tests or source."
-    },
-    "history": "Original identity method has two intended AuditErrors; matching-cache and reparse/special controls pass. First green r1 predates the stronger r2 cross-device matrix; all failures remain retained.",
-    "scope": "Linux native fixture controls and actual-method metadata models; not real Gradle product execution or foreign-host acceptance. Do not sum overlapping test totals.",
-    "limitations": [
-      "Native Windows correction and junction regression not yet executed",
-      "Trial3 observed cleanup failure125; numeric Windows device fields were not recorded",
-      "Trial3 remains PARTIAL_SALVAGE unsafe with18 JSONL omissions; remote cleanup/full-tree NOT_PROVEN",
-      "Nine negative-oracle inner failures and three deliberately incomplete fixture teardown attempts remain historical",
-      "No new product XML, whole-check, consumer product, release, or Apple acceptance",
-      "Whole audit NOT_READY; independent133 NOT_STARTED; physical/hostile-network/professional crypto/#120 separate"
-    ],
-    "issue": 373,
-    "review": {
-      "reviewer": "/root/review_373_source",
-      "verdict": "APPROVE_SOURCE_AND_INSPECTED_LOCAL_VERIFICATION",
-      "findings": [],
-      "reportSha256": "360d89cce04603cfd2a5184a794efbc64088af01416f396775815a10a5d92b77",
-      "manifestSha256": "333fadd5a6a2d16a4bd53f35eb89d090fa41f59ad5b7061e9d4b1cf4fc9849a2",
-      "sealSha256": "d27cbb254884dfdccdba9bead7c6e62cb3261ba7111c264e3f729104ba069098",
-      "initialReadsetSha256": "55293e0de78037d237dfbfcbedd6aa918995eb551d08d92c7d02e9108d8e6b13",
-      "completeObservedReadsetSha256": "1f91717206a0123611302374563831cd066cf63108901ba14210d553013f85c3",
-      "actualCommitAddendum": {
-        "commit": "128136ff8ab040f0b5c61dc5402d2b9736d63c86",
-        "addendumSha256": "7d49c983f72f3a2900cac76f2e264f673d0c851e9ef004e77974c4b96a8698ad",
-        "sealSha256": "09a00e76e98c6d29c03f9e4cfcb0861541857693f8995f784e5b4e7f7d863236",
-        "manifestSha256": "720867fbcae15b6857e8a6ba8f2bcd10048435aea5f59ebaca5e1ce3fa2a6c6c",
-        "substantiveCommitComparisons": 20,
-        "currentWorktreeDiscrepancyPreserved": true,
-        "scope": "Exact committed bytes approved; separate later staged workflow is not part of this source approval or a clean current128 worktree. No clean-commit/native rerun."
-      },
-      "scope": "Actual staged-tree source/evidence review, not administrative approval or clean-commit/Windows/product execution; later exact commit binding remains a separate event."
-    },
-    "laterExactCommit": "128136ff8ab040f0b5c61dc5402d2b9736d63c86",
-    "laterExactTree": "747189670275c32b9ef67b3f1842cb3fad3cb381"
+    "role": "Complementary final-source/affected-scope evidence, not a single all-green aggregate or full check.",
+    "scope": "See continuedCohort receipts and exact per-row issue dispositions. R1/R2 remain failed invocations; narrow R3 only reran corrected affected suites. No native/physical/external acceptance inferred."
   },
   "cleanBd611ProductCorroboration369": {
     "commit": "bd61175167337fee585855cbbe5bfae9c0122dc5",
@@ -7444,24 +6241,23 @@
     }
   ],
   "corroborationProjection": {
-    "sourceCommit": "d5d0c1ea72324fd8f04dc55deae93692f3d0fe0f",
-    "sourceTree": "e0aaf19895def88732c68742d73687be612f01ef",
-    "projectionPaths": 1076,
-    "changedSourcePaths": 63,
-    "newSourcePaths": 11,
-    "newReportPaths": [
-      "docs/audit/2026-09-04/repairs/cohort-2026-09-09.md"
-    ],
-    "existingHistoricalFiveColumnCellsPreserved": 5320,
+    "sourceCommit": "ffd92738009638d4a4832c575530d03c2b930e54",
+    "sourceTree": "3baa110085b8a323fb8045fa5ad1e02641ab3ac5",
+    "observedUtc": "2026-09-09T12:46:17.630027+00:00",
+    "projectionPaths": 1100,
     "countsByReadStatus": {
-      "FULL_TEXT_CURRENT": 753,
-      "FULL_SEMANTIC_DELTA_CURRENT": 56,
+      "FULL_TEXT_CURRENT": 681,
+      "FULL_SEMANTIC_DELTA_CURRENT": 151,
       "REOPENED_CHANGED_SINCE_RECORDED_READ": 6,
       "STRUCTURAL_ONLY_CURRENT": 259,
       "SELF_DESCRIBING_LEDGER_NO_CURRENT_SELF_BINDING": 1,
-      "PARTIAL_CURRENT": 1
+      "PARTIAL_CURRENT": 1,
+      "NEW_PATH_CURRENT_READ_NOT_RECORDED": 1
     },
-    "scope": "Scoped independently reviewed source deltas mapped to byte-equivalent committed blobs; new files fully in their reviewed patches. No repeated full-source read or execution inferred from hashes. New report read at staged-parent binding. Earlier current-read rows remain in Git history; first five historical columns preserved. Six reopened administrative rows,259 structural-only paths,one partial and one self-binding boundary remain. Not whole-repository semantic completion or audit acceptance."
+    "newPaths": 24,
+    "exactReviewedReadAdvances": 134,
+    "existingHistoricalFiveColumnCellsPreserved": 5380,
+    "scope": "Conservative committed-checkpoint-source/admin candidate delta projection; later working-tree changes excluded. Exact supplied independent source read chains only; no fresh whole-corpus reread. Changed unbound candidates reopened, new unbound paths explicit, admin outputs not self-reviewed. Private gap census separates executable/source gaps from structural binary/generated/reference limits."
   },
   "successorAdministrativeScope369370371": {
     "evidenceFrozenUtc": "2026-09-09T01:18:20.220814+00:00",
@@ -9058,11 +7854,10 @@
     "scope": "Separately approved operational request, locally committed, NOT_PUSHED; no extra repair approval. Actual complete committed source read may honestly bind d152. No hosted trial4/native Windows/Apple acceptance. Final administrative review plus live Actions/ref observation/global lease/source freeze/local-test pause required BEFORE triggering publication."
   },
   "currentAdministrativeInputSource": {
-    "commit": "d5d0c1ea72324fd8f04dc55deae93692f3d0fe0f",
-    "tree": "e0aaf19895def88732c68742d73687be612f01ef",
-    "parent": "59f6abc0fa638093d39d1fe3c4cf8e37c009d2db",
-    "previousAdministrativeCommit": "6a2a78c9ba45038278641bd4770d841f0e863ac9",
-    "scope": "Actual nine-commit source input; no future administrative commit, approval, publication or hosted run is inferred."
+    "commit": "ffd92738009638d4a4832c575530d03c2b930e54",
+    "tree": "3baa110085b8a323fb8045fa5ad1e02641ab3ac5",
+    "observedUtc": "2026-09-09T12:46:17.630027+00:00",
+    "scope": "Local point observation; dirty candidates may extend this commit. No remote ref refresh or future binding."
   },
   "priorCanonicalAab8Product": {
     "lastIntegratedCheck": {
@@ -9802,7 +8597,7 @@
     "public373Outcome": "https://github.com/p2pKit/P2pKit/issues/373#issuecomment-5597019604",
     "scope": "Actual historical failed trial, independently inspected retained evidence; diagnostics-only d5d0c1e is not its cleanup repair. Older operational request/trial records remain historical."
   },
-  "corroborationProjectionRole": "Current scoped cohort projection; previous full projection preserved under previousCorroborationProjectionBeforeCohort0909.",
+  "corroborationProjectionRole": "Latest limited source/read projection, not whole-repository semantic correctness or current complete audit approval; earlier projection preserved.",
   "previousCorroborationProjectionBeforeCohort0909": {
     "latestApprovedNumberedSourceCommit": "128136ff8ab040f0b5c61dc5402d2b9736d63c86",
     "latestApprovedNumberedSourceTree": "747189670275c32b9ef67b3f1842cb3fad3cb381",
@@ -10003,5 +8798,2033 @@
       "FULL_SEMANTIC_DELTA_CURRENT": 5
     },
     "scope": "Honest full source reads replace2 source rows plus separate workflow read replaces1; four actual-read reports updated and one appended.5315 old historical cells/1056 entire rows preserved. No complete-repository correctness or native acceptance claim."
+  },
+  "latestGithubListObservationBeforeContinuedCohort": {
+    "startedUtc": "2026-09-09T08:30:40.086312+00:00",
+    "finishedUtc": "2026-09-09T08:30:45.411979+00:00",
+    "totalIssues": 298,
+    "openIssues": 191,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "dedicatedPrListFinishedUtc": "2026-09-09T08:30:46.470229+00:00",
+    "scope": "Fresh all-state list/full bodies and five own histories373-377; no existing list/PR contract deltas versus06:49. All other03:25 full histories/PR/upstream sets explicitly historical; unseen timeline/upstream changes not excluded. Not repair approval or a lease.",
+    "reportSha256": "dde8a58f2a90b01ce0f5677c56aed5eedb4d1d992f27280efc0ad0ffacd01b52",
+    "reconciliationSha256": "a8090130f8288721a43bc09415c735c1c9c31b3f47da829e5aeaf3bcd1d4ad5b"
+  },
+  "githubIssueListRefreshedUtcBeforeContinuedCohort": "2026-09-09T08:30:45.411979+00:00",
+  "lastDispositionUpdateUtcBeforeContinuedCohort": "2026-09-09T08:46:16.352677+00:00",
+  "currentStateBeforeContinuedCohort": {
+    "sourceCheckpointCommit": "d5d0c1ea72324fd8f04dc55deae93692f3d0fe0f",
+    "sourceCheckpointTree": "e0aaf19895def88732c68742d73687be612f01ef",
+    "activeIssueState": "NO_ACTIVE_ISSUE_IMPLEMENTATION;25_COHORT_ROWS_APPROVED;3_APPLE_SOURCE_PREPARED_PENDING_EXECUTION;LOCAL_PUBLICATION_AND_FOCUSED_WINDOWS_FOLLOWUP_PENDING",
+    "issueCountDenominator": 191,
+    "dispositions": {
+      "EXTERNAL_VALIDATION_PENDING": 21,
+      "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
+      "FIXED_REVIEWED_IN_AUDIT_HISTORY": 100,
+      "PENDING_REMEDIATION": 69
+    },
+    "completedIssueCount": 100,
+    "remainingIssueCount": 91,
+    "percentageMeaning": "100/191 independently approved repository-repair rows (52.4%); 91 remaining (47.6%): 69 Low repairs, 21 external-validation rows and architecture decision #120; 58 new audit findings. Counts are not effort, GitHub closure, platform acceptance or readiness.",
+    "newAuditIssueCount": 58,
+    "lastReviewedIssue": 377,
+    "lastReviewedIssues": [
+      184,
+      188,
+      211,
+      267,
+      268,
+      285,
+      296,
+      306,
+      311,
+      314,
+      326,
+      327,
+      331,
+      333,
+      347,
+      361,
+      362,
+      364,
+      365,
+      366,
+      372,
+      374,
+      375,
+      376,
+      377
+    ],
+    "lastSourceBaselineCommit": "6a2a78c9ba45038278641bd4770d841f0e863ac9",
+    "lastSourceBaselineTree": "aa6d47e595db885d785ccc9ada5b40cb77703e85",
+    "pendingRepairSeverities": {
+      "low": 69
+    },
+    "continuationQueue": [
+      330,
+      341,
+      363
+    ],
+    "continuationQueueScope": "Publish only focused audit-branch source and safe ledgers after final source bindings, fresh Actions/ref observation and one held global local/hosted build lease. The current workflow selects only the bounded Windows durable-transfer follow-up; inspect its exact selected-class XML, platform event, source/stop/owned-output cleanup and complete/salvage artifact identity. It is not the former full Windows-to-Apple chain or full-host acceptance. A separately reviewed literal Apple selection/allocation is needed for330/341/363 and remaining Apple gates. Finish current Linux check, LAN strict Dokka and applicable consumer/release/whole-repository corroboration; then continue dependency-aware pending repairs. Preserve original trial failures and same-issue findings;133 independent NOT_STARTED. No checkpoint stop.",
+    "activeWorkItem": {
+      "name": "COHORT_PUBLICATION_FOCUSED_WINDOWS_FOLLOWUP_AND_REMAINING_VERIFICATION",
+      "status": "LOCAL_COMMITTED_NOT_PUSHED;CORRECTED_WINDOWS_AND_APPLE_NOT_RUN;WHOLE_AUDIT_NOT_READY",
+      "owner": "primary agent",
+      "scope": "Publish only focused audit-branch source and safe ledgers after final source bindings, fresh Actions/ref observation and one held global local/hosted build lease. The current workflow selects only the bounded Windows durable-transfer follow-up; inspect its exact selected-class XML, platform event, source/stop/owned-output cleanup and complete/salvage artifact identity. It is not the former full Windows-to-Apple chain or full-host acceptance. A separately reviewed literal Apple selection/allocation is needed for330/341/363 and remaining Apple gates. Finish current Linux check, LAN strict Dokka and applicable consumer/release/whole-repository corroboration; then continue dependency-aware pending repairs. Preserve original trial failures and same-issue findings;133 independent NOT_STARTED. No checkpoint stop."
+    },
+    "sourceCheckpointScope": "Nine independently source-reviewed local commits after6a2a78c9; d5d0c1e is the separate focused hosted facility. Eight product/docs commits through59f6abc include three unexecuted Apple repairs; review/commit is not publication or native acceptance.",
+    "lastIntegratedCheckRole": "Last successful integrated check remains historical clean-d152 (1607/199XML). The later cohort r1 is a failed aggregate, and r2 is exactly one corrected case. See lastIntegratedAttempt; no current whole-check pass.",
+    "currentAdministrativeInputSource": {
+      "commit": "d5d0c1ea72324fd8f04dc55deae93692f3d0fe0f",
+      "tree": "e0aaf19895def88732c68742d73687be612f01ef",
+      "parent": "59f6abc0fa638093d39d1fe3c4cf8e37c009d2db",
+      "previousAdministrativeCommit": "6a2a78c9ba45038278641bd4770d841f0e863ac9",
+      "scope": "Actual nine-commit source input; no future administrative commit, approval, publication or hosted run is inferred."
+    },
+    "githubTotalIssuesAtRefresh": 298,
+    "githubOpenIssuesAtRefresh": 191
+  },
+  "continuedCohort": {
+    "recordedUtc": "2026-09-09T12:46:17.630027+00:00",
+    "report": "repairs/cohort-2026-09-09-continued.md",
+    "newIssues": [
+      378,
+      379
+    ],
+    "newlyApprovedIssues": [
+      288,
+      312,
+      316,
+      239,
+      273,
+      276,
+      277,
+      243,
+      205,
+      206,
+      217,
+      281,
+      167,
+      169,
+      240,
+      241,
+      255,
+      245,
+      256,
+      249,
+      252,
+      218,
+      342,
+      272,
+      292,
+      220,
+      212,
+      219,
+      213,
+      215,
+      237,
+      216,
+      307,
+      309,
+      248,
+      168,
+      173,
+      232,
+      260,
+      271,
+      302,
+      230,
+      195,
+      278,
+      282
+    ],
+    "approvedCommits0910": [
+      {
+        "issues": "288",
+        "commit": "9bfe039e02e33ade22433c0bcfa6444b59a031d7",
+        "tree": "2fafbe1a424bbb8c447745d6d73cf9cf5add7c7a",
+        "patchSha256": "ff74ae0b6b679defc80f52a0c58c1552ca5a942640da0cfe4b1e8e8c9724c84d",
+        "subject": "fix(android): Identify app-scoped external inbox storage accurately"
+      },
+      {
+        "issues": "312",
+        "commit": "e5ab733fbd14b245924ca460856f7430cbfe58c6",
+        "tree": "7c0ee1587c56e3eef69f81acd3fdaa2ecd5e09ad",
+        "patchSha256": "73dde14c6ed5d3c3471ad7805a95d909cfecf01d364fc2bdf7ca9483e3130b84",
+        "subject": "fix(samples): Report the configured keep-alive timeout"
+      },
+      {
+        "issues": "316",
+        "commit": "feb6292d0316884ef67a648dd33abafdf01485f3",
+        "tree": "0fa379f49d729b822e5d956b0519b510feb567e0",
+        "patchSha256": "21a9f785377ec8b1d87ca3f77a89fdd727ca9bfd24171ba8b214a9f8cc67987f",
+        "subject": "refactor(diagnostics): Remove unused recorder pause APIs"
+      },
+      {
+        "issues": "239,273,276,277,243",
+        "commit": "2d7d40718e40f5284ae9b3640d6f361e90d6e232",
+        "tree": "21950e6d50b37b7eace338be46c0d050b3be674a",
+        "patchSha256": "b19b6abdf7f9d2a6f2b8cdf6a8455fbe9e47a9e902d3e363a7731c956f211aae",
+        "subject": "docs(core): Clarify logger, pairing, provisioning and rearm contracts"
+      },
+      {
+        "issues": "205",
+        "commit": "d313b1b1baaff6e8e245567f57670a3363af43e4",
+        "tree": "2b5bcd16a00b42055e8facb1743722521106837d",
+        "patchSha256": "594049842be4419804486ff3cd887b57eef149ef9882130985a25a0d6c4a6041",
+        "subject": "test(core): Observe retry-owner completion instead of elapsed absence"
+      },
+      {
+        "issues": "206",
+        "commit": "4e24d9c9daf45b89e6482eec046cf64b95197c1d",
+        "tree": "5aa92e3958dbafb6604483f33451df52c1fa7b44",
+        "patchSha256": "058869436c95ce7752fbca16ed3735c859cbd32bd136b1663c937861d478688b",
+        "subject": "test(lan): Remove obsolete secure-fixture home isolation"
+      },
+      {
+        "issues": "217",
+        "commit": "7b24ad8cfb805cd6a4276f358810d255298fea88",
+        "tree": "28406ded9d1d255e0688805efd9e98662b4a8041",
+        "patchSha256": "e7b08bd02aed08338a5c96c6fb8e9afae2e27a5becb138086c1efd53968e9da7",
+        "subject": "test(lan): Report socket admission timeouts with their original cause"
+      },
+      {
+        "issues": "281",
+        "commit": "77fe88a4e9a4057a3820ca34e81b2e6dcb29a135",
+        "tree": "1b7b1de2777e714e045e40a4cfd8dbcb25485710",
+        "patchSha256": "7da5fd74725230e418fffddea0f7c56ab9611957e8c56042660d646de293b933",
+        "subject": "test(android): Retire only owned process-binding tokens"
+      },
+      {
+        "issues": "167",
+        "commit": "58d1d741296896cb92f01c0ccc7737609c782373",
+        "tree": "9922cc6aeff6d89fb8da75f2f7efe3ee8982ad80",
+        "patchSha256": "2507c7d1f5d2144c1f095f3210191db9119ebee9111e51039f6af3a05ca1bbf6",
+        "subject": "fix(core): Preserve manual peer display identity during discovery"
+      },
+      {
+        "issues": "169",
+        "commit": "fd223850ce386192079b3d6e2b0ae69f84595d17",
+        "tree": "dd890a44b3ea790b978b73258021d4074e30e118",
+        "patchSha256": "c35f3a87b510954bb29f90ee521592698e07b1af69ede86c3d126270eb9bc606",
+        "subject": "fix(core): Summarize sustained discovery rejection without unbounded state"
+      },
+      {
+        "issues": "240",
+        "commit": "49e6b10765cdd0f3582ba89933d5ac8c440b209e",
+        "tree": "d686cde8c3216031fc1c010a6b66c6f9296a9f64",
+        "patchSha256": "9c446ece967241aec20c727b98c20860bc8ec06d272cfc88922747e4a8f1316d",
+        "subject": "fix(core): Attribute observer startup failures without blaming transports"
+      },
+      {
+        "issues": "241",
+        "commit": "9876c9e4b9ba7bc9c1b2f7fac1bd3b597a05c440",
+        "tree": "1cc96a2a4a650a91da43b6fc50154e2d102924fd",
+        "patchSha256": "1c9ebb126246c7ad92ab9bb70ede6faa3c2568db0911514e180bd5ee655052d7",
+        "subject": "fix(android): Diagnose path-observer restart after failed cleanup"
+      },
+      {
+        "issues": "255",
+        "commit": "a13745a2c77441025f74e165cab2844029cade67",
+        "tree": "b343173673e9a1b9f05e824d3245bce12f9a9a28",
+        "patchSha256": "c6b04d14f16b9d982dcb15f20ccc5e5a4f781c2ba381ed5cef6822cf1a77a5e0",
+        "subject": "docs(core): Describe asynchronous background feature failures"
+      },
+      {
+        "issues": "245",
+        "commit": "f58e13b4d0a11b545b5ab569127327e76b27782f",
+        "tree": "8634a37ae2de07e77f72c5b4644c5474056657f9",
+        "patchSha256": "c8d6913c1d7a15cfa9516b6801ade62df4bb3238cdb5543535a81079146e6b9d",
+        "subject": "fix(core): Retire reconnect watchdogs with their owning episode"
+      }
+    ],
+    "review0910": {
+      "reviewer": "/root/review_cohort_0910_execution",
+      "verdict": "APPROVED_ALL_18_EXACT_FINAL_REVISIONS",
+      "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+      "sourceBindingSha256": "ab5883033b6452e0d9092d768578e099f18d2cf546c7ee74af13af77e8269900",
+      "composedDiffSha256": "d2e7fc9823b9458c5d15236aa51b55095ea1cb324bc9a9c54f48150878b201d4",
+      "baseCommit": "0770ec9950830983acb605a4bedd7384b8f6c3b9",
+      "baseTree": "e77a11cd5612bac242a132bb7210903db9f912f4"
+    },
+    "additionalApprovedIssues": [
+      256,
+      249,
+      252,
+      218,
+      342,
+      272,
+      292,
+      220,
+      212,
+      219,
+      213,
+      215,
+      237,
+      216,
+      307,
+      309,
+      248,
+      168,
+      173,
+      232,
+      260,
+      271,
+      302,
+      230,
+      195,
+      278,
+      282
+    ],
+    "sourceApprovedPendingAffectedValidation": [
+      172,
+      176,
+      156,
+      158,
+      378,
+      236,
+      250,
+      261,
+      275,
+      279
+    ],
+    "cohort0911SourceCommits": [
+      {
+        "issues": [
+          172,
+          176,
+          256
+        ],
+        "subject": "fix(transfer): Acquire private staging lazily and preserve directory failures",
+        "commit": "348cf179194a72afdc7abbd097898884fc25e7df",
+        "parent": "f58e13b4d0a11b545b5ab569127327e76b27782f",
+        "tree": "aa975f453551ae3fb559202c2e59c5d38052a7b6",
+        "patchSha256": "60653ec54a8b6d1b1f121c2af9e5a9ef2fd64a850e3250d63376d85d4d6710f8"
+      },
+      {
+        "issues": [
+          249,
+          252
+        ],
+        "subject": "fix(transfer): Keep progress monotonic and document submission accounting",
+        "commit": "1e886dcd099806e11c8656c38daf97ff27f51c0a",
+        "parent": "348cf179194a72afdc7abbd097898884fc25e7df",
+        "tree": "4a45bd10a3b5b76080e22e8819d92519f2edd17d",
+        "patchSha256": "8cbc4c36aa76bfe3bff7f549fb03f507799acf729dbb6af72bb23adc16cde28d"
+      },
+      {
+        "issues": [
+          218,
+          342,
+          272,
+          292,
+          220
+        ],
+        "subject": "test: Strengthen value and asynchronous fixture contracts",
+        "commit": "4f9da4f98c500988975c274d1d3709572e7f954e",
+        "parent": "1e886dcd099806e11c8656c38daf97ff27f51c0a",
+        "tree": "646abb8aaa5630f9c16b8f5c85a606843ec54f8b",
+        "patchSha256": "5b57ee7c8289c6f4e0c5bb9c3b1823bf81b43b667509adf4a63b954f95d9ace7"
+      },
+      {
+        "issues": [
+          156,
+          158
+        ],
+        "subject": "fix(lan): Set TCP options and align bounded inbound capacity",
+        "commit": "9ab46d7bdd52a551e4be525dd7b839b32928b6ac",
+        "parent": "4f9da4f98c500988975c274d1d3709572e7f954e",
+        "tree": "02b64b0cbc870ebbc6e246e1ee10f4f81e9b128e",
+        "patchSha256": "7601d44e0ccd2d3b319986783f92a8e8125aa53ce5514283552bda16d49fca83"
+      },
+      {
+        "issues": [
+          378
+        ],
+        "subject": "fix(audit): Retire owned readonly outputs without mutating shared files",
+        "commit": "ac49fee0f81bf0bd34ec01d200f9b04bc13885e5",
+        "parent": "9ab46d7bdd52a551e4be525dd7b839b32928b6ac",
+        "tree": "ee54aae76375c8d2fd3e08b9164c75c6ee44b11a",
+        "patchSha256": "2096b34ddbdaed0c6c6233d65c76b8b2fd2c2b10c5b30219344f68ae2e5f6c86"
+      },
+      {
+        "issues": [
+          236
+        ],
+        "subject": "build: Enforce canonical licenses across covered publication archives",
+        "commit": "2c1a9ba54a895b8317df69e7dd9b20b12b513d5f",
+        "parent": "ac49fee0f81bf0bd34ec01d200f9b04bc13885e5",
+        "tree": "bb3201f7974d0d7eeccfa6d78134f5337624d643",
+        "patchSha256": "c556e39f15f588359bd36404c5d0cd070d87fe7a4047cb0cae41c23914a6fbf0"
+      },
+      {
+        "issues": [
+          212,
+          230
+        ],
+        "subject": "fix(docs): Align maintained contract and fail-closed release metadata",
+        "commit": "7bc68b6718bdb1a3f3e61dbf2a9fd5c1defd6596",
+        "parent": "2c1a9ba54a895b8317df69e7dd9b20b12b513d5f",
+        "tree": "8e7312c23a5491ffff423713b5d4355713043397",
+        "patchSha256": "0ac205a90230cbd2629f6ded4e34c3761665e40243f9a4feb7958323915c4377"
+      },
+      {
+        "issues": [
+          219,
+          213,
+          215
+        ],
+        "subject": "docs: Define transport integration, error recovery and threat boundaries",
+        "commit": "e9b8be24672fac0421326dfa8e87718180df72d5",
+        "parent": "7bc68b6718bdb1a3f3e61dbf2a9fd5c1defd6596",
+        "tree": "746320931ffd8d920de782ceb655cefdece143da",
+        "patchSha256": "e21c806e19910350eb0fa78eac466d56fa987a2c413249a6d8588f553afbb02f"
+      },
+      {
+        "issues": [
+          237,
+          216
+        ],
+        "subject": "docs: Centralize validation dispositions and describe gate scope",
+        "commit": "bb1ad32db4ffb592d75724a9600409ba8d29a91d",
+        "parent": "e9b8be24672fac0421326dfa8e87718180df72d5",
+        "tree": "8e53d8b1bb761117db505aa0fdaab9623e3511bb",
+        "patchSha256": "7896fabd9b24e30e752d9e1cf4360a8a21bf56151430c5e8ab3b938a15ef6968"
+      },
+      {
+        "issues": [
+          307,
+          309
+        ],
+        "subject": "docs(core): Explain transfer limits and keep public KDoc links public",
+        "commit": "60aadb560ade72250ec575a312a2b81b2dfd2aba",
+        "parent": "bb1ad32db4ffb592d75724a9600409ba8d29a91d",
+        "tree": "262f466ba675466218f38937da41ee1085133bac",
+        "patchSha256": "3c773d2719325dad2490daffebe23b5d4efaf69db8861a35e86d8ac2f3a9f766"
+      },
+      {
+        "issues": [
+          248
+        ],
+        "subject": "fix(android): Make identity content and directory durability explicit",
+        "commit": "248f8177c317e79c8de680ceb8ad0b239dd3a71e",
+        "parent": "60aadb560ade72250ec575a312a2b81b2dfd2aba",
+        "tree": "3677537f82b8a08a056c680cceacb66713fd991a",
+        "patchSha256": "bdfa340fc259c471c2331b7aec46bc9d27554b5926414115fb23651c32064c7e"
+      },
+      {
+        "issues": [
+          250
+        ],
+        "subject": "fix(identity): Serialize secure storage per namespace",
+        "commit": "d4ce3598a1d139721e0a2744a3779f2f38bfc7de",
+        "parent": "248f8177c317e79c8de680ceb8ad0b239dd3a71e",
+        "tree": "32135d8cbca3e4a2d2980a6a746988cb89ff3d37",
+        "patchSha256": "406b155d96d6d3d8fa70dac79fa1df6cb07bc824be26440df81eeb9a09a61626"
+      },
+      {
+        "issues": [
+          261
+        ],
+        "subject": "refactor(identity): Share legacy AppId namespace sanitization",
+        "commit": "e0e52cb9598e9ba367420fa7f5d1c012832223c6",
+        "parent": "d4ce3598a1d139721e0a2744a3779f2f38bfc7de",
+        "tree": "7633d08667c14bc81ec62caba157ecfe9076155c",
+        "patchSha256": "75a96ffac45f8855c2ce3e445184bef80510406dd71eb4744e450b2c4e33e863"
+      },
+      {
+        "issues": [
+          168
+        ],
+        "subject": "fix(core): Retire terminal sessions without waiting behind the send gate",
+        "commit": "417aab2b62e0f9016a428fa8d6a974b2245b7896",
+        "parent": "e0e52cb9598e9ba367420fa7f5d1c012832223c6",
+        "tree": "b56099a2b8c3b9a956bdabfaa1db431a353d8074",
+        "patchSha256": "82806eba575dcdb6a2794a10024ff05b09485382b404e4b5c0402df90cefeeff"
+      },
+      {
+        "issues": [
+          195
+        ],
+        "subject": "fix(android): Classify post-start permission loss using current grants",
+        "commit": "b4239a58989eec5ed1fe5f356e224adb1a5d2357",
+        "parent": "417aab2b62e0f9016a428fa8d6a974b2245b7896",
+        "tree": "0454544e8d5f2ab86d8303dd9e3fa32c7862dadf",
+        "patchSha256": "0e9feac029f623d50d01c42d0d023ce8d0dabd281bee8c7ce781478a7e6850bc"
+      },
+      {
+        "issues": [
+          275
+        ],
+        "subject": "fix(provisioning): Avoid logging manual endpoint details",
+        "commit": "67deecddbb74478e89d03551add8316c8bd420f2",
+        "parent": "b4239a58989eec5ed1fe5f356e224adb1a5d2357",
+        "tree": "c2a8b93d201b7e660180d3fb536d5785cb3a5f24",
+        "patchSha256": "54e563974aa430ea8fa2d6506c722cbc5b9020b36a6753354517767af5bde942"
+      },
+      {
+        "issues": [
+          278
+        ],
+        "subject": "fix(desktop): Report interface polling failures once per episode",
+        "commit": "bb513c25f1983b91be2d60ab2a96dca846d1157c",
+        "parent": "67deecddbb74478e89d03551add8316c8bd420f2",
+        "tree": "e9bb3f8b352a9b20f9ad789fc4dba4bc4170b388",
+        "patchSha256": "f4a2d9e9af0c861203fb23638960ac020780a3eec03e90392f9d9f99adebe40a"
+      },
+      {
+        "issues": [
+          279
+        ],
+        "subject": "docs(provisioning): Clarify cancellation and close semantics",
+        "commit": "a90a3ae12ba8047099ac036bb28b2144af0c5d19",
+        "parent": "bb513c25f1983b91be2d60ab2a96dca846d1157c",
+        "tree": "0e133a80f11d5a3d8d2b9bf02dde724012e61fb8",
+        "patchSha256": "2750adbd7d25cd4a89862deeaef4c553d694642601756a8568f583f9f655e90e"
+      },
+      {
+        "issues": [
+          282
+        ],
+        "subject": "fix(android): Share dual-stack manual address scanning",
+        "commit": "63e1ae71d4f87d87ae67486b565f4bf41d2ad2a8",
+        "parent": "a90a3ae12ba8047099ac036bb28b2144af0c5d19",
+        "tree": "50c20d2ee21157744ca9641fd9f3d9c06ceaaafe",
+        "patchSha256": "cf7bff5f657a0362d1bd0306cbd597cea144755c3388695225c299dd07fcfd21"
+      },
+      {
+        "issues": [
+          173
+        ],
+        "subject": "fix(core): Preserve public StateFlow operator fusion for peer lists",
+        "commit": "7a57e7274a692b78bc913248b3a5359765c25280",
+        "parent": "63e1ae71d4f87d87ae67486b565f4bf41d2ad2a8",
+        "tree": "53b999a864869a8af09de1ce645cdb95f650d038",
+        "patchSha256": "223fd3c0a7fb9aff3a3f3a09e1f9c7270ae8f5ca38cbdd58eb45c78ca5c98fb4"
+      },
+      {
+        "issues": [
+          232,
+          260
+        ],
+        "subject": "docs(core): Clarify cancellation and hot-stream collector ownership",
+        "commit": "1235d293090a489b54defc719870043b63c4033e",
+        "parent": "7a57e7274a692b78bc913248b3a5359765c25280",
+        "tree": "2a675416d165595895bfaf03aec01c71aa781ea2",
+        "patchSha256": "17d304393ac77165cd457c9773d4f99bc7d76bc8ef67c0da3d4f5fb544db5a6d"
+      },
+      {
+        "issues": [
+          271
+        ],
+        "subject": "fix(core): Include safe offending values in configuration errors",
+        "commit": "75ee783185d4760394749e41253eca299db6c97b",
+        "parent": "1235d293090a489b54defc719870043b63c4033e",
+        "tree": "1246399c2f1cdfb530ad186abf6c6eca84cf6f86",
+        "patchSha256": "1cce8ae59a73517cb69eaed3316c554007bce03c5d6a2ade451f96db979e2dd6"
+      },
+      {
+        "issues": [
+          302
+        ],
+        "subject": "refactor(core): Remove unused manual-peer projection",
+        "commit": "ffd92738009638d4a4832c575530d03c2b930e54",
+        "parent": "75ee783185d4760394749e41253eca299db6c97b",
+        "tree": "3baa110085b8a323fb8045fa5ad1e02641ab3ac5",
+        "patchSha256": "2f127f707b5a7c0e781978c7371fe30c2424529b8b4dfa4f3d894a513e17ddbe"
+      }
+    ],
+    "appliedCandidatesPendingApproval": [
+      156,
+      158,
+      172,
+      176,
+      236,
+      250,
+      261,
+      275,
+      279,
+      378
+    ],
+    "sourceApprovedPendingFirstAppleExecution": [
+      330,
+      341,
+      363
+    ],
+    "ownerDecisionOrRefutationRowsRetained": [
+      274,
+      284,
+      287
+    ],
+    "verificationReceipts": [
+      {
+        "name": "cohort-0910-original-r1",
+        "startedUtc": "2026-09-09T09:31:03.750305+00:00",
+        "finishedUtc": "2026-09-09T09:33:06.880411+00:00",
+        "commandExitCode": 1,
+        "stopExitCode": 0,
+        "finalExitCode": 1,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "outputsDeferredForDependentVerification": true,
+        "sourceCommit": "0770ec9950830983acb605a4bedd7384b8f6c3b9",
+        "sourceTree": "e77a11cd5612bac242a132bb7210903db9f912f4",
+        "sourceDiffSha256": "404da76cf3538404c110e2dfcde70a4f07f7b1d6aaa9c98c9b60524f0ba58cc6",
+        "receiptSha256": "c631642e98ae0f5c09fa1bf7723cf88a4d825a0aed05a5d090a56e626755f194",
+        "commandLogSha256": "7e95f9f23f25c3210c53518f8c59d394eefe68d3be2e0bccfa9391c25c54d834",
+        "scope": "Retained invocation receipt, not a rerun; archived XML totals may include stale suites."
+      },
+      {
+        "name": "cohort-0910-focused-r1",
+        "startedUtc": "2026-09-09T09:39:38.467859+00:00",
+        "finishedUtc": "2026-09-09T09:40:59.788109+00:00",
+        "commandExitCode": 1,
+        "stopExitCode": 0,
+        "finalExitCode": 1,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "outputsDeferredForDependentVerification": true,
+        "sourceCommit": "0770ec9950830983acb605a4bedd7384b8f6c3b9",
+        "sourceTree": "e77a11cd5612bac242a132bb7210903db9f912f4",
+        "sourceDiffSha256": "72cf9d2f4a8822088c9deeed8b1e221d1c5b31829bfd50ad729c1a1434471536",
+        "receiptSha256": "ed4cc8d898eb8bf42f8b5d8c58fddedfc1f5c26da707debde27b9bc6374ee676",
+        "commandLogSha256": "f1dacf95044115abd0f02827846db0a94dea4d07ce3ddb6fc5c654b9fe3aba2a",
+        "scope": "Retained invocation receipt, not a rerun; archived XML totals may include stale suites."
+      },
+      {
+        "name": "cohort-0910-focused-r2",
+        "startedUtc": "2026-09-09T09:52:13.460136+00:00",
+        "finishedUtc": "2026-09-09T09:55:54.406846+00:00",
+        "commandExitCode": 0,
+        "stopExitCode": 0,
+        "finalExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "outputsDeferredForDependentVerification": true,
+        "sourceCommit": "0770ec9950830983acb605a4bedd7384b8f6c3b9",
+        "sourceTree": "e77a11cd5612bac242a132bb7210903db9f912f4",
+        "sourceDiffSha256": "d2e7fc9823b9458c5d15236aa51b55095ea1cb324bc9a9c54f48150878b201d4",
+        "receiptSha256": "cb62cd6e93c2ffda9148ce7c5c9263d51d1c24cd8bf483a183a5f31c39d6a292",
+        "commandLogSha256": "e38ce95149df56e2302f4d0014635e906f5ab5c9e37892a77b20d8e1f5e06dd8",
+        "scope": "Retained invocation receipt, not a rerun; archived XML totals may include stale suites."
+      },
+      {
+        "name": "cohort-0911-original-r1",
+        "startedUtc": "2026-09-09T10:29:30.431490+00:00",
+        "finishedUtc": "2026-09-09T10:30:37.625407+00:00",
+        "commandExitCode": 1,
+        "stopExitCode": 0,
+        "finalExitCode": 1,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "outputsDeferredForDependentVerification": true,
+        "sourceCommit": "f58e13b4d0a11b545b5ab569127327e76b27782f",
+        "sourceTree": "8634a37ae2de07e77f72c5b4644c5474056657f9",
+        "sourceDiffSha256": "7c2ba2ca69f36d5616a9cbc2f5414b85f315500bb23cf8b36ca0578c0c4b5add",
+        "receiptSha256": "62769f3abb814b8a8c0179e1eefa69a7f8f55c738d25fec8bd433a3fe48e8448",
+        "commandLogSha256": "2f4ae3cfc41979eb2463297119e3dc019c37d9d72c24ea72c8459366f4990c7c",
+        "scope": "Retained invocation receipt, not a rerun; archived XML totals may include stale suites."
+      },
+      {
+        "name": "cohort-0911-original-r2",
+        "startedUtc": "2026-09-09T10:42:42.770766+00:00",
+        "finishedUtc": "2026-09-09T10:44:13.469961+00:00",
+        "commandExitCode": 1,
+        "stopExitCode": 0,
+        "finalExitCode": 1,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "outputsDeferredForDependentVerification": true,
+        "sourceCommit": "f58e13b4d0a11b545b5ab569127327e76b27782f",
+        "sourceTree": "8634a37ae2de07e77f72c5b4644c5474056657f9",
+        "sourceDiffSha256": "fcbb122c66460a878e0f00a1cf1525ad301f0e6496e97eee16426f888e0b3ddf",
+        "receiptSha256": "899d2c3e1c9f4f02f59eab9aba2d098b612215326f217e006501e6c981c08935",
+        "commandLogSha256": "c9f49bbe3d3d341a23d37a0287d7f50a26fa6e9fab234b00676bd23f207207ce",
+        "scope": "Retained invocation receipt, not a rerun; archived XML totals may include stale suites."
+      },
+      {
+        "name": "cohort-0911-focused-r1",
+        "startedUtc": "2026-09-09T11:06:31.592067+00:00",
+        "finishedUtc": "2026-09-09T11:09:33.999769+00:00",
+        "commandExitCode": 1,
+        "stopExitCode": 0,
+        "finalExitCode": 1,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "outputsDeferredForDependentVerification": true,
+        "sourceCommit": "f58e13b4d0a11b545b5ab569127327e76b27782f",
+        "sourceTree": "8634a37ae2de07e77f72c5b4644c5474056657f9",
+        "sourceDiffSha256": "1293b565828e76a10f02b39e5ea62a3a6773c5c1d55f4e1c62e8d20b89ff3706",
+        "receiptSha256": "79a0d80a646a9f72028dad0ff0ee2c3d1176046fcd98e68d91648e78f958d0e7",
+        "commandLogSha256": "2561567a271023fcf8c07918333d9da9841ca9dea10fbe8bca748eab8b4566ce",
+        "scope": "Retained invocation receipt, not a rerun; archived XML totals may include stale suites."
+      },
+      {
+        "name": "cohort-0911-focused-r2",
+        "startedUtc": "2026-09-09T12:01:18.336845+00:00",
+        "finishedUtc": "2026-09-09T12:04:06.219744+00:00",
+        "commandExitCode": 1,
+        "stopExitCode": 0,
+        "finalExitCode": 1,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "outputsDeferredForDependentVerification": true,
+        "sourceCommit": "f58e13b4d0a11b545b5ab569127327e76b27782f",
+        "sourceTree": "8634a37ae2de07e77f72c5b4644c5474056657f9",
+        "sourceDiffSha256": "843ecc0b0c1a60352bb9c042e743b536f54153d437a8052b1e5e696ddcc4f061",
+        "receiptSha256": "afc29b61f9ee503e78032507d45a478720f8eeee8ea710bb882dfe0a407663ee",
+        "commandLogSha256": "154a80f1a13e916558088372c9740860407b730d3cbb26a9c342470b6fc69682",
+        "scope": "Retained invocation receipt, not a rerun; archived XML totals may include stale suites."
+      },
+      {
+        "name": "cohort-0911-focused-r3",
+        "startedUtc": "2026-09-09T12:10:19.245681+00:00",
+        "finishedUtc": "2026-09-09T12:11:12.809563+00:00",
+        "commandExitCode": 0,
+        "stopExitCode": 0,
+        "finalExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "outputsDeferredForDependentVerification": true,
+        "sourceCommit": "f58e13b4d0a11b545b5ab569127327e76b27782f",
+        "sourceTree": "8634a37ae2de07e77f72c5b4644c5474056657f9",
+        "sourceDiffSha256": "b06f8cca08e209e039077b686f1b25cc9f3016dd0301d9984aed2751437e168f",
+        "receiptSha256": "74315ca4369134f72021e88280e78ff6ee46f852dcbcbb9409ad959ad74f22e2",
+        "commandLogSha256": "8c9c5857cd5f6b314d9959152ee1f9d74c6911fe14b0c6dbb0347ad61077f8b4",
+        "scope": "Retained invocation receipt, not a rerun; archived XML totals may include stale suites."
+      },
+      {
+        "name": "cohort-0911-static-r1",
+        "startedUtc": "2026-09-09T11:23:23.744918+00:00",
+        "finishedUtc": "2026-09-09T11:24:36.776620+00:00",
+        "commandExitCode": 1,
+        "stopExitCode": 0,
+        "finalExitCode": 1,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "outputsDeferredForDependentVerification": true,
+        "sourceCommit": "f58e13b4d0a11b545b5ab569127327e76b27782f",
+        "sourceTree": "8634a37ae2de07e77f72c5b4644c5474056657f9",
+        "sourceDiffSha256": "f636f49c3971f9dbbbac03daad4b1bfa9ca4e89ef059ff529e0d6d7ea38959bb",
+        "receiptSha256": "7bbde821bf3afcab93dc0b8c9fbcadf3a2ba572094e5634c65a58f460c66f020",
+        "commandLogSha256": "8e8c0f9d576dcae17a691920c7c6386879d6d7af7acc842c9d3b82edae2148e1",
+        "scope": "Retained invocation receipt, not a rerun; archived XML totals may include stale suites."
+      },
+      {
+        "name": "cohort-0911-static-r2",
+        "startedUtc": "2026-09-09T11:46:07.973451+00:00",
+        "finishedUtc": "2026-09-09T11:46:15.121678+00:00",
+        "commandExitCode": 1,
+        "stopExitCode": 0,
+        "finalExitCode": 1,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "outputsDeferredForDependentVerification": true,
+        "sourceCommit": "f58e13b4d0a11b545b5ab569127327e76b27782f",
+        "sourceTree": "8634a37ae2de07e77f72c5b4644c5474056657f9",
+        "sourceDiffSha256": "41d3952d001b7a75d5770b18926acc3e70d737be5434ee35026382f0b1ee8b44",
+        "receiptSha256": "4992c5dfd2368dbc0ab7d0823607d04cebd404a4e93b730c2835c3784775f6ef",
+        "commandLogSha256": "68b2fe55b4e210c65f615325f72190ad8cce8df0b2534b641d07b9ac0a5c925b",
+        "scope": "Retained invocation receipt, not a rerun; archived XML totals may include stale suites."
+      },
+      {
+        "name": "cohort-0911-static-r3",
+        "startedUtc": "2026-09-09T12:00:38.499641+00:00",
+        "finishedUtc": "2026-09-09T12:00:43.886065+00:00",
+        "commandExitCode": 0,
+        "stopExitCode": 0,
+        "finalExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "outputsDeferredForDependentVerification": true,
+        "sourceCommit": "f58e13b4d0a11b545b5ab569127327e76b27782f",
+        "sourceTree": "8634a37ae2de07e77f72c5b4644c5474056657f9",
+        "sourceDiffSha256": "843ecc0b0c1a60352bb9c042e743b536f54153d437a8052b1e5e696ddcc4f061",
+        "receiptSha256": "259668e600a40038ef5e7bfac7742088fb5af4e3cf27f1229a788d9be9770865",
+        "commandLogSha256": "5dae1e5653693a38b76dfc5b0acec874e52f3106df3591a9105c6562242dd237",
+        "scope": "Retained invocation receipt, not a rerun; archived XML totals may include stale suites."
+      }
+    ],
+    "scope": "Only explicit final approvals count. Stale aggregate XML is not fresh tests. Earlier full-check and hosted failures remain historical. Raw private evidence is not included in Git.",
+    "publication": {
+      "status": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW",
+      "observedUtc": "2026-09-09T12:36:49.761041+00:00",
+      "commit": "ffd92738009638d4a4832c575530d03c2b930e54",
+      "tree": "3baa110085b8a323fb8045fa5ad1e02641ab3ac5",
+      "aheadOfLocalOrigin": 37,
+      "evidenceReportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+      "scope": "Final independent local commit/status capture; no fresh remote ref/Actions lease or subsequent publication claim."
+    },
+    "coverageReviewSources": [
+      {
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89"
+      },
+      {
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180"
+      },
+      {
+        "report": "next-sidecars-independent-review/R3-REPORT.md",
+        "reportSha256": "990e7568c58c064e13a82f1c8140650217a5e1d941959ff1cb38c3986c588a8f"
+      }
+    ]
+  },
+  "lastScopedVerificationBeforeContinuedCohort": {
+    "source": {
+      "recordedUtc": "2026-09-09T03:05:41.007449+00:00",
+      "baselineCommit": "bafe905ac030d090219352de8a2358695755b528",
+      "baselineTree": "91d469eb09c8a612bf7dd9f7c5e2ce1f081634bb",
+      "stagedTree": "747189670275c32b9ef67b3f1842cb3fad3cb381",
+      "diffSha256": "e0836d4312f918e3288dc1001dfdd6b635592ecdc11f39ba430a91f766818d18",
+      "paths": {
+        "scripts/run-audit-command.py": {
+          "sha256": "c3fa28adcde3efbacb0f2b6aa70c1c77906c7f2dd9688bd49cf2e75261139a17",
+          "gitBlob": "837f712733c0a5b102e203447c17b63f0ae785e2"
+        },
+        "scripts/tests/run-audit-command-test.py": {
+          "sha256": "83f955dbf888228e5cdfa4808b9c63917cffd91d76fc7d56e7dd2f632a025d1e",
+          "gitBlob": "d35fa8c5b6ed286931c82e79fa001758ca3d66c6"
+        }
+      },
+      "scope": "Staged two-file source; not a clean commit, independent approval, or native host execution"
+    },
+    "selectedFinalGates": [
+      {
+        "name": "issue-373-native-cleanup-r2",
+        "command": [
+          "python3",
+          "-B",
+          "scripts/tests/run-audit-command-test.py",
+          "--expected-host",
+          "linux-x64",
+          "--evidence-root",
+          "<private-373-verification>/native-fixture-evidence-r2"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "7dc2db648bab39bcfcd858257c9d1495562b274a476873593b27912e2965d2dc",
+        "startedUtc": "2026-09-09T03:08:21.924716+00:00",
+        "finishedUtc": "2026-09-09T03:09:31.326647+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": true
+      },
+      {
+        "name": "issue-373-final-r2-preservation",
+        "command": [
+          "python3",
+          "-B",
+          "<private-373-verification>/check-preservation.py"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "cd380ec7f7f6805431f53ae996f180870513c14e7cece41523a821f5e7d07b85",
+        "startedUtc": "2026-09-09T03:12:25.661022+00:00",
+        "finishedUtc": "2026-09-09T03:12:27.268760+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-focused",
+        "command": [
+          "python3",
+          "-B",
+          "<private-373-verification>/select-tests.py",
+          "--result",
+          "<private-373-verification>/focused-r2-result.json",
+          "PurePolicyTests.test_cleanup_directory_identity_uses_full_stat_not_cached_fields",
+          "PurePolicyTests.test_cleanup_rejects_actual_cross_device_before_descending",
+          "PurePolicyTests.test_cleanup_revalidates_directory_type_before_descending",
+          "PurePolicyTests.test_cleanup_revalidates_directory_reparse_before_descending",
+          "PurePolicyTests.test_cleanup_rejects_unknown_cached_reparse_before_path_stat",
+          "PurePolicyTests.test_cleanup_directory_full_stat_errors_fail_closed",
+          "PurePolicyTests.test_cleanup_scan_failures_and_entry_bound_stay_fail_closed",
+          "PurePolicyTests.test_cleanup_initial_special_file_is_rejected_before_path_stat"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "3d1e2f68ca33364231791d10442cc7eaa135a38ecac75fc077f961e5e0fe3b11",
+        "startedUtc": "2026-09-09T03:12:27.340751+00:00",
+        "finishedUtc": "2026-09-09T03:12:28.493767+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-mutation-cached-device",
+        "command": [
+          "python3",
+          "-B",
+          "<private-373-verification>/mutation-control.py",
+          "cached-device"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "3162a8a1916d91ac68ca5f23a9130df58479cf3ffe39ce96b9ae18d83ed8140c",
+        "startedUtc": "2026-09-09T03:12:28.566925+00:00",
+        "finishedUtc": "2026-09-09T03:12:29.714921+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-mutation-missing-device-guard",
+        "command": [
+          "python3",
+          "-B",
+          "<private-373-verification>/mutation-control.py",
+          "missing-device-guard"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "396a7d64a2a6ccc2716a9b8b922e5e45168c6fb06a8a0c669740007c28320e03",
+        "startedUtc": "2026-09-09T03:12:29.785589+00:00",
+        "finishedUtc": "2026-09-09T03:12:30.938071+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-mutation-zero-child-wildcard",
+        "command": [
+          "python3",
+          "-B",
+          "<private-373-verification>/mutation-control.py",
+          "zero-child-wildcard"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "57a446d193241fdefbfba72b81a77c8de30b642a3a7152c1c42f19f1fa700ea5",
+        "startedUtc": "2026-09-09T03:12:31.009712+00:00",
+        "finishedUtc": "2026-09-09T03:12:32.162912+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-mutation-zero-root-wildcard",
+        "command": [
+          "python3",
+          "-B",
+          "<private-373-verification>/mutation-control.py",
+          "zero-root-wildcard"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "8a0b13ec199e7d8fd81b8ac65e3e397768f5e6650e9c5ff0db02893291b410fd",
+        "startedUtc": "2026-09-09T03:12:32.234466+00:00",
+        "finishedUtc": "2026-09-09T03:12:33.386238+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-mutation-missing-type-guard",
+        "command": [
+          "python3",
+          "-B",
+          "<private-373-verification>/mutation-control.py",
+          "missing-type-guard"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "df16f84c9c0dcad1a439637e20d67f43a8b1884df0e5399c02f49ca6a77d6dcd",
+        "startedUtc": "2026-09-09T03:12:33.455937+00:00",
+        "finishedUtc": "2026-09-09T03:12:34.604559+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-mutation-missing-reparse-guard",
+        "command": [
+          "python3",
+          "-B",
+          "<private-373-verification>/mutation-control.py",
+          "missing-reparse-guard"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "51d4190ad48e8e613ad381ae1c8fc1ad65a9591937b164d157e74972bb394088",
+        "startedUtc": "2026-09-09T03:12:34.675874+00:00",
+        "finishedUtc": "2026-09-09T03:12:35.824054+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-mutation-following-path-stat",
+        "command": [
+          "python3",
+          "-B",
+          "<private-373-verification>/mutation-control.py",
+          "following-path-stat"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "ee5c142a83987bd74fea6c1cbcbda314a81d0259edfdaaea35af8ac695bd949f",
+        "startedUtc": "2026-09-09T03:12:35.895798+00:00",
+        "finishedUtc": "2026-09-09T03:12:37.050059+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-mutation-initial-path-stat",
+        "command": [
+          "python3",
+          "-B",
+          "<private-373-verification>/mutation-control.py",
+          "initial-path-stat"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "d83d0ecfe79d8d1feb22b5cbf77dfdedde50cfc02a80370a10a0069985c6f55d",
+        "startedUtc": "2026-09-09T03:12:37.122943+00:00",
+        "finishedUtc": "2026-09-09T03:12:38.274791+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-mutation-following-entry-stat",
+        "command": [
+          "python3",
+          "-B",
+          "<private-373-verification>/mutation-control.py",
+          "following-entry-stat"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "795845cb2a0678318edcb7c1037470a6d3f091dcbcf37f84cca4f57678f8b7e5",
+        "startedUtc": "2026-09-09T03:12:38.345975+00:00",
+        "finishedUtc": "2026-09-09T03:12:39.500568+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-host",
+        "command": [
+          "python3",
+          "-B",
+          "scripts/tests/audit-host-test.py",
+          "-v"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "53d1e493159f1b2376503806bca7a9b66154178cd864b7eb115708dff1bd35c2",
+        "startedUtc": "2026-09-09T03:12:39.571298+00:00",
+        "finishedUtc": "2026-09-09T03:12:46.427703+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-workflow",
+        "command": [
+          "python3",
+          "-B",
+          "scripts/tests/audit-host-workflow-test.py",
+          "-v"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "cdc3ffdd6a92bdc609366af33ca7ec4227ec6c2ad5dd2b4bd59398dda346f4c3",
+        "startedUtc": "2026-09-09T03:12:46.490220+00:00",
+        "finishedUtc": "2026-09-09T03:12:50.484522+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-leaf",
+        "command": [
+          "python3",
+          "-B",
+          "scripts/tests/audit-leaf-hooks-test.py",
+          "-v"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "d13323a5badf1bf6c653efc1c9ba05f9d9b243f0f59331ffbfbc04718e74f6c6",
+        "startedUtc": "2026-09-09T03:12:50.548460+00:00",
+        "finishedUtc": "2026-09-09T03:13:15.241067+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-consumer",
+        "command": [
+          "python3",
+          "-B",
+          "scripts/tests/audit-consumer-test.py",
+          "-v"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "b374cdc2ad1392ad66216eef1db98ff5a0cefb12b849474f92cf1135a17a0202",
+        "startedUtc": "2026-09-09T03:13:15.312944+00:00",
+        "finishedUtc": "2026-09-09T03:14:57.035146+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-wrapper",
+        "command": [
+          "bash",
+          "scripts/check-gradle-wrapper.sh"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "24c56f706fee7e898f90953a5311bcc53a5736030a35b45d150e9c6031487e6e",
+        "startedUtc": "2026-09-09T03:14:57.107960+00:00",
+        "finishedUtc": "2026-09-09T03:14:58.105647+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-wrapper-checkout",
+        "command": [
+          "bash",
+          "scripts/tests/check-gradle-wrapper-test.sh"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "62c278597c529f43d23889e49355ab93f1d6d810931f27ea19358ec3c361963d",
+        "startedUtc": "2026-09-09T03:14:58.174683+00:00",
+        "finishedUtc": "2026-09-09T03:15:00.132943+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-layout",
+        "command": [
+          "bash",
+          "scripts/tests/check-repository-layout.sh"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "e60e46a92111372e62766e5fe9d5e1581edf58faca334071996bfcb84cababd4",
+        "startedUtc": "2026-09-09T03:15:00.204518+00:00",
+        "finishedUtc": "2026-09-09T03:15:01.305658+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-osv-lock",
+        "command": [
+          "bash",
+          "scripts/tests/check-osv-lockfile-coverage.sh"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "1a57bd5e98b96c5e1a1ea3af81d4f4e898521878c22bb26dc27b6fe5316c55ea",
+        "startedUtc": "2026-09-09T03:15:01.376522+00:00",
+        "finishedUtc": "2026-09-09T03:15:02.369402+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-links",
+        "command": [
+          "bash",
+          "scripts/tests/check-markdown-links.sh"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "330c3b0c89a56bc8b8d060ae3cf01ab3783b6832a68060555d30d020155f4ddd",
+        "startedUtc": "2026-09-09T03:15:02.441323+00:00",
+        "finishedUtc": "2026-09-09T03:15:03.576398+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-metadata",
+        "command": [
+          "bash",
+          "scripts/check-release-metadata.sh"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "f4200a9bfa807fa59ee71201be06a33ba020eae0328d01681ed175633f4de207",
+        "startedUtc": "2026-09-09T03:15:03.660379+00:00",
+        "finishedUtc": "2026-09-09T03:15:04.763319+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-release-workflow",
+        "command": [
+          "bash",
+          "scripts/tests/release-workflow-test.sh"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "e46b3fe52cd2695c9185f5b9868cb296b018ea56c3167a6d917e97f1028d99bd",
+        "startedUtc": "2026-09-09T03:15:04.835859+00:00",
+        "finishedUtc": "2026-09-09T03:15:12.634873+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-whitespace",
+        "command": [
+          "bash",
+          "scripts/check-git-whitespace.sh"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "714e6488a7610519a49f1fa45c575070a683e4126f97eade0cc03b5c2adf3f1c",
+        "startedUtc": "2026-09-09T03:15:12.706096+00:00",
+        "finishedUtc": "2026-09-09T03:15:13.701037+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-working-diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "e7fda5e5d83d9113c820f12c5b501e3bd359e7e8493618fc058e3531ea63bad2",
+        "startedUtc": "2026-09-09T03:15:13.772988+00:00",
+        "finishedUtc": "2026-09-09T03:15:14.670433+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      },
+      {
+        "name": "issue-373-final-r2-staged-diff",
+        "command": [
+          "git",
+          "diff",
+          "--cached",
+          "--check"
+        ],
+        "exitCode": 0,
+        "receiptSha256": "86069233d7ec4a0a49fb688d7a99961a2f0b1dfec7018b4e92f43ee3976b400b",
+        "startedUtc": "2026-09-09T03:15:14.739451+00:00",
+        "finishedUtc": "2026-09-09T03:15:15.630966+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "alreadyCompletedSameRevisionNotRerun": false
+      }
+    ],
+    "allOwnLeaves": [
+      {
+        "name": "issue-373-original-cleanup-identity",
+        "sha256": "083f95711040ede80030e475aa03b518f19da9133e5dfd9a2c26bd55737d5aa5",
+        "startedUtc": "2026-09-09T02:57:33.292912+00:00",
+        "finishedUtc": "2026-09-09T02:57:34.390924+00:00",
+        "commandExitCode": 1,
+        "finalExitCode": 1,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-focused-cleanup-r1",
+        "sha256": "aebc59188a9dfeaec943adb88bb776d318e3d49f8ab4896dd57c66bb623fe01b",
+        "startedUtc": "2026-09-09T03:01:05.057626+00:00",
+        "finishedUtc": "2026-09-09T03:01:06.213025+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-native-cleanup-r2",
+        "sha256": "7dc2db648bab39bcfcd858257c9d1495562b274a476873593b27912e2965d2dc",
+        "startedUtc": "2026-09-09T03:08:21.924716+00:00",
+        "finishedUtc": "2026-09-09T03:09:31.326647+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-preservation",
+        "sha256": "cd380ec7f7f6805431f53ae996f180870513c14e7cece41523a821f5e7d07b85",
+        "startedUtc": "2026-09-09T03:12:25.661022+00:00",
+        "finishedUtc": "2026-09-09T03:12:27.268760+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-focused",
+        "sha256": "3d1e2f68ca33364231791d10442cc7eaa135a38ecac75fc077f961e5e0fe3b11",
+        "startedUtc": "2026-09-09T03:12:27.340751+00:00",
+        "finishedUtc": "2026-09-09T03:12:28.493767+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-mutation-cached-device",
+        "sha256": "3162a8a1916d91ac68ca5f23a9130df58479cf3ffe39ce96b9ae18d83ed8140c",
+        "startedUtc": "2026-09-09T03:12:28.566925+00:00",
+        "finishedUtc": "2026-09-09T03:12:29.714921+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-mutation-missing-device-guard",
+        "sha256": "396a7d64a2a6ccc2716a9b8b922e5e45168c6fb06a8a0c669740007c28320e03",
+        "startedUtc": "2026-09-09T03:12:29.785589+00:00",
+        "finishedUtc": "2026-09-09T03:12:30.938071+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-mutation-zero-child-wildcard",
+        "sha256": "57a446d193241fdefbfba72b81a77c8de30b642a3a7152c1c42f19f1fa700ea5",
+        "startedUtc": "2026-09-09T03:12:31.009712+00:00",
+        "finishedUtc": "2026-09-09T03:12:32.162912+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-mutation-zero-root-wildcard",
+        "sha256": "8a0b13ec199e7d8fd81b8ac65e3e397768f5e6650e9c5ff0db02893291b410fd",
+        "startedUtc": "2026-09-09T03:12:32.234466+00:00",
+        "finishedUtc": "2026-09-09T03:12:33.386238+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-mutation-missing-type-guard",
+        "sha256": "df16f84c9c0dcad1a439637e20d67f43a8b1884df0e5399c02f49ca6a77d6dcd",
+        "startedUtc": "2026-09-09T03:12:33.455937+00:00",
+        "finishedUtc": "2026-09-09T03:12:34.604559+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-mutation-missing-reparse-guard",
+        "sha256": "51d4190ad48e8e613ad381ae1c8fc1ad65a9591937b164d157e74972bb394088",
+        "startedUtc": "2026-09-09T03:12:34.675874+00:00",
+        "finishedUtc": "2026-09-09T03:12:35.824054+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-mutation-following-path-stat",
+        "sha256": "ee5c142a83987bd74fea6c1cbcbda314a81d0259edfdaaea35af8ac695bd949f",
+        "startedUtc": "2026-09-09T03:12:35.895798+00:00",
+        "finishedUtc": "2026-09-09T03:12:37.050059+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-mutation-initial-path-stat",
+        "sha256": "d83d0ecfe79d8d1feb22b5cbf77dfdedde50cfc02a80370a10a0069985c6f55d",
+        "startedUtc": "2026-09-09T03:12:37.122943+00:00",
+        "finishedUtc": "2026-09-09T03:12:38.274791+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-mutation-following-entry-stat",
+        "sha256": "795845cb2a0678318edcb7c1037470a6d3f091dcbcf37f84cca4f57678f8b7e5",
+        "startedUtc": "2026-09-09T03:12:38.345975+00:00",
+        "finishedUtc": "2026-09-09T03:12:39.500568+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-host",
+        "sha256": "53d1e493159f1b2376503806bca7a9b66154178cd864b7eb115708dff1bd35c2",
+        "startedUtc": "2026-09-09T03:12:39.571298+00:00",
+        "finishedUtc": "2026-09-09T03:12:46.427703+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-workflow",
+        "sha256": "cdc3ffdd6a92bdc609366af33ca7ec4227ec6c2ad5dd2b4bd59398dda346f4c3",
+        "startedUtc": "2026-09-09T03:12:46.490220+00:00",
+        "finishedUtc": "2026-09-09T03:12:50.484522+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-leaf",
+        "sha256": "d13323a5badf1bf6c653efc1c9ba05f9d9b243f0f59331ffbfbc04718e74f6c6",
+        "startedUtc": "2026-09-09T03:12:50.548460+00:00",
+        "finishedUtc": "2026-09-09T03:13:15.241067+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-consumer",
+        "sha256": "b374cdc2ad1392ad66216eef1db98ff5a0cefb12b849474f92cf1135a17a0202",
+        "startedUtc": "2026-09-09T03:13:15.312944+00:00",
+        "finishedUtc": "2026-09-09T03:14:57.035146+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-wrapper",
+        "sha256": "24c56f706fee7e898f90953a5311bcc53a5736030a35b45d150e9c6031487e6e",
+        "startedUtc": "2026-09-09T03:14:57.107960+00:00",
+        "finishedUtc": "2026-09-09T03:14:58.105647+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-wrapper-checkout",
+        "sha256": "62c278597c529f43d23889e49355ab93f1d6d810931f27ea19358ec3c361963d",
+        "startedUtc": "2026-09-09T03:14:58.174683+00:00",
+        "finishedUtc": "2026-09-09T03:15:00.132943+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-layout",
+        "sha256": "e60e46a92111372e62766e5fe9d5e1581edf58faca334071996bfcb84cababd4",
+        "startedUtc": "2026-09-09T03:15:00.204518+00:00",
+        "finishedUtc": "2026-09-09T03:15:01.305658+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-osv-lock",
+        "sha256": "1a57bd5e98b96c5e1a1ea3af81d4f4e898521878c22bb26dc27b6fe5316c55ea",
+        "startedUtc": "2026-09-09T03:15:01.376522+00:00",
+        "finishedUtc": "2026-09-09T03:15:02.369402+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-links",
+        "sha256": "330c3b0c89a56bc8b8d060ae3cf01ab3783b6832a68060555d30d020155f4ddd",
+        "startedUtc": "2026-09-09T03:15:02.441323+00:00",
+        "finishedUtc": "2026-09-09T03:15:03.576398+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-metadata",
+        "sha256": "f4200a9bfa807fa59ee71201be06a33ba020eae0328d01681ed175633f4de207",
+        "startedUtc": "2026-09-09T03:15:03.660379+00:00",
+        "finishedUtc": "2026-09-09T03:15:04.763319+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-release-workflow",
+        "sha256": "e46b3fe52cd2695c9185f5b9868cb296b018ea56c3167a6d917e97f1028d99bd",
+        "startedUtc": "2026-09-09T03:15:04.835859+00:00",
+        "finishedUtc": "2026-09-09T03:15:12.634873+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-whitespace",
+        "sha256": "714e6488a7610519a49f1fa45c575070a683e4126f97eade0cc03b5c2adf3f1c",
+        "startedUtc": "2026-09-09T03:15:12.706096+00:00",
+        "finishedUtc": "2026-09-09T03:15:13.701037+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-working-diff",
+        "sha256": "e7fda5e5d83d9113c820f12c5b501e3bd359e7e8493618fc058e3531ea63bad2",
+        "startedUtc": "2026-09-09T03:15:13.772988+00:00",
+        "finishedUtc": "2026-09-09T03:15:14.670433+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-373-final-r2-staged-diff",
+        "sha256": "86069233d7ec4a0a49fb688d7a99961a2f0b1dfec7018b4e92f43ee3976b400b",
+        "startedUtc": "2026-09-09T03:15:14.739451+00:00",
+        "finishedUtc": "2026-09-09T03:15:15.630966+00:00",
+        "commandExitCode": 0,
+        "finalExitCode": 0,
+        "stopExitCode": 0,
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "removedOutputs": []
+      }
+    ],
+    "suites": {
+      "native": {
+        "tests": 59,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "logSha256": "3ebb9089f75dd814b5dff9d485d8f18c7a938f21a65414a84afec8656cead515"
+      },
+      "host": {
+        "tests": 91,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "logSha256": "2b16353c91a085986e9bddeed403cf68cc02cc298588696521ba47946736ea42"
+      },
+      "workflow": {
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "logSha256": "ffc51ee73b0a40fa4c60f0aed419e4660b7d03dd2e5f5824cad65a3cb76ab39b"
+      },
+      "leaf": {
+        "tests": 27,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "logSha256": "8856049c301183a1fe795ff163f2ea86c6c0746151c67ae92200e3580eeb31ac"
+      },
+      "consumer": {
+        "tests": 32,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "logSha256": "a6fe2d36f4cdb9192488776097c056e6516f40f4d2482be8ebe6024ebb17983d"
+      }
+    },
+    "originalReproduction": {
+      "methods": [
+        "PurePolicyTests.test_cleanup_directory_identity_uses_full_stat_not_cached_fields",
+        "PurePolicyTests.test_cleanup_rejects_unknown_cached_reparse_before_path_stat",
+        "PurePolicyTests.test_cleanup_initial_special_file_is_rejected_before_path_stat"
+      ],
+      "testsRun": 3,
+      "failures": 0,
+      "errors": 2,
+      "skipped": 0,
+      "successful": false,
+      "failedIds": [],
+      "errorIds": [
+        "cleanup_tests.PurePolicyTests.test_cleanup_directory_identity_uses_full_stat_not_cached_fields (cached=0, full=47)",
+        "cleanup_tests.PurePolicyTests.test_cleanup_directory_identity_uses_full_stat_not_cached_fields (cached=47, full=0)"
+      ],
+      "scope": "Actual source methods on Linux with modeled metadata; not native Windows/product acceptance"
+    },
+    "focused": {
+      "r1": {
+        "methods": [
+          "PurePolicyTests.test_cleanup_directory_identity_uses_full_stat_not_cached_fields",
+          "PurePolicyTests.test_cleanup_rejects_actual_cross_device_before_descending",
+          "PurePolicyTests.test_cleanup_revalidates_directory_type_before_descending",
+          "PurePolicyTests.test_cleanup_revalidates_directory_reparse_before_descending",
+          "PurePolicyTests.test_cleanup_rejects_unknown_cached_reparse_before_path_stat",
+          "PurePolicyTests.test_cleanup_directory_full_stat_errors_fail_closed",
+          "PurePolicyTests.test_cleanup_scan_failures_and_entry_bound_stay_fail_closed",
+          "PurePolicyTests.test_cleanup_initial_special_file_is_rejected_before_path_stat"
+        ],
+        "testsRun": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "successful": true,
+        "failedIds": [],
+        "errorIds": [],
+        "scope": "Actual source methods on Linux with modeled metadata; not native Windows/product acceptance"
+      },
+      "r2": {
+        "methods": [
+          "PurePolicyTests.test_cleanup_directory_identity_uses_full_stat_not_cached_fields",
+          "PurePolicyTests.test_cleanup_rejects_actual_cross_device_before_descending",
+          "PurePolicyTests.test_cleanup_revalidates_directory_type_before_descending",
+          "PurePolicyTests.test_cleanup_revalidates_directory_reparse_before_descending",
+          "PurePolicyTests.test_cleanup_rejects_unknown_cached_reparse_before_path_stat",
+          "PurePolicyTests.test_cleanup_directory_full_stat_errors_fail_closed",
+          "PurePolicyTests.test_cleanup_scan_failures_and_entry_bound_stay_fail_closed",
+          "PurePolicyTests.test_cleanup_initial_special_file_is_rejected_before_path_stat"
+        ],
+        "testsRun": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "successful": true,
+        "failedIds": [],
+        "errorIds": [],
+        "scope": "Actual source methods on Linux with modeled metadata; not native Windows/product acceptance"
+      }
+    },
+    "mutationOracles": [
+      {
+        "mutation": "cached-device",
+        "selectedActualMethod": "test_cleanup_directory_identity_uses_full_stat_not_cached_fields",
+        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
+        "mutatedFunctionSha256": "cab71adb3abd24b6c78073558f18091b986c98114e7a138c261083f808af7530",
+        "testsRun": 1,
+        "failures": 0,
+        "errors": 2,
+        "skipped": 0,
+        "expectedFailures": 0,
+        "expectedErrors": 2,
+        "requiredFailureMechanisms": [
+          "Cross-device descendant directory blocks cleanup"
+        ],
+        "oraclePass": true,
+        "sourceUnchanged": true,
+        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
+      },
+      {
+        "mutation": "missing-device-guard",
+        "selectedActualMethod": "test_cleanup_rejects_actual_cross_device_before_descending",
+        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
+        "mutatedFunctionSha256": "c27c2423a6027d0449b833367060201c01a0c5bcde98e89f978372a0efdd569a",
+        "testsRun": 1,
+        "failures": 6,
+        "errors": 0,
+        "skipped": 0,
+        "expectedFailures": 6,
+        "expectedErrors": 0,
+        "requiredFailureMechanisms": [
+          "AuditError not raised"
+        ],
+        "oraclePass": true,
+        "sourceUnchanged": true,
+        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
+      },
+      {
+        "mutation": "zero-child-wildcard",
+        "selectedActualMethod": "test_cleanup_rejects_actual_cross_device_before_descending",
+        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
+        "mutatedFunctionSha256": "d337bcc509c7ebb3122aec2e38bc99bb45f35bd864bd42b0527a3b89ea698d16",
+        "testsRun": 1,
+        "failures": 2,
+        "errors": 0,
+        "skipped": 0,
+        "expectedFailures": 2,
+        "expectedErrors": 0,
+        "requiredFailureMechanisms": [
+          "AuditError not raised"
+        ],
+        "oraclePass": true,
+        "sourceUnchanged": true,
+        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
+      },
+      {
+        "mutation": "zero-root-wildcard",
+        "selectedActualMethod": "test_cleanup_rejects_actual_cross_device_before_descending",
+        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
+        "mutatedFunctionSha256": "0088da915c904364788e9756c974f19960dbcbdc605c4ddeaad6dca83a6f0b3d",
+        "testsRun": 1,
+        "failures": 2,
+        "errors": 0,
+        "skipped": 0,
+        "expectedFailures": 2,
+        "expectedErrors": 0,
+        "requiredFailureMechanisms": [
+          "AuditError not raised"
+        ],
+        "oraclePass": true,
+        "sourceUnchanged": true,
+        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
+      },
+      {
+        "mutation": "missing-type-guard",
+        "selectedActualMethod": "test_cleanup_revalidates_directory_type_before_descending",
+        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
+        "mutatedFunctionSha256": "b2a7dfeef726eebfbee2191cb82b538fb3ef25413f9e52321c374510bef7586f",
+        "testsRun": 1,
+        "failures": 3,
+        "errors": 0,
+        "skipped": 0,
+        "expectedFailures": 3,
+        "expectedErrors": 0,
+        "requiredFailureMechanisms": [
+          "AuditError not raised",
+          "does not match"
+        ],
+        "oraclePass": true,
+        "sourceUnchanged": true,
+        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
+      },
+      {
+        "mutation": "missing-reparse-guard",
+        "selectedActualMethod": "test_cleanup_revalidates_directory_reparse_before_descending",
+        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
+        "mutatedFunctionSha256": "2ea90095fdfd0ec23627c12c2cc40648a8508388d5e6818e5a73b4ce85e98ccc",
+        "testsRun": 1,
+        "failures": 3,
+        "errors": 0,
+        "skipped": 0,
+        "expectedFailures": 3,
+        "expectedErrors": 0,
+        "requiredFailureMechanisms": [
+          "does not match"
+        ],
+        "oraclePass": true,
+        "sourceUnchanged": true,
+        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
+      },
+      {
+        "mutation": "following-path-stat",
+        "selectedActualMethod": "test_cleanup_directory_identity_uses_full_stat_not_cached_fields",
+        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
+        "mutatedFunctionSha256": "3a6eb9a22579f8a4590e30274d433128de89b27e87af68b1494c494c50dda9d7",
+        "testsRun": 1,
+        "failures": 4,
+        "errors": 0,
+        "skipped": 0,
+        "expectedFailures": 4,
+        "expectedErrors": 0,
+        "requiredFailureMechanisms": [
+          "Full stat must remain no-follow"
+        ],
+        "oraclePass": true,
+        "sourceUnchanged": true,
+        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
+      },
+      {
+        "mutation": "initial-path-stat",
+        "selectedActualMethod": "test_cleanup_rejects_unknown_cached_reparse_before_path_stat",
+        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
+        "mutatedFunctionSha256": "1b16c80d7642dea75a560c8c9e4f463a958c7c81e50340815e0b9a32b18b171a",
+        "testsRun": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0,
+        "expectedFailures": 1,
+        "expectedErrors": 0,
+        "requiredFailureMechanisms": [
+          "Unknown reparse must be rejected before full path lookup"
+        ],
+        "oraclePass": true,
+        "sourceUnchanged": true,
+        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
+      },
+      {
+        "mutation": "following-entry-stat",
+        "selectedActualMethod": "test_cleanup_directory_identity_uses_full_stat_not_cached_fields",
+        "originalFunctionSha256": "d3119cb22eaad61effb99c02cda83a4574b9fa8a25e9edd2f16ae4d16c1cab22",
+        "mutatedFunctionSha256": "341edc401caa502c15d3d716354bc167eafc844487ebf71d8fc8c47b768ad85e",
+        "testsRun": 1,
+        "failures": 4,
+        "errors": 0,
+        "skipped": 0,
+        "expectedFailures": 4,
+        "expectedErrors": 0,
+        "requiredFailureMechanisms": [
+          "Initial entry classification must remain no-follow"
+        ],
+        "oraclePass": true,
+        "sourceUnchanged": true,
+        "scope": "In-memory actual-function negative control; inner failures are not passing product tests"
+      }
+    ],
+    "preservation": {
+      "baseline": "bafe905ac030d090219352de8a2358695755b528",
+      "sourceBinding": {
+        "recordedUtc": "2026-09-09T03:05:41.007449+00:00",
+        "baselineCommit": "bafe905ac030d090219352de8a2358695755b528",
+        "baselineTree": "91d469eb09c8a612bf7dd9f7c5e2ce1f081634bb",
+        "stagedTree": "747189670275c32b9ef67b3f1842cb3fad3cb381",
+        "diffSha256": "e0836d4312f918e3288dc1001dfdd6b635592ecdc11f39ba430a91f766818d18",
+        "paths": {
+          "scripts/run-audit-command.py": {
+            "sha256": "c3fa28adcde3efbacb0f2b6aa70c1c77906c7f2dd9688bd49cf2e75261139a17",
+            "gitBlob": "837f712733c0a5b102e203447c17b63f0ae785e2"
+          },
+          "scripts/tests/run-audit-command-test.py": {
+            "sha256": "83f955dbf888228e5cdfa4808b9c63917cffd91d76fc7d56e7dd2f632a025d1e",
+            "gitBlob": "d35fa8c5b6ed286931c82e79fa001758ca3d66c6"
+          }
+        },
+        "scope": "Staged two-file source; not a clean commit, independent approval, or native host execution"
+      },
+      "unchangedOriginalTestFileDefinitions": 100,
+      "unchangedOriginalTestMethods": 56,
+      "addedTestMethods": [
+        [
+          "ExecutorFixtureTests",
+          "test_cleanup_preflights_all_targets_before_removing_any_output"
+        ],
+        [
+          "PurePolicyTests",
+          "test_cleanup_directory_full_stat_errors_fail_closed"
+        ],
+        [
+          "PurePolicyTests",
+          "test_cleanup_directory_identity_uses_full_stat_not_cached_fields"
+        ],
+        [
+          "PurePolicyTests",
+          "test_cleanup_initial_special_file_is_rejected_before_path_stat"
+        ],
+        [
+          "PurePolicyTests",
+          "test_cleanup_rejects_actual_cross_device_before_descending"
+        ],
+        [
+          "PurePolicyTests",
+          "test_cleanup_rejects_unknown_cached_reparse_before_path_stat"
+        ],
+        [
+          "PurePolicyTests",
+          "test_cleanup_revalidates_directory_reparse_before_descending"
+        ],
+        [
+          "PurePolicyTests",
+          "test_cleanup_revalidates_directory_type_before_descending"
+        ],
+        [
+          "PurePolicyTests",
+          "test_cleanup_scan_failures_and_entry_bound_stay_fail_closed"
+        ],
+        [
+          "WindowsNativeTests",
+          "test_windows_cleanup_nested_outputs_and_junction_preserve_external_sentinel"
+        ]
+      ],
+      "fixtureProgramUnchanged": true,
+      "nativeSelectionUnchanged": true,
+      "productionScope": "Exact two-line ordinary-directory block replacement; all other source bytes/guards unchanged",
+      "scope": "Source preservation inspection, not native Windows/product/cleanup approval"
+    },
+    "fixtureCleanup": {
+      "records": 38,
+      "uniqueBases": 35,
+      "historicalIncompleteRecords": 3,
+      "allFinalRecordsCompleteAndBasesAbsent": true,
+      "scope": "Retained Linux fixture attempts and final absent-base observations, not native Windows or remote cleanup."
+    },
+    "nestedInvocations": {
+      "unique": 46,
+      "identicalArchivedReceiptCopies": 3,
+      "finalOutcomes": {
+        "zero": 15,
+        "infrastructure125": 30,
+        "intentional7": 1
+      },
+      "stops": {
+        "zero": 23,
+        "nullAdmission": 21,
+        "intentional9": 1,
+        "timeoutMinus15": 1
+      }
+    },
+    "verificationManifestSha256": "ac6050abc693c2e1cdf2bc36c097df1b4479441f1bbf2b2c15afcdadad92b8d0",
+    "verificationSummarySha256": "030c61b9d272e4f024a42df248633b184b1b2275d4e52ff061753ea616b4d023",
+    "verificationSealSha256": "133f78d5023256a89f9fee4ff4b485c4aefdb63e93b24fefdd6d1d0c144b96ba",
+    "files": 1178,
+    "bytes": 2635900,
+    "ownLeaves": 28,
+    "finalGates": 26,
+    "sealerReceiptSha256": "bcf66a0982104b92c63aedb785badc99694c62f49f6896ae14638bda6785efe6",
+    "sealerFinalizedUtc": "2026-09-09T03:28:26.882699+00:00",
+    "sealerSeparateNotRecursive": true,
+    "sealerCommandStopFinal": [
+      0,
+      0,
+      0
+    ],
+    "reviewerInspectorHistory": {
+      "archiveFalseLabels": 54,
+      "archiveBindingsReconciled": 822,
+      "direct": 795,
+      "relocated": 27,
+      "copiedManifests": 8,
+      "supplementalArchiveComparisons": 1127,
+      "verboseSameLineFalseLabels": 4,
+      "selectedMethodOutcomesReconciled": 260,
+      "supplementalVerboseComparisons": 301,
+      "scope": "Original reviewer inspector outputs are retained; separate data reconciliations resolve assumptions without altering root evidence, tests or source."
+    },
+    "history": "Original identity method has two intended AuditErrors; matching-cache and reparse/special controls pass. First green r1 predates the stronger r2 cross-device matrix; all failures remain retained.",
+    "scope": "Linux native fixture controls and actual-method metadata models; not real Gradle product execution or foreign-host acceptance. Do not sum overlapping test totals.",
+    "limitations": [
+      "Native Windows correction and junction regression not yet executed",
+      "Trial3 observed cleanup failure125; numeric Windows device fields were not recorded",
+      "Trial3 remains PARTIAL_SALVAGE unsafe with18 JSONL omissions; remote cleanup/full-tree NOT_PROVEN",
+      "Nine negative-oracle inner failures and three deliberately incomplete fixture teardown attempts remain historical",
+      "No new product XML, whole-check, consumer product, release, or Apple acceptance",
+      "Whole audit NOT_READY; independent133 NOT_STARTED; physical/hostile-network/professional crypto/#120 separate"
+    ],
+    "issue": 373,
+    "review": {
+      "reviewer": "/root/review_373_source",
+      "verdict": "APPROVE_SOURCE_AND_INSPECTED_LOCAL_VERIFICATION",
+      "findings": [],
+      "reportSha256": "360d89cce04603cfd2a5184a794efbc64088af01416f396775815a10a5d92b77",
+      "manifestSha256": "333fadd5a6a2d16a4bd53f35eb89d090fa41f59ad5b7061e9d4b1cf4fc9849a2",
+      "sealSha256": "d27cbb254884dfdccdba9bead7c6e62cb3261ba7111c264e3f729104ba069098",
+      "initialReadsetSha256": "55293e0de78037d237dfbfcbedd6aa918995eb551d08d92c7d02e9108d8e6b13",
+      "completeObservedReadsetSha256": "1f91717206a0123611302374563831cd066cf63108901ba14210d553013f85c3",
+      "actualCommitAddendum": {
+        "commit": "128136ff8ab040f0b5c61dc5402d2b9736d63c86",
+        "addendumSha256": "7d49c983f72f3a2900cac76f2e264f673d0c851e9ef004e77974c4b96a8698ad",
+        "sealSha256": "09a00e76e98c6d29c03f9e4cfcb0861541857693f8995f784e5b4e7f7d863236",
+        "manifestSha256": "720867fbcae15b6857e8a6ba8f2bcd10048435aea5f59ebaca5e1ce3fa2a6c6c",
+        "substantiveCommitComparisons": 20,
+        "currentWorktreeDiscrepancyPreserved": true,
+        "scope": "Exact committed bytes approved; separate later staged workflow is not part of this source approval or a clean current128 worktree. No clean-commit/native rerun."
+      },
+      "scope": "Actual staged-tree source/evidence review, not administrative approval or clean-commit/Windows/product execution; later exact commit binding remains a separate event."
+    },
+    "laterExactCommit": "128136ff8ab040f0b5c61dc5402d2b9736d63c86",
+    "laterExactTree": "747189670275c32b9ef67b3f1842cb3fad3cb381"
+  },
+  "lastScopedVerificationRoleBeforeContinuedCohort": "Final373 staged-source Linux fixture/static verification and original controls, independently inspected. Not clean-commit or corrected native Windows/product/Apple execution. Separate operational request gates have their own binding.",
+  "corroborationProjectionBeforeContinuedCohort": {
+    "sourceCommit": "d5d0c1ea72324fd8f04dc55deae93692f3d0fe0f",
+    "sourceTree": "e0aaf19895def88732c68742d73687be612f01ef",
+    "projectionPaths": 1076,
+    "changedSourcePaths": 63,
+    "newSourcePaths": 11,
+    "newReportPaths": [
+      "docs/audit/2026-09-04/repairs/cohort-2026-09-09.md"
+    ],
+    "existingHistoricalFiveColumnCellsPreserved": 5320,
+    "countsByReadStatus": {
+      "FULL_TEXT_CURRENT": 753,
+      "FULL_SEMANTIC_DELTA_CURRENT": 56,
+      "REOPENED_CHANGED_SINCE_RECORDED_READ": 6,
+      "STRUCTURAL_ONLY_CURRENT": 259,
+      "SELF_DESCRIBING_LEDGER_NO_CURRENT_SELF_BINDING": 1,
+      "PARTIAL_CURRENT": 1
+    },
+    "scope": "Scoped independently reviewed source deltas mapped to byte-equivalent committed blobs; new files fully in their reviewed patches. No repeated full-source read or execution inferred from hashes. New report read at staged-parent binding. Earlier current-read rows remain in Git history; first five historical columns preserved. Six reopened administrative rows,259 structural-only paths,one partial and one self-binding boundary remain. Not whole-repository semantic completion or audit acceptance."
   }
 }

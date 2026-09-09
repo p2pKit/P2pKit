@@ -3,8 +3,8 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-09T08:30:45.411979+00:00",
-  "provenance": "Current cohort adds four filed causes374-377 and25 independently source-approved/applicable-Linux-or-static repairs. Three Apple-only prepared repairs330/341/363 remain pending. 100/191 independently approved repository-repair rows (52.4%); 91 remaining (47.6%): 69 Low repairs, 21 external-validation rows and architecture decision #120; 58 new audit findings. Counts are not effort, GitHub closure, platform acceptance or readiness. Earlier assessments/filing clocks/failures and original refresh objects remain historical. See cohort0909 and repairs/cohort-2026-09-09.md. The08:30 bounded refresh adds fresh own histories373-377, not a new all-history/PR/upstream capture or full-current-check pass.",
+  "githubIssueListRefreshedUtc": "2026-09-09T12:04:20.651772+00:00",
+  "provenance": "145/193 independently approved repository-repair rows (75.1%); 48 remaining (24.9%): 26 repair-category rows, 21 external-validation rows and architecture decision #120; 60 new audit findings. Counts are not effort, GitHub closures, platform acceptance or release readiness. Eighteen cohort0910 final approvals are bound to exact commits and retained evidence; later rows count only with explicit final approvals. Two filed causes378/379 expand191 to193. Historical failures/read scopes/decisions are preserved; #133 independent NOT_STARTED and whole audit NOT_READY.",
   "issues": [
     {
       "number": 21,
@@ -957,11 +957,36 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "9ab46d7bdd52a551e4be525dd7b839b32928b6ac"
+      ],
+      "recordedIndependentReview": "APPROVE_SOURCE; not counted complete. Apple selected-SDK declaration, C helper compile/link and relevant native parameter/recovery execution.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/156#issuecomment-5406154938"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "9ab46d7bdd52a551e4be525dd7b839b32928b6ac"
+        ],
+        "correction": "Apply TCP options before use and retain failed-release ownership.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_SOURCE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "Original JVM/Android dial-option reds; r1 JVM LAN17/17 and Android-host18/18 including setter ordering and failed-release ownership. Apple selected-SDK declaration, C helper compile/link and relevant native parameter/recovery execution.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-transport-options-independent-review/REPORT.md",
+        "sourceReviewSha256": "6c70c01be4a41f0f4eac2240f7577daed1bd089e186c9661330fac9071fe62dc",
+        "remainingMaterialValidation": "Apple selected-SDK declaration, C helper compile/link and relevant native parameter/recovery execution.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 157,
@@ -1028,11 +1053,36 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "9ab46d7bdd52a551e4be525dd7b839b32928b6ac"
+      ],
+      "recordedIndependentReview": "APPROVE_SOURCE; not counted complete. Apple native queue/recovery parity after shared constant and bundled helper changes.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/158#issuecomment-5406155347"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "9ab46d7bdd52a551e4be525dd7b839b32928b6ac"
+        ],
+        "correction": "Align the explicit bounded inbound capacity across LAN platforms.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_SOURCE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "Original JVM/Android capacity reds; r1 same35 LAN tests with actual fresh worker defaultBuffer=8; core admission2/2. Apple native queue/recovery parity after shared constant and bundled helper changes.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-transport-options-independent-review/REPORT.md",
+        "sourceReviewSha256": "6c70c01be4a41f0f4eac2240f7577daed1bd089e186c9661330fac9071fe62dc",
+        "remainingMaterialValidation": "Apple native queue/recovery parity after shared constant and bundled helper changes.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 160,
@@ -1114,14 +1164,35 @@
         124,
         139
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "58d1d741296896cb92f01c0ccc7737609c782373"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/167#issuecomment-5406156694"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "58d1d741296896cb92f01c0ccc7737609c782373"
+        ],
+        "correction": "Preserve manual display metadata precedence while retaining trusted pins and additive routing.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 168,
@@ -1143,14 +1214,39 @@
         165,
         166
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "417aab2b62e0f9016a428fa8d6a974b2245b7896"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/168#issuecomment-5406184845"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "417aab2b62e0f9016a428fa8d6a974b2245b7896"
+        ],
+        "correction": "Retire terminal sessions without waiting behind the blocked send gate.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r1 new SessionCloseRetirement3/3 and CloseSemantics6/6; r2 corrected SessionEpochOwnership5/5; actual raw retirement precondition/exactClosed and ownership checks retained. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-close-budget-independent-review/168-REPORT.md",
+        "sourceReviewSha256": "a22d80f16fea5eb03185cc5de10e608ffe17828069d98d55bd03cbc005c5149c",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 169,
@@ -1167,14 +1263,35 @@
         124,
         165
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "fd223850ce386192079b3d6e2b0ae69f84595d17"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/169#issuecomment-5406157850"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "fd223850ce386192079b3d6e2b0ae69f84595d17"
+        ],
+        "correction": "Use bounded monotonic rejection windows, exact concurrent counts and a true NoOp short-circuit.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 171,
@@ -1229,11 +1346,36 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "348cf179194a72afdc7abbd097898884fc25e7df"
+      ],
+      "recordedIndependentReview": "APPROVE_SOURCE; not counted complete. Native Windows FileTransferJvmTest for changed destination ownership/state machine.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/172#issuecomment-5406158144"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "348cf179194a72afdc7abbd097898884fc25e7df"
+        ],
+        "correction": "Acquire receive staging lazily and fence terminal ownership.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_SOURCE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r1 FileTransferJvmTest14/14; r3 AndroidDurableFileDestinationAndroidHostTest10/10 plus acceptance8/cleanup8; actual host file lifecycle, not power-loss. Native Windows FileTransferJvmTest for changed destination ownership/state machine.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-durable-independent-review/REPORT.md",
+        "sourceReviewSha256": "0416ee7a863d76f942265c586ebbe2dd18c9b21afed714066a9ba58f8689fa87",
+        "remainingMaterialValidation": "Native Windows FileTransferJvmTest for changed destination ownership/state machine.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 173,
@@ -1255,14 +1397,39 @@
         167,
         170
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "7a57e7274a692b78bc913248b3a5359765c25280"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/173#issuecomment-5406158213"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "7a57e7274a692b78bc913248b3a5359765c25280"
+        ],
+        "correction": "Use supported public StateFlow factory fusion while retaining generation semantics; #379 remains separate.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r2 PeerRegistry43/43, DiscoveryReemit3/3 and both core ABI tasks pass. Fixes fusion/retained-generation semantics; separately reproduced onSubscription remains unresolved. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-stateflow-supported-independent-review/REPORT.md",
+        "sourceReviewSha256": "4a6c1fab12b814ec1b552994fe0e0449ce378d36831499b6664b2bea99330108",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 175,
@@ -1312,11 +1479,36 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "348cf179194a72afdc7abbd097898884fc25e7df"
+      ],
+      "recordedIndependentReview": "APPROVE_SOURCE; not counted complete. Native Windows destination test for non-POSIX staging/ACL-default branch; no owner-only Windows ACL promise.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/176#issuecomment-5406158414"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "348cf179194a72afdc7abbd097898884fc25e7df"
+        ],
+        "correction": "Use private sibling staging on POSIX; do not promise owner-only Windows ACLs.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_SOURCE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "Same r1 JVM14/r3 Android10; real POSIX sibling/mode check where supported and substituted Android chmod/order/failure boundary. Native Windows destination test for non-POSIX staging/ACL-default branch; no owner-only Windows ACL promise.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-durable-independent-review/REPORT.md",
+        "sourceReviewSha256": "0416ee7a863d76f942265c586ebbe2dd18c9b21afed714066a9ba58f8689fa87",
+        "remainingMaterialValidation": "Native Windows destination test for non-POSIX staging/ACL-default branch; no owner-only Windows ACL promise.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 184,
@@ -1569,14 +1761,36 @@
         139,
         192
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "b4239a58989eec5ed1fe5f356e224adb1a5d2357"
+      ],
+      "recordedIndependentReview": "APPROVE_HOST_REPAIR exact final revision, /root/review_sidecars_next; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/195#issuecomment-5406160286"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "b4239a58989eec5ed1fe5f356e224adb1a5d2357"
+        ],
+        "correction": "Classify post-start permission loss using current grants and preserve ownership/cancellation.",
+        "reviewer": "/root/review_sidecars_next",
+        "verdict": "APPROVE_HOST_REPAIR",
+        "report": "next-sidecars-independent-review/R3-REPORT.md",
+        "reportSha256": "990e7568c58c064e13a82f1c8140650217a5e1d941959ff1cb38c3986c588a8f",
+        "verificationAndLimits": "Host credentials/ownership/cancellation and real adapter probes pass. Shared final gates; no physical/OEM permission-revocation acceptance.",
+        "group": "cohort0911-sidecars",
+        "remainingMaterialValidation": "Shared final gates; no physical/OEM permission-revocation acceptance.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 196,
@@ -1762,14 +1976,35 @@
         15,
         204
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "d313b1b1baaff6e8e245567f57670a3363af43e4"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/205#issuecomment-5406161580"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "d313b1b1baaff6e8e245567f57670a3363af43e4"
+        ],
+        "correction": "Await real reconnect-owner completion instead of a 150 ms absence oracle; retain dial/state assertions.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 206,
@@ -1785,15 +2020,36 @@
         141,
         147
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "4e24d9c9daf45b89e6482eec046cf64b95197c1d"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/206#issuecomment-5406161904",
         "https://github.com/p2pKit/P2pKit/issues/206#issuecomment-5552043454"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "4e24d9c9daf45b89e6482eec046cf64b95197c1d"
+        ],
+        "correction": "Use secure in-memory fixture identities and the canonical admission limit; remove process-wide home mutation.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 207,
@@ -1936,14 +2192,39 @@
         208,
         210
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "7bc68b6718bdb1a3f3e61dbf2a9fd5c1defd6596"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/212#issuecomment-5406162493"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "7bc68b6718bdb1a3f3e61dbf2a9fd5c1defd6596"
+        ],
+        "correction": "Restore maintained specification authority and authorized archive navigation.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "Final maintained/archive authority source review; static-r3 metadata gate and472 links/79 active Markdown pass. Only authorized archive navigation href changes. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-maintained-docs-independent-review/REPORT.md",
+        "sourceReviewSha256": "d327e20024a8e081a3f1d847954443f04cf3c9f143a40423881bee8ad230d963",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 213,
@@ -1958,14 +2239,39 @@
         185,
         191
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "e9b8be24672fac0421326dfa8e87718180df72d5"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/213#issuecomment-5406162469"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "e9b8be24672fac0421326dfa8e87718180df72d5"
+        ],
+        "correction": "Add typed-error recovery guidance.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "Complete typed-error/recovery guide source review and static-r3 active Markdown links; documentation-only, not fresh execution of every described error. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-maintained-docs-independent-review/REPORT.md",
+        "sourceReviewSha256": "d327e20024a8e081a3f1d847954443f04cf3c9f143a40423881bee8ad230d963",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 214,
@@ -2022,14 +2328,39 @@
         212,
         213
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "e9b8be24672fac0421326dfa8e87718180df72d5"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/215#issuecomment-5406162651"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "e9b8be24672fac0421326dfa8e87718180df72d5"
+        ],
+        "correction": "Map threat model properties to enforcement and explicit limitations.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "Threat-model/property-to-enforcement source review and static-r3 links; preserved limitations, assertion references are not new crypto validation. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-maintained-docs-independent-review/REPORT.md",
+        "sourceReviewSha256": "d327e20024a8e081a3f1d847954443f04cf3c9f143a40423881bee8ad230d963",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 216,
@@ -2047,14 +2378,39 @@
         214,
         215
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "bb1ad32db4ffb592d75724a9600409ba8d29a91d"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/216#issuecomment-5406162738"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "bb1ad32db4ffb592d75724a9600409ba8d29a91d"
+        ],
+        "correction": "Centralize external validation status links without advancing campaigns.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "Source confirms six unchanged campaign statuses with canonical anchors; static-r3 active links pass. External campaign states are not promoted. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-maintained-docs-independent-review/REPORT.md",
+        "sourceReviewSha256": "d327e20024a8e081a3f1d847954443f04cf3c9f143a40423881bee8ad230d963",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 217,
@@ -2072,14 +2428,35 @@
         119,
         206
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "7b24ad8cfb805cd6a4276f358810d255298fea88"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/217#issuecomment-5406162762"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "7b24ad8cfb805cd6a4276f358810d255298fea88"
+        ],
+        "correction": "Make socket accept timeout fail immediately with ordinal/deadline and the original exception cause.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 218,
@@ -2099,14 +2476,39 @@
         207,
         209
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "4f9da4f98c500988975c274d1d3709572e7f954e"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/218#issuecomment-5406162785"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "4f9da4f98c500988975c274d1d3709572e7f954e"
+        ],
+        "correction": "Strengthen immutable snapshot assertions without assuming identical platform cast behavior.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r1 affected immutable snapshot/model/fixture/metadata/store/transport tests pass; r2 final PeerRegistry43/43 includes retained snapshot checks. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-tests-remaining-independent-review/REPORT.md",
+        "sourceReviewSha256": "c9096e0feb329e8368d5eadbd6949f729fa9369aa241149182a883809409dddd",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 219,
@@ -2124,14 +2526,39 @@
         208,
         213
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "e9b8be24672fac0421326dfa8e87718180df72d5"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/219#issuecomment-5406162952"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "e9b8be24672fac0421326dfa8e87718180df72d5"
+        ],
+        "correction": "Document custom transport ownership, security mode and provider contracts.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "Source/provider caller review; static-r3 links; r2 both rendered securityProfile descriptions preserve explicit supplied security mode/provenance. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-maintained-docs-independent-review/REPORT.md",
+        "sourceReviewSha256": "d327e20024a8e081a3f1d847954443f04cf3c9f143a40423881bee8ad230d963",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 220,
@@ -2150,14 +2577,39 @@
         209,
         217
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "4f9da4f98c500988975c274d1d3709572e7f954e"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/220#issuecomment-5406163015"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "4f9da4f98c500988975c274d1d3709572e7f954e"
+        ],
+        "correction": "Exercise relay concurrency/lifecycle on real dispatcher execution.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r1 ReliablePeerEventRelayConcurrencyTest2/2 on real JVM Default dispatcher; deterministic lifecycle ordering and snapshot reconstruction. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-tests-remaining-independent-review/REPORT.md",
+        "sourceReviewSha256": "c9096e0feb329e8368d5eadbd6949f729fa9369aa241149182a883809409dddd",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 223,
@@ -2363,14 +2815,39 @@
       "relatedIssuesAndDependencies": [
         225
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "7bc68b6718bdb1a3f3e61dbf2a9fd5c1defd6596"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/230#issuecomment-5406163842"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "7bc68b6718bdb1a3f3e61dbf2a9fd5c1defd6596"
+        ],
+        "correction": "Fail closed when required release metadata sections are absent or contradictory.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "Full source review plus metadata integration delta review; static-r3 all11fixtures+actual release metadata+links+diff PASS after historical static-r2 live-heading failure. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-small-contracts-independent-review/REPORT.md",
+        "sourceReviewSha256": "b1b491312e7143df99a3b0020efce601dc0864a0e6d7f2ef663fc0186ec01e39",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 232,
@@ -2389,14 +2866,39 @@
         222,
         227
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "1235d293090a489b54defc719870043b63c4033e"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/232#issuecomment-5406164099"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "1235d293090a489b54defc719870043b63c4033e"
+        ],
+        "correction": "Document DataTransport.start cancellation obligations.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r2 final public DataTransport.start generated page inspected and core ABI passes; documentation/cancellation contract only. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-small-contracts-independent-review/REPORT.md",
+        "sourceReviewSha256": "b1b491312e7143df99a3b0020efce601dc0864a0e6d7f2ef663fc0186ec01e39",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 235,
@@ -2440,11 +2942,36 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "2c1a9ba54a895b8317df69e7dd9b20b12b513d5f"
+      ],
+      "recordedIndependentReview": "APPROVE_SOURCE; not counted complete. Full candidate publication artifact inspection, including license checks on all15 macOS rows; nine fixtures/core archives do not certify that gate.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/236#issuecomment-5406164399"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "2c1a9ba54a895b8317df69e7dd9b20b12b513d5f"
+        ],
+        "correction": "Enforce canonical LICENSE presence in covered publication archives.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_SOURCE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "static-r1 nine real-inline-policy ZIP fixture cases pass; actual core source/Dokka/JVM/metadata jars inspected with exactly one canonical LICENSE, mixed run origins explicit. Full candidate publication artifact inspection, including license checks on all15 macOS rows; nine fixtures/core archives do not certify that gate.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-maintained-docs-independent-review/REPORT.md",
+        "sourceReviewSha256": "d327e20024a8e081a3f1d847954443f04cf3c9f143a40423881bee8ad230d963",
+        "remainingMaterialValidation": "Full candidate publication artifact inspection, including license checks on all15 macOS rows; nine fixtures/core archives do not certify that gate.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 237,
@@ -2459,14 +2986,39 @@
         216,
         236
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "bb1ad32db4ffb592d75724a9600409ba8d29a91d"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/237#issuecomment-5406164415"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "bb1ad32db4ffb592d75724a9600409ba8d29a91d"
+        ],
+        "correction": "Distinguish immutable RC3 publication from current source gate scope.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "Immutable RC3/source gate-scope reconciliation source review and static-r3 links; no published artifact or release history rewritten. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-maintained-docs-independent-review/REPORT.md",
+        "sourceReviewSha256": "d327e20024a8e081a3f1d847954443f04cf3c9f143a40423881bee8ad230d963",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 239,
@@ -2485,14 +3037,35 @@
         222,
         238
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "2d7d40718e40f5284ae9b3640d6f361e90d6e232"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/239#issuecomment-5406164709"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "2d7d40718e40f5284ae9b3640d6f361e90d6e232"
+        ],
+        "correction": "Document synchronous, concurrent logger calls and nonblocking obligations; no latency isolation guarantee.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 240,
@@ -2513,11 +3086,13 @@
         234,
         238
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "49e6b10765cdd0f3582ba89933d5ac8c440b209e"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/240#issuecomment-5406164671"
       ],
@@ -2526,6 +3101,25 @@
         "removedNonIssueToken": 0,
         "source": "https://github.com/p2pKit/P2pKit/issues/240",
         "scope": "Full captured issue body twice says transport #0 for the zero-indexed first transport, not GitHub issue0. Remove only the falsely extracted dependency; no replacement issue, new product finding, source repair or disposition/count change. Original body retained."
+      },
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "49e6b10765cdd0f3582ba89933d5ac8c440b209e"
+        ],
+        "correction": "Attribute observer-only failures as ConnectionFailed; preserve real data-start taxonomy and cancellation.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
       }
     },
     {
@@ -2543,14 +3137,35 @@
         239,
         240
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "9876c9e4b9ba7bc9c1b2f7fac1bd3b597a05c440"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/241#issuecomment-5406164680"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "9876c9e4b9ba7bc9c1b2f7fac1bd3b597a05c440"
+        ],
+        "correction": "Warn on restart after retained failed observer unregister; distinguish ordinary idempotent start.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 243,
@@ -2565,14 +3180,35 @@
         168,
         222
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "2d7d40718e40f5284ae9b3640d6f361e90d6e232"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/243#issuecomment-5406164915"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "2d7d40718e40f5284ae9b3640d6f361e90d6e232"
+        ],
+        "correction": "Correct connection-lock/epoch-adoption documentation; no invented additional race repair.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 245,
@@ -2590,14 +3226,35 @@
         239,
         243
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "f58e13b4d0a11b545b5ab569127327e76b27782f"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/245#issuecomment-5406164934"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "f58e13b4d0a11b545b5ab569127327e76b27782f"
+        ],
+        "correction": "Fence reconnect watchdog episodes, register before eager handlers and retire detached timers outside the lock.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 247,
@@ -2643,14 +3300,39 @@
         235,
         241
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "248f8177c317e79c8de680ceb8ad0b239dd3a71e"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/248#issuecomment-5406165317"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "248f8177c317e79c8de680ceb8ad0b239dd3a71e"
+        ],
+        "correction": "Make Android identity content/directory durability ordering explicit.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r3 new AndroidIdentityAtomicWriteAndroidHostTest8/8 after expected-list compiler correction; checked actual host fd sync with controlled publication/directory adapters. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-identity-independent-review/248-REPORT.md",
+        "sourceReviewSha256": "a31720f24062f55bfcb1e9f7d844c15fd550046628f70a4b6fc8f60d98e43c67",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 249,
@@ -2666,14 +3348,39 @@
         110,
         209
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "1e886dcd099806e11c8656c38daf97ff27f51c0a"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/249#issuecomment-5406165332"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "1e886dcd099806e11c8656c38daf97ff27f51c0a"
+        ],
+        "correction": "Keep receive progress forward-only during reentrant terminal transitions.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "Original-r2 both deterministic regression reds; focused-r1 FileTransferFlow122/122 includes both corrected exact forward-only byte/terminal cases. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-durable-independent-review/progress-REPORT.md",
+        "sourceReviewSha256": "b7d15d19f605961911a7d647cacb5b492a499fd3c4f25aea048017a7d285629a",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 250,
@@ -2696,11 +3403,36 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "d4ce3598a1d139721e0a2744a3779f2f38bfc7de"
+      ],
+      "recordedIndependentReview": "APPROVE_SOURCE; not counted complete. Apple IosSecureIdentityOperationLocksTest and existing storage ownership/recovery selectors.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/250#issuecomment-5406165808"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "d4ce3598a1d139721e0a2744a3779f2f38bfc7de"
+        ],
+        "correction": "Serialize secure-identity storage operations per namespace.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_SOURCE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r3 AndroidSecureIdentityOperationLocksAndroidHostTest3/3 uses real host file locks/shared process registry; no new Android multiprocess/Keystore claim. Apple IosSecureIdentityOperationLocksTest and existing storage ownership/recovery selectors.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-identity-independent-review/250-REPORT.md",
+        "sourceReviewSha256": "3364bae2c3b1c8a65934d924d429a3d1c79d5a6f3635b124de626dacf14323c2",
+        "remainingMaterialValidation": "Apple IosSecureIdentityOperationLocksTest and existing storage ownership/recovery selectors.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 252,
@@ -2715,14 +3447,39 @@
         178,
         249
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "1e886dcd099806e11c8656c38daf97ff27f51c0a"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/252#issuecomment-5406165846"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "1e886dcd099806e11c8656c38daf97ff27f51c0a"
+        ],
+        "correction": "Document local submission/receipt versus durable completion and independently published flows.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r1 shared transfer regressions; r2 actual generated bytesTransferred page distinguishes local submission/receipt, durable commit and non-atomic flows. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-durable-independent-review/progress-REPORT.md",
+        "sourceReviewSha256": "b7d15d19f605961911a7d647cacb5b492a499fd3c4f25aea048017a7d285629a",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 255,
@@ -2739,14 +3496,35 @@
         245,
         251
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "a13745a2c77441025f74e165cab2844029cade67"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/255#issuecomment-5406166215"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "a13745a2c77441025f74e165cab2844029cade67"
+        ],
+        "correction": "Truthful KDoc plus characterization of existing NonCancellable cleanup; no new fanout/cancellation production fix.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 256,
@@ -2768,14 +3546,39 @@
         241,
         248
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "348cf179194a72afdc7abbd097898884fc25e7df"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/256#issuecomment-5406166400"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "348cf179194a72afdc7abbd097898884fc25e7df"
+        ],
+        "correction": "Preserve directory fsync/close primary and suppressed failures after publication.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r3 Android durable10/10 includes fsync/close primary+suppressed failure, close-only failure, one rename and retained published bytes/retry. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-durable-independent-review/REPORT.md",
+        "sourceReviewSha256": "0416ee7a863d76f942265c586ebbe2dd18c9b21afed714066a9ba58f8689fa87",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 260,
@@ -2791,14 +3594,39 @@
         243,
         245
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "1235d293090a489b54defc719870043b63c4033e"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/260#issuecomment-5406167069"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "1235d293090a489b54defc719870043b63c4033e"
+        ],
+        "correction": "Document hot-stream collector lifecycle and terminal cancellation ownership.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r2 generated incoming page contains state.first onClosed/Failed and finally collector.cancel; no completion sentinel/API change. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-small-contracts-independent-review/REPORT.md",
+        "sourceReviewSha256": "b1b491312e7143df99a3b0020efce601dc0864a0e6d7f2ef663fc0186ec01e39",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 261,
@@ -2818,11 +3646,36 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "e0e52cb9598e9ba367420fa7f5d1c012832223c6"
+      ],
+      "recordedIndependentReview": "APPROVE_SOURCE; not counted complete. Apple shared vectors and NSUserDefaults historical/current-bucket migration selectors.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/261#issuecomment-5406167502"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "e0e52cb9598e9ba367420fa7f5d1c012832223c6"
+        ],
+        "correction": "Share the unchanged legacy AppId sanitizer across platforms.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_SOURCE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r1 JVM FilePeerIdStorage21/21 and common vector1/1; r3 explicit Android wrapper1/1. Source-equivalent extraction, no secure-v2 namespace change. Apple shared vectors and NSUserDefaults historical/current-bucket migration selectors.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-identity-independent-review/261-REPORT.md",
+        "sourceReviewSha256": "f94388875ba8c164161bcc19ab23c3f046b8423df735fd585b3ee7c3393029fc",
+        "remainingMaterialValidation": "Apple shared vectors and NSUserDefaults historical/current-bucket migration selectors.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 267,
@@ -2937,15 +3790,40 @@
         268,
         269
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "75ee783185d4760394749e41253eca299db6c97b"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/271#issuecomment-5406168109",
         "https://github.com/p2pKit/P2pKit/issues/271#issuecomment-5544835281"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "75ee783185d4760394749e41253eca299db6c97b"
+        ],
+        "correction": "Include safe offending configuration values without leaking identity/credential data.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r2 PublicConfigurationValidation7/7 and LocalIdentity6/6 including safe offending values/descriptor single-read; core ABI passes. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-small-contracts-independent-review/REPORT.md",
+        "sourceReviewSha256": "b1b491312e7143df99a3b0020efce601dc0864a0e6d7f2ef663fc0186ec01e39",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 272,
@@ -2963,15 +3841,40 @@
         218,
         268
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "4f9da4f98c500988975c274d1d3709572e7f954e"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/272#issuecomment-5406168157",
         "https://github.com/p2pKit/P2pKit/issues/272#issuecomment-5544835595"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "4f9da4f98c500988975c274d1d3709572e7f954e"
+        ],
+        "correction": "Add realistic value-equality and public snapshot fixture coverage.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r1 PublicModelImmutabilityTest6/6 and FixtureContractTest23/23, plus related existing model checks; no equality implementation change. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-tests-remaining-independent-review/REPORT.md",
+        "sourceReviewSha256": "c9096e0feb329e8368d5eadbd6949f729fa9369aa241149182a883809409dddd",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 273,
@@ -2986,14 +3889,35 @@
         259,
         269
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "2d7d40718e40f5284ae9b3640d6f361e90d6e232"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/273#issuecomment-5406168369"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "2d7d40718e40f5284ae9b3640d6f361e90d6e232"
+        ],
+        "correction": "Document all String QR carriers, syntax validation, trusted pinning and handshake-proof boundaries.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 274,
@@ -3018,7 +3942,15 @@
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/274#issuecomment-5406168430",
         "https://github.com/p2pKit/P2pKit/issues/274#issuecomment-5544838235"
-      ]
+      ],
+      "continuedSchedulingDisposition": {
+        "disposition": "OWNER_API_EVOLUTION_DECISION; no current behavior violation",
+        "decisionUrl": "https://github.com/p2pKit/P2pKit/issues/274#issuecomment-5544838235",
+        "decisionBodySha256": "c55ce84c09376527dbecfdf29622221df9ddc50f8ecf7d11740828c659b0e686",
+        "freshCommentsCapturedUtc": "2026-09-09T12:04:20.651772+00:00",
+        "countedApproved": false,
+        "scope": "Preserve pending-row membership and original assessment; no closure or new implementation approval."
+      }
     },
     {
       "number": 275,
@@ -3037,12 +3969,34 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "67deecddbb74478e89d03551add8316c8bd420f2"
+      ],
+      "recordedIndependentReview": "APPROVE_HOST_SCOPE; APPLE_PENDING; not counted complete. Native Apple redaction/privacy test compilation and execution.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/275#issuecomment-5406168395",
         "https://github.com/p2pKit/P2pKit/issues/275#issuecomment-5544834973"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "67deecddbb74478e89d03551add8316c8bd420f2"
+        ],
+        "correction": "Avoid logging manual endpoint details across sidecars.",
+        "reviewer": "/root/review_sidecars_next",
+        "verdict": "APPROVE_HOST_SCOPE; APPLE_PENDING",
+        "report": "next-sidecars-independent-review/R3-REPORT.md",
+        "reportSha256": "990e7568c58c064e13a82f1c8140650217a5e1d941959ff1cb38c3986c588a8f",
+        "verificationAndLimits": "Android/Desktop fixed-context logging cases pass. Native Apple redaction/privacy test compilation and execution.",
+        "group": "cohort0911-sidecars",
+        "remainingMaterialValidation": "Native Apple redaction/privacy test compilation and execution.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 276,
@@ -3056,14 +4010,35 @@
         187,
         270
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "2d7d40718e40f5284ae9b3640d6f361e90d6e232"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/276#issuecomment-5406168528"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "2d7d40718e40f5284ae9b3640d6f361e90d6e232"
+        ],
+        "correction": "Document tolerant post-close provisioning stop without inventing runtime cleanup or cancellation guarantees.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 277,
@@ -3078,14 +4053,35 @@
         274,
         275
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "2d7d40718e40f5284ae9b3640d6f361e90d6e232"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/277#issuecomment-5406168612"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "2d7d40718e40f5284ae9b3640d6f361e90d6e232"
+        ],
+        "correction": "Document capability flags as advisory, not enforced authorization or security controls.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 278,
@@ -3100,14 +4096,36 @@
         269,
         275
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "bb513c25f1983b91be2d60ab2a96dca846d1157c"
+      ],
+      "recordedIndependentReview": "APPROVE_HOST_REPAIR exact final revision, /root/review_sidecars_next; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/278#issuecomment-5406168639"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "bb513c25f1983b91be2d60ab2a96dca846d1157c"
+        ],
+        "correction": "Report Desktop interface polling failures once per streak while preserving lifecycle.",
+        "reviewer": "/root/review_sidecars_next",
+        "verdict": "APPROVE_HOST_REPAIR",
+        "report": "next-sidecars-independent-review/R3-REPORT.md",
+        "reportSha256": "990e7568c58c064e13a82f1c8140650217a5e1d941959ff1cb38c3986c588a8f",
+        "verificationAndLimits": "Desktop poll escalation/rearm/cause/lifecycle cases pass. Shared final gates; no new platform reachability acceptance.",
+        "group": "cohort0911-sidecars",
+        "remainingMaterialValidation": "Shared final gates; no new platform reachability acceptance.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 279,
@@ -3127,12 +4145,34 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "a90a3ae12ba8047099ac036bb28b2144af0c5d19"
+      ],
+      "recordedIndependentReview": "APPROVE_HOST_SCOPE; APPLE_PENDING; not counted complete. Native Apple NSLock/lifecycle regression compilation and execution.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/279#issuecomment-5406168740",
         "https://github.com/p2pKit/P2pKit/issues/279#issuecomment-5544837588"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "a90a3ae12ba8047099ac036bb28b2144af0c5d19"
+        ],
+        "correction": "Clarify cancellation/close lifecycle and preserve scoped ownership.",
+        "reviewer": "/root/review_sidecars_next",
+        "verdict": "APPROVE_HOST_SCOPE; APPLE_PENDING",
+        "report": "next-sidecars-independent-review/R3-REPORT.md",
+        "reportSha256": "990e7568c58c064e13a82f1c8140650217a5e1d941959ff1cb38c3986c588a8f",
+        "verificationAndLimits": "Desktop bounded concurrent close, timeout/retry and late-result suppression pass. Native Apple NSLock/lifecycle regression compilation and execution.",
+        "group": "cohort0911-sidecars",
+        "remainingMaterialValidation": "Native Apple NSLock/lifecycle regression compilation and execution.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 281,
@@ -3147,14 +4187,35 @@
         196,
         218
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "77fe88a4e9a4057a3820ca34e81b2e6dcb29a135"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/281#issuecomment-5406168877"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "77fe88a4e9a4057a3820ca34e81b2e6dcb29a135"
+        ],
+        "correction": "Release only the test-owned provisioning token in finally; no global reset or production arbiter change.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 282,
@@ -3173,14 +4234,36 @@
         277,
         279
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "63e1ae71d4f87d87ae67486b565f4bf41d2ad2a8"
+      ],
+      "recordedIndependentReview": "APPROVE_HOST_REPAIR exact final revision, /root/review_sidecars_next; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/282#issuecomment-5406168880"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "63e1ae71d4f87d87ae67486b565f4bf41d2ad2a8"
+        ],
+        "correction": "Share Android dual-stack scanning on the manager-owned IO context; IPv6 expansion is 0.8.0+ only.",
+        "reviewer": "/root/review_sidecars_next",
+        "verdict": "APPROVE_HOST_REPAIR",
+        "report": "next-sidecars-independent-review/R3-REPORT.md",
+        "reportSha256": "990e7568c58c064e13a82f1c8140650217a5e1d941959ff1cb38c3986c588a8f",
+        "verificationAndLimits": "Address selection/failure and exact IO Thread identity cases pass. Shared final gates; no physical IPv6-only hotspot/CLAT reachability acceptance.",
+        "group": "cohort0911-sidecars",
+        "remainingMaterialValidation": "Shared final gates; no physical IPv6-only hotspot/CLAT reachability acceptance.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 284,
@@ -3207,7 +4290,15 @@
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/284#issuecomment-5406169210",
         "https://github.com/p2pKit/P2pKit/issues/284#issuecomment-5544838598"
-      ]
+      ],
+      "continuedSchedulingDisposition": {
+        "disposition": "OWNER_API_ENHANCEMENT_DECISION; no current contract violation",
+        "decisionUrl": "https://github.com/p2pKit/P2pKit/issues/284#issuecomment-5544838598",
+        "decisionBodySha256": "427b9c30c0ee13b4e1b5a10830d413a3024e2103d314cc7ea96f67c8aa9a788e",
+        "freshCommentsCapturedUtc": "2026-09-09T12:04:20.651772+00:00",
+        "countedApproved": false,
+        "scope": "Preserve pending-row membership and original assessment; no closure or new implementation approval."
+      }
     },
     {
       "number": 285,
@@ -3273,7 +4364,15 @@
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/287#issuecomment-5406169500",
         "https://github.com/p2pKit/P2pKit/issues/287#issuecomment-5544836673"
-      ]
+      ],
+      "continuedSchedulingDisposition": {
+        "disposition": "CURRENT_CONTRACT_REFUTATION; not an implementation obligation without new evidence",
+        "decisionUrl": "https://github.com/p2pKit/P2pKit/issues/287#issuecomment-5544836673",
+        "decisionBodySha256": "9aa590eebd8bae308cd91de3e99e73ae63852ee347868ec1dc93e69989e693d7",
+        "freshCommentsCapturedUtc": "2026-09-09T12:04:20.651772+00:00",
+        "countedApproved": false,
+        "scope": "Preserve pending-row membership and original assessment; no closure or new implementation approval."
+      }
     },
     {
       "number": 288,
@@ -3289,14 +4388,35 @@
         176,
         286
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "9bfe039e02e33ade22433c0bcfa6444b59a031d7"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/288#issuecomment-5406169575"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "9bfe039e02e33ade22433c0bcfa6444b59a031d7"
+        ],
+        "correction": "Label the chosen app-scoped external/internal inbox domain truthfully; accepted keep-external alternative, no migration.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 289,
@@ -3395,16 +4515,41 @@
         281,
         355
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken. New #355 reproduction demonstrates an existing clean-stop substring assertion missed normal-completion warnings. That specific test is strengthened in #355; broader diagnostic-net/assertion-precision remediation remains pending.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "4f9da4f98c500988975c274d1d3709572e7f954e"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/292#issuecomment-5406170706",
         "https://github.com/p2pKit/P2pKit/issues/292#issuecomment-5544835956",
         "https://github.com/p2pKit/P2pKit/issues/292#issuecomment-5568796559"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "4f9da4f98c500988975c274d1d3709572e7f954e"
+        ],
+        "correction": "Replace broad Throwable catches with typed, cause-preserving expectations.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r1 FileTransferErrorIsolation1/1, FileTransferFlow122/122 and TransportCapability9/9 retain typed/cause/privacy/cleanup assertions. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-tests-remaining-independent-review/REPORT.md",
+        "sourceReviewSha256": "c9096e0feb329e8368d5eadbd6949f729fa9369aa241149182a883809409dddd",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 296,
@@ -3473,14 +4618,39 @@
         284,
         285
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "ffd92738009638d4a4832c575530d03c2b930e54"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/302#issuecomment-5406171468"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "ffd92738009638d4a4832c575530d03c2b930e54"
+        ],
+        "correction": "Remove an unused private manual-peer projection.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r2 registry/discovery tests pass; exact private zero-reader getter deletion independently source-reviewed; no public API change. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-small-contracts-independent-review/REPORT.md",
+        "sourceReviewSha256": "b1b491312e7143df99a3b0020efce601dc0864a0e6d7f2ef663fc0186ec01e39",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 306,
@@ -3539,14 +4709,39 @@
         268,
         305
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "60aadb560ade72250ec575a312a2b81b2dfd2aba"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/307#issuecomment-5406171785"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "60aadb560ade72250ec575a312a2b81b2dfd2aba"
+        ],
+        "correction": "Name and explain existing transfer limits without changing wire bounds.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "Same-literal private constants/comment change; r1 core ABI+transfer tests and r2 ABI pass; static-r3 links. No255-byte filename guarantee. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-maintained-docs-independent-review/REPORT.md",
+        "sourceReviewSha256": "d327e20024a8e081a3f1d847954443f04cf3c9f143a40423881bee8ad230d963",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 309,
@@ -3564,14 +4759,39 @@
         267,
         302
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "60aadb560ade72250ec575a312a2b81b2dfd2aba"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/309#issuecomment-5406172028"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "60aadb560ade72250ec575a312a2b81b2dfd2aba"
+        ],
+        "correction": "Make public KDoc references resolve to public declarations.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r2 successful core Dokka with allfive changed public sites inspected in generated HTML; selected local targets resolve; no remaining internal-link assertion. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-maintained-docs-independent-review/REPORT.md",
+        "sourceReviewSha256": "d327e20024a8e081a3f1d847954443f04cf3c9f143a40423881bee8ad230d963",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 311,
@@ -3638,14 +4858,35 @@
         307,
         308
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "e5ab733fbd14b245924ca460856f7430cbfe58c6"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/312#issuecomment-5406172301"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "e5ab733fbd14b245924ca460856f7430cbfe58c6"
+        ],
+        "correction": "Export the actual default 30000 ms keep-alive timeout in both Desktop diagnostic builders.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 313,
@@ -3730,14 +4971,35 @@
         313,
         315
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "feb6292d0316884ef67a648dd33abafdf01485f3"
+      ],
+      "recordedIndependentReview": "APPROVED exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/316#issuecomment-5406172465"
-      ]
+      ],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "feb6292d0316884ef67a648dd33abafdf01485f3"
+        ],
+        "correction": "Remove only unused Kotlin pause state; preserve live Compose/Swift controls and diagnostics schema.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVED",
+        "report": "cohort-0910-final-independent-review/REPORT.md",
+        "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+        "verificationAndLimits": "Final independent source/execution approval; 160 fresh focused host cases, ABI/core Dokka/Android assembly. Not Apple runtime, physical-device, independent interoperability or release approval.",
+        "group": "cohort0910",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 317,
@@ -4385,12 +5647,37 @@
         220,
         341
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
-      "publicInvestigationAndOutcomeUrls": []
+      "recordedFixCommitsOrFinalRevision": [
+        "4f9da4f98c500988975c274d1d3709572e7f954e"
+      ],
+      "recordedIndependentReview": "APPROVE_FOCUSED_SCOPE exact final revision, /root/review_cohort_0910_execution; see repairs/cohort-2026-09-09-continued.md.",
+      "publicInvestigationAndOutcomeUrls": [],
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "continuedCohort": {
+        "commits": [
+          "4f9da4f98c500988975c274d1d3709572e7f954e"
+        ],
+        "correction": "Model asynchronous fake discovery publication and strict backpressure.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_FOCUSED_SCOPE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "r1 FakeDiscoveryTransportTest2/2 after exact List<PeerEvent> compiler-only correction; callback gating/strict backpressure are actually executed. None specific to this repair beyond shared final campaign/platform gates.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-tests-remaining-independent-review/REPORT.md",
+        "sourceReviewSha256": "c9096e0feb329e8368d5eadbd6949f729fa9369aa241149182a883809409dddd",
+        "remainingMaterialValidation": "None specific to this repair beyond shared final campaign/platform gates.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
     },
     {
       "number": 343,
@@ -5990,9 +7277,89 @@
         "bodySha256": "4d5fdcde9ca307fab0b86e3d4f228b49e5b6e2bdd04ce2ba99c67a6598d8f1a6",
         "scope": "Fresh selected own body/comments/timeline; unchanged other histories remain historical. Not an approval or runtime verification."
       }
+    },
+    {
+      "number": 378,
+      "title": "[AUDIT][Low] Read-only packaged launcher blocks Windows audit output cleanup",
+      "url": "https://github.com/p2pKit/P2pKit/issues/378",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Read-only owned Windows launcher leaf prevents audit output cleanup after passing selected tests/packaging.",
+      "affectedComponentsExcerpt": "scripts/run-audit-command.py owned generated-output cleanup; one guarded read-only Windows unlink retry.",
+      "relatedIssuesAndDependencies": [
+        373,
+        375
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": "open",
+      "assessmentAtCheckpoint": "Confirmed and filed; original reproduction is not final repair approval. See the dated continued-cohort report.",
+      "recordedFixCommitsOrFinalRevision": [
+        "ac49fee0f81bf0bd34ec01d200f9b04bc13885e5"
+      ],
+      "recordedIndependentReview": "APPROVE_SOURCE; not counted complete. Actual Windows nested-readonly/hardlink controls plus existing packaged-image cleanup caller; original failure preserved.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/378"
+      ],
+      "initialFilingObservation": {
+        "createdUtc": "2026-09-09T09:26:18Z",
+        "bodySha256": "536e2415bdf057753b8c093ab2cb635bb203c2cdd9b75abb1d5bdaf2bf2b9b93",
+        "state": "open",
+        "capturedAtListUtc": "2026-09-09T12:04:20.651772+00:00",
+        "scope": "Individual filing time from later fresh all-state body capture; not an initial API refetch or closure."
+      },
+      "dispositionBeforeContinuedCohort": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "Final repair approval not recorded."
+      },
+      "continuedCohort": {
+        "commits": [
+          "ac49fee0f81bf0bd34ec01d200f9b04bc13885e5"
+        ],
+        "correction": "Retry only an eligible owned Windows read-only leaf unlink; reject shared/ineligible targets.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_SOURCE",
+        "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
+        "reportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+        "verificationAndLimits": "static-r1 Linux native68 cases:67pass/1helperfail; approved helper-only delta then static-r2 focused affected2/2. No Windows execution. Actual Windows nested-readonly/hardlink controls plus existing packaged-image cleanup caller; original failure preserved.",
+        "group": "cohort0911",
+        "sourceVerdict": "APPROVE_SOURCE",
+        "sourceReview": "next-host378-apple-independent-review/windows378.md",
+        "sourceReviewSha256": "015b9ad9d044ea82c77a76dddf8bbce624cc0fb826680ab7d222188fe58e296d",
+        "remainingMaterialValidation": "Actual Windows nested-readonly/hardlink controls plus existing packaged-image cleanup caller; original failure preserved.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      }
+    },
+    {
+      "number": 379,
+      "title": "[AUDIT][Low] PeerRegistry.peers skips onSubscription callbacks",
+      "url": "https://github.com/p2pKit/P2pKit/issues/379",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Public peers StateFlow skips onSubscription callbacks; native control passes and actual registry probe fails.",
+      "affectedComponentsExcerpt": "PeerRegistry.kt public state projection and kotlinx-coroutines 1.11.0 subscription hook handshake.",
+      "relatedIssuesAndDependencies": [
+        173
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": "open",
+      "assessmentAtCheckpoint": "Confirmed and filed; original reproduction is not final repair approval. See the dated continued-cohort report.",
+      "recordedFixCommitsOrFinalRevision": [],
+      "recordedIndependentReview": "Final repair approval not recorded.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/379"
+      ],
+      "initialFilingObservation": {
+        "createdUtc": "2026-09-09T11:37:24Z",
+        "bodySha256": "a2c5b9ffe12dcce4635efa9cd9259dc7caa899be3608a3a88031c0b4deeb054a",
+        "state": "open",
+        "capturedAtListUtc": "2026-09-09T12:04:20.651772+00:00",
+        "scope": "Individual filing time from later fresh all-state body capture; not an initial API refetch or closure."
+      }
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-09T08:46:16.352677+00:00",
+  "lastDispositionUpdateUtc": "2026-09-09T12:46:17.630027+00:00",
   "githubRefreshEvidence": {
     "startedUtc": "2026-09-08T10:24:33.734412+00:00",
     "endedUtc": "2026-09-08T10:30:05.205645+00:00",
@@ -6108,16 +7475,19 @@
   "previousDispositionUpdateUtc368": "2026-09-08T12:25:06.517016+00:00",
   "previousProvenance368": "Curated recovery/continuation record; original inventorySnapshotUtc stays historical. Full issue discussions and affected callers, not excerpts, govern repairs. Earlier assessments/outcomes are not fresh executions; raw private evidence is not inGit. Rows reconcile the exhaustive 10:24\u201310:30UTC fresh-history capture plus individually filed/refetched368 at10:50:42UTC. 367 and368 source approvals/pushes/outcomes are later scoped disposition/publication observations, not post-outcome complete GitHub refreshes, closure, merge or release. Current368approval/verification is bound to c221d54; earlier367/145 assessments/failures retain their original scope, and later223work is not approved here. Previous145 verification and refresh fields are preserved under explicit historical keys. Approved repository scope excludes unexecuted foreign-host/device/independent acceptance; whole audit NOT_READY.",
   "latestGithubListObservation": {
-    "startedUtc": "2026-09-09T08:30:40.086312+00:00",
-    "finishedUtc": "2026-09-09T08:30:45.411979+00:00",
-    "totalIssues": 298,
-    "openIssues": 191,
+    "startedUtc": "2026-09-09T12:04:11.725046+00:00",
+    "finishedUtc": "2026-09-09T12:04:20.651772+00:00",
+    "totalIssues": 300,
+    "openIssues": 193,
     "pullRequests": 79,
     "openPullRequests": 7,
-    "dedicatedPrListFinishedUtc": "2026-09-09T08:30:46.470229+00:00",
-    "scope": "Fresh all-state list/full bodies and five own histories373-377; no existing list/PR contract deltas versus06:49. All other03:25 full histories/PR/upstream sets explicitly historical; unseen timeline/upstream changes not excluded. Not repair approval or a lease.",
-    "reportSha256": "dde8a58f2a90b01ce0f5677c56aed5eedb4d1d992f27280efc0ad0ffacd01b52",
-    "reconciliationSha256": "a8090130f8288721a43bc09415c735c1c9c31b3f47da829e5aeaf3bcd1d4ad5b"
+    "issueStyleBodies": 379,
+    "conversationComments": 495,
+    "inlineReviewComments": 0,
+    "summarySha256": "50132ca90ab118d29dd73015f5d6e4ec84b66807411de87e1350fac7e96515fb",
+    "scope": "All repository issue/PR bodies and complete global conversation and inline-review comments freshly fetched; open PR list metadata fresh. Closed PR detailed reviews/commits/files and issue timelines retain previous complete captures; not a new full-history refresh, no Actions/ref execution lease. Initial unsupported --slurp attempt120329 made no HTTP request; retained separately.",
+    "freshCompleteHistories": false,
+    "previousFullCaptureReference": "latestGithubFullRefresh (historical, unchanged)"
   },
   "previousDispositionUpdateUtc223": "2026-09-08T13:18:49.492924+00:00",
   "previousGithubListObservation223": {
@@ -7255,6 +8625,158 @@
     "mainRef": {
       "commit": "eb444cccfc290be5435c5c10629c24183293606f",
       "observedUtc": "2026-09-09T08:30:39.515558+00:00"
+    }
+  },
+  "latestGithubListObservationBeforeContinuedCohort": {
+    "startedUtc": "2026-09-09T08:30:40.086312+00:00",
+    "finishedUtc": "2026-09-09T08:30:45.411979+00:00",
+    "totalIssues": 298,
+    "openIssues": 191,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "dedicatedPrListFinishedUtc": "2026-09-09T08:30:46.470229+00:00",
+    "scope": "Fresh all-state list/full bodies and five own histories373-377; no existing list/PR contract deltas versus06:49. All other03:25 full histories/PR/upstream sets explicitly historical; unseen timeline/upstream changes not excluded. Not repair approval or a lease.",
+    "reportSha256": "dde8a58f2a90b01ce0f5677c56aed5eedb4d1d992f27280efc0ad0ffacd01b52",
+    "reconciliationSha256": "a8090130f8288721a43bc09415c735c1c9c31b3f47da829e5aeaf3bcd1d4ad5b"
+  },
+  "githubIssueListRefreshedUtcBeforeContinuedCohort": "2026-09-09T08:30:45.411979+00:00",
+  "lastDispositionUpdateUtcBeforeContinuedCohort": "2026-09-09T08:46:16.352677+00:00",
+  "provenanceBeforeContinuedCohort": "Current cohort adds four filed causes374-377 and25 independently source-approved/applicable-Linux-or-static repairs. Three Apple-only prepared repairs330/341/363 remain pending. 100/191 independently approved repository-repair rows (52.4%); 91 remaining (47.6%): 69 Low repairs, 21 external-validation rows and architecture decision #120; 58 new audit findings. Counts are not effort, GitHub closure, platform acceptance or readiness. Earlier assessments/filing clocks/failures and original refresh objects remain historical. See cohort0909 and repairs/cohort-2026-09-09.md. The08:30 bounded refresh adds fresh own histories373-377, not a new all-history/PR/upstream capture or full-current-check pass.",
+  "continuedCohort": {
+    "recordedUtc": "2026-09-09T12:46:17.630027+00:00",
+    "report": "repairs/cohort-2026-09-09-continued.md",
+    "newIssues": [
+      378,
+      379
+    ],
+    "newlyApprovedIssues": [
+      288,
+      312,
+      316,
+      239,
+      273,
+      276,
+      277,
+      243,
+      205,
+      206,
+      217,
+      281,
+      167,
+      169,
+      240,
+      241,
+      255,
+      245,
+      256,
+      249,
+      252,
+      218,
+      342,
+      272,
+      292,
+      220,
+      212,
+      219,
+      213,
+      215,
+      237,
+      216,
+      307,
+      309,
+      248,
+      168,
+      173,
+      232,
+      260,
+      271,
+      302,
+      230,
+      195,
+      278,
+      282
+    ],
+    "review0910": {
+      "reviewer": "/root/review_cohort_0910_execution",
+      "verdict": "APPROVED_ALL_18_EXACT_FINAL_REVISIONS",
+      "reportSha256": "a9d865fb88a82cb1f596328e28273dec79a826112fe8ab4a840158e9a1e7ee89",
+      "sourceBindingSha256": "ab5883033b6452e0d9092d768578e099f18d2cf546c7ee74af13af77e8269900",
+      "composedDiffSha256": "d2e7fc9823b9458c5d15236aa51b55095ea1cb324bc9a9c54f48150878b201d4",
+      "baseCommit": "0770ec9950830983acb605a4bedd7384b8f6c3b9",
+      "baseTree": "e77a11cd5612bac242a132bb7210903db9f912f4"
+    },
+    "additionalApprovedIssues": [
+      256,
+      249,
+      252,
+      218,
+      342,
+      272,
+      292,
+      220,
+      212,
+      219,
+      213,
+      215,
+      237,
+      216,
+      307,
+      309,
+      248,
+      168,
+      173,
+      232,
+      260,
+      271,
+      302,
+      230,
+      195,
+      278,
+      282
+    ],
+    "sourceApprovedPendingAffectedValidation": [
+      172,
+      176,
+      156,
+      158,
+      378,
+      236,
+      250,
+      261,
+      275,
+      279
+    ],
+    "appliedCandidatesPendingApproval": [
+      156,
+      158,
+      172,
+      176,
+      236,
+      250,
+      261,
+      275,
+      279,
+      378
+    ],
+    "sourceApprovedPendingFirstAppleExecution": [
+      330,
+      341,
+      363
+    ],
+    "ownerDecisionOrRefutationRowsRetained": [
+      274,
+      284,
+      287
+    ],
+    "scope": "Only explicit final approvals count. Stale aggregate XML is not fresh tests. Earlier full-check and hosted failures remain historical. Raw private evidence is not included in Git.",
+    "publication": {
+      "status": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW",
+      "observedUtc": "2026-09-09T12:36:49.761041+00:00",
+      "commit": "ffd92738009638d4a4832c575530d03c2b930e54",
+      "tree": "3baa110085b8a323fb8045fa5ad1e02641ab3ac5",
+      "aheadOfLocalOrigin": 37,
+      "evidenceReportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
+      "scope": "Final independent local commit/status capture; no fresh remote ref/Actions lease or subsequent publication claim."
     }
   }
 }

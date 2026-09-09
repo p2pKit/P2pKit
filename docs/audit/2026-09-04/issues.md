@@ -1,25 +1,14 @@
-# Current issue disposition — September9 repair cohort
+# Current issue dispositions — continued September9 cohort
 
-**9 September 2026 — whole audit NOT_READY.** 100/191 independently approved repository-repair rows
-(52.4%); 91 remaining (47.6%): 69 Low repairs, 21 external-validation rows and architecture decision #120.
-58 new audit findings. These are repair-row counts, not effort, GitHub closure or platform acceptance.
+**Whole audit NOT_READY.** 145/193 independently approved repository-repair rows (75.1%); 48 remaining (24.9%): 26 repair-category rows, 21 external-validation rows and architecture decision #120; 60 new audit findings. Counts are not effort, GitHub closures, platform acceptance or release readiness.
 
-Nine local, independently source-reviewed commits end at `d5d0c1ea72324fd8f04dc55deae93692f3d0fe0f`
-(tree `e0aaf19895def88732c68742d73687be612f01ef`), **NOT_PUSHED in this record**. The cohort adds25 approved
-rows; #330/#341/#363 are source-prepared but remain pending their first affected Apple execution. #268 is
-now source-reviewed with applicable Linux verification; defensive copies remain. #133 independent interoperability
-is still NOT_STARTED. #145/#144/#360 remain approved; do not reimplement them.
+18 newly recorded final approvals are committed through `f58e13b4d0a11b545b5ab569127327e76b27782f`; latest explicitly approved source in this packet is `ffd92738009638d4a4832c575530d03c2b930e54`. 27 further rows gain final scoped approval. 10 independently source-approved rows remain uncounted pending specifically required native/artifact validation. #330/#341/#363 still need affected Apple execution; #133 independent interoperability is NOT_STARTED.
 
-[Concise cohort report](repairs/cohort-2026-09-09.md) records each of the28 prepared rows, exact source/review bindings, execution and blockers.
+At the final independent local capture,37 focused commits were ahead of origin and not yet pushed. Later source/working edits or publication require a separate binding.
 
-Next: bind/review the exact local source and safe ledgers, refresh Actions/refs, hold one global local/hosted
-build lease before any workflow-triggering push, then inspect the **focused Windows** selected-class/packaging
-run. The new workflow is not the old full Windows-to-Apple chain. Apple needs a separately reviewed literal
-selection/allocation; do not infer cleanup or acceptance from a partial run. Finish current whole-check, LAN Dokka,
-consumer/release and whole-repository corroboration, while continuing feasible pending repairs. No checkpoint stop.
+[Continued cohort report](repairs/cohort-2026-09-09-continued.md) records exact approvals, failures, pending candidates and limits.
 
-GitHub scope: fresh08:30 lists show298 issues/191 open and79PRs/7open; own histories373–377 freshly read.
-The other full histories/PR/upstream sets remain historical02:54–03:25; no new all-history refresh or lease.
+GitHub 12:04:11–12:04:20 UTC: 300 issues/193 open,79 PRs/7 open; 379 issue/PR bodies and495 conversation comments freshly captured. Detailed PR reviews/files/commits and timelines retain earlier captures; not a fresh complete-history/remote-execution lease.
 
 ## Preserved pre-cohort narrative
 
@@ -146,7 +135,7 @@ before trigger; complete capture/hashing is not a new semantic audit of every un
 [#369repair report](repairs/369.md):4files/finalAPPROVE/nofindings,19finalLinuxfixture/static gates,24totalleaves;
 zero productXML. Partialtrial1/unsafehandoff/remote cleanup NOT_PROVEN and oldproductsource bindings remain.
 
-## Repairs with recorded independent approval (100)
+## Repairs with recorded independent approval (145)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -166,7 +155,11 @@ zero productXML. Partialtrial1/unsafehandoff/remote cleanup NOT_PROVEN and oldpr
 | [#157: [BUILD-65] iosX64Test and Android instrumented tests never execute; the skip is silent](https://github.com/p2pKit/P2pKit/issues/157) | medium | Existing | `03c8ae738821` (same-issue follow-up) |
 | [#160: [F-15] LAN advertisement can publish SRV port 0 when read mid listener-detach](https://github.com/p2pKit/P2pKit/issues/160) | medium | Existing | `6d92bde87b5a` |
 | [#161: [F-16] stopNetworkWatcherNow() throws out of idle teardown, stranding the Wi-Fi multicast lock](https://github.com/p2pKit/P2pKit/issues/161) | medium | Existing | `11a44c6bb70c` |
+| [#167: [WSA2-03] Discovery claim overwrites a pinned manual peer's display name (UI spoof, not auth bypass)](https://github.com/p2pKit/P2pKit/issues/167) | low | Existing | `58d1d7412968` |
+| [#168: [WSA1-11] close() burns its full CLOSE-frame budget behind the rearm send gate](https://github.com/p2pKit/P2pKit/issues/168) | low | Existing | `417aab2b62e0` |
+| [#169: [WSA2-04] Discovery-rejection warning latches once per kit lifetime, hiding sustained attacks](https://github.com/p2pKit/P2pKit/issues/169) | low | Existing | `fd223850ce38` |
 | [#171: [WSA2-07] startFeature is a 262-line inline transaction whose cancellation flag misses a settlement window](https://github.com/p2pKit/P2pKit/issues/171) | medium | Existing | `2ea1060b1b9a` |
+| [#173: [WSA2-05] PeerListStateFlow defeats StateFlow operator fusion](https://github.com/p2pKit/P2pKit/issues/173) | low | Existing | `7a57e7274a69` |
 | [#175: [WSB-08] JVM sendFile(File) reopens by path with no file-identity binding (detected post-transmission)](https://github.com/p2pKit/P2pKit/issues/175) | medium | Existing | `a0d074c32206` |
 | [#184: [WSD-04] PeerAuthorizationPolicy sealed hierarchy has no documented evolution contract](https://github.com/p2pKit/P2pKit/issues/184) | low | Existing | `f51e121e96b8` |
 | [#186: [WSD-03] Handshake interpolates a whole ProtocolEvent, leaking unfiltered peer payload into error messages](https://github.com/p2pKit/P2pKit/issues/186) | medium | Existing | `ceaf028263c0` |
@@ -174,29 +167,69 @@ zero productXML. Partialtrial1/unsafehandoff/remote cleanup NOT_PROVEN and oldpr
 | [#188: [WSD-07] Recommended sendFile(PreparedFileSource) overload has an undocumented throwing interface default](https://github.com/p2pKit/P2pKit/issues/188) | low | Existing | `f51e121e96b8` |
 | [#190: [WSD-12] Value-class mangling makes the identity surface (and the builder's appId) unreachable from Java](https://github.com/p2pKit/P2pKit/issues/190) | medium | Existing | `d9b900171bcf` |
 | [#194: [WSE-08] Android LOHS support predicate omits FEATURE_WIFI](https://github.com/p2pKit/P2pKit/issues/194) | medium | Existing | `e39153eec3f1` |
+| [#195: [WSE-07] Post-start Android permission loss is reported as a platform failure](https://github.com/p2pKit/P2pKit/issues/195) | low | Existing | `b4239a58989e` |
 | [#196: [WSE-14] WifiManagerWrapperImpl adapter untested; no Robolectric/instrumented tier exists to test it](https://github.com/p2pKit/P2pKit/issues/196) | medium | Existing | `5ac78f9d55e1` |
 | [#197: [WSF-09] Sample console/logcat paths print chat message bodies, peer names and full peer ids unredacted](https://github.com/p2pKit/P2pKit/issues/197) | medium | Existing | `3f596b1de5ab` |
 | [#198: [WSE-12] Stale hotspot-stop callback can overwrite a newer successful join](https://github.com/p2pKit/P2pKit/issues/198) | medium | Existing | `20a6dcdd19db` |
 | [#199: [WSF-10] Samples do not demonstrate pinning discovered peers or displaying local pairing QR](https://github.com/p2pKit/P2pKit/issues/199) | medium | Existing | `62dedfaad288` |
 | [#202: [WSF-08] iOS sample turns on console mirroring of every transport event with no DEBUG gate or reset](https://github.com/p2pKit/P2pKit/issues/202) | medium | Existing | `ec248178eb62` |
 | [#203: [WSF-07] JVM samples flip the library's off-by-default LAN/frame traces on (CLI has an opt-out, Desktop UI has none)](https://github.com/p2pKit/P2pKit/issues/203) | medium | Existing | `fc3c14b2c367` |
+| [#205: [WSG-09] Reconnect tests disprove a 1000 ms retry with a 150 ms wall-clock delay](https://github.com/p2pKit/P2pKit/issues/205) | low | Existing | `d313b1b1baaf` |
+| [#206: [WSG-13] Test port binding is ephemeral and already serialized; residue is one unguarded user.home site + a mirrored constant](https://github.com/p2pKit/P2pKit/issues/206) | low | Existing | `4e24d9c9daf4` |
 | [#208: [WSH-06] local.md fast-gate list omits check-markdown-links.sh and git diff --check (CI runs both)](https://github.com/p2pKit/P2pKit/issues/208) | low | Existing | `3a96a775c379` |
 | [#211: [WSH-07] gradle.properties and build.gradle.kts point at a release doc that moved into docs/archive/](https://github.com/p2pKit/P2pKit/issues/211) | low | Existing | `03c8ae738821` |
+| [#212: [WSH-08] Maintained specification.md delegates its design record into docs/archive/, which has a broken link](https://github.com/p2pKit/P2pKit/issues/212) | low | Existing | `7bc68b6718bd` |
+| [#213: [WSH-11] Error taxonomy is Dokka-published but undocumented; only FileTransferFailed carries retryability](https://github.com/p2pKit/P2pKit/issues/213) | low | Existing | `e9b8be24672f` |
 | [#214: [WSH-10] Operational limits documented only in internal source; one of ~40 reaches docs/](https://github.com/p2pKit/P2pKit/issues/214) | medium | Existing | `68170b99a2e7` |
+| [#215: [WSH-09] Threat model lacks actor, asset, and trust-boundary structure](https://github.com/p2pKit/P2pKit/issues/215) | low | Existing | `e9b8be24672f` |
+| [#216: [WSH-13] Validation status restated by hand in 8 places; only the CLI/Desktop row actually diverges](https://github.com/p2pKit/P2pKit/issues/216) | low | Existing | `bb1ad32db4ff` |
+| [#217: [WSG-15] Admission-control test swallows a socket timeout into a sentinel that is never asserted](https://github.com/p2pKit/P2pKit/issues/217) | low | Existing | `7b24ad8cfb80` |
+| [#218: [WSG-07] runCatching{}.isFailure immutability assertions accept any throwable, not just rejection](https://github.com/p2pKit/P2pKit/issues/218) | low | Existing | `4f9da4f98c50` |
+| [#219: [WSH-12] Public transport SPI lacks an integration and security contract](https://github.com/p2pKit/P2pKit/issues/219) | low | Existing | `e9b8be24672f` |
+| [#220: [WSG-17] Relay concurrency test collects after awaitAll; only the non-diff branch runs](https://github.com/p2pKit/P2pKit/issues/220) | low | Existing | `4f9da4f98c50` |
 | [#223: [BUILD-25] .gitattributes pins gradlew.bat line endings but leaves gradlew to core.autocrlf](https://github.com/p2pKit/P2pKit/issues/223) | low | Existing | `8dd65ce3f4e8` |
 | [#225: [BUILD-33] Version pins duplicated as literals in 4 policy scripts; 10 of 12 sites are deliberate tripwires](https://github.com/p2pKit/P2pKit/issues/225) | low | Existing | `46ed124ded59` |
 | [#226: [BUILD-43] review-dependency-verification.sh hardcodes /tmp, ignoring TMPDIR (mktemp+trap intact)](https://github.com/p2pKit/P2pKit/issues/226) | low | Existing | `f085dc8a59f6` |
 | [#228: [BUILD-44] iOS launcher lock leaks on EVERY run (trap reads main's local under set -u); mkdir IS atomic](https://github.com/p2pKit/P2pKit/issues/228) | medium | Existing | `d4be234161a5` |
 | [#229: [F-03] Lossy JmDNS UTF-8 decode makes isWellFormedLanText vacuous; iOS decodes strictly](https://github.com/p2pKit/P2pKit/issues/229) | low | Existing | `6d9cd3c74724` |
+| [#230: [BUILD-54] Release metadata gate matches whole prose sentences via grep -F; two guards fail open](https://github.com/p2pKit/P2pKit/issues/230) | low | Existing | `7bc68b6718bd` |
+| [#232: [F-09] DataTransport.start() documents "transports do not throw" but suspend cancellation must escape](https://github.com/p2pKit/P2pKit/issues/232) | low | Existing | `1235d293090a` |
+| [#237: [BUILD-74] README gate list omits the CI test-target and local-artifact scope](https://github.com/p2pKit/P2pKit/issues/237) | low | Existing | `bb1ad32db4ff` |
+| [#239: [WSA2-11] FailureIsolatingP2pLogger isolates throws but not blocking; a slow logger can hang stop()](https://github.com/p2pKit/P2pKit/issues/239) | low | Existing | `2d7d40718e40` |
+| [#240: [WSA2-08] Observer-startup rollback error is stamped with transportFactories.first(), blaming an unrelated transport](https://github.com/p2pKit/P2pKit/issues/240) | low | Existing | `49e6b10765cd` |
+| [#241: [WSA2-09] NetworkPathCallbackState.begin() returns null unlogged; a declined path-observer restart is undiagnosable](https://github.com/p2pKit/P2pKit/issues/241) | low | Existing | `9876c9e4b9ba` |
+| [#243: [WSA1-13] markCleanlyClosed check-then-act outside the lock; KDoc contradicts rearmWith](https://github.com/p2pKit/P2pKit/issues/243) | low | Existing | `2d7d40718e40` |
+| [#245: [WSA1-14] Reconnect flaps accumulate uncancelled 30-second diagnostic watchdogs](https://github.com/p2pKit/P2pKit/issues/245) | low | Existing | `f58e13b4d0a1` |
+| [#248: [WSC-09] Android identity commit lacks an explicit directory-durability guarantee](https://github.com/p2pKit/P2pKit/issues/248) | low | Existing | `248f8177c317` |
+| [#249: [WSB-10] acceptData publishes then retracts bytesTransferred, breaking documented monotonic progress](https://github.com/p2pKit/P2pKit/issues/249) | low | Existing | `1e886dcd0998` |
+| [#252: [WSB-11] Outgoing progress counts submitted (not delivered) bytes; locking asymmetry undocumented](https://github.com/p2pKit/P2pKit/issues/252) | low | Existing | `1e886dcd0998` |
+| [#255: [WSA2-13] notifyAppBackgrounded fire-and-forget: no failure channel for consumers; cancellation skips discovery stop](https://github.com/p2pKit/P2pKit/issues/255) | low | Existing | `a13745a2c774` |
+| [#256: [WSB-12] Android syncParentDirectory: throwing Os.close replaces the fsync failure (JVM uses use{})](https://github.com/p2pKit/P2pKit/issues/256) | low | Existing | `348cf179194a` |
+| [#260: [WSD-10] incoming collectors never complete on terminal transition; KDoc stops short of the consequence](https://github.com/p2pKit/P2pKit/issues/260) | low | Existing | `1235d293090a` |
 | [#267: [WSD-05] Sealed-placement comment incorrectly calls the Kotlin 2.4.10 rule temporary](https://github.com/p2pKit/P2pKit/issues/267) | low | Existing | `03c8ae738821` |
 | [#268: [WSD-19] P2pMessage.Binary.bytes copies the payload on every read; no public size accessor](https://github.com/p2pKit/P2pKit/issues/268) | low | Existing | `f51e121e96b8`; `533ca243de09` |
+| [#271: [WSD-15] Config validation messages omit the offending value at 7 of 12 value-bearing sites](https://github.com/p2pKit/P2pKit/issues/271) | low | Existing | `75ee783185d4` |
+| [#272: [WSD-18] Twelve hand-written public value types lack value-semantics regression tests](https://github.com/p2pKit/P2pKit/issues/272) | low | Existing | `4f9da4f98c50` |
+| [#273: [WSD-20] PeerPairingQr never appears on the public API: both pairing ends are bare String](https://github.com/p2pKit/P2pKit/issues/273) | low | Existing | `2d7d40718e40` |
+| [#276: [WSD-24] Post-close stopLocalNetwork() is a uniform no-op in all 4 managers; contract is undocumented](https://github.com/p2pKit/P2pKit/issues/276) | low | Existing | `2d7d40718e40` |
+| [#277: [WSE-09] Provisioning config: 3 of 4 fields never read; preferredSsidPrefix read but log-only](https://github.com/p2pKit/P2pKit/issues/277) | low | Existing | `2d7d40718e40` |
+| [#278: [WSE-11] Desktop poll loop swallows every Exception into NetworkState.Unknown with no escalation](https://github.com/p2pKit/P2pKit/issues/278) | low | Existing | `bb513c25f198` |
+| [#281: [WSE-13] ProcessBindingArbiter global has no reset seam; one host test mutates it unguarded](https://github.com/p2pKit/P2pKit/issues/281) | low | Existing | `77fe88a4e9a4` |
+| [#282: [WSE-16] Android manual-address scanning is IPv4-only and duplicated from LAN selection](https://github.com/p2pKit/P2pKit/issues/282) | low | Existing | `63e1ae71d4f8` |
 | [#285: [WSF-11] samples.md and the CLI's own help omit the mandatory p2f1 fingerprint for `manual`](https://github.com/p2pKit/P2pKit/issues/285) | low | Existing | `0a6f16b7aa12` |
+| [#288: [WSF-13] Android sample saves peer files to app-scoped external storage but logs "app-private"](https://github.com/p2pKit/P2pKit/issues/288) | low | Existing | `9bfe039e02e3` |
 | [#289: [WSF-17] Filename-collision claim duplicated 4x in samples; iOS copy overwrites instead of suffixing](https://github.com/p2pKit/P2pKit/issues/289) | medium | Existing | `7f5f2d844e21` |
+| [#292: [WSG-14] 47 error-message substring assertions in 21 files; 32 are redundant, ~15 load-bearing](https://github.com/p2pKit/P2pKit/issues/292) | low | Existing | `4f9da4f98c50` |
 | [#296: [WSH-14] validation-status.md files verified-but-non-evidentiary CI provenance under "Completed"](https://github.com/p2pKit/P2pKit/issues/296) | low | Existing | `0a6f16b7aa12` |
+| [#302: [WSA2-14] TrackedPeer.isManual has zero readers; its KDoc claims a derivation and an exemption it does not implement](https://github.com/p2pKit/P2pKit/issues/302) | low | Existing | `ffd927380096` |
 | [#306: [WSB-16] prepareFinish() error text says FILE_DONE on the authenticated FILE_FINISH path](https://github.com/p2pKit/P2pKit/issues/306) | low | Existing | `03c8ae738821` |
+| [#307: [WSB-17] File-transfer resource-limit constants lack rationale documentation](https://github.com/p2pKit/P2pKit/issues/307) | low | Existing | `60aadb560ade` |
+| [#309: [WSD-22] Eight public KDoc links target internal symbols](https://github.com/p2pKit/P2pKit/issues/309) | low | Existing | `60aadb560ade` |
 | [#311: [WSD-23] create()'s @throws list omits duplicate transport registration (type is listed, cause is not)](https://github.com/p2pKit/P2pKit/issues/311) | low | Existing | `f51e121e96b8`; `533ca243de09` |
+| [#312: [WSF-18] Desktop diagnostics report a keep-alive value the samples never configure](https://github.com/p2pKit/P2pKit/issues/312) | low | Existing | `e5ab733fbd14` |
 | [#313: [WSF-23] DiagnosticRedactor passes details["line"] through the weaker text path; instance= ids survive](https://github.com/p2pKit/P2pKit/issues/313) | low | Existing | `0bfa94481a3a` |
 | [#314: [WSF-19] iosApp scripts README teaches a manual Xcode phase setup that project.yml automates](https://github.com/p2pKit/P2pKit/issues/314) | low | Existing | `0a6f16b7aa12` |
+| [#316: [WSF-24] Diagnostics recorder exposes three unused pause APIs](https://github.com/p2pKit/P2pKit/issues/316) | low | Existing | `feb6292d0316` |
 | [#317: [WSF-25] Android diagnostics recomposition-trigger read is inert: unread `by` delegate never subscribes](https://github.com/p2pKit/P2pKit/issues/317) | low | Existing | `f273b1b98e95` |
 | [#320: [AUDIT] Sample receivers can delete files after post-publication commit failure](https://github.com/p2pKit/P2pKit/issues/320) | medium | New audit | `33dbe3844d6e` |
 | [#321: [AUDIT] Android sample leaks process-global LAN diagnostics enablement](https://github.com/p2pKit/P2pKit/issues/321) | medium | New audit | `61484e1f0f53` |
@@ -216,6 +249,7 @@ zero productXML. Partialtrial1/unsafehandoff/remote cleanup NOT_PROVEN and oldpr
 | [#338: [AUDIT] Cancelling a queued provisioning operation clears another acquisition’s state](https://github.com/p2pKit/P2pKit/issues/338) | medium | New audit | `5ac5f1ef7350` |
 | [#339: [AUDIT] Initial Wi-Fi binding and cancellation close acquire native monitors in opposite order](https://github.com/p2pKit/P2pKit/issues/339) | high | New audit | `9a694307a6a9` |
 | [#340: [AUDIT] Canceled JmDNS network samples can replace newer or restarted bindings](https://github.com/p2pKit/P2pKit/issues/340) | medium | New audit | `ffea091775ce` |
+| [#342: [Low] Discovery test fixture falsely claims current LAN delivery and acknowledgement semantics](https://github.com/p2pKit/P2pKit/issues/342) | low | New audit | `4f9da4f98c50` |
 | [#343: [AUDIT] Dependency provenance review rejects valid signatures under a UTF-8 locale](https://github.com/p2pKit/P2pKit/issues/343) | medium | New audit | `0e8ea772cf5c` |
 | [#344: [AUDIT] Dependency curator cannot locate signed Gradle sibling-version variant artifacts](https://github.com/p2pKit/P2pKit/issues/344) | medium | New audit | `7e3e02480bf1` |
 | [#345: [AUDIT] Plugin metadata size guards allocate the whole file before rejecting oversized input](https://github.com/p2pKit/P2pKit/issues/345) | low | New audit | `7aa225e2d99a` |
@@ -251,79 +285,36 @@ zero productXML. Partialtrial1/unsafehandoff/remote cleanup NOT_PROVEN and oldpr
 | [#376: [AUDIT][Low] Android room cleanup Retry is disabled by an empty device name](https://github.com/p2pKit/P2pKit/issues/376) | low | New audit finding | `533ca243de09` |
 | [#377: [AUDIT][Low] Android startup failure cancels only its child and strands run collectors](https://github.com/p2pKit/P2pKit/issues/377) | low | New audit finding | `533ca243de09` |
 
-## Pending remediation (69)
+## Pending remediation (26)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
-| [#156: [F-07] TCP_NODELAY is unset and transport liveness relies on core deadlines](https://github.com/p2pKit/P2pKit/issues/156) | low | Existing | — |
-| [#158: [F-11] Inbound buffer depth diverges: 64 on JVM/Android (framework default) vs 16 on iOS](https://github.com/p2pKit/P2pKit/issues/158) | low | Existing | — |
-| [#167: [WSA2-03] Discovery claim overwrites a pinned manual peer's display name (UI spoof, not auth bypass)](https://github.com/p2pKit/P2pKit/issues/167) | low | Existing | — |
-| [#168: [WSA1-11] close() burns its full CLOSE-frame budget behind the rearm send gate](https://github.com/p2pKit/P2pKit/issues/168) | low | Existing | — |
-| [#169: [WSA2-04] Discovery-rejection warning latches once per kit lifetime, hiding sustained attacks](https://github.com/p2pKit/P2pKit/issues/169) | low | Existing | — |
-| [#172: [WSB-05] Staging .part file is created in the destination constructor, orphaned on reject/crash](https://github.com/p2pKit/P2pKit/issues/172) | low | Existing | — |
-| [#173: [WSA2-05] PeerListStateFlow defeats StateFlow operator fusion](https://github.com/p2pKit/P2pKit/issues/173) | low | Existing | — |
-| [#176: [WSB-06] Unverified partial file stages in the user-visible destination directory during transfer](https://github.com/p2pKit/P2pKit/issues/176) | low | Existing | — |
+| [#156: [F-07] TCP_NODELAY is unset and transport liveness relies on core deadlines](https://github.com/p2pKit/P2pKit/issues/156) | low | Existing | `9ab46d7bdd52` (source approved; affected validation pending) |
+| [#158: [F-11] Inbound buffer depth diverges: 64 on JVM/Android (framework default) vs 16 on iOS](https://github.com/p2pKit/P2pKit/issues/158) | low | Existing | `9ab46d7bdd52` (source approved; affected validation pending) |
+| [#172: [WSB-05] Staging .part file is created in the destination constructor, orphaned on reject/crash](https://github.com/p2pKit/P2pKit/issues/172) | low | Existing | `348cf179194a` (source approved; affected validation pending) |
+| [#176: [WSB-06] Unverified partial file stages in the user-visible destination directory during transfer](https://github.com/p2pKit/P2pKit/issues/176) | low | Existing | `348cf179194a` (source approved; affected validation pending) |
 | [#191: [WSD-14] Swift receives P2pError through string-based NSError details](https://github.com/p2pKit/P2pKit/issues/191) | low | Existing | — |
-| [#195: [WSE-07] Post-start Android permission loss is reported as a platform failure](https://github.com/p2pKit/P2pKit/issues/195) | low | Existing | — |
-| [#205: [WSG-09] Reconnect tests disprove a 1000 ms retry with a 150 ms wall-clock delay](https://github.com/p2pKit/P2pKit/issues/205) | low | Existing | — |
-| [#206: [WSG-13] Test port binding is ephemeral and already serialized; residue is one unguarded user.home site + a mirrored constant](https://github.com/p2pKit/P2pKit/issues/206) | low | Existing | — |
 | [#207: [WSG-10] Warn/error teardown net armed in 1 of 34 kit-constructing suites; convention undocumented](https://github.com/p2pKit/P2pKit/issues/207) | low | Existing | — |
 | [#209: [WSG-16] Fixture hangUp closes both directions; production collapses half-close, so the real gap is a transport test](https://github.com/p2pKit/P2pKit/issues/209) | low | Existing | — |
-| [#212: [WSH-08] Maintained specification.md delegates its design record into docs/archive/, which has a broken link](https://github.com/p2pKit/P2pKit/issues/212) | low | Existing | — |
-| [#213: [WSH-11] Error taxonomy is Dokka-published but undocumented; only FileTransferFailed carries retryability](https://github.com/p2pKit/P2pKit/issues/213) | low | Existing | — |
-| [#215: [WSH-09] Threat model lacks actor, asset, and trust-boundary structure](https://github.com/p2pKit/P2pKit/issues/215) | low | Existing | — |
-| [#216: [WSH-13] Validation status restated by hand in 8 places; only the CLI/Desktop row actually diverges](https://github.com/p2pKit/P2pKit/issues/216) | low | Existing | — |
-| [#217: [WSG-15] Admission-control test swallows a socket timeout into a sentinel that is never asserted](https://github.com/p2pKit/P2pKit/issues/217) | low | Existing | — |
-| [#218: [WSG-07] runCatching{}.isFailure immutability assertions accept any throwable, not just rejection](https://github.com/p2pKit/P2pKit/issues/218) | low | Existing | — |
-| [#219: [WSH-12] Public transport SPI lacks an integration and security contract](https://github.com/p2pKit/P2pKit/issues/219) | low | Existing | — |
-| [#220: [WSG-17] Relay concurrency test collects after awaitAll; only the non-diff branch runs](https://github.com/p2pKit/P2pKit/issues/220) | low | Existing | — |
-| [#230: [BUILD-54] Release metadata gate matches whole prose sentences via grep -F; two guards fail open](https://github.com/p2pKit/P2pKit/issues/230) | low | Existing | — |
-| [#232: [F-09] DataTransport.start() documents "transports do not throw" but suspend cancellation must escape](https://github.com/p2pKit/P2pKit/issues/232) | low | Existing | — |
 | [#235: [F-17] Post-cancellation socket read discards its result and rethrows into the platform default handler](https://github.com/p2pKit/P2pKit/issues/235) | low | Existing | — |
-| [#236: [BUILD-73] "Every distributable archive carries the exact repository license" is broader than the gate](https://github.com/p2pKit/P2pKit/issues/236) | low | Existing | — |
-| [#237: [BUILD-74] README gate list omits the CI test-target and local-artifact scope](https://github.com/p2pKit/P2pKit/issues/237) | low | Existing | — |
-| [#239: [WSA2-11] FailureIsolatingP2pLogger isolates throws but not blocking; a slow logger can hang stop()](https://github.com/p2pKit/P2pKit/issues/239) | low | Existing | — |
-| [#240: [WSA2-08] Observer-startup rollback error is stamped with transportFactories.first(), blaming an unrelated transport](https://github.com/p2pKit/P2pKit/issues/240) | low | Existing | — |
-| [#241: [WSA2-09] NetworkPathCallbackState.begin() returns null unlogged; a declined path-observer restart is undiagnosable](https://github.com/p2pKit/P2pKit/issues/241) | low | Existing | — |
-| [#243: [WSA1-13] markCleanlyClosed check-then-act outside the lock; KDoc contradicts rearmWith](https://github.com/p2pKit/P2pKit/issues/243) | low | Existing | — |
-| [#245: [WSA1-14] Reconnect flaps accumulate uncancelled 30-second diagnostic watchdogs](https://github.com/p2pKit/P2pKit/issues/245) | low | Existing | — |
+| [#236: [BUILD-73] "Every distributable archive carries the exact repository license" is broader than the gate](https://github.com/p2pKit/P2pKit/issues/236) | low | Existing | `2c1a9ba54a89` (source approved; affected validation pending) |
 | [#247: [WSA1-17] Session close can compose seven 2-second waits without an aggregate deadline](https://github.com/p2pKit/P2pKit/issues/247) | low | Existing | — |
-| [#248: [WSC-09] Android identity commit lacks an explicit directory-durability guarantee](https://github.com/p2pKit/P2pKit/issues/248) | low | Existing | — |
-| [#249: [WSB-10] acceptData publishes then retracts bytesTransferred, breaking documented monotonic progress](https://github.com/p2pKit/P2pKit/issues/249) | low | Existing | — |
-| [#250: [WSC-10/11] Identity storage serializes all namespaces through one process-global lock](https://github.com/p2pKit/P2pKit/issues/250) | low | Existing | — |
-| [#252: [WSB-11] Outgoing progress counts submitted (not delivered) bytes; locking asymmetry undocumented](https://github.com/p2pKit/P2pKit/issues/252) | low | Existing | — |
-| [#255: [WSA2-13] notifyAppBackgrounded fire-and-forget: no failure channel for consumers; cancellation skips discovery stop](https://github.com/p2pKit/P2pKit/issues/255) | low | Existing | — |
-| [#256: [WSB-12] Android syncParentDirectory: throwing Os.close replaces the fsync failure (JVM uses use{})](https://github.com/p2pKit/P2pKit/issues/256) | low | Existing | — |
-| [#260: [WSD-10] incoming collectors never complete on terminal transition; KDoc stops short of the consequence](https://github.com/p2pKit/P2pKit/issues/260) | low | Existing | — |
-| [#261: [WSC-18] Lossy AppId sanitizer duplicated byte-identically in 3 source sets; collisions defused by hashed namespace](https://github.com/p2pKit/P2pKit/issues/261) | low | Existing | — |
-| [#271: [WSD-15] Config validation messages omit the offending value at 7 of 12 value-bearing sites](https://github.com/p2pKit/P2pKit/issues/271) | low | Existing | — |
-| [#272: [WSD-18] Twelve hand-written public value types lack value-semantics regression tests](https://github.com/p2pKit/P2pKit/issues/272) | low | Existing | — |
-| [#273: [WSD-20] PeerPairingQr never appears on the public API: both pairing ends are bare String](https://github.com/p2pKit/P2pKit/issues/273) | low | Existing | — |
+| [#250: [WSC-10/11] Identity storage serializes all namespaces through one process-global lock](https://github.com/p2pKit/P2pKit/issues/250) | low | Existing | `d4ce3598a1d1` (source approved; affected validation pending) |
+| [#261: [WSC-18] Lossy AppId sanitizer duplicated byte-identically in 3 source sets; collisions defused by hashed namespace](https://github.com/p2pKit/P2pKit/issues/261) | low | Existing | `e0e52cb9598e` (source approved; affected validation pending) |
 | [#274: [WSD-21] ProvisioningContext: 10-arg constructor with 3 defaults freezes the factory SPI's ABI](https://github.com/p2pKit/P2pKit/issues/274) | low | Existing | — |
-| [#275: [WSE-05] createManualPeer logs the manual host:port at INFO on all three platforms (default logger is NoOp)](https://github.com/p2pKit/P2pKit/issues/275) | low | Existing | — |
-| [#276: [WSD-24] Post-close stopLocalNetwork() is a uniform no-op in all 4 managers; contract is undocumented](https://github.com/p2pKit/P2pKit/issues/276) | low | Existing | — |
-| [#277: [WSE-09] Provisioning config: 3 of 4 fields never read; preferredSsidPrefix read but log-only](https://github.com/p2pKit/P2pKit/issues/277) | low | Existing | — |
-| [#278: [WSE-11] Desktop poll loop swallows every Exception into NetworkState.Unknown with no escalation](https://github.com/p2pKit/P2pKit/issues/278) | low | Existing | — |
-| [#279: [WSE-10] Desktop/iOS parent cancellation skips Closing and close has no deadline](https://github.com/p2pKit/P2pKit/issues/279) | low | Existing | — |
-| [#281: [WSE-13] ProcessBindingArbiter global has no reset seam; one host test mutates it unguarded](https://github.com/p2pKit/P2pKit/issues/281) | low | Existing | — |
-| [#282: [WSE-16] Android manual-address scanning is IPv4-only and duplicated from LAN selection](https://github.com/p2pKit/P2pKit/issues/282) | low | Existing | — |
+| [#275: [WSE-05] createManualPeer logs the manual host:port at INFO on all three platforms (default logger is NoOp)](https://github.com/p2pKit/P2pKit/issues/275) | low | Existing | `67deecddbb74` (source approved; affected validation pending) |
+| [#279: [WSE-10] Desktop/iOS parent cancellation skips Closing and close has no deadline](https://github.com/p2pKit/P2pKit/issues/279) | low | Existing | `a90a3ae12ba8` (source approved; affected validation pending) |
 | [#284: [WSE-18] joinLocalNetwork has no leave path: a joined network is unreleasable until close()](https://github.com/p2pKit/P2pKit/issues/284) | low | Existing | — |
 | [#287: [WSE-19] requiredPermissions() omits three install-time Android permissions](https://github.com/p2pKit/P2pKit/issues/287) | low | Existing | — |
-| [#288: [WSF-13] Android sample saves peer files to app-scoped external storage but logs "app-private"](https://github.com/p2pKit/P2pKit/issues/288) | low | Existing | — |
 | [#290: [WSF-15] Desktop UI provisioning poll failures are silently discarded](https://github.com/p2pKit/P2pKit/issues/290) | low | Existing | — |
 | [#291: [WSF-14] iOS sample inbox contents are backed up without an explicit policy](https://github.com/p2pKit/P2pKit/issues/291) | low | Existing | — |
-| [#292: [WSG-14] 47 error-message substring assertions in 21 files; 32 are redundant, ~15 load-bearing](https://github.com/p2pKit/P2pKit/issues/292) | low | Existing | — |
-| [#302: [WSA2-14] TrackedPeer.isManual has zero readers; its KDoc claims a derivation and an exemption it does not implement](https://github.com/p2pKit/P2pKit/issues/302) | low | Existing | — |
-| [#307: [WSB-17] File-transfer resource-limit constants lack rationale documentation](https://github.com/p2pKit/P2pKit/issues/307) | low | Existing | — |
-| [#309: [WSD-22] Eight public KDoc links target internal symbols](https://github.com/p2pKit/P2pKit/issues/309) | low | Existing | — |
-| [#312: [WSF-18] Desktop diagnostics report a keep-alive value the samples never configure](https://github.com/p2pKit/P2pKit/issues/312) | low | Existing | — |
-| [#316: [WSF-24] Diagnostics recorder exposes three unused pause APIs](https://github.com/p2pKit/P2pKit/issues/316) | low | Existing | — |
 | [#322: [AUDIT] Per-session evidence reports recorder-lifetime dropped-event totals](https://github.com/p2pKit/P2pKit/issues/322) | low | New audit | — |
 | [#329: [AUDIT] CLI auto-mesh does not redial after stable-peer session loss](https://github.com/p2pKit/P2pKit/issues/329) | low | New audit | — |
 | [#330: [AUDIT] iOS history cap can evict an active transfer row](https://github.com/p2pKit/P2pKit/issues/330) | low | New audit | `59f6abc0fa63`; source approved, first Apple execution pending |
 | [#341: iOS sample groups the local TCP port, breaking copy/paste into manual dialing](https://github.com/p2pKit/P2pKit/issues/341) | low | New audit | `59f6abc0fa63`; source approved, first Apple execution pending |
-| [#342: [Low] Discovery test fixture falsely claims current LAN delivery and acknowledgement semantics](https://github.com/p2pKit/P2pKit/issues/342) | low | New audit | — |
 | [#363: [AUDIT][Low] First iOS incoming file offer has no visible Accept/Reject controls](https://github.com/p2pKit/P2pKit/issues/363) | low | New audit | `59f6abc0fa63`; source approved, first Apple execution pending |
+| [#378: [AUDIT][Low] Read-only packaged launcher blocks Windows audit output cleanup](https://github.com/p2pKit/P2pKit/issues/378) | low | New audit | `ac49fee0f81b` (source approved; affected validation pending) |
+| [#379: [AUDIT][Low] PeerRegistry.peers skips onSubscription callbacks](https://github.com/p2pKit/P2pKit/issues/379) | low | New audit | Pending final repair approval |
 
 ## External/platform validation pending (21)
 

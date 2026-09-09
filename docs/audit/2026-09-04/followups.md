@@ -1,31 +1,18 @@
-# Current follow-up boundary — September9 repair cohort
+# Current follow-ups — continued September9 cohort
 
-**9 September 2026 — whole audit NOT_READY.** 100/191 independently approved repository-repair rows
-(52.4%); 91 remaining (47.6%): 69 Low repairs, 21 external-validation rows and architecture decision #120.
-58 new audit findings. These are repair-row counts, not effort, GitHub closure or platform acceptance.
+**Whole audit NOT_READY.** 145/193 independently approved repository-repair rows (75.1%); 48 remaining (24.9%): 26 repair-category rows, 21 external-validation rows and architecture decision #120; 60 new audit findings. Counts are not effort, GitHub closures, platform acceptance or release readiness.
 
-Nine local, independently source-reviewed commits end at `d5d0c1ea72324fd8f04dc55deae93692f3d0fe0f`
-(tree `e0aaf19895def88732c68742d73687be612f01ef`), **NOT_PUSHED in this record**. The cohort adds25 approved
-rows; #330/#341/#363 are source-prepared but remain pending their first affected Apple execution. #268 is
-now source-reviewed with applicable Linux verification; defensive copies remain. #133 independent interoperability
-is still NOT_STARTED. #145/#144/#360 remain approved; do not reimplement them.
+18 newly recorded final approvals are committed through `f58e13b4d0a11b545b5ab569127327e76b27782f`; latest explicitly approved source in this packet is `ffd92738009638d4a4832c575530d03c2b930e54`. 27 further rows gain final scoped approval. 10 independently source-approved rows remain uncounted pending specifically required native/artifact validation. #330/#341/#363 still need affected Apple execution; #133 independent interoperability is NOT_STARTED.
 
-[Concise cohort report](repairs/cohort-2026-09-09.md) records each of the28 prepared rows, exact source/review bindings, execution and blockers.
+At the final independent local capture,37 focused commits were ahead of origin and not yet pushed. Later source/working edits or publication require a separate binding.
 
-The cohort combined Linux attempt remains **FAIL** (1,630 passes/one failed source oracle; separate LAN
-strict-Dokka failure with32 unresolved Apple warnings). Its corrected oracle rerun is exactly **one fresh pass**,
-not a new full check. Android assembly, CLI/Desktop packaging and core Dokka passed. The separate focused-host
-facility has209 passing Linux script cases; corrected Windows375 and Apple gates remain unexecuted.
-Last successful integrated check remains the earlier clean`d1523e8`, not this source. All earlier failures remain.
+[Continued cohort report](repairs/cohort-2026-09-09-continued.md) records exact approvals, failures, pending candidates and limits.
 
-New confirmed causes #374–#377 are tracked, not suspicions. The trial4 Desktop-output PermissionError still
-has no established read-only-versus-sharing root cause; diagnostic additions are not a repair. Swift scoped-IPv6
-percent-zone refusal remains recorded by #365; no physical campaign waiver. Missing Android instrumentation,
-physical/ART/OEM/hostile-network validation, independent #133 and professional crypto remain separate blockers.
-Do not refile existing causes from older notes without checking current dispositions and full histories.
+The0910 focused run passed160 fresh cases. For0911, original focused-r1 remains FAIL(325fresh/324pass/1obsolete-oracle failure); r2 remains FAIL(243fresh/241pass/2sidecar oracle failures; core Android compilation blocked). Narrow corrected r3 passed48fresh/8suites,38core Android+10sidecar, exits0/0/0. Final distinct accepted sidecar scope is179cases, not a sum of copied XML. Static-r1/r2 failures are preserved; static-r3 metadata11fixtures, actual metadata,472links/79active Markdown and whitespace checks passed. Last successful full check remains old clean-d152, not this source.
 
-GitHub scope: fresh08:30 lists show298 issues/191 open and79PRs/7open; own histories373–377 freshly read.
-The other full histories/PR/upstream sets remain historical02:54–03:25; no new all-history refresh or lease.
+#378 is the now-confirmed read-only Windows cleanup cause; #379 is the separate peers subscription-hook defect, not #173 fusion. Keep #274/#284 owner decisions and #287 refuted-contract row in the denominator without inventing repairs. Do not refile known causes; older suspicions below keep their original evidentiary limits.
+
+GitHub 12:04:11–12:04:20 UTC: 300 issues/193 open,79 PRs/7 open; 379 issue/PR bodies and495 conversation comments freshly captured. Detailed PR reviews/files/commits and timelines retain earlier captures; not a fresh complete-history/remote-execution lease.
 
 ## Preserved pre-cohort narrative
 

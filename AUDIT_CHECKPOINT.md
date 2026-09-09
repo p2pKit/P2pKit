@@ -1,28 +1,14 @@
-# Current continuation — September9 repair cohort
+# Current continuation — continued September9 cohort
 
-**9 September 2026 — whole audit NOT_READY.** 100/191 independently approved repository-repair rows
-(52.4%); 91 remaining (47.6%): 69 Low repairs, 21 external-validation rows and architecture decision #120.
-58 new audit findings. These are repair-row counts, not effort, GitHub closure or platform acceptance.
+**Whole audit NOT_READY.** 145/193 independently approved repository-repair rows (75.1%); 48 remaining (24.9%): 26 repair-category rows, 21 external-validation rows and architecture decision #120; 60 new audit findings. Counts are not effort, GitHub closures, platform acceptance or release readiness.
 
-Nine local, independently source-reviewed commits end at `d5d0c1ea72324fd8f04dc55deae93692f3d0fe0f`
-(tree `e0aaf19895def88732c68742d73687be612f01ef`), **NOT_PUSHED in this record**. The cohort adds25 approved
-rows; #330/#341/#363 are source-prepared but remain pending their first affected Apple execution. #268 is
-now source-reviewed with applicable Linux verification; defensive copies remain. #133 independent interoperability
-is still NOT_STARTED. #145/#144/#360 remain approved; do not reimplement them.
+18 newly recorded final approvals are committed through `f58e13b4d0a11b545b5ab569127327e76b27782f`; latest explicitly approved source in this packet is `ffd92738009638d4a4832c575530d03c2b930e54`. 27 further rows gain final scoped approval. 10 independently source-approved rows remain uncounted pending specifically required native/artifact validation. #330/#341/#363 still need affected Apple execution; #133 independent interoperability is NOT_STARTED.
 
-The cohort combined Linux attempt remains **FAIL** (1,630 passes/one failed source oracle; separate LAN
-strict-Dokka failure with32 unresolved Apple warnings). Its corrected oracle rerun is exactly **one fresh pass**,
-not a new full check. Android assembly, CLI/Desktop packaging and core Dokka passed. The separate focused-host
-facility has209 passing Linux script cases; corrected Windows375 and Apple gates remain unexecuted.
-Last successful integrated check remains the earlier clean`d1523e8`, not this source. All earlier failures remain.
+At the final independent local capture,37 focused commits were ahead of origin and not yet pushed. Later source/working edits or publication require a separate binding.
 
-See the [cohort report](docs/audit/2026-09-04/repairs/cohort-2026-09-09.md) and [current issue tables](docs/audit/2026-09-04/issues.md).
+[Exact continued-cohort report](docs/audit/2026-09-04/repairs/cohort-2026-09-09-continued.md). The0910 focused run passed160 fresh cases. For0911, original focused-r1 remains FAIL(325fresh/324pass/1obsolete-oracle failure); r2 remains FAIL(243fresh/241pass/2sidecar oracle failures; core Android compilation blocked). Narrow corrected r3 passed48fresh/8suites,38core Android+10sidecar, exits0/0/0. Final distinct accepted sidecar scope is179cases, not a sum of copied XML. Static-r1/r2 failures are preserved; static-r3 metadata11fixtures, actual metadata,472links/79active Markdown and whitespace checks passed. Last successful full check remains old clean-d152, not this source.
 
-Next: bind/review the exact local source and safe ledgers, refresh Actions/refs, hold one global local/hosted
-build lease before any workflow-triggering push, then inspect the **focused Windows** selected-class/packaging
-run. The new workflow is not the old full Windows-to-Apple chain. Apple needs a separately reviewed literal
-selection/allocation; do not infer cleanup or acceptance from a partial run. Finish current whole-check, LAN Dokka,
-consumer/release and whole-repository corroboration, while continuing feasible pending repairs. No checkpoint stop.
+GitHub 12:04:11–12:04:20 UTC: 300 issues/193 open,79 PRs/7 open; 379 issue/PR bodies and495 conversation comments freshly captured. Detailed PR reviews/files/commits and timelines retain earlier captures; not a fresh complete-history/remote-execution lease.
 
 ## Preserved pre-cohort handoff
 
@@ -993,25 +979,17 @@ verification scope, blockers, cleanup and practical readiness limits at each han
 > samples/isolatedconsumers/inspectedrelease/Applegates. Host/simulatorisnotphysical/ART/OEM/hostilenetwork/independent133/
 > professionalcryptoacceptance. #120productdecisionremains;wholeauditNOT_READY. Continueallfeasiblework.
 
-## Current continuation prompt — after the September9 cohort
+## Current continuation prompt — continued September9 cohort
 
-> Continue on audit/complete-2026-09-04 from actual HEAD/tree/status; preserve later commits and user changes.
-> Current recorded source d5d0c1ea72324fd8f04dc55deae93692f3d0fe0f/treee0aaf19895def88732c68742d73687be612f01ef,
-> nine local commits NOT_PUSHED in this record. Read unchanged AGENTS/CLAUDE and current ledgers/cohort report.
-> 100/191 approved52.4%,91remaining47.6%:69Low repairs,21external,#120;58newfindings. #268 reviewed; #133independent
-> NOT_STARTED. #330/#341/#363 source-approved but pending first Apple execution. #145/#144/#360 stay approved.
-> Cohort combined Linux FAIL remains:1630pass/1oraclefail,LAN strictDokka32warnings. Corrected oracle one fresh PASS,
-> not1513fresh or full-check pass. Last successful full integration is old clean-d152.209Linux host-script cases pass.
-> Publish safe audit-branch commits only with current Actions/ref observation, exact approved source freeze and one
-> global local/hosted build lease. Current workflow selects focused Windows durable-transfer/packaging only; inspect
-> exact XML/platform/source/stop/owned-output/full-or-salvage evidence. Corrected native375 NOT_RUN; trial4 failed
-> with separate unexplained Desktop output PermissionError. Diagnostics are not its repair or proof of old cleanup.
-> Apple requires a separately reviewed literal selection/allocation, not an assumed old chained job. Continue feasible
-> remaining repairs and affected whole-check/LAN-Dokka/consumer/release/whole-repository corroboration. No checkpoint stop.
-> One active repair; fresh nonimplementing reviewer after every fix, resolve actionable findings. Serialize builds,
-> bounded RAM/at most2workers/no parallel Gradle/strict verification. After every invocation retain required logs,
-> task-isolated wrapper--stop, retire only owned workers, remove only confirmed disposable outputs after dependencies.
-> Never blanket-delete build directories:buildSrc/src/main/java/dev/p2pkit/build is source; preserve shared caches,
-> source/user changes/evidence. Refresh full GitHub histories before relying on live state; deduplicate causes.
-> Host/simulator is not physical/ART/OEM/hostile-network/independent/professional-crypto validation. No force push,
-> main merge, issue closure, release, tag or settings changes. Whole audit remains NOT_READY.
+> Continue audit/complete-2026-09-04 from actual HEAD/tree/status; preserve changes and unchanged AGENTS.md/CLAUDE.md.
+> 145/193 independently approved repository-repair rows (75.1%); 48 remaining (24.9%): 26 repair-category rows, 21 external-validation rows and architecture decision #120; 60 new audit findings. Counts are not effort, GitHub closures, platform acceptance or release readiness.
+> Read the current continued-cohort report and JSON records. Count only explicit final revisions; source preparation is not approval.
+> #145/#144/#360 stay fixed. #133 independent NOT_STARTED; #330/#341/#363 affected Apple execution pending.
+> Continue the next source-prepared cohort without counting unapplied/unapproved work. Complete focused Windows172/176/378, Apple156/158/250/261/275/279 plus prior330/341/363, and candidate publication-artifact/license236 validation. These hosted tasks are pending, not inherently unavailable hardware. Keep274/284 owner decisions and287 current-contract refutation in the denominator, and379 separate from approved173. Finish current whole-repository corroboration, ./gradlew check --console=plain, applicable sample/consumer and release gates. Prefer smallest meaningful scopes and shared cycles; serialize local/hosted resource-heavy runs and preserve every earlier failure and external limit.
+> Original failures remain historical. Do not turn KLIB compilation or host/simulator checks into physical, hostile-network, independent or crypto acceptance.
+> Keep one active repair and independent final review for substantive changes. Batch safe affected verification; no redundant full matrix.
+> Serialize builds, at most two Gradle workers/no parallel Gradle; retain required logs then applicable task-isolated wrapper --stop.
+> Retire only invocation-owned workers; remove confirmed disposable outputs after dependent checks, preserve shared caches/source/evidence.
+> Never blanket-delete build: buildSrc/src/main/java/dev/p2pkit/build is source. Recheck RAM/disk periodically.
+> Refresh needed GitHub decisions and cause duplicates; push only safe focused audit-branch commits with current hosted-work ownership.
+> No issue closures, force-push, main merge, releases, tag moves or settings changes. Continue all feasible work; leave precise external blockers.
