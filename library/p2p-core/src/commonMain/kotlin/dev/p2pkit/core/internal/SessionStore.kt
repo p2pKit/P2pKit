@@ -311,9 +311,9 @@ internal class SessionStore(
      *    mutation; the filter-then-add pattern in [tryRegister] removes
      *    both staleness windows the public list ever exhibited.)
      *
-     * Gated by [ASSERT_INVARIANTS]. Leave `true` through v0.4 — if a real
-     * device run trips a warning for a benign ordering, flip the gate off
-     * (see the companion constant's KDoc).
+     * [ASSERT_INVARIANTS] remains enabled in shipped builds. A warning
+     * requires investigation of the mutation ordering or invariant, not
+     * disabling the check (see the companion constant's KDoc).
      */
     private fun checkInvariants(site: String) {
         if (!ASSERT_INVARIANTS) return
@@ -391,15 +391,14 @@ internal class SessionStore(
         )
 
         /**
-         * Master switch for [checkInvariants]. `true` through v0.4 — if
-         * hardware testing surfaces a benign-but-valid ordering that
-         * trips a check, flip to `false` and open an issue. Reverting
-         * this whole commit (S1 Commit 2) is also clean since Commit 1
-         * already stands on its own.
+         * Keep structural checks enabled in every build: they diagnose
+         * publication/ownership divergence that otherwise appears as a
+         * missing or duplicate session. A reported benign ordering needs
+         * evidence and a corrected invariant or mutation, not a disabled
+         * safety check. This is not a temporary release-milestone gate.
          *
-         * Gates the whole check, including [strictInvariants] mode —
-         * strict only changes what happens *when* a violation is
-         * detected (throw instead of warn), not whether we look.
+         * [strictInvariants] changes violation handling (throw instead of
+         * warn), never whether the invariant is evaluated.
          */
         private const val ASSERT_INVARIANTS = true
     }

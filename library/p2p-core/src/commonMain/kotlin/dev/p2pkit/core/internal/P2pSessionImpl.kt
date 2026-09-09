@@ -23,17 +23,16 @@ import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CompletableJob
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
@@ -146,7 +145,10 @@ internal class P2pSessionImpl(
     private val afterTerminalStatePublishedForTest: (suspend () -> Unit)? = null,
     private val applicationDeliveryCloseTimeoutMillis: Long = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
     private val afterApplicationDeliveryDrainForTest: (suspend () -> Unit)? = null,
-    private val beforeRearmRawCloseForTest: (suspend () -> Unit)? = null
+    private val beforeRearmRawCloseForTest: (suspend () -> Unit)? = null,
+    private val cleanupClock: () -> Long = ::monotonicTimeMillis,
+    private val cleanupOperationDispatcher: CoroutineDispatcher = blockingCleanupDispatcher(),
+    private val cleanupDeadlineDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) : P2pSession {
 
     init {
@@ -198,11 +200,12 @@ internal class P2pSessionImpl(
     private var terminalTransitionClaim: Any? = null
 
     /**
-     * Exact result of the one local close transaction. A caller that observes
-     * [ConnectionState.Closing] joins this owner instead of running another
-     * CLOSE/cleanup transaction or racing its timeout against the leader.
+     * Retained owners, guarded by [connectionLock]. Followers reuse the original
+     * budget and result even after terminal-state publication. A follower's
+     * pending observation never completes or replaces the owner's result.
      */
-    private val localCloseCompletion = CompletableDeferred<List<CleanupIssue>>()
+    private var localCloseOwner: SessionCloseOwner? = null
+    private var terminalCleanupOwner: SessionCloseOwner? = null
 
     private var connection: RawConnection = initialConnection
     private var events: ReceiveChannel<ProtocolEvent> = initialEvents
@@ -537,66 +540,50 @@ internal class P2pSessionImpl(
     }
 
     override suspend fun close() {
-        // Commit local-close intent before touching the wire. Raw-state and
-        // protocol observers then see Closing and cannot classify the socket
-        // teardown as an unrelated Failed outcome. Exactly one caller owns
-        // the bounded cleanup; concurrent close callers join its result.
-        var joinLocalClose = false
+        // Account time before lock admission, but only the winning owner may
+        // latch this budget. Later calls never receive a fresh close deadline.
+        val candidate = SessionCloseOwner(newCleanupBudget())
+        var ownsLocalClose = false
+        var joiningRemoteTerminal = false
         var localCloseEpoch: ConnectionEpoch? = null
         var reconnectWatchdogToCancel: Job? = null
-        val ownsLocalClose = connectionLock.withLock {
-            if (terminalTransitionClaim != null) {
-                false
-            } else when (_state.value) {
-                ConnectionState.Closed, ConnectionState.Failed -> false
-                ConnectionState.Closing -> {
-                    joinLocalClose = true
-                    false
-                }
-                else -> {
-                    reconnectWatchdogToCancel = detachReconnectWatchdogLocked()
-                    _state.value = ConnectionState.Closing
-                    localCloseEpoch = ConnectionEpoch(connection, readerJob, epochJob, epochToken)
-                    true
-                }
+        val owner = connectionLock.withLock {
+            localCloseOwner ?: terminalCleanupOwner?.also {
+                joiningRemoteTerminal = true
+            } ?: candidate.also {
+                check(terminalTransitionClaim == null) { "Terminal claim has no cleanup owner" }
+                reconnectWatchdogToCancel = detachReconnectWatchdogLocked()
+                _state.value = ConnectionState.Closing
+                localCloseEpoch = ConnectionEpoch(connection, readerJob, epochJob, epochToken)
+                localCloseOwner = it
+                ownsLocalClose = true
             }
         }
         reconnectWatchdogToCancel?.cancel()
-        if (joinLocalClose) {
-            val issues = localCloseCompletion.await()
-            if (issues.isNotEmpty()) {
-                throw cleanupError("session $id close", issues)
-            }
-            return
-        }
         if (!ownsLocalClose) {
-            captureCleanupIssue(
-                resource = "session $id runtime",
-                timeoutMillis = SESSION_RUNTIME_CLOSE_TIMEOUT_MS
-            ) {
-                sessionJob.join()
-            }?.let { issue ->
-                logCleanupIssues(logger, "session $id close", listOf(issue))
-                throw cleanupError("session $id close", listOf(issue))
+            val observed = owner.budget.await(owner.completion, SESSION_CLOSE_BUDGET_MS)
+            val issues = when (observed) {
+                is BoundedOperationResult.Success -> observed.value.toMutableList()
+                else -> mutableListOf(checkNotNull(observed.sessionCleanupIssue("session $id close transaction")))
             }
+            if (joiningRemoteTerminal && observed is BoundedOperationResult.Success) {
+                // The remote owner runs in a session child: it must not join
+                // its own runtime. Public observers may join after its retained
+                // terminal result, using only that same budget's remainder.
+                owner.budget.join(sessionJob, SESSION_RUNTIME_CLOSE_TIMEOUT_MS)
+                    .sessionCleanupIssue("session $id runtime")?.let(issues::add)
+            }
+            if (issues.isNotEmpty()) throw cleanupError("session $id close", issues)
             return
         }
 
         var cleanupIssues: List<CleanupIssue> = emptyList()
         withContext(NonCancellable) {
             try {
-                // Best-effort CLOSE frame BEFORE we tear the wire down. Must
-                // happen before [transitionToTerminal] cancels the epoch —
-                // once the epoch is gone, [connection] is closed and the
-                // protocol writer would throw. Only the WAIT is bounded; raw
-                // close below is what unblocks a cancellation-ignoring write.
-                // Start inline through the first real suspension so the
-                // bounded wait measures send/mutex progress, not admission
-                // latency on a saturated dispatcher. Without UNDISTPATCHED,
-                // the child could remain queued for the whole two-second
-                // window; teardown would then cancel the raw connection
-                // without ever attempting the CLOSE frame, causing a clean
-                // peer shutdown to look like a reconnectable network loss.
+                // Preserve the immediate best-effort CLOSE opportunity. It
+                // cannot be preempted while a host callback blocks inline;
+                // once suspended, only the wait consumes a bounded allowance.
+                // Rearm retirement ends that opportunity for this exact epoch.
                 val closingEpoch = checkNotNull(localCloseEpoch)
                 val rawCloseStarted = closingEpoch.epochToken.rawCloseStarted
                 val closeSend = if (rawCloseStarted.isCompleted) {
@@ -613,13 +600,12 @@ internal class P2pSessionImpl(
                     }
                 }
                 if (closeSend != null) {
-                    withTimeoutOrNull(CLOSE_FRAME_TIMEOUT_MS) {
+                    owner.budget.waitFor(
+                        CLOSE_FRAME_TIMEOUT_MS,
+                        { closeSend.isCompleted || rawCloseStarted.isCompleted }
+                    ) {
                         select<Unit> {
                             closeSend.onJoin { }
-                            // Rearm can retire this exact epoch after CLOSE
-                            // queued behind an old writer. Its retirement
-                            // owner, not a stale raw-state snapshot, ends the
-                            // useful opportunity for this best-effort frame.
                             rawCloseStarted.onAwait { }
                         }
                     }
@@ -630,38 +616,33 @@ internal class P2pSessionImpl(
                     "user close()",
                     fileFailureKind = FileTransferFailureKind.TRANSPORT,
                     fileRetryability = Retryability.NOT_RETRYABLE,
-                    allowFromClosing = true
+                    allowFromClosing = true,
+                    cleanupBudget = owner.budget
                 ).toMutableList()
                 closeSend?.cancel()
 
-                // transitionToTerminal cancels the runtime after every
-                // terminal cleanup attempt. Bound the join too: a blocking
-                // child must not make close() unbounded after a failed raw
-                // close.
-                captureCleanupIssue(
-                    resource = "session $id runtime",
-                    timeoutMillis = SESSION_RUNTIME_CLOSE_TIMEOUT_MS,
-                    preserveCancellation = false
-                ) {
-                    sessionJob.cancelAndJoin()
-                }?.let(issues::add)
+                // Cancellation is mandatory even when no join allowance is
+                // left. No independent worker is needed merely to observe a job.
+                sessionJob.cancel()
+                owner.budget.join(sessionJob, SESSION_RUNTIME_CLOSE_TIMEOUT_MS)
+                    .sessionCleanupIssue("session $id runtime")?.let(issues::add)
                 cleanupIssues = issues
                 logCleanupIssues(logger, "session $id close", issues)
-                localCloseCompletion.complete(issues)
+                owner.completion.complete(issues)
             } catch (failure: Throwable) {
-                localCloseCompletion.completeExceptionally(failure)
+                owner.completion.completeExceptionally(failure)
                 throw failure
             }
         }
 
-        // The committed close transaction is non-cancellable so ownership is
-        // never stranded in Closing, but the initiating caller's cancellation
-        // still propagates unchanged after cleanup.
+        // Committed teardown cannot strand Closing, but cancellation of its
+        // initiating caller still propagates unchanged after the transaction.
         currentCoroutineContext().ensureActive()
-        if (cleanupIssues.isNotEmpty()) {
-            throw cleanupError("session $id close", cleanupIssues)
-        }
+        if (cleanupIssues.isNotEmpty()) throw cleanupError("session $id close", cleanupIssues)
     }
+
+    private fun newCleanupBudget(timeoutMillis: Long = SESSION_CLOSE_BUDGET_MS): SessionCleanupBudget =
+        SessionCleanupBudget(timeoutMillis, cleanupClock, cleanupDeadlineDispatcher)
 
     /**
      * Replace the underlying connection after a successful reconnect. The
@@ -925,25 +906,43 @@ internal class P2pSessionImpl(
      */
     private suspend fun closeOwnedEpochConnection(
         epoch: ConnectionEpoch,
-        resource: String
+        resource: String,
+        budget: SessionCleanupBudget = newCleanupBudget(SESSION_RESOURCE_CLOSE_TIMEOUT_MS)
     ): CleanupIssue? {
         val token = epoch.epochToken
-        token.rawCloseLock.lock()
-        try {
-            if (!token.rawCloseStarted.isCompleted) {
+        val cleanup = token.rawCloseLock.withLock {
+            token.rawCloseCleanup ?: RetainedSessionCleanup(
+                operationDispatcher = cleanupOperationDispatcher,
+                onFailure = { logger.warn("Retained $resource cleanup failed", it) }
+            ) {
+                epoch.connection.close()
+            }.also {
+                token.rawCloseCleanup = it
+                // Commit retirement before any worker or observer can see it.
+                // Actual native settlement is a different, retained result.
                 token.rawCloseStarted.complete(Unit)
-                token.rawCloseIssue = captureCleanupIssue(
-                    resource = resource,
-                    timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
-                    preserveCancellation = false
-                ) {
-                    epoch.connection.close()
-                }
             }
-            return token.rawCloseIssue
-        } finally {
-            token.rawCloseLock.unlock()
         }
+        // Never execute/await native close under the epoch ownership lock.
+        // Starting remains mandatory at zero remaining observation allowance.
+        cleanup.start()
+        val observed = budget.waitFor(
+            SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
+            { token.rawCloseObservation.isCompleted || cleanup.completion.isCompleted }
+        ) {
+            select<CleanupIssue?> {
+                token.rawCloseObservation.onAwait { it }
+                cleanup.completion.onAwait { it.sessionCleanupIssue(resource) }
+            }
+        }
+        val issue = when (observed) {
+            is BoundedOperationResult.Success -> observed.value
+            else -> observed.sessionCleanupIssue(resource)
+        }
+        // Racing rearm/terminal observers share the first observation without
+        // overwriting the eventual resource result or retrying a timed-out close.
+        token.rawCloseObservation.complete(issue)
+        return token.rawCloseObservation.await()
     }
 
     private suspend fun closeDetachedConnection(connection: RawConnection, label: String) {
@@ -982,8 +981,9 @@ internal class P2pSessionImpl(
      *      about to cancel — without [NonCancellable] the cleanup itself
      *      would be cancelled at the first suspension point, leaking the
      *      raw connection and the file-transfer dispatcher.
-     *      Each external resource attempt has an independently owned deadline,
-     *      so cancellation-ignoring platform code is reported and abandoned.
+     *      Resource workers retain ownership independently of the runtime.
+     *      Observations share one elapsed budget; an expiry reports pending
+     *      work, not cancellation or successful native release.
      *   3. Cleanup order: seal and terminalize file transfers; cancel the
      *      epoch and protocol reader (stops `routeEvents` from emitting to
      *      `_incoming` — guarantees contract C1: no incoming after terminal);
@@ -1007,11 +1007,13 @@ internal class P2pSessionImpl(
         fileRetryability: Retryability = Retryability.RETRY_NEW_SESSION,
         allowFromClosing: Boolean = false,
         requiredState: ConnectionState? = null,
-        expectedEpoch: ConnectionEpoch? = null
+        expectedEpoch: ConnectionEpoch? = null,
+        cleanupBudget: SessionCleanupBudget? = null
     ): List<CleanupIssue> {
         check(target == ConnectionState.Closed || target == ConnectionState.Failed) {
             "transitionToTerminal: target must be Closed or Failed, got $target"
         }
+        val owner = SessionCloseOwner(cleanupBudget ?: newCleanupBudget())
         val claim = Any()
         var terminalEpoch: ConnectionEpoch? = null
         var reconnectWatchdogToCancel: Job? = null
@@ -1039,6 +1041,7 @@ internal class P2pSessionImpl(
             } else {
                 terminalEpoch = ConnectionEpoch(connection, readerJob, epochJob, epochToken)
                 terminalTransitionClaim = claim
+                terminalCleanupOwner = owner
                 reconnectWatchdogToCancel = detachReconnectWatchdogLocked()
                 true
             }
@@ -1051,107 +1054,114 @@ internal class P2pSessionImpl(
         // checks, and runtime cancellation form one non-cancellable
         // transaction: a cancellation delivered at any internal boundary
         // cannot leave a terminal public state backed by live resources.
-        val cleanupIssues = withContext(NonCancellable) {
-            afterTerminalClaimForTest?.invoke()
-            applicationMessages.close()
-            applicationDeliveryJob?.cancel()
-            applicationEmissionMutex.withLock {
-                connectionLock.withLock {
-                    check(terminalTransitionClaim === claim) {
-                        "Terminal transition claim was replaced for session $id"
+        return withContext(NonCancellable) {
+            try {
+                afterTerminalClaimForTest?.invoke()
+                applicationMessages.close()
+                applicationDeliveryJob?.cancel()
+                applicationEmissionMutex.withLock {
+                    connectionLock.withLock {
+                        check(terminalTransitionClaim === claim) {
+                            "Terminal transition claim was replaced for session $id"
+                        }
+                        _state.value = target
+                        terminalTransitionClaim = null
                     }
-                    _state.value = target
-                    terminalTransitionClaim = null
                 }
-            }
-            afterTerminalStatePublishedForTest?.invoke()
-            logger.debug("Session $id: terminal → ${target.name} ($cause)")
+                afterTerminalStatePublishedForTest?.invoke()
+                logger.debug("Session $id: terminal → ${target.name} ($cause)")
 
-            val issues = mutableListOf<CleanupIssue>()
-            var transferJobs: List<Job>? = null
-            var transferTerminalizationSucceeded = true
-            // File transfers first: they may be mid-write on the connection;
-            // terminalize their handles and cancel their jobs before closing
-            // the socket, then settle those jobs after close has unblocked any
-            // stalled writer.
-            if (fileTransferDispatcherLazy.isInitialized()) {
-                val beginIssue = captureCleanupIssue(
-                    resource = "session $id file-transfer terminalization",
-                    timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
-                    preserveCancellation = false
-                ) {
-                    transferJobs = fileTransferDispatcher.beginCloseAll(
-                        reason = "session $id ${target.name}: $cause",
-                        failureKind = fileFailureKind,
-                        retryability = fileRetryability
-                    )
+                val issues = mutableListOf<CleanupIssue>()
+                val ownedEpoch = checkNotNull(terminalEpoch)
+                // One independent owner keeps both beginCloseAll's late result and
+                // its returned jobs. Observation expiry must not orphan either.
+                val files = if (fileTransferDispatcherLazy.isInitialized()) {
+                    startTerminalFileCleanup(ownedEpoch, target, cause, fileFailureKind, fileRetryability)
+                } else {
+                    null
                 }
-                beginIssue?.let {
-                    transferTerminalizationSucceeded = false
-                    issues += it
+                val beginResult = files?.let {
+                    owner.budget.awaitResult(it.began, SESSION_RESOURCE_CLOSE_TIMEOUT_MS).also { result ->
+                        result.sessionCleanupIssue("session $id file-transfer terminalization")?.let(issues::add)
+                    }
                 }
-            }
-            // Cancel the epoch — stops routeEvents, keepAliveLoop, and the
-            // parked observeRawState. Guarantees no further _incoming.emit.
-            val ownedEpoch = checkNotNull(terminalEpoch)
-            ownedEpoch.runtimeJob?.cancel()
-            ownedEpoch.readerJob?.cancel()
-            // Close the underlying raw connection.
-            closeOwnedEpochConnection(
-                ownedEpoch,
-                "session $id raw connection"
-            )?.let(issues::add)
-            transferJobs.takeIf { transferTerminalizationSucceeded }?.let { jobs ->
-                captureCleanupIssue(
-                    resource = "session $id file-transfer jobs",
-                    timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
-                    preserveCancellation = false
-                ) {
-                    fileTransferDispatcher.awaitCloseAll(jobs)
-                }?.let(issues::add)
-            }
-            ownedEpoch.readerJob?.let { reader ->
-                captureCleanupIssue(
-                    resource = "session $id protocol reader",
-                    timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
-                    preserveCancellation = false
-                ) {
-                    reader.join()
-                }?.let(issues::add)
-            }
-            applicationDeliveryJob?.let { delivery ->
-                captureCleanupIssue(
-                    resource = "session $id application delivery",
-                    timeoutMillis = applicationDeliveryCloseTimeoutMillis,
-                    preserveCancellation = false
-                ) {
-                    delivery.join()
-                }?.let(issues::add)
-            }
-            drainQueuedApplicationMessages()
-            afterApplicationDeliveryDrainForTest?.invoke()
-            logCleanupIssues(logger, "session $id terminal cleanup", issues)
+                // Cancellation and ownership commitment are mandatory at zero
+                // allowance; only observation can be skipped. Closing raw unblocks
+                // old writers even when file terminalization is still pending.
+                ownedEpoch.runtimeJob?.cancel()
+                ownedEpoch.readerJob?.cancel()
+                closeOwnedEpochConnection(ownedEpoch, "session $id raw connection", owner.budget)?.let(issues::add)
+                if (files != null && beginResult !is BoundedOperationResult.Failure) {
+                    owner.budget.awaitResult(files.cleanup.completion, SESSION_RESOURCE_CLOSE_TIMEOUT_MS)
+                        .sessionCleanupIssue("session $id file-transfer jobs")?.let(issues::add)
+                }
+                ownedEpoch.readerJob?.let { reader ->
+                    owner.budget.join(reader, SESSION_RESOURCE_CLOSE_TIMEOUT_MS)
+                        .sessionCleanupIssue("session $id protocol reader")?.let(issues::add)
+                }
+                applicationDeliveryJob?.let { delivery ->
+                    owner.budget.join(delivery, applicationDeliveryCloseTimeoutMillis)
+                        .sessionCleanupIssue("session $id application delivery")?.let(issues::add)
+                }
+                drainQueuedApplicationMessages()
+                afterApplicationDeliveryDrainForTest?.invoke()
+                logCleanupIssues(logger, "session $id terminal cleanup", issues)
 
-            // Hard invariants. check() throws on violation; that's intentional
-            // — if any of these fail, the SDK is in a state where downstream
-            // behaviour is undefined and we'd rather crash on the developer's
-            // machine than ship a silent corruption.
-            check(_state.value == target) {
-                "I-terminal-state: expected ${target.name} after transition, got ${_state.value.name}"
-            }
-            val ej = epochJob
-            check(ej == null || ej.isCancelled) {
-                "I-terminal-epoch: epochJob still alive after transition to ${target.name}"
-            }
+                // Hard invariants. check() throws on violation; that's intentional
+                // — if any of these fail, the SDK is in a state where downstream
+                // behaviour is undefined and we'd rather crash on the developer's
+                // machine than ship a silent corruption.
+                check(_state.value == target) {
+                    "I-terminal-state: expected ${target.name} after transition, got ${_state.value.name}"
+                }
+                val ej = epochJob
+                check(ej == null || ej.isCancelled) {
+                    "I-terminal-epoch: epochJob still alive after transition to ${target.name}"
+                }
 
-            // This is deliberately last. Remote failure paths run inside a
-            // child of sessionJob, so cancelling earlier would interrupt their
-            // own resource cleanup. The completed post-conditions above remain
-            // observable before this transaction exits.
-            sessionJob.cancel(CancellationException("Session $id reached ${target.name}: $cause"))
-            issues
+                // This is deliberately last. Remote failure paths run inside a
+                // child of sessionJob, so cancelling earlier would interrupt their
+                // own resource cleanup. The completed post-conditions above remain
+                // observable before this transaction exits.
+                sessionJob.cancel(CancellationException("Session $id reached ${target.name}: $cause"))
+                owner.completion.complete(issues)
+                issues
+            } catch (failure: Throwable) {
+                owner.completion.completeExceptionally(failure)
+                throw failure
+            }
         }
-        return cleanupIssues
+    }
+
+    private fun startTerminalFileCleanup(
+        epoch: ConnectionEpoch,
+        target: ConnectionState,
+        cause: String,
+        failureKind: FileTransferFailureKind,
+        retryability: Retryability
+    ): TerminalFileCleanup {
+        val began = CompletableDeferred<BoundedOperationResult<Unit>>()
+        val cleanup = RetainedSessionCleanup(
+            operationDispatcher = cleanupOperationDispatcher,
+            onFailure = { logger.warn("Retained session $id file-transfer cleanup failed", it) }
+        ) {
+            val jobs = try {
+                fileTransferDispatcher.beginCloseAll(
+                    reason = "session $id ${target.name}: $cause",
+                    failureKind = failureKind,
+                    retryability = retryability
+                ).also { began.complete(BoundedOperationResult.Success(Unit)) }
+            } catch (failure: Throwable) {
+                began.complete(BoundedOperationResult.Failure(failure))
+                throw failure
+            }
+            // Await the request, not successful physical close. A raw callback
+            // that never settles must not retain otherwise-finished transfers.
+            epoch.epochToken.rawCloseStarted.await()
+            fileTransferDispatcher.awaitCloseAll(jobs)
+        }
+        cleanup.start()
+        return TerminalFileCleanup(began, cleanup)
     }
 
     private suspend fun enqueueApplicationMessage(message: P2pMessage): Boolean {
@@ -1353,7 +1363,8 @@ internal class P2pSessionImpl(
                         logger.debug("Session $id: ignoring late HELLO")
                     }
                     is ProtocolEvent.Ack -> {
-                        // Reserved for v0.2 reliability work.
+                        // Parsed for wire compatibility; no retransmission or
+                        // application-delivery acknowledgement is implemented.
                     }
                     is ProtocolEvent.Close -> {
                         // Clean close from peer — never retry. The received
@@ -1685,7 +1696,15 @@ internal class P2pSessionImpl(
          */
         const val CLOSE_FRAME_TIMEOUT_MS: Long = 2_000
 
-        /** Bounds each terminal resource attempt and the final runtime join. */
+        /**
+         * Aggregate elapsed allowance for local/remote terminal controlled
+         * waits, including followers. Leaves nominal headroom within the
+         * manager's 10 s observation. Locks, scheduling and inline callbacks
+         * are accounted but not preempted; this is not a hard API latency SLA.
+         */
+        private const val SESSION_CLOSE_BUDGET_MS: Long = 8_000
+
+        /** Per-phase caps, further limited by the terminal aggregate budget. */
         const val SESSION_RESOURCE_CLOSE_TIMEOUT_MS: Long = 2_000
         const val SESSION_RUNTIME_CLOSE_TIMEOUT_MS: Long = 2_000
 
@@ -1742,8 +1761,18 @@ private class ConnectionEpochToken {
     // one raw-close attempt; it does not claim that a platform worker exited
     // or that the underlying socket has already finished closing.
     val rawCloseStarted: CompletableDeferred<Unit> = CompletableDeferred()
-    var rawCloseIssue: CleanupIssue? = null
+    var rawCloseCleanup: RetainedSessionCleanup<Unit>? = null
+    val rawCloseObservation: CompletableDeferred<CleanupIssue?> = CompletableDeferred()
 }
 
 /** Referential episode identity keeps an old timer from diagnosing a newer reconnect. */
 private class ReconnectEpisode(val token: Any, val watchdog: Job)
+
+private class SessionCloseOwner(val budget: SessionCleanupBudget) {
+    val completion = CompletableDeferred<List<CleanupIssue>>()
+}
+
+private class TerminalFileCleanup(
+    val began: CompletableDeferred<BoundedOperationResult<Unit>>,
+    val cleanup: RetainedSessionCleanup<Unit>
+)

@@ -13,7 +13,7 @@ import dev.p2pkit.core.P2pMessage
  *   - [PeerError] → connection loss (reconnect-eligible when the session
  *     has an enabled reconnect policy)
  *   - [Hello] → only meaningful during the initial handshake; ignored after
- *   - [Ack] → reserved for v0.2 reliability work
+ *   - [Ack] → parsed for compatibility; no retransmission or delivery confirmation
  *   - [FileOffer], [FileAccept], [FileReject], [FileData], [FileDone],
  *     [FileCancel] → dispatched by file-transfer-id to the session's transfer
  *     manager (v0.2.2). [FileData] hands over the raw [Frame] so the

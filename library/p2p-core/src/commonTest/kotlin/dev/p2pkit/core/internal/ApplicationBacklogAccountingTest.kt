@@ -2,6 +2,7 @@ package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.KeepAliveConfig
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
@@ -13,6 +14,7 @@ import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.RecordingLogger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertSame
@@ -255,10 +257,18 @@ class ApplicationBacklogAccountingTest {
                         "session application-backlog-accounting application delivery"
             }
             val failure = assertIs<IllegalStateException>(warning.throwable)
-            assertEquals("cleanup exceeded 50ms", failure.message)
             val deadline = assertIs<OwnedOperationTimeoutException>(failure.cause)
-            assertEquals("Operation timed out after 50 ms", deadline.message)
+            // The real deadline dispatcher consumes phase admission time. Both
+            // messages must encode the same remaining allowance within the 50 ms cap.
+            assertTrue((0L..50L).any { allowance ->
+                failure.message == "cleanup still pending after ${allowance}ms of remaining wait allowance; " +
+                    "work may remain in flight" &&
+                    deadline.message == "Operation timed out after $allowance ms"
+            }, "timeout diagnostics must share a remaining allowance bounded by the configured phase cap")
             logger.assertNoUnexpectedWarnOrError { it === warning }
+            // Even after the late finally releases the last charge, close observes
+            // the same retained terminal-transaction evidence rather than erasing it.
+            expectedTerminalCloseCause = failure
         }
     }
 
@@ -367,10 +377,20 @@ class ApplicationBacklogAccountingTest {
         block: suspend Fixture.() -> Unit
     ) {
         val fixture = Fixture(this, nonCooperativeDelivery, pauseTerminal, deliveryCloseTimeoutMillis)
+        var primaryFailure: Throwable? = null
         try {
             fixture.block()
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
         } finally {
-            fixture.cleanup()
+            try {
+                fixture.cleanup()
+            } catch (cleanupFailure: Throwable) {
+                val primary = primaryFailure
+                if (primary == null) throw cleanupFailure
+                if (cleanupFailure !== primary) primary.addSuppressed(cleanupFailure)
+            }
         }
     }
 
@@ -393,6 +413,7 @@ class ApplicationBacklogAccountingTest {
         val releaseTerminal = CompletableDeferred<Unit>()
         val deliveryDrained = CompletableDeferred<Unit>()
         val logger = RecordingLogger()
+        var expectedTerminalCloseCause: Throwable? = null
         val session = P2pSessionImpl(
             id = "application-backlog-accounting",
             peer = Peer(PeerId("backlog-peer"), "Peer", Platform.JVM_DESKTOP, setOf(TransportKind.LAN)),
@@ -479,7 +500,16 @@ class ApplicationBacklogAccountingTest {
             deliveryPermits.cancel()
             releaseTerminal.complete(Unit)
             try {
-                session.close()
+                val expectedCause = expectedTerminalCloseCause
+                if (expectedCause == null) {
+                    session.close()
+                } else {
+                    val failure = assertFailsWith<P2pError.ConnectionFailed> { session.close() }
+                    val issue = assertIs<CleanupAggregateException>(failure.cause).issues.single()
+                    assertEquals("session application-backlog-accounting application delivery", issue.resource)
+                    assertTrue(issue.deadlineExceeded)
+                    assertSame(expectedCause, issue.cause)
+                }
                 awaitTermination()
                 assertBacklog(0, 0L)
             } finally {

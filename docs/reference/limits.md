@@ -76,7 +76,7 @@ These are **not** supported mesh-size or whole-process memory guarantees.
 | `MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE` | `2` connections/source | Per LAN transport, held until handshake settlement/close. A further connection from that source is refused before core admission; source address is not authenticated identity. | [PerSourceAdmissionLimiter.kt:89](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/PerSourceAdmissionLimiter.kt#L89) |
 | `MAX_TRACKED_PRE_HANDSHAKE_SOURCES` | `96` sources | Per LAN transport, bounds distinct keys with outstanding admission leases. A new source is refused at capacity; this does not authorize 192 concurrent core setups. | [PerSourceAdmissionLimiter.kt:92](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/PerSourceAdmissionLimiter.kt#L92) |
 | `MAX_BUFFERED_INBOUND_CONNECTIONS` | `16` connections | Per LAN transport, accepted connections awaiting collection on JVM, Android and Apple. Distinct from active setups/sessions; overflow closes the newest connection. | [Lan.kt](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt) |
-| `MAX_QUEUED_APPLICATION_MESSAGES` | `64` messages | Per session, includes the message currently being emitted to incoming. Further admission fails the session and logs the receive-backlog reason. | [P2pSessionImpl.kt:1635](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1635) |
+| `MAX_QUEUED_APPLICATION_MESSAGES` | `64` messages | Per session, includes the message currently being emitted to incoming. Further admission fails the session and logs the receive-backlog reason. | [P2pSessionImpl.kt](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt) |
 | `MAX_QUEUED_APPLICATION_BYTES` | `8,388,608` bytes (8 MiB) | Same backlog: approximate retention-policy charge, including the in-flight message. Exceeding it fails the session; not wire bytes or a whole-session/process heap cap. | [P2pSessionImpl.kt](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt) |
 
 Backlog accounting charges **512 bytes per message**, plus **two bytes per
@@ -243,24 +243,35 @@ may provide different phase-specific bounds; none is guaranteed by the SPI.
 
 ## Shutdown and recovery waits
 
-These bound **individual waits**, not a single aggregate `session.close()` or
-`kit.stop()` duration. Cleanup phases can compose. Expiring a best-effort CLOSE
-opportunity can simply proceed to teardown; other waits report the resource
-or operation failure described below. A timeout alone never proves that an OS
-resource or non-cooperative worker is gone. The kit retains failed ownership
-where supported. Keep callbacks prompt and cancellation-cooperative, inspect
-cleanup errors, and do not interpret a deadline as a successful release of
-storage, radios, identity leases or sockets.
+SDK session terminal cleanup has one **8-second aggregate elapsed allowance
+for controlled waits**. Its CLOSE/resource/runtime phases each retain a 2-second
+cap, further limited by the remainder. Local/remote terminal owners latch the
+budget once; concurrent and later `close()` callers never restart it. A follower
+can report a pending transaction at that deadline; this observation does not
+replace the owner's eventual result.
+
+This is **not a hard wall-clock `session.close()` or `kit.stop()` guarantee**.
+Mandatory terminal-publication/accounting locks, dispatcher scheduling and
+inline host callbacks are elapsed-accounted, not preempted. Other lifecycle
+phases below can still compose without a kit-wide aggregate budget. Expiring a
+best-effort CLOSE opportunity proceeds to teardown; other incomplete waits
+report cleanup failure. Raw close and file terminalization retain independent
+owners even at zero allowance; raw close is not retried concurrently. A timeout
+never proves an OS resource, cipher state or non-cooperative worker is gone.
+Keep callbacks prompt and cancellation-cooperative and inspect cleanup errors;
+never interpret expiry as successful release of storage, radios, identity
+leases or sockets.
 
 | Policy or setting | Current value | Scope and observable consequence | Source |
 | --- | --- | --- | --- |
 | `HANDSHAKE_CLEANUP_TIMEOUT_MS` | `2,000` ms (2 s) | Per resource/join during incomplete-handshake rollback; expiry reports incomplete cleanup. Also the best-effort CLOSE opportunity: its expiry proceeds to transport teardown without necessarily creating a cleanup issue. | [SessionManager.kt:1828](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1828) |
 | `SESSION_COMMIT_CLEANUP_TIMEOUT_MS` | `2,000` ms (2 s) | Per raw connection during failed session-publication rollback. Expiry reports incomplete cleanup. | [SessionManager.kt:1831](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1831) |
 | `DEFAULT_DISCOVERY_REFRESH_TIMEOUT_MS` | `6,000` ms (6 s) | One reconnect discovery-refresh callback. Timeout is logged and does not itself exhaust the reconnect policy. | [SessionManager.kt:1834](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1834) |
-| `SESSION_CLOSE_TIMEOUT_MS` | `10,000` ms (10 s) | Manager wait for each session/setup during background or terminal cleanup; direct public close can compose several phases. Expiry is a cleanup issue, not a clean-close guarantee. | [SessionManager.kt:1837](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1837) |
-| `CLOSE_FRAME_TIMEOUT_MS` | `2,000` ms (2 s) | Best-effort CLOSE send wait. Expiry proceeds to teardown; delivery is not guaranteed. | [P2pSessionImpl.kt:1618](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1618) |
-| `SESSION_RESOURCE_CLOSE_TIMEOUT_MS` | `2,000` ms (2 s) | Each terminal session-resource attempt (also default application-delivery cancellation wait). Expiry reports an incomplete cleanup attempt. | [P2pSessionImpl.kt:1621](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1621) |
-| `SESSION_RUNTIME_CLOSE_TIMEOUT_MS` | `2,000` ms (2 s) | Final session runtime join phase. Expiry reports incomplete runtime termination; it is separate from resource waits. | [P2pSessionImpl.kt:1622](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1622) |
+| `SESSION_CLOSE_TIMEOUT_MS` | `10,000` ms (10 s) | Manager wait for each session/setup during background or terminal cleanup; separate from the session's 8 s controlled-wait budget. Expiry is a cleanup issue, not a clean-close guarantee. | [SessionManager.kt:1837](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1837) |
+| `SESSION_CLOSE_BUDGET_MS` | `8,000` ms (8 s) | Aggregate elapsed allowance across terminal session controlled waits and followers; not a preemptive API or native-release guarantee. | [SessionCleanupBudget.kt](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionCleanupBudget.kt), [P2pSessionImpl.kt](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt) |
+| `CLOSE_FRAME_TIMEOUT_MS` | `2,000` ms (2 s) | Best-effort CLOSE wait, further capped by the aggregate remainder. Retirement of that exact epoch also ends the wait. Expiry proceeds to teardown; delivery is not guaranteed. | [P2pSessionImpl.kt](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt) |
+| `SESSION_RESOURCE_CLOSE_TIMEOUT_MS` | `2,000` ms (2 s) | Each terminal resource observation (also default application-delivery join), further capped by the aggregate remainder. Expiry reports pending cleanup, not a cancelled owner. | [P2pSessionImpl.kt](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt) |
+| `SESSION_RUNTIME_CLOSE_TIMEOUT_MS` | `2,000` ms (2 s) | Final runtime join, further capped by the aggregate remainder. Cancellation is still requested at zero allowance; an incomplete join reports pending runtime termination. | [P2pSessionImpl.kt](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt) |
 | `STOP_START_MUTEX_TIMEOUT_MS` | `5,000` ms (5 s) | Kit stop waiting for an active startup lock. Expiry warns, records a cleanup issue and continues terminal teardown without that lock. | [P2pKitImpl.kt:1541](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1541) |
 | `OBSERVER_CLOSE_TIMEOUT_MS` | `5,000` ms (5 s) | Kit path-observer close wait. Expiry records incomplete observer cleanup. | [P2pKitImpl.kt:1549](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1549) |
 | `INTERNAL_JOB_CLOSE_TIMEOUT_MS` | `5,000` ms (5 s) | Kit internal-job cancellation/join wait. Expiry records failure and retains the destructive-identity-reset lease fail-closed. | [P2pKitImpl.kt:1552](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1552) |

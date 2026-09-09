@@ -70,6 +70,19 @@ before using it as an independent test oracle.
   peer and attach collectors promptly.
 - Only the outgoing owner reconnects. Clean close is terminal; interruption may
   enter bounded reconnect according to policy.
+- SDK session terminal cleanup has one internal **8-second elapsed budget for
+  controlled waits**, with individual CLOSE/resource/runtime waits capped at
+  2 seconds and further limited by the remaining budget. Local close and remote
+  terminal owners latch their deadline once; concurrent and later `close()`
+  calls do not restart it. A follower can report typed `ConnectionFailed` for
+  a still-pending transaction without replacing the owner's eventual result.
+- The 8 seconds is not a hard whole-API wall-clock or native-release guarantee.
+  Mandatory publication, no-post-terminal-message and accounting barriers are
+  elapsed-accounted but not abandoned on expiry; dispatcher scheduling and
+  inline host callbacks cannot be preempted. Cleanup owns raw close and file
+  terminalization even when no observation allowance remains. Late work stays
+  owned, a raw close is never retried concurrently, and timeout never proves
+  a socket, cipher state or non-cooperative worker was actually released.
 
 ## Authenticated protocol v2
 
@@ -141,8 +154,10 @@ The [operational limits reference](../reference/limits.md) records current
 values, source locations, scope and observable consequences for admission,
 message/framing/reassembly, receive backlog, discovery and lifecycle deadlines.
 It also distinguishes public configuration from internal policy. These bounds
-do not promise a supported mesh size, total heap ceiling, aggregate shutdown
-deadline or acknowledgement of remote application processing.
+do not promise a supported mesh size, total heap ceiling, hard whole-API shutdown
+deadline or acknowledgement of remote application processing. The session's
+aggregate controlled-wait policy is defined above; it is not a kit-wide stop
+budget.
 
 ## Compatibility
 

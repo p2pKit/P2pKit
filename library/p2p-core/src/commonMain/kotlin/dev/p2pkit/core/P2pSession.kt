@@ -41,11 +41,11 @@ import kotlinx.io.RawSource
  * ### Lifecycle
  *
  * `close()` commits [ConnectionState.Closing] before its bounded wire/resource
- * cleanup, then transitions to `Closed`. After [close], the underlying
- * connection is released and terminal cleanup cancels queued application
- * delivery, not application-owned [incoming] collectors. Those collectors
+ * cleanup, then transitions to `Closed`. Terminal cleanup cancels queued
+ * application delivery and owns connection release; a reported timeout does
+ * not prove native work has finished. Application-owned [incoming] collectors
  * do not complete on `Closed` or `Failed`; their owner must cancel them
- * (see [incoming]). Concurrent close callers join the same cleanup transaction.
+ * (see [incoming]). Concurrent callers observe the same transaction/deadline.
  */
 public interface P2pSession {
     /** Stable identifier of this session for the lifetime of the process. */
@@ -261,11 +261,23 @@ public interface P2pSession {
     )
 
     /**
-     * Close the session and release all owned resources. Cleanup attempts are
-     * bounded; the session still becomes terminal if a resource misbehaves.
+     * Close the session and initiate release of all owned resources.
+     * SDK sessions share one internal 8-second elapsed budget across controlled
+     * CLOSE, resource and runtime waits, each capped at 2 seconds. Concurrent
+     * and later callers reuse the original transaction deadline and result.
      *
-     * @throws P2pError.ConnectionFailed after all cleanup attempts when one
-     *   or more resources failed or exceeded their close deadline.
+     * This is not a hard wall-clock or native-release guarantee: mandatory
+     * publication/accounting locks, dispatcher scheduling and inline host
+     * callbacks are elapsed-accounted but cannot be preempted. Even at zero
+     * remaining allowance, raw close and file cleanup retain independent
+     * owners; expiry never declares their work finished or retries raw close.
+     *
+     * @throws P2pError.ConnectionFailed when cleanup failed, remains pending,
+     *   or a concurrent caller reaches the shared deadline before the owner
+     *   finishes its transaction. A caller's pending observation does not
+     *   replace the owner's eventual result. Cancellation propagates unchanged
+     *   after an initiating caller's committed teardown, or while a follower
+     *   waits.
      */
     @Throws(Exception::class)
     public suspend fun close()
