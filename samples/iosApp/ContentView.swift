@@ -6,6 +6,8 @@ import Darwin
 /// UI-thread-only selectors shared by consent, cancellation, and watcher updates.
 /// Always carry the SDK session; never interpret a transfer ID as process-global.
 enum SessionTransferEntries {
+    private static let terminalHistoryCapacity = 24
+
     static func take<Offer>(_ key: TransferKey, from offers: inout [TransferKey: Offer]) -> Offer? {
         offers.removeValue(forKey: key)
     }
@@ -26,6 +28,18 @@ enum SessionTransferEntries {
     ) {
         for id in transferIds {
             offers.removeValue(forKey: TransferKey(sessionId: sessionId, transferId: id))
+        }
+    }
+
+    /// Keep every active row and the newest 24 terminal rows in insertion order.
+    /// History pressure must never remove a live transfer's progress or controls.
+    static func trimTerminalHistory<Row>(in rows: inout [Row], isTerminal: (Row) -> Bool) {
+        var excess = rows.reduce(0) { $0 + (isTerminal($1) ? 1 : 0) } - terminalHistoryCapacity
+        guard excess > 0 else { return }
+        rows.removeAll { row in
+            guard excess > 0, isTerminal(row) else { return false }
+            excess -= 1
+            return true
         }
     }
 }
@@ -200,7 +214,6 @@ struct ContentView: View {
         "Settings → Privacy & Security → Local Network and " +
         "enable this app, then tap Stop / Start."
 
-    private static let transferHistoryCapacity = 24
     private static let messageByteCapacity = 256 * 1024
 
     // MARK: - Row models
@@ -324,7 +337,7 @@ struct ContentView: View {
                 manualConnectSection
                 Divider()
                 sessionsSection
-                if !transfers.isEmpty {
+                if !pendingOffers.isEmpty || !transfers.isEmpty {
                     Divider()
                     transfersSection
                 }
@@ -435,7 +448,7 @@ struct ContentView: View {
                 .textSelection(.enabled)
         }
         if localTcpPort > 0 {
-            Text("localTcpPort: \(localTcpPort)")
+            Text("localTcpPort: \(String(localTcpPort))")
                 .font(.system(.caption, design: .monospaced))
                 .textSelection(.enabled)
         }
@@ -1599,13 +1612,7 @@ struct ContentView: View {
             detail: detail,
             transfer: transfer
         ))
-        while transfers.count > Self.transferHistoryCapacity {
-            if let idx = transfers.firstIndex(where: { $0.isTerminal }) {
-                transfers.remove(at: idx)
-            } else {
-                transfers.removeFirst()
-            }
-        }
+        SessionTransferEntries.trimTerminalHistory(in: &transfers) { $0.isTerminal }
         transferWatchTasks[key] = Task { @MainActor in
             var lastLabel = ""
             var cleanupCompleted = false
@@ -1660,7 +1667,10 @@ struct ContentView: View {
                         )
                     }
                 }
-                if terminal { break }
+                if terminal {
+                    SessionTransferEntries.trimTerminalHistory(in: &transfers) { $0.isTerminal }
+                    break
+                }
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
             if !cleanupCompleted {

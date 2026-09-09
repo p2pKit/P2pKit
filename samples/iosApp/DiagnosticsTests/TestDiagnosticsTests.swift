@@ -102,6 +102,54 @@ final class TestDiagnosticsTests: XCTestCase {
         XCTAssertEqual(Set(offers.keys), [current])
     }
 
+    func testHistoryCapPreservesActiveControlsAndBoundsOnlyTerminalRows() {
+        final class Handle {
+            var cancellations = 0
+            func cancel() { cancellations += 1 }
+        }
+        struct Row: Identifiable {
+            let id: TransferKey
+            let handle = Handle()
+            var bytes = 0
+            var isTerminal = false
+        }
+        let activeKeys = (0..<25).map {
+            TransferKey(sessionId: "active-session-\($0)", transferId: "same-id")
+        }
+        var rows: [Row] = []
+        for key in activeKeys {
+            rows.append(Row(id: key))
+            SessionTransferEntries.trimTerminalHistory(in: &rows) { $0.isTerminal }
+        }
+        XCTAssertEqual(rows.map(\.id), activeKeys, "the 25th active transfer must not evict the first")
+        let activeHandles = rows.map(\.handle)
+
+        let terminalKeys = (0..<25).map {
+            TransferKey(sessionId: "terminal-session-\($0)", transferId: "same-id")
+        }
+        for key in terminalKeys {
+            rows.append(Row(id: key, isTerminal: true))
+            SessionTransferEntries.trimTerminalHistory(in: &rows) { $0.isTerminal }
+        }
+        let retainedHistory = Array(terminalKeys.suffix(24))
+        XCTAssertEqual(rows.map(\.id), activeKeys + retainedHistory)
+        for key in activeKeys {
+            SessionTransferEntries.update(key, in: &rows) { $0.bytes = 42 }
+            XCTAssertEqual(SessionTransferEntries.row(key, in: rows)?.bytes, 42)
+            SessionTransferEntries.row(key, in: rows)?.handle.cancel()
+        }
+        XCTAssertEqual(activeHandles.map(\.cancellations), Array(repeating: 1, count: 25))
+        XCTAssertTrue(rows.filter(\.isTerminal).allSatisfy { $0.handle.cancellations == 0 })
+
+        // Terminal transitions must enforce the cap even when no new transfer is added.
+        for (index, key) in activeKeys.enumerated() {
+            SessionTransferEntries.update(key, in: &rows) { $0.isTerminal = true }
+            SessionTransferEntries.trimTerminalHistory(in: &rows) { $0.isTerminal }
+            XCTAssertEqual(rows.map(\.id), Array(activeKeys.dropFirst(index + 1)) + retainedHistory)
+        }
+        XCTAssertEqual(rows.count, 24)
+    }
+
     @MainActor
     func testMultiPeerCorrelationUsesRealSessionAndTransferOwnership() throws {
         let fixture = try Fixture()
