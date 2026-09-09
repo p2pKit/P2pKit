@@ -28,12 +28,14 @@ import kotlin.uuid.Uuid
 import kotlin.jvm.JvmInline
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.ensureActive
@@ -102,7 +104,7 @@ internal class PeerRegistry(
      * [PeerEvent]; emits a new value only when the visible peer set actually
      * changes (heartbeat-only updates to `lastSeen` do not churn this flow).
      */
-    val peers: StateFlow<List<Peer>> = PeerListStateFlow(peerPublication)
+    val peers: StateFlow<List<Peer>> = PeerListStateFlow(peerPublication).asStateFlow()
 
     fun lastSeen(peerId: PeerId): Long? =
         registryState.value.tracked[peerId]?.lastSeenAtMillis
@@ -254,11 +256,15 @@ internal class PeerRegistry(
         } else {
             snapshot.tracked.values.map { it.internalPeer.publicPeer }
         }
-        val candidate = PeerPublication(snapshot.generation, immutableListSnapshot(newList))
+        val candidatePeers = immutableListSnapshot(newList)
         beforePeerPublicationForTest?.invoke(snapshot.generation)
         while (true) {
             val published = peerPublication.value
-            if (published.generation >= candidate.generation) return
+            if (published.generation >= snapshot.generation) return
+            // Reuse equal immutable lists, but keep the newer generation in
+            // the CAS record so delayed publications remain fenced out.
+            val peers = if (published.peers == candidatePeers) published.peers else candidatePeers
+            val candidate = PeerPublication(snapshot.generation, peers)
             if (peerPublication.compareAndSet(published, candidate)) return
         }
     }
@@ -750,21 +756,55 @@ private data class PeerPublication(
 /**
  * Projects generation-bearing publications onto the established public state
  * type while retaining StateFlow's equality de-noising for heartbeat updates.
+ * Keep value publication synchronous and independent of the owner's scope.
+ *
+ * The mutable facade lets the public asStateFlow factory supply coroutine
+ * operator fusion without referencing hidden coroutine interfaces. No mutable
+ * view escapes the registry. Its write operations still honor MutableStateFlow
+ * semantics against the same atomic record, preserving the generation fence.
  */
 @OptIn(ExperimentalForInheritanceCoroutinesApi::class)
 private class PeerListStateFlow(
-    private val source: StateFlow<PeerPublication>
-) : StateFlow<List<Peer>> {
-    override val value: List<Peer> get() = source.value.peers
+    private val source: MutableStateFlow<PeerPublication>
+) : MutableStateFlow<List<Peer>> {
+    override var value: List<Peer>
+        get() = source.value.peers
+        set(value) {
+            val peers = immutableListSnapshot(value)
+            source.updateAndGet { current -> current.copy(peers = peers) }
+        }
 
     override val replayCache: List<List<Peer>> get() = listOf(value)
+
+    override val subscriptionCount: StateFlow<Int> get() = source.subscriptionCount
+
+    override fun compareAndSet(expect: List<Peer>, update: List<Peer>): Boolean {
+        val peers = immutableListSnapshot(update)
+        while (true) {
+            val current = source.value
+            if (current.peers != expect) return false
+            if (source.compareAndSet(current, current.copy(peers = peers))) return true
+        }
+    }
+
+    override fun tryEmit(value: List<Peer>): Boolean {
+        this.value = value
+        return true
+    }
+
+    override suspend fun emit(value: List<Peer>) {
+        this.value = value
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun resetReplayCache() = source.resetReplayCache()
 
     override suspend fun collect(collector: FlowCollector<List<Peer>>): Nothing {
         var initialized = false
         var previous: List<Peer> = emptyList()
         source.collect { publication ->
             val next = publication.peers
-            if (!initialized || previous != next) {
+            if (!initialized || (previous !== next && previous != next)) {
                 initialized = true
                 previous = next
                 collector.emit(next)

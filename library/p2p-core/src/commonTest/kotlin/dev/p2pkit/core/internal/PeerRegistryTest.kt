@@ -29,12 +29,23 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.cancellable
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -48,6 +59,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -145,6 +157,208 @@ class PeerRegistryTest {
     }
 
     @Test
+    fun delayedPublicationCannotReviveRemovedPeerAfterEqualNonemptySnapshot() = runTest {
+        lateinit var registry: PeerRegistry
+        var removalInjected = false
+        registry = PeerRegistry(
+            discoveryTransports = emptyList(),
+            scope = backgroundScope,
+            clock = { 1_000L },
+            beforePeerPublicationForTest = { generation ->
+                if (generation == 2L && !removalInjected) {
+                    removalInjected = true
+                    registry.processEvent(PeerEvent.Lost(PeerId("b")))
+                }
+            }
+        )
+
+        registry.processEvent(PeerEvent.Found(peer("a")))
+        registry.processEvent(PeerEvent.Found(peer("b")))
+
+        assertTrue(removalInjected)
+        assertEquals(listOf(PeerId("a")), registry.peers.value.map { it.id })
+        assertNull(registry.internalPeer(PeerId("b")))
+    }
+
+    @Test
+    fun delayedFirstPublicationCannotReplaceTerminalEmptySnapshot() = runTest {
+        lateinit var registry: PeerRegistry
+        var closeInjected = false
+        registry = PeerRegistry(
+            discoveryTransports = emptyList(),
+            scope = backgroundScope,
+            clock = { 1_000L },
+            beforePeerPublicationForTest = { generation ->
+                if (generation == 1L && !closeInjected) {
+                    closeInjected = true
+                    registry.close()
+                }
+            }
+        )
+
+        registry.processEvent(PeerEvent.Found(peer("delayed")))
+
+        assertTrue(closeInjected)
+        assertTrue(registry.peers.value.isEmpty())
+        assertNull(registry.internalPeer(PeerId("delayed")))
+    }
+
+    @OptIn(ExperimentalP2pApi::class)
+    @Test
+    fun publicPeerValueStaysSynchronousWithoutCollectorsAndAfterOwnerCancellation() = runTest {
+        val owner = SupervisorJob()
+        val registry = PeerRegistry(
+            discoveryTransports = emptyList(),
+            scope = CoroutineScope(StandardTestDispatcher(testScheduler) + owner),
+            clock = { 1_000L }
+        )
+        try {
+            // Deliberately do not yield or run the scheduler before reading value.
+            registry.processEvent(PeerEvent.Found(peer("synchronous")))
+            assertEquals(listOf(PeerId("synchronous")), registry.peers.value.map { it.id })
+
+            owner.cancel()
+            registry.processEvent(PeerEvent.Updated(peer("synchronous", "updated")))
+            assertEquals("updated", registry.peers.value.single().name)
+            val manual = registry.registerManualPeer("192.0.2.173", 9_173)
+            assertEquals(listOf(PeerId("synchronous"), manual.id), registry.peers.value.map { it.id })
+
+            registry.close()
+            assertTrue(registry.peers.value.isEmpty())
+            registry.processEvent(PeerEvent.Found(peer("late")))
+            assertTrue(registry.peers.value.isEmpty())
+        } finally {
+            registry.close()
+            owner.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun publicPeerOperatorsMatchPinnedStateFlowFusion() = runTest {
+        val registry = PeerRegistry(emptyList(), backgroundScope, clock = { 1_000L })
+        // Flow-typed references bypass deprecated-at-error StateFlow overloads.
+        val reference: Flow<List<Peer>> = MutableStateFlow(emptyList())
+        val projected: Flow<List<Peer>> = registry.peers
+        fun assertFusion(
+            name: String,
+            noOp: Boolean,
+            operation: (Flow<List<Peer>>) -> Flow<List<Peer>>
+        ) {
+            assertEquals(noOp, operation(reference) === reference, "$name reference")
+            assertEquals(noOp, operation(projected) === projected, "$name projection")
+        }
+
+        assertFusion("conflate", true) { it.conflate() }
+        assertFusion("CONFLATED", true) { it.buffer(Channel.CONFLATED) }
+        assertFusion("RENDEZVOUS", true) { it.buffer(Channel.RENDEZVOUS) }
+        assertFusion("flowOn", true) { it.flowOn(Dispatchers.Default) }
+        assertFusion("cancellable", true) { it.cancellable() }
+        assertFusion("distinctUntilChanged", true) { it.distinctUntilChanged() }
+        assertFusion("one DROP_OLDEST", true) { it.buffer(1, BufferOverflow.DROP_OLDEST) }
+        assertFusion("BUFFERED DROP_OLDEST", true) { it.buffer(Channel.BUFFERED, BufferOverflow.DROP_OLDEST) }
+        assertFusion("two DROP_OLDEST", false) { it.buffer(2, BufferOverflow.DROP_OLDEST) }
+        assertFusion("one SUSPEND", false) { it.buffer(1, BufferOverflow.SUSPEND) }
+        assertFusion("BUFFERED SUSPEND", false) { it.buffer(Channel.BUFFERED, BufferOverflow.SUSPEND) }
+        assertFusion("zero DROP_LATEST", false) { it.buffer(0, BufferOverflow.DROP_LATEST) }
+        assertFusion("two DROP_LATEST", false) { it.buffer(2, BufferOverflow.DROP_LATEST) }
+    }
+
+    @Test
+    fun realBuffersReceivePeerSnapshotsAfterHeartbeatConflation() = runTest {
+        for (overflow in listOf(BufferOverflow.SUSPEND, BufferOverflow.DROP_LATEST)) {
+            var now = 1_000L
+            val registry = PeerRegistry(emptyList(), backgroundScope, clock = { now })
+            val reference = MutableStateFlow<List<Peer>>(emptyList())
+            val projected: Flow<List<Peer>> = registry.peers
+            val referenceFlow: Flow<List<Peer>> = reference
+            val actualEmissions = mutableListOf<List<Peer>>()
+            val referenceEmissions = mutableListOf<List<Peer>>()
+            val releaseInitial = CompletableDeferred<Unit>()
+            val actualCollector = backgroundScope.launch {
+                projected.buffer(2, overflow).collect { peers ->
+                    actualEmissions += peers
+                    if (actualEmissions.size == 1) releaseInitial.await()
+                }
+            }
+            val referenceCollector = backgroundScope.launch {
+                referenceFlow.buffer(2, overflow).collect { peers ->
+                    referenceEmissions += peers
+                    if (referenceEmissions.size == 1) releaseInitial.await()
+                }
+            }
+            try {
+                runCurrent()
+                assertEquals(listOf(emptyList<Peer>()), actualEmissions, "$overflow initial projection")
+                assertEquals(actualEmissions, referenceEmissions, "$overflow initial reference")
+                val a = peer("a")
+                val b = peer("b")
+                val c = peer("c")
+                val d = peer("d")
+                registry.processEvent(PeerEvent.Found(a))
+                reference.value = listOf(a.publicPeer)
+                runCurrent()
+                now += 1L
+                registry.processEvent(PeerEvent.Updated(a))
+                reference.value = listOf(a.publicPeer)
+                runCurrent()
+                registry.processEvent(PeerEvent.Found(b))
+                reference.value = listOf(a.publicPeer, b.publicPeer)
+                runCurrent()
+                registry.processEvent(PeerEvent.Found(c))
+                reference.value = listOf(a.publicPeer, b.publicPeer, c.publicPeer)
+                runCurrent()
+
+                releaseInitial.complete(Unit)
+                runCurrent()
+                val expected = mutableListOf<List<Peer>>(
+                    emptyList(),
+                    listOf(a.publicPeer),
+                    listOf(a.publicPeer, b.publicPeer)
+                )
+                if (overflow == BufferOverflow.SUSPEND) {
+                    expected += listOf(a.publicPeer, b.publicPeer, c.publicPeer)
+                }
+                assertEquals(expected, referenceEmissions, "$overflow bounded reference")
+                assertEquals(expected, actualEmissions, "$overflow must not buffer heartbeat generations")
+
+                registry.processEvent(PeerEvent.Found(d))
+                reference.value = listOf(a.publicPeer, b.publicPeer, c.publicPeer, d.publicPeer)
+                runCurrent()
+                expected += reference.value
+                assertEquals(expected, referenceEmissions, "$overflow reference continues")
+                assertEquals(expected, actualEmissions, "$overflow projection continues")
+            } finally {
+                releaseInitial.complete(Unit)
+                actualCollector.cancelAndJoin()
+                referenceCollector.cancelAndJoin()
+            }
+        }
+    }
+
+    @Test
+    fun fusedCancellationStopsBeforeASecondPeerEmission() = runTest {
+        val registry = PeerRegistry(emptyList(), backgroundScope, clock = { 1_000L })
+        val projected: Flow<List<Peer>> = registry.peers
+        val emissions = mutableListOf<List<Peer>>()
+        val collector = backgroundScope.launch {
+            projected.cancellable().collect { peers ->
+                emissions += peers
+                currentCoroutineContext().cancel()
+                registry.processEvent(PeerEvent.Found(peer("after-cancellation")))
+            }
+        }
+        try {
+            runCurrent()
+            assertEquals(listOf(emptyList<Peer>()), emissions)
+            assertTrue(collector.isCancelled)
+            assertTrue(collector.isCompleted)
+            assertEquals(listOf(PeerId("after-cancellation")), registry.peers.value.map { it.id })
+        } finally {
+            collector.cancelAndJoin()
+        }
+    }
+
+    @Test
     fun unchangedDiscoveryHeartbeatDoesNotReemitPublicPeerList() = runTest {
         var now = 1_000L
         val registry = PeerRegistry(
@@ -163,10 +377,12 @@ class PeerRegistryTest {
 
         registry.processEvent(PeerEvent.Found(peer("heartbeat")))
         runCurrent()
+        val published = registry.peers.value
         now += 1_000L
         registry.processEvent(PeerEvent.Updated(peer("heartbeat")))
         runCurrent()
 
+        assertSame(published, registry.peers.value, "equal snapshots reuse the immutable public list")
         assertEquals(listOf(0, 1), emissions.map(List<Peer>::size))
         assertEquals(2_000L, registry.lastSeen(PeerId("heartbeat")))
         collector.cancel()
