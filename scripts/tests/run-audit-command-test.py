@@ -11,6 +11,7 @@ import argparse
 import ctypes
 import errno
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -132,8 +133,10 @@ record = {"argv": arguments, "pid": os.getpid(), "home": os.environ.get("GRADLE_
 with (state / "fixture-calls.jsonl").open("a", encoding="utf-8") as output:
     output.write(json.dumps(record) + "\n")
 if "--stop" in arguments:
-    print("STOP-ONLY-STDOUT", flush=True)
-    print("STOP-ONLY-STDERR", file=sys.stderr, flush=True)
+    sys.stdout.buffer.write(b"STOP-ONLY-STDOUT\n")
+    sys.stdout.buffer.flush()
+    sys.stderr.buffer.write(b"STOP-ONLY-STDERR\n")
+    sys.stderr.buffer.flush()
     if os.environ.get("FIXTURE_STOP_HANG") == "yes":
         while True: time.sleep(.05)
     raise SystemExit(int(os.environ.get("FIXTURE_STOP_EXIT", "0")))
@@ -233,6 +236,33 @@ class Capture:
 
 
 class PurePolicyTests(unittest.TestCase):
+    def test_fixture_markers_are_flushed_raw_bytes_under_both_text_newline_policies(self):
+        # Exercise the actual embedded program, not a duplicate marker implementation.
+        # Buffered binary streams make a missing explicit flush observable before close.
+        cases = ((["success"], 0, 0, b"PRODUCT"), (["failure"], 0, 7, b"PRODUCT"),
+                 (["--stop"], 0, 0, b"STOP-ONLY"), (["--stop"], 7, 7, b"STOP-ONLY"))
+        for newline in ("\n", "\r\n"):
+            for arguments, stop_status, expected_status, marker in cases:
+                with self.subTest(newline=repr(newline), arguments=arguments, stop_status=stop_status), \
+                        tempfile.TemporaryDirectory(prefix="audit fixture newline ") as temporary:
+                    stdout_bytes, stderr_bytes = io.BytesIO(), io.BytesIO()
+                    with io.TextIOWrapper(io.BufferedWriter(stdout_bytes), encoding="utf-8", newline=newline) as stdout, \
+                            io.TextIOWrapper(io.BufferedWriter(stderr_bytes), encoding="utf-8", newline=newline) as stderr:
+                        environment = {"P2PKIT_AUDIT_STATE_DIR": temporary, "FIXTURE_STOP_HANG": "no",
+                                       "FIXTURE_STOP_EXIT": str(stop_status)}
+                        with mock.patch.dict(os.environ, environment), \
+                                mock.patch.object(sys, "argv", ["fixture.py", *arguments]), \
+                                mock.patch.object(sys, "stdout", stdout), mock.patch.object(sys, "stderr", stderr):
+                            with self.assertRaises(SystemExit) as stopped:
+                                exec(compile(FIXTURE, "actual-audit-fixture", "exec"), {})
+                        self.assertEqual(stopped.exception.code, expected_status)
+                        for stream, captured in ((b"STDOUT", stdout_bytes), (b"STDERR", stderr_bytes)):
+                            with self.subTest(stream=stream):
+                                self.assertEqual(captured.getvalue(), marker + b"-" + stream + b"\n")
+                    calls = (Path(temporary) / "fixture-calls.jsonl").read_text(encoding="utf-8").splitlines()
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual(json.loads(calls[0])["argv"], arguments)
+
     def test_resource_flags_and_original_arguments_are_preserved(self):
         original = ["publishToMavenLocal", "-Dmaven.repo.local=/tmp/fixture repository", "--configure-on-demand"]
         snapshot = list(original)
