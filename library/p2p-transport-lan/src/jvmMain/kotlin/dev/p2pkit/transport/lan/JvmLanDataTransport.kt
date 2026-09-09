@@ -12,11 +12,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -24,6 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.net.ConnectException
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -70,7 +73,8 @@ internal class JvmLanDataTransport(
     private val retainedServerSocketCleanup = mutableSetOf<ServerSocket>()
     private val lifecycleGeneration = AtomicLong()
     private val pendingDialSockets = mutableSetOf<Socket>()
-    private val retainedDialSocketCleanup = mutableSetOf<Socket>()
+    // Failed dial cleanup and accepted-option rollback share the existing stop/retry owner.
+    private val retainedSocketCleanup = mutableSetOf<Socket>()
     private val inboundAdmission = PerSourceAdmissionLimiter()
 
     @Volatile private var restartPort: Int = 0
@@ -89,7 +93,7 @@ internal class JvmLanDataTransport(
         val hasUnreleasedResources = synchronized(listenerStateLock) {
             retainedServerSocketCleanup.isNotEmpty()
         } || synchronized(dialStateLock) {
-            retainedDialSocketCleanup.isNotEmpty()
+            retainedSocketCleanup.isNotEmpty()
         }
         if (hasUnreleasedResources) {
             return Result.failure(
@@ -204,13 +208,14 @@ internal class JvmLanDataTransport(
             }
             if (!admitted) {
                 throw stoppedDialFailure().also { failure ->
-                    closeDialSocket(socket)?.let(failure::addSuppressed)
+                    closeSocketRetainingFailure(socket)?.let(failure::addSuppressed)
                 }
             }
             try {
                 ensureDialGeneration(dialGeneration)
                 withContext(Dispatchers.IO) {
                     socket.connect(InetSocketAddress(endpoint.host, endpoint.port), timeout)
+                    socket.tcpNoDelay = true
                 }
                 currentCoroutineContext().ensureActive()
                 ensureDialGeneration(dialGeneration)
@@ -229,11 +234,11 @@ internal class JvmLanDataTransport(
                 if (!handedOff) throw stoppedDialFailure()
                 return JvmRawConnection(socket)
             } catch (cancelled: CancellationException) {
-                closeDialSocket(socket)?.let(cancelled::addSuppressed)
+                closeSocketRetainingFailure(socket)?.let(cancelled::addSuppressed)
                 JvmLanDiag.log("dial", "connect CANCELLED peer=$pid8 ${endpoint.host}:${endpoint.port} — socket closed")
                 throw cancelled
             } catch (error: Throwable) {
-                val cleanupFailure = closeDialSocket(socket)
+                val cleanupFailure = closeSocketRetainingFailure(socket)
                 if (!isDialGenerationActive(dialGeneration)) {
                     throw stoppedDialFailure().also { stopped ->
                         stopped.addSuppressed(error)
@@ -276,6 +281,8 @@ internal class JvmLanDataTransport(
         return minOf(roundedMillis.toInt(), LanConstants.TCP_CANDIDATE_CONNECT_TIMEOUT_MS)
     }
 
+    // The adjacent buffer fuses with callbackFlow. trySend still rejects the newest
+    // connection immediately when full; SUSPEND does not park this accept loop.
     override fun incomingConnections(): Flow<RawConnection> = callbackFlow {
         if (hasStarted && serverSocket.get() == null && !closed) {
             start().getOrThrow()
@@ -308,6 +315,21 @@ internal class JvmLanDataTransport(
                             "REJECTED ${socket.remoteSocketAddress} on excluded local ${socket.localAddress.hostAddress}"
                         )
                         runCatching { socket.close() }
+                        continue
+                    }
+                    // Configure while the accepter still owns the fd and before taking a source slot.
+                    try {
+                        socket.tcpNoDelay = true
+                    } catch (error: Throwable) {
+                        val cleanupFailure = closeSocketRetainingFailure(socket)
+                        cleanupFailure?.let(error::addSuppressed)
+                        if (error !is IOException || cleanupFailure != null) {
+                            // An uncertain release stays in the stop/retry ledger; never keep accepting.
+                            // Close the flow as well, including when the accepter exits by cancellation.
+                            close(error)
+                            throw error
+                        }
+                        JvmLanDiag.log("accept", "REJECTED inbound socket: TCP_NODELAY configuration failed")
                         continue
                     }
                     val source = runCatching { socket.inetAddress.hostAddress }
@@ -347,7 +369,7 @@ internal class JvmLanDataTransport(
             accepterJob.cancel()
             releaseServerSocket(sock, preservePort = !closed)
         }
-    }
+    }.buffer(LanConstants.MAX_BUFFERED_INBOUND_CONNECTIONS, BufferOverflow.SUSPEND)
 
     override suspend fun stop(): Unit = startMutex.withLock {
         if (closed) return@withLock
@@ -362,7 +384,7 @@ internal class JvmLanDataTransport(
     private fun stopLocked(preserveRestartPort: Boolean) {
         val dialCleanup = synchronized(dialStateLock) {
             lifecycleGeneration.incrementAndGet()
-            pendingDialSockets.toList() + retainedDialSocketCleanup.toList()
+            pendingDialSockets.toList() + retainedSocketCleanup.toList()
         }.distinct()
         val listenerCleanup = synchronized(listenerStateLock) {
             hasStarted = false
@@ -375,7 +397,7 @@ internal class JvmLanDataTransport(
             listOfNotNull(sock) + retainedServerSocketCleanup.toList()
         }.distinct()
         val failures = mutableListOf<Throwable>()
-        dialCleanup.forEach { socket -> closeDialSocket(socket)?.let(failures::add) }
+        dialCleanup.forEach { socket -> closeSocketRetainingFailure(socket)?.let(failures::add) }
         listenerCleanup.firstOrNull()?.let {
             JvmLanDiag.log(
                 "data",
@@ -405,12 +427,12 @@ internal class JvmLanDataTransport(
     private fun stoppedDialFailure(): P2pError.ConnectionFailed =
         P2pError.ConnectionFailed("LAN data transport stopped during connect")
 
-    private fun closeDialSocket(socket: Socket): Throwable? =
+    private fun closeSocketRetainingFailure(socket: Socket): Throwable? =
         synchronized(dialStateLock) {
             pendingDialSockets -= socket
-            retainedDialSocketCleanup += socket
+            retainedSocketCleanup += socket
             runCatching { socket.close() }.exceptionOrNull().also { failure ->
-                if (failure == null) retainedDialSocketCleanup -= socket
+                if (failure == null) retainedSocketCleanup -= socket
             }
         }
 

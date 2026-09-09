@@ -22,6 +22,12 @@ public interface RawConnection {
      * so a second concurrent collector would steal bytes and corrupt
      * framing — implementations are not required to support multiple or
      * repeated collection.
+     *
+     * This SPI does not guarantee a read-idle deadline. A session-layer
+     * consumer must enforce its setup and established-session liveness
+     * policies and close the connection on cancellation or termination.
+     * Shipped LAN reads rely on core's policies; their independent write
+     * deadlines do not bound reads or time spent awaiting admission.
      */
     public fun read(): Flow<ByteArray>
 

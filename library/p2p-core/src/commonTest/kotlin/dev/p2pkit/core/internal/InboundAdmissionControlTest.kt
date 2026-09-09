@@ -96,6 +96,8 @@ class InboundAdmissionControlTest {
 
     @Test
     fun preHandshakeBoundRefusesExcessAndPermitsRecoverOnBothOutcomes() = runBlocking {
+        // LAN's separate inbound queue mirrors this policy; review both bounds together.
+        assertEquals(16, MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS)
         val logger = RecordingLogger()
         val transport = FakeDataTransport()
         val bob = incomingKit(transport, logger)

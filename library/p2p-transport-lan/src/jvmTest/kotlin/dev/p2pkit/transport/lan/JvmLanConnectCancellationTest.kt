@@ -30,6 +30,14 @@ class JvmLanConnectCancellationTest {
         private val entered: CompletableDeferred<Unit>,
         private val release: CountDownLatch
     ) : Socket() {
+        private var noDelay = false
+
+        override fun setTcpNoDelay(on: Boolean) {
+            noDelay = on
+        }
+
+        override fun getTcpNoDelay(): Boolean = noDelay
+
         override fun connect(endpoint: SocketAddress?, timeout: Int) {
             entered.complete(Unit)
             release.await()

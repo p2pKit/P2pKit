@@ -110,7 +110,7 @@ internal fun validateLanDiscoverySecurityMetadata(
     }
 }
 
-/** Wire-level constants shared by the JVM and Android implementations. */
+/** LAN policy and wire constants shared across the supported platforms. */
 internal object LanConstants {
     /** JmDNS-style service type. Used by the JVM/Android LAN discovery transports. */
     const val LEGACY_SERVICE_TYPE_JMDNS: String = "_p2pkit._tcp.local."
@@ -178,6 +178,14 @@ internal object LanConstants {
 
     /** Per-candidate slice of the shared dial budget when alternates exist. */
     const val TCP_CANDIDATE_CONNECT_TIMEOUT_MS: Int = 1_500
+
+    /**
+     * Already-accepted connections awaiting delivery to the session layer.
+     * Mirrors core's 16 concurrent inbound setup slots, but is a separate queue,
+     * not an allowance for more setups. Overflow rejects and closes the newest
+     * connection without parking the accepter. This is independent of coroutine defaults.
+     */
+    const val MAX_BUFFERED_INBOUND_CONNECTIONS: Int = 16
 
 }
 

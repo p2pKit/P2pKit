@@ -24,6 +24,14 @@ class JvmLanCandidateFallbackTest {
     private open class RecordingSocket(private val failure: Exception? = null) : Socket() {
         val attempts = mutableListOf<InetSocketAddress>()
 
+        private var noDelay = false
+
+        override fun setTcpNoDelay(on: Boolean) {
+            noDelay = on
+        }
+
+        override fun getTcpNoDelay(): Boolean = noDelay
+
         override fun connect(endpoint: SocketAddress?, timeout: Int) {
             attempts += endpoint as InetSocketAddress
             failure?.let { throw it }
@@ -52,6 +60,7 @@ class JvmLanCandidateFallbackTest {
             assertEquals("192.168.1.20", first.attempts.single().hostString)
             assertEquals("192.168.1.21", second.attempts.single().hostString)
             assertTrue(first.isClosed, "a failed candidate socket must be closed before fallback")
+            assertTrue(second.tcpNoDelay, "fallback success must configure its own socket")
         } finally {
             raw.close()
         }

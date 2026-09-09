@@ -10,6 +10,7 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.InboundConnectionAdmission
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.LocalPeerInfo
+import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportHint
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
@@ -425,6 +426,85 @@ class IosLanRecoveryTest {
             admitted.last().close()
         } finally {
             transport.close()
+        }
+    }
+
+    @Test
+    fun inboundQueueUsesTheSharedDepthAndRecoversAcrossRestart() = runBlocking<Unit> {
+        val capacity = LanConstants.MAX_BUFFERED_INBOUND_CONNECTIONS
+        // Core's admission regression pins the separate active-setup gate to the same policy value.
+        assertEquals(16, capacity)
+        var nextSource = 0
+        var sources = emptyList<String>()
+        var rejectedBeforeQueue = 0
+        val nativeConnections = mutableListOf<nw_connection_t>()
+        val created = mutableListOf<ControlledInboundConnection>()
+        val received = mutableListOf<RawConnection>()
+        val transport = IosLanDataTransport(
+            transportContext = context("inbound-queue-depth"),
+            endpointRegistry = IosEndpointRegistry(),
+            inboundSourceProvider = { sources[nextSource++] },
+            connectionRejector = { connection ->
+                rejectedBeforeQueue += 1
+                nw_connection_cancel(connection)
+            },
+            connectionFactory = { connection, _ ->
+                ControlledInboundConnection(connection).also(created::add)
+            }
+        )
+        fun nextConnection(): nw_connection_t = nativeConnection().also(nativeConnections::add)
+        try {
+            repeat(2) { round ->
+                nextSource = 0
+                sources = List(capacity + 1) { "queue-source-$round-$it" } +
+                    List(MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE) { "queue-source-$round-$capacity" }
+                val firstCreated = created.size
+                assertTrue(transport.start().isSuccess)
+                val owner = assertNotNull(transport.listener)
+                repeat(capacity) {
+                    assertTrue(transport.handleInboundConnectionForTest(owner, nextConnection()))
+                }
+                assertFalse(transport.handleInboundConnectionForTest(owner, nextConnection()))
+                val burst = created.drop(firstCreated)
+                assertEquals(capacity + 1, burst.size, "all distinct sources must reach the queue")
+                assertEquals(0, rejectedBeforeQueue, "source quota must not masquerade as queue overflow")
+                assertTrue(burst.dropLast(1).none { it.cancelled })
+                assertTrue(burst.last().cancelled, "only the newest queued-before-collection offer is rejected")
+
+                val admitted = withTimeout(RECOVERY_TIMEOUT_MILLIS) {
+                    transport.incomingConnections().take(capacity).toList()
+                }
+                received += admitted
+                assertEquals(
+                    sources.take(capacity),
+                    admitted.map { assertIs<InboundConnectionAdmission>(it).admissionSource },
+                    "accepted connections must drain in FIFO order"
+                )
+                admitted.forEach { it.close() }
+
+                // Keep both recovery leases held until both offers are processed.
+                repeat(MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE) {
+                    assertTrue(transport.handleInboundConnectionForTest(owner, nextConnection()))
+                }
+                val recovered = withTimeout(RECOVERY_TIMEOUT_MILLIS) {
+                    transport.incomingConnections().take(MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE).toList()
+                }
+                received += recovered
+                assertEquals(
+                    sources.takeLast(MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE),
+                    recovered.map { assertIs<InboundConnectionAdmission>(it).admissionSource }
+                )
+                recovered.forEach { it.close() }
+                assertTrue(created.drop(firstCreated).all { it.cancelled })
+                transport.stop()
+            }
+        } finally {
+            try {
+                transport.close()
+            } finally {
+                received.forEach { it.close() }
+                nativeConnections.forEach(::nw_connection_cancel)
+            }
         }
     }
 

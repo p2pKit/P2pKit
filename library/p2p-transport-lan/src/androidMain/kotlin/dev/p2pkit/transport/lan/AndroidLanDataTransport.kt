@@ -14,11 +14,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -26,6 +28,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.net.ConnectException
 import java.net.InetSocketAddress
 import java.net.NoRouteToHostException
@@ -69,7 +72,8 @@ internal class AndroidLanDataTransport(
     private val retainedServerSocketCleanup = mutableSetOf<ServerSocket>()
     private val lifecycleGeneration = AtomicLong()
     private val pendingDialSockets = mutableSetOf<Socket>()
-    private val retainedDialSocketCleanup = mutableSetOf<Socket>()
+    // Failed dial cleanup and accepted-option rollback share the existing stop/retry owner.
+    private val retainedSocketCleanup = mutableSetOf<Socket>()
     private val inboundAdmission = PerSourceAdmissionLimiter()
     @Volatile private var restartPort: Int = 0
     @Volatile private var hasStarted: Boolean = false
@@ -87,7 +91,7 @@ internal class AndroidLanDataTransport(
         val hasUnreleasedResources = synchronized(listenerStateLock) {
             retainedServerSocketCleanup.isNotEmpty()
         } || synchronized(dialStateLock) {
-            retainedDialSocketCleanup.isNotEmpty()
+            retainedSocketCleanup.isNotEmpty()
         }
         if (hasUnreleasedResources) {
             return Result.failure(
@@ -219,7 +223,7 @@ internal class AndroidLanDataTransport(
                     }
                 }
             } catch (error: Throwable) {
-                val cleanupFailure = createdSocket?.let(::closeDialSocket)
+                val cleanupFailure = createdSocket?.let(::closeSocketRetainingFailure)
                 if (error !is Exception) {
                     cleanupFailure?.let(error::addSuppressed)
                     throw error
@@ -248,13 +252,14 @@ internal class AndroidLanDataTransport(
             }
             if (!admitted) {
                 throw stoppedDialFailure().also { failure ->
-                    closeDialSocket(socket)?.let(failure::addSuppressed)
+                    closeSocketRetainingFailure(socket)?.let(failure::addSuppressed)
                 }
             }
             try {
                 ensureDialGeneration(dialGeneration)
                 withContext(Dispatchers.IO) {
                     socket.connect(InetSocketAddress(endpoint.host, endpoint.port), timeout)
+                    socket.tcpNoDelay = true
                 }
                 currentCoroutineContext().ensureActive()
                 ensureDialGeneration(dialGeneration)
@@ -270,11 +275,11 @@ internal class AndroidLanDataTransport(
                 if (!handedOff) throw stoppedDialFailure()
                 return AndroidRawConnection(socket)
             } catch (cancelled: CancellationException) {
-                closeDialSocket(socket)?.let(cancelled::addSuppressed)
+                closeSocketRetainingFailure(socket)?.let(cancelled::addSuppressed)
                 Log.d(TAG, "connect CANCELLED peer=$pid8 ${endpoint.host}:${endpoint.port} — socket closed")
                 throw cancelled
             } catch (error: Throwable) {
-                val cleanupFailure = closeDialSocket(socket)
+                val cleanupFailure = closeSocketRetainingFailure(socket)
                 if (!isDialGenerationActive(dialGeneration)) {
                     throw stoppedDialFailure().also { stopped ->
                         stopped.addSuppressed(error)
@@ -317,6 +322,8 @@ internal class AndroidLanDataTransport(
         return minOf(roundedMillis.toInt(), LanConstants.TCP_CANDIDATE_CONNECT_TIMEOUT_MS)
     }
 
+    // The adjacent buffer fuses with callbackFlow. trySend still rejects the newest
+    // connection immediately when full; SUSPEND does not park this accept loop.
     override fun incomingConnections(): Flow<RawConnection> = callbackFlow {
         if (hasStarted && serverSocket.get() == null && !closed) {
             start().getOrThrow()
@@ -353,6 +360,21 @@ internal class AndroidLanDataTransport(
                         runCatching { socket.close() }
                         continue
                     }
+                    // Configure while the accepter still owns the fd and before taking a source slot.
+                    try {
+                        socket.tcpNoDelay = true
+                    } catch (error: Throwable) {
+                        val cleanupFailure = closeSocketRetainingFailure(socket)
+                        cleanupFailure?.let(error::addSuppressed)
+                        if (error !is IOException || cleanupFailure != null) {
+                            // An uncertain release stays in the stop/retry ledger; never keep accepting.
+                            // Close the flow as well, including when the accepter exits by cancellation.
+                            close(error)
+                            throw error
+                        }
+                        Log.d(TAG, "REJECTED inbound socket: TCP_NODELAY configuration failed")
+                        continue
+                    }
                     val source = runCatching { socket.inetAddress.hostAddress }
                         .getOrNull()
                         ?.takeIf(String::isNotBlank)
@@ -386,7 +408,7 @@ internal class AndroidLanDataTransport(
             accepterJob.cancel()
             releaseServerSocket(sock, preservePort = !closed)
         }
-    }
+    }.buffer(LanConstants.MAX_BUFFERED_INBOUND_CONNECTIONS, BufferOverflow.SUSPEND)
 
     override suspend fun stop(): Unit = startMutex.withLock {
         if (closed) return@withLock
@@ -402,7 +424,7 @@ internal class AndroidLanDataTransport(
     private fun stopLocked(preserveRestartPort: Boolean) {
         val dialCleanup = synchronized(dialStateLock) {
             lifecycleGeneration.incrementAndGet()
-            pendingDialSockets.toList() + retainedDialSocketCleanup.toList()
+            pendingDialSockets.toList() + retainedSocketCleanup.toList()
         }.distinct()
         val listenerCleanup = synchronized(listenerStateLock) {
             hasStarted = false
@@ -415,7 +437,7 @@ internal class AndroidLanDataTransport(
             listOfNotNull(sock) + retainedServerSocketCleanup.toList()
         }.distinct()
         val failures = mutableListOf<Throwable>()
-        dialCleanup.forEach { socket -> closeDialSocket(socket)?.let(failures::add) }
+        dialCleanup.forEach { socket -> closeSocketRetainingFailure(socket)?.let(failures::add) }
         listenerCleanup.firstOrNull()?.let {
             Log.d(
                 TAG,
@@ -445,12 +467,12 @@ internal class AndroidLanDataTransport(
     private fun stoppedDialFailure(): P2pError.ConnectionFailed =
         P2pError.ConnectionFailed("LAN data transport stopped during connect")
 
-    private fun closeDialSocket(socket: Socket): Throwable? =
+    private fun closeSocketRetainingFailure(socket: Socket): Throwable? =
         synchronized(dialStateLock) {
             pendingDialSockets -= socket
-            retainedDialSocketCleanup += socket
+            retainedSocketCleanup += socket
             runCatching { socket.close() }.exceptionOrNull().also { failure ->
-                if (failure == null) retainedDialSocketCleanup -= socket
+                if (failure == null) retainedSocketCleanup -= socket
             }
         }
 

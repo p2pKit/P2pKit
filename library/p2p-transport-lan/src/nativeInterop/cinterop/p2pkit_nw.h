@@ -13,28 +13,21 @@
 #include <unistd.h>
 
 /**
- * Build an nw_parameters_t for plain TCP without TLS.
+ * Build plain TCP parameters with Nagle disabled for small protocol frames.
+ * Authenticated-v2 security remains above the byte transport; disabling
+ * transport TLS here never permits an authentication downgrade.
  *
- * Equivalent to Apple's idiomatic call:
- *
- *     nw_parameters_create_secure_tcp(
- *         NW_PARAMETERS_DISABLE_PROTOCOL,
- *         NW_PARAMETERS_DEFAULT_CONFIGURATION
- *     )
- *
- * The two macros expand to global void-returning ObjC block constants
- * (`_nw_parameters_configure_protocol_disable` /
- *  `_nw_parameters_configure_protocol_default_configuration`) which
- * Kotlin/Native's `Kotlin_Interop_refFromObjC` cannot box as `kotlin.Any` —
- * any direct Kotlin read of those globals crashes at startup. Performing the
- * call inline inside this static-inline C function keeps the block constants
- * entirely on the ObjC side; the Kotlin caller only sees the resulting
- * `nw_parameters_t`, which boxes cleanly.
+ * NW_PARAMETERS_DISABLE_PROTOCOL expands to a global void-returning ObjC
+ * block constant which Kotlin/Native cannot box as kotlin.Any. Keep both
+ * protocol configuration blocks entirely on the ObjC side; Kotlin only
+ * receives the resulting nw_parameters_t, which boxes cleanly.
  */
 static inline nw_parameters_t p2pkit_nw_create_plain_tcp_parameters(void) {
     return nw_parameters_create_secure_tcp(
         NW_PARAMETERS_DISABLE_PROTOCOL,
-        NW_PARAMETERS_DEFAULT_CONFIGURATION
+        ^(nw_protocol_options_t options) {
+            nw_tcp_options_set_no_delay(options, true);
+        }
     );
 }
 

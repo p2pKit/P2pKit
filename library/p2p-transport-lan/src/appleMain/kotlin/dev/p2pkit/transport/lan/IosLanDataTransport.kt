@@ -223,7 +223,7 @@ internal class IosLanDataTransport(
         get() = listenerLease?.handle
 
     private val incomingQueue = BoundedInboundQueue<IosConnectionHandle>(
-        capacity = MAX_BUFFERED_INBOUND_CONNECTIONS,
+        capacity = LanConstants.MAX_BUFFERED_INBOUND_CONNECTIONS,
         onDrop = { it.cancelNow("inbound admission rejected") }
     )
     private val inboundAdmission = PerSourceAdmissionLimiter()
@@ -1252,9 +1252,6 @@ internal class IosLanDataTransport(
     }
 
     internal companion object {
-        /** Matches core's maximum number of concurrently admitted inbound setups. */
-        const val MAX_BUFFERED_INBOUND_CONNECTIONS: Int = 16
-
         /** Bounded outbound connect; LAN should resolve + handshake in << 10 s. */
         const val CONNECT_TIMEOUT_MILLIS: Long = 10_000
 

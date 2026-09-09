@@ -75,7 +75,7 @@ These are **not** supported mesh-size or whole-process memory guarantees.
 | `MAX_TOTAL_ACTIVE_SESSIONS` | `64` active sessions | Only active entries count. Net-new inbound registration at capacity is refused, including replacement of a terminal entry. Outgoing registrations and no-growth simultaneous-open arbitration are exempt; not a hard total-session ceiling. Warn and close; no required typed local application error. | [SessionManager.kt:1883](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1883) |
 | `MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE` | `2` connections/source | Per LAN transport, held until handshake settlement/close. A further connection from that source is refused before core admission; source address is not authenticated identity. | [PerSourceAdmissionLimiter.kt:89](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/PerSourceAdmissionLimiter.kt#L89) |
 | `MAX_TRACKED_PRE_HANDSHAKE_SOURCES` | `96` sources | Per LAN transport, bounds distinct keys with outstanding admission leases. A new source is refused at capacity; this does not authorize 192 concurrent core setups. | [PerSourceAdmissionLimiter.kt:92](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/PerSourceAdmissionLimiter.kt#L92) |
-| `MAX_BUFFERED_INBOUND_CONNECTIONS` | `16` connections | Apple-only accepted-connection queue, distinct from active sessions. A connection that cannot be queued is cancelled. | [IosLanDataTransport.kt:1256](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosLanDataTransport.kt#L1256) |
+| `MAX_BUFFERED_INBOUND_CONNECTIONS` | `16` connections | Per LAN transport, accepted connections awaiting collection on JVM, Android and Apple. Distinct from active setups/sessions; overflow closes the newest connection. | [Lan.kt](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt) |
 | `MAX_QUEUED_APPLICATION_MESSAGES` | `64` messages | Per session, includes the message currently being emitted to incoming. Further admission fails the session and logs the receive-backlog reason. | [P2pSessionImpl.kt:1635](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1635) |
 | `MAX_QUEUED_APPLICATION_BYTES` | `8,388,608` bytes (8 MiB) | Same backlog: approximate retention-policy charge, including the in-flight message. Exceeding it fails the session; not wire bytes or a whole-session/process heap cap. | [P2pSessionImpl.kt](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt) |
 
@@ -102,11 +102,20 @@ exactly 8 MiB; one more is refused, and a maximum 4 MiB ASCII message costs
 8 MiB + 512 bytes and fails the session even into an empty backlog. Metadata
 lowers that threshold further. Neither the 64-message nor 8 MiB cap is raised.
 
-JVM/Android accepted-connection `callbackFlow` uses the coroutine library's
-default buffer (normally 64, subject to its JVM default-buffer property), not
-Apple's explicit queue policy; failed `trySend` closes the offered connection.
-See [JVM accept](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmLanDataTransport.kt#L279)
-and [Android accept](../../library/p2p-transport-lan/src/androidMain/kotlin/dev/p2pkit/transport/lan/AndroidLanDataTransport.kt#L320).
+LAN now uses one explicit 16-connection inbound-queue policy on all platforms.
+On JVM/Android, an adjacent `buffer(16, BufferOverflow.SUSPEND)` fuses with
+`callbackFlow`; nonblocking `trySend` still rejects and closes the newest
+connection when full. It neither adds a second queue nor suspends the accepter,
+and the JVM `kotlinx.coroutines.channels.defaultBuffer` property cannot change
+this chosen capacity. A connection already delivered to a held consumer is not
+in the queue: that shape accepts one delivered plus 16 queued before refusing
+the 18th offer. Source quotas still apply first.
+
+This is **observable admission tightening, reserved for 0.8.0+**: JVM/Android
+previously inherited the coroutine default (normally 64). It is not an unchanged
+0.7 behavior promise or a new timeout, session limit, or whole-process fd bound.
+See [JVM accept](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmLanDataTransport.kt)
+and [Android accept](../../library/p2p-transport-lan/src/androidMain/kotlin/dev/p2pkit/transport/lan/AndroidLanDataTransport.kt).
 
 Subscribe to session `incoming` promptly and keep collectors fast. It has zero
 replay: with no subscriber, emitted messages are not saved for later. A slow
@@ -196,7 +205,7 @@ to fit their TXT entry; an AppId is not silently truncated.
 | `MAX_DISCOVERY_HOST_CHARS` | `253` characters | Discovery hint host length; excess rejects the claim. Blank, control-bearing or whitespace-containing hosts are also invalid. | [PeerRegistry.kt:631](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L631) |
 | `MAX_DISCOVERY_HOST_UTF8_BYTES` | `1,012` bytes | Discovery hint host UTF-8 ceiling; exceeding it rejects the claim. | [PeerRegistry.kt:632](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L632) |
 | `MAX_MANUAL_HOST_CHARS` | `253` characters | Normalized manual host length; invalid local registration throws rather than creating a peer. | [PeerRegistry.kt:630](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L630) |
-| `MAX_DNS_SD_TXT_ENTRY_BYTES` | `255` bytes | Whole key=value TXT entry. Oversized consumed remote fields reject the record; oversized local non-display-name fields prevent advertising. | [Lan.kt:446](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt#L446) |
+| `MAX_DNS_SD_TXT_ENTRY_BYTES` | `255` bytes | Whole key=value TXT entry. Oversized consumed remote fields reject the record; oversized local non-display-name fields prevent advertising. | [Lan.kt:456](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt#L456) |
 | `MAX_FIELD_LEN` | `512` characters | Core HELLO/peer name and identity string ceiling; invalid local fields fail validation and invalid remote claims are rejected. Not a way to bypass smaller LAN TXT limits. | [HelloPayload.kt:39](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/HelloPayload.kt#L39) |
 | `MAX_FIELD_UTF8_BYTES` | `2,048` bytes (2 KiB) | UTF-8 companion ceiling for those core string fields; the character ceiling still applies. | [HelloPayload.kt:42](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/HelloPayload.kt#L42) |
 
@@ -213,12 +222,24 @@ A write completing locally is still not remote processing acknowledgement.
 | `TCP_CONNECT_TIMEOUT_MS` | `5,000` ms (5 s) | JVM/Android TCP connect budget shared by candidate attempts. Exhaustion fails the dial with ConnectionFailed; not the Apple budget. | [Lan.kt:174](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt#L174) |
 | `MAX_DIAL_CANDIDATES` | `8` endpoints | JVM/Android selected address fan-out per dial. Further candidates are not attempted in that operation. | [Lan.kt:177](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt#L177) |
 | `TCP_CANDIDATE_CONNECT_TIMEOUT_MS` | `1,500` ms (1.5 s) | JVM/Android maximum slice when multiple candidates exist, within the shared connect budget. A single candidate receives the full budget. | [Lan.kt:180](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt#L180) |
-| `CONNECT_TIMEOUT_MILLIS` | `10,000` ms (10 s) | Apple outbound NWConnection readiness wait. Timeout cancels the connection, invalidates the failed cached endpoint and throws ConnectionFailed. | [IosLanDataTransport.kt:1259](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosLanDataTransport.kt#L1259) |
+| `CONNECT_TIMEOUT_MILLIS` | `10,000` ms (10 s) | Apple outbound NWConnection readiness wait. Timeout cancels the connection, invalidates the failed cached endpoint and throws ConnectionFailed. | [IosLanDataTransport.kt:1256](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosLanDataTransport.kt#L1256) |
 | `WRITE_TIMEOUT_MILLIS` | `30,000` ms (30 s) | JVM raw socket-write watchdog. Expiry closes the socket and fails the write; excludes time waiting for the write mutex. | [JvmRawConnection.kt:267](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmRawConnection.kt#L267) |
 | `WRITE_TIMEOUT_MILLIS` | `30,000` ms (30 s) | Android raw socket-write watchdog, with the same close/fail behavior and mutex-wait exclusion. | [AndroidRawConnection.kt:263](../../library/p2p-transport-lan/src/androidMain/kotlin/dev/p2pkit/transport/lan/AndroidRawConnection.kt#L263) |
 | `WRITE_READY_TIMEOUT_MILLIS` | `10,000` ms (10 s) | Apple raw write awaiting a Connecting-to-ready transition. Expiry cancels the connection and fails that write. | [IosRawConnection.kt:413](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosRawConnection.kt#L413) |
 | `WRITE_TIMEOUT_MILLIS` | `30,000` ms (30 s) | Apple send-completion wait after readiness/write serialization. Expiry cancels the connection and fails the write; not a total send deadline. | [IosRawConnection.kt:425](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosRawConnection.kt#L425) |
 | `OS_CALLBACK_TIMEOUT_MS` | `60,000` ms (60 s) | Android LOHS acquisition / Wi-Fi join approval wait. Expiry returns failed result/state: HotspotStopped for hosting, JoinFailed for joining; not permission to retain a late OS resource. | [AndroidNetworkProvisioningManager.kt:601](../../library/p2p-network-provisioning-android/src/androidMain/kotlin/dev/p2pkit/provisioning/android/AndroidNetworkProvisioningManager.kt#L601) |
+
+The shipped LAN transports enable TCP_NODELAY for accepted and dialed
+connections. This is a socket configuration policy, not a measured latency
+or throughput guarantee. It does not change any connect/setup/write/PONG
+deadline or enable a separate socket read-idle timer.
+
+`RawConnection` SPI consumers supplying their own session layer must enforce
+setup and established-session liveness and close on cancellation/termination.
+Core starts its setup budget after admission, not while a connection waits
+in the transport queue. LAN's bounded queue and write watchdog do not impose
+an expiry on buffered connections or a read deadline. Other SPI transports
+may provide different phase-specific bounds; none is guaranteed by the SPI.
 
 ## Shutdown and recovery waits
 
