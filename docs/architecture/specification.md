@@ -89,6 +89,20 @@ record produced during the 0.7 remediation is preserved in
   parent directory; the public JDK exposes no equivalent directory barrier on
   Windows, so that platform cannot guarantee the rename survives sudden power
   loss.
+- Built-in JVM/Android destinations create no staging file until `openSink`.
+  During receipt, unverified content is stored in a randomly named
+  `.p2pkit-*.part` **sibling** of the target to preserve same-filesystem atomic
+  publication. JVM POSIX staging is created with `0600` permissions; other
+  filesystems use JDK temporary-file defaults and the parent's access policy.
+  Android requests `0600` before opening the payload stream and fails if that
+  permission operation fails. Choose a trusted, application-controlled directory
+  with effective access restrictions; Android internal app storage is preferred
+  when external storage does not enforce the required permissions. Same-user
+  indexers, backup agents and cloud-sync clients can still read partial content:
+  a hidden name or owner-only mode is **not** a backup/sync exclusion. Avoid
+  watched/synced destinations when premature consumption is unacceptable.
+  Crashes after opening may leave staging files; reconcile only files the
+  application can establish it owns, not arbitrary prefix matches.
 - For authenticated SDK sessions, JVM `sendFile(File)` retains no descriptor
   while its offer is pending. After acceptance it rechecks the reopened
   descriptor's length and SHA-256 before sending any payload, then rewinds that

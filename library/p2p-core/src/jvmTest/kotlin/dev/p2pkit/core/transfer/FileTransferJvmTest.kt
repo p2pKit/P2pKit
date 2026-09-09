@@ -24,6 +24,8 @@ import kotlinx.io.readByteArray
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFilePermissions
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -188,6 +190,80 @@ class FileTransferJvmTest {
     }
 
     @Test
+    fun durableDestinationUsesSiblingStagingAndPrivatePosixPermissions() = runBlocking {
+        val directory = Files.createTempDirectory("p2pkit-durable-permissions-").toFile()
+        tempFiles.add(directory)
+        val target = File(directory, "received.bin")
+        val destination = durableFileDestination(target)
+        try {
+            val sink = destination.openSink()
+            val buffer = Buffer().apply { write(byteArrayOf(1, 2, 3)) }
+            sink.write(buffer, buffer.size)
+            val staging = directory.listFiles().orEmpty().single()
+            val store = Files.getFileStore(directory.toPath())
+
+            assertFalse(target.exists())
+            assertTrue(staging.name.startsWith(".p2pkit-") && staging.extension == "part")
+            assertEquals(store, Files.getFileStore(staging.toPath()))
+            if (store.supportsFileAttributeView(PosixFileAttributeView::class.java)) {
+                assertEquals(
+                    PosixFilePermissions.fromString("rw-------"),
+                    Files.getPosixFilePermissions(staging.toPath())
+                )
+            }
+        } finally {
+            destination.abort(cause = null)
+        }
+        assertTrue(directory.listFiles().isNullOrEmpty())
+    }
+
+    @Test
+    fun durableDestinationAbortBeforeOpenLeavesNoStagingAndPreservesTarget() = runBlocking {
+        val directory = Files.createTempDirectory("p2pkit-durable-unused-").toFile()
+        tempFiles.add(directory)
+        val target = File(directory, "received.bin").also { it.writeText("existing") }
+        val destination = durableFileDestination(target)
+
+        assertEquals(listOf(target.name), directory.list()?.sorted())
+        destination.abort(cause = null)
+        destination.abort(cause = null)
+
+        assertFailsWith<IllegalStateException> { destination.openSink() }
+        assertFailsWith<IllegalStateException> { destination.commit() }
+        assertEquals("existing", target.readText())
+        assertEquals(listOf(target.name), directory.list()?.sorted())
+    }
+
+    @Test
+    fun durableDestinationFailedOpenRetainsStagingUntilAbort() = runBlocking {
+        val directory = Files.createTempDirectory("p2pkit-durable-open-failure-").toFile()
+        tempFiles.add(directory)
+        val target = File(directory, "received.bin").also { it.writeText("existing") }
+        val openFailure = IOException("injected staging open failure")
+        var openAttempts = 0
+        val destination = JvmDurableFileDestination(
+            target = target,
+            openStream = {
+                openAttempts += 1
+                assertTrue(it.isFile)
+                throw openFailure
+            }
+        )
+
+        assertEquals(listOf(target.name), directory.list()?.sorted())
+        assertSame(openFailure, assertFailsWith<IOException> { destination.openSink() })
+        assertTrue(directory.listFiles().orEmpty().any { it.extension == "part" })
+        assertFailsWith<IllegalStateException> { destination.openSink() }
+        assertFailsWith<IllegalStateException> { destination.commit() }
+        destination.abort(cause = null)
+        destination.abort(cause = null)
+
+        assertEquals(1, openAttempts)
+        assertEquals("existing", target.readText())
+        assertEquals(listOf(target.name), directory.list()?.sorted())
+    }
+
+    @Test
     fun durableDestinationPreflightRetainsConfiguredFreeSpace() = runBlocking {
         val directory = Files.createTempDirectory("p2pkit-durable-capacity-").toFile()
         tempFiles.add(directory)
@@ -206,6 +282,7 @@ class FileTransferJvmTest {
         val failure = assertFailsWith<IOException> { rejected.requireAvailableStorage(5L) }
 
         assertTrue(failure.message.orEmpty().contains("Insufficient usable space"))
+        assertTrue(directory.listFiles().isNullOrEmpty(), "preflight must not create staging files")
         accepted.abort(cause = null)
         rejected.abort(cause = null)
         assertTrue(directory.listFiles().isNullOrEmpty())

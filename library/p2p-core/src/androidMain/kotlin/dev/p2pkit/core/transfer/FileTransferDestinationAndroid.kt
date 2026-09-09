@@ -4,6 +4,7 @@ import android.system.Os
 import android.system.OsConstants
 import dev.p2pkit.core.P2pError
 import java.io.File
+import java.io.FileDescriptor
 import java.io.FileOutputStream
 import java.io.IOException
 import kotlinx.io.RawSink
@@ -13,11 +14,23 @@ import kotlinx.io.asSink
  * Create a checked sibling-temp, file-fsync, atomic-rename, directory-fsync
  * destination for [target].
  *
- * The target's parent directory must already exist. Commit fails rather than
- * silently weakening durability if Android cannot atomically replace the
+ * Construction creates no staging file; the single staging sink is acquired
+ * only by [FileTransferDestination.openSink]. The target's parent directory
+ * must already exist. Commit fails rather than silently weakening durability if Android cannot atomically replace the
  * target or cannot fsync its parent directory. The standard receive path also
  * retains 64 MiB of usable space after the advertised file size fits; use the
  * overload to choose a different headroom.
+ *
+ * Staging is a randomly named `.p2pkit-*.part` sibling of [target], on the same
+ * filesystem for atomic publication. Before opening it for payload writes,
+ * Android must accept owner-only read/write permissions (`0600`) or opening
+ * fails. Choose a trusted, application-controlled directory whose filesystem
+ * enforces those permissions, such as internal app storage. Neither owner-only
+ * permissions nor a hidden name prevents same-user tools, indexers, backup
+ * agents, or cloud-sync clients from reading unverified partial content. Do
+ * not use a watched/synced directory when that exposure is unwanted. A process
+ * crash after opening can leave staging content for the application to
+ * reconcile; the SDK does not sweep files based only on their names.
  */
 public fun durableFileDestination(target: File): FileTransferDestination =
     durableFileDestination(target, DEFAULT_DURABLE_DESTINATION_MINIMUM_FREE_SPACE_BYTES)
@@ -28,7 +41,8 @@ public fun durableFileDestination(target: File): FileTransferDestination =
  *
  * The standard receive path checks this before opening the staging sink. It
  * is a preflight rather than a reservation: other processes can still change
- * filesystem capacity while a transfer is running.
+ * filesystem capacity while a transfer is running. The sibling-staging and
+ * directory-access constraints of [durableFileDestination] also apply.
  */
 public fun durableFileDestination(
     target: File,
@@ -43,7 +57,13 @@ internal class AndroidDurableFileDestination(
     private val closeSink: (RawSink) -> Unit = { it.close() },
     private val deleteTemp: (File) -> Boolean = { it.delete() },
     private val usableSpace: (File) -> Long = { it.usableSpace },
-    private val minimumFreeSpaceBytes: Long = DEFAULT_DURABLE_DESTINATION_MINIMUM_FREE_SPACE_BYTES
+    private val minimumFreeSpaceBytes: Long = DEFAULT_DURABLE_DESTINATION_MINIMUM_FREE_SPACE_BYTES,
+    private val openStream: (File) -> FileOutputStream = { FileOutputStream(it, false) },
+    private val chmod: (String, Int) -> Unit = Os::chmod,
+    private val rename: (String, String) -> Unit = Os::rename,
+    private val openDirectory: (String) -> FileDescriptor = { Os.open(it, OsConstants.O_RDONLY, 0) },
+    private val fsyncDirectory: (FileDescriptor) -> Unit = Os::fsync,
+    private val closeDirectory: (FileDescriptor) -> Unit = Os::close
 ) : FileTransferDestination, StorageCapacityCheckingFileTransferDestination {
     private val target = target.absoluteFile
     private val parent = checkNotNull(this.target.parentFile) { "Target must have a parent directory" }
@@ -53,7 +73,7 @@ internal class AndroidDurableFileDestination(
         require(minimumFreeSpaceBytes >= 0) { "minimumFreeSpaceBytes must be non-negative" }
     }
 
-    private val temp = File.createTempFile(tempPrefix(this.target.name), ".part", parent)
+    private var temp: File? = null
     private var stream: FileOutputStream? = null
     private var sink: RawSink? = null
     private var state = DestinationState.NEW
@@ -74,10 +94,22 @@ internal class AndroidDurableFileDestination(
 
     override fun openSink(): RawSink = synchronized(this) {
         check(state == DestinationState.NEW) { "Destination was already opened or terminal" }
-        val opened = FileOutputStream(temp, false)
-        stream = opened
-        state = DestinationState.OPEN
-        opened.asSink().also { sink = it }
+        try {
+            val staging = File.createTempFile(tempPrefix(target.name), ".part", parent)
+            temp = staging
+            chmod(staging.absolutePath, 0x180) // 0600: owner read/write, no group/other access.
+            val opened = openStream(staging)
+            stream = opened
+            opened.asSink().also {
+                sink = it
+                state = DestinationState.OPEN
+            }
+        } catch (failure: Throwable) {
+            // A failed one-shot open still owns any staging file/stream it acquired.
+            // The caller or the dispatcher's acceptance cleanup must abort it.
+            state = DestinationState.ABORTING
+            throw failure
+        }
     }
 
     override suspend fun commit() {
@@ -94,13 +126,14 @@ internal class AndroidDurableFileDestination(
                 }
                 DestinationState.OPEN -> Unit
             }
+            val temp = checkNotNull(temp) { "Destination has no staging file" }
             val opened = checkNotNull(stream) { "Destination was not opened" }
             sink?.flush()
             opened.fd.sync()
             sink?.close()
             sink = null
             stream = null
-            Os.rename(temp.absolutePath, target.absolutePath)
+            rename(temp.absolutePath, target.absolutePath)
             state = DestinationState.PUBLISHED
             syncParentDirectory()
             state = DestinationState.COMMITTED
@@ -117,16 +150,18 @@ internal class AndroidDurableFileDestination(
             state = DestinationState.ABORTING
 
             val failures = mutableListOf<AbortFailure>()
-            sink?.let { openedSink ->
+            val openedSink = sink
+            if (openedSink != null || stream != null) {
                 try {
-                    closeSink(openedSink)
+                    if (openedSink != null) closeSink(openedSink) else stream?.close()
                     sink = null
                     stream = null
                 } catch (failure: Throwable) {
                     failures += AbortFailure("staging sink close", failure)
                 }
             }
-            if (temp.exists()) {
+            val temp = temp
+            if (temp != null && temp.exists()) {
                 try {
                     deleteTemp(temp)
                     if (temp.exists()) {
@@ -140,7 +175,8 @@ internal class AndroidDurableFileDestination(
                 }
             }
 
-            if (sink == null && !temp.exists() && failures.isEmpty()) {
+            if (sink == null && stream == null && temp?.exists() != true && failures.isEmpty()) {
+                this.temp = null
                 state = DestinationState.ABORTED
                 return
             }
@@ -149,15 +185,21 @@ internal class AndroidDurableFileDestination(
     }
 
     private fun syncParentDirectory() {
-        val descriptor = Os.open(
-            parent.absolutePath,
-            OsConstants.O_RDONLY,
-            0
-        )
+        val descriptor = openDirectory(parent.absolutePath)
+        var primary: Throwable? = null
         try {
-            Os.fsync(descriptor)
+            fsyncDirectory(descriptor)
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
         } finally {
-            Os.close(descriptor)
+            try {
+                closeDirectory(descriptor)
+            } catch (closeFailure: Throwable) {
+                val failure = primary
+                if (failure == null) throw closeFailure
+                if (closeFailure !== failure) failure.addSuppressed(closeFailure)
+            }
         }
     }
 }
