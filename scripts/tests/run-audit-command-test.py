@@ -820,7 +820,7 @@ class DarwinObservationTests(unittest.TestCase):
         self.scope.observation_reconciliations = []
         self.scope.self_port, self.scope.argmax = 7, 4096
         self.scope.system, self.scope.proc = mock.Mock(), mock.Mock()
-        self.identity = {"pid": 43210, "uid": 1000, "parentPid": 1, "group": 43210,
+        self.identity = {"pid": 43210, "uid": 1000, "realUid": 1000, "parentPid": 1, "group": 43210,
                          "uniqueId": 99, "parentUniqueId": 1, "pidVersion": 3,
                          "startSeconds": 123, "startMicroseconds": 456,
                          "status": 2, "flags": 4, "live": True}
@@ -1033,6 +1033,37 @@ class DarwinObservationTests(unittest.TestCase):
                 mock.patch.object(self.scope, "_ours", side_effect=ours), \
                 self.assertRaisesRegex(processes.OwnershipError, "bound identity access denied"):
             self.scope.discover()
+        self.scope.system.task_name_for_pid.assert_not_called()
+
+    def test_consumer_identity_observes_darwin_lifetime_without_signaling_or_reacquiring(self):
+        fixture = PosixNativeTests()
+        fixture.scope = self.scope
+        entry = {"identity": self.identity, "handle": processes.AuditToken()}
+        # XNU rejects signal zero before inspecting the token. This API cannot
+        # implement Linux's pidfd liveness probe, even for a valid live token.
+        self.scope.proc.proc_signal_with_audittoken.return_value = errno.EINVAL
+        self.assertTrue(fixture.consumer_identity_live(entry))
+        for terminal in (None, {**self.identity, "status": 5, "live": False},
+                         {**self.identity, "uniqueId": 100}):
+            with self.subTest(terminal=terminal):
+                self.current = terminal
+                self.assertFalse(fixture.consumer_identity_live(entry))
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+        self.scope.system.task_name_for_pid.assert_not_called()
+
+    def test_consumer_identity_refuses_changed_darwin_epoch_credentials_or_unknown_liveness(self):
+        fixture = PosixNativeTests()
+        fixture.scope = self.scope
+        entry = {"identity": self.identity, "handle": processes.AuditToken()}
+        for field in ("pidVersion", "uid", "realUid"):
+            with self.subTest(field=field):
+                self.current = {**self.identity, field: self.identity[field] + 1}
+                with self.assertRaisesRegex(runner.AuditError, "recorded credentials and exec version"):
+                    fixture.consumer_identity_live(entry)
+        self.scope._identity.side_effect = processes.DarwinObservationError("bound identity access denied")
+        with self.clock(), self.assertRaisesRegex(processes.OwnershipError, "unresolved"):
+            fixture.consumer_identity_live(entry)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
         self.scope.system.task_name_for_pid.assert_not_called()
 
 
@@ -1835,6 +1866,17 @@ class PosixNativeTests(ExecutorFixtureTests):
 
     def consumer_identity_live(self, entry):
         previous = entry["identity"]
+        if isinstance(self.scope, processes.DarwinScope):
+            # proc_signal_with_audittoken does not support signal zero. Observe
+            # the original lifetime instead; actual termination still uses the
+            # stored opaque token, never a PID or newly acquired capability.
+            try:
+                current = self.scope._observe(previous, "consumer fixture identity", lambda identity: identity)
+            except ProcessLookupError:
+                return False
+            runner.require(all(current[field] == previous[field] for field in ("uid", "realUid", "pidVersion")),
+                           "Live consumer identity differs from its recorded credentials and exec version")
+            return True
         current = self.scope._identity(previous["pid"])
         same = current is not None and self.scope._key(current) == self.scope._key(previous)
         try:
@@ -1842,7 +1884,7 @@ class PosixNativeTests(ExecutorFixtureTests):
         except ProcessLookupError:
             # The process may have exited between our identity read and token
             # probe. Reinspect before calling a still-live same-key identity an
-            # expired-token fault (e.g. an unexpected Darwin exec-version change).
+            # expired-token fault.
             current = self.scope._identity(previous["pid"])
             same = current is not None and self.scope._key(current) == self.scope._key(previous)
             runner.require(not (same and current["live"]),
@@ -1967,6 +2009,9 @@ class PosixNativeTests(ExecutorFixtureTests):
                 self.assertEqual(self.scope._key(current), self.scope._key(identity))
                 self.assertEqual(current["parentPid"], identity["parentPid"])
                 self.assertEqual(current["uid"], os.getuid())
+                if isinstance(self.scope, processes.DarwinScope):
+                    self.assertEqual(current["pidVersion"], identity["pidVersion"],
+                                     "Consumer exec version changed while acquiring its recorded token")
                 self.assertTrue(self.consumer_identity_live(entry))
             self.consumer_obligation_event(obligation, "identity-binding", allChainCapabilitiesAcquired=True,
                 signalAuthority=self.scope.name,
