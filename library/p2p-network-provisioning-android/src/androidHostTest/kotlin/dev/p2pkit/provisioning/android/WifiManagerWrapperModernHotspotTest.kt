@@ -23,7 +23,10 @@ class AdapterModernReservationShadow : AdapterReservationShadow() {
     lateinit var softAp: SoftApConfiguration
 
     @Implementation(minSdk = 30)
-    protected fun getSoftApConfiguration(): SoftApConfiguration = softAp
+    protected fun getSoftApConfiguration(): SoftApConfiguration {
+        credentialFailure?.let { throw it }
+        return softAp
+    }
 }
 
 @RunWith(RobolectricTestRunner::class)

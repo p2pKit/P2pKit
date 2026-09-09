@@ -37,6 +37,13 @@ internal interface WifiManagerWrapper {
     fun requiredRuntimePermission(): P2pPermission
 
     /**
+     * Post-failure diagnostic only; never an atomic authorization check.
+     * Unknown/failed probes must not turn an arbitrary SecurityException into
+     * a runtime-permission failure. Platform calls remain authoritative.
+     */
+    fun permissionState(): ProvisioningPermissionState = ProvisioningPermissionState()
+
+    /**
      * Start a LocalOnlyHotspot. Suspends until the system reports either
      * `onStarted` or `onFailed`. SecurityException (permission missing) is
      * propagated to the caller, not wrapped here.
@@ -84,11 +91,11 @@ internal sealed class HotspotStartResult {
 internal interface HotspotHandle {
 
     /**
-     * Current SSID + passphrase if the OS exposes them. `null` if the
-     * runtime permission has been stripped (Android redacts the
-     * `SoftApConfiguration` fields when the caller no longer holds the
-     * required permission), or on very old API levels where the
-     * `WifiConfiguration` shape returned empty fields.
+     * Current SSID + passphrase if the OS exposes them. A returned `null`
+     * means no usable credential record was exposed; it does not establish
+     * whether permissions changed or the OS redacted the record. A thrown
+     * failure (including SecurityException) must remain distinguishable from
+     * `null`, and cancellation must propagate.
      */
     fun getCredentials(): WifiCredentials?
 

@@ -98,8 +98,9 @@ class AndroidNetworkProvisioningManagerTest {
     fun locationModeOffSecurityExceptionMapsToLocationPermissionMissing() = runBlocking<Unit> {
         val wifi = FakeWifiManagerWrapper(
             behavior = FakeWifiManagerWrapper.Behavior.ThrowSecurityWithMessage(
-                message = "Location mode is not enabled."
-            )
+                message = "位置情報モードが有効になっていません"
+            ),
+            permissionState = ProvisioningPermissionState(runtimePermissionGranted = true, locationEnabled = false)
         )
         val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
         try {
@@ -934,8 +935,9 @@ class AndroidNetworkProvisioningManagerTest {
     fun joinLocationModeOffMapsToLocationPermissionMissing() = runBlocking<Unit> {
         val wifi = FakeWifiManagerWrapper(
             behavior = FakeWifiManagerWrapper.Behavior.JoinThrowsSecurity(
-                message = "Location mode is not enabled."
-            )
+                message = "位置情報モードが有効になっていません"
+            ),
+            permissionState = ProvisioningPermissionState(runtimePermissionGranted = true, locationEnabled = false)
         )
         val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
         try {
@@ -1657,7 +1659,9 @@ private class FakeWifiManagerWrapper(
     private val behavior: Behavior,
     pendingCleanupFailures: Int = 0,
     private val localOnlyHotspotSupported: Boolean = true,
-    private val specifierJoinSupported: Boolean = true
+    private val specifierJoinSupported: Boolean = true,
+    private val permissionState: ProvisioningPermissionState =
+        ProvisioningPermissionState(runtimePermissionGranted = false)
 ) : WifiManagerWrapper {
 
     var lastHandle: FakeHotspotHandle? = null
@@ -1720,6 +1724,8 @@ private class FakeWifiManagerWrapper(
     override val isSpecifierJoinSupported: Boolean = specifierJoinSupported
     override fun requiredRuntimePermission() =
         dev.p2pkit.core.permission.P2pPermission.NearbyWifiDevices
+
+    override fun permissionState(): ProvisioningPermissionState = permissionState
 
     override suspend fun startLocalOnlyHotspot(): HotspotStartResult {
         hotspotStartCalls += 1

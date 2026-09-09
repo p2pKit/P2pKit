@@ -179,9 +179,17 @@ public class AndroidNetworkProvisioningManager internal constructor(
         val existing = handle
         if (existing != null) {
             ctx.logger.debug("provisioning: startLocalNetwork called while already running")
-            val result = buildStartedResult(
-                runCatching { existing.getCredentials() }.getOrNull(), existing
-            )
+            val read = readHotspotCredentials(existing)
+            val failure = read.exceptionOrNull()
+            // Inspection of an already-published hotspot does not transfer or
+            // destroy its ownership. stop/close still releases the reservation.
+            val result = if (failure != null) {
+                val error = mapStartException(failure)
+                commitIfOpen { _events.tryEmit(NetworkProvisioningEvent.Failed(error)) }
+                LocalNetworkResult.Failed(error)
+            } else {
+                buildStartedResult(read.getOrNull(), existing)
+            }
             return@withLock if (isClosingOrClosed()) closedLocalNetworkResult() else result
         }
         retryWrapperOwnedCleanup("starting a hotspot")?.let { error ->
@@ -267,8 +275,14 @@ public class AndroidNetworkProvisioningManager internal constructor(
                         return@withLock closedLocalNetworkResult()
                     }
                     installed = true
-                    val creds = runCatching { h.getCredentials() }.getOrNull()
-                    val result = buildStartedResult(creds, h)
+                    val read = readHotspotCredentials(h)
+                    val creds = read.getOrNull()
+                    val credentialFailure = read.exceptionOrNull()
+                    val result = if (credentialFailure == null) {
+                        buildStartedResult(creds, h)
+                    } else {
+                        LocalNetworkResult.Failed(mapStartException(credentialFailure))
+                    }
                     if (result is LocalNetworkResult.Failed) {
                         cleanupClaimed = claimHotspot(h)
                         val cleanupFailure = if (cleanupClaimed) {
@@ -683,8 +697,8 @@ public class AndroidNetworkProvisioningManager internal constructor(
         return if (credentials != null && credentials.ssid != null) {
             LocalNetworkResult.Started(credentials = credentials, manualConnectionInfo = info)
         } else if (info != null) {
-            // OS redacted SSID/passphrase but the hotspot is up; surface the manual info
-            // so the host can still share the connection out-of-band.
+            // No usable credentials were exposed, but the hotspot is up.
+            // This returned-null path does not swallow a thrown permission failure.
             LocalNetworkResult.StartedWithoutCredentials(manualConnectionInfo = info)
         } else {
             // No creds AND no manual info — the only honest answer is Failed.
@@ -1002,31 +1016,32 @@ public class AndroidNetworkProvisioningManager internal constructor(
         }
     }
 
+    private fun readHotspotCredentials(handle: HotspotHandle): Result<WifiCredentials?> = try {
+        Result.success(handle.getCredentials())
+    } catch (failure: CancellationException) {
+        throw failure
+    } catch (failure: Exception) {
+        Result.failure(failure)
+    }
+
     private fun mapStartException(e: Throwable): NetworkProvisioningError {
-        if (e is SecurityException || e.cause is SecurityException) {
-            val msg = e.message.orEmpty()
-            // Some OEMs (Huawei, older Samsung, MIUI) reject startLocalOnlyHotspot
-            // with a SecurityException carrying "Location mode is not enabled"
-            // even when NEARBY_WIFI_DEVICES is granted. This is the device-wide
-            // Location toggle, not the per-app runtime permission — only the
-            // user can flip it (Settings → Location → Use location). Surface
-            // it as Location-permission-missing so callers can show the right
-            // remediation (open Location settings, not request a permission).
-            if (msg.contains("Location mode", ignoreCase = true) ||
-                msg.contains("location is disabled", ignoreCase = true) ||
-                msg.contains("location services", ignoreCase = true)
-            ) {
-                return NetworkProvisioningError.PermissionMissingForProvisioning(
-                    permissions = listOf(P2pPermission.Location)
-                )
-            }
-            return NetworkProvisioningError.PermissionMissingForProvisioning(
-                // targetSdk-aware: NEARBY_WIFI_DEVICES is ungrantable for
-                // targetSdk<=32 apps even on Android 13+ (AUDIT-2026-06 fix).
-                permissions = listOf(wifi.requiredRuntimePermission())
-            )
+        if (!hasProvisioningSecurityCause(e)) return NetworkProvisioningError.PlatformError(e)
+        // Inspect current prerequisites only after an actual platform denial.
+        // OEM message text is not evidence: a normal/install-time permission
+        // or another SecurityException must not trigger an unrelated prompt.
+        val observed = try {
+            wifi.permissionState()
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            return NetworkProvisioningError.PlatformError(e)
         }
-        return NetworkProvisioningError.PlatformError(e)
+        val missing = when {
+            observed.runtimePermissionGranted == false -> wifi.requiredRuntimePermission()
+            observed.runtimePermissionGranted == true && observed.locationEnabled == false -> P2pPermission.Location
+            else -> return NetworkProvisioningError.PlatformError(e)
+        }
+        return NetworkProvisioningError.PermissionMissingForProvisioning(listOf(missing))
     }
 
     /**

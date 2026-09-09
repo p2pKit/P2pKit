@@ -1,6 +1,9 @@
 package dev.p2pkit.provisioning.android
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -11,6 +14,7 @@ import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import dev.p2pkit.core.permission.P2pPermission
 import dev.p2pkit.core.provisioning.NetworkState
 import dev.p2pkit.core.provisioning.WifiCredentials
@@ -72,6 +76,24 @@ internal class WifiManagerWrapperImpl(
             deviceSdk = Build.VERSION.SDK_INT,
             targetSdk = targetSdk
         )
+    }
+
+    @Suppress("DEPRECATION") // LOCATION_MODE is the authoritative pre-28 setting.
+    override fun permissionState(): ProvisioningPermissionState {
+        val context = applicationContext.applicationContext
+        val permission = when (requiredRuntimePermission()) {
+            P2pPermission.NearbyWifiDevices -> Manifest.permission.NEARBY_WIFI_DEVICES
+            else -> Manifest.permission.ACCESS_FINE_LOCATION
+        }
+        val granted = context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+        if (!granted) return ProvisioningPermissionState(runtimePermissionGranted = false)
+        val locationEnabled = if (Build.VERSION.SDK_INT >= 28) {
+            (context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager)?.isLocationEnabled
+        } else {
+            Settings.Secure.getInt(context.contentResolver, Settings.Secure.LOCATION_MODE) !=
+                Settings.Secure.LOCATION_MODE_OFF
+        }
+        return ProvisioningPermissionState(runtimePermissionGranted = true, locationEnabled = locationEnabled)
     }
 
     @Suppress("MissingPermission") // Permission handling is the caller's responsibility.

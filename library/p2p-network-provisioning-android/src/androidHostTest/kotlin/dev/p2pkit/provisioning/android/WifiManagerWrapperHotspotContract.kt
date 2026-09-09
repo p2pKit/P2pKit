@@ -110,6 +110,17 @@ abstract class WifiManagerWrapperHotspotContract {
     }
 
     @Test
+    fun credentialSecurityFailureEscapesInsteadOfBecomingNull() = runTest {
+        val reservation = reservation()
+        val handle = start(reservation)
+        Shadow.extract<AdapterReservationShadow>(reservation).credentialFailure =
+            SecurityException("synthetic revoked credential access")
+        assertFailsWith<SecurityException> { handle.getCredentials() }
+        handle.close()
+        assertEquals(1, Shadow.extract<AdapterReservationShadow>(reservation).closeCalls)
+    }
+
+    @Test
     fun failedLateReservationCloseIsRetainedAndRetried() = runTest {
         val pending = async(start = CoroutineStart.UNDISPATCHED) { fixture.wrapper.startLocalOnlyHotspot() }
         pending.cancelAndJoin()

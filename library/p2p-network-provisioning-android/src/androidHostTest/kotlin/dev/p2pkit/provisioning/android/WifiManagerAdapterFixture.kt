@@ -46,11 +46,15 @@ class AdapterWifiManagerShadow : ShadowWifiManager() {
 @Implements(WifiManager.LocalOnlyHotspotReservation::class, minSdk = 26)
 open class AdapterReservationShadow {
     var configuration: WifiConfiguration? = null
+    var credentialFailure: Throwable? = null
     var closeCalls = 0
     var remainingCloseFailures = 0
 
     @Implementation
-    protected fun getWifiConfiguration(): WifiConfiguration? = configuration
+    protected fun getWifiConfiguration(): WifiConfiguration? {
+        credentialFailure?.let { throw it }
+        return configuration
+    }
 
     @Implementation
     protected fun close() {
