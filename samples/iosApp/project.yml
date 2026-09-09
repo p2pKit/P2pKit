@@ -23,6 +23,7 @@ targets:
       - ContentView.swift
       - LocalPairingView.swift
       - IosLanDiagnosticsLease.swift
+      - SampleRunLifecycle.swift
       - SampleConsole.swift
       - SampleP2pError.swift
       - SampleBackupPolicy.swift

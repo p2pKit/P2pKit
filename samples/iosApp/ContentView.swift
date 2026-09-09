@@ -88,6 +88,7 @@ func claimUniqueDestination(
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var diagnostics = IOSTestDiagnosticStore()
+    @StateObject private var runLifecycle = SampleRunLifecycle()
 
     // MARK: - Public state shown in the UI
 
@@ -122,10 +123,7 @@ struct ContentView: View {
     @State private var kit: P2pKit?
     @State private var pollTask: Task<Void, Never>?
     @State private var incomingSessionsTask: Task<Void, Never>?
-    @State private var debugLogTask: Task<Void, Never>?
     @State private var permissionCheckTask: Task<Void, Never>?
-    @State private var frameTraceLease: FrameTraceLease?
-    @State private var lanDiagnosticsLease: IosLanDiagnosticsLease?
 
     // AUDIT-2026-06 (A-G9-samples-desktop-ios-09): per-session and
     // per-transfer collector Tasks are tracked by id so stop() and
@@ -141,8 +139,8 @@ struct ContentView: View {
     // MARK: - In-flight guards (prevent rapid double-taps from spawning
     // parallel work).
 
-    @State private var isStarting: Bool = false
-    @State private var isStopping: Bool = false
+    private var isStarting: Bool { runLifecycle.phase == .starting }
+    private var isStopping: Bool { runLifecycle.phase == .stopping }
     @State private var isManualDialing: Bool = false
     @State private var pendingConnectPeerIds: Set<String> = []
     @State private var sendingFileSessionIds: Set<String> = []
@@ -489,7 +487,9 @@ struct ContentView: View {
                 .disabled(isStarting || trimmedDeviceName.isEmpty)
             } else {
                 Button(isStopping ? "Stopping…" : "Stop") {
-                    Task { await stop() }
+                    if let run = runLifecycle.current {
+                        Task { await stop(run: run) }
+                    }
                 }
                 .accessibilityIdentifier("stop-kit")
                 .buttonStyle(.borderedProminent)
@@ -528,7 +528,7 @@ struct ContentView: View {
                     pending: pending,
                     sessionForPeer: sessionForPeer
                 )) {
-                    Task { await connect(row) }
+                    runLifecycle.launchAction { run in await connect(row, run: run) }
                 }
                 .buttonStyle(.bordered)
                 .disabled(alreadyConnected || inFlight || pending || kit == nil || isStopping)
@@ -563,7 +563,7 @@ struct ContentView: View {
             .disabled(isManualDialing)
             .focused($focusedField, equals: .manualPairingQr)
         Button(isManualDialing ? "Dialing…" : "Dial manual peer") {
-            Task { await dialManual() }
+            runLifecycle.launchAction { run in await dialManual(run: run) }
         }
         .buttonStyle(.bordered)
         .disabled(
@@ -596,7 +596,9 @@ struct ContentView: View {
                     Menu(sendingFileSessionIds.contains(row.id) ? "Sending…" : "Send test file") {
                         ForEach(TestFilePreset.allCases) { preset in
                             Button(preset.rawValue) {
-                                Task { await sendTestFile(to: row, preset: preset) }
+                                runLifecycle.launchAction { run in
+                                    await sendTestFile(to: row, preset: preset, run: run)
+                                }
                             }
                         }
                     }
@@ -606,7 +608,7 @@ struct ContentView: View {
                     // control size — .small put the tap target well under
                     // the 44 pt guideline.
                     Button("Close") {
-                        Task { await closeSession(row) }
+                        runLifecycle.launchAction { run in await closeSession(row, run: run) }
                     }
                     .buttonStyle(.bordered)
                     .disabled(row.isTerminal || isStopping)
@@ -629,13 +631,15 @@ struct ContentView: View {
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
                     .focused($focusedField, equals: .draft)
-                Button("Send all (\(connectedCount))") { Task { await sendAll() } }
-                    .buttonStyle(.bordered)
-                    .disabled(
-                        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                        connectedCount == 0 ||
-                        isStopping
-                    )
+                Button("Send all (\(connectedCount))") {
+                    runLifecycle.launchAction { run in await sendAll(run: run) }
+                }
+                .buttonStyle(.bordered)
+                .disabled(
+                    draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                    connectedCount == 0 ||
+                    isStopping
+                )
             }
         }
     }
@@ -662,10 +666,14 @@ struct ContentView: View {
                             .foregroundColor(.secondary)
                     }
                     Spacer()
-                    Button("Accept") { Task { await acceptIncomingOffer(pending) } }
-                        .buttonStyle(.borderedProminent)
-                    Button("Reject") { Task { await rejectIncomingOffer(pending) } }
-                        .buttonStyle(.bordered)
+                    Button("Accept") {
+                        runLifecycle.launchAction { run in await acceptIncomingOffer(pending, run: run) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button("Reject") {
+                        runLifecycle.launchAction { run in await rejectIncomingOffer(pending, run: run) }
+                    }
+                    .buttonStyle(.bordered)
                 }
             }
         }
@@ -681,7 +689,7 @@ struct ContentView: View {
                     Spacer()
                     if !t.isTerminal {
                         Button("Cancel") {
-                            Task { await cancelTransfer(t) }
+                            runLifecycle.launchAction { run in await cancelTransfer(t, run: run) }
                         }
                         .buttonStyle(.bordered)
                     }
@@ -815,13 +823,12 @@ struct ContentView: View {
             return
         }
 
-        isStarting = true
+        guard let run = runLifecycle.begin() else { return }
         var startupCompleted = false
         defer {
-            isStarting = false
             // Release even when create/start or the SDK's rollback fails.
             // Retaining a kit for retry does not require global tracing.
-            if !startupCompleted { releaseSampleTracing() }
+            if !startupCompleted { run.releaseTracing() }
         }
         errorBanner = nil
         status = "Starting..."
@@ -841,26 +848,28 @@ struct ContentView: View {
         probeEpochSeen = false
         diag("ui", "Start: cleared local state, building kit")
 
-        releaseSampleTracing()
         // The lease mirrors only in Debug and restores settings on teardown.
         // Bounded in-app replay remains available in both configurations.
-        lanDiagnosticsLease = IosLanDiagnosticsLease.acquire()
+        let lanDiagnosticsLease = IosLanDiagnosticsLease.acquire()
 
         // Decoded frame-type trace (Issue #2/#3). Each
         // TX/RX frame line (PING/PONG/DATA/FILE_*) enters the in-app timeline
         // and recorder. The LAN lease mirrors that timeline only in Debug.
-        frameTraceLease = FrameTrace.shared.installSink(enabled: true) { line in
-            IosLanDebug.shared.log(tag: "frame", message: line)
+        let frameTraceLease = FrameTrace.shared.installSink(enabled: true) { line in
             Task { @MainActor in
+                guard self.runLifecycle.ownsTracing(run) else { return }
+                IosLanDebug.shared.log(tag: "frame", message: line)
                 self.diagnostics.recordFrame(line)
             }
         }
 
         // Subscribe to IosLanDebug BEFORE startAdvertising/Discovery so
         // we capture every browser-state and result-change from t=0.
-        self.debugLogTask = Task {
+        let debugLogTask = Task {
+            guard self.runLifecycle.ownsTracing(run), !Task.isCancelled else { return }
             let collector = StringCollector { line in
                 await MainActor.run {
+                    guard self.runLifecycle.ownsTracing(run) else { return }
                     self.appendLog(line)
                     self.diagnostics.recordTransport(line)
                     if !self.probeEpochSeen {
@@ -886,6 +895,11 @@ struct ContentView: View {
                 }
             }
             _ = try? await IosLanDebug.shared.events.collect(collector: collector)
+        }
+        run.ownTracing {
+            frameTraceLease.release()
+            debugLogTask.cancel()
+            lanDiagnosticsLease.release()
         }
         diag("ui", probeEpoch)
 
@@ -917,6 +931,7 @@ struct ContentView: View {
                 }
             }
         } catch {
+            defer { runLifecycle.abandonUnbuilt(run) }
             if Task.isCancelled || error is CancellationError { return }
             let detail = SampleP2pError.userMessage(error)
             status = "Create failed: \(detail)"
@@ -935,102 +950,130 @@ struct ContentView: View {
         ))
         diag("kit", "P2pKit constructed (peerId=\(SampleConsole.identifier(localPeerId)))")
 
-        do {
-            diag("kit", "calling startAdvertising")
-            try await built.startAdvertising()
-            diag("kit", "startAdvertising returned OK")
-            diag("kit", "calling startDiscovery")
-            try await built.startDiscovery()
-            diagnostics.record(TestDiagnosticRecord(
-                category: "discovery",
-                eventName: TestDiagnosticEventName.discoveryStarted,
-                currentState: "active"
-            ))
-            diag("kit", "startDiscovery returned OK")
-            status = "Running"
-        } catch {
-            diag("kit", "start FAILED: \(SampleConsole.failure(error))")
-            status = "Start failed: \(error.localizedDescription)"
-            errorBanner = "Failed to start: \(error.localizedDescription)"
-            do {
-                try await built.stop()
-                diagnostics.setLocalPeerId(nil)
-                self.kit = nil
-            } catch let cleanupError {
-                // Keep the only owner and the Stop affordance. Dropping this
-                // reference would allow a second kit to overlap live SDK
-                // resources after a partial-start cleanup failure.
-                status = "Start failed — cleanup pending"
-                errorBanner = "Start failed and cleanup did not complete: " +
-                    cleanupError.localizedDescription + ". Tap Stop to retry."
-                diag("kit", "startup cleanup FAILED; ownership retained: \(SampleConsole.failure(cleanupError))")
-            }
-            return
-        }
-
-        // Read back the local TCP port for the manual-connect helper UI.
-        do {
-            if let info = try await built.networkProvisioning.getManualConnectionInfo() {
-                self.localTcpPort = Int(info.port)
-                diag("kit", "manual connection info: port=\(info.port)")
-            }
-        } catch {
-            diag("kit", "getManualConnectionInfo failed: \(SampleConsole.failure(error))")
-        }
-
-        self.incomingSessionsTask = Task { [weak built] in
-            let collector = SessionCollector { session in
-                IosLanDebug.shared.log(
-                    tag: "ui",
-                    message: "incomingSessions emitted: peer=\(SampleConsole.identifier("\(session.peer.id)")) " +
-                        "id=\(SampleConsole.identifier(session.id))"
-                )
-                self.attachCollectors(to: session, label: "incoming")
-            }
-            _ = try? await built?.incomingSessions.collect(collector: collector)
-        }
-
-        self.pollTask = Task { @MainActor in
-            var tick = 0
-            // AUDIT-2026-06 (A-G9-samples-desktop-ios-08): also check
-            // Task.isCancelled — after stop() cancels this task, Task.sleep
-            // throws immediately, and a kit!=nil-only condition busy-spun
-            // refreshPeersAndSessions on the main actor for the whole
-            // duration of kit.stop().
-            while !Task.isCancelled && self.kit != nil {
-                refreshPeersAndSessions(from: built)
-                // AUDIT-2026-06 (A-G9-samples-desktop-ios-10): the iOS data
-                // transport rebinds its NWListener on network changes and the
-                // port can rotate — re-read the manual-connect info on a slow
-                // cadence instead of only once at start.
-                if tick % 5 == 0 {
-                    if let info = try? await built.networkProvisioning.getManualConnectionInfo() {
-                        let port = Int(info.port)
-                        if port > 0 && port != self.localTcpPort {
-                            diag("kit", "localTcpPort changed \(self.localTcpPort) -> \(port) (listener rebind)")
-                            self.localTcpPort = port
-                        }
+        let outcome = await runLifecycle.completeStartup(
+            run,
+            advertise: {
+                diag("kit", "calling startAdvertising")
+                try await built.startAdvertising()
+            },
+            didAdvertise: { diag("kit", "startAdvertising returned OK") },
+            discover: {
+                diag("kit", "calling startDiscovery")
+                try await built.startDiscovery()
+            },
+            didDiscover: {
+                diagnostics.record(TestDiagnosticRecord(
+                    category: "discovery",
+                    eventName: TestDiagnosticEventName.discoveryStarted,
+                    currentState: "active"
+                ))
+                diag("kit", "startDiscovery returned OK")
+                status = "Running"
+            },
+            manualInfo: { try await built.networkProvisioning.getManualConnectionInfo() },
+            didReadInfo: { result in
+                switch result {
+                case .success(let info):
+                    if let info {
+                        self.localTcpPort = Int(info.port)
+                        diag("kit", "manual connection info: port=\(info.port)")
                     }
+                case .failure(let error):
+                    diag("kit", "getManualConnectionInfo failed: \(SampleConsole.failure(error))")
                 }
-                tick += 1
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-            }
+            },
+            installObservers: { installRunObservers(for: built, run: run) }
+        )
+        switch outcome {
+        case .started:
+            startupCompleted = true
+        case .superseded:
+            // Stop owns the captured kit's teardown. Never clear a successor.
+            return
+        case .failed(let error):
+            // completeStartup itself is awaited: Stop may have won before this
+            // caller resumed, so fence failure publication and rollback too.
+            guard runLifecycle.withActiveRun(run, {
+                diag("kit", "start FAILED: \(SampleConsole.failure(error))")
+                status = "Start failed: \(error.localizedDescription)"
+                errorBanner = "Failed to start: \(error.localizedDescription)"
+            }) else { return }
+            // Even caller cancellation must reach real SDK rollback. Failure
+            // retains this run and its kit, so Stop can retry its cleanup.
+            await runLifecycle.stop(
+                run,
+                cancelObservers: { cancelRunObservers() },
+                operation: { try await built.stop() },
+                succeeded: { retireStoppedRun() },
+                failed: { cleanupError in
+                    status = "Start failed — cleanup pending"
+                    errorBanner = "Start failed and cleanup did not complete: " +
+                        cleanupError.localizedDescription + ". Tap Stop to retry."
+                    diag("kit", "startup cleanup FAILED; ownership retained: \(SampleConsole.failure(cleanupError))")
+                }
+            )
         }
-
-        // Permission-denial probe: if NWBrowser never reaches `.ready`
-        // within 6 s of starting, iOS is almost certainly refusing Local
-        // Network permission (or the user dismissed the dialog).
-        self.permissionCheckTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 6_000_000_000)
-            if self.kit != nil && !self.browserEverReady {
-                self.errorBanner = Self.localNetworkHint
-            }
-        }
-        startupCompleted = true
     }
 
     @MainActor
-    private func refreshPeersAndSessions(from kit: P2pKit) {
+    private func installRunObservers(for built: P2pKit, run: SampleRunLifecycle.Run) {
+        runLifecycle.withActiveRun(run) {
+            self.incomingSessionsTask = Task { [weak built] in
+                guard self.runLifecycle.acceptsWork(run), !Task.isCancelled else { return }
+                let collector = SessionCollector { session in
+                    self.runLifecycle.withActiveRun(run) {
+                        IosLanDebug.shared.log(
+                            tag: "ui",
+                            message: "incomingSessions emitted: peer=\(SampleConsole.identifier("\(session.peer.id)")) " +
+                                "id=\(SampleConsole.identifier(session.id))"
+                        )
+                        self.attachCollectors(to: session, label: "incoming", run: run)
+                    }
+                }
+                _ = try? await built?.incomingSessions.collect(collector: collector)
+            }
+
+            self.pollTask = Task { @MainActor in
+                var tick = 0
+                while !Task.isCancelled && self.runLifecycle.acceptsWork(run) {
+                    refreshPeersAndSessions(from: built, run: run)
+                    // The listener can rebind and change port during a run.
+                    if tick % 5 == 0 {
+                        let info = try? await built.networkProvisioning.getManualConnectionInfo()
+                        guard self.runLifecycle.acceptsWork(run), !Task.isCancelled else { break }
+                        if let info {
+                            let port = Int(info.port)
+                            if port > 0 && port != self.localTcpPort {
+                                diag("kit", "localTcpPort changed \(self.localTcpPort) -> \(port) (listener rebind)")
+                                self.localTcpPort = port
+                            }
+                        }
+                    }
+                    tick += 1
+                    do {
+                        try await Task.sleep(nanoseconds: 1_000_000_000)
+                    } catch { return }
+                }
+            }
+
+            // A cancelled permission probe must not turn Stop into a denial hint.
+            self.permissionCheckTask = Task { @MainActor in
+                await self.runLifecycle.afterDelay(
+                    run,
+                    delay: { try await Task.sleep(nanoseconds: 6_000_000_000) },
+                    perform: {
+                        if !self.browserEverReady {
+                            self.errorBanner = Self.localNetworkHint
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    @MainActor
+    private func refreshPeersAndSessions(from kit: P2pKit, run: SampleRunLifecycle.Run) {
+        guard runLifecycle.acceptsWork(run) else { return }
         let peerArray: [Peer] = IosSwiftHelpersKt.peersSnapshot(kit)
         let sessionArray: [P2pSession] = IosSwiftHelpersKt.sessionsSnapshot(kit)
 
@@ -1199,7 +1242,7 @@ struct ContentView: View {
         if sessionRows != self.sessions { self.sessions = sessionRows }
 
         for row in sessionRows where !collectedSessionIds.contains(row.id) {
-            attachCollectors(to: row.session, label: "tracked")
+            attachCollectors(to: row.session, label: "tracked", run: run)
         }
     }
 
@@ -1219,57 +1262,63 @@ struct ContentView: View {
     /// tracked in dictionaries keyed by session id and cancelled in stop()
     /// and on session removal.
     @MainActor
-    private func attachCollectors(to session: P2pSession, label: String) {
-        let sid = session.id
-        guard !collectedSessionIds.contains(sid) else { return }
-        collectedSessionIds.insert(sid)
-        appendMessage("[\(label)] session opened: \(session.peer.name)", kind: .info)
+    private func attachCollectors(to session: P2pSession, label: String, run: SampleRunLifecycle.Run) {
+        runLifecycle.withActiveRun(run) {
+            let sid = session.id
+            guard !collectedSessionIds.contains(sid) else { return }
+            collectedSessionIds.insert(sid)
+            appendMessage("[\(label)] session opened: \(session.peer.name)", kind: .info)
 
-        messageCollectorTasks[sid] = Task {
-            let collector = MessageCollector { msg in
-                await MainActor.run {
-                    if let text = msg as? P2pMessage.Text {
-                        self.diagnostics.record(TestDiagnosticRecord(
-                            peerId: "\(session.peer.id)",
-                            connectionId: self.diagnostics.connectionId(for: "\(session.peer.id)"),
-                            category: "metadata",
-                            eventName: TestDiagnosticEventName.metadataReceived,
-                            direction: .received,
-                            payloadSizeBytes: Int64(text.value.utf8.count),
-                            details: ["metadataKeys": text.metadata.keys.sorted().joined(separator: ",")]
-                        ))
-                        self.diagnostics.record(TestDiagnosticRecord(
-                            peerId: "\(session.peer.id)",
-                            connectionId: self.diagnostics.connectionId(for: "\(session.peer.id)"),
-                            category: "metadata",
-                            eventName: TestDiagnosticEventName.metadataValidated,
-                            direction: .received,
-                            outcome: .success
-                        ))
-                        self.diag("ui", SampleConsole.received(
-                            peerId: "\(session.peer.id)", isText: true, sizeBytes: Int64(text.value.utf8.count)
-                        ))
-                        self.appendMessage("\(session.peer.name) -> \(text.value)", kind: .received)
-                    } else if let bin = msg as? P2pMessage.Binary {
-                        self.appendMessage(
-                            "\(session.peer.name) -> <binary \(bin.bytes.size) bytes>",
-                            kind: .received
-                        )
-                    } else if msg != nil {
-                        self.appendMessage("\(session.peer.name) -> <other message>", kind: .received)
+            messageCollectorTasks[sid] = Task {
+                guard self.runLifecycle.acceptsWork(run), !Task.isCancelled else { return }
+                let collector = MessageCollector { msg in
+                    await MainActor.run {
+                        guard self.runLifecycle.acceptsWork(run) else { return }
+                        if let text = msg as? P2pMessage.Text {
+                            self.diagnostics.record(TestDiagnosticRecord(
+                                peerId: "\(session.peer.id)",
+                                connectionId: self.diagnostics.connectionId(for: "\(session.peer.id)"),
+                                category: "metadata",
+                                eventName: TestDiagnosticEventName.metadataReceived,
+                                direction: .received,
+                                payloadSizeBytes: Int64(text.value.utf8.count),
+                                details: ["metadataKeys": text.metadata.keys.sorted().joined(separator: ",")]
+                            ))
+                            self.diagnostics.record(TestDiagnosticRecord(
+                                peerId: "\(session.peer.id)",
+                                connectionId: self.diagnostics.connectionId(for: "\(session.peer.id)"),
+                                category: "metadata",
+                                eventName: TestDiagnosticEventName.metadataValidated,
+                                direction: .received,
+                                outcome: .success
+                            ))
+                            self.diag("ui", SampleConsole.received(
+                                peerId: "\(session.peer.id)", isText: true, sizeBytes: Int64(text.value.utf8.count)
+                            ))
+                            self.appendMessage("\(session.peer.name) -> \(text.value)", kind: .received)
+                        } else if let bin = msg as? P2pMessage.Binary {
+                            self.appendMessage(
+                                "\(session.peer.name) -> <binary \(bin.bytes.size) bytes>",
+                                kind: .received
+                            )
+                        } else if msg != nil {
+                            self.appendMessage("\(session.peer.name) -> <other message>", kind: .received)
+                        }
                     }
                 }
+                _ = try? await session.incoming.collect(collector: collector)
             }
-            _ = try? await session.incoming.collect(collector: collector)
-        }
 
-        fileCollectorTasks[sid] = Task {
-            let collector = FileOfferSnapshotCollector { offers in
-                await MainActor.run {
-                    self.reconcileIncomingOffers(offers, sessionId: sid)
+            fileCollectorTasks[sid] = Task {
+                guard self.runLifecycle.acceptsWork(run), !Task.isCancelled else { return }
+                let collector = FileOfferSnapshotCollector { offers in
+                    await MainActor.run {
+                        guard self.runLifecycle.acceptsWork(run) else { return }
+                        self.reconcileIncomingOffers(offers, sessionId: sid)
+                    }
                 }
+                _ = try? await session.pendingFileOffers.collect(collector: collector)
             }
-            _ = try? await session.pendingFileOffers.collect(collector: collector)
         }
     }
 
@@ -1311,7 +1360,8 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func rejectIncomingOffer(_ pending: PendingOffer) async {
+    private func rejectIncomingOffer(_ pending: PendingOffer, run: SampleRunLifecycle.Run) async {
+        guard runLifecycle.acceptsWork(run) else { return }
         guard let pending = SessionTransferEntries.take(pending.id, from: &pendingOffers) else { return }
         let offer = pending.offer
         let sessionId = pending.id.sessionId
@@ -1329,6 +1379,7 @@ struct ContentView: View {
         do {
             try await offer.reject(reason: "rejected by user")
         } catch {
+            guard runLifecycle.acceptsWork(run) else { return }
             diag("file", "reject failed for selected file: \(SampleConsole.failure(error))")
         }
     }
@@ -1348,7 +1399,8 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func acceptIncomingOffer(_ pending: PendingOffer) async {
+    private func acceptIncomingOffer(_ pending: PendingOffer, run: SampleRunLifecycle.Run) async {
+        guard runLifecycle.acceptsWork(run) else { return }
         guard let pending = SessionTransferEntries.take(pending.id, from: &pendingOffers) else { return }
         let offer = pending.offer
         let maxBytes: Int64 = 50 * 1024 * 1024
@@ -1360,18 +1412,26 @@ struct ContentView: View {
         let inbox = SampleBackupPolicy.inboxDirectory()
         do {
             try await SampleBackupPolicy.withPreparedDirectory(at: inbox) {
-                await acceptPreparedIncomingOffer(pending, in: inbox)
+                await acceptPreparedIncomingOffer(pending, in: inbox, run: run)
             }
         } catch is CancellationError {
             // Do not present cancellation as an ordinary storage rejection.
         } catch {
-            appendMessage("Cannot prepare inbox backup policy — rejecting selected file", kind: .error)
+            if runLifecycle.owns(run) {
+                appendMessage("Cannot prepare inbox backup policy — rejecting selected file", kind: .error)
+            }
             try? await offer.reject(reason: "receiver storage unavailable")
         }
     }
 
     @MainActor
-    private func acceptPreparedIncomingOffer(_ pending: PendingOffer, in inbox: URL) async {
+    private func acceptPreparedIncomingOffer(
+        _ pending: PendingOffer, in inbox: URL, run: SampleRunLifecycle.Run
+    ) async {
+        guard runLifecycle.acceptsWork(run) else {
+            try? await pending.offer.reject(reason: "sample stopped before consent")
+            return
+        }
         let offer = pending.offer
         let sessionId = pending.id.sessionId
         let fm = FileManager.default
@@ -1422,6 +1482,10 @@ struct ContentView: View {
         ))
         do {
             let transfer = try await offer.accept(destination: destination)
+            guard runLifecycle.acceptsWork(run), !Task.isCancelled else {
+                try? await transfer.cancel(reason: "sample stopped")
+                return
+            }
             diagnostics.transfer(
                 TestDiagnosticEventName.offerAccepted,
                 peerId: "\(offer.peer.id)",
@@ -1435,7 +1499,9 @@ struct ContentView: View {
                 "receiving '\(dest.lastPathComponent)' (\(fmtBytes(offer.sizeBytes))) from \(offer.peer.name)",
                 kind: .info
             )
-            watchTransfer(transfer, sessionId: sessionId, direction: .receive, detail: dest.lastPathComponent) { completed in
+            watchTransfer(
+                transfer, sessionId: sessionId, direction: .receive, detail: dest.lastPathComponent, run: run
+            ) { completed in
                 let cleanupComplete = !destination.temporaryArtifactExists
                 self.diagnostics.record(TestDiagnosticRecord(
                     peerId: "\(offer.peer.id)",
@@ -1494,7 +1560,9 @@ struct ContentView: View {
             // offer's acceptance transition. Abort defensively on every
             // thrown accept so a pre-transition refusal cannot leave the
             // sample's reservation or temporary file behind.
-            if let cleanupError = await abortDestination(destination) {
+            let cleanupError = await abortDestination(destination)
+            guard runLifecycle.owns(run) else { return }
+            if let cleanupError {
                 diag(
                     "file",
                     "destination cleanup after failed accept also failed: " +
@@ -1541,10 +1609,15 @@ struct ContentView: View {
     /// the prepared SHA-256 `sendFile(name:mimeType:source:)` API —
     /// no document picker needed, so the flow is one tap on the test bench.
     @MainActor
-    private func sendTestFile(to row: SessionRow, preset: TestFilePreset = .small) async {
+    private func sendTestFile(
+        to row: SessionRow, preset: TestFilePreset = .small, run: SampleRunLifecycle.Run
+    ) async {
+        guard runLifecycle.acceptsWork(run) else { return }
         guard !sendingFileSessionIds.contains(row.id) else { return }
         sendingFileSessionIds.insert(row.id)
-        defer { sendingFileSessionIds.remove(row.id) }
+        defer {
+            if runLifecycle.owns(run) { sendingFileSessionIds.remove(row.id) }
+        }
 
         let size = preset.byteCount
         var data = Data(count: size)
@@ -1571,6 +1644,10 @@ struct ContentView: View {
                 mimeType: "application/octet-stream",
                 source: source
             )
+            guard runLifecycle.acceptsWork(run), !Task.isCancelled else {
+                try? await transfer.cancel(reason: "sample stopped")
+                return
+            }
             diagnostics.transfer(
                 TestDiagnosticEventName.transferPrepared,
                 peerId: row.peerId,
@@ -1599,13 +1676,14 @@ struct ContentView: View {
                 sessionId: row.id
             )
             appendMessage("offering file '\(name)' (\(fmtBytes(Int64(size)))) to \(row.peerName)", kind: .sent)
-            watchTransfer(transfer, sessionId: row.id, direction: .send, detail: nil) { completed in
+            watchTransfer(transfer, sessionId: row.id, direction: .send, detail: nil, run: run) { completed in
                 if completed {
                     diag("file", "sender completed sha256=\(digest)")
                 }
                 return nil
             }
         } catch {
+            guard runLifecycle.acceptsWork(run) else { return }
             diagnostics.transfer(
                 TestDiagnosticEventName.transferFailed,
                 peerId: row.peerId,
@@ -1638,8 +1716,10 @@ struct ContentView: View {
         sessionId: String,
         direction: TransferRow.Direction,
         detail: String?,
+        run: SampleRunLifecycle.Run,
         onTerminal: @escaping (_ completed: Bool) -> String?
     ) {
+        guard runLifecycle.acceptsWork(run) else { return }
         let key = TransferKey(sessionId: sessionId, transferId: transfer.id)
         transfers.append(TransferRow(
             id: key,
@@ -1657,7 +1737,7 @@ struct ContentView: View {
         transferWatchTasks[key] = Task { @MainActor in
             var lastLabel = ""
             var cleanupCompleted = false
-            while !Task.isCancelled {
+            while !Task.isCancelled && self.runLifecycle.owns(run) {
                 let (label, terminal) = describeTransferState(transfer.state.value)
                 let bytes = (transfer.bytesTransferred.value as? KotlinLong)?.int64Value ?? 0
                 SessionTransferEntries.update(key, in: &transfers) { row in
@@ -1714,7 +1794,9 @@ struct ContentView: View {
                 }
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
-            if !cleanupCompleted {
+            // onTerminal is UI/diagnostics only; SDK source/destination cleanup
+            // already ran before Stop retires watchers. Never publish into B.
+            if !cleanupCompleted && self.runLifecycle.owns(run) {
                 let localFailure = onTerminal(false)
                 if let localFailure {
                     let arrow = direction == .send ? "→" : "←"
@@ -1724,7 +1806,7 @@ struct ContentView: View {
                     )
                 }
             }
-            transferWatchTasks[key] = nil
+            if self.runLifecycle.owns(run) { transferWatchTasks[key] = nil }
         }
     }
 
@@ -1755,7 +1837,8 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func cancelTransfer(_ row: TransferRow) async {
+    private func cancelTransfer(_ row: TransferRow, run: SampleRunLifecycle.Run) async {
+        guard runLifecycle.acceptsWork(run) else { return }
         guard let row = SessionTransferEntries.row(row.id, in: transfers) else { return }
         diag("file", "Cancel tapped for transfer \(SampleConsole.identifier(row.id.transferId))")
         diagnostics.transfer(
@@ -1771,12 +1854,14 @@ struct ContentView: View {
         do {
             try await row.transfer.cancel(reason: "cancelled from iOS sample UI")
         } catch {
+            guard runLifecycle.acceptsWork(run) else { return }
             appendMessage("cancel failed (\(row.fileName)): \(error.localizedDescription)", kind: .error)
         }
     }
 
     @MainActor
-    private func connect(_ row: PeerRow) async {
+    private func connect(_ row: PeerRow, run: SampleRunLifecycle.Run) async {
+        guard runLifecycle.acceptsWork(run) else { return }
         diag("ui", "Connect tapped: peer=\(SampleConsole.identifier(row.id))")
         diagnostics.record(TestDiagnosticRecord(
             peerId: row.id,
@@ -1813,20 +1898,27 @@ struct ContentView: View {
         // immediately instead of awaiting a never-completing SharedFlow
         // collect, so the Connect button no longer wedges on "Connecting…"
         // after the session later dies.
-        defer { pendingConnectPeerIds.remove(pid) }
+        defer {
+            if runLifecycle.owns(run) { pendingConnectPeerIds.remove(pid) }
+        }
 
         diag("ui", "calling kit.connect(\(SampleConsole.identifier(pid)))")
         appendMessage("connect -> \(row.name)", kind: .info)
         do {
             let session = try await k.connect(peer: row.peer)
+            guard runLifecycle.acceptsWork(run), !Task.isCancelled else {
+                try? await session.close()
+                return
+            }
             diag(
                 "ui",
                 "kit.connect returned session id=\(SampleConsole.identifier(session.id)) " +
                     "peer=\(SampleConsole.identifier("\(session.peer.id)")) " +
                     "state=\(IosSwiftHelpersKt.stateName(session))"
             )
-            attachCollectors(to: session, label: "outgoing")
+            attachCollectors(to: session, label: "outgoing", run: run)
         } catch {
+            guard runLifecycle.acceptsWork(run) else { return }
             if Task.isCancelled || error is CancellationError { return }
             let typed = SampleP2pError.recover(error)
             let detail: String
@@ -1856,7 +1948,8 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func dialManual() async {
+    private func dialManual(run: SampleRunLifecycle.Run) async {
+        guard runLifecycle.acceptsWork(run) else { return }
         diag("ui", "Dial manual tapped")
         guard let k = kit else {
             diag("ui", "Dial ABORT — kit not started")
@@ -1903,7 +1996,9 @@ struct ContentView: View {
         // AUDIT-2026-06 (B-G9-samples-desktop-ios-03): with attachCollectors
         // returning immediately, this defer runs when the dial settles —
         // isManualDialing no longer latches true forever after one dial.
-        defer { isManualDialing = false }
+        defer {
+            if runLifecycle.owns(run) { isManualDialing = false }
+        }
         errorBanner = nil
         appendMessage("manual: createManualPeer host=\(host) port=\(portInt)", kind: .info)
         diag("ui", "calling networkProvisioning.createManualPeer(<omitted>:\(portInt))")
@@ -1913,17 +2008,23 @@ struct ContentView: View {
                 port: portInt,
                 expectedFingerprint: expectedFingerprint
             )
+            guard runLifecycle.acceptsWork(run), !Task.isCancelled else { return }
             diag("ui", "createManualPeer returned: id=\(SampleConsole.identifier("\(peer.id)"))")
             appendMessage("manual: created \(peer.name) (\(peer.id))", kind: .info)
             diag("ui", "calling kit.connect on synthetic peer \(SampleConsole.identifier("\(peer.id)"))")
             let session = try await k.connect(peer: peer)
+            guard runLifecycle.acceptsWork(run), !Task.isCancelled else {
+                try? await session.close()
+                return
+            }
             diag(
                 "ui",
                 "kit.connect (manual) returned session id=\(SampleConsole.identifier(session.id)) " +
                     "state=\(IosSwiftHelpersKt.stateName(session))"
             )
-            attachCollectors(to: session, label: "manual")
+            attachCollectors(to: session, label: "manual", run: run)
         } catch {
+            guard runLifecycle.acceptsWork(run) else { return }
             if Task.isCancelled || error is CancellationError { return }
             let detail = SampleP2pError.userMessage(error)
             diag("ui", "manual dial THREW: \(SampleConsole.failure(error))")
@@ -1933,7 +2034,8 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func sendAll() async {
+    private func sendAll(run: SampleRunLifecycle.Run) async {
+        guard runLifecycle.acceptsWork(run) else { return }
         diag("ui", "Send All tapped: draft=\(draft.count) chars uiSessions=\(sessions.count)")
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
@@ -1974,6 +2076,7 @@ struct ContentView: View {
         var successes = 0
         var failures: [String] = []
         for row in liveSessions {
+            guard runLifecycle.acceptsWork(run), !Task.isCancelled else { return }
             diag("ui", SampleConsole.sendingText(recipients: 1, sizeBytes: text.utf8.count))
             do {
                 diagnostics.record(TestDiagnosticRecord(
@@ -1986,6 +2089,7 @@ struct ContentView: View {
                     details: ["metadataKeys": ""]
                 ))
                 try await row.session.send(message: P2pMessage.Text(value: text, metadata: [:]))
+                guard runLifecycle.acceptsWork(run), !Task.isCancelled else { return }
                 diagnostics.record(TestDiagnosticRecord(
                     peerId: row.peerId,
                     connectionId: diagnostics.connectionId(for: row.peerId),
@@ -1999,6 +2103,7 @@ struct ContentView: View {
                 appendMessage("me -> \(row.peerName): \(text)", kind: .sent)
                 successes += 1
             } catch {
+                guard runLifecycle.acceptsWork(run) else { return }
                 let msg = error.localizedDescription
                 diag("ui", "session.send THREW for \(SampleConsole.identifier(row.peerId)): \(SampleConsole.failure(error))")
                 appendMessage(
@@ -2029,67 +2134,71 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func closeSession(_ row: SessionRow) async {
+    private func closeSession(_ row: SessionRow, run: SampleRunLifecycle.Run) async {
+        guard runLifecycle.acceptsWork(run) else { return }
         diag("ui", "Close tapped: session=\(SampleConsole.identifier(row.id)) peer=\(SampleConsole.identifier(row.peerId))")
         do {
             try await row.session.close()
+            guard runLifecycle.acceptsWork(run) else { return }
             diag("ui", "session.close OK for \(SampleConsole.identifier(row.peerId))")
             appendMessage("closed session with \(row.peerName)", kind: .info)
         } catch {
+            guard runLifecycle.acceptsWork(run) else { return }
             diag("ui", "session.close THREW for \(SampleConsole.identifier(row.peerId)): \(SampleConsole.failure(error))")
             appendMessage("close failed (\(row.peerName)): \(error.localizedDescription)", kind: .error)
         }
     }
 
     @MainActor
-    private func stop() async {
+    private func stop(run: SampleRunLifecycle.Run) async {
+        guard runLifecycle.owns(run) else { return }
         diag("ui", "Stop tapped")
-        guard let k = kit, !isStopping else {
+        guard let k = kit, runLifecycle.owns(run), !isStopping else {
             diag("ui", "Stop ignored — kit=\(kit != nil) isStopping=\(isStopping)")
             return
         }
-        isStopping = true
-        defer {
-            isStopping = false
-            releaseSampleTracing()
-        }
-        status = "Stopping..."
-        diagnostics.record(TestDiagnosticRecord(
-            category: "discovery",
-            eventName: TestDiagnosticEventName.discoveryStopped,
-            currentState: "stopping"
-        ))
+        await runLifecycle.stop(
+            run,
+            cancelObservers: {
+                status = "Stopping..."
+                diagnostics.record(TestDiagnosticRecord(
+                    category: "discovery",
+                    eventName: TestDiagnosticEventName.discoveryStopped,
+                    currentState: "stopping"
+                ))
+                cancelRunObservers()
+            },
+            operation: {
+                let offers = Array(pendingOffers.values)
+                for pending in offers {
+                    try? await pending.offer.reject(reason: "sample stopped before consent")
+                }
+                try await k.stop()
+            },
+            succeeded: {
+                retireStoppedRun()
+                errorBanner = nil
+                status = "Stopped"
+                diagnostics.record(TestDiagnosticRecord(
+                    category: "application",
+                    eventName: TestDiagnosticEventName.applicationShutdown,
+                    currentState: "stopped",
+                    outcome: .success
+                ))
+            },
+            failed: { error in
+                appendMessage("stop error: \(error.localizedDescription)", kind: .error)
+                errorBanner = "Stop failed: \(error.localizedDescription)"
+                status = "Stop failed — retry Stop"
+                // The coordinator retains this owner and the captured SDK kit.
+            }
+        )
+    }
 
-        pollTask?.cancel()
-        incomingSessionsTask?.cancel()
-        permissionCheckTask?.cancel()
-        // AUDIT-2026-06 (A-G9-samples-desktop-ios-09): also cancel the
-        // per-session message/file collectors and per-transfer watchers —
-        // stop() previously cancelled only the four named tasks, leaking
-        // every session collector (and its captured session/kit) across
-        // each Stop/Start cycle.
-        messageCollectorTasks.values.forEach { $0.cancel() }
-        fileCollectorTasks.values.forEach { $0.cancel() }
-        messageCollectorTasks = [:]
-        fileCollectorTasks = [:]
-        fileOfferIdsBySession = [:]
-
-        for pending in pendingOffers.values {
-            try? await pending.offer.reject(reason: "sample stopped before consent")
-        }
-        do {
-            try await k.stop()
-        } catch {
-            appendMessage("stop error: \(error.localizedDescription)", kind: .error)
-            errorBanner = "Stop failed: \(error.localizedDescription)"
-            status = "Stop failed — retry Stop"
-            // Retain kit ownership so a failed teardown is retryable; do not
-            // present a stopped state while SDK resources may still be live.
-            return
-        }
-        // Let the SDK quiesce its writers before cancelling watcher cleanup;
-        // otherwise a late write can race the sink close and leave a partial
-        // file looking complete.
+    @MainActor
+    private func retireStoppedRun() {
+        // The SDK quiesces its writers before watcher retirement. Never
+        // replace this real cleanup with a run-token-only UI reset.
         transferWatchTasks.values.forEach { $0.cancel() }
         transferWatchTasks = [:]
         diagnostics.setLocalPeerId(nil)
@@ -2101,29 +2210,27 @@ struct ContentView: View {
         collectedSessionIds = []
         pendingConnectPeerIds = []
         sendingFileSessionIds = []
+        isManualDialing = false
         localPeerId = ""
         localTcpPort = 0
-        errorBanner = nil
-        status = "Stopped"
-        diagnostics.record(TestDiagnosticRecord(
-            category: "application",
-            eventName: TestDiagnosticEventName.applicationShutdown,
-            currentState: "stopped",
-            outcome: .success
-        ))
+    }
+
+    @MainActor
+    private func cancelRunObservers() {
+        pollTask?.cancel()
+        pollTask = nil
+        incomingSessionsTask?.cancel()
+        incomingSessionsTask = nil
+        permissionCheckTask?.cancel()
+        permissionCheckTask = nil
+        messageCollectorTasks.values.forEach { $0.cancel() }
+        fileCollectorTasks.values.forEach { $0.cancel() }
+        messageCollectorTasks = [:]
+        fileCollectorTasks = [:]
+        fileOfferIdsBySession = [:]
     }
 
     // MARK: - Helpers
-
-    @MainActor
-    private func releaseSampleTracing() {
-        frameTraceLease?.release()
-        frameTraceLease = nil
-        debugLogTask?.cancel()
-        debugLogTask = nil
-        lanDiagnosticsLease?.release()
-        lanDiagnosticsLease = nil
-    }
 
     @MainActor
     private func appendMessage(_ text: String, kind: MessageRow.Kind) {
