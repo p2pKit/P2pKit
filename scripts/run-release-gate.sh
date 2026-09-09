@@ -24,6 +24,7 @@ scripts/tests/check-kotlin-toolchain-policy-test.sh
 scripts/check-android-abi-guard.sh
 ruby scripts/tests/check-platform-test-policy-test.rb
 python3 scripts/tests/run-platform-tests-test.py
+python3 scripts/tests/check-release-metadata-test.py
 scripts/check-release-metadata.sh
 scripts/check-git-whitespace.sh
 python3 scripts/tests/ios-project-generation-test.py

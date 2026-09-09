@@ -43,10 +43,12 @@ the harness:
 - `SecureIdentityService.kt`, platform cryptography implementations, and public
   authorization policies: fingerprints and key lifecycle.
 
-The maintained high-level contract is
-[`../architecture/specification.md`](../architecture/specification.md). If it
-and code disagree, stop and file a protocol defect; do not silently teach the
-harness the implementation accident.
+The maintained [high-level contract](../architecture/specification.md) is not
+a complete byte-level specification. Its linked July archive is historical,
+not normative. Complete and review the candidate-bound wire specification before
+using it to implement this harness. If a maintained contract and code disagree,
+stop and file a protocol defect; do not silently teach the harness the
+implementation accident.
 
 ## Independent harness deliverables
 

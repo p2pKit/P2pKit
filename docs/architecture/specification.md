@@ -1,11 +1,22 @@
-# Current API and protocol specification
+# Current high-level API and protocol contract
 
 This document is the maintained high-level contract for the `0.7` release
 candidate line. Public ABI files under each library module are the executable
 binary-compatibility baselines; `api/android/` protects Android-only bytecode
-that Kotlin's built-in JVM/KLIB validator does not inspect. The detailed design
-record produced during the 0.7 remediation is preserved in
-[`../archive/remediation/2026-07/P2pKit-Spec.md`](../archive/remediation/2026-07/P2pKit-Spec.md).
+that Kotlin's built-in JVM/KLIB validator does not inspect.
+
+The [July design record](../archive/remediation/2026-07/P2pKit-Spec.md) is frozen
+historical rationale, **not a current normative specification**. Its dated
+status and milestone language do not describe this checkout. Use the maintained
+[migration guide](../guides/migrating-to-0.7.md) for current migration instructions.
+
+A complete, candidate-bound byte-level secure-v2 specification is still required
+for [independent interoperability](../validation/secure-v2-interoperability.md)
+and [cryptographic review](../validation/cryptographic-audit-preparation.md).
+Neither this high-level page nor the archive fills that gap. For current
+implementation behavior, inspect the exact candidate's source and ABI baselines;
+if they disagree with a maintained contract, report and resolve the discrepancy
+before using it as an independent test oracle.
 
 ## Lifecycle
 

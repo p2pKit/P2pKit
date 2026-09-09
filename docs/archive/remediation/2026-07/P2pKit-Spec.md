@@ -38,7 +38,7 @@ this amendment and the checked ABI declarations are authoritative.
   replaced with v0.7 bytes.
 
 The operational migration contract is
-[`docs/MIGRATING_TO_0.7.md`](docs/MIGRATING_TO_0.7.md).
+[`docs/MIGRATING_TO_0.7.md`](../../../guides/migrating-to-0.7.md).
 
 ---
 
