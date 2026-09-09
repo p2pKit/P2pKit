@@ -3,8 +3,8 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-09T12:04:20.651772+00:00",
-  "provenance": "145/193 independently approved repository-repair rows (75.1%); 48 remaining (24.9%): 26 repair-category rows, 21 external-validation rows and architecture decision #120; 60 new audit findings. Counts are not effort, GitHub closures, platform acceptance or release readiness. Eighteen cohort0910 final approvals are bound to exact commits and retained evidence; later rows count only with explicit final approvals. Two filed causes378/379 expand191 to193. Historical failures/read scopes/decisions are preserved; #133 independent NOT_STARTED and whole audit NOT_READY.",
+  "githubIssueListRefreshedUtc": "2026-09-09T14:14:18.202983+00:00",
+  "provenance": "156/201 independently approved repository-repair rows (77.6%); 45 remaining (22.4%): 23 repairs, 21 external-validation rows and architecture decision #120; 68 new audit findings. Five independently approved followup repairs382/384/385/386/387 are locally committed;383 remains source-confirmed/native NOT_RUN.151/201 filing-time and151/195 cohort snapshots stay historical. Latest15:27 bounded all-open/body/delta observation matches201 inventory IDs, not a fresh complete-history crawl. No closure/platform/release acceptance; whole audit NOT_READY;133 NOT_STARTED.",
   "issues": [
     {
       "number": 21,
@@ -1715,11 +1715,32 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "c3f816c27fed4070ffc9eb9d9a78ae0d3c9c64e0"
+      ],
+      "recordedIndependentReview": "APPROVE_SOURCE_KDOC_HOST_ONLY_NATIVE_PENDING; /root/review_cohort_0910_execution; exact final committed composition bound independently; see repairs/cohort-2026-09-09-0912.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/191#issuecomment-5406159896"
-      ]
+      ],
+      "dispositionBeforeCohort0912": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "cohort0912": {
+        "commits": [
+          "c3f816c27fed4070ffc9eb9d9a78ae0d3c9c64e0"
+        ],
+        "correction": "Decode typed Kotlin P2pError from NSError at the Swift sample boundary; preserve fallback privacy and render typed recovery guidance.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_SOURCE_KDOC_HOST_ONLY_NATIVE_PENDING",
+        "report": "cohort-0912-focused-independent-review/FINAL-HOST-REPORT.md",
+        "reportSha256": "b4cf2f78075cb16f377eaf3211daee9dcb98bc43d9129bef6587ea45037a6275",
+        "verificationAndLimits": "Source and actual strict rendered NSError KDoc approved; generated ObjC header, Swift compile and eight XCTest methods remain pending. Those methods comprise three actual throwing-boundary calls and five synthetic/presentation groups, not eight actual Kotlin throw cases.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_BINDING",
+        "finalCommitBindingSha256": "fd0fc2bcf812a33b7a6ae6c26c901f5796d9bed2221ba21170836ffbbd2c1c30"
+      }
     },
     {
       "number": 194,
@@ -2072,12 +2093,33 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken. New #355 reproduction demonstrates an existing clean-stop substring assertion missed normal-completion warnings. That specific test is strengthened in #355; broader diagnostic-net/assertion-precision remediation remains pending.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "80ba584206f1d5ff66a6543d2d935f7e0da72fb6"
+      ],
+      "recordedIndependentReview": "APPROVE_HOST_SCOPE_ONLY_NATIVE_PENDING; /root/review_cohort_0910_execution; exact final committed composition bound independently; see repairs/cohort-2026-09-09-0912.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/207#issuecomment-5406161826",
         "https://github.com/p2pKit/P2pKit/issues/207#issuecomment-5568796169"
-      ]
+      ],
+      "dispositionBeforeCohort0912": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "cohort0912": {
+        "commits": [
+          "80ba584206f1d5ff66a6543d2d935f7e0da72fb6"
+        ],
+        "correction": "Enforce post-stop unexpected WARN/ERROR checks in the documented owner/logger convention and actual kit adopters without broad exception or diagnostic allowances.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_HOST_SCOPE_ONLY_NATIVE_PENDING",
+        "report": "cohort-0912-focused-independent-review/FINAL-HOST-REPORT.md",
+        "reportSha256": "b4cf2f78075cb16f377eaf3211daee9dcb98bc43d9129bef6587ea45037a6275",
+        "verificationAndLimits": "Source-approved strict logger/owner fixture/adopters, real-kit WARN negative control, R1/R2/R3 focused host results with all newly surfaced failures resolved without broad allowances. Affected Apple/commonTest and Windows strict actual-kit/durable coverage remain unexecuted by these runs.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_BINDING",
+        "finalCommitBindingSha256": "fd0fc2bcf812a33b7a6ae6c26c901f5796d9bed2221ba21170836ffbbd2c1c30"
+      }
     },
     {
       "number": 208,
@@ -2126,11 +2168,32 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "ad2c21fc98d73dae729afe7a478541342a9cbe3e"
+      ],
+      "recordedIndependentReview": "APPROVE_HOST_SCOPE_ONLY_APPLE_PENDING; /root/review_cohort_0910_execution; exact final committed composition bound independently; see repairs/cohort-2026-09-09-0912.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/209#issuecomment-5406162147"
-      ]
+      ],
+      "dispositionBeforeCohort0912": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "cohort0912": {
+        "commits": [
+          "ad2c21fc98d73dae729afe7a478541342a9cbe3e"
+        ],
+        "correction": "Add real remote-FIN/half-close and close/cancellation transport regressions rather than relabeling the bidirectional fake connection.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_HOST_SCOPE_ONLY_APPLE_PENDING",
+        "report": "cohort-0912-focused-independent-review/FINAL-HOST-REPORT.md",
+        "reportSha256": "b4cf2f78075cb16f377eaf3211daee9dcb98bc43d9129bef6587ea45037a6275",
+        "verificationAndLimits": "JVM and Android-host real socket remote-FIN/close/cancellation tests pass. Apple FIN helper compile/link and IosRawConnectionHalfCloseTest execution.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_BINDING",
+        "finalCommitBindingSha256": "fd0fc2bcf812a33b7a6ae6c26c901f5796d9bed2221ba21170836ffbbd2c1c30"
+      }
     },
     {
       "number": 211,
@@ -2915,14 +2978,35 @@
         222,
         227
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "029020182140288deacdfb70068ae64d714d8962"
+      ],
+      "recordedIndependentReview": "APPROVE_REPAIR_HOST; /root/review_cohort_0910_execution; exact final committed composition bound independently; see repairs/cohort-2026-09-09-0912.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/235#issuecomment-5406164397"
-      ]
+      ],
+      "dispositionBeforeCohort0912": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "cohort0912": {
+        "commits": [
+          "029020182140288deacdfb70068ae64d714d8962"
+        ],
+        "correction": "Contain ordinary and IO failures after retired Java-family socket reads without unsafe uncaught escalation; preserve active/cancellation/fatal behavior and late-byte accounting.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_REPAIR_HOST",
+        "report": "cohort-0912-focused-independent-review/FINAL-HOST-REPORT.md",
+        "reportSha256": "b4cf2f78075cb16f377eaf3211daee9dcb98bc43d9129bef6587ea45037a6275",
+        "verificationAndLimits": "Source-identical R1 JVM/Android-host late-read3+3 and existing real socket/watchdog/cancellation; original partial approval retained. No Apple source affected by235; Android-host is not physical ART/logcat.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_BINDING",
+        "finalCommitBindingSha256": "fd0fc2bcf812a33b7a6ae6c26c901f5796d9bed2221ba21170836ffbbd2c1c30"
+      }
     },
     {
       "number": 236,
@@ -3274,14 +3358,35 @@
         225,
         246
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "a6b271246e25b70b1cba5c1b57829d33794f7ab1"
+      ],
+      "recordedIndependentReview": "APPROVE_REPAIR_HOST; /root/review_cohort_0910_execution; exact final committed composition bound independently; see repairs/cohort-2026-09-09-0912.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/247#issuecomment-5406165303"
-      ]
+      ],
+      "dispositionBeforeCohort0912": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "cohort0912": {
+        "commits": [
+          "a6b271246e25b70b1cba5c1b57829d33794f7ab1"
+        ],
+        "correction": "Share one 8000ms terminal controlled-wait budget with at most 2000ms per phase and the original owner deadline; preserve mandatory publication/accounting and once-owned cleanup scheduling.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_REPAIR_HOST",
+        "report": "cohort-0912-focused-independent-review/FINAL-HOST-REPORT.md",
+        "reportSha256": "b4cf2f78075cb16f377eaf3211daee9dcb98bc43d9129bef6587ea45037a6275",
+        "verificationAndLimits": "Source-approved shared8s controlled wait budget; R1 five budget cases, affected core/ABI, real rendered KDoc, executed failing old-budget control; R2 all15 backlog cases; R3 six session ownership and four strict fixture cases. Not an8s hard wall/native-disposal guarantee; no new physical/Apple runtime claim.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_BINDING",
+        "finalCommitBindingSha256": "fd0fc2bcf812a33b7a6ae6c26c901f5796d9bed2221ba21170836ffbbd2c1c30"
+      }
     },
     {
       "number": 248,
@@ -4462,14 +4567,35 @@
         278,
         282
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "63ebd6f2dd6775cc9b46a29808a3557857fd57fc"
+      ],
+      "recordedIndependentReview": "APPROVE_REPAIR_HOST; /root/review_cohort_0910_execution; exact final committed composition bound independently; see repairs/cohort-2026-09-09-0912.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/290#issuecomment-5406170056"
-      ]
+      ],
+      "dispositionBeforeCohort0912": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "cohort0912": {
+        "commits": [
+          "63ebd6f2dd6775cc9b46a29808a3557857fd57fc"
+        ],
+        "correction": "Report one type-only Desktop provisioning-poll failure per streak and rearm on success without changing cancellation or cadence.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_REPAIR_HOST",
+        "report": "cohort-0912-focused-independent-review/FINAL-HOST-REPORT.md",
+        "reportSha256": "b4cf2f78075cb16f377eaf3211daee9dcb98bc43d9129bef6587ea45037a6275",
+        "verificationAndLimits": "Source-identical R1 desktop UI polling4 plus pairing1; original partial approval retained. Model/helper host behavior, not rendered-window/device observation.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_BINDING",
+        "finalCommitBindingSha256": "fd0fc2bcf812a33b7a6ae6c26c901f5796d9bed2221ba21170836ffbbd2c1c30"
+      }
     },
     {
       "number": 291,
@@ -4491,11 +4617,32 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
+      "recordedFixCommitsOrFinalRevision": [
+        "8e038f93431cfd5136606e9cc42ccdc4c91d98d4"
+      ],
+      "recordedIndependentReview": "APPROVE_SOURCE_NATIVE_PENDING; /root/review_cohort_0910_execution; exact final committed composition bound independently; see repairs/cohort-2026-09-09-0912.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/291#issuecomment-5406170023"
-      ]
+      ],
+      "dispositionBeforeCohort0912": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "cohort0912": {
+        "commits": [
+          "8e038f93431cfd5136606e9cc42ccdc4c91d98d4"
+        ],
+        "correction": "Exclude received iOS sample inbox content from backup through an explicit policy and sample wiring.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_SOURCE_NATIVE_PENDING",
+        "report": "cohort-0912-focused-independent-review/FINAL-HOST-REPORT.md",
+        "reportSha256": "b4cf2f78075cb16f377eaf3211daee9dcb98bc43d9129bef6587ea45037a6275",
+        "verificationAndLimits": "Previously approved backup exclusion policy and merged Swift source match frozen composition. Apple XCTest/app wiring; actual physical backup behavior remains separately external.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_BINDING",
+        "finalCommitBindingSha256": "fd0fc2bcf812a33b7a6ae6c26c901f5796d9bed2221ba21170836ffbbd2c1c30"
+      }
     },
     {
       "number": 292,
@@ -4536,7 +4683,7 @@
         "commits": [
           "4f9da4f98c500988975c274d1d3709572e7f954e"
         ],
-        "correction": "Replace broad Throwable catches with typed, cause-preserving expectations.",
+        "correction": "Replace redundant failure-message substrings with existing typed classification and exact cause identity; preserve privacy and sole-discriminator assertions.",
         "reviewer": "/root/review_cohort_0910_execution",
         "verdict": "APPROVE_FOCUSED_SCOPE",
         "report": "cohort-0911-focused-independent-review/R2-R3-FINAL-REPORT.md",
@@ -5085,9 +5232,30 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
-      "publicInvestigationAndOutcomeUrls": []
+      "recordedFixCommitsOrFinalRevision": [
+        "c05a700c0c239d1d6d639ff24289cb00911e5567"
+      ],
+      "recordedIndependentReview": "APPROVE_KOTLIN_HOST_SCOPE_ONLY_SWIFT_PENDING; /root/review_cohort_0910_execution; exact final committed composition bound independently; see repairs/cohort-2026-09-09-0912.md.",
+      "publicInvestigationAndOutcomeUrls": [],
+      "dispositionBeforeCohort0912": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "cohort0912": {
+        "commits": [
+          "c05a700c0c239d1d6d639ff24289cb00911e5567"
+        ],
+        "correction": "Attribute dropped diagnostics to the owning session rather than the recorder lifetime, with Swift drop/clear/export coverage authored.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_KOTLIN_HOST_SCOPE_ONLY_SWIFT_PENDING",
+        "report": "cohort-0912-focused-independent-review/FINAL-HOST-REPORT.md",
+        "reportSha256": "b4cf2f78075cb16f377eaf3211daee9dcb98bc43d9129bef6587ea45037a6275",
+        "verificationAndLimits": "R1 all118 diagnostics cases including8 drop-attribution controls pass. Swift drop/clear/export XCTest on actual sample wiring.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_BINDING",
+        "finalCommitBindingSha256": "fd0fc2bcf812a33b7a6ae6c26c901f5796d9bed2221ba21170836ffbbd2c1c30"
+      }
     },
     {
       "number": 323,
@@ -5260,12 +5428,33 @@
       "reportedProblemExcerpt": "Low \u2014 the CLI's opt-in auto-mesh mode does not recover a dropped session while discovery remains stable.",
       "affectedComponentsExcerpt": "",
       "relatedIssuesAndDependencies": [],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "No completed local repair/review cycle recorded",
-      "publicInvestigationAndOutcomeUrls": []
+      "recordedFixCommitsOrFinalRevision": [
+        "7955446b031966c1f72dc1fe15ab8877ca1095c0"
+      ],
+      "recordedIndependentReview": "APPROVE_REPAIR_HOST; /root/review_cohort_0910_execution; exact final committed composition bound independently; see repairs/cohort-2026-09-09-0912.md.",
+      "publicInvestigationAndOutcomeUrls": [],
+      "dispositionBeforeCohort0912": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "No completed local repair/review cycle recorded"
+      },
+      "cohort0912": {
+        "commits": [
+          "7955446b031966c1f72dc1fe15ab8877ca1095c0"
+        ],
+        "correction": "Observe stable-peer session loss and redial through the existing fenced pending-connect pipeline.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_REPAIR_HOST",
+        "report": "cohort-0912-focused-independent-review/FINAL-HOST-REPORT.md",
+        "reportSha256": "b4cf2f78075cb16f377eaf3211daee9dcb98bc43d9129bef6587ea45037a6275",
+        "verificationAndLimits": "R1 and final R2 CLI mesh12/commands8/pairing3; subsequent R3 source irrelevant. Synthetic SDK/caller-order and host scope, no physical-network claim.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_BINDING",
+        "finalCommitBindingSha256": "fd0fc2bcf812a33b7a6ae6c26c901f5796d9bed2221ba21170836ffbbd2c1c30"
+      }
     },
     {
       "number": 330,
@@ -7345,8 +7534,10 @@
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Confirmed and filed; original reproduction is not final repair approval. See the dated continued-cohort report.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "Final repair approval not recorded.",
+      "recordedFixCommitsOrFinalRevision": [
+        "f260136be7b6e5115c785965b3ee29e6d791439d"
+      ],
+      "recordedIndependentReview": "APPROVE_HOST_SCOPE_ONLY_APPLE_PENDING; /root/review_cohort_0910_execution; exact final committed composition bound independently; see repairs/cohort-2026-09-09-0912.md.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/379"
       ],
@@ -7356,10 +7547,481 @@
         "state": "open",
         "capturedAtListUtc": "2026-09-09T12:04:20.651772+00:00",
         "scope": "Individual filing time from later fresh all-state body capture; not an initial API refetch or closure."
+      },
+      "dispositionBeforeCohort0912": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "Final repair approval not recorded."
+      },
+      "cohort0912": {
+        "commits": [
+          "f260136be7b6e5115c785965b3ee29e6d791439d"
+        ],
+        "correction": "Preserve StateFlow onSubscription hooks and publication semantics with common and platform-specific publication synchronization.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_HOST_SCOPE_ONLY_APPLE_PENDING",
+        "report": "cohort-0912-focused-independent-review/FINAL-HOST-REPORT.md",
+        "reportSha256": "b4cf2f78075cb16f377eaf3211daee9dcb98bc43d9129bef6587ea45037a6275",
+        "verificationAndLimits": "R1 hooks4/concurrency2/PeerRegistry43/DiscoveryReemit3 and common/Android compilation/ABI pass. Changed iOS actual/common publication execution; Linux KLIB compilation is not native runtime.",
+        "countedApproved": false,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_BINDING",
+        "finalCommitBindingSha256": "fd0fc2bcf812a33b7a6ae6c26c901f5796d9bed2221ba21170836ffbbd2c1c30"
+      }
+    },
+    {
+      "number": 380,
+      "title": "[AUDIT][Low] CLI terminal sessions retain message and file-offer collectors",
+      "url": "https://github.com/p2pKit/P2pKit/issues/380",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Actual CLI registerSession/wireIncoming message and file-offer collectors survive Closed/Failed until CLI exit; real-helper terminal subscriber counts [1,1,0] and two retained owner children reproduce the defect.",
+      "affectedComponentsExcerpt": "samples/p2p-sample-desktop/src/main/kotlin/dev/p2pkit/sample/desktop/Main.kt: actual registerSession/wireIncoming and all incoming, auto-mesh, interactive and manual acquisitions.",
+      "relatedIssuesAndDependencies": [
+        260,
+        329,
+        336,
+        381
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": "open",
+      "assessmentAtCheckpoint": "Fresh actual-helper host reproduction confirmed and filed as a distinct cause. Filing and original failure are separate from the later cohort0912 repair approval; no native-resource volume, SDK authoritative-store, payload-loss or device acceptance is claimed.",
+      "recordedFixCommitsOrFinalRevision": [
+        "b5eaac72dfcd2bb9b21c170a47ce3d948727d252"
+      ],
+      "recordedIndependentReview": "APPROVE_REPAIR_HOST; /root/review_cohort_0910_execution; exact final committed composition bound independently; see repairs/cohort-2026-09-09-0912.md.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/380"
+      ],
+      "initialFilingObservation": {
+        "createdUtc": "2026-09-09T13:15:03Z",
+        "verifiedUtc": "2026-09-09T13:15:03.009542+00:00",
+        "bodySha256": "c6a244385832461f19a2c74da203cffb60c76eb91c6e92e52ff31c90e80b8f94",
+        "state": "open",
+        "initialDisposition": "PENDING_REMEDIATION",
+        "sourceScope": "Published b67 baseline plus source-reviewed #329 candidate; registration helper bodies were unchanged by #329.",
+        "freshReproduction": "One intended actual-helper assertion failure; owner finally cleanup and task-owned wrapper stop passed, no owned worker survivors.",
+        "capturedAtListUtc": "2026-09-09T14:14:18.202983+00:00"
+      },
+      "cohort0912": {
+        "commits": [
+          "b5eaac72dfcd2bb9b21c170a47ce3d948727d252"
+        ],
+        "correction": "Retire registration-owned incoming-message and file-offer collectors on terminal state and outer shutdown without cancelling unrelated CLI ownership.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_REPAIR_HOST",
+        "report": "cohort-0912-focused-independent-review/FINAL-HOST-REPORT.md",
+        "reportSha256": "b4cf2f78075cb16f377eaf3211daee9dcb98bc43d9129bef6587ea45037a6275",
+        "verificationAndLimits": "Original real-helper retention failure; final R2 actual helper4/4 plus43total CLI caller/diagnostic/privacy/selection cases. Retained consumer jobs, not measured heap/native sockets or device behavior.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_BINDING",
+        "finalCommitBindingSha256": "fd0fc2bcf812a33b7a6ae6c26c901f5796d9bed2221ba21170836ffbbd2c1c30"
+      }
+    },
+    {
+      "number": 381,
+      "title": "[AUDIT][Low] CLI duplicate registration overwrites a replacement session before its guard",
+      "url": "https://github.com/p2pKit/P2pKit/issues/381",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "CLI registerSession publishes to the peer map before duplicate admission; A then replacement B then duplicate A overwrites B even though once-only collector wiring is preserved. Actual-helper assertSame(B, sessions[peerId]) fails.",
+      "affectedComponentsExcerpt": "samples/p2p-sample-desktop/src/main/kotlin/dev/p2pkit/sample/desktop/Main.kt: actual registerSession/wireIncoming and all incoming, auto-mesh, interactive and manual acquisitions.",
+      "relatedIssuesAndDependencies": [
+        260,
+        329,
+        336,
+        380
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": "open",
+      "assessmentAtCheckpoint": "Fresh actual-helper host reproduction confirmed and filed as a distinct cause. Filing and original failure are separate from the later cohort0912 repair approval; no native-resource volume, SDK authoritative-store, payload-loss or device acceptance is claimed.",
+      "recordedFixCommitsOrFinalRevision": [
+        "b5eaac72dfcd2bb9b21c170a47ce3d948727d252"
+      ],
+      "recordedIndependentReview": "APPROVE_REPAIR_HOST; /root/review_cohort_0910_execution; exact final committed composition bound independently; see repairs/cohort-2026-09-09-0912.md.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/381"
+      ],
+      "initialFilingObservation": {
+        "createdUtc": "2026-09-09T13:53:34Z",
+        "verifiedUtc": "2026-09-09T13:53:34.184772+00:00",
+        "bodySha256": "6736d6eb0030edda3e84d16dac9f7c0b37bfbced1b20c78ee6de4ac2155bac3d",
+        "state": "open",
+        "initialDisposition": "PENDING_REMEDIATION",
+        "sourceScope": "Published b67 baseline plus source-reviewed #329 candidate; registration helper bodies were unchanged by #329.",
+        "freshReproduction": "One intended actual-helper assertion failure; owner finally cleanup and task-owned wrapper stop passed, no owned worker survivors.",
+        "capturedAtListUtc": "2026-09-09T14:14:18.202983+00:00"
+      },
+      "cohort0912": {
+        "commits": [
+          "b5eaac72dfcd2bb9b21c170a47ce3d948727d252"
+        ],
+        "correction": "Check duplicate and already-terminal admission before CLI peer-map publication so stale A cannot replace current B.",
+        "reviewer": "/root/review_cohort_0910_execution",
+        "verdict": "APPROVE_REPAIR_HOST",
+        "report": "cohort-0912-focused-independent-review/FINAL-HOST-REPORT.md",
+        "reportSha256": "b4cf2f78075cb16f377eaf3211daee9dcb98bc43d9129bef6587ea45037a6275",
+        "verificationAndLimits": "Separate original real-helper duplicate-map overwrite; final R2 exact replacement and stale/terminal-acquisition assertions in4-helper-case class. Application peer-map admission, not SDK authoritative store or measured payload loss.",
+        "countedApproved": true,
+        "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_BINDING",
+        "finalCommitBindingSha256": "fd0fc2bcf812a33b7a6ae6c26c901f5796d9bed2221ba21170836ffbbd2c1c30"
+      }
+    },
+    {
+      "number": 382,
+      "title": "[AUDIT][Low] Dependency curator packet/key inspection inherits ambient GPG configuration",
+      "url": "https://github.com/p2pKit/P2pKit/issues/382",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Curator packet/key reads inherit ambient GPG configuration instead of the allocated private home; invalid synthetic ambient config rejects parseable public inputs.",
+      "affectedComponentsExcerpt": "scripts/review-dependency-verification.sh packet/key inspection and scripts/prepare-dependency-update.sh caller.",
+      "relatedIssuesAndDependencies": [
+        226,
+        334,
+        335,
+        343,
+        344,
+        345
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": null,
+      "assessmentAtCheckpoint": "Confirmed and individually filed after the cohort0912 snapshot; no implemented/independently approved repair recorded. Real parser argv on separate public inputs: clean ambient/invalid ambient/owned home exits0/2/0 for both readers. Not a matched signature/key pair, whole curator run, trust bypass or secret leak.",
+      "recordedFixCommitsOrFinalRevision": [
+        "446b96d7f168f4e582c172ee1715036044d9917f"
+      ],
+      "recordedIndependentReview": "APPROVE_REPAIR_HOST; /root/review_gpg_382; exact reviewed source and focused commit receipt recorded in followupApproval.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/382"
+      ],
+      "initialFilingObservation": {
+        "createdUtc": "2026-09-09T14:56:57Z",
+        "requestStartedUtc": "2026-09-09T14:56:55.930843+00:00",
+        "requestEndedUtc": "2026-09-09T14:56:56.768207+00:00",
+        "state": "open",
+        "exitCode": 0,
+        "bodySha256": "78863076901418765b12066c15d977f3458a619b93678c1290981c1c49d51fd4",
+        "responseSha256": "af3c805e0b7499eadb50b6dfcc1eb415e93d0d4a440723309eaf16ea1de43f93",
+        "scope": "Successful individual creation response, not a new all-state list, separate refetch, repair approval or closure."
+      },
+      "filingTimeFollowupConfirmation": {
+        "status": "NARROW_HOST_CONTROL_CONFIRMED",
+        "countedApproved": false
+      },
+      "dispositionAtFollowupFiling": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "Pending repair and fresh independent final acceptance."
+      },
+      "followupApproval": {
+        "recordedUtc": "2026-09-09T15:20:57.641005+00:00",
+        "commits": [
+          "446b96d7f168f4e582c172ee1715036044d9917f"
+        ],
+        "correction": "Select the already allocated private GNUPGHOME for both packet and exported-key inspection; preserve exact provenance, invalid-signature rejection, ambient-home isolation and owned cleanup.",
+        "reviewer": "/root/review_gpg_382",
+        "verdict": "APPROVE_REPAIR_HOST",
+        "report": "382-gpg-home-independent-review/FINAL-REPORT.md",
+        "reportSha256": "fe11e3ef0655be8da6baf756ec095ca4adc8104b7a5d8dd30fa71d572c49a303",
+        "reviewedPatchSha256": "d3b9bdcee23a471eecfb90c67ae8f1f21a7f1c760bef2dd820139d37427593c0",
+        "commitReceipt": "382-gpg-home-candidate/commit.json",
+        "commitReceiptSha256": "786f77438a376126f2845ab2e6d6f7e12c6d68e97fe798af24b85c592b76ae4d",
+        "verificationAndLimits": "APPROVE_REPAIR_HOST: three selected real-curator/offline GPG fixture tests pass in3.099s: invalid ambient configuration ignored/untouched with all-five-operation private-home selection, invalid-signature cleanup, and injected shutdown failure retaining a retry path.0/0/0, no owned survivors; synthetic fixtures retired, existing product outputs deferred.237 copied cases/39XML stale;zero fresh product XML. Not remote publisher authentication, professional cryptographic, macOS/Windows or release acceptance.",
+        "countedApproved": true,
+        "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED",
+        "commitBindingScope": "Root focused-commit receipt binds reviewed final paths/hunks. The source/execution review predates that commit; no later independent commit-review verdict is invented."
+      }
+    },
+    {
+      "number": 383,
+      "title": "[AUDIT][Low] iOS sample: startup continuations and callbacks can outlive Stop and mutate a replacement run",
+      "url": "https://github.com/p2pKit/P2pKit/issues/383",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "iOS startup can install work after Stop takes its cancellation snapshot; missing exact-run checks let old callbacks/finalizers mutate a replacement run.",
+      "affectedComponentsExcerpt": "samples/iosApp/ContentView.swift startup/Stop, task admission, queued callbacks and run-owned cleanup.",
+      "relatedIssuesAndDependencies": [
+        202,
+        191,
+        291,
+        260,
+        321,
+        328,
+        374,
+        377,
+        379,
+        380,
+        381
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": null,
+      "assessmentAtCheckpoint": "Confirmed and individually filed after the cohort0912 snapshot; no implemented/independently approved repair recorded. Reachable ownership/suspension path source-confirmed at9f9e57ce8df84a7bae94b13b2b500f3d8225da4e; native reproduction/regression NOT_RUN. Swift Task.cancel propagation into pinned exported Flow.collect is a separate suspicion, not proven by run fencing.",
+      "recordedFixCommitsOrFinalRevision": [],
+      "recordedIndependentReview": "Pending repair and fresh independent final acceptance.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/383"
+      ],
+      "initialFilingObservation": {
+        "createdUtc": "2026-09-09T14:59:27Z",
+        "requestStartedUtc": "2026-09-09T14:59:25.408718+00:00",
+        "requestEndedUtc": "2026-09-09T14:59:26.279101+00:00",
+        "state": "open",
+        "exitCode": 0,
+        "bodySha256": "d4d6c37b826080090589b83ff1091b7113a17053c1d61bd53ad1adfdd23bf331",
+        "responseSha256": "656dd8f32aa26dad5819c6525f5dd1de9549544313a60a9b21cfacd55f4aa0bb",
+        "scope": "Successful individual creation response, not a new all-state list, separate refetch, repair approval or closure."
+      },
+      "followupConfirmation": {
+        "status": "SOURCE_CONFIRMED_NATIVE_NOT_RUN",
+        "countedApproved": false
+      }
+    },
+    {
+      "number": 384,
+      "title": "[AUDIT][Low] XcodeGen installer accepts a failed version probe when its output matches",
+      "url": "https://github.com/p2pKit/P2pKit/issues/384",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "XcodeGen installer ignores the version probe exit status; matching stdout from a failing probe still yields successful installation.",
+      "affectedComponentsExcerpt": "scripts/install-xcodegen.sh version probe/actual main and CI/release/audit-host callers.",
+      "relatedIssuesAndDependencies": [
+        225,
+        385,
+        386
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": null,
+      "assessmentAtCheckpoint": "Confirmed and individually filed after the cohort0912 snapshot; no implemented/independently approved repair recorded. Actual main with a tiny checksum-matched synthetic ZIP: expected version plus exit7 still returns0 and installs. No network, real XcodeGen behavior, checksum bypass or native Apple acceptance.",
+      "recordedFixCommitsOrFinalRevision": [
+        "b77c7c5edf3612bc80e52c80870b448f3860caae"
+      ],
+      "recordedIndependentReview": "APPROVE_REPAIR_HOST; /root/prepare_remaining_tests/review_xcodegen_384_386; exact reviewed source and focused commit receipt in followupApproval.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/384"
+      ],
+      "initialFilingObservation": {
+        "createdUtc": "2026-09-09T15:02:07Z",
+        "requestStartedUtc": "2026-09-09T15:02:05.928207+00:00",
+        "requestEndedUtc": "2026-09-09T15:02:06.687106+00:00",
+        "state": "open",
+        "exitCode": 0,
+        "bodySha256": "bfb105ff9b4030e1756490a3f9b18c1b2c64b52faa62011279c98e3bacc5d659",
+        "responseSha256": "eb3a2699bc983dde17556c0a9d0847bc4312f9c909f61dc2fcf078fcdb3a47aa",
+        "scope": "Successful individual creation response, not a new all-state list, separate refetch, repair approval or closure."
+      },
+      "filingTimeFollowupConfirmation": {
+        "status": "NARROW_HOST_CONTROL_CONFIRMED",
+        "countedApproved": false
+      },
+      "dispositionAtFollowupFiling": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "Pending repair and fresh independent final acceptance."
+      },
+      "followupApproval": {
+        "recordedUtc": "2026-09-09T15:31:07.028235+00:00",
+        "commits": [
+          "b77c7c5edf3612bc80e52c80870b448f3860caae"
+        ],
+        "correction": "Explicitly reject nonzero version probe status before exact-version comparison; preserve failure through owned cleanup instead of relying on errexit in command substitution.",
+        "reviewer": "/root/prepare_remaining_tests/review_xcodegen_384_386",
+        "verdict": "APPROVE_REPAIR_HOST",
+        "report": "next-xcodegen-installer-384-386/independent-review/EXECUTION-ADDENDUM.md",
+        "reportSha256": "63c0a80b5b47b48f035e13c213588b993c9e67ea895fba47c7e1d6b48b408b34",
+        "reviewedPatchSha256": "89d1ca91d87f33e9df624013c748ac920b9a2ff15901133c4f9a35e10f451ba7",
+        "commitReceipt": "next-xcodegen-installer-384-386/commit.json",
+        "commitReceiptSha256": "6de26ec290ee5e731b043ddb881032194b2db9b07296e7ab6bb1ef52705f9f87",
+        "verificationAndLimits": "APPROVE_REPAIR_HOST for actual installer Bash control flow:14 fixture assertions plus5 actual-main cases pass, including quoted spaced-TMPDIR success, failed matching version probe returning7, wrong version/blocked parent/existing destination with owned stages removed and caller sentinels/EXIT marker preserved.0/0/0, unchanged source/no owned survivors;237 copied cases/39XML stale,zero fresh product XML. ShellCheck NOT_AVAILABLE/NOT_EXECUTED. Actual Mac/pinned binary and Bash3.2 corroboration remain separate final-campaign work, not mandatory prerequisites for these host repair approvals.",
+        "countedApproved": true,
+        "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED",
+        "commitBindingScope": "Root receipt binds exact independently reviewed pre/postimages. Git patch renderer context/alignment differs; byte-equivalent source, not raw renderer equality. Reviewer source/execution verdict predates commit; no later independent commit review invented."
+      }
+    },
+    {
+      "number": 385,
+      "title": "[AUDIT][Low] XcodeGen installer splits the executable path under a spaced TMPDIR",
+      "url": "https://github.com/p2pKit/P2pKit/issues/385",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Unquoted XcodeGen executable pathname under a spaced TMPDIR splits the version command and prevents installation.",
+      "affectedComponentsExcerpt": "scripts/install-xcodegen.sh temporary unpack path/version argv and actual main callers.",
+      "relatedIssuesAndDependencies": [
+        225,
+        226,
+        384,
+        386
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": null,
+      "assessmentAtCheckpoint": "Confirmed and individually filed after the cohort0912 snapshot; no implemented/independently approved repair recorded. Actual main succeeds with ordinary TMPDIR but fails at the version invocation under a literal spaced TMPDIR. Synthetic archive/control only; not a claim about default macOS TMPDIR or native qualification.",
+      "recordedFixCommitsOrFinalRevision": [
+        "b77c7c5edf3612bc80e52c80870b448f3860caae"
+      ],
+      "recordedIndependentReview": "APPROVE_REPAIR_HOST; /root/prepare_remaining_tests/review_xcodegen_384_386; exact reviewed source and focused commit receipt in followupApproval.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/385"
+      ],
+      "initialFilingObservation": {
+        "createdUtc": "2026-09-09T15:02:08Z",
+        "requestStartedUtc": "2026-09-09T15:02:06.688876+00:00",
+        "requestEndedUtc": "2026-09-09T15:02:07.479334+00:00",
+        "state": "open",
+        "exitCode": 0,
+        "bodySha256": "daf87059f2c0fae566b8417ab7a1a97c1b838124b2d37ce8f15461082e2dead6",
+        "responseSha256": "4cb76b5ae5aeee84a92a3bf6734944dd6259fe46f175c150d61ac471f9d7c936",
+        "scope": "Successful individual creation response, not a new all-state list, separate refetch, repair approval or closure."
+      },
+      "filingTimeFollowupConfirmation": {
+        "status": "NARROW_HOST_CONTROL_CONFIRMED",
+        "countedApproved": false
+      },
+      "dispositionAtFollowupFiling": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "Pending repair and fresh independent final acceptance."
+      },
+      "followupApproval": {
+        "recordedUtc": "2026-09-09T15:31:07.028235+00:00",
+        "commits": [
+          "b77c7c5edf3612bc80e52c80870b448f3860caae"
+        ],
+        "correction": "Quote the complete temporary executable pathname as one argv element without changing version or checksum pins.",
+        "reviewer": "/root/prepare_remaining_tests/review_xcodegen_384_386",
+        "verdict": "APPROVE_REPAIR_HOST",
+        "report": "next-xcodegen-installer-384-386/independent-review/EXECUTION-ADDENDUM.md",
+        "reportSha256": "63c0a80b5b47b48f035e13c213588b993c9e67ea895fba47c7e1d6b48b408b34",
+        "reviewedPatchSha256": "89d1ca91d87f33e9df624013c748ac920b9a2ff15901133c4f9a35e10f451ba7",
+        "commitReceipt": "next-xcodegen-installer-384-386/commit.json",
+        "commitReceiptSha256": "6de26ec290ee5e731b043ddb881032194b2db9b07296e7ab6bb1ef52705f9f87",
+        "verificationAndLimits": "APPROVE_REPAIR_HOST for actual installer Bash control flow:14 fixture assertions plus5 actual-main cases pass, including quoted spaced-TMPDIR success, failed matching version probe returning7, wrong version/blocked parent/existing destination with owned stages removed and caller sentinels/EXIT marker preserved.0/0/0, unchanged source/no owned survivors;237 copied cases/39XML stale,zero fresh product XML. ShellCheck NOT_AVAILABLE/NOT_EXECUTED. Actual Mac/pinned binary and Bash3.2 corroboration remain separate final-campaign work, not mandatory prerequisites for these host repair approvals.",
+        "countedApproved": true,
+        "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED",
+        "commitBindingScope": "Root receipt binds exact independently reviewed pre/postimages. Git patch renderer context/alignment differs; byte-equivalent source, not raw renderer equality. Reviewer source/execution verdict predates commit; no later independent commit review invented."
+      }
+    },
+    {
+      "number": 386,
+      "title": "[AUDIT][Low] XcodeGen installer leaves downloaded archives after failed installation",
+      "url": "https://github.com/p2pKit/P2pKit/issues/386",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Failed XcodeGen installation leaves its downloaded archive because the EXIT trap uses download_root after its main-local ownership lifetime ends.",
+      "affectedComponentsExcerpt": "scripts/install-xcodegen.sh main-local download workspace and EXIT trap.",
+      "relatedIssuesAndDependencies": [
+        225,
+        228,
+        384,
+        385
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": null,
+      "assessmentAtCheckpoint": "Confirmed and individually filed after the cohort0912 snapshot; no implemented/independently approved repair recorded. Actual failed main leaves download directory/archive after child exit; unpack directory is absent. Later outer controller cleanup is not installer cleanup. Same Bash EXIT/local mechanism as228 but independent installer scope; approved launcher fixes remain intact.",
+      "recordedFixCommitsOrFinalRevision": [
+        "b77c7c5edf3612bc80e52c80870b448f3860caae"
+      ],
+      "recordedIndependentReview": "APPROVE_REPAIR_HOST; /root/prepare_remaining_tests/review_xcodegen_384_386; exact reviewed source and focused commit receipt in followupApproval.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/386"
+      ],
+      "initialFilingObservation": {
+        "createdUtc": "2026-09-09T15:02:09Z",
+        "requestStartedUtc": "2026-09-09T15:02:07.480134+00:00",
+        "requestEndedUtc": "2026-09-09T15:02:08.417448+00:00",
+        "state": "open",
+        "exitCode": 0,
+        "bodySha256": "0565f23adafd12d997af3349fa54c9e060d983c16776df3435302cb7a16bb517",
+        "responseSha256": "3c399517385d746bdeeaecba13d2868839fe435da983911217f15e7df932264b",
+        "scope": "Successful individual creation response, not a new all-state list, separate refetch, repair approval or closure."
+      },
+      "filingTimeFollowupConfirmation": {
+        "status": "NARROW_HOST_CONTROL_CONFIRMED",
+        "countedApproved": false
+      },
+      "dispositionAtFollowupFiling": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "Pending repair and fresh independent final acceptance."
+      },
+      "followupApproval": {
+        "recordedUtc": "2026-09-09T15:31:07.028235+00:00",
+        "commits": [
+          "b77c7c5edf3612bc80e52c80870b448f3860caae"
+        ],
+        "correction": "Keep EXIT cleanup ownership alive in the installer main subshell and safely capture the exact owned download path; preserve original failure, caller trap and unrelated/destination state.",
+        "reviewer": "/root/prepare_remaining_tests/review_xcodegen_384_386",
+        "verdict": "APPROVE_REPAIR_HOST",
+        "report": "next-xcodegen-installer-384-386/independent-review/EXECUTION-ADDENDUM.md",
+        "reportSha256": "63c0a80b5b47b48f035e13c213588b993c9e67ea895fba47c7e1d6b48b408b34",
+        "reviewedPatchSha256": "89d1ca91d87f33e9df624013c748ac920b9a2ff15901133c4f9a35e10f451ba7",
+        "commitReceipt": "next-xcodegen-installer-384-386/commit.json",
+        "commitReceiptSha256": "6de26ec290ee5e731b043ddb881032194b2db9b07296e7ab6bb1ef52705f9f87",
+        "verificationAndLimits": "APPROVE_REPAIR_HOST for actual installer Bash control flow:14 fixture assertions plus5 actual-main cases pass, including quoted spaced-TMPDIR success, failed matching version probe returning7, wrong version/blocked parent/existing destination with owned stages removed and caller sentinels/EXIT marker preserved.0/0/0, unchanged source/no owned survivors;237 copied cases/39XML stale,zero fresh product XML. ShellCheck NOT_AVAILABLE/NOT_EXECUTED. Actual Mac/pinned binary and Bash3.2 corroboration remain separate final-campaign work, not mandatory prerequisites for these host repair approvals.",
+        "countedApproved": true,
+        "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED",
+        "commitBindingScope": "Root receipt binds exact independently reviewed pre/postimages. Git patch renderer context/alignment differs; byte-equivalent source, not raw renderer equality. Reviewer source/execution verdict predates commit; no later independent commit review invented."
+      }
+    },
+    {
+      "number": 387,
+      "title": "[AUDIT][Low] External evidence checksum recipe hashes its own output",
+      "url": "https://github.com/p2pKit/P2pKit/issues/387",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "The external-evidence checksum recipe hashes its own root sha256sums.txt output and immediately fails verification.",
+      "affectedComponentsExcerpt": "docs/validation/test-catalog.md checksum recipe and docs/validation/evidence-schema.md integrity contract.",
+      "relatedIssuesAndDependencies": [
+        236,
+        297,
+        322
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": null,
+      "assessmentAtCheckpoint": "Confirmed and individually filed after the cohort0912 snapshot; no implemented/independently approved repair recorded. Exact recipe with existing root manifest generates0/verifies1; root-only exclusion control retains nested same-named raw evidence. First-creation self-inclusion is scheduling-dependent; no historical private manifest is alleged affected.",
+      "recordedFixCommitsOrFinalRevision": [
+        "38434bd72bf58c7d5c0c756a550bb7c355207bc2"
+      ],
+      "recordedIndependentReview": "APPROVE; /root/review_wire_spec; exact reviewed source and focused commit receipt recorded in followupApproval.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/387"
+      ],
+      "initialFilingObservation": {
+        "createdUtc": "2026-09-09T15:02:10Z",
+        "requestStartedUtc": "2026-09-09T15:02:08.418272+00:00",
+        "requestEndedUtc": "2026-09-09T15:02:09.359078+00:00",
+        "state": "open",
+        "exitCode": 0,
+        "bodySha256": "44bfb6e5f5596cc5e3959789623e9d4b12df64f62475f262b65734bbdd62aa5a",
+        "responseSha256": "2d48018d214f7e8612583c2a50e59d04d09d95c5588b45c1686f2c4b56b17795",
+        "scope": "Successful individual creation response, not a new all-state list, separate refetch, repair approval or closure."
+      },
+      "filingTimeFollowupConfirmation": {
+        "status": "NARROW_HOST_CONTROL_CONFIRMED",
+        "countedApproved": false
+      },
+      "dispositionAtFollowupFiling": {
+        "status": "PENDING_REMEDIATION",
+        "recordedFixCommitsOrFinalRevision": [],
+        "recordedIndependentReview": "Pending repair and fresh independent final acceptance."
+      },
+      "followupApproval": {
+        "recordedUtc": "2026-09-09T15:20:57.641005+00:00",
+        "commits": [
+          "38434bd72bf58c7d5c0c756a550bb7c355207bc2"
+        ],
+        "correction": "Generate the evidence manifest from a quoted evidence-directory subshell using relative paths; exclude only the exact root manifest, retain nested same-name raw evidence, and hash the completed manifest separately.",
+        "reviewer": "/root/review_wire_spec",
+        "verdict": "APPROVE",
+        "report": "387-manifest-independent-review/REPORT.md",
+        "reportSha256": "a1d6fb47f9e3fdc43893f71ab0f136159e112c1d1355cf1eb64446382747fe88",
+        "reviewedPatchSha256": "1ca1e40345e706f1b20ca1f052557f329e4b06fbfa49bc5fd8b423c3b44bbc94",
+        "commitReceipt": "387-manifest-candidate/commit.json",
+        "commitReceiptSha256": "1fb907884f1a553aa521cea0d7c91116e95077be04640aad5668d7d45c6fbc2c",
+        "verificationAndLimits": "Independent exact-document APPROVE. Actual modified recipe generation and real shasum verification both pass, with exactly two raw entries and no root output;484 relative links/81 active Markdown and whitespace checks passed at that invocation.0/0/0, no owned survivors;237 copied product cases are stale, zero fresh product XML. Not external campaign or later-administration acceptance.",
+        "countedApproved": true,
+        "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED",
+        "commitBindingScope": "Root focused-commit receipt binds reviewed final paths/hunks. The source/execution review predates that commit; no later independent commit-review verdict is invented."
       }
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-09T12:46:17.630027+00:00",
+  "lastDispositionUpdateUtc": "2026-09-09T15:31:07.028235+00:00",
   "githubRefreshEvidence": {
     "startedUtc": "2026-09-08T10:24:33.734412+00:00",
     "endedUtc": "2026-09-08T10:30:05.205645+00:00",
@@ -7475,19 +8137,23 @@
   "previousDispositionUpdateUtc368": "2026-09-08T12:25:06.517016+00:00",
   "previousProvenance368": "Curated recovery/continuation record; original inventorySnapshotUtc stays historical. Full issue discussions and affected callers, not excerpts, govern repairs. Earlier assessments/outcomes are not fresh executions; raw private evidence is not inGit. Rows reconcile the exhaustive 10:24\u201310:30UTC fresh-history capture plus individually filed/refetched368 at10:50:42UTC. 367 and368 source approvals/pushes/outcomes are later scoped disposition/publication observations, not post-outcome complete GitHub refreshes, closure, merge or release. Current368approval/verification is bound to c221d54; earlier367/145 assessments/failures retain their original scope, and later223work is not approved here. Previous145 verification and refresh fields are preserved under explicit historical keys. Approved repository scope excludes unexecuted foreign-host/device/independent acceptance; whole audit NOT_READY.",
   "latestGithubListObservation": {
-    "startedUtc": "2026-09-09T12:04:11.725046+00:00",
-    "finishedUtc": "2026-09-09T12:04:20.651772+00:00",
-    "totalIssues": 300,
-    "openIssues": 193,
+    "startedUtc": "2026-09-09T14:14:10.710942+00:00",
+    "finishedUtc": "2026-09-09T14:14:18.202983+00:00",
+    "totalIssues": 302,
+    "openIssues": 195,
+    "closedIssues": 107,
     "pullRequests": 79,
     "openPullRequests": 7,
-    "issueStyleBodies": 379,
-    "conversationComments": 495,
+    "closedPullRequests": 72,
+    "issueStyleBodies": 381,
+    "conversationComments": 540,
     "inlineReviewComments": 0,
-    "summarySha256": "50132ca90ab118d29dd73015f5d6e4ec84b66807411de87e1350fac7e96515fb",
-    "scope": "All repository issue/PR bodies and complete global conversation and inline-review comments freshly fetched; open PR list metadata fresh. Closed PR detailed reviews/commits/files and issue timelines retain previous complete captures; not a new full-history refresh, no Actions/ref execution lease. Initial unsupported --slurp attempt120329 made no HTTP request; retained separately.",
+    "freshOwnTimelines": 54,
+    "timelineSupplementFinishedUtc": "2026-09-09T14:20:42.820522+00:00",
     "freshCompleteHistories": false,
-    "previousFullCaptureReference": "latestGithubFullRefresh (historical, unchanged)"
+    "reportSha256": "2561ef42d8215530f505622f1d62c7d36ab59468e49616b2648ac0fa993b7401",
+    "reconciliationSha256": "5d730d2ea07fcaf36044300c0f511977577225e5e0dbf952f719ac87d19ee056",
+    "scope": "Authoritative 381-item end list; all bodies/conversation comments and PR own list fields freshly fetched. Only 54 changed/new timelines refreshed. Unchanged detailed local PR/own histories and 117 upstream histories remain historical; eight visibility gaps, 402/33 missing patch fields and checkout2454 backlink uncertainty remain. Initial and exact-Link retry 200-item traversals are incomplete, cause UNKNOWN; their summaries/deltas are not authoritative. No Actions, execution lease or runtime approval."
   },
   "previousDispositionUpdateUtc223": "2026-09-08T13:18:49.492924+00:00",
   "previousGithubListObservation223": {
@@ -8778,5 +9444,237 @@
       "evidenceReportSha256": "0771537ffbb288dbde7b9166ce99b98c187353cf47ce65dd1080a15a23817180",
       "scope": "Final independent local commit/status capture; no fresh remote ref/Actions lease or subsequent publication claim."
     }
+  },
+  "currentProjectionBeforeCohort0912": {
+    "provenance": "145/193 independently approved repository-repair rows (75.1%); 48 remaining (24.9%): 26 repair-category rows, 21 external-validation rows and architecture decision #120; 60 new audit findings. Counts are not effort, GitHub closures, platform acceptance or release readiness. Eighteen cohort0910 final approvals are bound to exact commits and retained evidence; later rows count only with explicit final approvals. Two filed causes378/379 expand191 to193. Historical failures/read scopes/decisions are preserved; #133 independent NOT_STARTED and whole audit NOT_READY.",
+    "lastDispositionUpdateUtc": "2026-09-09T12:46:17.630027+00:00",
+    "githubIssueListRefreshedUtc": "2026-09-09T12:04:20.651772+00:00",
+    "latestGithubListObservation": {
+      "startedUtc": "2026-09-09T12:04:11.725046+00:00",
+      "finishedUtc": "2026-09-09T12:04:20.651772+00:00",
+      "totalIssues": 300,
+      "openIssues": 193,
+      "pullRequests": 79,
+      "openPullRequests": 7,
+      "issueStyleBodies": 379,
+      "conversationComments": 495,
+      "inlineReviewComments": 0,
+      "summarySha256": "50132ca90ab118d29dd73015f5d6e4ec84b66807411de87e1350fac7e96515fb",
+      "scope": "All repository issue/PR bodies and complete global conversation and inline-review comments freshly fetched; open PR list metadata fresh. Closed PR detailed reviews/commits/files and issue timelines retain previous complete captures; not a new full-history refresh, no Actions/ref execution lease. Initial unsupported --slurp attempt120329 made no HTTP request; retained separately.",
+      "freshCompleteHistories": false,
+      "previousFullCaptureReference": "latestGithubFullRefresh (historical, unchanged)"
+    }
+  },
+  "publishedCheckpointBeforeCohort0912": {
+    "commit": "b67e186f62f4550cea853f56ac1df22933e744ab",
+    "tree": "4c9173dc764c00e644ed04c8a2da21a8112eb191",
+    "approved": 145,
+    "denominator": 193,
+    "remaining": 48,
+    "pendingRepairs": 26,
+    "externalValidation": 21,
+    "architectureDecision": 1,
+    "newAuditFindings": 60,
+    "publishedUtc": "2026-09-09T13:13:05.604981+00:00",
+    "pushExitCode": 0,
+    "publicationReceiptSha256": "92d67bb8002366810c3fb4df9a1700314ce957e6d32b4e5e8619d90986452ef3",
+    "scope": "The prior 37 focused commits and eight-file administration were normally pushed to the audit branch. Earlier not-yet-pushed observations remain dated history, not the current publication state."
+  },
+  "cohort0912": {
+    "recordedUtc": "2026-09-09T14:53:22.668681+00:00",
+    "report": "repairs/cohort-2026-09-09-0912.md",
+    "newIssues": [
+      380,
+      381
+    ],
+    "newlyApprovedIssues": [
+      235,
+      247,
+      290,
+      329,
+      380,
+      381
+    ],
+    "sourceApprovedPendingAffectedValidation": [
+      191,
+      207,
+      209,
+      291,
+      322,
+      379
+    ],
+    "inventorySnapshot": {
+      "approved": 151,
+      "denominator": 195,
+      "remaining": 44,
+      "pendingRepairs": 22,
+      "externalValidation": 21,
+      "architectureDecision": 1,
+      "newAuditFindings": 62,
+      "scope": "Dated pre-followup disposition snapshot through issues #380/#381 and the final commit binding at 2026-09-09T14:53:22.668681+00:00. Later followup filings require a separate inventory delta; not effort, GitHub closures, platform acceptance or release readiness."
+    },
+    "sourceCommit": "9f9e57ce8df84a7bae94b13b2b500f3d8225da4e",
+    "sourceTree": "88a3b7fe4d016c526a1256f1b456ab04dd2ed954",
+    "baseCommit": "b67e186f62f4550cea853f56ac1df22933e744ab",
+    "baseTree": "4c9173dc764c00e644ed04c8a2da21a8112eb191",
+    "sourceDiffSha256": "86dbef25748239913e2187f1911e9adf9596d856109b5811b1990cd950e3fec5",
+    "review": {
+      "reviewer": "/root/review_cohort_0910_execution",
+      "report": "cohort-0912-focused-independent-review/FINAL-HOST-REPORT.md",
+      "reportSha256": "b4cf2f78075cb16f377eaf3211daee9dcb98bc43d9129bef6587ea45037a6275",
+      "readinessSha256": "43156b7504206306c62dbbc4be4cc1da79fe13968eefd81a43e2f480c7f27fa1",
+      "verdict": "APPROVE_REPAIR_HOST for 235/247/290/329/380/381; all six native-pending issue scopes remain uncounted."
+    },
+    "finalCommitBinding": {
+      "verdict": "APPROVE_FINAL_COMMIT_BINDING",
+      "reviewedUtc": "2026-09-09T14:53:22.668681+00:00",
+      "report": "cohort-0912-focused-independent-review/final-commit-bindings.json",
+      "sha256": "fd0fc2bcf812a33b7a6ae6c26c901f5796d9bed2221ba21170836ffbbd2c1c30",
+      "commitReceiptSha256": "3d8a8e9513dff8f88ace9488ba33d0da56e8efcafea66b373d186fa03246bc79",
+      "commits": 12,
+      "changedPaths": 103,
+      "byteExactToExecutedR3": true
+    },
+    "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_BINDING",
+    "hostSelections": {
+      "windowsR5": "Applied and independently source/local-fixture approved; actual native execution, packaging/READONLY cleanup and full-host qualification pending. CI commit 9f9e57ce8df84a7bae94b13b2b500f3d8225da4e.",
+      "appleR6": "Separately APPROVE_SOURCE, unapplied/unexecuted; only after terminal Windows reconciliation and exact final-source admission. Authored Apple/Swift tests are not executions."
+    },
+    "githubRefreshReference": "latestGithubListObservation; cohort-0912-github-refresh/REPORT.md",
+    "cleanup": "R1/R2/R3 owned wrapper stops passed, source unchanged, no owned survivors. Disposable outputs explicitly deferred for dependent verification/packaging, not proved removed by clean Git status. This administration starts no workers or builds.",
+    "deferredProjections": "issues.md, followups.md, coverage.tsv and the earlier continued-cohort report retain the published b67 snapshot. Synchronize at final whole-source continuation; no new full semantic read is claimed here.",
+    "scope": "Whole audit NOT_READY; independent interoperability #133 NOT_STARTED. Historical failures/full-check/host attempts remain unchanged; later confirmed or suspected followups are outside this pre-followup snapshot until separately filed and reconciled.",
+    "wordingCorrections": [
+      {
+        "issue": 292,
+        "field": "issues[number=292].continuedCohort.correction",
+        "previous": "Replace broad Throwable catches with typed, cause-preserving expectations.",
+        "current": "Replace redundant failure-message substrings with existing typed classification and exact cause identity; preserve privacy and sole-discriminator assertions.",
+        "sourceCommit": "4f9da4f98c500988975c274d1d3709572e7f954e",
+        "patchSha256": "34788139814a93c326a70b6c3a24a823e58c35648cc29c70db83494bf078b2f5",
+        "reason": "Factual description correction only; typed classifications were already present and redundant substrings were removed with cause identity strengthened. No implementation or approval/count change."
+      }
+    ]
+  },
+  "cohort0912FollowupFilings": {
+    "recordedUtc": "2026-09-09T15:11:17.080466+00:00",
+    "newIssues": [
+      382,
+      383,
+      384,
+      385,
+      386,
+      387
+    ],
+    "previousSnapshotReference": "cohort0912.inventorySnapshot:151/195, unchanged; membership was bound to14:14 full list through381.",
+    "currentCounts": {
+      "approved": 151,
+      "denominator": 201,
+      "remaining": 50,
+      "pendingRepairs": 28,
+      "externalValidation": 21,
+      "architectureDecision": 1,
+      "newAuditFindings": 68
+    },
+    "individualFilingWindow": {
+      "firstRequestStartedUtc": "2026-09-09T14:56:55.930843+00:00",
+      "lastRequestEndedUtc": "2026-09-09T15:02:09.359078+00:00",
+      "lastGithubCreatedUtc": "2026-09-09T15:02:10Z",
+      "scope": "Separate local request and GitHub server clocks; individual creations, not an atomic or new complete GitHub refresh."
+    },
+    "knownGithubCountsAfterSixAdditions": {
+      "totalIssues": 308,
+      "openIssues": 201,
+      "pullRequests": 79,
+      "scope": "14:14 authoritative list plus six individual open creations only; original list timestamps/counts remain unchanged."
+    },
+    "filingReceiptSha256ByIssue": {
+      "382": "9eea936441e9855f01de5c373f4dae64ae31700695b24432eb5c418752df7f38",
+      "383": "22a93db47667d9d501c5796b0e7bd7e0381392c4178e998ad8211fce538dc00d",
+      "384": "faed35fade11a2605df96c8041d99aa26595503bda52e83e5833996a93ca3944",
+      "385": "e80d431c5aa4b4ed812318376d59dd1b543b00ead685cdc75975a7eaa01bb439",
+      "386": "609b6fcbcbe56ee606fc51954ea5ca7b6d8bfc6b20bc42b3d00913619518f434",
+      "387": "ebdace7273dc0d54fc10a69ebc8b1cabc657da538b0784d8c8e57c0c7de80d23"
+    },
+    "verificationScope": "383 source-confirmed; native reproduction/regression NOT_RUN.382/384–387 fresh narrow host controls: outer command/owned wrapper stop/final0/0/0 means expected controller completion, not product XML/native/release approval.237 copied stale XML cases give no fresh credit.",
+    "repairState": "All six pending. Private382 candidate is unapplied and independently unaccepted; no new fix/approval recorded.",
+    "scope": "Whole audit NOT_READY;133 NOT_STARTED. Six filed rows expand the denominator without changing151 approvals. Publication/native scheduling remain root-owned; no execution by this preparation.",
+    "previousCurrentProvenance": "151/195 independently approved repository-repair rows (77.4%); 44 remaining (22.6%): 22 repairs, 21 external-validation rows and architecture decision #120; 62 new audit findings. Dated pre-followup disposition snapshot through issues #380/#381 and the final commit binding at 2026-09-09T14:53:22.668681+00:00. Later followup filings require a separate inventory delta; not effort, GitHub closures, platform acceptance or release readiness. Six exact independently host-approved repairs are counted; required Apple/Windows/artifact scopes remain pending. Whole audit NOT_READY; #133 NOT_STARTED."
+  },
+  "cohort0912FollowupApprovals": {
+    "recordedUtc": "2026-09-09T15:31:07.028235+00:00",
+    "newlyApprovedIssues": [
+      387,
+      382,
+      384,
+      385,
+      386
+    ],
+    "currentCounts": {
+      "approved": 156,
+      "denominator": 201,
+      "remaining": 45,
+      "pendingRepairs": 23,
+      "externalValidation": 21,
+      "architectureDecision": 1,
+      "newAuditFindings": 68
+    },
+    "previousSnapshotReferences": [
+      "cohort0912.inventorySnapshot:151/195, unchanged",
+      "cohort0912FollowupFilings.currentCounts:151/201 filing-time snapshot, unchanged"
+    ],
+    "sourceCheckpointCommit": "b77c7c5edf3612bc80e52c80870b448f3860caae",
+    "sourceCheckpointTree": "b3ae9998655e8545c961f05f502a12345ce7acd7",
+    "sourceCommits": [
+      {
+        "issue": 387,
+        "commit": "38434bd72bf58c7d5c0c756a550bb7c355207bc2",
+        "tree": "8f27a60a93059205f5361e0c0bd4bfe2fa59af9c",
+        "receiptSha256": "1fb907884f1a553aa521cea0d7c91116e95077be04640aad5668d7d45c6fbc2c"
+      },
+      {
+        "issue": 382,
+        "commit": "446b96d7f168f4e582c172ee1715036044d9917f",
+        "tree": "96a0b6bb0a45d43b9030b753f1a87987a0ab914c",
+        "receiptSha256": "786f77438a376126f2845ab2e6d6f7e12c6d68e97fe798af24b85c592b76ae4d"
+      },
+      {
+        "issues": [
+          384,
+          385,
+          386
+        ],
+        "commit": "b77c7c5edf3612bc80e52c80870b448f3860caae",
+        "tree": "b3ae9998655e8545c961f05f502a12345ce7acd7",
+        "receiptSha256": "6de26ec290ee5e731b043ddb881032194b2db9b07296e7ab6bb1ef52705f9f87"
+      }
+    ],
+    "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED",
+    "remainingNewFollowups": [
+      383
+    ],
+    "scope": "Only382/384/385/386/387 move to fixed/reviewed;383 source-confirmed/native NOT_RUN. Earlier filing-time pending/unapplied wording is historical. Windows native validation is next;133 NOT_STARTED;whole audit NOT_READY. No issue closure, source push or native qualification.",
+    "previousCurrentProvenance": "151/201 independently approved repository-repair rows (75.1%); 50 remaining (24.9%): 28 repairs, 21 external-validation rows and architecture decision #120; 68 new audit findings. Includes individual pending filings382–387 after the unchanged151/195 cohort0912 snapshot; no new approval. Full-list freshness stays14:14, not a fresh201-row history crawl. Counts are not effort, closures or platform/release acceptance. Whole audit NOT_READY;133NOT_STARTED.",
+    "githubObservationReference": "latestGithubOpenIssueObservation:15:27 bounded all-open bodies/deltas;14:14 full all-state/list fields retained as history."
+  },
+  "latestGithubOpenIssueObservation": {
+    "startedUtc": "2026-09-09T15:27:45.724357+00:00",
+    "finishedUtc": "2026-09-09T15:27:52.153037+00:00",
+    "openIssues": 201,
+    "openPullRequestsInIssueList": 7,
+    "missingFromInventory": [],
+    "inventoryNotOpen": [],
+    "allStateChangedIssueIdsSince1413": [
+      382,
+      383,
+      384,
+      385,
+      386,
+      387
+    ],
+    "updatedConversationComments": 0,
+    "summarySha256": "e3fee3f0cda83c82d841d53ad51327fecc3794a3dfbab9959cb8bc27e5604b93",
+    "freshCompleteHistories": false,
+    "scope": "Fresh all-open full bodies, all-state changes and conversation comments since14:13; unchanged earlier full bodies/history/linked PR sets remain historically bound, not freshly reread. Not an Actions lease. The existing14:14 githubIssueListRefreshedUtc/latestGithubListObservation remain the historical complete all-state list; this later observation is the current bounded all-open/delta refresh, not an Actions lease or history recrawl."
   }
 }

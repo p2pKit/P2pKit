@@ -1,3 +1,64 @@
+# Current approvals — #382 and #384–#387
+
+**Whole audit NOT_READY.** 156/201 independently approved repository-repair rows (77.6%); 45 remaining (22.4%): 23 repairs, 21 external-validation rows and architecture decision #120; 68 new audit findings.
+Five followup repairs are now applied, independently approved and committed;
+#383 remains source-confirmed with native reproduction **NOT_RUN**.
+Latest focused source `b77c7c5edf3612bc80e52c80870b448f3860caae`, tree `b3ae9998655e8545c961f05f502a12345ce7acd7`,
+**locally committed, not pushed**, at `2026-09-09T15:31:07.028235+00:00`.
+[Current approval addendum](repairs/cohort-2026-09-09-0912.md) and `cohort0912FollowupApprovals` bind
+exact commits/reviews and narrow checks. Fresh15:27 UTC all-open bodies/deltas
+match201 inventory issues and7 open PRs; not a complete-history recrawl or lease.
+Windows native validation is next; #133 **NOT_STARTED**. The151/201 filing-time
+and151/195 cohort snapshots below are historical, including former pending or
+unapplied descriptions of these five now-approved repairs.
+
+## Preserved filing-time and earlier checkpoint narratives
+
+# Current followup filings — #382–#387
+
+**Whole audit NOT_READY.** 151/201 independently approved repository-repair rows (75.1%); 50 remaining (24.9%): 28 repairs, 21 external-validation rows and architecture decision #120; 68 new audit findings.
+Six individually filed **pending** findings were added after the snapshot below;
+no new repair is approved. #383 is source-confirmed with native reproduction
+**NOT_RUN**; the other five have narrow host controls, not product/native gates.
+#382's private candidate is unapplied/unaccepted. See the six-filing addendum in
+[the cohort report](repairs/cohort-2026-09-09-0912.md) and `cohort0912FollowupFilings` in the current JSON.
+The **151/195** cohort0912 snapshot below remains unchanged historical evidence;
+these creation responses are not a fresh complete GitHub crawl. #133 NOT_STARTED.
+
+# Current continuation — cohort 0912 (pre-followup snapshot)
+
+**Whole audit NOT_READY.** 151/195 independently approved repository-repair rows (77.4%); 44 remaining (22.6%): 22 repairs, 21 external-validation rows and architecture decision #120; 62 new audit findings.
+These are dated disposition counts through #380/#381 at **2026-09-09T14:53:22.668681+00:00**,
+not effort, live GitHub state, platform or release acceptance. Later followup
+filings require a separate delta and are not silently included in 195.
+
+Source **`9f9e57ce8df84a7bae94b13b2b500f3d8225da4e` / tree `88a3b7fe4d016c526a1256f1b456ab04dd2ed954`**:
+12 focused commits independently bound to the exact executed/reviewed composition.
+**Locally committed, not pushed at the final binding.** The previous 37 focused
+commits and administration were normally pushed as `b67e186f62f4550cea853f56ac1df22933e744ab`
+at 13:13:05 UTC; the older unpublished notices below retain their original scope.
+
+[Current cohort report](repairs/cohort-2026-09-09-0912.md) and the `cohort0912` records in
+`issues.json`/`checkpoint.json` govern this snapshot. **APPROVE_REPAIR_HOST**:
+#235/#247/#290/#329/#380/#381. R1 remains FAIL (985/1,015 fresh), R2 remains FAIL
+(123/124 fresh); narrow R3 passed 10 fresh core cases and nine local host-helper
+fixtures. Stale XML is excluded, not added to fresh totals.
+
+Windows r5 is source/local-fixture approved and applied; actual native execution,
+packaging and READONLY cleanup are next. Apple r6 is source-approved, unapplied
+and unexecuted; admit separately after terminal Windows reconciliation.
+#191/#207/#209/#291/#322/#379 remain pending applicable native evidence; #207 also
+needs relevant Windows adopters. **#133 independent interoperability NOT_STARTED.**
+
+The existing Markdown disposition tables, followups, coverage projection and
+older cohort report remain the published **b67 snapshot**, not current tables or
+a whole-source/release pass. Use this notice, the current JSON and report until
+final synchronization. Preserve all earlier failures; continue feasible work,
+serialized owned builds/cleanup and independent final review. No issue closures,
+main merges, force-pushes, tag moves, settings changes or releases are authorized.
+
+## Preserved published b67 checkpoint narrative
+
 # Current audit continuation — continued September9 cohort
 
 **Whole audit NOT_READY.** 145/193 independently approved repository-repair rows (75.1%); 48 remaining (24.9%): 26 repair-category rows, 21 external-validation rows and architecture decision #120; 60 new audit findings. Counts are not effort, GitHub closures, platform acceptance or release readiness.
