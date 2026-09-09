@@ -115,6 +115,7 @@ struct ContentView: View {
     /// explicit close button on the banner (AUDIT-2026-06: was tap-to-dismiss
     /// with no visible affordance).
     @State private var errorBanner: String? = nil
+    @State private var backupWarning: String? = nil
 
     // MARK: - Kit + background tasks
 
@@ -373,6 +374,7 @@ struct ContentView: View {
                 }
             )
         }
+        .onAppear { prepareManagedStorage() }
         .onChange(of: scenePhase) { phase in
             switch phase {
             case .active:
@@ -415,6 +417,16 @@ struct ContentView: View {
             .textSelection(.enabled)
         Text("Status: \(status)")
             .accessibilityIdentifier("sample-status")
+
+        if let backupWarning {
+            Text(backupWarning)
+                .font(.callout)
+                .foregroundColor(.red)
+                .accessibilityIdentifier("backup-policy-warning")
+            Button("Retry storage setup") { prepareManagedStorage() }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("retry-backup-policy")
+        }
 
         if let err = errorBanner {
             // AUDIT-2026-06 (D-G9-samples-desktop-ios-16): explicit dismiss
@@ -1320,27 +1332,54 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func prepareManagedStorage() {
+        do {
+            backupWarning = try SampleBackupPolicy.prepareAtStartup(
+                inbox: { try SampleBackupPolicy.prepareDirectory(at: SampleBackupPolicy.inboxDirectory()) },
+                evidence: { try diagnostics.prepareEvidenceStorage() }
+            )
+        } catch is CancellationError {
+            // View/task cancellation is not an ordinary backup-policy failure.
+        } catch {
+            backupWarning = SampleBackupPolicy.startupWarning
+        }
+    }
+
+    @MainActor
     private func acceptIncomingOffer(_ pending: PendingOffer) async {
         guard let pending = SessionTransferEntries.take(pending.id, from: &pendingOffers) else { return }
         let offer = pending.offer
-        let sessionId = pending.id.sessionId
         let maxBytes: Int64 = 50 * 1024 * 1024
         guard offer.sizeBytes >= 0 && offer.sizeBytes <= maxBytes else {
             appendMessage("file offer '\(offer.name)' rejected: exceeds 50 MiB sample quota", kind: .error)
             try? await offer.reject(reason: "receiver quota exceeded")
             return
         }
-        let fm = FileManager.default
-        let inbox = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("P2pKitInbox", isDirectory: true)
+        let inbox = SampleBackupPolicy.inboxDirectory()
         do {
-            try fm.createDirectory(at: inbox, withIntermediateDirectories: true)
+            try await SampleBackupPolicy.withPreparedDirectory(at: inbox) {
+                await acceptPreparedIncomingOffer(pending, in: inbox)
+            }
+        } catch is CancellationError {
+            // Do not present cancellation as an ordinary storage rejection.
+        } catch {
+            appendMessage("Cannot prepare inbox backup policy — rejecting selected file", kind: .error)
+            try? await offer.reject(reason: "receiver storage unavailable")
+        }
+    }
+
+    @MainActor
+    private func acceptPreparedIncomingOffer(_ pending: PendingOffer, in inbox: URL) async {
+        let offer = pending.offer
+        let sessionId = pending.id.sessionId
+        let fm = FileManager.default
+        do {
             if !cleanedTransferDirectories.contains(inbox.path) {
                 try cleanupStaleTransferParts(in: inbox, fileManager: fm)
                 cleanedTransferDirectories.insert(inbox.path)
             }
         } catch {
-            appendMessage("file offer '\(offer.name)': cannot create inbox dir — rejecting", kind: .error)
+            appendMessage("file offer '\(offer.name)': cannot prepare inbox dir — rejecting", kind: .error)
             try? await offer.reject(reason: "receiver storage unavailable")
             return
         }

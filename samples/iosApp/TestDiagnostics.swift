@@ -298,6 +298,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
     private let encoder: JSONEncoder
     private let logDirectory: URL
     private let evidenceDirectory: URL
+    private let excludeEvidenceFromBackup: (URL) throws -> Void
     private let defaults: UserDefaults
 
     private struct TransferEvidence {
@@ -334,11 +335,13 @@ final class IOSTestDiagnosticStore: ObservableObject {
     init(
         baseDirectory: URL? = nil,
         evidenceDirectory: URL? = nil,
+        excludeEvidenceFromBackup: @escaping (URL) throws -> Void = SampleBackupPolicy.excludeDirectoryFromBackup,
         defaults: UserDefaults = .standard,
         maximumEvents: Int = 5_000
     ) {
         precondition(maximumEvents > 0 && maximumEvents <= Self.maxEvents)
         self.maximumEvents = maximumEvents
+        self.excludeEvidenceFromBackup = excludeEvidenceFromBackup
         self.defaults = defaults
         applicationVersion = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
@@ -933,6 +936,12 @@ final class IOSTestDiagnosticStore: ObservableObject {
         )
     }
 
+    func prepareEvidenceStorage() throws {
+        try SampleBackupPolicy.prepareDirectory(
+            at: evidenceDirectory, excludeFromBackup: excludeEvidenceFromBackup
+        )
+    }
+
     func exportEvidence() throws -> URL {
         let selected = events.filter { $0.testSessionId == activeSessionId }
         let manual = [
@@ -973,10 +982,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
             timestamp,
             Self.filenamePart(activeSessionId)
         ].joined(separator: "_") + ".zip"
-        try FileManager.default.createDirectory(
-            at: evidenceDirectory,
-            withIntermediateDirectories: true
-        )
+        try prepareEvidenceStorage()
         let destination = evidenceDirectory.appendingPathComponent(filename)
         let temporary = destination.appendingPathExtension("part")
         try SimpleEvidenceZip.write(files: files, to: temporary)

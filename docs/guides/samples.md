@@ -211,6 +211,31 @@ The UI does not overwrite LAN switches; those explicit properties belong to
 the host process. Structured application diagnostics remain available without
 enabling raw tracing. Never share trace output without reviewing it.
 
+## iOS sample backup policy
+
+The iOS sample keeps received files in app-private `Documents/P2pKitInbox` and
+exported packages in `Documents/P2pKitEvidence`; it does not enable Files-app
+sharing. It explicitly excludes both managed directory hierarchies from future
+OS backups without moving or deleting existing contents. First appearance
+prepares both roots independently, and every receive/export reapplies exclusion
+before reservation or ZIP staging, including after directory recreation.
+
+A failed setup shows a fixed warning with **Retry storage setup**. Existing
+contents may remain backup-eligible after failure; a new receive/export for the
+affected root is refused, not silently allowed. An independent root's failure
+does not block a successfully prepared inbox or evidence root. General recording,
+networking and the checked current-session clear remain independent.
+
+Default iOS file protection (`CompleteUntilFirstUserAuthentication`) is deliberately
+unchanged; stronger locked-device protection would alter transfer behavior.
+This is **not** blanket diagnostics exclusion or Android `allowBackup=false`
+parity: the rotated JSONL files under
+`Library/Application Support/P2pKitTestDiagnostics` remain backup-eligible.
+Setting a root flag neither erases earlier backups nor controls copies made by a
+user's share target. Simulator resource-key and synthetic-transfer tests are not
+physical backup observations; inspect a newly created, owner-controlled physical
+device backup with synthetic data before claiming that external validation.
+
 ## Running samples
 
 Common build commands:

@@ -24,6 +24,7 @@ targets:
       - LocalPairingView.swift
       - IosLanDiagnosticsLease.swift
       - SampleConsole.swift
+      - SampleBackupPolicy.swift
       - TestDiagnosticDetailPolicy.swift
       - TestDiagnostics.swift
     info:
