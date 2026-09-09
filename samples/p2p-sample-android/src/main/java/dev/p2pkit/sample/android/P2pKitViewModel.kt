@@ -431,6 +431,7 @@ class P2pKitViewModel internal constructor(
         transferId: String,
         eventName: String,
         state: String,
+        storageDomain: String,
         outcome: DiagnosticOutcome? = null,
         error: Throwable? = null
     ) {
@@ -448,7 +449,7 @@ class P2pKitViewModel internal constructor(
                 outcome = outcome,
                 errorCode = error?.let { it::class.simpleName },
                 errorDescription = error?.message,
-                details = mapOf("location" to "app-private", "contentsExported" to "false")
+                details = mapOf("location" to storageDomain, "contentsExported" to "false")
             )
         )
     }
@@ -1389,12 +1390,8 @@ class P2pKitViewModel internal constructor(
         }
         val opened = withContext(Dispatchers.IO) {
             runCatchingNonCancel {
-                val baseDir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
-                val saveDir = File(
-                    baseDir,
-                    "p2pkit-incoming/${sanitizeIncomingPathComponent(pending.peerName)}",
-                )
-                    .also { it.mkdirs() }
+                val location = incomingFileDirectory(ctx.getExternalFilesDir(null), pending.peerName) { ctx.filesDir }
+                val saveDir = location.file.also { it.mkdirs() }
                 cleanupStaleTransferPartsOnce(saveDir)
                 val allocatableBytes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     val storage = ctx.getSystemService(StorageManager::class.java)
@@ -1406,16 +1403,16 @@ class P2pKitViewModel internal constructor(
                 if (allocatableBytes < pending.sizeBytes + 1L * 1024 * 1024) {
                     error("insufficient free space")
                 }
-                val saveFile = uniqueDestination(saveDir, pending.name)
-                saveFile
+                location.copy(file = uniqueDestination(saveDir, pending.name))
             }
         }
-        val saveFile = opened.getOrElse { e ->
+        val location = opened.getOrElse { e ->
             runCatchingNonCancel { pending.offer.reject("receiver storage unavailable") }
             appendSystemMessage("rejected '${pending.name}': ${e.message ?: "storage unavailable"}")
             return
         }
-        Log.i(LOG_TAG, "incoming file offer <file> (${pending.sizeBytes}B) → <app-private destination>")
+        val saveFile = location.file
+        Log.i(LOG_TAG, "incoming file offer <file> (${pending.sizeBytes}B) → <${location.storageDomain} destination>")
         val destination = runCatchingNonCancel { reservedFileDestination(saveFile) }
             .getOrElse { e ->
                 runCatchingNonCancel { pending.offer.reject("destination preparation failed") }
@@ -1428,7 +1425,8 @@ class P2pKitViewModel internal constructor(
             sessionId = pending.sessionId,
             transferId = pending.id,
             eventName = DiagnosticEventNames.TEMP_FILE_CREATED,
-            state = "prepared"
+            state = "prepared",
+            storageDomain = location.storageDomain
         )
         val incoming = try {
             pending.offer.accept(destination)
@@ -1445,6 +1443,7 @@ class P2pKitViewModel internal constructor(
                 transferId = pending.id,
                 eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
                 state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
+                storageDomain = location.storageDomain,
                 outcome = if (cleanup.isSuccess) DiagnosticOutcome.SUCCESS else DiagnosticOutcome.FAILURE,
                 error = cleanup.exceptionOrNull()
             )
@@ -1461,13 +1460,14 @@ class P2pKitViewModel internal constructor(
                 transferId = pending.id,
                 eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
                 state = if (cleanup.isSuccess) "aborted" else "cleanup-failed",
+                storageDomain = location.storageDomain,
                 outcome = if (cleanup.isSuccess) DiagnosticOutcome.SUCCESS else DiagnosticOutcome.FAILURE,
                 error = cleanup.exceptionOrNull()
             )
             appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
             return
         }
-        registerIncomingTransfer(incoming, pending.sessionId, pending.peerName, saveFile.absolutePath, scope)
+        registerIncomingTransfer(incoming, pending.sessionId, pending.peerName, location, scope)
     }
 
     private fun registerOutgoingTransfer(
@@ -1513,9 +1513,10 @@ class P2pKitViewModel internal constructor(
         transfer: P2pFileTransfer,
         sessionId: String,
         peerName: String,
-        destinationPath: String,
+        destination: IncomingFileLocation,
         scope: CoroutineScope
     ) {
+        val destinationPath = destination.file.absolutePath
         val correlation = diagnostics.registerTransfer(transfer.id, transfer.peer.id.value, sessionId)
         addRow(
             FileTransferRow(
@@ -1548,7 +1549,7 @@ class P2pKitViewModel internal constructor(
         // The transactional destination is SDK-owned and is committed or
         // aborted even if this UI collector is cancelled.
         appendSystemMessage("receiving file '${transfer.name}' from $peerName → $destinationPath")
-        watchTransfer(transfer, sessionId, scope, destinationPath)
+        watchTransfer(transfer, sessionId, scope, destination)
     }
 
     /**
@@ -1561,7 +1562,7 @@ class P2pKitViewModel internal constructor(
         transfer: P2pFileTransfer,
         sessionId: String,
         scope: CoroutineScope,
-        destinationPath: String? = null
+        destination: IncomingFileLocation? = null
     ) {
         scope.launch {
             var completed = false
@@ -1616,17 +1617,18 @@ class P2pKitViewModel internal constructor(
             } finally {
                 withContext(NonCancellable) {
                     bytesJob.cancelAndJoin()
-                    if (completed && destinationPath != null) {
+                    if (completed && destination != null) {
                         recordTemporaryFileEvent(
                             peerId = transfer.peer.id.value,
                             sessionId = sessionId,
                             transferId = transfer.id,
                             eventName = DiagnosticEventNames.TEMP_FILE_CLEANED,
                             state = "promoted",
+                            storageDomain = destination.storageDomain,
                             outcome = DiagnosticOutcome.SUCCESS
                         )
                         val digest = withContext(Dispatchers.IO) {
-                            runCatching { TestFileDigests.sha256(File(destinationPath)) }.getOrNull()
+                            runCatching { TestFileDigests.sha256(destination.file) }.getOrNull()
                         }
                         updateRowDigest(key, digest)
                         if (digest != null) {

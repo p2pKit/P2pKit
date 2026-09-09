@@ -3,6 +3,23 @@ package dev.p2pkit.sample.android
 import java.io.File
 import java.io.IOException
 
+/** A chosen directory or reserved file, paired with its storage-domain diagnostic label. */
+internal data class IncomingFileLocation(val file: File, val storageDomain: String)
+
+/** Preserve external-app storage with a lazy internal fallback; the label follows the actual selection. */
+internal fun incomingFileDirectory(
+    externalFilesDir: File?,
+    peerName: String,
+    internalFilesDir: () -> File
+): IncomingFileLocation {
+    val baseDir = externalFilesDir ?: internalFilesDir()
+    val storageDomain = if (externalFilesDir == null) "app-private" else "app-scoped-external"
+    return IncomingFileLocation(
+        File(baseDir, "p2pkit-incoming/${sanitizeIncomingPathComponent(peerName)}"),
+        storageDomain
+    )
+}
+
 internal fun sanitizeIncomingPathComponent(raw: String): String {
     val cleaned = raw.filterNot { it.isISOControl() }
         .replace(Regex("""[\\/:*?"<>|]"""), "_")
