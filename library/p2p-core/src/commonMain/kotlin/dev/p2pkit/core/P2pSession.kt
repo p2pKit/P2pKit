@@ -192,6 +192,20 @@ public interface P2pSession {
      * plaintext or flush-only downgrade is attempted. Admission is capped at
      * 64 active outgoing transfers per session; excess registration fails as
      * `TRANSPORT` / `OFFER` / `RETRY_SAME_SESSION` without opening [source].
+     *
+     * ### Interface default
+     *
+     * The default preserves source compatibility for third-party session
+     * implementations. It always throws [P2pError.FileTransferFailed] with
+     * `UNSUPPORTED_FEATURE` / `OFFER` / `NOT_RETRYABLE` and a null transfer id,
+     * without opening [source] or sending an offer. This reports a local
+     * implementation gap, not the peer's negotiated capabilities.
+     *
+     * SDK-created sessions, whether returned by [P2pKit.connect] or emitted by
+     * [P2pKit.incomingSessions], override this default and use the negotiated
+     * transfer path described above. Third-party implementations that support
+     * prepared transfer must override this overload; implementing only the
+     * legacy overload is not sufficient.
      */
     @Throws(Exception::class)
     public suspend fun sendFile(
@@ -203,7 +217,7 @@ public interface P2pSession {
         phase = FileTransferPhase.OFFER,
         retryability = Retryability.NOT_RETRYABLE,
         transferId = null,
-        reason = "Prepared authenticated file transfer is not implemented by this session"
+        reason = "Local P2pSession implementation does not implement prepared file transfer (interface default)"
     )
 
     /**

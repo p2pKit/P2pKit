@@ -60,7 +60,10 @@ public sealed class P2pMessage {
     /**
      * Arbitrary binary payload with optional string metadata.
      *
-     * @property bytes the binary payload.
+     * The constructor snapshots the supplied payload. Reading [bytes] also
+     * allocates a fresh full copy on every access.
+     *
+     * @property bytes a defensive copy of the binary payload.
      * @property metadata immutable metadata transmitted by negotiated secure
      *   sessions; explicit legacy protocol v1 does not transmit it.
      */
@@ -71,7 +74,11 @@ public sealed class P2pMessage {
 
         private val content: ByteArray = bytes.copyOf()
 
-        /** Defensive copy; mutating the returned array cannot alter this message. */
+        /**
+         * Allocates a fresh full defensive copy on **every** access (O(n) time and memory).
+         * Mutating the returned array cannot alter this message. Cache the returned array
+         * in a local value for repeated use, or cache its length if only the size is needed.
+         */
         public val bytes: ByteArray get() = content.copyOf()
 
         internal val payloadSizeBytes: Int get() = content.size

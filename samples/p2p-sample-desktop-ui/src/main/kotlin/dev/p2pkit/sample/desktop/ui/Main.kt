@@ -1378,13 +1378,13 @@ internal class DesktopP2pState(
                     // AUDIT-2026-06 (B-G9-samples-desktop-ios-18): keep a size-only
                     // summary of Binary payloads instead of retaining the bytes in
                     // history.
-                    val storedBody = when (msg) {
-                        is P2pMessage.Text -> msg.value
-                        is P2pMessage.Binary -> "<binary ${msg.bytes.size}B>"
-                    }
                     val payloadSize = when (msg) {
                         is P2pMessage.Text -> msg.value.toByteArray().size.toLong()
                         is P2pMessage.Binary -> msg.bytes.size.toLong()
+                    }
+                    val storedBody = when (msg) {
+                        is P2pMessage.Text -> msg.value
+                        is P2pMessage.Binary -> "<binary ${payloadSize}B>"
                     }
                     System.err.println(
                         SampleConsole.received(session.peer.id.value, msg is P2pMessage.Text, payloadSize)

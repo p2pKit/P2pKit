@@ -44,6 +44,23 @@ physical-device evidence. Exact toolchain versions are locked in the Gradle
 wrapper, version catalog, and CI workflows. Physical validation at the Android
 and Apple minimums remains pending until the evidence handbook is completed.
 
+## Public sealed hierarchies
+
+Public sealed hierarchies, including `PeerAuthorizationPolicy`, are not
+promised to keep the same variants forever. The pre-`1.0.0` breaking-change
+reservation above also applies to variant additions in a new version,
+including a new minor version. Such an addition is a source-breaking change
+for consumers with an exhaustive `when` and must be documented and reviewed
+through the API-baseline gates; passing an ABI check alone does not establish
+consumer source compatibility. This does not authorize changes to published
+`0.7.0-rc3` artifacts or baselines.
+
+Consumers can keep exhaustive branches to make recompilation require review
+of each new variant. Where UI or error mapping must tolerate additions, use
+a conservative `else` branch, such as an unknown/unsupported display state.
+Never treat an unfamiliar authorization policy as permission to admit a peer.
+The SDK's authorization checks remain exhaustive and fail closed.
+
 ## JVM-family constant ABI checks
 
 Kotlin visibility and JVM field visibility differ: a `const val` in a private

@@ -109,7 +109,14 @@ public sealed class SecurityMode {
     public data object NoneForMvp : SecurityMode()
 }
 
-/** Authorization applied after the remote proves possession of its X25519 key. */
+/**
+ * Authorization applied after the remote proves possession of its X25519 key.
+ *
+ * Under the pre-1.0 compatibility policy, a new version may add variants as a
+ * documented source-breaking change. Consumer exhaustive `when` expressions
+ * then need updating on recompilation; a fallback for an unfamiliar policy
+ * must not grant peer admission.
+ */
 public sealed interface PeerAuthorizationPolicy {
     /** Reject every identity that is not supplied as a per-connect/manual pin. */
     public data object RejectUnknown : PeerAuthorizationPolicy

@@ -283,7 +283,8 @@ public interface P2pKit {
          * @throws IllegalStateException when a required builder field or
          *   transport registration is missing.
          * @throws IllegalArgumentException when configuration or advertised
-         *   identity text violates its documented bounds.
+         *   identity text violates its documented bounds, or the same transport
+         *   factory instance or transport kind is registered more than once.
          * @throws P2pError.LocalIdentityUnavailable when secure identity
          *   storage cannot safely load or create the local identity.
          * @throws P2pError.SecurityConfigurationInvalid when secure-v2

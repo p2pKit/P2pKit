@@ -15,3 +15,8 @@ The current source is `0.7.0-SNAPSHOT`, the post-RC3 stabilization line for the
 eventual stable `0.7.0` release. The latest published release is `0.7.0-rc3`.
 External validation for RC3 must use its immutable tag and published artifacts,
 not a later source snapshot.
+
+The pre-`1.0.0` breaking-change reservation includes public sealed-hierarchy
+evolution. See the [compatibility policy](compatibility.md#public-sealed-hierarchies)
+for variant additions and exhaustive consumer `when` expressions; an ABI check
+is not a guarantee of consumer source compatibility.
