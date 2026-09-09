@@ -4,10 +4,11 @@ import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.transport.RawConnection
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
@@ -43,7 +44,9 @@ internal class JvmRawConnection(
      * (`JvmLanDataTransport`) pass nothing and get [WRITE_TIMEOUT_MILLIS];
      * mirrored identically in `AndroidRawConnection` (behavior-parity pair).
      */
-    private val writeTimeoutMillis: Long = WRITE_TIMEOUT_MILLIS
+    private val writeTimeoutMillis: Long = WRITE_TIMEOUT_MILLIS,
+    /** Tests own detached worker completion and failure observation without changing global handlers. */
+    connectionScopeForTest: CoroutineScope? = null
 ) : RawConnection {
 
     private val _state = MutableStateFlow(ConnectionState.Connected)
@@ -68,7 +71,7 @@ internal class JvmRawConnection(
      * saturated IO pool cannot starve the very timeout that recovers it.
      * Cancelled in [close].
      */
-    private val connScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val connScope = connectionScopeForTest ?: CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /** Stable label for the diagnostic trail; remoteSocketAddress goes null after close. */
     private val label: String =
@@ -186,12 +189,26 @@ internal class JvmRawConnection(
                         ) {
                             try {
                                 val read = input.read(buffer)
-                                if (continuation.isActive) continuation.resume(read)
+                                if (continuation.isActive) {
+                                    continuation.resume(read)
+                                } else if (read > 0) {
+                                    JvmLanDiag.log(
+                                        "conn",
+                                        "$label discarded ${read}B read after cancellation"
+                                    )
+                                }
                             } catch (error: Throwable) {
                                 if (continuation.isActive) {
                                     continuation.resumeWithException(error)
-                                } else if (error !is IOException) {
+                                } else if (error is CancellationException || error !is Exception) {
+                                    // Cancellation and fatal failures keep their original disposition.
                                     throw error
+                                } else {
+                                    // The cancelled collector already owns socket teardown. Attribute
+                                    // ordinary late failures without escaping into a root launch handler.
+                                    // Exception messages may contain private data; record only the type.
+                                    val type = error::class.simpleName ?: "Exception"
+                                    JvmLanDiag.log("conn", "$label post-cancellation read failure: $type")
                                 }
                             }
                         }
