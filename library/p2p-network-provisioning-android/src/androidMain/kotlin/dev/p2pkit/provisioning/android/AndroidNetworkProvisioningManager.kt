@@ -1,5 +1,6 @@
 package dev.p2pkit.provisioning.android
 
+import android.net.wifi.WifiManager.LocalOnlyHotspotCallback
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.NetworkProvisioningError
 import dev.p2pkit.core.Peer
@@ -1033,10 +1034,10 @@ public class AndroidNetworkProvisioningManager internal constructor(
      * label. Codes are stable since API 26.
      */
     private fun reasonCodeName(code: Int): String = when (code) {
-        0 -> "NO_CHANNEL"
-        1 -> "GENERIC"
-        2 -> "INCOMPATIBLE_MODE"
-        3 -> "TETHERING_DISALLOWED"
+        LocalOnlyHotspotCallback.ERROR_NO_CHANNEL -> "NO_CHANNEL"
+        LocalOnlyHotspotCallback.ERROR_GENERIC -> "GENERIC"
+        LocalOnlyHotspotCallback.ERROR_INCOMPATIBLE_MODE -> "INCOMPATIBLE_MODE"
+        LocalOnlyHotspotCallback.ERROR_TETHERING_DISALLOWED -> "TETHERING_DISALLOWED"
         -1 -> "STOPPED_BEFORE_START"
         else -> "UNKNOWN($code)"
     }

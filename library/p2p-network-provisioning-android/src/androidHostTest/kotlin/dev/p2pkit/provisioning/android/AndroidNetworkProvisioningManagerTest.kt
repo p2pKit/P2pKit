@@ -3,6 +3,7 @@
 package dev.p2pkit.provisioning.android
 
 import android.content.pm.PackageManager
+import android.net.wifi.WifiManager.LocalOnlyHotspotCallback
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.NetworkProvisioningError
@@ -117,14 +118,27 @@ class AndroidNetworkProvisioningManagerTest {
 
     @Test
     fun startReturnsFailedWhenWrapperReportsHotspotStartFailure() = runBlocking<Unit> {
-        val wifi = FakeWifiManagerWrapper(behavior = FakeWifiManagerWrapper.Behavior.FailWithReason(reasonCode = 2))
-        val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
-        try {
-            val result = mgr.startLocalNetwork(LocalNetworkConfig())
-            val failed = assertIs<LocalNetworkResult.Failed>(result)
-            assertIs<NetworkProvisioningError.HotspotStopped>(failed.error)
-        } finally {
-            mgr.close()
+        val reasons = listOf(
+            LocalOnlyHotspotCallback.ERROR_NO_CHANNEL to "NO_CHANNEL",
+            LocalOnlyHotspotCallback.ERROR_GENERIC to "GENERIC",
+            LocalOnlyHotspotCallback.ERROR_INCOMPATIBLE_MODE to "INCOMPATIBLE_MODE",
+            LocalOnlyHotspotCallback.ERROR_TETHERING_DISALLOWED to "TETHERING_DISALLOWED",
+            -1 to "STOPPED_BEFORE_START",
+            0 to "UNKNOWN(0)",
+            99 to "UNKNOWN(99)"
+        )
+        for ((code, label) in reasons) {
+            val wifi = FakeWifiManagerWrapper(behavior = FakeWifiManagerWrapper.Behavior.FailWithReason(code))
+            val mgr = AndroidNetworkProvisioningManager(ctx(), wifi)
+            try {
+                val result = mgr.startLocalNetwork(LocalNetworkConfig())
+                val failed = assertIs<LocalNetworkResult.Failed>(result)
+                val error = assertIs<NetworkProvisioningError.HotspotStopped>(failed.error)
+                assertEquals("startLocalOnlyHotspot failed (reason code $code: $label)", error.reason)
+                assertEquals(NetworkProvisioningState.Failed(error), mgr.state.value)
+            } finally {
+                mgr.close()
+            }
         }
     }
 
