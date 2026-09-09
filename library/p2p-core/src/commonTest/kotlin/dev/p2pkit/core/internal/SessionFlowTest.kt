@@ -164,7 +164,7 @@ class SessionFlowTest {
     @Test
     fun concurrentConnectCallsForSamePeerReturnTheSameSession() = runBlocking {
         val pair = FakeConnectionPair()
-        withSessionKits(pair) { alice, _ ->
+        withSessionKits(pair) { alice, bob ->
             val target = syntheticPeer("bob-id", "Bob")
             // Two coroutines try to connect simultaneously. With the per-peer
             // mutex, the second one must observe the first as in-flight and
@@ -174,19 +174,21 @@ class SessionFlowTest {
             val s1 = withTimeout(5_000) { first.await() }
             val s2 = withTimeout(5_000) { second.await() }
             assertSame(s1, s2, "Concurrent connect() to the same peer must return the same session")
+            assertResponderReadyForTeardown(bob, alice.localPeerId)
         }
     }
 
     @Test
     fun connectIsIdempotentForSamePeer() = runBlocking {
         val pair = FakeConnectionPair()
-        withSessionKits(pair) { alice, _ ->
+        withSessionKits(pair) { alice, bob ->
             val target = syntheticPeer("bob-id", "Bob")
             val first = withTimeout(5_000) { alice.connect(target) }
             // SessionManager's `active` map is updated synchronously inside
             // connect(), so the second call should short-circuit to `first`.
             val second = withTimeout(5_000) { alice.connect(target) }
             assertSame(first, second, "connect() should return the same active session")
+            assertResponderReadyForTeardown(bob, alice.localPeerId)
         }
     }
 
@@ -456,6 +458,9 @@ class SessionFlowTest {
                 assertEquals(ConnectionState.Connected, retried.state.value)
                 assertEquals(2, transport.connectCalls.size)
                 assertEquals(listOf(retried), alice.sessions.value)
+
+                // Keep cancellation and retry immediate; only fixture teardown waits for the responder.
+                assertResponderReadyForTeardown(bob, alice.localPeerId)
             }
         }
     }
@@ -499,8 +504,19 @@ class SessionFlowTest {
                 val retried = withTimeout(5_000) { alice.connect(target) }
                 assertEquals(ConnectionState.Connected, retried.state.value)
                 assertEquals(2, transport.connectCalls.size)
+
+                // The failed attempt and immediate retry above retain their original deadline semantics.
+                assertResponderReadyForTeardown(bob, alice.localPeerId)
             }
         }
+    }
+
+    /** Local connect completion does not join this peer's independent incoming-session commit. */
+    private suspend fun assertResponderReadyForTeardown(remote: P2pKit, expectedPeerId: PeerId) {
+        // Each calling fixture supplies exactly one raw connection to this peer, including retry cases.
+        val incoming = withTimeout(5_000) { remote.sessions.first { it.isNotEmpty() } }.single()
+        assertEquals(expectedPeerId, incoming.peer.id)
+        assertEquals(ConnectionState.Connected, incoming.state.value)
     }
 
     private fun incomingKitWithConnections(

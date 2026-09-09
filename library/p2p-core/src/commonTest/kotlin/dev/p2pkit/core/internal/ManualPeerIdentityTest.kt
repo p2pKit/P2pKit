@@ -25,6 +25,7 @@ import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
@@ -116,6 +117,14 @@ class ManualPeerIdentityTest {
         supportedTransports = setOf(TransportKind.LAN)
     )
 
+    /** Local connect completion does not join this peer's independent incoming-session commit. */
+    private suspend fun assertResponderReadyForTeardown(remote: P2pKit, expectedPeerId: PeerId) {
+        // Each calling fixture supplies exactly one raw connection to this peer, including retry cases.
+        val incoming = withTimeout(5_000) { remote.sessions.first { it.isNotEmpty() } }.single()
+        assertEquals(expectedPeerId, incoming.peer.id)
+        assertEquals(ConnectionState.Connected, incoming.state.value)
+    }
+
     @Test
     fun manualConnectKeepsDialedSyntheticIdentityDespiteDifferentHelloId() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
@@ -148,6 +157,8 @@ class ManualPeerIdentityTest {
                         "not adopt the remote's HELLO id"
                 )
                 assertNotEquals("bob-real-id", session.peer.id.value)
+
+                assertResponderReadyForTeardown(bob, alice.localPeerId)
             }
         }
     }
@@ -182,6 +193,8 @@ class ManualPeerIdentityTest {
                 assertSame(first, alice.sessions.value.single())
                 // No Replaced churn: the original session is still the live one.
                 assertEquals(ConnectionState.Connected, first.state.value)
+
+                assertResponderReadyForTeardown(bob, alice.localPeerId)
             }
         }
     }
