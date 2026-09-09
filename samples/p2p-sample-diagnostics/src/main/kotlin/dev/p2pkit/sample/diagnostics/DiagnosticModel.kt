@@ -180,6 +180,7 @@ public data class DiagnosticSessionSummary(
     val warningCount: Int,
     val errorCount: Int,
     val eventCount: Int,
+    /** Session-owned loss incidents, not a recorder-lifetime or unique-event total. */
     val droppedEventCount: Long,
     val configuration: DiagnosticConfiguration,
     val manualEvidenceStillRequired: List<String>
@@ -386,6 +387,8 @@ public class DiagnosticRecorder(
     private var nextIndex: Long = 1L
     private var encodedBytes: Int = 0
     private var droppedEvents: Long = 0L
+    private val droppedEventsBySession: MutableMap<String, Long> = linkedMapOf()
+    private var clearingDropCounts: ClearDropBoundary? = null
     private val sinkPermit: Semaphore = Semaphore(1)
     private var sessionContext: SessionContext = SessionContext(
         testId = "UNASSIGNED",
@@ -544,7 +547,7 @@ public class DiagnosticRecorder(
                     .filter { it.testSessionId == sessionId }
                     .toList(),
                 activeContext = sessionContext,
-                droppedEventCount = droppedEvents
+                droppedEventCount = droppedEventsBySession[sessionId] ?: 0L
             )
         }
         val events = captured.events
@@ -624,27 +627,47 @@ public class DiagnosticRecorder(
             throw IOException("Diagnostic sink is busy; retry clearing after the current operation")
         }
         try {
-            val (sessionId, throughIndex) = synchronized(lock) { sessionContext.sessionId to (nextIndex - 1) }
-            clearPersisted(sessionId)
+            val boundary = synchronized(lock) {
+                ClearDropBoundary(
+                    sessionId = sessionContext.sessionId,
+                    throughIndex = nextIndex - 1,
+                    discardedDrops = droppedEventsBySession[sessionContext.sessionId] ?: 0L
+                ).also { clearingDropCounts = it }
+            }
+            clearPersisted(boundary.sessionId)
             return synchronized(lock) {
                 val before = entries.size
-                entries.removeAll { it.event.testSessionId == sessionId && it.event.index <= throughIndex }
+                entries.removeAll {
+                    it.event.testSessionId == boundary.sessionId && it.event.index <= boundary.throughIndex
+                }
                 encodedBytes = entries.sumOf { it.bytes }
-                pendingSinkLines.removeAll { it.sessionId == sessionId && it.index <= throughIndex }
+                pendingSinkLines.removeAll {
+                    it.sessionId == boundary.sessionId && it.index <= boundary.throughIndex
+                }
                 pendingSinkBytes = pendingSinkLines.sumOf { it.bytes }
+                val currentDrops = droppedEventsBySession[boundary.sessionId] ?: 0L
+                droppedEventsBySession[boundary.sessionId] =
+                    (currentDrops - boundary.discardedDrops).coerceAtLeast(0L)
                 before - entries.size
             }
         } finally {
-            synchronized(lock) { sinkPermit.release() }
+            synchronized(lock) {
+                clearingDropCounts = null
+                pruneDropCountsLocked()
+                sinkPermit.release()
+            }
             // Records created by a concurrent caller or the storage callback could not
             // drain while the clear owned the permit. Do not strand those newer records.
             drainSinkIfOwner(true)
         }
     }
 
+    /** Recorder-lifetime loss incidents, including retention; intentional clearing does not reset this total. */
     public fun droppedEventCount(): Long = synchronized(lock) { droppedEvents }
 
     private fun appendSafelyLocked(record: DiagnosticRecord, context: SessionContext): Boolean {
+        droppedEventsBySession.getOrPut(context.sessionId) { 0L }
+        val attemptedIndex = nextIndex
         return try {
             val redacted = DiagnosticRedactor.redact(record.details)
             val event = DiagnosticEvent(
@@ -696,15 +719,17 @@ public class DiagnosticRecorder(
             encodedBytes += stored.bytes
             enforceBounds()
             if (pendingSinkLines.size >= maxEvents || pendingSinkBytes + stored.bytes > maxEncodedBytes) {
-                droppedEvents++
+                recordDropLocked(event.testSessionId, event.index)
                 return false
             }
             pendingSinkLines.addLast(PendingSinkLine(json, stored.bytes, event.testSessionId, event.index))
             pendingSinkBytes += stored.bytes
             true
         } catch (_: Throwable) {
-            droppedEvents++
+            recordDropLocked(context.sessionId, attemptedIndex)
             false
+        } finally {
+            pruneDropCountsLocked()
         }
     }
 
@@ -732,7 +757,7 @@ public class DiagnosticRecorder(
                 try {
                     eventSink(line.json)
                 } catch (_: Throwable) {
-                    synchronized(lock) { droppedEvents++ }
+                    synchronized(lock) { recordDropLocked(line.sessionId, line.index) }
                 }
             }
         } finally {
@@ -744,15 +769,42 @@ public class DiagnosticRecorder(
         while (entries.size > maxEvents || encodedBytes > maxEncodedBytes) {
             val removed = entries.removeAt(0)
             encodedBytes -= removed.bytes
-            droppedEvents++
+            recordDropLocked(removed.event.testSessionId, removed.event.index)
         }
         val sessions = entries.map { it.event.testSessionId }.distinct()
         if (sessions.size > maxSessions) {
             val removable = sessions.take(sessions.size - maxSessions).toSet()
+            entries.filter { it.event.testSessionId in removable }.forEach {
+                recordDropLocked(it.event.testSessionId, it.event.index)
+            }
             entries.removeAll { it.event.testSessionId in removable }
             encodedBytes = entries.sumOf { it.bytes }
         }
     }
+
+    private fun recordDropLocked(sessionId: String, index: Long) {
+        droppedEvents++
+        // A late sink failure belongs to the queued event, never the current session.
+        droppedEventsBySession[sessionId]?.let { droppedEventsBySession[sessionId] = it + 1 }
+        clearingDropCounts?.takeIf { it.sessionId == sessionId && index <= it.throughIndex }?.let {
+            // Old records can be evicted while the persistence callback admits newer records.
+            it.discardedDrops++
+        }
+    }
+
+    private fun pruneDropCountsLocked() {
+        // Keep every in-memory owner plus the active/clearing owner. Retain a bounded
+        // tail for sessions whose last event was evicted, without an unbounded history map.
+        val retained = entries.mapTo(mutableSetOf()) { it.event.testSessionId }
+        retained += sessionContext.sessionId
+        clearingDropCounts?.let { retained += it.sessionId }
+        for (sessionId in droppedEventsBySession.keys.toList()) {
+            if (droppedEventsBySession.size.toLong() <= maxSessions.toLong() + 2L) break
+            if (sessionId !in retained) droppedEventsBySession.remove(sessionId)
+        }
+    }
+
+    private data class ClearDropBoundary(val sessionId: String, val throughIndex: Long, var discardedDrops: Long)
 
     private data class SessionContext(
         val testId: String,

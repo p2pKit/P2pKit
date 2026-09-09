@@ -1076,8 +1076,24 @@ Cooperating owners lock each log family; competing owners fail fast, while calls
 to one sink serialize. Keep log families and their `.filename.lock` coordination
 files disjoint, and do not edit/delete them while an owner is active. The empty
 lock file survives clearing. Use regular log files, not symbolic/hard-link aliases.
-Sink failures increment the recorder's dropped-event
-counter without interrupting protocol work; the in-memory event may still exist.
+`summary.json`'s `droppedEventCount` counts loss incidents owned by that test session:
+invalid/unencodable input, bounded sink-queue rejection or sink failure, and eviction
+of that session's in-memory events. Evicting old A records while recording B charges A,
+not B; a late sink failure also stays with its queued event's session. The count is
+not a unique-event count: one event can have both a retention eviction and a sink
+failure, and a persisted or in-memory copy may still exist. The JVM/Android recorder's
+`droppedEventCount()` accessor remains a separately scoped recorder-lifetime total;
+intentional clear does not reset it. Neither counter interrupts protocol work.
+
+Successful selective clear resets the selected session's prior loss incidents with
+its history, preserving post-boundary events/losses; failed storage clearing preserves
+its count. Session counters have bounded in-process retention (JVM/Android: every
+retained owner plus at most two context slots; Swift: at most the event-count limit
+plus one). They are not reconstructed from restart logs. A summary without retained
+history, or one produced after a process restart, must not be treated as proof that
+the entire historical campaign had no drops. Completed-session counts can increase
+when that session's own records are subsequently evicted or fail delivery; unrelated
+session failures never inflate them.
 Partial rotation can already have discarded older history, and an interrupted
 append can leave a partial record in an older generation. These restart logs are
 bounded best-effort diagnostics, not crash-atomic or power-loss-durable storage.

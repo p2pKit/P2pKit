@@ -222,6 +222,7 @@ struct TestDiagnosticSummary: Codable {
     let warningCount: Int
     let errorCount: Int
     let eventCount: Int
+    /// Loss incidents owned by this session, not a recorder-lifetime or unique-event total.
     let droppedEventCount: Int64
     let configuration: [String: String]
     let manualEvidenceStillRequired: [String]
@@ -284,7 +285,9 @@ final class IOSTestDiagnosticStore: ObservableObject {
 
     private var nextIndex: Int64 = 1
     private var encodedBytes = 0
-    private var droppedEvents: Int64 = 0
+    private var droppedEventsBySession: [String: Int64] = [:]
+    private var dropSessionOrder: [String] = []
+    private let maximumEvents: Int
     private var sessionStart = Date()
     private var localPeerId: String?
     private var connectionsBySession: [String: Correlation] = [:]
@@ -331,8 +334,11 @@ final class IOSTestDiagnosticStore: ObservableObject {
     init(
         baseDirectory: URL? = nil,
         evidenceDirectory: URL? = nil,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        maximumEvents: Int = 5_000
     ) {
+        precondition(maximumEvents > 0 && maximumEvents <= Self.maxEvents)
+        self.maximumEvents = maximumEvents
         self.defaults = defaults
         applicationVersion = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
@@ -505,6 +511,11 @@ final class IOSTestDiagnosticStore: ObservableObject {
     }
 
     func record(_ input: TestDiagnosticRecord) {
+        if droppedEventsBySession[activeSessionId] == nil {
+            droppedEventsBySession[activeSessionId] = 0
+            dropSessionOrder.append(activeSessionId)
+        }
+        defer { pruneDropCounts() }
         let redacted = Self.redact(input.details)
         let event = TestDiagnosticEvent(
             schemaVersion: 1,
@@ -547,24 +558,43 @@ final class IOSTestDiagnosticStore: ObservableObject {
         )
         nextIndex += 1
         guard let data = try? encoder.encode(event) else {
-            droppedEvents += 1
+            recordDrop(sessionId: event.testSessionId)
             return
         }
         events.append(event)
         encodedBytes += data.count + 1
-        while events.count > Self.maxEvents || encodedBytes > Self.maxEncodedBytes {
+        while events.count > maximumEvents || encodedBytes > Self.maxEncodedBytes {
             guard let first = events.first,
                   let bytes = try? encoder.encode(first).count else { break }
             events.removeFirst()
             encodedBytes -= bytes + 1
-            droppedEvents += 1
+            recordDrop(sessionId: first.testSessionId)
         }
         do {
             try persist(data + Data([0x0a]))
         } catch {
             // Diagnostics must never change protocol behavior.
-            droppedEvents += 1
+            recordDrop(sessionId: event.testSessionId)
         }
+    }
+
+    private func recordDrop(sessionId: String) {
+        if let count = droppedEventsBySession[sessionId] {
+            droppedEventsBySession[sessionId] = count + 1
+        }
+    }
+
+    private func pruneDropCounts() {
+        var retained = Set(events.map(\.testSessionId))
+        retained.insert(activeSessionId)
+        // At most one owner per retained event plus the active owner. Empty historical
+        // sessions get only a bounded tail; counters are not restored from restart logs.
+        for sessionId in dropSessionOrder where droppedEventsBySession.count > maximumEvents + 1 {
+            if !retained.contains(sessionId) {
+                droppedEventsBySession[sessionId] = nil
+            }
+        }
+        dropSessionOrder.removeAll { droppedEventsBySession[$0] == nil }
     }
 
     func recordLegacy(tag: String, message: String) {
@@ -892,6 +922,8 @@ final class IOSTestDiagnosticStore: ObservableObject {
         encodedBytes = events.reduce(0) {
             $0 + ((try? encoder.encode($1).count) ?? 0) + 1
         }
+        droppedEventsBySession[activeSessionId] = 0
+        pruneDropCounts()
         return before - events.count
     }
 
@@ -1019,7 +1051,7 @@ final class IOSTestDiagnosticStore: ObservableObject {
             warningCount: selected.filter { $0.severity == .warning }.count,
             errorCount: selected.filter { $0.severity == .error }.count,
             eventCount: selected.count,
-            droppedEventCount: droppedEvents,
+            droppedEventCount: droppedEventsBySession[first?.testSessionId ?? activeSessionId] ?? 0,
             configuration: configuration,
             manualEvidenceStillRequired: manual
         )
