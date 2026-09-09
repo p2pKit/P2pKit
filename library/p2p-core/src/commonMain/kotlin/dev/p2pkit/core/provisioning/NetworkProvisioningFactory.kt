@@ -28,10 +28,9 @@ public interface NetworkProvisioningFactory {
  * can be built without inspecting the kit's internals.
  *
  * - [appId], [localPeerId], [localDeviceName] mirror the kit's identity.
- * - [config] reflects the DSL-level enable flags
- *   ([NetworkProvisioningConfig.enableLocalHotspot] etc.). Managers may
- *   honor these advisorily or ignore them — the spec leaves the precise
- *   semantics to the platform.
+ * - [config] passes advisory capability hints to the factory. Bundled
+ *   managers do not enforce these flags; custom factories must document
+ *   any effect they give them. See [NetworkProvisioningConfig].
  * - [logger] is the kit's logger; managers should route their own diagnostics
  *   through it.
  * - [lanTcpPort] is a provider lambda that returns the **current** bound
@@ -60,7 +59,11 @@ public class ProvisioningContext public constructor(
     public val manualPeerRegistrar: ManualPeerRegistrar,
     /** Local v2 fingerprint, or `null` for explicit legacy plaintext mode. */
     public val localFingerprint: PeerFingerprint? = null,
-    /** Canonical AppId-bound pairing QR, or `null` in legacy mode. */
+    /**
+     * Canonical local [dev.p2pkit.core.PeerPairingQr] text bound to [appId],
+     * or `null` in legacy mode when populated by the kit. Direct constructor
+     * calls carry this text unchanged and do not validate it.
+     */
     public val localPairingQr: String? = null,
     /**
      * Parent [Job] the manager should attach its scope to so the kit's

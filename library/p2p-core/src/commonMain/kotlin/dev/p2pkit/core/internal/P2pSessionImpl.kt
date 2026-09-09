@@ -1500,14 +1500,21 @@ internal class P2pSessionImpl(
      * session that raced into `Reconnecting` off the raw-state flip (the
      * [observeRawState] deferral window elapsed under load) is corrected to
      * the spec-mandated `Closed` as soon as the buffered CLOSE is processed;
-     * the reconnect retry loop re-checks state before every dial and
-     * [rearmWith] no-ops on terminal states, so no further dial happens. A
-     * CLOSE processed by a live [routeEvents] is always from the *current*
-     * epoch — [rearmWith] cancel-and-joins the old epoch's routeEvents under
-     * [connectionLock] before flipping back to `Connected` — so this can
-     * never close a freshly rearmed session on a stale frame. Terminal
-     * states still win: [transitionToTerminal] stays idempotent and a local
-     * `close()` / prior `Failed` is never overridden.
+     * the reconnect retry loop re-checks state before every dial, and
+     * [rearmWith] refuses adoption once the session is terminal.
+     *
+     * [rearmWith] snapshots the old epoch under [connectionLock], then cancels
+     * and joins its runtime (including [routeEvents]) outside that lock.
+     * Cleanup failure, including a join timeout, aborts rearm.
+     * `rearmLock.tryLock()` rejects concurrent adoption. Only after successful
+     * cleanup does the commit re-acquire [connectionLock], validate the captured
+     * epoch, install the replacement, publish `Connected`, and start the new
+     * epoch. Thus an old [routeEvents] cannot process a CLOSE after a replacement
+     * is successfully installed.
+     *
+     * Terminal states still win: [transitionToTerminal] re-checks state under
+     * [connectionLock] and, with its default `allowFromClosing = false`, never
+     * overrides a local `Closing` or a prior `Closed` / `Failed` outcome.
      */
     private suspend fun markCleanlyClosed() {
         val proceed = connectionLock.withLock {

@@ -30,6 +30,16 @@ public interface NetworkProvisioningManager {
 
     @Throws(Exception::class)
     public suspend fun startLocalNetwork(config: LocalNetworkConfig = LocalNetworkConfig()): LocalNetworkResult
+
+    /**
+     * Release this manager's locally hosted network, if any, without leaving
+     * a joined network. Repeated calls with no hosted resources are no-ops.
+     *
+     * Once the manager is closing or closed, a new call is a no-op, not a
+     * [NetworkProvisioningError.ManagerClosed] failure. Retry [close], not this
+     * method, to settle retained terminal cleanup. While the manager is open,
+     * cleanup failures and caller cancellation can still be reported.
+     */
     @Throws(Exception::class)
     public suspend fun stopLocalNetwork()
 
@@ -241,7 +251,13 @@ public class ManualConnectionInfo(
     public val deviceName: String,
     /** Local authenticated identity to exchange out of band in secure v2. */
     public val fingerprint: PeerFingerprint? = null,
-    /** Canonical AppId-bound QR payload carrying [fingerprint], when secure. */
+    /**
+     * Canonical [dev.p2pkit.core.PeerPairingQr] text carrying [fingerprint];
+     * kit-backed managers supply `null` in legacy mode. This DTO does not
+     * validate supplied text or its consistency with [appId] and [fingerprint].
+     * Recipients should use [dev.p2pkit.core.P2pKit.parsePeerPairingQr] to validate
+     * the text and local AppId binding before using the returned connection pin.
+     */
     public val pairingQr: String? = null
 ) {
     /** Stable, unmodifiable snapshot of advertised manual connection addresses. */
@@ -302,13 +318,30 @@ public class ManualConnectionInfo(
 
 /** Configuration hints for [NetworkProvisioningManager.startLocalNetwork]. */
 public data class LocalNetworkConfig(
-    /** Hint; the OS may ignore it. */
+    /**
+     * Non-binding hint. The bundled Android manager does not request this
+     * prefix: Android chooses the LocalOnlyHotspot SSID and credentials.
+     */
     val preferredSsidPrefix: String? = null
 )
 
-/** DSL-level enable flags for the provisioning sidecar. */
+/**
+ * Advisory capability hints delivered to [NetworkProvisioningFactory].
+ *
+ * Bundled managers do not enforce these flags: setting one to `false` does
+ * not disable the corresponding operation. Custom factories receive the
+ * hints and define any effect in their own contracts. Platform support,
+ * runtime permissions, and core security checks still apply.
+ *
+ * These flags are not authorization controls. Authenticated-v2 manual peers
+ * still require an out-of-band fingerprint and a matching authenticated
+ * handshake, independently of [enableManualIpFallback].
+ */
 public data class NetworkProvisioningConfig(
+    /** Hotspot capability hint; not enforced by bundled managers. */
     val enableLocalHotspot: Boolean = false,
+    /** Wi-Fi join capability hint; not enforced by bundled managers. */
     val enableWifiJoin: Boolean = false,
+    /** Manual-IP capability hint; not enforced by bundled managers. */
     val enableManualIpFallback: Boolean = true
 )

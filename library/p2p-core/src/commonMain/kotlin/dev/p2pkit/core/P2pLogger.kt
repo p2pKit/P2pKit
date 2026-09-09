@@ -8,6 +8,13 @@ package dev.p2pkit.core
  * Logger callbacks are diagnostic-only: an exception thrown by an
  * application logger is isolated and never changes protocol, lifecycle, or
  * cleanup behavior.
+ *
+ * Calls run synchronously on the emitting SDK execution context, including
+ * non-cancellable teardown, and may arrive concurrently on different threads.
+ * Implementations must be thread-safe, non-blocking, and return promptly; move
+ * slow I/O or log shipping off the callback path. Exception isolation does not
+ * bound execution time: a blocking logger can delay SDK operations, including
+ * [P2pKit.stop], for as long as it blocks.
  */
 public interface P2pLogger {
     public fun debug(message: String)

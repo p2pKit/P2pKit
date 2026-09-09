@@ -3,7 +3,8 @@ package dev.p2pkit.core.internal
 import dev.p2pkit.core.P2pLogger
 
 /**
- * Returns a logger boundary whose delegate can never alter SDK behavior.
+ * Returns a logger boundary that isolates exceptions thrown by its delegate.
+ * Calls remain synchronous; this wrapper provides no latency isolation.
  *
  * [P2pLogger] is a synchronous, host-supplied diagnostic extension point. A
  * delegate may accidentally throw any [Throwable], including a

@@ -316,8 +316,11 @@ public class NetworkProvisioningConfigBuilder internal constructor(
     initial: NetworkProvisioningConfig,
     initialFactory: NetworkProvisioningFactory?
 ) {
+    /** Advisory only; see [NetworkProvisioningConfig.enableLocalHotspot]. Bundled managers do not enforce it. */
     public var enableLocalHotspot: Boolean = initial.enableLocalHotspot
+    /** Advisory only; see [NetworkProvisioningConfig.enableWifiJoin]. Bundled managers do not enforce it. */
     public var enableWifiJoin: Boolean = initial.enableWifiJoin
+    /** Advisory only; see [NetworkProvisioningConfig.enableManualIpFallback]. Bundled managers do not enforce it. */
     public var enableManualIpFallback: Boolean = initial.enableManualIpFallback
 
     /**

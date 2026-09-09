@@ -77,12 +77,22 @@ public interface P2pKit {
     /** Canonical local X25519 fingerprint in secure v2; null only in explicit legacy mode. */
     public val localFingerprint: PeerFingerprint?
 
-    /** AppId-bound canonical pairing QR text in secure v2; null in legacy mode. */
+    /**
+     * Canonical [PeerPairingQr] text bound to this kit's exact [AppId] in secure
+     * v2, or `null` in legacy mode. It is [PeerPairingQr.encode] output and
+     * round-trips through `PeerPairingQr.parseOrNull`.
+     */
     public val localPairingQr: String?
 
     /**
-     * Parse and validate a pairing QR against this kit's exact AppId.
-     * Returns null for malformed, non-canonical, other-AppId, or legacy input.
+     * Parse canonical [PeerPairingQr] text and validate its binding against
+     * this kit's exact [AppId]. Unlike `PeerPairingQr.parseOrNull`, success
+     * also means the AppId binding matched. Returns `null` for malformed,
+     * non-canonical, or other-AppId input, and whenever this kit uses legacy mode.
+     *
+     * Parsing does not prove possession of the remote private key. Exchange the
+     * QR through a trusted out-of-band channel and use the returned fingerprint
+     * as the connection pin; the authenticated handshake proves possession.
      */
     public fun parsePeerPairingQr(value: String): PeerFingerprint?
 
