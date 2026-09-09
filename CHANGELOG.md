@@ -9,6 +9,20 @@ audits, trackers, and implementation evidence remain under `docs/archive/`.
 The six real-world, independent-interoperability, and professional-audit areas
 remain pending; no stable-release readiness claim is implied.
 
+### Audit-branch Android provisioning address snapshots — reserved for 0.8.0+
+
+- #282: Android manual connection information and hosted-network snapshots now
+  share one IO-dispatched all-interface scanner. Usable IPv4 is retained and
+  portable non-link-local unicast IPv6 candidates are included, so dual-stack
+  consumers can see additional addresses and IPv6-only snapshots need not be
+  empty. Sender-local IPv6 zones and deprecated site-local IPv6 are excluded.
+  A snapshot is not proof of peer reachability: LAN-only route admission and
+  fingerprint-pinned authentication are unchanged. Physical IPv6/OEM
+  qualification remains pending.
+- This unmerged behavior expansion is **not approved for a 0.7 release** and
+  is not part of published RC3. Honor the 0.8.0+ target or obtain an explicit
+  owner release decision; no version/tag/publication authorization is implied.
+
 ### Audit-branch discovery tightening — reserved for 0.8.0+
 
 - #229: JVM/Android decode original DNS-SD TXT bytes rather than JmDNS's

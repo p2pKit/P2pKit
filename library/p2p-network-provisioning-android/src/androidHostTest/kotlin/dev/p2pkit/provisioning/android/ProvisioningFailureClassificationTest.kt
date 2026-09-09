@@ -193,7 +193,7 @@ private class FailureFixture : WifiManagerWrapper, HotspotHandle {
         readFailure?.let { throw it }
         return WifiCredentials("synthetic hotspot", null, WifiSecurityType.OPEN)
     }
-    override fun apHostAddresses() = listOf("192.0.2.1")
+    override fun scanInterfaceAddresses() = listOf("192.0.2.1")
     override val stopped = MutableSharedFlow<HotspotStopReason>()
     override fun close() {
         closeCalls += 1

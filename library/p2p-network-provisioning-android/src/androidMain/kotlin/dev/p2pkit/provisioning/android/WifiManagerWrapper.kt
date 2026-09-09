@@ -44,6 +44,13 @@ internal interface WifiManagerWrapper {
     fun permissionState(): ProvisioningPermissionState = ProvisioningPermissionState()
 
     /**
+     * Blocking snapshot of all active non-loopback interfaces, not just a
+     * hotspot. The manager owns the IO dispatch and uses this same scanner
+     * for manual connection information and hosted-network snapshots.
+     */
+    fun scanInterfaceAddresses(): List<String> = collectProvisioningInterfaceAddresses()
+
+    /**
      * Start a LocalOnlyHotspot. Suspends until the system reports either
      * `onStarted` or `onFailed`. SecurityException (permission missing) is
      * propagated to the caller, not wrapped here.
@@ -98,14 +105,6 @@ internal interface HotspotHandle {
      * `null`, and cancellation must propagate.
      */
     fun getCredentials(): WifiCredentials?
-
-    /**
-     * Snapshot of non-loopback IPs surfaced by `NetworkInterface` *while
-     * the hotspot is running*. Includes the soft-AP interface IP (the
-     * gateway, typically `192.168.43.1` on AOSP, varies by OEM) once the
-     * AP interface comes up.
-     */
-    fun apHostAddresses(): List<String>
 
     /**
      * Fires exactly once when the system tears the hotspot down on its

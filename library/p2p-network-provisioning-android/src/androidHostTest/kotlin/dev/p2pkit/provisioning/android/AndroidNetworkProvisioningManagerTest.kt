@@ -1757,6 +1757,12 @@ private class FakeWifiManagerWrapper(
         dev.p2pkit.core.permission.P2pPermission.NearbyWifiDevices
 
     override fun permissionState(): ProvisioningPermissionState = permissionState
+    override fun scanInterfaceAddresses(): List<String> = when (val current = behavior) {
+        is Behavior.Start -> current.apHosts
+        is Behavior.StartSuspends -> current.apHosts
+        is Behavior.StartAndJoin -> current.apHosts
+        else -> emptyList()
+    }
 
     override suspend fun startLocalOnlyHotspot(): HotspotStartResult {
         hotspotStartCalls += 1
@@ -1769,7 +1775,6 @@ private class FakeWifiManagerWrapper(
             is Behavior.Start -> {
                 val h = FakeHotspotHandle(
                     credentials = b.credentials,
-                    apHosts = b.apHosts,
                     closeFailures = b.closeFailures,
                     closeEntered = b.closeEntered,
                     closeRelease = b.closeRelease,
@@ -1781,14 +1786,14 @@ private class FakeWifiManagerWrapper(
             is Behavior.StartSuspends -> {
                 b.entered.complete(Unit)
                 b.release.await()
-                val h = FakeHotspotHandle(b.credentials, b.apHosts, b.closeFailures)
+                val h = FakeHotspotHandle(b.credentials, b.closeFailures)
                 lastHandle = h
                 HotspotStartResult.Started(h)
             }
             is Behavior.StartAndJoin -> {
                 b.startEntered?.complete(Unit)
                 b.startRelease?.await()
-                val h = FakeHotspotHandle(b.credentials, b.apHosts, b.hotspotCloseFailures)
+                val h = FakeHotspotHandle(b.credentials, b.hotspotCloseFailures)
                 lastHandle = h
                 HotspotStartResult.Started(h)
             }
@@ -1844,7 +1849,6 @@ private class FakeWifiManagerWrapper(
 
 private class FakeHotspotHandle(
     private val credentials: WifiCredentials?,
-    private val apHosts: List<String>,
     closeFailures: Int = 0,
     private val closeEntered: CountDownLatch? = null,
     private val closeRelease: CountDownLatch? = null,
@@ -1871,7 +1875,6 @@ private class FakeHotspotHandle(
     }
 
     override fun getCredentials(): WifiCredentials? = credentials
-    override fun apHostAddresses(): List<String> = apHosts
     override fun close() {
         try {
             closeAttempts += 1

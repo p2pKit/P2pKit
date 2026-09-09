@@ -20,8 +20,6 @@ import dev.p2pkit.core.provisioning.NetworkState
 import dev.p2pkit.core.provisioning.WifiCredentials
 import dev.p2pkit.core.provisioning.WifiPassword
 import dev.p2pkit.core.provisioning.WifiSecurityType
-import java.net.Inet4Address
-import java.net.NetworkInterface
 import kotlin.coroutines.resume
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -638,25 +636,6 @@ private class HotspotHandleImpl(
                 )
             }
         }
-    }
-
-    override fun apHostAddresses(): List<String> {
-        val out = mutableListOf<String>()
-        val ifs = runCatching { NetworkInterface.getNetworkInterfaces() }.getOrNull() ?: return emptyList()
-        for (nif in ifs) {
-            // Per-interface guard: isUp/inetAddresses can throw
-            // SocketException when an interface vanishes mid-scan (hotspot/
-            // VPN churn — exactly when provisioning runs). Skip the bad NIC
-            // instead of letting the raw exception escape (AUDIT-2026-06 fix).
-            runCatching {
-                if (!nif.isUp || nif.isLoopback) return@runCatching
-                for (addr in nif.inetAddresses) {
-                    if (addr.isLoopbackAddress || addr.isAnyLocalAddress) continue
-                    if (addr is Inet4Address) out += addr.hostAddress
-                }
-            }
-        }
-        return out.distinct()
     }
 
     override fun close() {

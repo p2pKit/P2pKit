@@ -16,10 +16,9 @@ import dev.p2pkit.core.provisioning.NetworkProvisioningState
 import dev.p2pkit.core.provisioning.NetworkState
 import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.WifiCredentials
-import java.net.Inet4Address
-import java.net.NetworkInterface
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -57,8 +56,11 @@ import kotlinx.coroutines.withTimeoutOrNull
  *   bound to the joined network). Requires Android 10 (API 29) — returns
  *   [JoinNetworkResult.Unsupported] below that.
  * - [getManualConnectionInfo] / [createManualPeer]: identical shape to the
- *   JVM impl. While the hotspot is running, [ManualConnectionInfo.hostAddresses]
- *   includes the soft-AP interface IP.
+ *   JVM impl. A single IO-dispatched, all-interface snapshot reports usable
+ *   IPv4 and non-link-local unicast IPv6 candidates, including the soft-AP
+ *   interface once it is visible. IPv6 sender-local zone IDs are not exported.
+ *   These candidates are not a reachability guarantee; LAN route admission
+ *   and authenticated manual-peer pinning remain separate checks.
  *
  * A hotspot and a joined network can coexist. Each state snapshot belongs
  * to its publishing operation/resource: terminating the other resource does
@@ -74,7 +76,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 public class AndroidNetworkProvisioningManager internal constructor(
     private val ctx: ProvisioningContext,
     private val wifi: WifiManagerWrapper,
-    private val lifecycleHooks: ProvisioningLifecycleHooks = ProvisioningLifecycleHooks()
+    private val lifecycleHooks: ProvisioningLifecycleHooks = ProvisioningLifecycleHooks(),
+    private val addressScanDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : NetworkProvisioningManager {
 
     private val scopeJob = SupervisorJob(parent = ctx.parentJob)
@@ -188,7 +191,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
                 commitIfOpen { _events.tryEmit(NetworkProvisioningEvent.Failed(error)) }
                 LocalNetworkResult.Failed(error)
             } else {
-                buildStartedResult(read.getOrNull(), existing)
+                buildStartedResult(read.getOrNull())
             }
             return@withLock if (isClosingOrClosed()) closedLocalNetworkResult() else result
         }
@@ -279,7 +282,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
                     val creds = read.getOrNull()
                     val credentialFailure = read.exceptionOrNull()
                     val result = if (credentialFailure == null) {
-                        buildStartedResult(creds, h)
+                        buildStartedResult(creds)
                     } else {
                         LocalNetworkResult.Failed(mapStartException(credentialFailure))
                     }
@@ -307,7 +310,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
                         }
                         return@withLock failureResult
                     }
-                    val networkState = buildStartedNetworkState(h, creds)
+                    val networkState = buildStartedNetworkState(creds)
                     if (!commitStateIfOpen(h) {
                             networkStateOwner = h
                             _networkState.value = networkState
@@ -570,8 +573,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
         runManagerOperation({ throw NetworkProvisioningError.ManagerClosed() }) {
             ensureOpen()
             val port = ctx.lanTcpPort() ?: return@runManagerOperation null
-            val hosts = collectInterfaceIPs() + (handle?.apHostAddresses() ?: emptyList())
-            val distinct = hosts.distinct()
+            val distinct = collectInterfaceIPs()
             if (distinct.isEmpty()) return@runManagerOperation null
             ManualConnectionInfo(
                 hostAddresses = distinct,
@@ -690,10 +692,9 @@ public class AndroidNetworkProvisioningManager internal constructor(
     }
 
     private suspend fun buildStartedResult(
-        credentials: WifiCredentials?,
-        h: HotspotHandle
+        credentials: WifiCredentials?
     ): LocalNetworkResult {
-        val info = buildManualInfoFromHandle(h)
+        val info = buildManualInfo()
         return if (credentials != null && credentials.ssid != null) {
             LocalNetworkResult.Started(credentials = credentials, manualConnectionInfo = info)
         } else if (info != null) {
@@ -709,9 +710,9 @@ public class AndroidNetworkProvisioningManager internal constructor(
         }
     }
 
-    private suspend fun buildManualInfoFromHandle(h: HotspotHandle): ManualConnectionInfo? {
+    private suspend fun buildManualInfo(): ManualConnectionInfo? {
         val port = ctx.lanTcpPort() ?: return null
-        val hosts = (collectInterfaceIPs() + h.apHostAddresses()).distinct()
+        val hosts = collectInterfaceIPs()
         if (hosts.isEmpty()) return null
         return ManualConnectionInfo(
             hostAddresses = hosts,
@@ -725,10 +726,9 @@ public class AndroidNetworkProvisioningManager internal constructor(
     }
 
     private suspend fun buildStartedNetworkState(
-        h: HotspotHandle,
         creds: WifiCredentials?
     ): NetworkState.LocalNetworkHosted {
-        val ips = (collectInterfaceIPs() + h.apHostAddresses()).distinct()
+        val ips = collectInterfaceIPs()
         return NetworkState.LocalNetworkHosted(
             credentials = creds,
             localIpAddresses = ips
@@ -1057,25 +1057,10 @@ public class AndroidNetworkProvisioningManager internal constructor(
         else -> "UNKNOWN($code)"
     }
 
-    private suspend fun collectInterfaceIPs(): List<String> = withContext(Dispatchers.IO) {
-        // IO dispatcher (the JVM sidecar already hops; Android ran the scan
-        // on the caller's thread) and per-NIC guard: isUp/inetAddresses throw
-        // SocketException when an interface vanishes mid-scan
-        // (AUDIT-2026-06 fix).
-        val out = mutableListOf<String>()
-        val ifs = runCatching { NetworkInterface.getNetworkInterfaces() }.getOrNull()
-            ?: return@withContext emptyList()
-        for (nif in ifs) {
-            runCatching {
-                if (!nif.isUp || nif.isLoopback) return@runCatching
-                for (addr in nif.inetAddresses) {
-                    if (addr.isLoopbackAddress || addr.isAnyLocalAddress) continue
-                    if (addr is Inet4Address) out += addr.hostAddress
-                }
-            }
-        }
-        out.distinct()
+    private suspend fun collectInterfaceIPs(): List<String> = withContext(addressScanDispatcher) {
+        wifi.scanInterfaceAddresses()
     }
+
 }
 
 /** Deterministic lifecycle seams used only by host-side concurrency tests. */
