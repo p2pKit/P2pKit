@@ -1611,11 +1611,15 @@ class AndroidNetworkProvisioningManagerTest {
 
         val first = Any()
         val second = Any()
-        assertTrue(ProcessBindingArbiter.tryAcquire(first))
-        assertFalse(ProcessBindingArbiter.tryAcquire(second))
-        ProcessBindingArbiter.release(first)
-        assertTrue(ProcessBindingArbiter.tryAcquire(second))
-        ProcessBindingArbiter.release(second)
+        try {
+            assertTrue(ProcessBindingArbiter.tryAcquire(first))
+            assertFalse(ProcessBindingArbiter.tryAcquire(second))
+            ProcessBindingArbiter.release(first)
+            assertTrue(ProcessBindingArbiter.tryAcquire(second))
+        } finally {
+            ProcessBindingArbiter.release(first)
+            ProcessBindingArbiter.release(second)
+        }
 
         assertEquals(
             listOf(
