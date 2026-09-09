@@ -28,6 +28,7 @@ import dev.p2pkit.core.protocol.FileResultCode
 import dev.p2pkit.core.internal.security.sha256
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.assertCannotClear
 import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.testfixtures.runWireBlocking
 import dev.p2pkit.core.transfer.FileTransferConfig
@@ -675,10 +676,7 @@ class FileTransferFlowTest {
 
         val initial = dispatcher.pendingFileOffers.value
         assertEquals(listOf(id.toString()), initial.map { it.id })
-        assertTrue(
-            runCatching { (initial as MutableList).clear() }.isFailure,
-            "retained offer snapshots must reject mutation"
-        )
+        assertCannotClear(initial)
 
         runCurrent()
         advanceTimeBy(99L)
@@ -1901,10 +1899,6 @@ class FileTransferFlowTest {
             assertEquals(Retryability.RETRY_AFTER_USER_ACTION, failure.retryability)
             assertEquals(transfer.id, failure.transferId)
             assertIs<IOException>(failure.cause)
-            assertTrue(
-                failed.error.message?.contains("source read failed") == true,
-                "sender failure should be classified as a source read failure, got ${failed.error}"
-            )
             val cancel = protocol.fileCancels.single()
             assertEquals(transferId, cancel.first)
             assertTrue(

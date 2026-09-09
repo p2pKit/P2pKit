@@ -2,6 +2,7 @@ package dev.p2pkit.core.protocol
 
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
+import dev.p2pkit.core.testfixtures.assertCannotClear
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -14,6 +15,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
@@ -39,15 +41,16 @@ class MessageMetadataContractTest {
         sourceMetadata.clear()
         val exposedBytes = message.bytes
         exposedBytes[1] = 9
-        @Suppress("UNCHECKED_CAST")
-        val metadataMutation = runCatching {
-            (message.metadata as MutableMap<String, String>).clear()
-        }
+        assertCannotClear(message.metadata)
 
         assertContentEquals(byteArrayOf(1, 2, 3), message.bytes)
         assertEquals(mapOf("one" to "1", "two" to "2"), message.metadata)
         assertEquals(originalHash, message.hashCode())
-        assertTrue(metadataMutation.isFailure, "public metadata must reject mutation")
+        val equal = P2pMessage.Binary(byteArrayOf(1, 2, 3), mapOf("one" to "1", "two" to "2"))
+        assertEquals(message, equal)
+        assertEquals(message.hashCode(), equal.hashCode())
+        assertNotEquals(message, P2pMessage.Binary(byteArrayOf(1, 2, 4), equal.metadata))
+        assertNotEquals(message, P2pMessage.Binary(byteArrayOf(1, 2, 3), mapOf("one" to "different")))
     }
 
     // --- Chunker/Reassembler round-trip (protocol codec layer) ---

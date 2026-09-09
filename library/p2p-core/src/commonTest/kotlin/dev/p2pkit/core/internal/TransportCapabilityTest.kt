@@ -9,6 +9,7 @@ import dev.p2pkit.core.permission.P2pPermission
 import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.FakeDiscoveryTransport
+import dev.p2pkit.core.testfixtures.assertCannotAdd
 import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.InternalPeer
@@ -25,6 +26,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -39,15 +41,17 @@ class TransportCapabilityTest {
         assertEquals(setOf(TransportCapability.DATA), descriptor.capabilities)
         assertEquals(TransportKind.LAN, descriptor.component1())
         assertEquals(setOf(TransportCapability.DATA), descriptor.component2())
+        val equal = TransportDescriptor(TransportKind.LAN, setOf(TransportCapability.DATA))
+        assertEquals(descriptor, equal)
+        assertEquals(descriptor.hashCode(), equal.hashCode())
         assertEquals(descriptor, descriptor.copy())
-        assertEquals(descriptor.hashCode(), descriptor.copy().hashCode())
-        assertTrue(
-            runCatching {
-                @Suppress("UNCHECKED_CAST")
-                (descriptor.capabilities as MutableSet<TransportCapability>) +=
-                    TransportCapability.DISCOVERY
-            }.isFailure
-        )
+        val otherKind = descriptor.copy(kind = TransportKind.BLE)
+        assertEquals(TransportKind.BLE, otherKind.kind)
+        assertNotEquals(descriptor, otherKind)
+        val otherCapabilities = descriptor.copy(capabilities = setOf(TransportCapability.DISCOVERY))
+        assertEquals(setOf(TransportCapability.DISCOVERY), otherCapabilities.capabilities)
+        assertNotEquals(descriptor, otherCapabilities)
+        assertCannotAdd(descriptor.capabilities, TransportCapability.DISCOVERY)
 
         assertFailsWith<IllegalArgumentException> {
             TransportDescriptor(TransportKind.LAN, emptySet())
@@ -159,7 +163,6 @@ class TransportCapabilityTest {
 
         assertEquals(TransportKind.LAN, failure.transportKind)
         assertSame(cause, failure.underlying)
-        assertTrue(failure.reason.contains("provider construction failed"))
     }
 
     @Test
@@ -228,7 +231,6 @@ class TransportCapabilityTest {
 
         assertEquals(TransportKind.LAN, failure.transportKind)
         assertSame(cause, failure.underlying)
-        assertTrue(failure.reason.contains("provider type getter failed"))
     }
 }
 

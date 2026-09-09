@@ -264,6 +264,20 @@ command above. Provider-internal key erasure, OS identity persistence, physical
 network behavior and independent cryptographic assurance are not established
 by these synthetic tests.
 
+## Failure assertion precision
+
+Prefer `assertFailsWith`/`assertIs` plus the error's classification fields and
+original cause over diagnostic wording. For `P2pError.FileTransferFailed`, pin
+`kind`, `phase`, `retryability`, and `transferId`; when a fixture supplied a
+cause, compare its identity. Do not duplicate that contract with a substring
+of the same cause message.
+
+Do not remove strings mechanically: parser field/packet-family discriminators,
+non-disclosure assertions, explicit timeout/cleanup reason contracts, and
+intentional logger diagnostics remain meaningful when no typed alternative
+exists. A broad `ProtocolError` or `IllegalArgumentException` alone may not
+identify the failed check. Do not change public error ABI just to simplify tests.
+
 ## Android diagnostic compatibility
 
 The shared sample diagnostics use the pinned Kotlin clock's API-24/25 fallback,

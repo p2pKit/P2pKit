@@ -332,6 +332,15 @@ class FixtureContractTest {
         }
     }
 
+    @Test
+    fun immutabilityAssertionRejectsSuccessfulMutationAndUnrelatedFailure() {
+        assertFailsWith<AssertionError> { assertCannotAdd(mutableListOf(1), 2) }
+        val unrelatedFailure = object : MutableList<Int> by mutableListOf(1) {
+            override fun add(element: Int): Boolean = throw IllegalStateException("not mutation rejection")
+        }
+        assertFailsWith<AssertionError> { assertCannotAdd(unrelatedFailure, 2) }
+    }
+
     // ---- F7: RecordingLogger ---------------------------------------------
 
     @Test

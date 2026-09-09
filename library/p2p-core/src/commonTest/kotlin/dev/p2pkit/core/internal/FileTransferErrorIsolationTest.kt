@@ -35,7 +35,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.test.assertTrue
+import kotlin.test.assertSame
 
 /**
  * Error-isolation guarantees for file transfers (AUDIT-2026-06 #3): a failure
@@ -100,12 +100,14 @@ class FileTransferErrorIsolationTest {
      * FILE_DONE finalization in StreamingFileReceiver.finish().
      */
     private class DiskFullSink : RawSink {
+        val failure = IOException("disk full")
+
         override fun write(source: Buffer, byteCount: Long) {
             source.skip(byteCount)
         }
 
         override fun flush() {
-            throw IOException("disk full")
+            throw failure
         }
 
         override fun close() {}
@@ -155,7 +157,8 @@ class FileTransferErrorIsolationTest {
             val goodOffer = offers.first { it.name == "good.bin" }
 
             val goodSink = Buffer()
-            val badIncoming = badOffer.accept(DiskFullSink())
+            val badSink = DiskFullSink()
+            val badIncoming = badOffer.accept(badSink)
             val goodIncoming = goodOffer.accept(goodSink)
 
             // The failing receive must land in Failed (flush threw in finish())…
@@ -168,11 +171,7 @@ class FileTransferErrorIsolationTest {
             assertEquals(FileTransferPhase.FLUSH, error.phase)
             assertEquals(Retryability.RETRY_AFTER_USER_ACTION, error.retryability)
             assertEquals(badIncoming.id, error.transferId)
-            assertIs<IOException>(error.cause)
-            assertTrue(
-                failed.error.message?.contains("disk full") == true,
-                "Failure should carry the sink's IOException, got ${failed.error}"
-            )
+            assertSame(badSink.failure, error.cause, "retain the original sink failure, not a message copy")
 
             // …while the concurrent transfer completes on both sides…
             val goodReceiverFinal = withTimeout(5_000) {

@@ -9,6 +9,8 @@ import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.RecordingLogger
+import dev.p2pkit.core.testfixtures.assertCannotAdd
+import dev.p2pkit.core.testfixtures.assertCannotClear
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -52,10 +54,8 @@ class SessionStoreInvariantTest {
         val store = SessionStore(P2pLogger.NoOp, strictInvariants = true)
         val session = StubSession(peer = syntheticPeer("immutable", "Immutable"))
 
-        assertTrue(
-            runCatching { (store.sessions.value as MutableList<P2pSession>).add(session) }
-                .isFailure
-        )
+        val initial = store.sessions.value
+        assertCannotAdd(initial, session)
         assertIs<RegisterOutcome.Accepted>(
             store.tryRegister(
                 peerId = session.peer.id,
@@ -65,8 +65,12 @@ class SessionStoreInvariantTest {
             )
         )
         val published = store.sessions.value
-        assertTrue(runCatching { (published as MutableList<P2pSession>).clear() }.isFailure)
+        assertCannotClear(published)
         assertEquals(listOf(session), store.sessions.value)
+        assertTrue(initial.isEmpty(), "registration must not change an earlier snapshot")
+        store.removeIfMatches(session.peer.id, session)
+        assertTrue(store.sessions.value.isEmpty())
+        assertEquals(listOf(session), published)
     }
 
     @Test

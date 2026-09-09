@@ -18,6 +18,8 @@ import dev.p2pkit.core.transport.PeerOrigin
 import dev.p2pkit.core.transport.TransportHint
 import dev.p2pkit.core.transport.TransportSecurityProfile
 import dev.p2pkit.core.testfixtures.RecordingLogger
+import dev.p2pkit.core.testfixtures.assertCannotAdd
+import dev.p2pkit.core.testfixtures.assertCannotClear
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -93,17 +95,17 @@ class PeerRegistryTest {
                 evictionPollMillis = Long.MAX_VALUE / 2
             )
             val initial = registry.peers.value
-            assertTrue(
-                runCatching { (initial as MutableList<Peer>).add(peer("injected").publicPeer) }
-                    .isFailure
-            )
+            val injected = peer("injected").publicPeer
+            assertCannotAdd(initial, injected)
 
             registry.processEvent(PeerEvent.Found(peer("published")))
             val published = registry.peers.value
-            assertTrue(
-                runCatching { (published as MutableList<Peer>).clear() }.isFailure
-            )
+            assertCannotClear(published)
             assertEquals(listOf(PeerId("published")), registry.peers.value.map { it.id })
+            assertTrue(initial.isEmpty(), "publication must not change an earlier snapshot")
+            registry.processEvent(PeerEvent.Lost(PeerId("published")))
+            assertTrue(registry.peers.value.isEmpty())
+            assertEquals(listOf(PeerId("published")), published.map { it.id })
         } finally {
             supervisor.cancel()
         }

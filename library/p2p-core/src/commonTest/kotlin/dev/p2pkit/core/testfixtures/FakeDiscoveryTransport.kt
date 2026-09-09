@@ -18,15 +18,16 @@ import kotlinx.coroutines.flow.first
  * No actual discovery work is performed; `start*` / `stop*` are recorded as
  * counters so the kit lifecycle can be asserted if needed.
  *
- * Delivery semantics (fixture change F4 / TST-4): by default the event flow
- * is **production-shaped**, matching all three shipped LAN discovery
- * transports — `MutableSharedFlow(replay = 0, extraBufferCapacity = 256,
- * onBufferOverflow = DROP_OLDEST)` fed via `tryEmit`. That means events
- * emitted while no collector is subscribed are not delivered, and a
- * collector lagging more than 256 events behind loses the oldest ones —
- * exactly like production. Construct with [strictDelivery] = true for tests
- * that must not lose events under backlog: the flow then uses
- * `BufferOverflow.SUSPEND` and [emit] suspends until delivered.
+ * This is a synthetic replay-zero event source, not the shipped LAN relay.
+ * Both modes discard events emitted without a subscriber. Default mode uses
+ * a 256-event buffer and drops the oldest events under backlog. With
+ * [strictDelivery], emission suspends only when an active subscriber's buffer
+ * is full; completion means buffer acceptance, not consumer processing.
+ *
+ * The production LAN relay instead retains current peers and replays them to
+ * new collectors, while allowing intermediate updates to conflate. Tests using
+ * this fake must [awaitSubscriber] before emitting, then await the registry's
+ * observable postcondition when they need proof that an event was processed.
  */
 internal class FakeDiscoveryTransport(
     override val type: TransportKind = TransportKind.LAN,
@@ -71,15 +72,15 @@ internal class FakeDiscoveryTransport(
         refreshCalls++
     }
 
-    /** Wait until PeerRegistry has attached its replay-zero event collector. */
+    /** Wait for an active subscriber; this does not acknowledge registry processing. */
     suspend fun awaitSubscriber() {
         _events.subscriptionCount.first { it > 0 }
     }
 
     /**
-     * Push a discovery event into the kit's `PeerRegistry`. Default mode is
-     * `tryEmit`-shaped like production (never suspends; DROP_OLDEST under
-     * backlog); with [strictDelivery] it suspends until delivered.
+     * Enqueue a synthetic event. With no subscriber, both modes discard it.
+     * Default mode never suspends and drops oldest entries under backlog;
+     * [strictDelivery] suspends at buffer saturation, not until processing.
      */
     suspend fun emit(event: PeerEvent) {
         if (strictDelivery) {
