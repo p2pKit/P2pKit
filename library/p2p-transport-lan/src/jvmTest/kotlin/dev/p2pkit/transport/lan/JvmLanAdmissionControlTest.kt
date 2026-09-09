@@ -102,12 +102,16 @@ class JvmLanAdmissionControlTest {
                 val expectedRefusals = NEVER_HELLO_COUNT - MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE
                 var refusedClosed = 0
                 var admitted = 0
-                for (s in sockets) {
+                for ((index, s) in sockets.withIndex()) {
                     s.soTimeout = SOCKET_PROBE_TIMEOUT_MS
                     val first = try {
                         s.getInputStream().read()
                     } catch (e: SocketTimeoutException) {
-                        -2
+                        throw AssertionError(
+                            "socket ${index + 1}/${sockets.size} neither closed nor sent HELLO " +
+                                "within ${SOCKET_PROBE_TIMEOUT_MS}ms",
+                            e
+                        )
                     }
                     when {
                         first == -1 -> refusedClosed++
