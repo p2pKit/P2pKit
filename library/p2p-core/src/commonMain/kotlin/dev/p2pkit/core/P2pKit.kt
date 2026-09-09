@@ -162,9 +162,9 @@ public interface P2pKit {
      *   - JVM desktop: defaults to [NetworkPathStatus.Unknown] unless the
      *     host app supplies a custom observer.
      *
-     * Useful for the host app's UI ("offline" banner). Internally the SDK
-     * uses the same flow to drive reconnect on path-recovered (see
-     * [dev.p2pkit.core.internal.SessionManager.applyPathChange]).
+     * Useful for the host app's UI ("offline" banner). The kit uses the same
+     * flow to respond to connection loss and wake pending reconnect delays on
+     * path recovery, subject to the configured [ReconnectPolicy].
      */
     public val networkPathStatus: StateFlow<NetworkPathStatus>
 

@@ -5,9 +5,8 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * Current reachability of the host device's default network path.
  *
- * Surfaced via [P2pKit.networkPathStatus] (and observed internally by
- * [SessionManager][dev.p2pkit.core.internal.SessionManager] when
- * [ReconnectPolicy.Enabled] is configured). Apps can also subscribe for
+ * Surfaced via [P2pKit.networkPathStatus] and used by the kit for connection
+ * loss and configured [ReconnectPolicy] behavior. Apps can also subscribe for
  * their own UI ("offline" banner, etc.).
  */
 public sealed class NetworkPathStatus {

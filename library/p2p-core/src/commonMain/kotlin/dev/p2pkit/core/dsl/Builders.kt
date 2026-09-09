@@ -86,7 +86,7 @@ public class P2pKitBuilder internal constructor() {
 
     /**
      * Optional host-provided [P2pPermissionManager]. When `null`, the kit uses
-     * the platform default ([dev.p2pkit.core.internal.defaultPlatformPermissionManager]):
+     * the platform default selected for this kit:
      * a live LAN permission checker on Android (once
      * `P2pKitAndroid.initialize(context)` has run), no-op on JVM/iOS.
      *

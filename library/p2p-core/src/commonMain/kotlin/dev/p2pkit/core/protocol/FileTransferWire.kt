@@ -260,10 +260,19 @@ internal object SecureFileAccept {
     }
 }
 
+/** Fixed secure transfer schema identifier; every transfer reader rejects any other version. */
 private const val FILE_TRANSFER_SCHEMA_VERSION = 1
+/** FILE_OFFER algorithm identifier, not a tunable bound: the receiver requires SHA-256 (1). */
 private const val DIGEST_SHA256 = 1
+/** Required FILE_OFFER completion mode (1); reject flush-only/unknown modes instead of weakening commit. */
 private const val COMPLETION_DURABLE_COMMIT = 1
+/** Bit 0 declares the length-prefixed MIME field; the offer decoder rejects every unknown flag bit. */
 private const val FLAG_MIME = 1
+/**
+ * Bound the public diagnostic projection of a validated FILE_RESULT to 512
+ * UTF-16 units. This is not redaction or a wire allocation limit; wire text
+ * validation uses ProtocolConstants.MAX_REASON_PAYLOAD_BYTES independently.
+ */
 private const val MAX_PUBLIC_FAILURE_REASON_CHARS = 512
 
 private fun FileTransferPhase.toWireCode(): Int = when (this) {

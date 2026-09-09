@@ -25,9 +25,12 @@ public data class FileTransferConfig(
      * Time the receiver has to call [P2pFileOffer.accept] or [P2pFileOffer.reject]
      * before the offer auto-rejects with reason `"timeout"`. It is also the
      * maximum idle interval for both sending and receiving after acceptance;
-     * the overall accepted-transfer deadline in either direction is twenty
-     * times this value. Secure-v2 receiver commit and sender FILE_COMMIT
-     * acknowledgement each use the same bound. Must be positive. Default 30 s.
+     * accepted streaming deadline in either direction is twenty times this
+     * value (600 s at the 30 s default). That timer ends at receiver finalization
+     * or sender commit-wait, whose operations have separate deadlines; it is not
+     * an end-to-end completion/cleanup ceiling. Secure-v2 receiver commit and
+     * sender FILE_COMMIT acknowledgement each use this value as their own bound.
+     * Must be positive. Default 30 s.
      */
     val offerTimeoutMillis: Long = 30_000,
 
@@ -105,6 +108,7 @@ internal val FileTransferConfig.commitTimeoutMillis: Long
  * FILE_REJECT. The sender watchdog starts after the offer is actually written
  * and includes a response grace, retaining a finite bound for an unresponsive
  * or non-conforming peer without racing the receiver's normal decision timer.
+ * At the 30 s default, the sender watchdog is 37.5 s, not 30 s.
  */
 internal val FileTransferConfig.outgoingOfferWatchdogMillis: Long
     get() = saturatingAdd(
@@ -118,5 +122,8 @@ private fun saturatingMultiply(value: Long, multiplier: Long): Long =
 private fun saturatingAdd(left: Long, right: Long): Long =
     if (left > Long.MAX_VALUE - right) Long.MAX_VALUE else left + right
 
+/** Streaming lifetime: 20 times the idle budget (default 600 s), saturating rather than overflowing. */
 private const val ACCEPTED_OVERALL_TIMEOUT_MULTIPLIER: Long = 20L
+
+/** Sender gives the receiver at least 1 s, or 25% of its offer budget, to return the timeout rejection. */
 private const val MIN_OFFER_RESPONSE_GRACE_MILLIS: Long = 1_000L

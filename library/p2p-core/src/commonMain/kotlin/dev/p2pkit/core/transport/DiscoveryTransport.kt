@@ -29,7 +29,7 @@ public interface DiscoveryTransport {
      * underlying browser / `discoverServices` under their existing lock so a
      * fresh mDNS (or equivalent) query goes out on the wire.
      *
-     * Called by [dev.p2pkit.core.internal.SessionManager] when an outgoing
+     * Called by the kit when an outgoing
      * session enters `Reconnecting`, to close the gap where the remote peer
      * has changed network state (rebound to a new port) but the local NSD
      * cache has not yet seen the re-announcement. A `refresh()` forces a

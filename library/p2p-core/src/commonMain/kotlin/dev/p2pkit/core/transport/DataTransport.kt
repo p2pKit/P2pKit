@@ -6,9 +6,10 @@ import kotlinx.coroutines.flow.Flow
 /**
  * A transport that can open and accept raw byte streams to peers.
  *
- * Each transport advertises a [type] (LAN, BLE, ...) and a [priority]. The
- * [dev.p2pkit.core.internal.TransportManager] picks the highest-priority
- * transport that reports [canConnect] for the target peer. Internal contract.
+ * Each transport advertises a [type] (LAN, BLE, ...) and a [priority]. The kit
+ * picks the highest-priority transport that reports [canConnect] for the target
+ * peer. This SPI is for transport providers; application code normally calls
+ * [dev.p2pkit.core.P2pKit.connect].
  */
 public interface DataTransport {
     /** Stable kind for this instance. The getter must be side-effect free. */

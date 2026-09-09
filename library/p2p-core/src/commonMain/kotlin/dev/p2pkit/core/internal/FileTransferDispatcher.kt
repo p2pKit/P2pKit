@@ -3027,14 +3027,63 @@ internal class FileTransferDispatcher(
     )
 }
 
+/**
+ * Per-dispatcher inbound-entry budget across offer, acceptance, streaming and
+ * finalization. New offers beyond 64 receive best-effort FILE_REJECT before
+ * sink admission; existing transfers are not evicted. Separate byte limits
+ * still apply: this bounds state count, not aggregate file size.
+ */
 private const val MAX_ACTIVE_INCOMING_TRANSFERS: Int = 64
+/**
+ * Extra slots for lagging subscribers of the deprecated, replay-zero offer
+ * event stream. tryEmit drops notifications when full instead of retaining
+ * suspended emitters; pendingFileOffers remains the authoritative snapshot.
+ */
 private const val MAX_INCOMING_OFFER_EVENT_BUFFER: Int = 64
+/**
+ * Cap registered outgoing attempts at 64 so unanswered/slow work cannot grow
+ * the map indefinitely. Pre-registration exhaustion reports a typed OFFER
+ * failure with RETRY_SAME_SESSION; it is not the active-stream worker limit.
+ */
 private const val MAX_ACTIVE_OUTGOING_TRANSFERS: Int = 64
+/**
+ * Secure replay budget for active reservations plus terminal outcomes in one
+ * connection epoch. Admission reserves terminal capacity before accepting new
+ * work; at 256 it rejects new secure offers with "reconnect required" rather
+ * than evicting replay protection or automatically closing the whole session.
+ */
 private const val MAX_TERMINAL_INCOMING_TRANSACTIONS: Int = 256
+/**
+ * Retain up to 256 legacy IDs whose FILE_ACCEPT ownership is ambiguous. A
+ * further insertion latches admission closed for the epoch, never evicting an
+ * ID that a late write could reuse. New outgoing allocation then requires a
+ * new session; this is distinct from the secure terminal replay ledger.
+ */
 private const val MAX_AMBIGUOUS_INCOMING_TRANSFER_IDS: Int = 256
+/**
+ * Eight permits EACH for application callbacks, cleanup and protocol-control
+ * work, not eight operations globally. Separate gates keep a wedged sink from
+ * consuming its terminal-notification capacity. A timed-out worker keeps its
+ * permit until exit; acquisition/work waits remain operation-deadline bounded.
+ */
 private const val MAX_CONCURRENT_FILE_OPERATIONS: Int = 8
+/**
+ * Separate eight-permit sender-stream gate, limiting simultaneous source/read
+ * loops without lowering the outgoing-entry budget. Waiting accepted attempts
+ * remain subject to their streaming deadline; a stuck stream retains its slot.
+ */
 private const val MAX_CONCURRENT_OUTGOING_STREAMS: Int = 8
+/**
+ * Bound random-ID collision search against active, terminal and ambiguous IDs
+ * to 128 draws. Exhaustion reports TRANSFER_PROTOCOL / RETRY_NEW_SESSION rather
+ * than spinning indefinitely or reusing an owned ID.
+ */
 private const val MAX_TRANSFER_ID_ATTEMPTS: Int = 128
+/**
+ * Public diagnostic truncation budget (512 UTF-16 units) for locally classified
+ * file failures. It neither redacts sensitive content nor defines the UTF-8
+ * wire-reason limit; safe protocol reasons are selected/validated separately.
+ */
 private const val MAX_TRANSFER_FAILURE_REASON_CHARS: Int = 512
 
 /** Referential generation marker for dispatcher writes. */

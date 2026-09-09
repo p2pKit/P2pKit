@@ -224,7 +224,15 @@ private enum class DestinationState {
     ABORTED
 }
 
-private fun tempPrefix(targetName: String): String = ".p2pkit-${targetName.take(48)}."
+/**
+ * Limit the target-derived staging prefix to 48 UTF-16 units, leaving room for
+ * the 8-character marker, separator, platform-generated infix and `.part`.
+ * This is not a universal 255-byte filesystem guarantee: encoding/component
+ * rules differ, and it does not validate or shorten the final target name.
+ */
+private const val MAX_TEMP_PREFIX_NAME_CHARS: Int = 48
+
+private fun tempPrefix(targetName: String): String = ".p2pkit-${targetName.take(MAX_TEMP_PREFIX_NAME_CHARS)}."
 
 private data class AbortFailure(val resource: String, val cause: Throwable)
 
