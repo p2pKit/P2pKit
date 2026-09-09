@@ -43,9 +43,9 @@ import kotlinx.io.RawSource
  * `close()` commits [ConnectionState.Closing] before its bounded wire/resource
  * cleanup, then transitions to `Closed`. After [close], the underlying
  * connection is released and terminal cleanup cancels queued application
- * delivery. [SharedFlow] has no completion signal, so collectors should
- * observe [state] or be cancelled with their owning scope. Concurrent close
- * callers join the same cleanup transaction.
+ * delivery, not application-owned [incoming] collectors. Those collectors
+ * do not complete on `Closed` or `Failed`; their owner must cancel them
+ * (see [incoming]). Concurrent close callers join the same cleanup transaction.
  */
 public interface P2pSession {
     /** Stable identifier of this session for the lifetime of the process. */
@@ -63,6 +63,46 @@ public interface P2pSession {
 
     public val state: StateFlow<ConnectionState>
 
+    /**
+     * Hot application-message stream with no replay and no completion signal.
+     *
+     * Collection does not return normally when [state] becomes
+     * [ConnectionState.Closed] or [ConnectionState.Failed]. The SDK cancels
+     * its producer, not your collector job. A collector left in a longer-lived
+     * scope stays suspended and retains its captured objects until cancelled.
+     *
+     * Own the collection job and observe [state] independently to cancel it
+     * on either terminal state, including when the session is already terminal:
+     *
+     * ```kotlin
+     * import dev.p2pkit.core.ConnectionState
+     * import dev.p2pkit.core.P2pMessage
+     * import dev.p2pkit.core.P2pSession
+     * import kotlinx.coroutines.coroutineScope
+     * import kotlinx.coroutines.flow.first
+     * import kotlinx.coroutines.flow.launchIn
+     * import kotlinx.coroutines.flow.onEach
+     *
+     * suspend fun collectForSession(
+     *     session: P2pSession,
+     *     onMessage: suspend (P2pMessage) -> Unit
+     * ) {
+     *     coroutineScope {
+     *         val collector = session.incoming.onEach(onMessage).launchIn(this)
+     *         try {
+     *             session.state.first {
+     *                 it == ConnectionState.Closed || it == ConnectionState.Failed
+     *             }
+     *         } finally {
+     *             collector.cancel()
+     *         }
+     *     }
+     * }
+     * ```
+     *
+     * Checking [state] only inside `incoming.takeWhile { ... }` is not enough:
+     * after termination there may be no next message to evaluate the predicate.
+     */
     public val incoming: SharedFlow<P2pMessage>
 
     /**

@@ -35,10 +35,16 @@ public interface DataTransport {
      *
      * Returns:
      * - `Result.success(Unit)` once the transport is fully usable.
-     * - `Result.failure(throwable)` if the underlying OS rejected the bind
-     *   (e.g., port exhaustion, missing entitlement, multicast disabled).
-     *   The kit wraps it in [dev.p2pkit.core.P2pError.TransportStartFailed]
-     *   for the caller; transports do not throw.
+     * - `Result.failure(throwable)` for ordinary startup failures, including
+     *   OS bind rejection (e.g., port exhaustion, missing entitlement, or
+     *   multicast disabled). The kit wraps these failures in
+     *   [dev.p2pkit.core.P2pError.TransportStartFailed] for its caller.
+     *
+     * Caller [kotlinx.coroutines.CancellationException] must propagate; do
+     * not encode cancellation in `Result.failure`. Non-[Exception]
+     * [Throwable]s (such as [Error]) may also propagate: implementations are
+     * not required to encode fatal failures as results. Returning [Result]
+     * does not make this suspending operation non-throwing.
      */
     public suspend fun start(): Result<Unit> = Result.success(Unit)
 

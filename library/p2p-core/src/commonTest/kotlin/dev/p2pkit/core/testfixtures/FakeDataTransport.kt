@@ -53,9 +53,9 @@ internal class FakeDataTransport(
     val stopCalls: Int get() = _stopCalls.load()
 
     /**
-     * Fail-on-demand knob for [start]: while non-null, `start()` returns
-     * `Result.failure(startFailure)` — modeling an OS-level bind refusal per
-     * the [DataTransport.start] contract (transports report, never throw).
+     * Fail-on-demand knob for ordinary [start] failures, such as an OS-level bind
+     * refusal. While non-null, `start()` returns `Result.failure(startFailure)`.
+     * This knob does not model caller cancellation or fatal-error propagation.
      */
     @Volatile
     var startFailure: Throwable? = null
