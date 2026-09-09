@@ -19,10 +19,8 @@ private var applicationContext: Context? = null
 public fun initP2pKitAndroid(context: Context) {
     val app = context.applicationContext
     applicationContext = app
-    // Required for persistent PeerId on Android: without this the kit falls
-    // back to in-memory storage and the device gets a new identity every
-    // process launch. The documented KMP setup pattern promised this call but
-    // never made it (AUDIT-2026-06 fix).
+    // Required for default authenticated Android identity storage. Missing
+    // registration is a kit-creation failure, not an in-memory identity fallback.
     P2pKitAndroid.initialize(app)
 }
 

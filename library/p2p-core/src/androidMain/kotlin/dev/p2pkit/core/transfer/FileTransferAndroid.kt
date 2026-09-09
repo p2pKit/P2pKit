@@ -29,10 +29,19 @@ import kotlinx.coroutines.withContext
  * instead of being durably committed. Explicit legacy or third-party session
  * implementations retain the deprecated one-shot source behavior.
  *
+ * If the provider cannot report an exact size, use a stable URI that can, or
+ * copy the content to application-owned stable storage with bounded streaming
+ * I/O off the main thread. Compute the exact size and SHA-256 of those retained
+ * bytes, close preparation resources, and expose the immutable size/digest and
+ * fresh byte-zero sources through [PreparedFileSource]. Send it with the common
+ * `sendFile(name = ..., mimeType = ..., source = prepared)` API, available on Android.
+ * Keep the backing content immutable and reopenable while the offer/transfer
+ * uses it. The SDK closes returned sources; the application owns backing-file
+ * cleanup after pending source operations settle. See [PreparedFileSource] for
+ * prompt-return and late-cleanup requirements.
+ *
  * @throws IllegalArgumentException if the URI cannot be opened or its size
- *   cannot be determined (Android Storage Access Framework occasionally
- *   returns `null` for documents the host app cannot stat — for those, save
- *   to a temp file first and use the JVM `sendFile(File)` overload).
+ *   cannot be determined from the opened descriptor or `SIZE` metadata.
  */
 @Suppress("DEPRECATION")
 public suspend fun P2pSession.sendFile(context: Context, uri: Uri): P2pFileTransfer {

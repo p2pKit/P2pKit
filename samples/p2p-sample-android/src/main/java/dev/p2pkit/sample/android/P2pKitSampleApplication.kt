@@ -4,9 +4,9 @@ import android.app.Application
 import dev.p2pkit.sample.kmp.initP2pKitAndroid
 
 /**
- * Wires P2pKit's Android-only init hook so that `PeerId` persistence uses
- * the app's `filesDir`. Without this call, the kit logs a warning and falls
- * back to in-memory storage (PeerId regenerates every process).
+ * Registers application context before kit creation. The default authenticated
+ * identity uses Android Keystore wrapping and `noBackupFilesDir`; missing
+ * initialization is a configuration failure, not an in-memory identity fallback.
  */
 class P2pKitSampleApplication : Application() {
     override fun onCreate() {
