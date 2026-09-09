@@ -9,11 +9,16 @@ import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
+import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.FakeDiscoveryTransport
+import dev.p2pkit.core.testfixtures.MemorySecureIdentityStorage
+import dev.p2pkit.core.testfixtures.createSecureTestKit
 import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.DiscoveryTransport
@@ -22,6 +27,7 @@ import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerEvent
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
+import dev.p2pkit.core.transport.TransportDescriptor
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
 import kotlin.concurrent.Volatile
@@ -406,6 +412,53 @@ class KitLifecycleTest {
         assertTrue(second.active)
 
         kit.stop()
+        assertTrue(first.closed)
+        assertTrue(second.closed)
+    }
+
+    @Test
+    fun dataStartupWithUnsettledRollbackRetainsFailingTransportAttribution() = runBlocking {
+        val calls = mutableListOf<String>()
+        val cleanupFailure = IllegalStateException("first listener stop failed")
+        val bindFailure = IllegalStateException("second listener bind failed")
+        val first = StartupProbeTransport(TransportKind.LAN, "first", calls).also {
+            it.stopFailure = cleanupFailure
+        }
+        val second = StartupProbeTransport(TransportKind.BLE, "second", calls).also {
+            it.startFailure = bindFailure
+        }
+        val store = MemorySecureIdentityStorage()
+        val kit = createSecureTestKit(
+            appId = AppId("data-rollback-attribution"),
+            name = "Test",
+            store = store,
+            transport = first,
+            authorization = PeerAuthorizationPolicy.RejectUnknown
+        ) {
+            transports { register(DataOnlyFactory(second)) }
+        }
+        try {
+            val failure = assertFailsWith<P2pError.TransportStartFailed> { kit.start() }
+            assertEquals(TransportKind.BLE, failure.transportKind)
+            assertSame(failure, assertIs<P2pState.Failed>(kit.state.value).error)
+            val aggregate = assertIs<CleanupAggregateException>(failure.cause)
+            assertEquals("failed data startup", aggregate.operation)
+            assertSame(cleanupFailure, aggregate.issues.single().cause)
+            val original = assertIs<P2pError.TransportStartFailed>(failure.suppressedExceptions.single())
+            assertEquals(TransportKind.BLE, original.transportKind)
+            assertSame(bindFailure, original.cause)
+            assertEquals(listOf("start:first", "start:second", "stop:second", "stop:first"), calls)
+
+            assertSame(failure, assertFailsWith<P2pError.TransportStartFailed> { kit.start() })
+            assertEquals(4, calls.size, "a blocked retry must not re-enter any transport")
+        } finally {
+            first.stopFailure = null
+            try {
+                kit.stop()
+            } finally {
+                store.clear()
+            }
+        }
         assertTrue(first.closed)
         assertTrue(second.closed)
     }
@@ -986,15 +1039,17 @@ class KitLifecycleTest {
             transports { register(DataOnlyFactory(transport)) }
         }
         try {
-            val failure = assertFailsWith<P2pError.TransportStartFailed> { kit.start() }
+            val failure = assertFailsWith<P2pError.ConnectionFailed> { kit.start() }
 
-            assertTrue(failure.reason.contains("cleanup was incomplete"))
-            assertTrue(
-                failure.suppressedExceptions.any {
-                    it.message == "observer attach failed after partial acquisition"
-                },
-                "the fail-closed diagnosis must retain the original attachment failure"
+            assertEquals(
+                "failed network-path observer startup cleanup was incomplete; " +
+                    "call stop() and replace this P2pKit instance",
+                failure.reason
             )
+            assertSame(observer.startFailure, failure.suppressedExceptions.single())
+            val aggregate = assertIs<CleanupAggregateException>(failure.cause)
+            assertEquals("failed network-path observer startup", aggregate.operation)
+            assertSame(observer.closeFailure, aggregate.issues.single().cause)
             val failedState = assertIs<P2pState.Failed>(kit.state.value)
             assertSame(failure, failedState.error)
             assertTrue(observer.active, "failed detach retains uncertain native ownership")
@@ -1003,13 +1058,84 @@ class KitLifecycleTest {
             assertEquals(1, transport.startCalls)
             assertEquals(1, transport.stopCalls)
 
-            val retryFailure = assertFailsWith<P2pError.TransportStartFailed> { kit.start() }
+            val retryFailure = assertFailsWith<P2pError.ConnectionFailed> { kit.start() }
             assertSame(failure, retryFailure)
             assertEquals(1, observer.startCalls, "uncertain ownership must block observer reattachment")
             assertEquals(1, transport.startCalls, "uncertain ownership must block data rebinding")
         } finally {
-            runCatching { kit.stop() }
+            observer.failClose = false
+            kit.stop()
         }
+        assertFalse(observer.active, "terminal stop must retry retained observer cleanup")
+        assertEquals(2, observer.closeCalls)
+    }
+
+    @Test
+    fun observerCancellationWithStartedDataKeepsNonTransportAttribution() = runBlocking {
+        assertObserverCancellationAttribution(includeData = true)
+    }
+
+    @Test
+    fun observerCancellationWithDiscoveryOnlyKitKeepsNonTransportAttribution() = runBlocking {
+        assertObserverCancellationAttribution(includeData = false)
+    }
+
+    private suspend fun assertObserverCancellationAttribution(includeData: Boolean) {
+        val cancellation = CancellationException("observer attachment cancelled after acquisition")
+        val observer = FailingStartObserver(failClose = true, startFailure = cancellation)
+        val data = if (includeData) RestartableStartTrackingTransport() else null
+        val discovery = FakeDiscoveryTransport()
+        val store = MemorySecureIdentityStorage()
+        val kit = P2pKit.create {
+            appId = AppId("observer-cancellation-attribution-$includeData")
+            deviceName = "Test"
+            secureIdentityStorage = store
+            strictSessionInvariants = true
+            security { mode = SecurityMode.AuthenticatedV2(PeerAuthorizationPolicy.RejectUnknown) }
+            lifecycle { networkPathObserver = observer }
+            transports {
+                register(object : TransportFactory {
+                    override val descriptor = if (includeData) {
+                        TransportDescriptor.dataAndDiscovery(TransportKind.LAN)
+                    } else {
+                        TransportDescriptor.discoveryOnly(TransportKind.LAN)
+                    }
+
+                    override fun build(context: TransportContext): TransportPair =
+                        TransportPair(data = data, discovery = discovery)
+                })
+            }
+        }
+        try {
+            val thrown = assertFailsWith<CancellationException> { kit.start() }
+            assertSame(cancellation, thrown, "caller cancellation must remain the primary throwable")
+            val blocker = assertIs<P2pError.ConnectionFailed>(thrown.suppressedExceptions.single())
+            assertSame(blocker, assertIs<P2pState.Failed>(kit.state.value).error)
+            assertTrue(blocker.reason.startsWith("cancelled network-path observer startup cleanup was incomplete"))
+            val aggregate = assertIs<CleanupAggregateException>(blocker.cause)
+            assertEquals("cancelled network-path observer startup", aggregate.operation)
+            assertSame(observer.closeFailure, aggregate.issues.single().cause)
+            assertTrue(blocker.suppressedExceptions.isEmpty(), "the blocker must not point back to cancellation")
+            assertTrue(observer.active)
+            data?.let {
+                assertEquals(1, it.startCalls)
+                assertEquals(1, it.stopCalls)
+            }
+
+            assertSame(blocker, assertFailsWith<P2pError.ConnectionFailed> { kit.start() })
+            assertEquals(1, observer.startCalls, "retry must not reattach the observer")
+            assertEquals(1, observer.closeCalls, "retry must not repeat uncertain cleanup")
+            data?.let { assertEquals(1, it.startCalls, "retry must not rebind a data listener") }
+        } finally {
+            observer.failClose = false
+            try {
+                kit.stop()
+            } finally {
+                store.clear()
+            }
+        }
+        assertFalse(observer.active)
+        assertEquals(2, observer.closeCalls, "terminal stop must attempt retained cleanup")
     }
 
     @Test
@@ -1041,6 +1167,7 @@ class KitLifecycleTest {
             )
             val failedState = assertIs<P2pState.Failed>(kit.state.value)
             val blocker = assertIs<P2pError.TransportStartFailed>(failedState.error)
+            assertEquals(TransportKind.LAN, blocker.transportKind)
             assertTrue(blocker.reason.contains("cleanup was incomplete"))
             assertEquals(1, transport.startCalls)
             assertEquals(1, transport.stopCalls)
@@ -1540,6 +1667,7 @@ private class StartupProbeTransport(
     @Volatile var active: Boolean = false
     @Volatile var closed: Boolean = false
     @Volatile var startFailure: Throwable? = null
+    @Volatile var stopFailure: Throwable? = null
 
     override suspend fun start(): Result<Unit> {
         check(!closed)
@@ -1551,6 +1679,7 @@ private class StartupProbeTransport(
 
     override suspend fun stop() {
         calls += "stop:$label"
+        stopFailure?.let { throw it }
         active = false
     }
 
@@ -1884,9 +2013,10 @@ private class CancelThenReturnObserver : NetworkPathObserver {
     }
 }
 
-/** Observer that acquires a resource before reporting an ordinary startup failure. */
+/** Observer that acquires a resource before reporting the configured startup failure. */
 private class FailingStartObserver(
-    private val failClose: Boolean = false
+    @Volatile var failClose: Boolean = false,
+    val startFailure: Throwable = IllegalStateException("observer attach failed after partial acquisition")
 ) : NetworkPathObserver {
     private val _status = MutableStateFlow<NetworkPathStatus>(NetworkPathStatus.Unknown)
     override val status: StateFlow<NetworkPathStatus> = _status.asStateFlow()
@@ -1895,15 +2025,17 @@ private class FailingStartObserver(
     @Volatile var closeCalls: Int = 0
     @Volatile var active: Boolean = false
 
+    val closeFailure = IllegalStateException("observer detach failed")
+
     override suspend fun start() {
         startCalls += 1
         active = true
-        throw IllegalStateException("observer attach failed after partial acquisition")
+        throw startFailure
     }
 
     override suspend fun close() {
         closeCalls += 1
-        if (failClose) throw IllegalStateException("observer detach failed")
+        if (failClose) throw closeFailure
         active = false
     }
 }

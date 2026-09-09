@@ -200,7 +200,7 @@ internal class P2pKitImpl(
      * alive. This kit instance must never call start again over that uncertain
      * ownership; terminal [stop] is the only safe recovery.
      */
-    private var startupCleanupBlocker: P2pError.TransportStartFailed? = null
+    private var startupCleanupBlocker: P2pError? = null
 
     // Set once by [stop]. A stopped kit is terminal: its internal scope is
     // cancelled and cannot be revived, so every lifecycle entry point rejects
@@ -402,7 +402,8 @@ internal class P2pKitImpl(
      * Any per-transport failure surfaces as
      * [P2pError.TransportStartFailed]; we attribute the error to that
      * transport's [DataTransport.type] so the caller can show which medium
-     * failed without inspecting the cause's class.
+     * failed without inspecting the cause's class. Observer-phase rollback
+     * failures use [P2pError.ConnectionFailed] without inventing a transport.
      */
     private suspend fun ensureStarted(generation: Long) {
         currentCoroutineContext().ensureActive()
@@ -429,6 +430,8 @@ internal class P2pKitImpl(
             }
             val attempted = mutableListOf<DataTransport>()
             var observerMayHaveStarted = false
+            // Phase and resource ownership differ after a clean observer detach.
+            var observerStartupEntered = false
             try {
                 for (transport in dataTransports) {
                     // AUDIT-2026-07 (ARCH-1): rethrow cancellation before any
@@ -510,6 +513,7 @@ internal class P2pKitImpl(
                 // callback, so roll back data startup and latch fail-closed rather
                 // than attaching a second monitor on retry. Cancellation of the
                 // calling coroutine remains structural and propagates unchanged.
+                observerStartupEntered = true
                 observerMayHaveStarted = true
                 val observedPathStatus: StateFlow<NetworkPathStatus>? = try {
                     pathObserver.start()
@@ -536,7 +540,7 @@ internal class P2pKitImpl(
                             addAll(rollbackDataStartup(attempted))
                         }
                         val blocker = startupRollbackFailure(
-                            transportFactories.first().descriptor.kind,
+                            null,
                             "failed network-path observer startup",
                             rollbackIssues
                         ).also { failure ->
@@ -584,6 +588,7 @@ internal class P2pKitImpl(
                     generation = generation,
                     attempted = attempted,
                     observerMayHaveStarted = observerMayHaveStarted,
+                    observerStartupEntered = observerStartupEntered,
                     cancellation = cancelled
                 )
                 throw cancelled
@@ -1273,6 +1278,7 @@ internal class P2pKitImpl(
         generation: Long,
         attempted: List<DataTransport>,
         observerMayHaveStarted: Boolean,
+        observerStartupEntered: Boolean,
         cancellation: CancellationException
     ) {
         withContext(NonCancellable) {
@@ -1290,14 +1296,14 @@ internal class P2pKitImpl(
                 }
                 addAll(rollbackDataStartup(attempted))
             }
-            val operation = if (observerMayHaveStarted) {
+            val operation = if (observerStartupEntered) {
                 "cancelled network-path observer startup"
             } else {
                 "cancelled data startup"
             }
             val blocker = rollbackIssues.takeIf { it.isNotEmpty() }?.let { issues ->
                 startupRollbackFailure(
-                    attempted.lastOrNull()?.type ?: transportFactories.first().descriptor.kind,
+                    if (observerStartupEntered) null else attempted.lastOrNull()?.type,
                     operation,
                     issues
                 )
@@ -1320,16 +1326,17 @@ internal class P2pKitImpl(
     }
 
     private fun startupRollbackFailure(
-        transportKind: TransportKind,
+        transportKind: TransportKind?,
         operation: String,
         issues: List<CleanupIssue>
-    ): P2pError.TransportStartFailed {
+    ): P2pError {
         val aggregate = CleanupAggregateException(operation, issues.toList())
-        return P2pError.TransportStartFailed(
-            transportKind = transportKind,
-            reason = "$operation cleanup was incomplete; call stop() and replace this P2pKit instance",
-            underlying = aggregate
-        )
+        val reason = "$operation cleanup was incomplete; call stop() and replace this P2pKit instance"
+        return if (transportKind == null) {
+            P2pError.ConnectionFailed(reason).also { it.underlying = aggregate }
+        } else {
+            P2pError.TransportStartFailed(transportKind, reason, aggregate)
+        }
     }
 
     private suspend fun cleanupStaleResource(

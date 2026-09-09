@@ -175,18 +175,24 @@ public interface P2pKit {
      * [startAdvertising], [startDiscovery],
      * and [connect] each lazily ensure the kit is started on their first
      * invocation. Calling `start()` explicitly is preferable because it
-     * surfaces a typed [P2pError.TransportStartFailed] at a single,
-     * predictable call site instead of inside the first lifecycle method.
+     * surfaces startup failures at a single, predictable call site instead
+     * of inside the first lifecycle method. Data-transport failures use
+     * [P2pError.TransportStartFailed]; incomplete observer-startup rollback
+     * uses [P2pError.ConnectionFailed] without attributing it to a transport.
      *
      * Idempotent: subsequent calls after a successful start return without
      * re-binding. After an ordinary failed start whose rollback completed, the
      * next call retries. If rollback itself fails or exceeds its deadline, the
      * instance fails closed: call [stop] and create a replacement instead of
-     * risking a second listener over uncertain native ownership.
+     * risking a second listener over uncertain native ownership. Cancellation
+     * remains the primary throwable; any incomplete-rollback diagnosis is
+     * attached as suppressed and retained in [state] for subsequent callers.
      *
      * @throws P2pError.TransportStartFailed if any registered transport's
      *   `start()` returned a failure (port exhaustion, missing entitlement,
-     *   listener bind timeout, etc.).
+     *   listener bind timeout, etc.), including an incomplete rollback of that failure.
+     * @throws P2pError.ConnectionFailed if an ordinary network-path observer
+     *   startup failure could not be rolled back completely.
      *
      * (The `@Throws(Exception::class)` annotation exists so Kotlin/Native
      * bridges thrown errors to a catchable Swift `NSError` instead of
@@ -233,8 +239,9 @@ public interface P2pKit {
      *
      * @throws P2pError.NoTransportAvailable if no registered transport can reach [peer]
      * @throws P2pError.TransportStartFailed if lazy transport startup fails.
-     * @throws P2pError.ConnectionFailed if the underlying connection fails
-     *   or a transport provider fails while evaluating reachability.
+     * @throws P2pError.ConnectionFailed if lazy observer-startup rollback is
+     *   incomplete, the underlying connection fails, or a transport provider
+     *   fails while evaluating reachability.
      * @throws P2pError.SecurityConfigurationInvalid if the requested peer/pin
      *   cannot be authenticated under the configured security mode.
      * @throws P2pError.HandshakeRejected if the peer rejects the HELLO exchange.
