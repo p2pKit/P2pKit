@@ -178,11 +178,14 @@ internal class P2pSessionImpl(
     private val lastPongAt = MutableStateFlow(monotonicClock())
 
     /**
-     * Lock guarding [connection], [events], [readerJob], [epochJob], [epochToken], and the
-     * [_state] transitions driven by connection loss. Held briefly during
+     * Lock guarding [connection], [events], [readerJob], [epochJob], [epochToken],
+     * [reconnectEpisode], and the [_state] transitions driven by connection loss. Held briefly during
      * [rearmWith] and the `onConnectionLost` decision.
      */
     private val connectionLock = Mutex()
+
+    /** The one diagnostic timer for the current reconnect episode; guarded by [connectionLock]. */
+    private var reconnectEpisode: ReconnectEpisode? = null
 
     /**
      * Non-null while one terminal transition owns the interval between its
@@ -538,6 +541,7 @@ internal class P2pSessionImpl(
         // the bounded cleanup; concurrent close callers join its result.
         var joinLocalClose = false
         var localCloseConnection: RawConnection? = null
+        var reconnectWatchdogToCancel: Job? = null
         val ownsLocalClose = connectionLock.withLock {
             if (terminalTransitionClaim != null) {
                 false
@@ -548,12 +552,14 @@ internal class P2pSessionImpl(
                     false
                 }
                 else -> {
+                    reconnectWatchdogToCancel = detachReconnectWatchdogLocked()
                     _state.value = ConnectionState.Closing
                     localCloseConnection = connection
                     true
                 }
             }
         }
+        reconnectWatchdogToCancel?.cancel()
         if (joinLocalClose) {
             val issues = localCloseCompletion.await()
             if (issues.isNotEmpty()) {
@@ -667,6 +673,7 @@ internal class P2pSessionImpl(
         var replacementAccepted = false
         var replacementSharesCurrentEpoch = false
         var sendGateAcquired = false
+        var reconnectWatchdogToCancel: Job? = null
         try {
             val captured = connectionLock.withLock {
                 val s = _state.value
@@ -803,6 +810,7 @@ internal class P2pSessionImpl(
                     // see Reconnecting, exit immediately, and leave the rearmed
                     // session with no liveness watchdog. Next disconnect goes
                     // undetected (Android stuck in Connected).
+                    reconnectWatchdogToCancel = detachReconnectWatchdogLocked()
                     _state.value = ConnectionState.Connected
                     startEpoch()
                     true
@@ -820,6 +828,7 @@ internal class P2pSessionImpl(
                 }
             }
             rearmLock.unlock()
+            reconnectWatchdogToCancel?.cancel()
         }
         return true
     }
@@ -983,6 +992,7 @@ internal class P2pSessionImpl(
         }
         val claim = Any()
         var terminalEpoch: ConnectionEpoch? = null
+        var reconnectWatchdogToCancel: Job? = null
         val claimed = connectionLock.withLock {
             val current = _state.value
             val expectedStillCurrent = expectedEpoch == null ||
@@ -1007,10 +1017,12 @@ internal class P2pSessionImpl(
             } else {
                 terminalEpoch = ConnectionEpoch(connection, readerJob, epochJob, epochToken)
                 terminalTransitionClaim = claim
+                reconnectWatchdogToCancel = detachReconnectWatchdogLocked()
                 true
             }
         }
         if (!claimed) return emptyList()
+        reconnectWatchdogToCancel?.cancel()
 
         // Once the epoch is claimed, no competing close/rearm/terminal path
         // may mutate it. State publication, resource cleanup, invariant
@@ -1554,6 +1566,7 @@ internal class P2pSessionImpl(
         //   - handler    = "kick off a reconnect attempt"
         // Only one is true; both can be false (already terminal / Reconnecting).
         var shouldFail = false
+        var reconnectWatchdogToStart: Job? = null
         val handler: ReconnectHandler? = connectionLock.withLock {
             if (terminalTransitionClaim != null) {
                 null
@@ -1564,6 +1577,14 @@ internal class P2pSessionImpl(
                         shouldFail = true  // hand off to transitionToTerminal below
                         null
                     } else {
+                        // Register before the handler can run: an immediate
+                        // rearm must be able to cancel even a not-yet-started timer.
+                        val token = Any()
+                        val watchdog = scope.launch(start = CoroutineStart.LAZY) {
+                            watchReconnectEpisode(token, cause)
+                        }
+                        reconnectEpisode = ReconnectEpisode(token, watchdog)
+                        reconnectWatchdogToStart = watchdog
                         _state.value = ConnectionState.Reconnecting
                         // Snapshot the path-wake baseline at the exact
                         // Reconnecting edge (still under the lock, before the
@@ -1595,32 +1616,39 @@ internal class P2pSessionImpl(
                     )
                 }
             }
-            // Stabilization watchdog: emit a single WARN if the session is
-            // still in Reconnecting after [STUCK_RECONNECTING_THRESHOLD_MS].
-            // Under normal operation a session should either reach Connected
-            // (rearmWith) or Failed (markFailedAfterExhaustion) well within
-            // `maxAttempts × retryDelayMillis` — typically a few seconds.
-            // Persisting past 30 s indicates a bug in the reconnect path
-            // (e.g., a stale internalPeer pointing at an unreachable address,
-            // a `pathSatisfiedSignal` emission consumed by another handler and
-            // never re-emitted, or a deadlocked reconnect handler). Launched
-            // on the session scope so `close()` / `kit.stop()` cancel it.
-            scope.launch {
-                delay(STUCK_RECONNECTING_THRESHOLD_MS)
-                if (_state.value == ConnectionState.Reconnecting) {
-                    logger.warn(
-                        "Session $id: STUCK in Reconnecting for >${STUCK_RECONNECTING_THRESHOLD_MS}ms " +
-                            "(cause=$cause). Investigate: stale internalPeer, lost path signal, " +
-                            "or deadlocked SessionReconnectHandler."
-                    )
-                }
-            }
+            // Starting a timer already cancelled by rearm/close is a no-op.
+            checkNotNull(reconnectWatchdogToStart).start()
         } else if (shouldFail) {
             // No reconnect handler (incoming session, or outgoing with
             // Disabled). Centralised terminal path handles state flip,
             // epoch cancel, file-transfer teardown, and raw close in one
             // place.
             transitionToTerminal(ConnectionState.Failed, cause)
+        }
+    }
+
+    /** Detach under [connectionLock]; cancellation and callbacks run only after releasing it. */
+    private fun detachReconnectWatchdogLocked(): Job? {
+        val watchdog = reconnectEpisode?.watchdog
+        reconnectEpisode = null
+        return watchdog
+    }
+
+    private suspend fun watchReconnectEpisode(token: Any, cause: String) {
+        delay(STUCK_RECONNECTING_THRESHOLD_MS)
+        val stillReconnecting = connectionLock.withLock {
+            reconnectEpisode?.token === token &&
+                terminalTransitionClaim == null &&
+                _state.value == ConnectionState.Reconnecting
+        }
+        // The diagnostic describes the checked boundary. A later transition
+        // must not wait for a potentially slow host logger under the lock.
+        if (stillReconnecting) {
+            logger.warn(
+                "Session $id: STUCK in Reconnecting for >${STUCK_RECONNECTING_THRESHOLD_MS}ms " +
+                    "(cause=$cause). Investigate: stale internalPeer, lost path signal, " +
+                    "or deadlocked SessionReconnectHandler."
+            )
         }
     }
 
@@ -1650,12 +1678,9 @@ internal class P2pSessionImpl(
         private const val RETENTION_BYTES_PER_CODE_UNIT: Long = 2L
 
         /**
-         * Threshold for the stuck-Reconnecting watchdog. Generous enough to
-         * cover any reasonable `maxAttempts × retryDelayMillis` budget
-         * (default is ~4 s; even pathological configs rarely exceed 20 s);
-         * crossing it means the reconnect path is wedged. Used during the
-         * post-S3 stabilization phase to surface lifecycle leaks that the
-         * structural fixes haven't covered yet.
+         * Warn once when one uninterrupted reconnect episode exceeds this
+         * diagnostic interval. This is not a reconnect deadline: a caller's
+         * retry policy may legitimately take longer to finish.
          */
         const val STUCK_RECONNECTING_THRESHOLD_MS: Long = 30_000
 
@@ -1694,3 +1719,6 @@ private class ConnectionEpochToken {
     var rawCloseAttempted: Boolean = false
     var rawCloseIssue: CleanupIssue? = null
 }
+
+/** Referential episode identity keeps an old timer from diagnosing a newer reconnect. */
+private class ReconnectEpisode(val token: Any, val watchdog: Job)
