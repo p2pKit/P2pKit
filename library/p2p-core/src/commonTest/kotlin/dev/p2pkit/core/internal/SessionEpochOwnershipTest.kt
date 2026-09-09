@@ -104,45 +104,64 @@ class SessionEpochOwnershipTest {
         }
         val session = harness.newSession()
         session.start()
-        harness.events.send(ProtocolEvent.Ping)
-        runCurrent()
-        harness.blockingProtocol!!.pongEntered.await()
+        var rearmJob: Job? = null
+        var closeJob: Job? = null
+        try {
+            harness.events.send(ProtocolEvent.Ping)
+            runCurrent()
+            harness.blockingProtocol!!.pongEntered.await()
 
-        val replacement = FakeConnectionPair()
-        val rearm = async {
-            session.rearmWith(
-                replacement.a,
-                Channel(Channel.UNLIMITED)
+            val replacement = FakeConnectionPair()
+            val rearm = async {
+                session.rearmWith(
+                    replacement.a,
+                    Channel(Channel.UNLIMITED)
+                )
+            }
+            rearmJob = rearm
+            runCurrent()
+            // Establish retirement before close, without assuming independent
+            // cleanup has run merely because the test dispatcher was pumped.
+            withContext(Dispatchers.Default) {
+                withTimeout(5_000) { countedConnection.closeEntered.await() }
+            }
+
+            val close = async(start = CoroutineStart.UNDISPATCHED) { session.close() }
+            closeJob = close
+            runCurrent()
+            assertEquals(
+                ConnectionState.Closed,
+                session.state.value,
+                "close must publish Closed without waiting behind the retired epoch's PONG"
             )
-        }
-        runCurrent()
 
-        val close = async(start = CoroutineStart.UNDISPATCHED) { session.close() }
-        runCurrent()
-        assertEquals(
-            ConnectionState.Closing,
-            session.state.value,
-            "close must commit Closing while rearm waits for the old epoch"
-        )
-
-        harness.blockingProtocol.pongRelease.complete(Unit)
-        runCurrent()
-        withContext(Dispatchers.Default) {
-            withTimeout(5_000) {
-                rearm.join()
-                close.join()
+            harness.blockingProtocol.pongRelease.complete(Unit)
+            runCurrent()
+            withContext(Dispatchers.Default) {
+                withTimeout(5_000) {
+                    rearm.join()
+                    close.join()
+                }
+            }
+            assertFalse(rearm.await(), "a replacement must not commit after close wins")
+            close.await()
+            assertEquals(ConnectionState.Closed, session.state.value)
+            assertEquals(ConnectionState.Closed, replacement.a.state.value)
+            assertEquals(
+                1,
+                countedConnection.closeCalls.load(),
+                "reconnect cleanup and terminal cleanup must share one raw close owner"
+            )
+        } finally {
+            harness.blockingProtocol?.pongRelease?.complete(Unit)
+            harness.supervisor.cancel()
+            withContext(NonCancellable + Dispatchers.Default) {
+                withTimeout(5_000) {
+                    rearmJob?.join()
+                    closeJob?.join()
+                }
             }
         }
-        assertFalse(rearm.await(), "a replacement must not commit after close wins")
-        close.await()
-        assertEquals(ConnectionState.Closed, session.state.value)
-        assertEquals(ConnectionState.Closed, replacement.a.state.value)
-        assertEquals(
-            1,
-            countedConnection.closeCalls.load(),
-            "reconnect cleanup and terminal cleanup must share one raw close owner"
-        )
-        harness.supervisor.cancel()
     }
 
     @Test
@@ -255,9 +274,11 @@ private class CloseCountingRawConnection(
     private val delegate: RawConnection
 ) : RawConnection by delegate {
     val closeCalls = AtomicInt(0)
+    val closeEntered = CompletableDeferred<Unit>()
 
     override suspend fun close() {
         closeCalls.addAndFetch(1)
+        closeEntered.complete(Unit)
         delegate.close()
     }
 }

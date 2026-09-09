@@ -48,6 +48,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.io.RawSource
@@ -144,7 +145,8 @@ internal class P2pSessionImpl(
     private val afterTerminalClaimForTest: (suspend () -> Unit)? = null,
     private val afterTerminalStatePublishedForTest: (suspend () -> Unit)? = null,
     private val applicationDeliveryCloseTimeoutMillis: Long = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
-    private val afterApplicationDeliveryDrainForTest: (suspend () -> Unit)? = null
+    private val afterApplicationDeliveryDrainForTest: (suspend () -> Unit)? = null,
+    private val beforeRearmRawCloseForTest: (suspend () -> Unit)? = null
 ) : P2pSession {
 
     init {
@@ -540,7 +542,7 @@ internal class P2pSessionImpl(
         // teardown as an unrelated Failed outcome. Exactly one caller owns
         // the bounded cleanup; concurrent close callers join its result.
         var joinLocalClose = false
-        var localCloseConnection: RawConnection? = null
+        var localCloseEpoch: ConnectionEpoch? = null
         var reconnectWatchdogToCancel: Job? = null
         val ownsLocalClose = connectionLock.withLock {
             if (terminalTransitionClaim != null) {
@@ -554,7 +556,7 @@ internal class P2pSessionImpl(
                 else -> {
                     reconnectWatchdogToCancel = detachReconnectWatchdogLocked()
                     _state.value = ConnectionState.Closing
-                    localCloseConnection = connection
+                    localCloseEpoch = ConnectionEpoch(connection, readerJob, epochJob, epochToken)
                     true
                 }
             }
@@ -595,14 +597,33 @@ internal class P2pSessionImpl(
                 // window; teardown would then cancel the raw connection
                 // without ever attempting the CLOSE frame, causing a clean
                 // peer shutdown to look like a reconnectable network loss.
-                val closeSend = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                    runCatching {
-                        sendMutex.withLock {
-                            protocol.sendClose(checkNotNull(localCloseConnection))
+                val closingEpoch = checkNotNull(localCloseEpoch)
+                val rawCloseStarted = closingEpoch.epochToken.rawCloseStarted
+                val closeSend = if (rawCloseStarted.isCompleted) {
+                    null
+                } else {
+                    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        runCatching {
+                            sendMutex.withLock {
+                                if (!rawCloseStarted.isCompleted) {
+                                    protocol.sendClose(closingEpoch.connection)
+                                }
+                            }
                         }
                     }
                 }
-                withTimeoutOrNull(CLOSE_FRAME_TIMEOUT_MS) { closeSend.join() }
+                if (closeSend != null) {
+                    withTimeoutOrNull(CLOSE_FRAME_TIMEOUT_MS) {
+                        select<Unit> {
+                            closeSend.onJoin { }
+                            // Rearm can retire this exact epoch after CLOSE
+                            // queued behind an old writer. Its retirement
+                            // owner, not a stale raw-state snapshot, ends the
+                            // useful opportunity for this best-effort frame.
+                            rawCloseStarted.onAwait { }
+                        }
+                    }
+                }
 
                 val issues = transitionToTerminal(
                     ConnectionState.Closed,
@@ -611,7 +632,7 @@ internal class P2pSessionImpl(
                     fileRetryability = Retryability.NOT_RETRYABLE,
                     allowFromClosing = true
                 ).toMutableList()
-                closeSend.cancel()
+                closeSend?.cancel()
 
                 // transitionToTerminal cancels the runtime after every
                 // terminal cleanup attempt. Bound the join too: a blocking
@@ -726,6 +747,7 @@ internal class P2pSessionImpl(
                         issues += it
                     }
                 }
+                beforeRearmRawCloseForTest?.invoke()
                 closeOwnedEpochConnection(
                     captured,
                     "session $id replaced raw connection"
@@ -908,8 +930,8 @@ internal class P2pSessionImpl(
         val token = epoch.epochToken
         token.rawCloseLock.lock()
         try {
-            if (!token.rawCloseAttempted) {
-                token.rawCloseAttempted = true
+            if (!token.rawCloseStarted.isCompleted) {
+                token.rawCloseStarted.complete(Unit)
                 token.rawCloseIssue = captureCleanupIssue(
                     resource = resource,
                     timeoutMillis = SESSION_RESOURCE_CLOSE_TIMEOUT_MS,
@@ -1716,7 +1738,10 @@ private data class ConnectionEpoch(
 /** Referential generation marker and single-close owner; unlike a counter it cannot wrap. */
 private class ConnectionEpochToken {
     val rawCloseLock: Mutex = Mutex()
-    var rawCloseAttempted: Boolean = false
+    // Thread-safe retirement signal for this epoch only. Completion commits
+    // one raw-close attempt; it does not claim that a platform worker exited
+    // or that the underlying socket has already finished closing.
+    val rawCloseStarted: CompletableDeferred<Unit> = CompletableDeferred()
     var rawCloseIssue: CleanupIssue? = null
 }
 
