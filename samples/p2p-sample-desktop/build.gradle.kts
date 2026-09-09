@@ -39,6 +39,13 @@ kotlin {
     jvmToolchain(17)
 }
 
+tasks.test {
+    doFirst {
+        // The shutdown regression starts a real JVM, not a mocked signal handler.
+        systemProperty("p2pkit.test.runtimeClasspath", sourceSets.test.get().runtimeClasspath.asPath)
+    }
+}
+
 dependencies {
     implementation(project(":p2p-core"))
     implementation(project(":p2p-transport-lan"))

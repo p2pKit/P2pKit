@@ -49,7 +49,6 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -123,21 +122,23 @@ fun main(args: Array<String>) {
         ?: "p2pkit-desktop-sample"
     val appId = AppId(rawAppId)
     val reconnect = parseReconnect(launch.reconnectArg)
-    CliDiagnostics.configure(launch)
-
-    // No sample tracing without an explicit opt-in. The lexical lease covers
-    // creation, startup, cancellation and teardown failures, not just the REPL.
-    try {
-        CliTracingLease.acquire(launch.traceMode, CliDiagnostics::frame).use {
-            runCli(appId, deviceName, reconnect)
+    runCliWithShutdownHook {
+        // Install the shutdown owner before acquiring any application resources.
+        // Final export and tracing release belong to the same lexical cleanup
+        // path on EOF, quit, failure and catchable JVM termination.
+        try {
+            CliDiagnostics.configure(launch)
+            CliTracingLease.acquire(launch.traceMode, CliDiagnostics::frame).use {
+                runCli(appId, deviceName, reconnect)
+            }
+        } finally {
+            CliDiagnostics.close()
         }
-    } finally {
-        CliDiagnostics.close()
     }
 }
 
 @OptIn(ExplicitSecurityRisk::class)
-private fun runCli(appId: AppId, deviceName: String, reconnect: ReconnectPolicy) {
+private suspend fun runCli(appId: AppId, deviceName: String, reconnect: ReconnectPolicy) {
     println("[P2pKit CLI] app=${SampleConsole.identifier(appId.value)} reconnect=${reconnect.describe()}")
     println(
         "[P2pKit CLI] trace: lan(interfaces/conn)=${JvmLanDiag.enabled} " +
@@ -254,18 +255,18 @@ private fun runCli(appId: AppId, deviceName: String, reconnect: ReconnectPolicy)
         admittedSession
     }
 
-    runBlocking {
-        try {
-            p2p.startAdvertising(); advertising.set(true)
-            CliDiagnostics.recorder.record(
-                DiagnosticRecord(
-                    category = "discovery",
-                    eventName = DiagnosticEventNames.DISCOVERY_STARTED,
-                    currentState = "advertising-active"
-                )
+    try {
+        p2p.startAdvertising(); advertising.set(true)
+        CliDiagnostics.recorder.record(
+            DiagnosticRecord(
+                category = "discovery",
+                eventName = DiagnosticEventNames.DISCOVERY_STARTED,
+                currentState = "advertising-active"
             )
-            p2p.startDiscovery();   discovering.set(true)
-            println("Ready. Type 'help' for commands.")
+        )
+        p2p.startDiscovery();   discovering.set(true)
+        println("Ready. Type 'help' for commands.")
+        CliConsoleInput(System.`in`.bufferedReader()).use { reader ->
             repl(
                 p2p,
                 scope,
@@ -275,13 +276,18 @@ private fun runCli(appId: AppId, deviceName: String, reconnect: ReconnectPolicy)
                 pendingFileOffers,
                 advertising,
                 discovering,
-                autoMesh
+                autoMesh,
+                reader
             )
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            System.err.println("CLI failed: ${SampleConsole.failure(e)}")
-        } finally {
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        System.err.println("CLI failed: ${SampleConsole.failure(e)}")
+    } finally {
+        // The shutdown hook cancels this coroutine; its finally still has to
+        // await the existing collector/kit owner before final diagnostics close.
+        withContext(NonCancellable) {
             println("Stopping…")
             rejectPendingOffers(pendingFileOffers, "receiver stopped")
             // Quiesce application collectors before stopping the kit so no
@@ -386,7 +392,8 @@ private suspend fun repl(
     pendingFileOffers: ConcurrentHashMap<SessionTransferKey, P2pFileOffer>,
     advertising: StateLatch,
     discovering: StateLatch,
-    autoMesh: MutableStateFlow<Boolean>
+    autoMesh: MutableStateFlow<Boolean>,
+    reader: CliConsoleInput
 ) {
     val connectCommands = CliConnectCommands(
         kit = p2p,
@@ -408,7 +415,6 @@ private suspend fun repl(
             registerSession(session, scope, sessions, wiredSessionIds, pendingFileOffers)
         }
     )
-    val reader = System.`in`.bufferedReader()
     while (true) {
         print("> ")
         System.out.flush()
