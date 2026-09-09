@@ -1,6 +1,6 @@
 name: Audit host validation
 
-# Run revision: 6. Change this comment in a reviewed audit-branch push to
+# Run revision: 7. Change this comment in a reviewed audit-branch push to
 # request a new frozen-source run. Helpers/docs-only pushes do not trigger it.
 on:
   push:
@@ -22,16 +22,17 @@ env:
 
 jobs:
   selected_host:
-    name: Audit native Windows x64
-    runs-on: windows-2025
-    timeout-minutes: 180
+    name: Audit native Apple Silicon components
+    runs-on: macos-26
+    timeout-minutes: 360
     defaults:
       run:
-        shell: python {0}
+        shell: python3 {0}
     env:
-      P2PKIT_AUDIT_ROLE: windows-x64
-      P2PKIT_AUDIT_SCOPE: windows-diagnostics
-      P2PKIT_AUDIT_DRIVER_TIMEOUT_SECONDS: "8400"
+      P2PKIT_AUDIT_ROLE: macos-arm64
+      P2PKIT_AUDIT_SCOPE: full
+      P2PKIT_AUDIT_DRIVER_TIMEOUT_SECONDS: "19200"
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
     outputs: &host_outputs
       safe_to_continue: ${{ steps.handoff.outcome == 'success' && steps.handoff.outputs.safe_to_continue == 'true' }}
       artifact_uploaded: ${{ steps.evidence.outcome == 'success' && steps.evidence.outputs['artifact-id'] != '' }}
@@ -115,9 +116,9 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Execute source-bound Windows components and finalize ownership
+      - name: Execute source-bound Apple Silicon components and finalize ownership
         id: audit
-        timeout-minutes: 150
+        timeout-minutes: 330
         run: &run_host |
           import os
           from pathlib import Path

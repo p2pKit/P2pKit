@@ -54,12 +54,43 @@ workflows or local builds, and GitHub can replace an older pending run even with
 `cancel-in-progress: false`. Do not queue another triggering push while a run is
 active or pending; preserve earlier failure/cancellation records.
 
-## Selected Windows diagnostics scope
+## Selected Apple Silicon full-component scope
 
-The current literal job is `Audit native Windows x64` on `windows-2025`, using
-native Python, Java 21 then 17 and the checked-in `gradlew.bat`. Its optional
-`windows-diagnostics` scope retains the unchanged native ownership controls and
-SDK admission, then selects only the affected strict LAN diagnostic callers:
+The current literal job is `Audit native Apple Silicon components` on `macos-26`,
+using native Python 3, Java 21 then 17, the checked-in `gradlew` and the fixed
+`/Applications/Xcode_26.5.app/Contents/Developer`. Its existing `macos-arm64`/`full`
+role/scope retains mandatory native ownership controls and SDK admission before
+the [full Apple component replay](#what-the-full-apple-silicon-component-replay-requires).
+No Windows or Intel job precedes or follows it automatically. The host must pass
+actual ARM64/non-Rosetta and Xcode-version admission; an advertised image label
+or the presence of this workflow is not execution evidence.
+
+`requestedScope` is bound across admission, summary and workflow bootstrap/handoff.
+`FULL_COMPONENT_SCOPE` describes the requested component set, not qualification
+or successful completion. Inspect every actual component result, receipt, source
+binding and cleanup outcome. The monolithic release gate and external acceptance
+remain separate.
+
+Before the existing Mac component builds, a read-only inspection retains the
+actual selected `iphoneos` and `iphonesimulator` SDK path, version and build
+queries plus each complete `Network.framework/Headers/tcp_options.h`. SDK and
+framework aliases may resolve only inside the selected Developer/SDK roots.
+The header is bounded to 1 MiB and retained verbatim as
+`apple-sdk-<sdk>-tcp_options.h.log`; its binding records both resolved paths,
+SHA-256, size, exact source and the retained Xcode prerequisite record. Original
+query stdout/stderr and failure records remain available if inspection fails.
+This supplies declarations for #156 inspection, **not** compilation, actual
+socket-option state, latency improvement or issue acceptance. It never copies
+an entire SDK or changes installed tools. Independent later components may run
+after a failed read-only inspection, but the failed component cannot become PASS.
+
+## Unselected Windows diagnostics scope retained by the driver
+
+The optional `windows-diagnostics` scope remains available only for `windows-x64`,
+using native Python, Java 21 then 17 and the checked-in `gradlew.bat`. It is **not
+executed by this workflow revision**. A later reviewed literal Windows selection
+would retain the unchanged native ownership controls and SDK admission, then
+select only the affected strict LAN diagnostic callers:
 
 ```text
 :p2p-transport-lan:jvmTest
@@ -77,10 +108,11 @@ Core durability, the broader LAN selection and Desktop packaging are not repeate
 reuse earlier successful evidence only with its original source and reviewed limits.
 This scope does not supply native discovery, whole-host or external qualification.
 
-## Retained Windows follow-up scope
+## Unselected Windows follow-up scope retained by the driver
 
-The optional `windows-followup` scope also retains the native ownership controls
-and SDK admission, then runs one broader product graph:
+The optional `windows-followup` scope also remains Windows-only and unselected.
+It retains the native ownership controls and SDK admission, then runs one broader
+product graph:
 
 ```text
 :p2p-core:jvmTest
@@ -117,16 +149,16 @@ exercise the migrated post-stop diagnostic assertions using real Windows TCP
 sockets and deterministic test-discovery callbacks, not native JmDNS/multicast
 validation. None is inferred merely from a task's aggregate count.
 
-`requestedScope` is bound across admission, summary and workflow bootstrap/handoff.
-For either focused scope, `hostQualification` is always
+For either focused Windows scope, `hostQualification` is always
 `NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, including when the selected components pass.
 The CLI accepts `full` for the existing roles, or `windows-followup` and
 `windows-diagnostics` only for Windows, rejecting other pairs before state
 initialization. Full defaults remain
 unchanged; `FULL_COMPONENT_SCOPE` describes their requested scope, not a successful
-qualification. Omitted full-profile components are **NOT_EXECUTED by this run**,
-not waived. The retained `windows-followup` graph does not repeat wrapper-checkout,
-whole library suites, provisioning, CLI/KMP consumers or Desktop UI tests. It adds only the
+qualification. Omitted Windows full-profile components are **NOT_EXECUTED by
+such a focused run**, not waived. The retained `windows-followup` graph does not
+repeat wrapper-checkout, whole library suites, provisioning, CLI/KMP consumers or
+Desktop UI tests. It adds only the
 newly affected registry/raw-I/O and selected diagnostic-network callers to the
 existing durable-transfer and packaged-output cleanup controls. Gradle exit zero
 or failure to reproduce an earlier cleanup error does not establish a repair.
@@ -134,7 +166,10 @@ The mandatory native executor suite retains the actual Windows read-only-file
 recovery/hardlink refusal controls; when packaging is selected, packaged-image
 cleanup must also succeed.
 
-### Full profiles retained by the driver, not selected by this workflow revision
+### Full profiles supported by the driver
+
+This workflow revision selects only the Apple Silicon row. The other native
+roles require a later independently reviewed literal selection.
 
 | Role and fixed label | Selected tools | Components, not broader acceptance |
 | --- | --- | --- |
@@ -195,14 +230,26 @@ policy or replace the assessor with an XML-only success check.
 
 The additional components retain:
 
-- Android sample assembly, CLI checks/installable distribution, and Desktop UI
-  tests/runtime/argument-file/application-image builds.
-- Four Kotlin ABI comparisons, the three published Android ABI comparisons,
-  strict Dokka, and actual aggregate JSON/XML SBOM generation plus inspection.
-- Local-only publication to a fresh owned Maven repository and all 15 expected
-  publication sets on macOS, followed by the maintained isolated-consumer script.
-  Its JVM Kotlin/Java, Android compilation/manifest and KMP JVM/Android/iOS
-  simulator compile/link checks and iOS minimum-OS/permission assertions remain.
+- Four Kotlin and three published Android ABI comparisons in the existing full
+  `check` graph, not a redundant standalone ABI rebuild. Inspect all seven actual
+  task outcomes and supported native dump work in `mac-platform-full`'s retained
+  product log; platform `execution.json` records test tasks, not ABI results.
+  Missing, skipped or failed ABI work is not acceptance.
+- One `mac-artifact-build` graph combines Android sample assembly, CLI checks/
+  installable distribution, Desktop UI tests/runtime/argument-file/application
+  image, all four strict Dokka publications and aggregate JSON/XML SBOM generation.
+  `--continue` allows independent tasks to finish but never turns a failed graph
+  green. Explicit JSON/XML SBOM inspection runs only after this graph succeeds,
+  before owned output cleanup. A failed graph leaves that inspection unexecuted,
+  even if partial SBOM files exist; retain its original failure and narrow any retry.
+- The maintained isolated-consumer script performs the one local-only publication
+  to its fresh owned Maven repository. After consumer success, the artifact checker
+  inspects all 15 expected macOS publication sets in that **same repository**;
+  a second standalone publication is not built. Its JVM Kotlin/Java, Android
+  compilation/manifest and KMP JVM/Android/iOS simulator compile/link checks and
+  iOS minimum-OS/permission assertions remain. Failed consumers leave artifact
+  inspection unexecuted, not waived; partial publication metadata/hashes and native
+  binary observations are still retained before cleanup.
 - Strict consumer dependency verification: reviewed external metadata plus exact
   source-bound local publication hashes, not a broad trusted group, disabled
   verification, arbitrary Maven-directory trust or remote publication fallback.
@@ -217,6 +264,17 @@ The additional components retain:
   of the device or opposite-host slice. Additional post-gate `vtool`/`lipo` output
   is hash-bound to the device and fat-simulator binaries before later rebuilding;
   it is separate from the original gate's captured shell variables.
+- Before dependent rebuilding or cleanup, the device and fat-simulator slices'
+  generated `Headers/P2pKitShared.h` are retained verbatim as
+  `xcframework-<device|simulator>-header.h.log`. Each must be a physical regular,
+  nonempty file of at most 1 MiB; copies are exclusive and source/retained bytes
+  are rechecked. The matching `*-header.json` records inspection PASS/FAIL and,
+  on success, original path, size/hash, source/run admission and XCFramework-build
+  invocation ID. Partial raw evidence survives a failed inspection; no missing
+  declaration is fabricated. Inspect `NSError.kotlinException`, exported typed
+  errors and synchronous/suspend error boundaries alongside actual Swift
+  compilation and throwing-call XCTest evidence. Header retention alone does not
+  prove bridging, SDK runtime behavior or issue acceptance.
 - A real Swift warnings-as-errors build, separately followed by XCTest for both
   `p2pkit-sample-tests` and `p2pkit-sample-uitests` on one recorded exact available
   simulator. A build-success marker is not a test count; retain actual xcresult
@@ -290,12 +348,12 @@ The workflow redirects stdout/stderr to separate fresh bootstrap logs and invoke
 the exact checked-out driver with `runpy` in the **same native Python process**.
 There is no extra unsupervised wrapper child, launcher replacement or product
 monkeypatch. The driver's own deadline, cancellation and ownership finalizers run.
-The selected Windows driver budget is 8,400 seconds, with step/job ceilings of
-150/180 minutes. Full driver defaults remain 8,400 seconds on Intel and 19,200 on
-Apple Silicon; a later source-selected Apple job must retain its matching native
-tools and budgets (Intel 150/180, Apple Silicon 330/360 minutes). The driver reserves
-finalization time before its deadline. These are resource ceilings, not relaxed
-product assertions or automatic retry allowances.
+The selected Apple Silicon driver budget is 19,200 seconds, with step/job ceilings
+of 330/360 minutes. Full driver defaults remain 8,400 seconds on Windows/Intel and
+19,200 on Apple Silicon; a later source-selected host must retain its matching
+native tools and budgets (Windows/Intel 150/180, Apple Silicon 330/360 minutes).
+The driver reserves finalization time before its deadline. These are existing
+resource ceilings, not relaxed product assertions or automatic retry allowances.
 
 A safe completed handoff requires all of the following; it does not dispatch a
 later host:
@@ -431,8 +489,8 @@ Independent secure-v2 interoperability (#133), professional cryptographic review
 and owner architecture/product decisions (#120) require their own participants,
 inputs and evidence. This facility does not supply them or change their dispositions.
 Actual OSV results and successful dependency submission also remain separate from
-policy fixtures/lockfile coverage. Linux corroboration is not supplied by the
-selected Windows workflow.
+policy fixtures/lockfile coverage. Native Windows/Intel and Linux corroboration
+are not supplied by this selected Apple Silicon run.
 
 Follow the [release checklist](../releasing/checklist.md) for any future release.
 The audit's 0.8.0+ compatibility decisions remain in force despite snapshot naming.

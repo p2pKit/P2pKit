@@ -1372,6 +1372,55 @@ class HostInvocationTest(unittest.TestCase):
         self.assertEqual("outside the selected evidence", sentinel.read_text())
         self.assertFalse((destination / "cache-link").exists())
 
+    def test_mac_batches_artifacts_and_reuses_the_consumer_publication_without_erasing_failed_dependencies(self):
+        # Orchestration only: existing invocation/retention controls exercise
+        # actual receipt validation, file copies and owned cleanup boundaries.
+        host = HOST.Host("macos-arm64", self.state / "mac-order")
+        consumer = host.state / "work/consumer"
+        repository = consumer / "repository"
+        repository.mkdir(parents=True)
+        artifacts = [":p2p-sample-android:assembleDebug", *HOST.DESKTOP_TASKS,
+                     *[":" + module + ":dokkaGeneratePublicationHtml" for module in HOST.MODULES],
+                     "cyclonedxBom", "--continue"]
+        for batch_ok, consumer_ok in ((True, True), (False, True), (True, False), (False, False)):
+            with self.subTest(batch_ok=batch_ok, consumer_ok=consumer_ok):
+                events = []
+                def invoke(label, arguments, **kwargs):
+                    events.append(label)
+                    return {"mac-artifact-build": batch_ok, "isolated-consumers": consumer_ok}.get(label, True)
+                def observe(name):
+                    return lambda *args, **kwargs: events.append(name)
+                with contextlib.ExitStack() as stack:
+                    operations = {name: stack.enter_context(mock.patch.object(host, name, side_effect=observe(name)))
+                                  for name in ("check", "install_xcodegen", "mac_policies", "clean_outputs",
+                                               "retain_publication", "retain_consumer_framework", "apple")}
+                    invoked = stack.enter_context(mock.patch.object(host, "invoke", side_effect=invoke))
+                    host.mac()
+                expected_calls = [
+                    mock.call("mac-platform-full", [sys.executable, "scripts/run-platform-tests.py", "full"],
+                              kind="command", timeout=7200),
+                    mock.call("mac-artifact-build", artifacts),
+                ]
+                if batch_ok:
+                    expected_calls.append(mock.call("sbom-inspect", ["bash", "scripts/check-sbom.sh",
+                        "build/reports/cyclonedx/bom.json", "build/reports/cyclonedx/bom.xml"], kind="command"))
+                expected_calls.append(mock.call("isolated-consumers", ["bash", "scripts/check-published-consumers.sh"],
+                    kind="command", timeout=7200, extra_env={"P2PKIT_CONSUMER_WORK_DIR": str(consumer),
+                                                            "P2PKIT_CONSUMER_AUDIT_METADATA": "1"}))
+                if consumer_ok:
+                    expected_calls.append(mock.call("consumer-publication-inspect",
+                        ["bash", "scripts/check-publish-artifacts.sh", str(repository)], kind="command"))
+                self.assertEqual(expected_calls, invoked.call_args_list)
+                self.assertEqual(["check", "install_xcodegen", "mac_policies", "mac-platform-full", "clean_outputs",
+                                  "mac-artifact-build", *(["sbom-inspect"] if batch_ok else []), "clean_outputs",
+                                  "isolated-consumers", *(["consumer-publication-inspect"] if consumer_ok else []),
+                                  "retain_publication", "retain_consumer_framework", "clean_outputs", "apple"], events)
+                operations["check"].assert_called_once_with("apple-tcp-options-sdk", host.inspect_tcp_options_headers)
+                operations["retain_publication"].assert_called_once_with(repository, "consumer-publication")
+                operations["retain_consumer_framework"].assert_called_once_with(consumer)
+                self.assertFalse((host.state / "work/publication").exists(), "Do not create a redundant publication")
+        self.assertEqual([], self.calls, "Orchestration fixture must not invoke a product subprocess")
+
     def test_consumer_framework_inspection_is_bound_and_missing_binary_is_not_a_pass(self):
         self.host.receipts["isolated-consumers"] = {"id": "b" * 32}
         consumer = self.state / "work/consumer"
@@ -1474,20 +1523,29 @@ class HostInvocationTest(unittest.TestCase):
                             ("BUILD_INPUTS_SHA256.txt", "a" * 64), ("BUILD_ARTIFACTS_SHA256.txt", "b" * 64)):
             (release / name).write_text(value + "\n", encoding="utf-8")
 
-    def test_xcframework_native_inspections_and_four_sidecars_precede_later_builds(self):
+    def test_xcframework_native_inspections_headers_and_four_sidecars_precede_later_builds(self):
         self.seed_apple_sidecars()
         release = self.repo / "library/p2p-transport-lan/build/XCFrameworks/release"
+        headers = {}
         for identifier in ("ios-arm64", "ios-arm64_x86_64-simulator"):
             binary = release / "P2pKitShared.xcframework" / identifier / "P2pKitShared.framework/P2pKitShared"
             binary.parent.mkdir(parents=True)
             binary.write_bytes(("synthetic " + identifier).encode())
+            header = binary.parent / "Headers/P2pKitShared.h"
+            header.parent.mkdir()
+            headers[identifier] = b"/* Synthetic header, not generated ABI. */\r\n" + identifier.encode() + b"\r\n"
+            header.write_bytes(headers[identifier])
         events = []
         original_invoke = self.host.invoke
+        original_check = self.host.check
         def invoke(label, *args, **kwargs):
             events.append(label)
             if label == "xcode-project":
                 return False  # No later native product boundary is needed for this fixture.
             return original_invoke(label, *args, **kwargs)
+        def check(label, callback):
+            events.append(label)
+            return original_check(label, callback)
         def inspect(label, arguments):
             events.append(label)
             path = self.host.evidence / (label + ".stdout.log")
@@ -1496,21 +1554,103 @@ class HostInvocationTest(unittest.TestCase):
             self.assertTrue(Path(arguments[-1]).is_file())
             return path
         with mock.patch.object(self.host, "invoke", side_effect=invoke), \
+                mock.patch.object(self.host, "check", side_effect=check), \
                 mock.patch.object(self.host, "inspect_tool", side_effect=inspect):
             self.host.apple()
-        self.assertEqual(["xcframework-build", "xcframework-inspect", "xcframework-device-vtool",
-                          "xcframework-device-lipo", "xcframework-simulator-vtool", "xcframework-simulator-lipo",
-                          "xcode-project"], events)
+        self.assertEqual(["xcframework-build", "xcframework-inspect", "xcframework-device-header",
+                          "xcframework-device-vtool", "xcframework-device-lipo", "xcframework-simulator-header",
+                          "xcframework-simulator-vtool", "xcframework-simulator-lipo", "xcode-project"], events)
         sidecars = json.loads((self.host.evidence / "xcframework-sidecars.json").read_text())
         self.assertEqual(4, len(sidecars["files"]))
         for row in sidecars["files"]:
             self.assertEqual("RETAINED", row["result"])
             self.assertEqual((release / row["path"]).read_bytes(), (self.host.evidence / row["path"]).read_bytes())
-        for name in ("device", "simulator"):
+        for name, identifier in (("device", "ios-arm64"), ("simulator", "ios-arm64_x86_64-simulator")):
             record = json.loads((self.host.evidence / ("xcframework-" + name + "-binding.json")).read_text())
             self.assertEqual(self.host.receipts["xcframework-build"]["id"], record["sourceInvocationId"])
             self.assertEqual(hashlib.sha256(Path(record["path"]).read_bytes()).hexdigest(), record["sha256"])
             self.assertEqual({"vtool", "lipo"}, set(record["nativeInspections"]))
+            inspection = json.loads((self.host.evidence / ("xcframework-" + name + "-header.json")).read_text())
+            self.assertEqual("PASS", inspection["result"])
+            binding = inspection["details"]
+            self.assertEqual(self.host.admission, binding["source"])
+            self.assertEqual(self.host.receipts["xcframework-build"]["id"], binding["sourceInvocationId"])
+            self.assertEqual(headers[identifier], Path(binding["headerPath"]).read_bytes())
+            self.assertEqual(headers[identifier], (self.host.evidence / binding["retainedPath"]).read_bytes())
+            self.assertEqual(hashlib.sha256(headers[identifier]).hexdigest(), binding["sha256"])
+            self.assertEqual(len(headers[identifier]), binding["bytes"])
+            self.assertIn("not Swift bridge execution", binding["limits"])
+
+    def test_generated_headers_reject_missing_nonregular_linked_empty_and_oversized_inputs(self):
+        for invalid in ("missing", "directory", "linked-leaf", "linked-parent", "empty", "oversized"):
+            with self.subTest(invalid=invalid):
+                label = "fixture-header-" + invalid
+                parent = self.repo / label
+                parent.mkdir()
+                header = parent / "Headers/P2pKitShared.h"
+                foreign = self.work / (label + "-foreign")
+                foreign.mkdir()
+                sentinel = foreign / "P2pKitShared.h"
+                sentinel.write_bytes(b"outside synthetic header must stay untouched\n")
+                if invalid == "linked-parent":
+                    header.parent.symlink_to(foreign, target_is_directory=True)
+                else:
+                    header.parent.mkdir()
+                    if invalid == "directory":
+                        header.mkdir()
+                    elif invalid == "linked-leaf":
+                        header.symlink_to(sentinel)
+                    elif invalid in ("empty", "oversized"):
+                        header.write_bytes(b"x" * (1024 ** 2 + 1) if invalid == "oversized" else b"")
+                self.assertFalse(self.host.check(label, lambda: self.host.retain_xcframework_header(label, header, TOKEN)))
+                result = json.loads((self.host.evidence / (label + ".json")).read_text())
+                self.assertEqual("FAIL", result["result"])
+                self.assertNotIn("details", result)
+                self.assertFalse((self.host.evidence / (label + ".h.log")).exists())
+                self.assertEqual(b"outside synthetic header must stay untouched\n", sentinel.read_bytes())
+        self.assertEqual([], self.calls, "Generated-header inspection must not run a product or native tool")
+
+    def test_generated_header_exact_size_limit_is_retained_without_running_a_tool(self):
+        header = self.repo / "SyntheticP2pKitShared.h"
+        raw = b"x" * (1024 ** 2)
+        header.write_bytes(raw)
+        binding = self.host.retain_xcframework_header("fixture-header-limit", header, TOKEN)
+        self.assertEqual(raw, (self.host.evidence / binding["retainedPath"]).read_bytes())
+        self.assertEqual(raw, header.read_bytes())
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), binding["sha256"])
+        self.assertEqual(len(raw), binding["bytes"])
+        self.assertEqual(TOKEN, binding["sourceInvocationId"])
+        self.assertEqual([], self.calls)
+
+    def test_generated_header_is_write_once_and_source_mutation_preserves_raw_failure_evidence(self):
+        for failure in ("existing-copy", "source-mutation"):
+            with self.subTest(failure=failure):
+                label = "fixture-header-" + failure
+                header = self.repo / (label + ".h")
+                raw = b"/* Synthetic original header, not generated ABI. */\r\n"
+                header.write_bytes(raw)
+                retained = self.host.evidence / (label + ".h.log")
+                prior = b"preserve previous raw evidence\n"
+                if failure == "existing-copy":
+                    retained.write_bytes(prior)
+                digest = HOST.digest
+                def mutate(path):
+                    value = digest(path)
+                    if path == retained and failure == "source-mutation":
+                        header.write_bytes(b"changed synthetic source\n")
+                    return value
+                with mock.patch.object(HOST, "digest", side_effect=mutate):
+                    self.assertFalse(self.host.check(label, lambda: self.host.retain_xcframework_header(
+                        label, header, TOKEN)))
+                result = json.loads((self.host.evidence / (label + ".json")).read_text())
+                self.assertEqual("FAIL", result["result"])
+                self.assertNotIn("details", result)
+                self.assertEqual(prior if failure == "existing-copy" else raw, retained.read_bytes())
+                if failure == "existing-copy":
+                    self.assertEqual(raw, header.read_bytes())
+                else:
+                    self.assertIn("changed during retention", result["error"])
+        self.assertEqual([], self.calls)
 
     def test_zero_xcode_exit_without_real_build_marker_does_not_start_swift_tests(self):
         self.seed_apple_sidecars()
@@ -1932,6 +2072,151 @@ class HostInvocationTest(unittest.TestCase):
                     self.assertEqual(b"preserve original required evidence\n", sentinel.read_bytes())
                     self.assertFalse((self.host.evidence / (operation + "-" + position)).exists())
                     self.assertFalse((self.host.evidence / (operation + "-" + position + "-manifest.json")).exists())
+
+
+class AppleSdkHeadersTest(unittest.TestCase):
+    @contextlib.contextmanager
+    def fixture(self):
+        work = temporary(self)
+        state = work / "state"
+        host = HOST.Host("macos-arm64", state)
+        host.evidence.mkdir(parents=True)
+        host.owns_state = True
+        host.state_identity = host.identity(state)
+        host.admission = {"commit": "1" * 40, "tree": "2" * 40, "role": host.role, "requestedScope": "full"}
+        host.write("prerequisites.json", {"tools": {"xcode": {"stdout": "Xcode 26.5\nBuild version fixture\n"}}})
+        developer = work / "Xcode SDK fixture Ω.app/Contents/Developer"
+        host.environment["DEVELOPER_DIR"] = str(developer)
+        responses, headers, roots, codes, calls = {}, {}, {}, {}, []
+        for sdk in ("iphoneos", "iphonesimulator"):
+            root = developer / "Platforms" / sdk / "Developer/SDKs" / (sdk + "26.5.sdk")
+            framework = root / "System/Library/Frameworks/Network.framework"
+            actual_headers = framework / "Versions/A/Headers"
+            actual_headers.mkdir(parents=True)
+            header = actual_headers / "tcp_options.h"
+            header.write_bytes(b"/* Synthetic SDK fixture, not an Apple declaration. */\r\n" + sdk.encode() + b"\r\n")
+            (framework / "Headers").symlink_to("Versions/A/Headers", target_is_directory=True)
+            alias = root.with_name(sdk + ".sdk")
+            alias.symlink_to(root.name, target_is_directory=True)
+            roots[sdk], headers[sdk] = root, header
+            responses[(sdk, "--show-sdk-path")] = (str(alias) + "\n").encode("utf-8")
+            responses[(sdk, "--show-sdk-version")] = b"26.5\n"
+            responses[(sdk, "--show-sdk-build-version")] = b"synthetic-build\n"
+
+        def inspect(command, **kwargs):
+            self.assertEqual(["xcrun", "--sdk"], command[:2])
+            self.assertEqual(4, len(command))
+            self.assertEqual(host.environment, kwargs["env"])
+            self.assertEqual(120, kwargs["timeout"])
+            calls.append(list(command))
+            key = tuple(command[2:])
+            kwargs["stdout"].write(responses[key])
+            kwargs["stderr"].write(b"synthetic inspection stderr\n")
+            return subprocess.CompletedProcess(command, codes.get(key, 0))
+
+        with mock.patch.object(HOST.subprocess, "run", side_effect=inspect), \
+                mock.patch.object(HOST.subprocess, "Popen", side_effect=AssertionError("No build/test process")):
+            yield types.SimpleNamespace(host=host, developer=developer, responses=responses, headers=headers,
+                                        roots=roots, codes=codes, calls=calls, work=work)
+
+    def test_exact_selected_ios_headers_and_native_metadata_are_retained_verbatim_and_hash_bound(self):
+        with self.fixture() as case:
+            original = {sdk: path.read_bytes() for sdk, path in case.headers.items()}
+            result = case.host.inspect_tcp_options_headers()
+            self.assertEqual(2, len(result["bindings"]))
+            self.assertEqual([["xcrun", "--sdk", sdk, flag] for sdk in ("iphoneos", "iphonesimulator")
+                              for flag in ("--show-sdk-path", "--show-sdk-version", "--show-sdk-build-version")], case.calls)
+            for sdk, record in zip(("iphoneos", "iphonesimulator"), result["bindings"]):
+                path = case.host.evidence / record["path"]
+                self.assertEqual(HOST.digest(path), record["sha256"])
+                binding = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual("INSPECTED", binding["result"])
+                self.assertIs(binding["inspectionOnly"], True)
+                self.assertEqual(case.host.admission, binding["source"])
+                self.assertEqual(str(case.developer), binding["developerDirectory"])
+                self.assertEqual(str(case.roots[sdk]), binding["sdkRoot"])
+                self.assertEqual(str(case.headers[sdk]), binding["resolvedHeaderPath"])
+                self.assertEqual(original[sdk], (case.host.evidence / binding["retainedPath"]).read_bytes())
+                self.assertEqual(original[sdk], case.headers[sdk].read_bytes(), "SDK inputs must not change")
+                self.assertEqual(hashlib.sha256(original[sdk]).hexdigest(), binding["sha256"])
+                self.assertEqual(len(original[sdk]), binding["bytes"])
+                for item in [binding["prerequisites"], *binding["metadata"].values()]:
+                    self.assertEqual(HOST.digest(case.host.evidence / item["path"]), item["sha256"])
+
+    def test_missing_escaped_oversized_or_malformed_sdk_inputs_never_become_header_evidence(self):
+        for invalid in ("sdk-outside", "header-outside", "missing", "oversized", "relative", "multiline", "empty"):
+            with self.subTest(invalid=invalid), self.fixture() as case:
+                sdk = "iphoneos"
+                if invalid == "sdk-outside":
+                    outside = case.work / "unselected-sdk"
+                    outside.mkdir()
+                    case.responses[(sdk, "--show-sdk-path")] = (str(outside) + "\n").encode()
+                elif invalid == "header-outside":
+                    outside = case.work / "foreign-header.h"
+                    outside.write_bytes(b"never copy this unselected header\n")
+                    case.headers[sdk].unlink()
+                    case.headers[sdk].symlink_to(outside)
+                elif invalid == "missing":
+                    case.headers[sdk].unlink()
+                elif invalid == "oversized":
+                    case.headers[sdk].write_bytes(b"x" * (1024 ** 2 + 1))
+                else:
+                    case.responses[(sdk, "--show-sdk-path")] = {
+                        "relative": b"relative-sdk\n", "multiline": b"one\ntwo\n", "empty": b"\n"
+                    }[invalid]
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    case.host.inspect_tcp_options_headers()
+                self.assertFalse(list(case.host.evidence.glob("*-tcp_options.h.log")))
+                self.assertFalse(list(case.host.evidence.glob("*-tcp-options-binding.json")))
+                self.assertTrue((case.host.evidence / "apple-sdk-iphoneos-path.stdout.log").is_file())
+
+    def test_nonzero_sdk_query_preserves_raw_logs_and_cannot_become_a_header_pass(self):
+        with self.fixture() as case:
+            case.codes[("iphoneos", "--show-sdk-path")] = 9
+            with self.assertRaisesRegex(ValueError, "Native evidence inspection failed"):
+                case.host.inspect_tcp_options_headers()
+            record = json.loads((case.host.evidence / "apple-sdk-iphoneos-path-inspection.json").read_text())
+            self.assertEqual(9, record["exitCode"])
+            self.assertEqual(case.responses[("iphoneos", "--show-sdk-path")],
+                             (case.host.evidence / "apple-sdk-iphoneos-path.stdout.log").read_bytes())
+            self.assertFalse(list(case.host.evidence.glob("*-tcp-options-binding.json")))
+
+    def test_existing_header_copy_is_never_overwritten(self):
+        with self.fixture() as case:
+            prior = case.host.evidence / "apple-sdk-iphoneos-tcp_options.h.log"
+            prior.write_bytes(b"preserve prior evidence\n")
+            with self.assertRaises(FileExistsError):
+                case.host.inspect_tcp_options_headers()
+            self.assertEqual(b"preserve prior evidence\n", prior.read_bytes())
+            self.assertFalse(list(case.host.evidence.glob("*-tcp-options-binding.json")))
+
+    def test_header_mutation_after_copy_preserves_observation_but_refuses_a_binding(self):
+        with self.fixture() as case:
+            retained = case.host.evidence / "apple-sdk-iphoneos-tcp_options.h.log"
+            original = case.headers["iphoneos"].read_bytes()
+            digest = HOST.digest
+            def mutate(path):
+                if path == retained:
+                    case.headers["iphoneos"].write_bytes(b"changed synthetic SDK input\n")
+                return digest(path)
+            with mock.patch.object(HOST, "digest", side_effect=mutate):
+                with self.assertRaisesRegex(ValueError, "TCP header changed during retention"):
+                    case.host.inspect_tcp_options_headers()
+            self.assertEqual(original, retained.read_bytes())
+            self.assertFalse(list(case.host.evidence.glob("*-tcp-options-binding.json")))
+
+    def test_mac_records_header_inspection_before_existing_component_builds_without_claiming_issue_acceptance(self):
+        for query_status in (0, 9):
+            with self.subTest(query_status=query_status), self.fixture() as case:
+                case.codes[("iphoneos", "--show-sdk-path")] = query_status
+                def stop():
+                    self.assertTrue((case.host.evidence / "apple-tcp-options-sdk.json").is_file())
+                    raise ValueError("fixture stops before existing XcodeGen install")
+                with mock.patch.object(case.host, "install_xcodegen", side_effect=stop):
+                    with self.assertRaisesRegex(ValueError, "fixture stops before"):
+                        case.host.mac()
+                self.assertEqual([{"component": "apple-tcp-options-sdk", "result": "FAIL" if query_status else "PASS",
+                                   "inspectionOnly": True}], case.host.rows)
 
 
 class SdkSetupTest(unittest.TestCase):

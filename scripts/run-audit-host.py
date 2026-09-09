@@ -698,32 +698,83 @@ class Host:
         require(len(bins) == 1, "Pinned installer did not produce exactly one executable XcodeGen")
         self.environment["PATH"] = str(bins[0].parent) + os.pathsep + self.environment["PATH"]
 
+    def inspect_tcp_options_headers(self):
+        """Retain the selected iOS SDK declarations, not inferred Apple socket behavior."""
+        self.assert_owned_state()
+        require(self.role == "macos-arm64" and self.scope == "full", "SDK inspection requires the full Apple role")
+        developer = Path(self.environment["DEVELOPER_DIR"])
+        require(developer.is_absolute(), "Selected Xcode developer directory is not absolute")
+        developer = physical(developer.resolve(strict=True))
+        require(developer.is_dir(), "Selected Xcode developer directory is unavailable")
+        prerequisite = physical(self.evidence / "prerequisites.json")
+        require(prerequisite.is_file(), "Missing retained selected-Xcode prerequisites")
+        bindings = []
+        for sdk in ("iphoneos", "iphonesimulator"):
+            prefix = "apple-sdk-" + sdk
+            metadata = {}
+            for field, flag in (("path", "--show-sdk-path"), ("version", "--show-sdk-version"),
+                                ("build", "--show-sdk-build-version")):
+                output = self.inspect_tool(prefix + "-" + field, ["xcrun", "--sdk", sdk, flag])
+                with output.open("rb") as stream:
+                    raw = stream.read(4097)
+                require(0 < len(raw) <= 4096, "SDK metadata exceeds its bound or is empty")
+                lines = raw.decode("utf-8").splitlines()
+                require(len(lines) == 1 and lines[0].strip() and "\0" not in lines[0], "Malformed SDK metadata")
+                metadata[field] = {"value": lines[0].strip(), "path": output.relative_to(self.evidence).as_posix(),
+                                   "sha256": digest(output)}
+            requested = Path(metadata["path"]["value"])
+            require(requested.is_absolute(), "Selected SDK path is not absolute")
+            sdk_root = physical(requested.resolve(strict=True))
+            require(sdk_root.is_dir() and sdk_root != developer and sdk_root.is_relative_to(developer),
+                    "SDK is outside the selected Xcode developer directory")
+            # Installed SDK/framework aliases are read-only inputs, not owned outputs.
+            # Resolve them only within the selected SDK; never traverse an arbitrary header tree.
+            location = sdk_root / "System/Library/Frameworks/Network.framework/Headers/tcp_options.h"
+            header = physical(location.resolve(strict=True))
+            require(header.is_relative_to(sdk_root) and header.is_file(), "TCP header is outside the selected SDK")
+            size = header.stat().st_size
+            require(0 < size <= 1024 ** 2, "TCP header exceeds its bound or is empty")
+            with header.open("rb") as stream:
+                raw = stream.read(1024 ** 2 + 1)
+            require(len(raw) == size, "TCP header changed size during inspection")
+            checksum = hashlib.sha256(raw).hexdigest()
+            retained = physical(self.evidence / (prefix + "-tcp_options.h.log"))
+            with retained.open("xb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            require(physical(location.resolve(strict=True)) == header and digest(retained) == checksum,
+                    "TCP header path or retained bytes changed during inspection")
+            with header.open("rb") as stream:
+                require(stream.read(1024 ** 2 + 1) == raw, "TCP header changed during retention")
+            name = prefix + "-tcp-options-binding.json"
+            self.write(name, {"result": "INSPECTED", "inspectionOnly": True, "source": self.admission,
+                       "observedUtc": now(), "developerDirectory": str(developer), "sdk": sdk, "metadata": metadata,
+                       "prerequisites": {"path": prerequisite.name, "sha256": digest(prerequisite)},
+                       "sdkRoot": str(sdk_root), "headerPath": str(location), "resolvedHeaderPath": str(header),
+                       "retainedPath": retained.name, "sha256": checksum, "bytes": size,
+                       "limits": "Verbatim selected-SDK declarations; not compilation, socket behavior, latency or issue acceptance."})
+            bindings.append({"path": name, "sha256": digest(self.evidence / name)})
+        return {"bindings": bindings, "limits": "Inspection only; review both original SDK headers before API claims."}
+
     def mac(self):
+        self.check("apple-tcp-options-sdk", self.inspect_tcp_options_headers)
         self.install_xcodegen()
         self.mac_policies()
         self.invoke("mac-platform-full", [sys.executable, "scripts/run-platform-tests.py", "full"], kind="command", timeout=7200)
         self.clean_outputs()
-        self.invoke("android-sample", [":p2p-sample-android:assembleDebug"])
-        self.clean_outputs()
-        self.invoke("mac-desktop-samples", DESKTOP_TASKS)
-        self.clean_outputs()
-        self.invoke("library-abi", [":" + module + ":checkKotlinAbi" for module in MODULES] +
-                    [":" + module + ":checkAndroidAbi" for module in MODULES[:3]])
-        self.clean_outputs()
-        self.invoke("strict-dokka", [":" + module + ":dokkaGeneratePublicationHtml" for module in MODULES])
-        self.clean_outputs()
-        if self.invoke("sbom-build", ["cyclonedxBom"]):
+        # The full check already runs all four Kotlin and three Android ABI
+        # compares. Inspect their actual task outcomes in that leaf's raw log;
+        # platform execution.json inventories test tasks, not ABI execution.
+        artifacts = [":p2p-sample-android:assembleDebug", *DESKTOP_TASKS,
+                     *[":" + module + ":dokkaGeneratePublicationHtml" for module in MODULES],
+                     "cyclonedxBom", "--continue"]
+        if self.invoke("mac-artifact-build", artifacts):
             self.invoke("sbom-inspect", ["bash", "scripts/check-sbom.sh", "build/reports/cyclonedx/bom.json",
                                          "build/reports/cyclonedx/bom.xml"], kind="command")
         self.clean_outputs()
-        publication = self.state / "work/publication"
-        publication.mkdir(parents=True, exist_ok=False)
-        if self.invoke("local-publication", ["publishToMavenLocal", "-Dmaven.repo.local=" + str(publication)]):
-            self.invoke("publication-inspect", ["bash", "scripts/check-publish-artifacts.sh", str(publication)], kind="command")
-        # Preserve even a failed/partial publication before deleting owned bytes.
-        self.retain_publication(publication, "publication")
-        self.clean_outputs()
-        self.remove_work(publication)
+        # The maintained consumer publishes this exact source to its fresh owned
+        # repository. Inspect/retain that same publication rather than rebuild it.
         consumer = self.state / "work/consumer"
         consumer_ok = self.invoke("isolated-consumers", ["bash", "scripts/check-published-consumers.sh"],
                                  kind="command", timeout=7200,
@@ -762,6 +813,32 @@ class Host:
         require(digest(binary) == before, "Binary changed during native evidence inspection")
         self.write(label + "-binding.json", {**binding, "result": "INSPECTED", "sha256": before,
                    "bytes": binary.stat().st_size, "nativeInspections": outputs})
+
+    def retain_xcframework_header(self, label, header, invocation):
+        """Preserve one generated Objective-C header before dependent builds/cleanup."""
+        self.assert_owned_state()
+        require(re.fullmatch(r"[a-z0-9-]+", label), "Unsafe generated-header evidence label")
+        header = physical(header)
+        require(header.is_file(), "Generated Objective-C header is not a regular file")
+        size = header.stat().st_size
+        require(0 < size <= 1024 ** 2, "Generated Objective-C header exceeds its bound or is empty")
+        with header.open("rb") as stream:
+            raw = stream.read(1024 ** 2 + 1)
+        require(len(raw) == size, "Generated Objective-C header changed size during inspection")
+        checksum = hashlib.sha256(raw).hexdigest()
+        retained = physical(self.evidence / (label + ".h.log"))
+        require(retained.parent == self.evidence, "Generated-header evidence is not an exact basename")
+        with retained.open("xb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        require(digest(retained) == checksum, "Retained generated Objective-C header changed")
+        require(physical(header).is_file(), "Generated Objective-C header is no longer regular")
+        with header.open("rb") as stream:
+            require(stream.read(1024 ** 2 + 1) == raw, "Generated Objective-C header changed during retention")
+        return {"source": self.admission, "sourceInvocationId": invocation, "observedUtc": now(),
+                "headerPath": str(header), "retainedPath": retained.name, "sha256": checksum, "bytes": size,
+                "limits": "Verbatim generated declaration observation, not Swift bridge execution or issue acceptance."}
 
     def retain_publication(self, publication, label):
         rows = []
@@ -809,6 +886,9 @@ class Host:
         self.write("xcframework-sidecars.json", {"files": sidecars, "sourceInvocationId": self.receipts["xcframework-build"]["id"]})
         for name, identifier in (("device", "ios-arm64"), ("simulator", "ios-arm64_x86_64-simulator")):
             binary = release / "P2pKitShared.xcframework" / identifier / "P2pKitShared.framework/P2pKitShared"
+            label = "xcframework-" + name + "-header"
+            self.check(label, lambda: self.retain_xcframework_header(
+                label, binary.parent / "Headers/P2pKitShared.h", self.receipts["xcframework-build"]["id"]))
             self.retain_native_binary("xcframework-" + name, binary, self.receipts["xcframework-build"]["id"])
         if not built:
             return
