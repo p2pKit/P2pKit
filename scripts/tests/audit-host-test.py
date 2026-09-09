@@ -34,7 +34,7 @@ POLICY = json.loads((ROOT / "gradle/platform-test-policy.json").read_text(encodi
 TOKEN = "abcdef0123456789abcdef0123456789"
 WINDOWS_TASKS = {":p2p-core:jvmTest", ":p2p-transport-lan:jvmTest",
                  ":p2p-network-provisioning-desktop:test"}
-WINDOWS_FOLLOWUP_TASKS = {":p2p-core:jvmTest", ":p2p-core:testAndroidHostTest"}
+WINDOWS_FOLLOWUP_TASKS = {":p2p-core:jvmTest", ":p2p-core:testAndroidHostTest", ":p2p-transport-lan:jvmTest"}
 SWIFT_TARGETS = ("p2pkit-sample-tests", "p2pkit-sample-uitests")
 
 
@@ -356,7 +356,7 @@ class WindowsAssessmentTest(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         self.assess(report)
 
-    def test_focused_task_pair_keeps_complete_model_and_cannot_pass_as_full_windows(self):
+    def test_focused_tasks_keep_complete_model_and_cannot_pass_as_full_windows(self):
         report = windows_report(WINDOWS_FOLLOWUP_TASKS)
         self.assertEqual(WINDOWS_FOLLOWUP_TASKS, set(HOST.assess_windows(
             report, POLICY, TOKEN, WINDOWS_FOLLOWUP_TASKS)))
@@ -374,7 +374,7 @@ class WindowsAssessmentTest(unittest.TestCase):
         for change in ("failed-unrequested", "missing-inventory", "stale-token"):
             mutated = copy.deepcopy(report)
             if change == "failed-unrequested":
-                mutated["tests"][":p2p-transport-lan:jvmTest"]["failed"] = 1
+                mutated["tests"][":p2p-network-provisioning-desktop:test"]["failed"] = 1
             elif change == "missing-inventory":
                 del mutated["tests"][":p2p-transport-lan:jvmTest"]
             else:
@@ -670,8 +670,18 @@ class HostInvocationTest(unittest.TestCase):
         gate = HOST.load_gate()
         expected = [
             ":p2p-core:jvmTest", "--tests", "dev.p2pkit.core.transfer.FileTransferJvmTest",
+            "--tests", "dev.p2pkit.core.internal.PeerRegistryTest",
+            "--tests", "dev.p2pkit.core.internal.PeerSubscriptionHookTest",
+            "--tests", "dev.p2pkit.core.internal.PeerPublicationConcurrencyTest",
+            "--tests", "dev.p2pkit.core.internal.DiscoveryReemitContractTest",
             ":p2p-core:testAndroidHostTest", "--tests",
             "dev.p2pkit.core.transfer.AndroidDurableFileDestinationAndroidHostTest",
+            ":p2p-transport-lan:jvmTest", "--tests", "dev.p2pkit.transport.lan.JvmRawConnection*",
+            "--tests", "dev.p2pkit.transport.lan.KitTestDiagnosticsTest",
+            "--tests", "dev.p2pkit.transport.lan.JvmLanLoopbackTest",
+            "--tests", "dev.p2pkit.transport.lan.JvmLanAcceptLoopResilienceTest",
+            "--tests", "dev.p2pkit.transport.lan.JvmLanAdmissionControlTest",
+            "--tests", "dev.p2pkit.transport.lan.JvmLanDiscoveryHeartbeatTest",
             ":p2p-sample-desktop-ui:checkRuntime", ":p2p-sample-desktop-ui:createDistributable",
             "--continue", "--init-script", str(self.repo / "gradle/platform-test-coverage.init.gradle"),
             "-Pp2pkit.testCoverageRoot=" + str(self.repo), "-Pp2pkit.testCoverageToken=" + TOKEN,

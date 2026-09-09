@@ -62,8 +62,21 @@ native Python, Java 21 then 17 and the checked-in `gradlew.bat`. Its finite
 admission, then runs one product graph:
 
 ```text
-:p2p-core:jvmTest --tests dev.p2pkit.core.transfer.FileTransferJvmTest
-:p2p-core:testAndroidHostTest --tests dev.p2pkit.core.transfer.AndroidDurableFileDestinationAndroidHostTest
+:p2p-core:jvmTest
+  --tests dev.p2pkit.core.transfer.FileTransferJvmTest
+  --tests dev.p2pkit.core.internal.PeerRegistryTest
+  --tests dev.p2pkit.core.internal.PeerSubscriptionHookTest
+  --tests dev.p2pkit.core.internal.PeerPublicationConcurrencyTest
+  --tests dev.p2pkit.core.internal.DiscoveryReemitContractTest
+:p2p-core:testAndroidHostTest
+  --tests dev.p2pkit.core.transfer.AndroidDurableFileDestinationAndroidHostTest
+:p2p-transport-lan:jvmTest
+  --tests dev.p2pkit.transport.lan.JvmRawConnection*
+  --tests dev.p2pkit.transport.lan.KitTestDiagnosticsTest
+  --tests dev.p2pkit.transport.lan.JvmLanLoopbackTest
+  --tests dev.p2pkit.transport.lan.JvmLanAcceptLoopResilienceTest
+  --tests dev.p2pkit.transport.lan.JvmLanAdmissionControlTest
+  --tests dev.p2pkit.transport.lan.JvmLanDiscoveryHeartbeatTest
 :p2p-sample-desktop-ui:checkRuntime
 :p2p-sample-desktop-ui:createDistributable
 ```
@@ -71,10 +84,17 @@ admission, then runs one product graph:
 The graph uses `--continue`, the source-bound platform-test init script and a fresh
 nonce, plus the executor's strict verification/resource/fresh-task flags. Each
 `--tests` option belongs to its immediately preceding test task. The event assessor
-requires both core tasks to execute nonzero successful cases on native Windows;
-it still validates the complete configured task inventory and rejects any failed
-event. Retain and independently inspect both selected class XMLs, including their
-close-only retry cases. Gradle exit zero alone is not portability evidence.
+requires both core tasks and the filtered LAN JVM task to execute nonzero
+successful cases on native Windows; it still validates the complete configured
+task inventory and rejects any failed event. Retain and independently inspect
+all selected class XMLs and exact case names. The durability classes preserve
+close-only retry and non-POSIX/lazy-staging controls; registry classes cover
+subscription hooks, interrupted publication waiting, terminal/reentrant updates
+and retained StateFlow fusion. The raw-I/O classes cover real TCP half-close,
+cancellation and late worker completion. The selected LAN integration callers
+exercise the migrated post-stop diagnostic assertions using real Windows TCP
+sockets and deterministic test-discovery callbacks, not native JmDNS/multicast
+validation. None is inferred merely from a task's aggregate count.
 
 `requestedScope` is bound across admission, summary and workflow bootstrap/handoff.
 For this scope, `hostQualification` is always
@@ -83,9 +103,13 @@ The CLI accepts only `full` for the existing roles or `windows-followup` for
 Windows, rejecting other pairs before state initialization. Full defaults remain
 unchanged; `FULL_COMPONENT_SCOPE` describes their requested scope, not a successful
 qualification. Omitted full-profile components are **NOT_EXECUTED by this run**,
-not waived. The focused graph does not repeat wrapper-checkout, LAN/provisioning,
-CLI or all Desktop UI suites. It targets durable transfer and packaged-output
-cleanup; failure to reproduce an earlier cleanup error does not establish a repair.
+not waived. The focused graph does not repeat wrapper-checkout, whole library
+suites, provisioning, CLI/KMP consumers or Desktop UI tests. It adds only the
+newly affected registry/raw-I/O and selected diagnostic-network callers to the
+existing durable-transfer and packaged-output cleanup controls. Gradle exit zero
+or failure to reproduce an earlier cleanup error does not establish a repair.
+The mandatory native executor suite retains the actual Windows read-only-file
+recovery/hardlink refusal controls; packaged-image cleanup must also succeed.
 
 ### Full profiles retained by the driver, not selected by this workflow revision
 
@@ -334,10 +358,23 @@ physical ancestors are checked root-to-parent, then the leaf is inspected with
 `lstat`. No link target or payload is read, and arbitrary exception text/foreign
 filenames are not retained. Missing native attributes mean unknown, not false.
 Metadata can be `OBSERVED`, `ABSENT`, `REFUSED` or `UNAVAILABLE`; diagnostic or
-encoding failure cannot erase the original removal error. The callback immediately
-rethrows that same error: there is no retry, chmod, worker kill, suppression or
-continuation to another output root. Final cleanup JSON retains its existing
-4 MiB bound, with space reserved before deletion.
+encoding failure cannot erase the original removal error. An ineligible or
+unrecovered failure rethrows that same error, and cleanup stops without advancing
+to another output root. Final cleanup JSON retains its existing 4 MiB bound, with
+space reserved before deletion.
+
+One narrowly admitted Windows recovery is available for an exact `os.unlink`
+`PermissionError` with `EACCES`/WinError 5: an already-owned regular, singly-linked
+leaf with only READONLY and optional ARCHIVE attributes. It durably retains the
+original failure before any change, revalidates the physical root/ancestors and
+same leaf identity, clears only READONLY, revalidates identity/remaining attributes,
+and retries that exact unlink at most once. Symlinks/reparse entries, directories,
+hardlinks, foreign roots and unknown attribute combinations are refused. There is
+no blanket chmod, ACL change, worker kill or suppression of an unrecovered error.
+The recovery record retains the original failure even on success; admission,
+journal, chmod, revalidation or retry failure preserves the original removal error
+as authoritative. This uses the existing quiescent-owned-output contract, not
+containment of a hostile actor concurrently changing filesystem names.
 
 These observations are post-failure, not an atomic statement about an earlier
 racing instant. A read-only attribute or WinError 5 does not alone establish the
