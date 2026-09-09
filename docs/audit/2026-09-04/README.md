@@ -1,3 +1,27 @@
+# Current audit continuation — #369 follow-up and distinct #370/#371
+
+**2026-09-09T01:18:20.220814+00:00. Same-#369 shell follow-up `aab8cab`, separate #370 SDK correction `d3c8120` and #371 native-fixture byte-emission correction `842d0aa` are independently source-APPROVED, locally committed and NOT_PUSHED in this record; trial3 NOT_EXECUTED. 74/185 independently approved repository-repair rows (40.0%), 111 remaining (60.0%): 89 repairs, 21 external validation rows and architecture decision #120; 52 new audit findings. Whole audit NOT_READY; no checkpoint stop.**
+Initial source/R3 publication and both genuine failed hosted trials remain separately recorded.
+Clean aab8 Linux check + samples + Dokka: 1,607 passes /199 XML /245 executed tasks, independently corroborated; repeated identities, not a later SDK-source or native-host execution.
+Latest GitHub scope: genuinely fresh **23:47:35–00:18:17 UTC** local/full first-hop capture observes
+291 issues /184 open /79 PRs (2,628 GETs, no failures); the separate **00:39:46–00:40:09 UTC** post-#371
+addendum observes 292 issues /185 open /79 PRs but refreshes only six complete histories. Its other 365
+histories/79 detailed PR sets/117 upstream sets retain the earlier full bindings. Eight upstream reported-
+comment gaps, 402/33 omitted patch fields and an unknown-cause unreturned upstream backlink remain.
+Neither is a transactional/live lease or implementation/native acceptance; original captures stay historical.
+
+See the [dated hosted report](hosted-validation.md#same-369-successor-after-second-hosted-trial),
+[same-issue #369 follow-up](repairs/369.md#same-369-follow-up-after-the-actual-second-trial) and
+[distinct #370 SDK repair](repairs/370.md) and [#371 fixture byte-emission repair](repairs/371.md)
+for exact source/review/verification/failure/publication scopes.
+Next: After final independent approval of the exact eleven administrative files and applied bytes, refresh live Actions and audit/main/PR refs, hold the one global local/hosted execution lease, freeze the exact approved source tree, and pause all local builds/tests BEFORE the audit-branch push that triggers the hosted workflow. With that lease and source freeze already held, push only the audit branch, verify its exact remote commit/tree and record the outcome separately, then inspect the controlled Windows -> ARM Mac -> Intel Mac trial under the same lease. Verify native controls, actual SDK admission, strict dependency/source/stop/ownership/full-artifact evidence before advancing. Both failed hosted trials remain unsafe/partial and remote cleanup/full-tree NOT_PROVEN; a local lease release is not remote cleanup. #268/#133 remain NOT_STARTED; continue all feasible sequential work.
+
+## Preserved R3 overview
+
+The remaining text is the exact overview published in `638d005`, not a current claim of its former source,
+counts, publication, product-run or pending-trial state. The dated section supersedes those states only;
+historical failures, scope boundaries and applicable safety requirements remain in force.
+
 # Comprehensive audit continuation ledger
 
 Start with the root [continuation checkpoint](../../../AUDIT_CHECKPOINT.md). Clone the

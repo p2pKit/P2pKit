@@ -4,7 +4,7 @@
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
   "githubIssueListRefreshedUtc": "2026-09-08T10:30:05.205645+00:00",
-  "provenance": "Current administrative continuation after individually filed369 and finalapproved localbd61175 repair.72/183 approved39.3%,111remaining60.7%;89repairs/21external/120decision,50new auditfindings. All182 preceding issueobjects and original assessments/observation timestamps remain verbatim.19:17-19:22freshfull local histories/PRsets plus firsthop context have exact scope/visibility gaps in latestGithubFullRefresh;19:59list and20:00individual369addition are separate, not post-addition fullcapture. Prior facility administration independentlyapproved/pushedbb0; actualtrial1 failed before audit nativecontrols/build/tests, unsafehand-off/partialsalvage/remote cleanup NOT_PROVEN.369source approved/locallycommitted but NOT_PUSHED/no native rerun or public outcome here. Earlier productresults/controls/source reads retain exact historical bindings; no invented execution, closure, merge, release, hardware/independent acceptance.133NOT_STARTED,268NOT_STARTED,wholeauditNOT_READY.",
+  "provenance": "74/185 independently approved repository-repair rows (40.0%), 111 remaining (60.0%): 89 repairs, 21 external validation rows and architecture decision #120; 52 new audit findings. Same369 follow-up aab8cabf68958a7a3fdedcddc70c84a39e050df4, distinct370 SDK source d3c812020b41aeceef45381b1d24871b9477607b and371 fixture source 842d0aafa9d84a0114d895a9f933f1663cc01a9d separately APPROVED/local; none pushed here. Initial source/R3 638d published; both authentic failed native trials preserved. Initial369 assessment and182 other legacy objects unchanged; actual370/371 rows added after separate filings and final independent approvals. Original19h and fresh23:47–00:18 full capture remain distinct from21:33/22:52 and post371 selected-history observations. Clean-aab8 product is not later SDK370/fixture371 source execution. 133/268 NOT_STARTED; whole audit NOT_READY; no closure/native/external acceptance.",
   "issues": [
     {
       "number": 21,
@@ -4864,17 +4864,20 @@
       "githubStateObservationScope": "Not present in19:17-19:22full capture or19:59pre-filing list. Individually created20:00:00Z/refetched20:00:01.894153UTC. No post-addition full inventory capture or closure inferred.",
       "assessmentAtCheckpoint": "Confirmed by actual run34268510397/attempt1 atbb0/tree7568, independently corroborated before filing. Final4-file repair binds validated absolute Git-for-Windows Bash and scoped tools PATH to both real shell callers; failclosed missing/unusable/incorrect flavor/layout, no WSL fallback or global native product PATH change. All65 original tests/helpers preserved plus13 actual-caller regressions. Final19Linuxfixture/static gates pass atbb0+staged1187; original fixture mistake/intended failures and mutations remain. Fresh independent final reviewer APPROVE, no findings; locally committedbd61175, not pushed and no native rerun/public outcome recorded here. #223/#367 not reimplemented; no external/release/whole-audit acceptance.",
       "recordedFixCommitsOrFinalRevision": [
-        "bd61175167337fee585855cbbe5bfae9c0122dc5"
+        "bd61175167337fee585855cbbe5bfae9c0122dc5",
+        "aab8cabf68958a7a3fdedcddc70c84a39e050df4"
       ],
       "recordedIndependentReview": "Fresh /root/review_369_r1 APPROVE final4-file source/controlled trial, report SHA256 becc0070d6f049399e206e98cc8ff872417abd91b74e07ce4c55c73dd745b8fe. Full issue/comments/timeline, actual callers/native routing, all4 complete source text,19final gate receipts and authentic trial1 evidence inspected. No actionable findings. Not Windows/macOS/Apple/product/cleanup/release/external acceptance.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/369",
-        "https://github.com/p2pKit/P2pKit/actions/runs/34268510397"
+        "https://github.com/p2pKit/P2pKit/actions/runs/34268510397",
+        "https://github.com/p2pKit/P2pKit/actions/runs/34286015922",
+        "https://github.com/p2pKit/P2pKit/issues/369#issuecomment-5592852988"
       ],
       "repositoryScopeStatus": "APPROVED",
-      "sourcePublicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED",
+      "sourcePublicationStatus": "INITIAL_SOURCE_PUBLISHED_WITH638D;FOLLOWUP_LOCALLY_COMMITTED_NOT_PUSHED",
       "externalAcceptanceStatus": "NOT_EXECUTED",
-      "externalAcceptanceScope": "Fresh native Windows/serialized Apple rerun and artifact/ownership/cleanup corroboration still required. First run is failed preinvocation with partial salvage/remote cleanup NOT_PROVEN. #367/#133 and physical/hostile-network/professional crypto remain separate.",
+      "externalAcceptanceScope": "Actual trial1/2 failed before first native control/audit invoke; partial salvage/unsafe handoff/full-tree and remote cleanup NOT_PROVEN. Same369 follow-up source approved; trial3 NOT_EXECUTED. Distinct370 SDK and371 fixture corrections are separately tracked, not more369 rows. No native Windows/Apple/133/device/hostile/pro-crypto acceptance.",
       "initialFilingObservation": {
         "issue": 369,
         "createdUtc": "2026-09-08T20:00:00Z",
@@ -4898,10 +4901,146 @@
         },
         "scope": "Individual Low issue creation/refetch after19:59list and19hfull-history duplicate review. Initial disposition is historical; subsequent approved repair is separate. Not a post-addition full inventory capture or an issue closure."
       },
-      "repairReport": "docs/audit/2026-09-04/repairs/369.md"
+      "repairReport": "docs/audit/2026-09-04/repairs/369.md",
+      "stateAt638dBeforeTrial2": {
+        "sourcePublicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED",
+        "externalAcceptanceScope": "Fresh native Windows/serialized Apple rerun and artifact/ownership/cleanup corroboration still required. First run is failed preinvocation with partial salvage/remote cleanup NOT_PROVEN. #367/#133 and physical/hostile-network/professional crypto remain separate."
+      },
+      "followupAfterTrial2": {
+        "recordedUtc": "2026-09-09T01:18:20.220814+00:00",
+        "sameIssueNotNewRow": true,
+        "sourceCommit": "aab8cabf68958a7a3fdedcddc70c84a39e050df4",
+        "sourceTree": "f094de05ca60a625e3b9f37abb4f3ce4f9b8dbc2",
+        "sourceDiffSha256": "1ccc4bc02be3c538bea3e083bda07f8203866e886dc2ece2317388f270ae7d92",
+        "status": "APPROVED_LOCAL_NOT_PUSHED_TRIAL3_NOT_EXECUTED",
+        "assessment": "Actual trial2 selected valid absolute Git Bash but its msys-only predicate rejected the observed x86_64-pc-cygwin banner. Same369 correction accepts exactly the two x64 bundled triplets and preserves native Windows Git/layout/version checks, both shell caller bindings, native product PATH, ownership and strict gates. Fourteen final selected Linux gates PASS; original reds/harness/private-inspector failures preserved. No native acceptance.",
+        "reviewer": "/root/review_369_followup",
+        "reviewVerdict": "APPROVE",
+        "reviewSha256": "50c16b712d6bfd5099ced5c11c2064e2cc206fc0d033fa670d10d704dd02214e",
+        "sourceReadsetSha256": "95cfb978b2fbb6108a53671dc40ad721dbd43ded467aef6054561b398c152075",
+        "verificationManifestSha256": "d98384424b28620a7f85f801fb6230882a30e6cda9918d6f0ddf079ebdee8e77",
+        "currentEvidenceReference": "checkpoint.json same369FollowupSourceVerification/hostedTrial2/administrativePublication369R3/lastIntegratedAttempt",
+        "githubObservation": "22:52/pre370 selected,23:47–00:18 full and post371 selected history observations are separately bound; original filing-state fields unchanged. Comment5592852988 is earlier publication and trial2/pending-correction text, not final-follow-up approval outcome."
+      }
+    },
+    {
+      "number": 370,
+      "title": "Hosted SDK validation rejects canonical Android Platform 37.0 metadata",
+      "url": "https://github.com/p2pKit/P2pKit/issues/370",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Hosted setup requests canonical Android Platform37.0 but expects integer37 property metadata, failing admission before products.",
+      "affectedComponentsExcerpt": "scripts/run-audit-host.py Host.setup_sdk/Host.run and native workflow caller; SDK evidence admission only, no library/protocol behavior.",
+      "relatedIssuesAndDependencies": [
+        325,
+        367,
+        369,
+        148,
+        157
+      ],
+      "relatedIssueScope": "Cause-based duplicate context, not inherited approvals or assertions of implementation dependency; each mechanism is separately owned.",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": "open",
+      "githubStateAtIndividualRefresh": "open",
+      "githubStateObservationScope": "Initial filing/refetch is separately recorded below. Latest actual00:40:02.921935–00:40:09.276101UTCall-state list observes issueopen; narrow history scope is checkpoint.latestGithubIncrementalObservation, not a fresh all-history capture.",
+      "assessmentAtCheckpoint": "Confirmed actual setup_sdk requests android-37.0 but rejected canonical AndroidVersion.ApiLevel=37.0. Two production-line correction preserves both SDKrequests/root/manager/order and literally escapes key/API, plus8newactual-caller tests and narrow guide. Final18selected Linuxfixture/static gatesPASS at aab8+stagedc21e,131originaldefs/83tests unchanged; original2method canonicalerror/integercontrol and new8method red plus3mutations remain. Fresh independent370review APPROVE nofindings; locald3c notpushed. Neither real hosted trial reached SDK and cleanaab8product predates/bypasses driver, not SDK/native acceptance.",
+      "recordedFixCommitsOrFinalRevision": [
+        "d3c812020b41aeceef45381b1d24871b9477607b"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_370_source APPROVE, no actionable findings; reportSHA256 aea94ab1109bec3f9607b8aec1cd209740152a7c7c65bdc5d1bb362aa3e77bff, readsetSHA256 a71a228d0571df2436c5cdc704d622f71c666bb130389c842fb6a76ec063732b, sealSHA256 f5ece24e14f4b24665d9b9676435189395287fcd1876cd901ed6b27a6924b72e. Exact staged source/caller/retained verification review; latercommitbinding is not retroactive readCommit, cleancommitexecution, independentadministrative approval or native/product/release acceptance.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/370"
+      ],
+      "repositoryScopeStatus": "APPROVED",
+      "sourcePublicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED",
+      "externalAcceptanceStatus": "NOT_EXECUTED",
+      "externalAcceptanceScope": "Controlled nativeWindows/serializedApple rerun and complete artifact/ownership/cleanup proof still required. Bothpriortrialsfailedpreinvoke unsafePARTIAL_SALVAGE/fulltreeandremotecleanupNOT_PROVEN. Linux fixture/model results cannot establish nativehost/product/consumer/release/device/hostilenetwork/133/procrypto acceptance.",
+      "initialFilingObservation": {
+        "issue": 370,
+        "createdUtc": "2026-09-08T23:51:42Z",
+        "verifiedUtc": null,
+        "url": "https://github.com/p2pKit/P2pKit/issues/370",
+        "githubState": "open",
+        "issueRefetchSha256": "473447f38c667c69631504c4ec401969008d975b3902147cb3f0e2923ae08893",
+        "bodySha256": "d81c206794754f91fe116cf6bdaa6a6de64b5959aa215a3f76da2298ff9ac421",
+        "creationBindingSha256": "8d48262aec7f4a18b740a0c5bbd0c0ef35a8cbb1b103cc2591ffe6854a2c8182",
+        "knownTotalIssuesAfterAddition": 291,
+        "knownOpenIssuesAfterAddition": 184,
+        "knownPullRequests": 79,
+        "fullPostAdditionCapturePerformed": false,
+        "initialDisposition": "CONFIRMED_NOT_STARTED",
+        "repairRowsAtFiling": {
+          "denominator": 184,
+          "approved": 72,
+          "remaining": 112,
+          "pendingRepairs": 90,
+          "externalRows": 21,
+          "architectureRows": 1
+        },
+        "scope": "Individual initial filing/refetch, not a post-additionfull capture. Exact wall-clock refetch completion was not recorded in the creation binding; created_at is not substituted. The later genuinelyfull23:47–00:18capture and source approval are separately bound."
+      },
+      "repairReport": "docs/audit/2026-09-04/repairs/370.md"
+    },
+    {
+      "number": 371,
+      "title": "Native executor fixture stop markers depend on text newline translation",
+      "url": "https://github.com/p2pKit/P2pKit/issues/371",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Native executor fixture writes stop markers through text stdout/stderr while inheritedWindows success test demands rawLF bytes; Windows textnewline translation violates the fixture contract.",
+      "affectedComponentsExcerpt": "scripts/tests/run-audit-command-test.py embeddedFIXTURE/unchanged sharedsuccess assertion/WindowsNativeTests selection and Host.run native-control prerequisite; production raw evidence capture remains correct.",
+      "relatedIssuesAndDependencies": [
+        141,
+        150,
+        223,
+        369,
+        370
+      ],
+      "relatedIssueScope": "Cause-based duplicate context, not inherited approvals or assertions of implementation dependency; each mechanism is separately owned.",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": "open",
+      "githubStateAtIndividualRefresh": "open",
+      "githubStateObservationScope": "Initial filing/refetch is separately recorded below. Latest actual00:40:02.921935–00:40:09.276101UTCall-state list observes issueopen; narrow history scope is checkpoint.latestGithubIncrementalObservation, not a fresh all-history capture.",
+      "assessmentAtCheckpoint": "Confirmed unchanged shared success test passesLF and intentionally fails modeledCRLF on real Linux executor while product/stop/final0/0/0 and cleanup intact. Only testfixture stopprint calls changed to bytewrites/flushes, preserving raw evidence/exactassertions/status/hang/nativeownership; one buffered actualFIXTURE regression,99originalfunctiondefs/55tests unchanged. Final21selectedgatesPASS at d3c+stagedf453; Linuxnative50,host91,workflow51,leaf27,consumer32 (notadditive). OriginalCRLF/newregressionfailures,4mutationinnerreds and3injectedincompletecleanup records preserved; all38bases have finalcompletecleanup. Fresh independent371review APPROVE nofindings; local842d notpushed. No nativeWindows/Apple/SDK/product/release or generalCRLF hypothesis acceptance.",
+      "recordedFixCommitsOrFinalRevision": [
+        "842d0aafa9d84a0114d895a9f933f1663cc01a9d"
+      ],
+      "recordedIndependentReview": "Fresh /root/review_371_source APPROVE, no actionable findings; reportSHA256 780700bdea9db1ec53f19113d539afd4ecd35ee6886770a305f4a56697213c15, readsetSHA256 4b3b0f51737c20401e86620d8fc4e56bc0189a25f8d01f5fcd7fe92ff579fbd7, sealSHA256 9aca4440958aaf9eb1eca0652e380cec817450baaaf7a4bf0d7ea432e3b247cc. Exact staged source/caller/retained verification review; latercommitbinding is not retroactive readCommit, cleancommitexecution, independentadministrative approval or native/product/release acceptance.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/371"
+      ],
+      "repositoryScopeStatus": "APPROVED",
+      "sourcePublicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED",
+      "externalAcceptanceStatus": "NOT_EXECUTED",
+      "externalAcceptanceScope": "Controlled nativeWindows/serializedApple rerun and complete artifact/ownership/cleanup proof still required. Bothpriortrialsfailedpreinvoke unsafePARTIAL_SALVAGE/fulltreeandremotecleanupNOT_PROVEN. Linux fixture/model results cannot establish nativehost/product/consumer/release/device/hostilenetwork/133/procrypto acceptance.",
+      "initialFilingObservation": {
+        "issue": 371,
+        "createdUtc": "2026-09-09T00:32:54Z",
+        "verifiedUtc": "2026-09-09T00:32:54.014721+00:00",
+        "url": "https://github.com/p2pKit/P2pKit/issues/371",
+        "githubState": "open",
+        "issueRefetchSha256": "ab63c3e6fe9c865723df051d295dc923ae995171236a1bcc6edd65e863c03da7",
+        "bodySha256": "0e08e3467512382b009ab841e81bfa37f2823bcfa6d106477436a4904ac55984",
+        "creationBindingSha256": "f976e2853a18096c21e8e00f4103f0baa78c022ccb84fb9a1dd3764b693d201b",
+        "knownTotalIssuesAfterAddition": 292,
+        "knownOpenIssuesAfterAddition": 185,
+        "knownPullRequests": 79,
+        "fullPostAdditionCapturePerformed": false,
+        "initialDisposition": "CONFIRMED_NOT_STARTED",
+        "repairRowsAtFiling": {
+          "denominator": 185,
+          "approved": 73,
+          "remaining": 112,
+          "pendingRepairs": 90,
+          "externalRows": 21,
+          "architectureRows": 1
+        },
+        "scope": "Individual verified addition after prior full capture and370approval. Later00:39–00:40all-state lists plus six histories are a narrow addendum, not a post371full refresh; filing alone did not approve371."
+      },
+      "repairReport": "docs/audit/2026-09-04/repairs/371.md"
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-08T21:05:23.112187+00:00",
+  "lastDispositionUpdateUtc": "2026-09-09T01:18:20.220814+00:00",
   "githubRefreshEvidence": {
     "startedUtc": "2026-09-08T10:24:33.734412+00:00",
     "endedUtc": "2026-09-08T10:30:05.205645+00:00",
@@ -5017,19 +5156,16 @@
   "previousDispositionUpdateUtc368": "2026-09-08T12:25:06.517016+00:00",
   "previousProvenance368": "Curated recovery/continuation record; original inventorySnapshotUtc stays historical. Full issue discussions and affected callers, not excerpts, govern repairs. Earlier assessments/outcomes are not fresh executions; raw private evidence is not inGit. Rows reconcile the exhaustive 10:24–10:30UTC fresh-history capture plus individually filed/refetched368 at10:50:42UTC. 367 and368 source approvals/pushes/outcomes are later scoped disposition/publication observations, not post-outcome complete GitHub refreshes, closure, merge or release. Current368approval/verification is bound to c221d54; earlier367/145 assessments/failures retain their original scope, and later223work is not approved here. Previous145 verification and refresh fields are preserved under explicit historical keys. Approved repository scope excludes unexecuted foreign-host/device/independent acceptance; whole audit NOT_READY.",
   "latestGithubListObservation": {
-    "startedUtc": "2026-09-08T19:59:24.646456+00:00",
-    "endedUtc": "2026-09-08T19:59:29.370117+00:00",
-    "issues": 289,
-    "openIssues": 182,
+    "startedUtc": "2026-09-09T00:40:02.921935+00:00",
+    "endedUtc": "2026-09-09T00:40:09.276101+00:00",
+    "issues": 292,
+    "openIssues": 185,
     "closedIssues": 107,
     "pullRequests": 79,
     "openPullRequests": 7,
     "closedPullRequests": 72,
-    "issueStyleObjects": 368,
     "freshCompleteHistories": false,
-    "changesVs19hLists": [],
-    "summarySha256": "3f12e22435ca077b045d9838d2718749aefc58b1cfa5851c9d6af2aa12793091",
-    "scope": "Fresh pre-filing all-state lists only; not another full-history capture. #369 not yet created; its later individual OPEN observation is separate. Not a current idle proof or execution lease."
+    "scope": "Narrow post371 all-state lists only; six complete histories belong to the wider00:39:46–00:40:09addendum. All365other histories/79detailedPRsets/117upstream remain bound to earlierfull capture. Not current indefinitely or an execution lease."
   },
   "previousDispositionUpdateUtc223": "2026-09-08T13:18:49.492924+00:00",
   "previousGithubListObservation223": {
@@ -5045,7 +5181,7 @@
     "freshCompleteHistories": false,
     "scope": "Later all-state list only, before223source/outcome publication; not new complete bodies/comments/timelines/PRdetails capture. Earlier githubIssueListRefreshedUtc/refresh evidence/addition fields retain their10:30scope, including368absence from that older list. The12:36outcome verification is individual, not a complete post-write refresh. Refresh live state before relying on it."
   },
-  "latestGithubFullRefresh": {
+  "fullGithubRefresh1900PreservedBefore370371Successor": {
     "startedUtc": "2026-09-08T19:17:06.237470+00:00",
     "endedUtc": "2026-09-08T19:22:50.252664+00:00",
     "issues": 289,
@@ -5153,28 +5289,86 @@
     "scope": "List endpoint within the separate16:02:38-16:08:26 fresh local history capture recorded in latestGithubFullRefresh. Per-endpoint, not transactional/permanently current. Earlier12:28 list,10:30 full histories and individual outcomes remain historical; row-level githubStateAtListRefresh fields are not retrospectively rebound."
   },
   "latestGithubIncrementalObservation": {
-    "kind": "INDIVIDUAL_ISSUE369_ADDITION_AFTER_PREFILING_LIST",
-    "issue": 369,
-    "createdUtc": "2026-09-08T20:00:00Z",
-    "verifiedUtc": "2026-09-08T20:00:01.894153+00:00",
-    "url": "https://github.com/p2pKit/P2pKit/issues/369",
-    "githubState": "open",
-    "issueRefetchSha256": "62476b07db7bd4327018f893eaa4bc23770b98ade04395469582fe792d05ef25",
-    "createRequestSha256": "cb7ca3789754f88fae08f9ac1db34c95bc2dbe5369a3969ac259435cb679fcf0",
-    "knownTotalIssuesAfterAddition": 290,
-    "knownOpenIssuesAfterAddition": 183,
-    "knownPullRequests": 79,
-    "completeAllStateListAfterAdditionPerformed": false,
-    "initialDisposition": "CONFIRMED_NOT_STARTED",
-    "initialRepairRows": {
-      "denominator": 183,
-      "approved": 71,
-      "remaining": 112,
-      "pendingRepairs": 90,
-      "externalRows": 21,
-      "architectureRows": 1
+    "kind": "NARROW_POST371_FRESH_LISTS_AND_SIX_COMPLETE_DIRECT_CONTEXT_HISTORIES",
+    "startedUtc": "2026-09-09T00:39:46.250050+00:00",
+    "endedUtc": "2026-09-09T00:40:09.276101+00:00",
+    "issues": 292,
+    "openIssues": 185,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "completeHistoryRefreshPerformed": false,
+    "freshCompleteLocalHistoryIds": [
+      141,
+      150,
+      223,
+      369,
+      370,
+      371
+    ],
+    "otherLocalHistoriesNotRefetched": 365,
+    "localPrSetsNotRefetched": 79,
+    "firstHopUpstreamHistoriesAndPrSetsNotRefetched": 117,
+    "reusedEvidenceReference": "latestGithubFullRefresh23:47–00:18; no post371upstream observation",
+    "requests": 28,
+    "failedRequests": 0,
+    "allHttp200": true,
+    "apiParallelism": 1,
+    "paginationCollections": 16,
+    "paginationPages": 22,
+    "rawUncompressedBytes": 14496717,
+    "relevantStartEndListsStable": true,
+    "onlyNewIssue": 371,
+    "existingListBodiesUnchanged": true,
+    "prListOwnVersionsAndDecisionsUnchanged": true,
+    "prListEmbeddedRepositoryMetadataChanges": 79,
+    "fresh371": {
+      "createdUtc": "2026-09-09T00:32:54Z",
+      "historyWindowUtc": [
+        "2026-09-09T00:39:51.875309+00:00",
+        "2026-09-09T00:39:53.428867+00:00"
+      ],
+      "state": "open",
+      "comments": 0,
+      "timelineEvents": 0,
+      "bodyBytes": 4339,
+      "bodySha256": "0e08e3467512382b009ab841e81bfa37f2823bcfa6d106477436a4904ac55984",
+      "detailSha256": "c2fad224f9f63d7917a2705bd47777c4549126916a3d54f2120df17996bdd420",
+      "bodyEqualsParentDraft": true
     },
-    "scope": "Individual Low issue creation/refetch after19:59list and19hfull-history duplicate review. Initial disposition is historical; subsequent approved repair is separate. Not a post-addition full inventory capture or an issue closure."
+    "new371BacklinkTargets": [
+      141,
+      150,
+      223,
+      369,
+      370
+    ],
+    "backlinksCreatedUtc": "2026-09-09T00:32:55Z",
+    "removedTimelineEvents": 0,
+    "matchedTimelineMetadataOnlyChanges": 34,
+    "sourceObservation": {
+      "head": "d3c812020b41aeceef45381b1d24871b9477607b",
+      "tree": "7baa8e2233bc7dd23a903178fa24dff7f9ae9ec2",
+      "status": "M  scripts/tests/run-audit-command-test.py",
+      "startedUtc": "2026-09-09T00:39:46.227072+00:00",
+      "endedUtc": "2026-09-09T00:40:09.426692+00:00",
+      "scope": "Parent staged source; not clean execution or review by metadata task."
+    },
+    "originalSealedPacketRehashedUnchanged": true,
+    "originalPriorityFilesUnchanged": 15,
+    "upstreamVisibilityGapCountRetained": 8,
+    "omittedLocalPatchFieldsRetained": 402,
+    "omittedUpstreamPatchFieldsRetained": 33,
+    "unreturnedUpstreamBacklinkCauseRetained": "UNKNOWN; not refetched in addendum",
+    "reportSha256": "7cf73786d2f417e0247b16c51809e712296ed88a13c37d3aab4354514c1c115a",
+    "sealSha256": "b5317cc3b8249f4680e1919a15f5a14de68135fb728cea2802a2e8bba0ce1ba6",
+    "manifestSha256": "74472da4e638baba5ea1482335fbe2b679a91a70ec41cb68bf31deb5004ffd97",
+    "reconciliationSha256": "d18d5e2fa97b6eeb75a06b5f6b29d69b8d853df5b2d20b1fe77a116f997d6c62",
+    "sealedUtc": "2026-09-09T00:44:56.990278+00:00",
+    "sealedFiles": 109,
+    "sealedBytes": 19280452,
+    "scope": "Narrow fresh371addition/directbacklinkcontext and start/end allstate list observation; NOT another full postwrite history refresh. Fresh lists do not refresh365other histories/79PRsets/117upstream. Filing and parent source approval remain separate; no closure, new runtime/native acceptance or implementation approval by metadata task."
   },
   "previousGithubFullRefreshHosted1608": {
     "startedUtc": "2026-09-08T16:02:38.964754+00:00",
@@ -5383,5 +5577,370 @@
     "scope": "Fresh18:28lists only; all368own histories/79PRsets reused16:02-16:08, upstream117context/gaps reused. Fresh ownbody/count/updated_at/list equality cannot prove unchanged comment payloads or timeline-only decisions. Original collector partial/error and corrected26GET capture remain distinct; all28GET200 is not no analysis failure. Operational idle/ref points are not a pre-push proof or lease."
   },
   "previousDispositionUpdateUtcHosted": "2026-09-08T18:58:47.263085+00:00",
-  "previousProvenanceHosted": "Curated recovery/continuation record; original inventorySnapshotUtc and row assessments retain their recorded scope. Raw evidence stays private. Latest16:02:38-16:08:26 fresh local capture records289issues/182open/79PRs,368histories and79PRmetadata sets fresh,zero reuse; all182openIDs reconcile. Separate117first-hop upstream records have109complete expected counts and8reported-comment visibility gaps;2927GETall200 is not complete upstream-content visibility. Earlier10:30capture,12:28list,368addition and individual223/367/368outcomes remain unchanged. Exact unnumbered facility731/tree6b259/sourcepatcha95 independently approved and locally committed; no verified push/hosted execution established here. Fresh Linuxcheck/sample/Dokka1607/199XML/234tasks is at6a32+stageda95, not clean731, sourceapproval or newhostedexecutor. All taskqualifiedcase identities/outcomes match prior368; do not sumoverlappingruns.223 remains last numberedrepair; original223 assessment is unchanged with a dated successor field.71/182 staysapproved,268NOT_STARTED,133independentNOT_STARTED,wholeauditNOT_READY. Earlierfailures,protectedguides,archive/releasebytes and0.8.0+ restrictions preserved; no issueclosure/mainmerge/release/settings/tagchange authorized. Later clean731 rootcheck/CLI/Desktop passes1607/199XML/205tasks with independentCORROBORATED evidence; not Androidassembly/Dokka or productlaunch/contentsinspection. Latest18:28freshlists equal16:08; all368histories/79PRsets explicitlyREUSED, not fresh18h, and unchanged count/updated_at/body fields do not establish unchanged comments/timelines. LatestActions/refpoint18:28:51active0 is not prepushidleproof/lease."
+  "previousProvenanceHosted": "Curated recovery/continuation record; original inventorySnapshotUtc and row assessments retain their recorded scope. Raw evidence stays private. Latest16:02:38-16:08:26 fresh local capture records289issues/182open/79PRs,368histories and79PRmetadata sets fresh,zero reuse; all182openIDs reconcile. Separate117first-hop upstream records have109complete expected counts and8reported-comment visibility gaps;2927GETall200 is not complete upstream-content visibility. Earlier10:30capture,12:28list,368addition and individual223/367/368outcomes remain unchanged. Exact unnumbered facility731/tree6b259/sourcepatcha95 independently approved and locally committed; no verified push/hosted execution established here. Fresh Linuxcheck/sample/Dokka1607/199XML/234tasks is at6a32+stageda95, not clean731, sourceapproval or newhostedexecutor. All taskqualifiedcase identities/outcomes match prior368; do not sumoverlappingruns.223 remains last numberedrepair; original223 assessment is unchanged with a dated successor field.71/182 staysapproved,268NOT_STARTED,133independentNOT_STARTED,wholeauditNOT_READY. Earlierfailures,protectedguides,archive/releasebytes and0.8.0+ restrictions preserved; no issueclosure/mainmerge/release/settings/tagchange authorized. Later clean731 rootcheck/CLI/Desktop passes1607/199XML/205tasks with independentCORROBORATED evidence; not Androidassembly/Dokka or productlaunch/contentsinspection. Latest18:28freshlists equal16:08; all368histories/79PRsets explicitlyREUSED, not fresh18h, and unchanged count/updated_at/body fields do not establish unchanged comments/timelines. LatestActions/refpoint18:28:51active0 is not prepushidleproof/lease.",
+  "previousProvenance369Initial": "Current administrative continuation after individually filed369 and finalapproved localbd61175 repair.72/183 approved39.3%,111remaining60.7%;89repairs/21external/120decision,50new auditfindings. All182 preceding issueobjects and original assessments/observation timestamps remain verbatim.19:17-19:22freshfull local histories/PRsets plus firsthop context have exact scope/visibility gaps in latestGithubFullRefresh;19:59list and20:00individual369addition are separate, not post-addition fullcapture. Prior facility administration independentlyapproved/pushedbb0; actualtrial1 failed before audit nativecontrols/build/tests, unsafehand-off/partialsalvage/remote cleanup NOT_PROVEN.369source approved/locallycommitted but NOT_PUSHED/no native rerun or public outcome here. Earlier productresults/controls/source reads retain exact historical bindings; no invented execution, closure, merge, release, hardware/independent acceptance.133NOT_STARTED,268NOT_STARTED,wholeauditNOT_READY.",
+  "previousDispositionUpdateUtc369Initial": "2026-09-08T21:05:23.112187+00:00",
+  "previousLatestGithubListObservation369Initial": {
+    "startedUtc": "2026-09-08T19:59:24.646456+00:00",
+    "endedUtc": "2026-09-08T19:59:29.370117+00:00",
+    "issues": 289,
+    "openIssues": 182,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "issueStyleObjects": 368,
+    "freshCompleteHistories": false,
+    "changesVs19hLists": [],
+    "summarySha256": "3f12e22435ca077b045d9838d2718749aefc58b1cfa5851c9d6af2aa12793091",
+    "scope": "Fresh pre-filing all-state lists only; not another full-history capture. #369 not yet created; its later individual OPEN observation is separate. Not a current idle proof or execution lease."
+  },
+  "previousLatestGithubIncrementalObservation369Reference": "issues[number=369].initialFilingObservation, unchanged",
+  "latestKnownGithubCountsAfterIndividualAddition": {
+    "totalIssues": 292,
+    "openIssues": 185,
+    "pullRequests": 79,
+    "issue": 371,
+    "createdUtc": "2026-09-09T00:32:54Z",
+    "scope": "Known counts at individual371 creation/refetch; later all-state list and selected histories are separately dated, not a post371full refresh."
+  },
+  "githubIncrementalObservation2133": {
+    "kind": "INCREMENTAL_FRESH_LISTS_AND_SELECTED_FULL_HISTORIES_NOT_COMPLETE_REFRESH",
+    "startedUtc": "2026-09-08T21:32:58.270028+00:00",
+    "endedUtc": "2026-09-08T21:33:17.806072+00:00",
+    "issues": 290,
+    "openIssues": 183,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "freshLocalHistories": [
+      369,
+      223,
+      367
+    ],
+    "reusedLocalHistories": 366,
+    "freshPrSets": 0,
+    "reusedPrSets": 79,
+    "reusedFirstHopUpstreamSets": 117,
+    "upstreamRequests": 0,
+    "reusedLocalHistoryWindowUtc": [
+      "2026-09-08T19:17:06.237470+00:00",
+      "2026-09-08T19:22:50.252664+00:00"
+    ],
+    "reusedUpstreamMainWindowUtc": [
+      "2026-09-08T19:24:05.838850+00:00",
+      "2026-09-08T19:30:42.647956+00:00"
+    ],
+    "reusedUpstreamSupplementWindowUtc": [
+      "2026-09-08T19:33:09.567975+00:00",
+      "2026-09-08T19:33:23.885385+00:00"
+    ],
+    "requests": 21,
+    "failedRequests": 0,
+    "allHttp200": true,
+    "paginationCollections": 10,
+    "paginationPages": 16,
+    "all183OpenIdsMatchInventory": true,
+    "startEndListsStable": true,
+    "upstreamVisibilityGapCount": 8,
+    "unavailableReportedInlineRecords": 7,
+    "unavailableReportedConversationRecords": 3,
+    "localOmittedPatchFieldsRetained": 402,
+    "upstreamOmittedPatchFieldsRetained": 33,
+    "reportSha256": "b07ef4c0e9ba5923bbeb1272aec4ce6b473d9192429c029ce6d2ba942bd79bb0",
+    "reconciliationSha256": "aadf65a575ad032a06a4bdd48a9f2a371ad867d4c30819dd1f40b712bbdd7eb8",
+    "manifestSha256": "deadb5d94662a3a38ba8ec80c6a7998262517ef3427aaa8ba1b3f45a19268872",
+    "sealedUtc": "2026-09-08T21:45:05.815287+00:00",
+    "sealedFiles": 93,
+    "sealedBytes": 20115351,
+    "scope": "Per-endpoint history/list observation, not execution lease/current all-narrative audit, new source approval or repair/closure/external acceptance.19hcomplete histories and known visibility gaps retain original scopes.",
+    "newListItems": [
+      369
+    ],
+    "newTimelineBacklinks": [
+      {
+        "target": 223,
+        "source": 369,
+        "createdUtc": "2026-09-08T20:00:01Z"
+      },
+      {
+        "target": 367,
+        "source": 369,
+        "createdUtc": "2026-09-08T20:00:01Z"
+      }
+    ],
+    "sourceAtCapture": {
+      "head": "bd61175167337fee585855cbbe5bfae9c0122dc5",
+      "tree": "95bb599cebc45d80d0a5c632fb2b84e240e14a30",
+      "cleanAtBothEndpoints": true,
+      "allTrackedWorktreeBytesUnchangedDuringCapture": true,
+      "trackedPaths": 1060,
+      "protectedInstructionsUnchanged": true
+    },
+    "closedDecisionScope": "All107closed-issue and72closed-PR list records have no item-relevant changes. Closed history payloads reused19h, not refetched. New369 links only open223/367; no new closed decision observed in this bounded delta scope.",
+    "inspectorHistory": "Initial offline reconciliation rejected368 because it incorrectly assumed every historical row had a non-null list-state. Historical368 deliberately retains listState=null and separately binds individualState=open; R2 compares that explicit basis without changing the row. Original script/log retained; no data mismatch or GitHub/source defect.",
+    "prior369State": "Initialsource locallyapproved; no outcomecomment observed, followup/secondtrial not yet executed at this observation."
+  },
+  "githubIncrementalObservation2252": {
+    "kind": "INCREMENTAL_FRESH_LISTS_AND_SELECTED_FULL_HISTORIES_NOT_COMPLETE_REFRESH",
+    "startedUtc": "2026-09-08T22:52:00.879067+00:00",
+    "endedUtc": "2026-09-08T22:52:22.453944+00:00",
+    "issues": 290,
+    "openIssues": 183,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "freshLocalHistories": [
+      133,
+      223,
+      268,
+      367,
+      369
+    ],
+    "reusedLocalHistories": 364,
+    "freshPrSets": 0,
+    "reusedPrSets": 79,
+    "reusedFirstHopUpstreamSets": 117,
+    "upstreamRequests": 0,
+    "reusedLocalHistoryWindowUtc": [
+      "2026-09-08T19:17:06.237470+00:00",
+      "2026-09-08T19:22:50.252664+00:00"
+    ],
+    "reusedUpstreamMainWindowUtc": [
+      "2026-09-08T19:24:05.838850+00:00",
+      "2026-09-08T19:30:42.647956+00:00"
+    ],
+    "reusedUpstreamSupplementWindowUtc": [
+      "2026-09-08T19:33:09.567975+00:00",
+      "2026-09-08T19:33:23.885385+00:00"
+    ],
+    "requests": 27,
+    "failedRequests": 0,
+    "allHttp200": true,
+    "paginationCollections": 14,
+    "paginationPages": 20,
+    "all183OpenIdsMatchInventory": true,
+    "startEndListsStable": true,
+    "upstreamVisibilityGapCount": 8,
+    "unavailableReportedInlineRecords": 7,
+    "unavailableReportedConversationRecords": 3,
+    "localOmittedPatchFieldsRetained": 402,
+    "upstreamOmittedPatchFieldsRetained": 33,
+    "reportSha256": "13172b4b48ee6d2b71726647a383d87288052270964d272cde9ba7bc25b0b9d6",
+    "reconciliationSha256": "0c3517da9a580842abdff30591405e9f1dae6c796b17430a5f2e7e5d71301a9e",
+    "manifestSha256": "cd5c57ef7ef57bbb4a69856804ac04a8406aa3e9ab4118b8a5b20a45a62206ee",
+    "sealedUtc": "2026-09-08T23:05:22.879719+00:00",
+    "sealedFiles": 113,
+    "sealedBytes": 20998235,
+    "scope": "Per-endpoint history/list observation, not execution lease/current all-narrative audit, new source approval or repair/closure/external acceptance.19hcomplete histories and known visibility gaps retain original scopes.",
+    "changedListItemIds": [
+      369
+    ],
+    "newListItems": [],
+    "newTimelineEvents": [
+      {
+        "item": 369,
+        "event": "commented",
+        "id": 5592852988,
+        "createdUtc": "2026-09-08T22:39:48Z"
+      },
+      {
+        "item": 133,
+        "event": "cross-referenced",
+        "source": 369,
+        "createdUtc": "2026-09-08T22:39:49Z"
+      },
+      {
+        "item": 268,
+        "event": "cross-referenced",
+        "source": 369,
+        "createdUtc": "2026-09-08T22:39:49Z"
+      }
+    ],
+    "sourceAtCapture": {
+      "head": "638d005784776a059c465d6940abac218e1a0d71",
+      "tree": "920191e495b90850a034b1f1debb2064bc121c26",
+      "status": "M scripts/tests/audit-host-test.py",
+      "trackedPaths": 1061,
+      "allTrackedBytesUnchangedAcrossCapture": true,
+      "pendingFixtureSha256": "9052f33d6d777fd3e9c374e7875ae1eeefe2d4ec689e4af024276d9436bc393f",
+      "protectedUnchanged": true,
+      "changesByThisTask": false
+    },
+    "fresh369Comment": {
+      "bodyUnchanged": true,
+      "addedComment": 5592852988,
+      "commentTextSha256": "1469bfd9e85d94f3f15f0e6f089f62f88e46f37d67ffbfe541c9b783ce4afeee",
+      "identityBodyAndTimestampsMatchPublishedRefetch": true,
+      "fullCommentJsonExactlyEqual": false,
+      "onlyAvatarUrlMetadataDiffers": true,
+      "publicationAndTrial2NativeFailureRecorded": true,
+      "distinctNewDefect": false,
+      "followup": "Existing369 shell locate-and-validate admission rejects observed native Git Bash x86_64-pc-cygwin; root sequential correction in progress, not approved by this refresh."
+    },
+    "closedDecisionScope": "No closed issue/PR list-level change or newly referenced closed decision from changed369. Relevant pre-existing closed histories/PR sets remain explicitly19h, not refetched. No new120decision signaled; its history reused19h.",
+    "inspectorHistory": "Initial offline verifier expected whole comment objects to match across the direct-comment endpoint and comments collection; rejected only actor avatar_url query variation. Original script/log preserved. Second offline attempt misread the publication receipt HTTP response-body SHA as the nested comment-text SHA; exact text equals the original3132-byte markdown. Both scripts/logs retained. Final verification records avatar metadata variation, matches all remaining fields, and independently binds comment text1469bfd9… versus full response JSONf1eeb36c…. No network or source/product failure.",
+    "prior369State": "Initial source approval historical; same-row followup active/unapproved by this capture. New final approval must have separate source/review binding."
+  },
+  "githubPre370FilingObservationReference": "checkpoint.json githubPre370FilingObservation",
+  "laterIndividualAdditionReferences": [
+    "issues[number=370].initialFilingObservation",
+    "issues[number=371].initialFilingObservation"
+  ],
+  "dispositionSequence370371Reference": "checkpoint.json dispositionSequence370371",
+  "latestGithubFullRefresh": {
+    "kind": "FRESH_ALL_LOCAL_RETURNED_HISTORIES_AND_PR_SETS_WITH_BOUNDED_FIRST_HOP_UPSTREAM",
+    "startedUtc": "2026-09-08T23:47:35.229190+00:00",
+    "endedUtc": "2026-09-09T00:18:17.149090+00:00",
+    "issues": 291,
+    "openIssues": 184,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "completeHistoryRefreshPerformed": true,
+    "freshCompleteIssueStyleHistories": 370,
+    "exactSealedHistoriesReused": 0,
+    "freshLocalPullDetails": 79,
+    "freshFirstHopUpstreamHistoriesAndPrSets": 117,
+    "ownConversationComments": 491,
+    "localTimelineEvents": 4216,
+    "localPullReviews": 0,
+    "localInlineComments": 0,
+    "localPullFileEntries": 1817,
+    "localPullCommitEntries": 277,
+    "upstreamConversationComments": 51,
+    "upstreamTimelineEvents": 8686,
+    "upstreamReviews": 292,
+    "upstreamInlineRecords": 184,
+    "upstreamFileEntries": 948,
+    "upstreamCommitEntries": 339,
+    "firstHopReferenceSetUnchanged": true,
+    "recursiveExpansion": false,
+    "requests": 2628,
+    "failedRequests": 0,
+    "allHttp200": true,
+    "apiParallelism": 1,
+    "paginationCollections": 1858,
+    "paginationPages": 1937,
+    "rawUncompressedBytes": 171564556,
+    "mainCapture": {
+      "endedUtc": "2026-09-09T00:17:53.740075+00:00",
+      "requests": 2600,
+      "originalStatusPreserved": "CAPTURED_RECONCILIATION_PENDING"
+    },
+    "post370ContextSupplement": {
+      "startedUtc": "2026-09-09T00:17:54.529681+00:00",
+      "endedUtc": "2026-09-09T00:18:17.199439+00:00",
+      "requests": 28,
+      "freshHistoryIds": [
+        325,
+        367,
+        369,
+        148,
+        157,
+        370
+      ],
+      "notSecondCompleteCapture": true
+    },
+    "all183ExistingLedgerIdsTitlesAndRecordedStatesMatch": true,
+    "onlyMissingThenLedgerIssue": 370,
+    "allPreviouslyExistingOwnBodiesAndConversationPayloadsUnchanged": true,
+    "allPrOwnVersionStateDecisionReviewInlineFileCommitPayloadsUnchanged": true,
+    "newLocalBacklinkTargetsFrom370": [
+      325,
+      367,
+      369,
+      148,
+      157
+    ],
+    "newLocalBacklinksCreatedUtc": "2026-09-08T23:51:43Z",
+    "changedMatchedLocalTimelineRecords": 1575,
+    "localMatchedChangesOnlyEmbeddedRepositoryMetadata": true,
+    "newUnrelatedUpstreamBacklink": {
+      "target": "actions/checkout#1924",
+      "source": "KenjiOhtsuka/pssw#9",
+      "createdUtc": "2026-09-08T23:12:42Z"
+    },
+    "previousUpstreamBacklinkNotReturned": {
+      "target": "actions/checkout#2454",
+      "source": "worganisation/home-assistant#2814",
+      "createdUtc": "2026-08-06T19:22:52Z",
+      "cause": "UNKNOWN",
+      "earlierEventRetained": true,
+      "secondHopSourceNotRefetched": true,
+      "positionsShifted": 102
+    },
+    "changedMatchedUpstreamTimelineRecords": 496,
+    "matchedUpstreamDeltaScope": "Embedded repository metadata except existing nested milestone counters/update time in checkout2286 and nested sourceupdated_at in checkout2464; no changed own/nested body or decision text. Not recursive source refresh.",
+    "upstreamVisibilityGaps": [
+      {
+        "pr": "actions/checkout#1941",
+        "collection": "inline",
+        "returned": 22,
+        "reported": 23
+      },
+      {
+        "pr": "actions/checkout#1977",
+        "collection": "inline",
+        "returned": 0,
+        "reported": 1
+      },
+      {
+        "pr": "actions/checkout#2044",
+        "collection": "inline",
+        "returned": 2,
+        "reported": 4
+      },
+      {
+        "pr": "actions/checkout#2194",
+        "collection": "conversation",
+        "returned": 0,
+        "reported": 1
+      },
+      {
+        "pr": "actions/checkout#2286",
+        "collection": "inline",
+        "returned": 21,
+        "reported": 22
+      },
+      {
+        "pr": "actions/checkout#2356",
+        "collection": "inline",
+        "returned": 6,
+        "reported": 8
+      },
+      {
+        "pr": "actions/checkout#2454",
+        "collection": "conversation",
+        "returned": 2,
+        "reported": 3
+      },
+      {
+        "pr": "actions/dependency-review-action#1077",
+        "collection": "conversation",
+        "returned": 0,
+        "reported": 1
+      }
+    ],
+    "reportedInlineRecordsNotReturned": 7,
+    "reportedConversationRecordsNotReturned": 3,
+    "freshExistingReviewCommentEndpoints": 78,
+    "additionalReturnedCommentIds": 0,
+    "omittedLocalPatchFields": 402,
+    "omittedUpstreamPatchFields": 33,
+    "offlineInspectorHistory": "Original identity inspector failed with recursive diff NameError from separate exec globals/locals; retained failed script/log. Corrected shared namespace passed. Not a network/product/native failure.",
+    "manifestSha256": "9820a67e9705258b9dc06b86eca4e4f891ab7ed9f88e9a197bbb5111c86867fb",
+    "reportSha256": "b5e4fe28bb9bbc27a4e3e8a7f774f377d2dcb743fb8cf5687224af2dcba9def0",
+    "sealSha256": "b86271d2964809773e35d339a3301803ef4be44f44d1057908a7bf42b8a151ab",
+    "reconciliationSha256": "c8621fcd4d49b2018833e33aa490079e14f0ad5c4d0f717ac9dc1a257af09364",
+    "semanticDeltaVerdictSha256": "23af9f272046da6666364dbcb55d199ba2a68a20d98510ca896a28f36f746e77",
+    "sealedUtc": "2026-09-09T00:37:31.308283+00:00",
+    "sealedFiles": 8596,
+    "sealedBytes": 253404649,
+    "scope": "Genuinely fresh returned local open/closed issue/PR bodies, comments, timelines, local PR metadata sets and117direct first-hop upstream sets. Not semantic proof of unchanged issue claims, full patch reconstruction, complete reported-comment visibility, an atomic/live lease or native/source/product acceptance. API window excludes371filing00:32:54; later narrow addendum is separate. Original19h/21:33/22:52 scopes remain unchanged."
+  },
+  "latestGithubFullRefreshListObservationReference": "checkpoint.json latestGithubFullRefreshListObservation"
 }

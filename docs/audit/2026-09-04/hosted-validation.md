@@ -1,3 +1,8 @@
+> **Current continuation (2026-09-09T01:18:20.220814+00:00):** Same-#369 shell follow-up `aab8cab`, separate #370 SDK correction `d3c8120` and #371 native-fixture byte-emission correction `842d0aa` are independently source-APPROVED, locally committed and NOT_PUSHED in this record; trial3 NOT_EXECUTED. 74/185 independently approved repository-repair rows (40.0%), 111 remaining (60.0%): 89 repairs, 21 external validation rows and architecture decision #120; 52 new audit findings. Whole audit NOT_READY; no checkpoint stop.
+> The full following `638d005`/R3 report is preserved historical text, including its formerly-current opening.
+> Dated additions after that block provide the separate current source, product, GitHub and publication states.
+> Source approval is not independent approval of these administrative bytes or native/SDK/external acceptance.
+
 > **Current state:** #369 source APPROVED/localbd61175, NOT_PUSHED; trial1 failed before audit build/test
 > invocations, remote cleanup/full-tree NOT_PROVEN. See the dated continuation sections below.
 > The original250-line pre-trial report is preserved as historical evidence, not current publication/host status.
@@ -366,3 +371,286 @@ at most two Gradle workers/no parallel. Retain required logs, stop only owned in
 only confirmed disposable outputs after dependent checks; preserve shared caches/source/user work/private evidence.
 Continue all feasible sequential repairs without a checkpoint stop; physical devices, hostile networks,
 independent interoperability, professional crypto and #120 decision remain separate. Whole audit **NOT_READY**.
+
+## Same #369 successor after second hosted trial
+
+**2026-09-09T01:18:20.220814+00:00: follow-up source APPROVED/local`aab8cab`; not yet pushed, trial3 NOT_EXECUTED.**
+Time-only #369 events below occurred on 2026-09-08 UTC. Newer #370/#371 are separately recorded below.
+This dated successor does not retroactively expand the initial source approval or alter either hosted failure.
+The full preceding638d/R3 report, including its original250-line facility block, is retained verbatim.
+
+### R3 publication and authentic trial2 failure
+
+Exact independently approved R3 administration was committed **`638d005784776a059c465d6940abac218e1a0d71`**,
+tree`920191e495b90850a034b1f1debb2064bc121c26`, parent`bd61175`, at22:26:00UTC.
+Fresh independent R3 administrative/applied-byte review APPROVE, report`ac40b3db9486537652df5dd8e6b2243be62c6d2c8b468fc1372ddcd5aefa4a52`,
+applied addendum`71db8918c3606d4f49c62b8c08ed2f015069723110bfbc59bca893ce95ef43f6`;59R3/97applied data comparisons,0discrepancies.
+Eight final application gatesPASS22:04:39.132271–22:04:47.181902UTC:6,674structural assertions,
+363relative links/73active Markdown files,10layout projects/15negative controls and10OSVlocks; all
+command/stop/final0, no survivors/output deletions/productXML. Gate binding`b2ee6e7db20dc221aab2aec5a5cadb04dcbe9400972680dfb9d70147fb8d1e49`.
+Earlier R1/R2 verdicts, missedR2clauses/publication hold, inspector errors and both8-gate cohorts remain
+historical, not silently discarded or promoted. This validates exact formerR3administration, not this successor.
+Normal audit-only push finished22:27:38.332526UTC with exit0; a separate22:28:32–22:28:33 observation
+verified commit/tree and resulting run identity. These publish initial369source plus administration, not
+Windows product acceptance or the later follow-up. No force-push/main/tag/release/settings change is inferred.
+
+[Run34286015922](https://github.com/p2pKit/P2pKit/actions/runs/34286015922), attempt1, eventpush, uses that
+exact source/tree. Windows job102261680137 **FAILS**,22:27:44–22:28:09UTC onWindows2025/AMD64, image
+`win25-vs2026`/`20260824.214.3`. ARM102261805782 andIntel102261805751 are **SKIPPED** without runner steps.
+All five native version queries return0; installation-bound `C:\Program Files\Git\bin\bash.exe` reports
+`GNU bash, version 5.3.15(2)-release (x86_64-pc-cygwin)` alongside `git version 2.55.0.windows.5`.
+The newly introduced MSYS-only predicate rejects it with `ValueError: Not native x64 Git for Windows Bash`.
+Trial2 therefore establishes successful absolute shell selection, not successful wrapper-fixture execution.
+Trial1's bare-Bash/WSL failure stays distinct historical evidence within the same corrective path.
+
+Admission/initialization/version subprocesses ran, but source ordering and`components=[]` bind the exception
+before first`Host.invoke`. Native ownership controls, SDK setup, wrapper fixture, product Gradle/tests and
+all Apple work remain **NOT_STARTED**. No applicable audit Gradle invocation/stop existed; none ran.
+Successful version probes do not prove descendant retirement. Root reconciled the same #369 corrective
+path after duplicate review, not #223 LF policy, #367 artifact admission or a new numbered defect.
+
+Artifact10079489154 is8,165bytes,13unique regular members/14,135expanded bytes, SHA-256
+`5babad8da288ab4e9455d1b4f71c1562702f1bf75bfde7bf84cfb707fe6dba25`. Returned bootstrap12entries/12,939bytes,
+salvage7/10,161 and nested5/9,139 manifests match their overlapping subtrees, not additive scopes.
+Six copied salvage files/9,563bytes and omissionCount0 do not prove original-tree completeness. Preserve
+**PARTIAL_SALVAGE, safeToContinue=false, driverSafeOutput=false, full-tree/remote cleanup NOT_PROVEN**.
+The private analyzer's exit2/PARTIAL_EVIDENCE is not a passing product/cleanup gate. Generic Actions orphan
+cleanup text is not an ownership receipt. Independent `/root/review_trial2_evidence` verdict:
+**CORROBORATE_TERMINAL_PREREQUISITE_FAILURE_ONLY**, report SHA-256
+`9c9a652a322d013347c1449ecf95ead80d5ead9bc30e499aa37649044a87b772`.
+Its complete log/all13member/source-order/manifest inspection is offline evidence corroboration, not new
+remote execution, a source repair approval or remote cleanup. Operator reconciliation22:41:07UTC retained all evidence without raw/remote/local-output deletion.
+A22:41:00.522134–22:41:07.357279empty-five-status observation bound audit638d/mainunchanged; the **local
+cooperative lease only** was released22:41:20.970952UTC with no source-freeze violations. These are point
+observations/local coordination, not remote cleanup, an atomic server-side lease or safe-host acceptance.
+
+### Separately recorded clean-bd611 Linux product corroboration
+
+`issue-369-clean-linux-check-samples-dokka` ran21:00:07.677161–21:09:11.983070UTC, finalized21:09:14.183239,
+on clean`bd61175167337fee585855cbbe5bfae9c0122dc5`/tree`95bb599cebc45d80d0a5c632fb2b84e240e14a30`:
+
+```bash
+./gradlew check :p2p-sample-android:assembleDebug \
+  :p2p-sample-desktop:check :p2p-sample-desktop:installDist \
+  :p2p-sample-desktop-ui:test :p2p-sample-desktop-ui:checkRuntime \
+  :p2p-sample-desktop-ui:hotRunArgfile :p2p-sample-desktop-ui:createDistributable \
+  :p2p-core:dokkaGeneratePublicationHtml \
+  --rerun-tasks --no-build-cache --no-configuration-cache --dependency-verification strict \
+  -Pkotlin.compiler.execution.strategy=in-process \
+  '-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8' \
+  --max-workers=2 --no-parallel --console=plain
+```
+
+**PASS1,607cases/199XML/245executed tasks**, zero XML failures/errors/skips. `/root/review_linux_731`
+independently corroborated exact source, all597XML across three cohorts, task/HTML/lint/log and receipt
+bindings. Exactly1,607task-qualified case identities/outcomes match prior clean731/precommit; no added/lost/
+duplicate cases, not4,821distinct tests. Androidassembly and coreDokka execute here, unlike the clean731run.
+CLI/Desktop packaging tasks pass, but APK/CLI/runtime/argfile/distribution/rendered-Dokka contents were
+not retained for inspection; no application launch or isolated published-consumer build is established.
+LauncherJava17/GradleJava21 and constant-ABI JDK17 are observed; all test-runtime versions are not attested.
+Apple tasks are explicitlySKIPPED; six cinterop/KLib warnings, unstripped native library and other original
+diagnostics remain. This is not native Windows shell/ownership, ART/device, Apple, external or release proof.
+
+Receipt/log corroboration records stop0/one daemon stopped, no owned survivors,11disposable roots/
+1,282,428,122bytes removed after report retention, source/shared caches preserved. This is retained record
+inspection, not independent live observation of historical removal. Required raw evidence remains private.
+Review SHA-256`9e26468a38752a68304b03ba96ac51adf6fd661b04258b72041d50cac8fa5769`; receipt`1cb2fd800966fa7ce6e1f22390b97c57a0ed2bba2d535cbb83a11034913cded5`;
+log`499a7168400f29bddd2ae68e8b083c60238802c94bbb35a538a1da5dc771330b`. This later product event was deliberately
+excluded from frozenR3 and is added now, never rebound to its initial source review or the newer follow-up.
+
+### Later incremental GitHub observations and current continuation
+
+The21:32:58.270028–21:33:17.806072UTC capture performs21GET/all200:290issues/183open/107closed and
+79PRs/7open/72closed; start/end lists stable. It freshly reads full369/223/367 histories, explicitly reusing
+366local histories,79PRsets and117upstream sets with original19h bindings/eight visibility gaps. Two new
+20:00:01backlinks from369 to223/367 do not advance target list`updated_at`; unchanged lists do not prove
+unchanged timelines. No new defect/decision/closure follows. Its initial private368null-list-state inspector
+assumption failure is retained; correction preserves the recorded individual-open state, not a product fix.
+A separate **22:52:00.879067–22:52:22.453944UTC** observation performs27GET/all200; counts unchanged.
+Only369comment count/updated_at change in stable lists. Full369/133/223/268/367 histories are fresh;
+364local histories,79PRsets and117upstream sets retain19h bindings/eight reported-count gaps. One known
+comment5592852988 and two22:39:49backlinks to133/268 are observed, not new defects/decisions. The latter
+again do not advance target listupdated_at. No new closed/product120decision is signaled; closed payload
+histories remain19h. Neither incremental observation is a full-history refresh or an execution lease.
+
+The actual[369comment](https://github.com/p2pKit/P2pKit/issues/369#issuecomment-5592852988) was posted/refetched
+22:39:48UTC, issueOPEN, reporting initial publication/trial2failure/same369pending correction. Its3,132-byte
+text SHA-256`1469bfd9e85d94f3f15f0e6f089f62f88e46f37d67ffbfe541c9b783ce4afeee` remains exact. The direct
+JSON response hash`f1eeb36cdff49da60b2c8596ca9efd27f932cd55ef36312f2b4c82c501128619` is a different scope;
+collection actoravatarURL metadata varies. Both initial offline inspector mistakes (whole-object avatar
+comparison, then response-body/text-hash confusion) remain preserved, not source/network/product failures.
+Capture source was638dwith an unstaged fixture, not clean or the later final1cccsource; subsequent staged
+source observations are separate. Manifest`cd5c57ef7ef57bbb4a69856804ac04a8406aa3e9ab4118b8a5b20a45a62206ee`
+binds113files/20,998,235bytes; report`13172b4b48ee6d2b71726647a383d87288052270964d272cde9ba7bc25b0b9d6`.
+
+
+Same369follow-up source`aab8cabf68958a7a3fdedcddc70c84a39e050df4`/tree`f094de05ca60a625e3b9f37abb4f3ce4f9b8dbc2` has a fresh independent
+final-revision **APPROVE**, not a second issue row or native acceptance. [Its repair report](repairs/369.md)
+binds exact four-file change, regression/control history and14finalselected gates; initialbd611approval
+and both hosted failures remain. Current progress after separate #370/#371 approvals: **74/185 independently approved repository-repair rows (40.0%), 111 remaining (60.0%): 89 repairs, 21 external validation rows and architecture decision #120; 52 new audit findings**. #268/#133NOT_STARTED; wholeauditNOT_READY.
+
+Independently review final administrative bytes before publication; use a fresh observed-source global lease
+for trial3 and retain genuine native/source/strict/stop/ownership/full-artifact evidence. Neither prior local
+lease release nor source approval makes unsafe remote output safe. Release monolith remains
+**NOT_EXECUTED_COMPONENT_REPLAY**; physical/hostile-network/independent/professional-crypto/#120 blockers
+remain separate. Continue all feasible sequential work; no checkpoint stop.
+
+### New clean-followup product observation
+
+Clean `aab8cabf68958a7a3fdedcddc70c84a39e050df4`, tree
+`f094de05ca60a625e3b9f37abb4f3ce4f9b8dbc2`, independently corroborated by
+`/root/review_linux_731`: **CORROBORATED**, no scoped evidence-consistency blocker.
+The exact command equals the earlier clean-bd611 command printed above: root `check`, Android assembly,
+CLI check/installDist, Desktop test/runtime/argfile/distributable and core Dokka, all with strict dependency
+verification, forced execution, bounded memory, two workers and no parallel Gradle execution.
+
+Run `issue-369-followup-clean-linux-check-samples-dokka` started **23:24:54.207314 UTC**, command ended
+**23:33:40.625530 UTC**, finalized **23:33:42.998127 UTC** on 2026-09-08. Command/stop/final exits 0;
+**1,607 passed /199 XML files /245 executed actionable tasks**, zero XML failures/errors/skips.
+The reviewer parsed all 199 current and 199 actual prior-bd611 XML files; exact task-qualified identities,
+outcomes, command and complete task/status multisets match. None of the current XML is byte-identical to
+prior. This is repeated verification, not added case coverage or another source-review verdict. All 12
+XML-producing tasks execute; 16 HTML indexes /19 task tabs agree. The 395 task/status log entries are not
+395 actionable executions. Earlier clean731/precommit comparisons retain their older review attribution.
+
+Stop log records one daemon stopped; the receipt has **two** pre-retirement owned entries (Java21 Gradle
+daemon and Java17 worker), then no owned survivors. **11 disposable roots /1,282,432,251 bytes** were
+recorded removed after retention and task-isolated cleanup; source/shared caches preserved. This is
+corroborated historical record inspection, not the reviewer's live observation of removal or process
+termination. The receipt does not attest its historical helper digest or individual signals.
+
+All **889 current retained files /4,722,576 bytes** are stable. No packages, APK, runtime image, argfile or
+rendered Dokka contents were retained for inspection; no sample launch or isolated consumer build follows.
+Java17 launcher/one worker and Java21 Gradle are observed, not every test-runtime version. Apple tests are
+explicitly skipped; six structured cinterop/KLib warnings, unstripped native library and original streams
+remain. This direct Linux wrapper run does not execute hosted `Host.setup_sdk`, and it predates the
+separate SDK-admission repair. Neither that later source nor native Windows/Apple/ART/physical/hostile-
+network/interoperability/cryptographic/release acceptance is inferred. Both real hosted failures remain red.
+
+Report SHA-256 `1c1e5684326a92ae7013cea10595fc9c278556636033706eecbc3b4b9ada4a08`;
+readset `8ac5ea2ab9317d2ac62eab79904bc922767bd1c55c5e8c8c80ea7baee4b2c720`;
+12-file review manifest `e186238801ec28fedf66b4d375a59963a73be61f12f87e58e675ed8fb9d0130a`.
+Receipt `f274783abe023a3a53f4ab504dd8328bcd6d10abffc5507d1e03b6f97b550912`;
+command log `f1356bf4d951d3899ad881c6585b0e5b4e48ddccf5b340deb86a16c6b9f042fc`.
+
+### Separate #370 SDK metadata repair
+
+The actual installed canonical Android Platform37.0 metadata was rejected by the original hosted driver,
+not by the passing clean-aab8 product build or either earlier hosted trial. Fresh actual `Host.setup_sdk`
+and `Host.invoke` reproduction retained the canonical ValueError and original integer37 positive control;
+No actual SDK manager or native Windows/Apple installation ran. Duplicate-checked #370 was filed
+2026-09-08 23:51:42 UTC, then separately repaired with literal37.0 and escaped key/API matching.
+
+Source `d3c812020b41aeceef45381b1d24871b9477607b`, tree `7baa8e2233bc7dd23a903178fa24dff7f9ae9ec2`, parent `aab8cabf68958a7a3fdedcddc70c84a39e050df4` is locally
+committed/NOT_PUSHED, independently APPROVED by `/root/review_370_source` with no findings. Exact diff
+`c21e66aa94d1113771b7a11ebd87a1eadb4c76428a7dabba43cb93409130a3be`; review `aea94ab1109bec3f9607b8aec1cd209740152a7c7c65bdc5d1bb362aa3e77bff`, readset
+`a71a228d0571df2436c5cdc704d622f71c666bb130389c842fb6a76ec063732b`. All18selected gatesPASS; host91/workflow51/leaf27/consumer32 overlap
+other runs, not additive. Original failures,3mutations and21underlying stop0/no-survivor receipts remain.
+Manifest `e4adcc0cf92eb6beb55c5a122f3de5f69a4f7028eacc085a49c3c35ae0ee24d9` binds216files/2,299,601bytes;
+zero productXML, nativeSDK trial3 NOT_EXECUTED. [Focused #370 report](repairs/370.md) records exact
+commands, final source review, canonical replay scope, preserved controls and separate cleanup. Approval
+first advanced72/184 to73/184; the later371filing/approval has its own denominator and verdict.
+
+### Separate #371 native-fixture byte-emission repair
+
+The unchanged shared success caller passesLF and fails one intended byte assertion under modeledCRLF on
+real Linux execution; product/stop/final statuses remain0/0/0 and cleanup is intact. This is not native
+Windows or a Gradle-stop failure. Actual #371 was filed2026-09-09 00:32:54 UTC and now has a separate
+final source APPROVE from `/root/review_371_source`, no findings, locally committed
+`842d0aafa9d84a0114d895a9f933f1663cc01a9d` / tree`48343ddd4da5fd01e052493bc85f5e38cbbb2b5e` / parent`d3c812020b41aeceef45381b1d24871b9477607b`. It is NOT_PUSHED.
+Only embedded fixture stopprints become raw bytewrites/flushes plus one deterministic buffered regression;
+99original functiondefs/55testdefs and all production/raw-evidence/assertion/ownership gates are unchanged.
+
+Diff `f4531694fbad98238efd426f43a7b28d6352be9fcd2a3fc90e9763158b24e72e`; review `780700bdea9db1ec53f19113d539afd4ecd35ee6886770a305f4a56697213c15`; readset
+`4b3b0f51737c20401e86620d8fc4e56bc0189a25f8d01f5fcd7fe92ff579fbd7`. All21selected final gatesPASS: actual LF/CRLF replays,4detected mutations,
+Linuxnative50,host91,workflow51,leaf27,consumer32,10static/preservation gates; overlaps are not additive.
+Manifest `466f5765d0b55861aaa3f72508e1b1c67b020f5b940a93bd35f630270c26ff78` binds1,229files/2,190,632bytes.
+25outer receipts plus separate sealer are stop0/no survivors/source unchanged/zero productXML/no outer
+product-output deletion. All38generated fixture bases have complete final cleanup;41retained records
+include3injected initial incomplete cleanups preserved as red history. The reviewer corrected an interim
+helper-count52 to actual50before approval, not a runtime/source failure. [Focused #371 report](repairs/371.md)
+binds exact sources, raw bytes, mutation failures and review/caller/cleanup limits.
+
+#371 filing first gave73/185 with112remaining; only its final independent approval gave**74/185 (40.0%),
+111remaining (60.0%):89repairs/21external/#120;52newfindings**. The same369follow-up is not a second row.
+Both actual hosted failures and earlier source-bound product runs remain unchanged. General shell-checkout
+CRLF/generated-batchCRCRLF hypotheses remain separate/unconfirmed; no nativeWindows/Apple/SDK/product
+acceptance is inferred. Whole auditNOT_READY;133/268NOT_STARTED, no checkpoint stop.
+
+### Genuinely fresh full GitHub histories, then a separate #371 addition
+
+A new **2026-09-08 23:47:35.229190–2026-09-09 00:18:17.149090 UTC** GET-only capture acquired
+**291 issues (184 open /107 closed), 79 PRs (7 open /72 closed)**: all 370 local issue-style full
+bodies/comments/timelines, all 79 local PR detail/review/inline/file/commit sets, and the same finite
+117 directly referenced first-hop upstream histories/PR sets were freshly fetched, **zero reused current
+histories**. All 2,628 GETs returned 200; 1,858 collection traversals /1,937 pages completed. The main
+collector's preserved `CAPTURED_RECONCILIATION_PENDING` record is a stage outcome; later immutable
+reconciliation completed. The six-history post-#370 supplement ended 00:18:17.199439 (last API return
+00:18:17.149090), not a second full refresh. Original 19h and 21:33/22:52 scopes remain separately dated.
+
+Every previously existing own body/comment and PR version/state/decision/review/file/commit payload
+is unchanged. #370 is the sole addition inside that full window; its five 23:51:43 backlinks target
+#325/#367/#369/#148/#157. The 1,575 matched local timeline changes are embedded repository metadata.
+Upstream, one unrelated backlink to `actions/checkout#1924` from `KenjiOhtsuka/pssw#9` is new. A previously
+captured backlink to `checkout#2454` from `worganisation/home-assistant#2814` is no longer returned:
+**cause UNKNOWN**, old evidence retained; no deletion/privacy/access explanation is inferred. Identity-aware
+comparison distinguishes the resulting 102 shifted positions from semantic changes. The 496 matched
+upstream changes are metadata, including two nested milestone/update-time cases, not changed body/decision
+text or a recursive second-hop refresh. No new product defect or #120 decision is inferred from metadata.
+
+Eight upstream count gaps remain: seven reported inline and three conversation records unavailable.
+Fresh traversal of 78 existing-review comment endpoints found no additional IDs. REST `patch` text is
+omitted for 402 local /33 upstream file entries, so metadata capture is not textual-patch reconstruction.
+The initial offline identity inspector's recursive `diff` NameError remains preserved alongside its
+corrected shared-namespace inspection; it is not a network, product or native failure.
+
+Manifest `9820a67e9705258b9dc06b86eca4e4f891ab7ed9f88e9a197bbb5111c86867fb` seals 8,596 files /
+253,404,649 bytes; report `b5e4fe28bb9bbc27a4e3e8a7f774f377d2dcb743fb8cf5687224af2dcba9def0`, seal
+`b86271d2964809773e35d339a3301803ef4be44f44d1057908a7bf42b8a151ab`. The original priority files remain
+unchanged. This metadata task ran no build/test/daemon and wrapper-stop is inapplicable; no generated
+output was removed. These are per-endpoint observations, not transactional freshness, a source-review
+verdict, new runtime execution or a current execution lease. **#371 was filed after this window.**
+
+### Narrow post-#371 list and direct-context observation
+
+The separate **2026-09-09 00:39:46.250050–00:40:09.276101 UTC** addendum makes 28 GETs, all 200,
+with 16 completed collections /22 pages. Its stable start/end lists report **292 issues (185 open /
+107 closed), 79 PRs (7 open /72 closed)**. #371 alone is added; prior issue-style list/body payloads and
+PR own versions/decisions are unchanged, with only embedded repository metadata changing in PR lists.
+Only **#141/#150/#223/#369/#370/#371** receive fresh complete histories. **365 other local histories,
+all 79 detailed PR sets and all 117 first-hop upstream sets were not refetched**; the earlier full capture
+and its eight visibility gaps, missing patches and unknown missing-backlink cause are not re-dated.
+
+#371 was created 00:32:54, freshly observed open with zero comments/timeline records, and its 4,339-byte
+body exactly matches the filed draft (SHA-256 `0e08e3467512382b009ab841e81bfa37f2823bcfa6d106477436a4904ac55984`).
+Five backlinks at 00:32:55 target #141/#150/#223/#369/#370 without requiring target list `updated_at`
+to change. The 34 changed matched timeline events are repository metadata; none disappeared.
+Filing is not repair approval: separate #370 approval first gave 73/184, then #371 filing gave 73/185 /
+112 remaining; only the subsequently bound independent #371 approval advances the approved count.
+The addendum observed parent-staged test source at `d3c8120`, not a clean-tree execution or source review.
+
+Manifest `74472da4e638baba5ea1482335fbe2b679a91a70ec41cb68bf31deb5004ffd97` seals 109 files /19,280,452
+bytes; report `7cf73786d2f417e0247b16c51809e712296ed88a13c37d3aab4354514c1c115a`, seal
+`b5317cc3b8249f4680e1919a15f5a14de68135fb728cea2802a2e8bba0ce1ba6`. Original 8,596 files and all 15
+priority inputs rehash unchanged. No runtime, worker, lease, source or remote write occurred in the metadata
+task; no wrapper-stop was applicable and no disposable output was generated/deleted. This narrow addendum
+is **not a fresh post-#371 full-history capture** or native/source/release acceptance.
+
+
+### Later operational point, not an execution lease
+
+A separate **2026-09-09 01:01:43.771913–01:01:50.926844 UTC** GET-only observation found zero
+queued/in-progress/waiting/pending/requested runs, audit ref`638d005` and unchanged main`eb444ccc`, with
+seven open PR heads. Summary SHA-256`a0a492abf770c66a827762444e499f92ff56f99f78582cf40d95d8bedef43f99`. The three approved local source commits
+`aab8cab`/`d3c8120`/`842d0aa` remain NOT_PUSHED here. This is only a dated point observation, **not an
+execution lease, a future pre-push idle proof, remote cleanup or trial approval**. Refresh immediately
+before root-controlled publication and acquire fresh exact-source coordination before native trial3.
+
+### Separate local resource cleanup
+
+The separate operator operation **2026-09-09 00:11:55.062330–00:11:55.186712 UTC** removed only
+confirmed generated project-local `.gradle`, `buildSrc/.gradle` and `.kotlin` caches, **21,901,119 bytes**,
+after completed stop receipts, exclusive coordination, no owned live process/open holder or scan error.
+Source/index/protected guides, shared caches, private evidence and unrelated tasks were unchanged; no
+process was stopped. Receipt SHA-256`6b98b27b12b53c1c33e0ebf6f4702427e6f3727dfb27151bc57dc00f565a1716`. This is a distinct historical resource action,
+not another product/test pass or retroactive cleanup of earlier evidence; source was aab8 plus staged370.

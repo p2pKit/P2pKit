@@ -1,3 +1,25 @@
+# Current issue disposition continuation — #369, #370 and #371
+
+**2026-09-09T01:18:20.220814+00:00. Same-#369 shell follow-up `aab8cab`, separate #370 SDK correction `d3c8120` and #371 native-fixture byte-emission correction `842d0aa` are independently source-APPROVED, locally committed and NOT_PUSHED in this record; trial3 NOT_EXECUTED. 74/185 independently approved repository-repair rows (40.0%), 111 remaining (60.0%): 89 repairs, 21 external validation rows and architecture decision #120; 52 new audit findings. Whole audit NOT_READY; no checkpoint stop.**
+Only existing #369 gains its independently reviewed follow-up revision; actually filed #370 and #371
+each add one independently approved row. Filing alone did not approve them: #370 began at 72/184;
+its approval gave 73/184, #371 filing gave 73/185, and only #371 approval gave 74/185.
+Those stages and original failing reproductions remain historical evidence. GitHub issues remain open at their
+stated observations; repair dispositions are not issue closures or native/external acceptance.
+Latest GitHub scope: genuinely fresh **23:47:35–00:18:17 UTC** local/full first-hop capture observes
+291 issues /184 open /79 PRs (2,628 GETs, no failures); the separate **00:39:46–00:40:09 UTC** post-#371
+addendum observes 292 issues /185 open /79 PRs but refreshes only six complete histories. Its other 365
+histories/79 detailed PR sets/117 upstream sets retain the earlier full bindings. Eight upstream reported-
+comment gaps, 402/33 omitted patch fields and an unknown-cause unreturned upstream backlink remain.
+Neither is a transactional/live lease or implementation/native acceptance; original captures stay historical.
+See [#369](repairs/369.md), [#370](repairs/370.md), [#371](repairs/371.md) and [hosted evidence](hosted-validation.md).
+
+## Preserved R3 index narrative; current disposition tables
+
+The following introductory narrative is historical at `638d005`, with its former counts/source/publication
+states superseded above. All 182 other original issue rows remain exact; the approved-table count and
+#369 revision cell are updated and distinct #370/#371 rows are added. No old failure or assessment is erased.
+
 # Issue disposition index
 
 Checkpoint inventory: **183 issues; 72 reviewed repository repairs (39.3%), 111 remaining rows (60.7%)**.
@@ -54,7 +76,7 @@ before trigger; complete capture/hashing is not a new semantic audit of every un
 [#369repair report](repairs/369.md):4files/finalAPPROVE/nofindings,19finalLinuxfixture/static gates,24totalleaves;
 zero productXML. Partialtrial1/unsafehandoff/remote cleanup NOT_PROVEN and oldproductsource bindings remain.
 
-## Repairs with recorded independent approval (72)
+## Repairs with recorded independent approval (74)
 
 | Issue | Severity at checkpoint | Origin | Last recorded fix/revision |
 | --- | --- | --- | --- |
@@ -129,7 +151,9 @@ zero productXML. Partialtrial1/unsafehandoff/remote cleanup NOT_PROVEN and oldpr
 | [#360: [AUDIT][Low] All-tree CI whitespace gates reject immutable historical archives](https://github.com/p2pKit/P2pKit/issues/360) | low | New audit | `6995130bcdb2` |
 | [#367: [AUDIT][Medium] Host-toolchain checksums omit Linux/Windows and Intel Native archives](https://github.com/p2pKit/P2pKit/issues/367) | medium | New audit | `0d88be3e3769` |
 | [#368: [AUDIT][Low] API24 export-failure fixture targets an unnormalized filename on case-sensitive filesystems](https://github.com/p2pKit/P2pKit/issues/368) | low | New audit | `c221d54b549d` |
-| [#369: [AUDIT][Low] Hosted Windows audit resolves Bash to WSL instead of Git Bash](https://github.com/p2pKit/P2pKit/issues/369) | low | New audit | `bd6117516733` |
+| [#369: [AUDIT][Low] Hosted Windows audit resolves Bash to WSL instead of Git Bash](https://github.com/p2pKit/P2pKit/issues/369) | low | New audit | `bd6117516733`, `aab8cabf6895` |
+| [#370: Hosted SDK validation rejects canonical Android Platform 37.0 metadata](https://github.com/p2pKit/P2pKit/issues/370) | low | New audit | `d3c812020b41` |
+| [#371: Native executor fixture stop markers depend on text newline translation](https://github.com/p2pKit/P2pKit/issues/371) | low | New audit | `842d0aafa9d8` |
 
 ## Pending remediation (89)
 

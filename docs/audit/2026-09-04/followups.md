@@ -1,3 +1,26 @@
+# Current follow-up boundary — #369 follow-up and distinct #370/#371
+
+**2026-09-09T01:18:20.220814+00:00. Same-#369 shell follow-up `aab8cab`, separate #370 SDK correction `d3c8120` and #371 native-fixture byte-emission correction `842d0aa` are independently source-APPROVED, locally committed and NOT_PUSHED in this record; trial3 NOT_EXECUTED. 74/185 independently approved repository-repair rows (40.0%), 111 remaining (60.0%): 89 repairs, 21 external validation rows and architecture decision #120; 52 new audit findings. Whole audit NOT_READY; no checkpoint stop.**
+Both actual hosted failures remain unsafe/PARTIAL_SALVAGE, with remote cleanup/full-tree NOT_PROVEN.
+The distinct SDK metadata predicate was confirmed through its actual method after the clean-aab8 product
+run, duplicate-checked, filed as [#370](https://github.com/p2pKit/P2pKit/issues/370), then separately repaired
+and independently reviewed. It is no longer an untracked suspicion. Neither earlier hosted trial reached
+SDK setup, and the Linux product pass is not SDK-driver or later-source execution.
+The distinct fixture stop-marker text-translation defect was reproduced with the unchanged real Linux
+caller under LF and modeled CRLF, filed as [#371](https://github.com/p2pKit/P2pKit/issues/371), then
+separately repaired and independently reviewed. This is not a native Windows observation or Gradle-stop
+failure. General shell-checkout CRLF and generated-batch CRCRLF hypotheses remain **UNCONFIRMED**;
+do not conflate them with #371 or invent another issue/native observation.
+See [#369 evidence](repairs/369.md), [#370 evidence](repairs/370.md), [#371 evidence](repairs/371.md)
+and [hosted continuation](hosted-validation.md).
+Next: After final independent approval of the exact eleven administrative files and applied bytes, refresh live Actions and audit/main/PR refs, hold the one global local/hosted execution lease, freeze the exact approved source tree, and pause all local builds/tests BEFORE the audit-branch push that triggers the hosted workflow. With that lease and source freeze already held, push only the audit branch, verify its exact remote commit/tree and record the outcome separately, then inspect the controlled Windows -> ARM Mac -> Intel Mac trial under the same lease. Verify native controls, actual SDK admission, strict dependency/source/stop/ownership/full-artifact evidence before advancing. Both failed hosted trials remain unsafe/partial and remote cleanup/full-tree NOT_PROVEN; a local lease release is not remote cleanup. #268/#133 remain NOT_STARTED; continue all feasible sequential work.
+
+## Preserved R3 hypotheses and historical disposition notes
+
+All following text is the exact `638d005` snapshot, including its formerly-current opening/tail. The dated
+boundary above supersedes older source/count/publication/native-trial states, not unconfirmed hypotheses,
+required reproduction/duplicate checks, earlier failures, scope limits or applicable safety requirements.
+
 # Follow-ups not yet established as new defects
 
 This file distinguishes unverified hypotheses from separately promoted/repaired findings. Reproduce suspicions at

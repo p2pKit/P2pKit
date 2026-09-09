@@ -1,51 +1,51 @@
 {
   "schemaVersion": 1,
-  "updatedDate": "2026-09-08",
+  "updatedDate": "2026-09-09",
   "status": "IN_PROGRESS_NOT_RELEASE_READY",
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "bd61175167337fee585855cbbe5bfae9c0122dc5",
-  "sourceCheckpointTree": "95bb599cebc45d80d0a5c632fb2b84e240e14a30",
+  "sourceCheckpointCommit": "842d0aafa9d84a0114d895a9f933f1663cc01a9d",
+  "sourceCheckpointTree": "48343ddd4da5fd01e052493bc85f5e38cbbb2b5e",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
   "activeIssue": null,
-  "activeIssueState": "NO_ACTIVE_ISSUE_IMPLEMENTATION;369source finalAPPROVED/locally committed; safe administration/publication and controlled native rerun remain active",
-  "issueCountDenominator": 183,
+  "activeIssueState": "NO_ACTIVE_ISSUE_IMPLEMENTATION;369_FOLLOWUP_AND_DISTINCT370_371_SOURCE_APPROVED_LOCAL_NOT_PUSHED;INDEPENDENT_ADMIN_REVIEW_AND_TRIAL3_PENDING",
+  "issueCountDenominator": 185,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
-    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 72,
     "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 74,
     "PENDING_REMEDIATION": 89
   },
-  "completedIssueCount": 72,
+  "completedIssueCount": 74,
   "remainingIssueCount": 111,
-  "percentageMeaning": "Independently approved repository-repair rows/183:72(39.3%) approved,111(60.7%) remaining;89pendingrepairs(88Low,1informational333),21external,1architecture120. Counts include separately filed/approved369, not effort/GitHubclosure/readiness or native/external acceptance.",
+  "percentageMeaning": "74/185 independently approved repository-repair rows (40.0%), 111 remaining (60.0%): 89 repairs, 21 external validation rows and architecture decision #120; 52 new audit findings; counts are not effort, GitHub closure, readiness or native/external acceptance.",
   "githubIssueListRefreshedUtc": "2026-09-08T10:30:05.205645+00:00",
   "githubTotalIssuesAtRefresh": 288,
   "githubOpenIssuesAtRefresh": 181,
-  "newAuditIssueCount": 50,
+  "newAuditIssueCount": 52,
   "rawEvidenceIncludedInGit": false,
   "originalEvidenceContinuity": "Some original raw evidence and initial audit ledger were lost. Recovered summaries are not original logs. Later raw evidence remains private. Fresh corroboration and integrated verification required.",
   "scope": "Branch continuation only; not a merge, release, independent crypto assurance, or physical-device completion.",
   "preservedDraftCommit": "eb564e9487f2887f83f519575c82d4e7657864cb",
   "preservedDraftTree": "69161ac65e02bbf33d390bde2575d3131a9d7996",
-  "lastReviewedIssue": 369,
+  "lastReviewedIssue": 371,
   "lastIntegratedCheck": {
-    "commit": "731f98db90668f098c6025d3a0df6e863a951197",
-    "tree": "6b259c267299be73f5c089fc401b965eea48c307",
+    "commit": "aab8cabf68958a7a3fdedcddc70c84a39e050df4",
+    "tree": "f094de05ca60a625e3b9f37abb4f3ce4f9b8dbc2",
     "executionWasCleanCommit": true,
+    "xmlFiles": 199,
+    "executedTasks": 245,
+    "invocation": "issue-369-followup-clean-linux-check-samples-dokka",
     "passed": 1607,
     "failures": 0,
     "errors": 0,
     "skipped": 0,
-    "xmlFiles": 199,
-    "executedTasks": 205,
-    "invocation": "hosted-731-clean-linux-check-samples",
-    "status": "PASS_AT_RECORDED_CLEAN_SOURCE_LINUX_ROOT_CHECK_AND_DESKTOP_SCOPE_ONLY",
-    "scope": "Actual clean731 Linux rootcheck+CLIcheck/installDist+Desktoptest/checkRuntime/hotRunArgfile/createDistributable, strict/rerun/no-cache/bounded2workers/no-parallel. Not a standalone-only check command, AndroidassembleDebug/coreDokka execution (separate precommit run), sample launch or published-consumer acceptance. Same1607task-qualified cases/outcomes as precommit; not additive. Java21Gradle daemon observed, alltestJVM17 not attested. AppleSKIPPED/sixcinterop-KLib warnings remain. No Windows/Mac/Apple/ART/device/hostile-network/independent133/procrypto/release/whole-audit acceptance."
+    "status": "PASS",
+    "scope": "Clean aab8 Linux root check + Android assembly + CLI check/installDist + Desktop test/runtime/argfile/distributable + core Dokka. Exact 1607 prior-bd611 case identities and complete task-status multiset, not additive. Independent product evidence corroboration is separate from source review. Not execution on a subsequent SDK-repair commit, Host.setup_sdk, native Windows/Apple, ART/device, sample launch, isolated consumer or retained package-content inspection. Java17 launcher/Java21 Gradle daemon/one Java17 worker observed; all test-JVM versions not attested. Apple skipped and six original structured warnings retained."
   },
   "protectedInstructionFilesCaveat": "Issue325 feasible correction preserves AGENTS.md:9 library-only SDK wording by owner instruction. Canonical setup explicitly warns about missing sample SDK. Literal alignment requires new owner authorization; not claimed fixed. CLAUDE.md unchanged.",
-  "lastScopedVerification": {
+  "initialScopedVerification369": {
     "issue": 369,
     "commit": "bd61175167337fee585855cbbe5bfae9c0122dc5",
     "tree": "95bb599cebc45d80d0a5c632fb2b84e240e14a30",
@@ -543,21 +543,23 @@
     "scope": "Final19gates ran atbb0+staged1187, not cleanbd61175 or later administration. Source approval permits focused commit/controlled trial only, not nativeWindows/#367, product/release, physical/hostile-network/independent133/procrypto or whole-audit acceptance. All24leaves retain task-isolated wrapperstop0/no owned survivors/no output deletions; no future trial2/push/outcome is invented."
   },
   "lastIntegratedAttempt": {
-    "commit": "731f98db90668f098c6025d3a0df6e863a951197",
-    "tree": "6b259c267299be73f5c089fc401b965eea48c307",
-    "invocation": "hosted-731-clean-linux-check-samples",
+    "commit": "aab8cabf68958a7a3fdedcddc70c84a39e050df4",
+    "tree": "f094de05ca60a625e3b9f37abb4f3ce4f9b8dbc2",
+    "invocation": "issue-369-followup-clean-linux-check-samples-dokka",
     "result": "PASS",
     "executionWasCleanCommit": true,
     "sourceDiffEmpty": true,
     "command": [
       "./gradlew",
       "check",
+      ":p2p-sample-android:assembleDebug",
       ":p2p-sample-desktop:check",
       ":p2p-sample-desktop:installDist",
       ":p2p-sample-desktop-ui:test",
       ":p2p-sample-desktop-ui:checkRuntime",
       ":p2p-sample-desktop-ui:hotRunArgfile",
       ":p2p-sample-desktop-ui:createDistributable",
+      ":p2p-core:dokkaGeneratePublicationHtml",
       "--rerun-tasks",
       "--no-build-cache",
       "--no-configuration-cache",
@@ -569,32 +571,35 @@
       "--no-parallel",
       "--console=plain"
     ],
-    "startedUtc": "2026-09-08T18:16:25.687320+00:00",
-    "commandEndedUtc": "2026-09-08T18:24:22.385600+00:00",
-    "finishedUtc": "2026-09-08T18:24:24.350269+00:00",
+    "startedUtc": "2026-09-08T23:24:54.207314+00:00",
+    "commandEndedUtc": "2026-09-08T23:33:40.625530+00:00",
+    "finishedUtc": "2026-09-08T23:33:42.998127+00:00",
     "commandExitCode": 0,
     "stopExitCode": 0,
     "finalExitCode": 0,
-    "executedTasks": 205,
+    "sourceUnchanged": true,
+    "executedTasks": 245,
     "xmlFiles": 199,
     "executedTestResultsPassed": 1607,
     "testFailures": 0,
     "testErrors": 0,
     "testSkips": 0,
     "allRequestedTasksCompleted": true,
-    "sourceUnchanged": true,
-    "receiptSha256": "40090db9e9c9e80d781bb78df0cb17a1d95f67a294c7f153d5b1205733180286",
-    "commandLogSha256": "533a7f46687f1835bd1f93b17b0502013ee2ff6c5a91430c2f0c8e642fa6b615",
+    "receiptSha256": "f274783abe023a3a53f4ab504dd8328bcd6d10abffc5507d1e03b6f97b550912",
+    "commandLogSha256": "f1356bf4d951d3899ad881c6585b0e5b4e48ddccf5b340deb86a16c6b9f042fc",
     "independentCorroboration": {
       "reviewer": "/root/review_linux_731",
-      "verdict": "CORROBORATED_WITHIN_LOCAL_LINUX_EXECUTION_SCOPE",
-      "reportSha256": "3d617f28efcd675fd0efcaa5546ba11fbea566c5f90bbdc0c58ff4942fb731d4",
-      "reviewManifestSha256": "b3d1d83a81a458183376c9b9836e2a17cf3e8c789efa08405fcd643880e4a6a6",
+      "verdict": "CORROBORATED",
+      "sealedUtc": "2026-09-08T23:46:15.492639+00:00",
+      "reportSha256": "1c1e5684326a92ae7013cea10595fc9c278556636033706eecbc3b4b9ada4a08",
+      "reviewManifestSha256": "e186238801ec28fedf66b4d375a59963a73be61f12f87e58e675ed8fb9d0130a",
+      "currentEvidenceReadsetSha256": "8ac5ea2ab9317d2ac62eab79904bc922767bd1c55c5e8c8c80ea7baee4b2c720",
       "retainedCurrentFiles": 889,
-      "retainedCurrentBytes": 4717315,
-      "priorFiles": 889,
-      "priorBytes": 5398248,
-      "exactTaskQualifiedCaseIdentitiesEqualPrecommit": true,
+      "retainedCurrentBytes": 4722576,
+      "xmlFilesParsedAcrossCurrentAndActualPriorBd611": 398,
+      "identityAndOutcomeMultisetSha256": "33fc58d9ed20f33dbee202da0e652c82201918f336fe67fd9f8bd116d52601e1",
+      "exactCurrentAndPriorBd611CaseIdentitiesAndOutcomesEqual": true,
+      "exactCurrentAndPriorBd611CommandsAndTaskStatusMultisetsEqual": true,
       "addedCases": 0,
       "lostCases": 0,
       "duplicateIdentities": 0,
@@ -603,13 +608,17 @@
     "cleanup": {
       "wrapperStopExitCode": 0,
       "stopLog": "1 Daemon stopped",
-      "ownedBeforeEscalationCount": 1,
+      "ownedBeforeEscalationCount": 2,
+      "ownedBeforeEscalationRoles": [
+        "Java21 Gradle daemon",
+        "Java17 worker"
+      ],
       "ownedSurvivors": {},
       "removedOutputRoots": 11,
-      "removedOutputBytes": 1196181541,
-      "scope": "Retained runner/log/receipt corroboration, not observation of historical removal. Source/shared caches preserved; no CLI/runtime/argfile/distribution contents retained for inspection."
+      "removedOutputBytes": 1282432251,
+      "scope": "Retained helper/log/receipt corroboration, not live retrospective process or removal observation. Source/shared caches preserved; package/argfile/runtime/rendered-Dokka contents not retained. Receipt does not attest its historical helper digest or individual signals."
     },
-    "scope": "Actual clean731 Linux rootcheck+CLIcheck/installDist+Desktoptest/checkRuntime/hotRunArgfile/createDistributable, strict/rerun/no-cache/bounded2workers/no-parallel. Not a standalone-only check command, AndroidassembleDebug/coreDokka execution (separate precommit run), sample launch or published-consumer acceptance. Same1607task-qualified cases/outcomes as precommit; not additive. Java21Gradle daemon observed, alltestJVM17 not attested. AppleSKIPPED/sixcinterop-KLib warnings remain. No Windows/Mac/Apple/ART/device/hostile-network/independent133/procrypto/release/whole-audit acceptance."
+    "scope": "Clean aab8 Linux root check + Android assembly + CLI check/installDist + Desktop test/runtime/argfile/distributable + core Dokka. Exact 1607 prior-bd611 case identities and complete task-status multiset, not additive. Independent product evidence corroboration is separate from source review. Not execution on a subsequent SDK-repair commit, Host.setup_sdk, native Windows/Apple, ART/device, sample launch, isolated consumer or retained package-content inspection. Java17 launcher/Java21 Gradle daemon/one Java17 worker observed; all test-JVM versions not attested. Apple skipped and six original structured warnings retained."
   },
   "resolvedDrafts": [
     {
@@ -831,11 +840,13 @@
     "scope": "Complete four-file failed-destination cleanup correction APPROVED/pushed. Three-test original repro2failures/1control;final-test original production JVM10/8failures/2controls,Android16/7failures/9controls;focused33passes;three restored mutations. Full2459passes/0failure/error/1manual skip;14static gates;1797sealed entries/28cleanup receipts. Two compilation failures and initial evidence-verifier failure retained. No API/ABI/wire/authentication/dependency/durability change. Physical/ART/OEM/independent gates pending."
   },
   "lastReviewedIssues": [
-    369
+    369,
+    370,
+    371
   ],
   "requestedStop": "NONE; owner resumed completed transfer checkpoint and authorized continued sequential repairs plus GitHub Actions for supported Mac/Windows/Apple gates.",
-  "lastSourceBaselineCommit": "bb0fd25f9ac40ca9bceb8bdfbb0ad104baae6d63",
-  "lastSourceBaselineTree": "7568fd93ac50fafe09f5fad91f03f5d8be138622",
+  "lastSourceBaselineCommit": "d3c812020b41aeceef45381b1d24871b9477607b",
+  "lastSourceBaselineTree": "7baa8e2233bc7dd23a903178fa24dff7f9ae9ec2",
   "mainCommitAtSourcePush": "eb444cccfc290be5435c5c10629c24183293606f",
   "continuationDelivery": "Source and safe context on audit branch; clone cannot transfer accounts, private raw evidence, historical stashes or live agents/session. Record actual checkout HEAD/tree; administrative commits follow reviewed source without rebinding its verification.",
   "completedInvestigation144": {
@@ -1071,7 +1082,7 @@
   "continuationQueue": [
     268
   ],
-  "continuationQueueScope": "Approved369source and safe independently reviewed administration publication, then serialized native hosted rerun with exact source/run/artifact/cleanup evidence. First trial stays failed/unsafe/partial, local cooperative lease release is not remote cleanup. Any new confirmed prerequisite needs sequential repair/fresh review; then268NOT_STARTED and remaining dependency-aware inventory. No stop or external acceptance inferred.",
+  "continuationQueueScope": "After final independent approval of the exact eleven administrative files and applied bytes, refresh live Actions and audit/main/PR refs, hold the one global local/hosted execution lease, freeze the exact approved source tree, and pause all local builds/tests BEFORE the audit-branch push that triggers the hosted workflow. With that lease and source freeze already held, push only the audit branch, verify its exact remote commit/tree and record the outcome separately, then inspect the controlled Windows -> ARM Mac -> Intel Mac trial under the same lease. Verify native controls, actual SDK admission, strict dependency/source/stop/ownership/full-artifact evidence before advancing. Both failed hosted trials remain unsafe/partial and remote cleanup/full-tree NOT_PROVEN; a local lease release is not remote cleanup. #268/#133 remain NOT_STARTED; continue all feasible sequential work.",
   "completedInvestigation145": {
     "issue": 145,
     "baselineCommit": "d823bb9cc0d187ec746714af67b08904a28331b6",
@@ -1082,10 +1093,10 @@
     "scope": "Final regressions on original production fail33/33at intended assertions; private Binary payload-size under-reporting remains refuted, caps always bounded growth. Approval excludes universal heap-bound/Native allocation/whole-audit claims."
   },
   "hostedValidationAuthorization": {
-    "status": "OWNER_AUTHORIZED_TRIAL1_FAILED_PREINVOCATION_NATIVE_RERUN_PENDING",
-    "scope": "GitHub Actions authorized for supported Windows/macOS/Apple host/simulator gates, not physical/hostile-network/independent/procrypto/release or main/settings changes. Trial1 failed before native controls/Gradle/tests;369repair finalapproved/locallycommitted only. Fresh controlled rerun must be recorded separately."
+    "status": "OWNER_AUTHORIZED_TRIAL1_AND2_FAILED_PREINVOKE_TRIAL3_PENDING",
+    "scope": "After final independent approval of the exact eleven administrative files and applied bytes, refresh live Actions and audit/main/PR refs, hold the one global local/hosted execution lease, freeze the exact approved source tree, and pause all local builds/tests BEFORE the audit-branch push that triggers the hosted workflow. With that lease and source freeze already held, push only the audit branch, verify its exact remote commit/tree and record the outcome separately, then inspect the controlled Windows -> ARM Mac -> Intel Mac trial under the same lease. Verify native controls, actual SDK admission, strict dependency/source/stop/ownership/full-artifact evidence before advancing. Both failed hosted trials remain unsafe/partial and remote cleanup/full-tree NOT_PROVEN; a local lease release is not remote cleanup. #268/#133 remain NOT_STARTED; continue all feasible sequential work. No new physical/hostile-network/independent/pro-crypto/main/settings/release authority."
   },
-  "lastDispositionUpdateUtc": "2026-09-08T21:05:23.112187+00:00",
+  "lastDispositionUpdateUtc": "2026-09-09T01:18:20.220814+00:00",
   "previousGithubRefreshEvidence145": {
     "startedUtc": "2026-09-08T09:17:23.275604+00:00",
     "endedUtc": "2026-09-08T09:28:07.480134+00:00",
@@ -1310,7 +1321,7 @@
       "scope": "Narrow human handoff navigation correction; no demonstrated product/gate consumer, changed command/candidate hash/result, new product issue or approved repair count. Original repair reports and223 assessment remain unchanged; this administration needs independent review."
     }
   ],
-  "corroborationProjection": {
+  "initialCorroborationProjection369": {
     "sourceReadSnapshotCommit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
     "sourceReadSnapshotTree": "c72ba8380a510c187298aa69efc721453c07f6c8",
     "latestApprovedSourceCommit": "bd61175167337fee585855cbbe5bfae9c0122dc5",
@@ -1814,25 +1825,22 @@
     "tree": "db432eb14791d9637e812333305e811edceb834e"
   },
   "activeWorkItem": {
-    "name": "SERIALIZED_HOSTED_MAC_WINDOWS_APPLE_VALIDATION_AFTER_369",
-    "status": "PREREQUISITE369_SOURCE_APPROVED_LOCALLY_COMMITTED_NOT_PUSHED_NATIVE_RERUN_PENDING",
+    "name": "SERIALIZED_HOSTED_MAC_WINDOWS_APPLE_VALIDATION_AFTER_369_FOLLOWUP_370_AND371",
+    "status": "SOURCE_APPROVED_LOCAL_NOT_PUSHED_TRIAL3_NOT_EXECUTED",
     "owner": "primary agent",
-    "scope": "First trial failed before any audit build/test invocation; no cleanup/host acceptance. Final369source review complete; finish independent final-byte admin review, then publish only audit branch under fresh live Actions observation/global build lease and inspect a new controlled trial. #268NOT_STARTED; no checkpoint stop."
+    "scope": "After final independent approval of the exact eleven administrative files and applied bytes, refresh live Actions and audit/main/PR refs, hold the one global local/hosted execution lease, freeze the exact approved source tree, and pause all local builds/tests BEFORE the audit-branch push that triggers the hosted workflow. With that lease and source freeze already held, push only the audit branch, verify its exact remote commit/tree and record the outcome separately, then inspect the controlled Windows -> ARM Mac -> Intel Mac trial under the same lease. Verify native controls, actual SDK admission, strict dependency/source/stop/ownership/full-artifact evidence before advancing. Both failed hosted trials remain unsafe/partial and remote cleanup/full-tree NOT_PROVEN; a local lease release is not remote cleanup. #268/#133 remain NOT_STARTED; continue all feasible sequential work."
   },
   "latestGithubListObservation": {
-    "startedUtc": "2026-09-08T19:59:24.646456+00:00",
-    "endedUtc": "2026-09-08T19:59:29.370117+00:00",
-    "issues": 289,
-    "openIssues": 182,
+    "startedUtc": "2026-09-09T00:40:02.921935+00:00",
+    "endedUtc": "2026-09-09T00:40:09.276101+00:00",
+    "issues": 292,
+    "openIssues": 185,
     "closedIssues": 107,
     "pullRequests": 79,
     "openPullRequests": 7,
     "closedPullRequests": 72,
-    "issueStyleObjects": 368,
     "freshCompleteHistories": false,
-    "changesVs19hLists": [],
-    "summarySha256": "3f12e22435ca077b045d9838d2718749aefc58b1cfa5851c9d6af2aa12793091",
-    "scope": "Fresh pre-filing all-state lists only; not another full-history capture. #369 not yet created; its later individual OPEN observation is separate. Not a current idle proof or execution lease."
+    "scope": "Narrow post371 all-state lists only; six complete histories belong to the wider00:39:46–00:40:09addendum. All365other histories/79detailedPRsets/117upstream remain bound to earlierfull capture. Not current indefinitely or an execution lease."
   },
   "completedInvestigation223": {
     "issue": 223,
@@ -2146,7 +2154,7 @@
     "freshCompleteHistories": false,
     "scope": "Later all-state list only, before223source/outcome publication; not new complete bodies/comments/timelines/PRdetails capture. Earlier githubIssueListRefreshedUtc/refresh evidence/addition fields retain their10:30scope, including368absence from that older list. The12:36outcome verification is individual, not a complete post-write refresh. Refresh live state before relying on it."
   },
-  "latestGithubFullRefresh": {
+  "fullGithubRefresh1900PreservedBefore370371Successor": {
     "startedUtc": "2026-09-08T19:17:06.237470+00:00",
     "endedUtc": "2026-09-08T19:22:50.252664+00:00",
     "issues": 289,
@@ -2221,12 +2229,12 @@
     "sealedUtc": "2026-09-08T19:50:01.960459+00:00",
     "scope": "Fresh complete local own histories and all returned local/first-hop PR collections, including closed decisions. Actual payload comparison, not equality inferred from counters. Eight upstream content gaps and omitted patches remain; no full textual patch reconstruction or semantic re-audit of every unchanged claim/current caller. Per-endpoint, not transactional/current indefinitely or an execution lease. Local freshness ends19:22:50; later upstream/analysis/sealing does not extend it. #369 not present in this capture; individually added later. Earlier10h/16h/18h records and historical row states remain unchanged."
   },
-  "sourceCheckpointScope": "Exact independently approved369source, locally committed20:40:01UTC; no push/native rerun/public outcome recorded. Original731facility source/approvals and all product executions remain historical, not rebound.",
-  "lastScopedVerificationRole": "Latest numbered369source/fixture cohort; no product Gradle check, native Windows execution or cleanup acceptance. Previous223record preserved separately.",
+  "sourceCheckpointScope": "Latest distinct #371 fixture source independently approved and locally committed after the approved aab8 same-369 follow-up and distinct d3c SDK370. None of those three is pushed here. Original source verdicts, both native failures and source-bound product executions remain exact.",
+  "lastScopedVerificationRole": "Latest separate #371 fixture source approval. sdk370SourceVerification preserves the d3c SDK verdict; same369FollowupSourceVerification preserves aab8 and initialScopedVerification369 preserves bd611. No native Windows/SDK or external acceptance.",
   "latestAffectedGateAttemptRole": "Historical223wrapper-policy record retained unchanged; latest369fixture/static cohort is lastScopedVerification, not new product/native execution.",
   "hostedValidationFacility": {
     "name": "SERIALIZED_HOSTED_MAC_WINDOWS_APPLE_VALIDATION_FACILITY",
-    "status": "SOURCE_PUBLISHED_TRIAL1_PREINVOCATION_FAIL_PREREQUISITE369_APPROVED_NOT_PUSHED",
+    "status": "ORIGINAL_FACILITY_PUBLISHED_TRIAL1_AND2_FAILED_PREINVOKE_369FOLLOWUP_370_371_APPROVED_LOCAL",
     "numberedIssue": null,
     "changesRepairDenominator": false,
     "report": "docs/audit/2026-09-04/hosted-validation.md",
@@ -2261,7 +2269,7 @@
     "commitFinishedUtc": "2026-09-08T18:14:47.607116+00:00",
     "commitReceiptSha256": "45ea58809b1a7108c806ad9f48458973854bde2e3929007f6b310d3906a844f5",
     "publicationStatus": "PUSHED_WITH_INDEPENDENTLY_APPROVED_BB0_ADMINISTRATION_REF_OBSERVED_19_22",
-    "hostedExecutionStatus": "TRIAL1_FAIL_BEFORE_NATIVE_CONTROLS_OR_ANY_AUDIT_BUILD_TEST",
+    "hostedExecutionStatus": "TRIAL1_AND2_FAIL_BEFORE_NATIVE_CONTROLS_OR_AUDIT_BUILD_TEST",
     "finalIndependentReviews": [
       {
         "scope": "native",
@@ -2714,13 +2722,9 @@
     },
     "releaseMonolithStatus": "NOT_EXECUTED_COMPONENT_REPLAY",
     "mandatoryNextSteps": [
-      "Preserve all original731/precommit/c221product results and failures with their exact source/scope.",
-      "369source finalapproved/localbd61175; obtain independent final-byte administrative review before safe audit-branch publication and controlled rerun. No trial2/push/outcome claimed here.",
-      "Refresh live Actions and hold one global local/hosted build lease. Freeze exact published source; run Windows then ARM Mac then Intel Mac without overlap, retaining failed native/product/cleanup results.",
-      "Require actual-host native controls, source/strict same-home stop/ownership receipts and inspected full artifacts/upload identities. Trial1partial salvage/unsafehandoff/remote cleanup NOT_PROVEN remains unchanged; local lease release is not remote cleanup.",
-      "Any newly confirmed distinct prerequisite receives sequential repair/fresh finalreview before planned268 and rest ofqueue. Physical/hostile-network/independent133/procrypto/120decision remain separate. No checkpoint stop."
+      "After final independent approval of the exact eleven administrative files and applied bytes, refresh live Actions and audit/main/PR refs, hold the one global local/hosted execution lease, freeze the exact approved source tree, and pause all local builds/tests BEFORE the audit-branch push that triggers the hosted workflow. With that lease and source freeze already held, push only the audit branch, verify its exact remote commit/tree and record the outcome separately, then inspect the controlled Windows -> ARM Mac -> Intel Mac trial under the same lease. Verify native controls, actual SDK admission, strict dependency/source/stop/ownership/full-artifact evidence before advancing. Both failed hosted trials remain unsafe/partial and remote cleanup/full-tree NOT_PROVEN; a local lease release is not remote cleanup. #268/#133 remain NOT_STARTED; continue all feasible sequential work."
     ],
-    "scope": "Original unnumbered731source approval unchanged; separately published inbb0 and actualtrial1 failed preinvocation.369source is a distinct numbered repair, finalapproved/locallycommitted. Current72/183 includes369, not host acceptance. No nativeWindows/#367, Apple, external or release acceptance; wholeauditNOT_READY.",
+    "scope": "Original unnumbered731 source/review/verification preserved. Initial369 source published with638d; same369 follow-up, distinct370 SDK and371 fixture source now separately APPROVED/local. Both failed trials and unsafe cleanup limits preserved. Counts follow separately filed rows, not native acceptance.",
     "stateBeforeTrial1": {
       "status": "SOURCE_APPROVED_LOCALLY_COMMITTED_PENDING_PUBLICATION_HOSTED_NOT_EXECUTED",
       "publicationStatus": "NOT_PUSHED_IN_THIS_RECORD",
@@ -2734,6 +2738,18 @@
         "Proceed to planned268(NOT_STARTED) only after any actually reproduced prerequisites receive sequential repair and fresh independent final-revision review; no checkpoint stop."
       ],
       "scope": "Unnumbered owner-authorized verification infrastructure. All final scoped reviewers approved exact18 source for publication/controlled hosted trial, not actual foreign-host or release execution. Windows facility alone does not exercise Windows Native/AAPT2 or complete367 acceptance. Numbered dispositions71/182 and lastReviewedIssue223 stay unchanged. Whole audit NOT_READY."
+    },
+    "stateAt638dBeforeTrial2": {
+      "status": "SOURCE_PUBLISHED_TRIAL1_PREINVOCATION_FAIL_PREREQUISITE369_APPROVED_NOT_PUSHED",
+      "hostedExecutionStatus": "TRIAL1_FAIL_BEFORE_NATIVE_CONTROLS_OR_ANY_AUDIT_BUILD_TEST",
+      "mandatoryNextSteps": [
+        "Preserve all original731/precommit/c221product results and failures with their exact source/scope.",
+        "369source finalapproved/localbd61175; obtain independent final-byte administrative review before safe audit-branch publication and controlled rerun. No trial2/push/outcome claimed here.",
+        "Refresh live Actions and hold one global local/hosted build lease. Freeze exact published source; run Windows then ARM Mac then Intel Mac without overlap, retaining failed native/product/cleanup results.",
+        "Require actual-host native controls, source/strict same-home stop/ownership receipts and inspected full artifacts/upload identities. Trial1partial salvage/unsafehandoff/remote cleanup NOT_PROVEN remains unchanged; local lease release is not remote cleanup.",
+        "Any newly confirmed distinct prerequisite receives sequential repair/fresh finalreview before planned268 and rest ofqueue. Physical/hostile-network/independent133/procrypto/120decision remain separate. No checkpoint stop."
+      ],
+      "scope": "Original unnumbered731source approval unchanged; separately published inbb0 and actualtrial1 failed preinvocation.369source is a distinct numbered repair, finalapproved/locallycommitted. Current72/183 includes369, not host acceptance. No nativeWindows/#367, Apple, external or release acceptance; wholeauditNOT_READY."
     }
   },
   "previousAdministrativeCheckpoint223": {
@@ -2853,30 +2869,88 @@
     "scope": "List endpoint within the separate16:02:38-16:08:26 fresh local history capture recorded in latestGithubFullRefresh. Per-endpoint, not transactional/permanently current. Earlier12:28 list,10:30 full histories and individual outcomes remain historical; row-level githubStateAtListRefresh fields are not retrospectively rebound."
   },
   "latestGithubIncrementalObservation": {
-    "kind": "INDIVIDUAL_ISSUE369_ADDITION_AFTER_PREFILING_LIST",
-    "issue": 369,
-    "createdUtc": "2026-09-08T20:00:00Z",
-    "verifiedUtc": "2026-09-08T20:00:01.894153+00:00",
-    "url": "https://github.com/p2pKit/P2pKit/issues/369",
-    "githubState": "open",
-    "issueRefetchSha256": "62476b07db7bd4327018f893eaa4bc23770b98ade04395469582fe792d05ef25",
-    "createRequestSha256": "cb7ca3789754f88fae08f9ac1db34c95bc2dbe5369a3969ac259435cb679fcf0",
-    "knownTotalIssuesAfterAddition": 290,
-    "knownOpenIssuesAfterAddition": 183,
-    "knownPullRequests": 79,
-    "completeAllStateListAfterAdditionPerformed": false,
-    "initialDisposition": "CONFIRMED_NOT_STARTED",
-    "initialRepairRows": {
-      "denominator": 183,
-      "approved": 71,
-      "remaining": 112,
-      "pendingRepairs": 90,
-      "externalRows": 21,
-      "architectureRows": 1
+    "kind": "NARROW_POST371_FRESH_LISTS_AND_SIX_COMPLETE_DIRECT_CONTEXT_HISTORIES",
+    "startedUtc": "2026-09-09T00:39:46.250050+00:00",
+    "endedUtc": "2026-09-09T00:40:09.276101+00:00",
+    "issues": 292,
+    "openIssues": 185,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "completeHistoryRefreshPerformed": false,
+    "freshCompleteLocalHistoryIds": [
+      141,
+      150,
+      223,
+      369,
+      370,
+      371
+    ],
+    "otherLocalHistoriesNotRefetched": 365,
+    "localPrSetsNotRefetched": 79,
+    "firstHopUpstreamHistoriesAndPrSetsNotRefetched": 117,
+    "reusedEvidenceReference": "latestGithubFullRefresh23:47–00:18; no post371upstream observation",
+    "requests": 28,
+    "failedRequests": 0,
+    "allHttp200": true,
+    "apiParallelism": 1,
+    "paginationCollections": 16,
+    "paginationPages": 22,
+    "rawUncompressedBytes": 14496717,
+    "relevantStartEndListsStable": true,
+    "onlyNewIssue": 371,
+    "existingListBodiesUnchanged": true,
+    "prListOwnVersionsAndDecisionsUnchanged": true,
+    "prListEmbeddedRepositoryMetadataChanges": 79,
+    "fresh371": {
+      "createdUtc": "2026-09-09T00:32:54Z",
+      "historyWindowUtc": [
+        "2026-09-09T00:39:51.875309+00:00",
+        "2026-09-09T00:39:53.428867+00:00"
+      ],
+      "state": "open",
+      "comments": 0,
+      "timelineEvents": 0,
+      "bodyBytes": 4339,
+      "bodySha256": "0e08e3467512382b009ab841e81bfa37f2823bcfa6d106477436a4904ac55984",
+      "detailSha256": "c2fad224f9f63d7917a2705bd47777c4549126916a3d54f2120df17996bdd420",
+      "bodyEqualsParentDraft": true
     },
-    "scope": "Individual Low issue creation/refetch after19:59list and19hfull-history duplicate review. Initial disposition is historical; subsequent approved repair is separate. Not a post-addition full inventory capture or an issue closure."
+    "new371BacklinkTargets": [
+      141,
+      150,
+      223,
+      369,
+      370
+    ],
+    "backlinksCreatedUtc": "2026-09-09T00:32:55Z",
+    "removedTimelineEvents": 0,
+    "matchedTimelineMetadataOnlyChanges": 34,
+    "sourceObservation": {
+      "head": "d3c812020b41aeceef45381b1d24871b9477607b",
+      "tree": "7baa8e2233bc7dd23a903178fa24dff7f9ae9ec2",
+      "status": "M  scripts/tests/run-audit-command-test.py",
+      "startedUtc": "2026-09-09T00:39:46.227072+00:00",
+      "endedUtc": "2026-09-09T00:40:09.426692+00:00",
+      "scope": "Parent staged source; not clean execution or review by metadata task."
+    },
+    "originalSealedPacketRehashedUnchanged": true,
+    "originalPriorityFilesUnchanged": 15,
+    "upstreamVisibilityGapCountRetained": 8,
+    "omittedLocalPatchFieldsRetained": 402,
+    "omittedUpstreamPatchFieldsRetained": 33,
+    "unreturnedUpstreamBacklinkCauseRetained": "UNKNOWN; not refetched in addendum",
+    "reportSha256": "7cf73786d2f417e0247b16c51809e712296ed88a13c37d3aab4354514c1c115a",
+    "sealSha256": "b5317cc3b8249f4680e1919a15f5a14de68135fb728cea2802a2e8bba0ce1ba6",
+    "manifestSha256": "74472da4e638baba5ea1482335fbe2b679a91a70ec41cb68bf31deb5004ffd97",
+    "reconciliationSha256": "d18d5e2fa97b6eeb75a06b5f6b29d69b8d853df5b2d20b1fe77a116f997d6c62",
+    "sealedUtc": "2026-09-09T00:44:56.990278+00:00",
+    "sealedFiles": 109,
+    "sealedBytes": 19280452,
+    "scope": "Narrow fresh371addition/directbacklinkcontext and start/end allstate list observation; NOT another full postwrite history refresh. Fresh lists do not refresh365other histories/79PRsets/117upstream. Filing and parent source approval remain separate; no closure, new runtime/native acceptance or implementation approval by metadata task."
   },
-  "lastIntegratedCheckRole": "Latest product rootcheck+CLI/Desktop command. Separate precommitAndroidassembly/Dokka is hostedValidationFacility.precommitLinuxProductVerification; lastStandaloneCheckAttempt stays its original c221 standalone command.",
+  "lastIntegratedCheckRole": "Latest product run is clean aab8, BEFORE the SDK370 and fixture371 corrections. Exact source and independent-evidence boundary retained; not rebound to latest source. Older clean-bd611/731/precommit runs remain separate, with no summed unique cases.",
   "previousGithubFullRefreshHosted1608": {
     "startedUtc": "2026-09-08T16:02:38.964754+00:00",
     "endedUtc": "2026-09-08T16:08:26.627459+00:00",
@@ -3524,17 +3598,27 @@
     "scope": "Confirmed distinct underlying shell-selection cause filed369 after duplicate review. #223/#367 not reimplemented. No native controls, product/Gradle, Apple/physical/hostile-network/independent/procrypto/release acceptance; no trial2 outcome recorded."
   },
   "sourcePublication369": {
-    "status": "NOT_PUSHED",
-    "localCommitReceiptSha256": "ecd70f51152ce7f00b2950bee67b7fe291adba95cc48d12167a71bc8259ecf46",
-    "localCommittedUtc": "2026-09-08T20:40:01.302427+00:00",
-    "commit": "bd61175167337fee585855cbbe5bfae9c0122dc5",
-    "tree": "95bb599cebc45d80d0a5c632fb2b84e240e14a30",
-    "scope": "Local commit only. Final source approval is not a verified push, posted outcome or native rerun."
+    "status": "FOLLOWUP_LOCALLY_COMMITTED_NOT_PUSHED_INITIAL_SOURCE_PUBLISHED",
+    "commit": "aab8cabf68958a7a3fdedcddc70c84a39e050df4",
+    "tree": "f094de05ca60a625e3b9f37abb4f3ce4f9b8dbc2",
+    "localCommittedUtc": "2026-09-08T23:24:04.718204+00:00",
+    "localCommitReceiptSha256": "cf365a66c576f6ad8327a32d1f79df68008f963b97c654ed82bf3bb97c3d4f24",
+    "initialSourcePublicationReference": "administrativePublication369R3",
+    "scope": "Only follow-up local commit established here; initial bd611 published with638d. No trial3/push/outcome inferred."
   },
   "outcomePublication369": {
-    "status": "NOT_RECORDED",
-    "url": null,
-    "issueLastObservedOpenUtc": "2026-09-08T20:00:01.894153+00:00"
+    "status": "PUBLISHED_INITIAL_SOURCE_AND_TRIAL2_FOLLOWUP_OBSERVATION_NOT_FINAL_FOLLOWUP_APPROVAL_OUTCOME",
+    "url": "https://github.com/p2pKit/P2pKit/issues/369#issuecomment-5592852988",
+    "id": 5592852988,
+    "postedUtc": "2026-09-08T22:39:48.147111+00:00",
+    "verifiedUtc": "2026-09-08T22:39:48.760700+00:00",
+    "issueLastObservedOpenUtc": "2026-09-08T22:52:08.971964+00:00",
+    "bodyEquality": true,
+    "textBytes": 3132,
+    "commentTextSha256": "1469bfd9e85d94f3f15f0e6f089f62f88e46f37d67ffbfe541c9b783ce4afeee",
+    "directResponseJsonSha256": "f1eeb36cdff49da60b2c8596ca9efd27f932cd55ef36312f2b4c82c501128619",
+    "publicationReceiptSha256": "44758ce355dd19c0019b4254af81c2c7cb164c182ede34b7a3800889ee6c88e6",
+    "scope": "Actual posted/refetched publication+trial2 failure/same369pending correction; finalfollowupapproval/outcome not posted here.22:52collection varies only avatarURL metadata, not3132-byte comment text. Issue staysOPEN."
   },
   "completedInvestigation369": {
     "issue": 369,
@@ -4056,5 +4140,2695 @@
     },
     "scope": "Priorc221/#223source/report cohorts preserved with exact18facility read-delta records and new report. All1047preceding rows keep5235historical cells; six changed-source old bindings saved separately. Six administrative rows and coverage self-row remain byte-identical.9full+9semanticdelta is conservative; no invented readCommit/futureadminhash or entirecurrentHEAD semantic approval. Read counts do not alter71/182, certify host/device/independent133 or retarget originalproductchecks."
   },
-  "previousLatestAffectedGateAttemptRoleHosted": "LAST_NUMBERED_REPAIR_AFFECTED_GATE_223; newer unnumbered fixture/product attempts are separately recorded."
+  "previousLatestAffectedGateAttemptRoleHosted": "LAST_NUMBERED_REPAIR_AFFECTED_GATE_223; newer unnumbered fixture/product attempts are separately recorded.",
+  "stateAt638dBefore369Followup370And371": {
+    "activeIssueState": "NO_ACTIVE_ISSUE_IMPLEMENTATION;369source finalAPPROVED/locally committed; safe administration/publication and controlled native rerun remain active",
+    "activeWorkItem": {
+      "name": "SERIALIZED_HOSTED_MAC_WINDOWS_APPLE_VALIDATION_AFTER_369",
+      "status": "PREREQUISITE369_SOURCE_APPROVED_LOCALLY_COMMITTED_NOT_PUSHED_NATIVE_RERUN_PENDING",
+      "owner": "primary agent",
+      "scope": "First trial failed before any audit build/test invocation; no cleanup/host acceptance. Final369source review complete; finish independent final-byte admin review, then publish only audit branch under fresh live Actions observation/global build lease and inspect a new controlled trial. #268NOT_STARTED; no checkpoint stop."
+    },
+    "hostedValidationAuthorization": {
+      "status": "OWNER_AUTHORIZED_TRIAL1_FAILED_PREINVOCATION_NATIVE_RERUN_PENDING",
+      "scope": "GitHub Actions authorized for supported Windows/macOS/Apple host/simulator gates, not physical/hostile-network/independent/procrypto/release or main/settings changes. Trial1 failed before native controls/Gradle/tests;369repair finalapproved/locallycommitted only. Fresh controlled rerun must be recorded separately."
+    },
+    "continuationQueueScope": "Approved369source and safe independently reviewed administration publication, then serialized native hosted rerun with exact source/run/artifact/cleanup evidence. First trial stays failed/unsafe/partial, local cooperative lease release is not remote cleanup. Any new confirmed prerequisite needs sequential repair/fresh review; then268NOT_STARTED and remaining dependency-aware inventory. No stop or external acceptance inferred.",
+    "lastSourceBaselineCommit": "bb0fd25f9ac40ca9bceb8bdfbb0ad104baae6d63",
+    "lastSourceBaselineTree": "7568fd93ac50fafe09f5fad91f03f5d8be138622",
+    "sourcePublication369": {
+      "status": "NOT_PUSHED",
+      "localCommitReceiptSha256": "ecd70f51152ce7f00b2950bee67b7fe291adba95cc48d12167a71bc8259ecf46",
+      "localCommittedUtc": "2026-09-08T20:40:01.302427+00:00",
+      "commit": "bd61175167337fee585855cbbe5bfae9c0122dc5",
+      "tree": "95bb599cebc45d80d0a5c632fb2b84e240e14a30",
+      "scope": "Local commit only. Final source approval is not a verified push, posted outcome or native rerun."
+    },
+    "outcomePublication369": {
+      "status": "NOT_RECORDED",
+      "url": null,
+      "issueLastObservedOpenUtc": "2026-09-08T20:00:01.894153+00:00"
+    },
+    "latestGithubListObservation": {
+      "startedUtc": "2026-09-08T19:59:24.646456+00:00",
+      "endedUtc": "2026-09-08T19:59:29.370117+00:00",
+      "issues": 289,
+      "openIssues": 182,
+      "closedIssues": 107,
+      "pullRequests": 79,
+      "openPullRequests": 7,
+      "closedPullRequests": 72,
+      "issueStyleObjects": 368,
+      "freshCompleteHistories": false,
+      "changesVs19hLists": [],
+      "summarySha256": "3f12e22435ca077b045d9838d2718749aefc58b1cfa5851c9d6af2aa12793091",
+      "scope": "Fresh pre-filing all-state lists only; not another full-history capture. #369 not yet created; its later individual OPEN observation is separate. Not a current idle proof or execution lease."
+    },
+    "lastIntegratedCheck": {
+      "commit": "731f98db90668f098c6025d3a0df6e863a951197",
+      "tree": "6b259c267299be73f5c089fc401b965eea48c307",
+      "executionWasCleanCommit": true,
+      "passed": 1607,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xmlFiles": 199,
+      "executedTasks": 205,
+      "invocation": "hosted-731-clean-linux-check-samples",
+      "status": "PASS_AT_RECORDED_CLEAN_SOURCE_LINUX_ROOT_CHECK_AND_DESKTOP_SCOPE_ONLY",
+      "scope": "Actual clean731 Linux rootcheck+CLIcheck/installDist+Desktoptest/checkRuntime/hotRunArgfile/createDistributable, strict/rerun/no-cache/bounded2workers/no-parallel. Not a standalone-only check command, AndroidassembleDebug/coreDokka execution (separate precommit run), sample launch or published-consumer acceptance. Same1607task-qualified cases/outcomes as precommit; not additive. Java21Gradle daemon observed, alltestJVM17 not attested. AppleSKIPPED/sixcinterop-KLib warnings remain. No Windows/Mac/Apple/ART/device/hostile-network/independent133/procrypto/release/whole-audit acceptance."
+    },
+    "lastIntegratedCheckRole": "Latest product rootcheck+CLI/Desktop command. Separate precommitAndroidassembly/Dokka is hostedValidationFacility.precommitLinuxProductVerification; lastStandaloneCheckAttempt stays its original c221 standalone command.",
+    "lastScopedVerificationRole": "Latest numbered369source/fixture cohort; no product Gradle check, native Windows execution or cleanup acceptance. Previous223record preserved separately.",
+    "sourceCheckpointScope": "Exact independently approved369source, locally committed20:40:01UTC; no push/native rerun/public outcome recorded. Original731facility source/approvals and all product executions remain historical, not rebound.",
+    "lastReviewedIssue": 369,
+    "lastReviewedIssues": [
+      369
+    ],
+    "updatedDate": "2026-09-08"
+  },
+  "progressAt638dBefore370And371": {
+    "issueCountDenominator": 183,
+    "completedIssueCount": 72,
+    "remainingIssueCount": 111,
+    "dispositions": {
+      "EXTERNAL_VALIDATION_PENDING": 21,
+      "FIXED_REVIEWED_IN_AUDIT_HISTORY": 72,
+      "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
+      "PENDING_REMEDIATION": 89
+    },
+    "percentageMeaning": "Independently approved repository-repair rows/183:72(39.3%) approved,111(60.7%) remaining;89pendingrepairs(88Low,1informational333),21external,1architecture120. Counts include separately filed/approved369, not effort/GitHubclosure/readiness or native/external acceptance.",
+    "newAuditIssueCount": 50,
+    "pendingRepairSeverities": {
+      "low": 88,
+      "informational": 1
+    }
+  },
+  "previousDispositionUpdateUtc369Initial": "2026-09-08T21:05:23.112187+00:00",
+  "priorLastIntegratedAttemptReference": "hostedValidationFacility.cleanCommittedSourceProductVerification (exact clean731 object preserved there)",
+  "same369FollowupSourceVerification": {
+    "baselineCommit": "638d005784776a059c465d6940abac218e1a0d71",
+    "baselineTree": "920191e495b90850a034b1f1debb2064bc121c26",
+    "candidateTree": "f094de05ca60a625e3b9f37abb4f3ce4f9b8dbc2",
+    "diffSha256": "1ccc4bc02be3c538bea3e083bda07f8203866e886dc2ece2317388f270ae7d92",
+    "insertions": 106,
+    "deletions": 3,
+    "executionWasCleanCommit": false,
+    "sourceFiles": {
+      ".github/workflows/audit-host-validation.yml": {
+        "sha256": "1e922727e45d28b8299a0eb926e2be10755f6e8681eddda51869737e00e3a7d2",
+        "blob": "c2d58f113faac3056d41f87dbe4fcd1216feb589",
+        "bytes": 34682
+      },
+      "docs/testing/audit-hosts.md": {
+        "sha256": "ce5a75a66dbca6ce3f1c0f5b8ad75be0532459e5a9b22897534af5a3ef2c6dbe",
+        "blob": "b79c37ed7d74d990c704bfdb32d6ddfe7503982f",
+        "bytes": 20754
+      },
+      "scripts/run-audit-host.py": {
+        "sha256": "feb364ecfe2f490bc07fa09f1ad3f152bd76e10a935293d65b1c8ef0c35a86cf",
+        "blob": "8570705943a60b71edded1f6553649bb603be401",
+        "bytes": 64981
+      },
+      "scripts/tests/audit-host-test.py": {
+        "sha256": "d8d388aa5500941694777ca06a547cd79b05a9ddab0622046baa0ff20adc6db4",
+        "blob": "48cc77abdfa02e7c604745343d0c65652c69ad43",
+        "bytes": 108527
+      }
+    },
+    "selectedFinalGateCount": 14,
+    "selectedFinalGateMeaning": "4 passing r1 suites plus10 passing r2 static gates at the same staged diff; failed private r1 inspector retained separately",
+    "finalGates": [
+      {
+        "name": "issue-369-followup-final-r1-host",
+        "exitCode": 0,
+        "receiptSha256": "e188d7e3e8b59800c288d4c543eeed2fea2a39ba78c7ce7a75344434149caa4a",
+        "startedUtc": "2026-09-08T22:58:58.224350+00:00",
+        "finishedUtc": "2026-09-08T22:59:02.878528+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "command": [
+          "python3",
+          "scripts/tests/audit-host-test.py",
+          "-v"
+        ]
+      },
+      {
+        "name": "issue-369-followup-final-r1-workflow",
+        "exitCode": 0,
+        "receiptSha256": "65a3f508301a3f225b8236e41bf694e2ebba8e45c3568fd6e285019d7dbd54fd",
+        "startedUtc": "2026-09-08T22:59:02.943983+00:00",
+        "finishedUtc": "2026-09-08T22:59:07.841709+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "command": [
+          "python3",
+          "scripts/tests/audit-host-workflow-test.py",
+          "-v"
+        ]
+      },
+      {
+        "name": "issue-369-followup-final-r1-leaf",
+        "exitCode": 0,
+        "receiptSha256": "c8d9aa2aac986ce8680c8ee66020ea0490d940831ce328ce2e13420da30f27d8",
+        "startedUtc": "2026-09-08T22:59:07.904230+00:00",
+        "finishedUtc": "2026-09-08T22:59:32.849411+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "command": [
+          "python3",
+          "scripts/tests/audit-leaf-hooks-test.py",
+          "-v"
+        ]
+      },
+      {
+        "name": "issue-369-followup-final-r1-consumer",
+        "exitCode": 0,
+        "receiptSha256": "cce0cf529aa9455040aa6236c4a57029dc50b0b7f0256e5474cfa867927312b3",
+        "startedUtc": "2026-09-08T22:59:32.920442+00:00",
+        "finishedUtc": "2026-09-08T23:01:15.414200+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "command": [
+          "python3",
+          "scripts/tests/audit-consumer-test.py",
+          "-v"
+        ]
+      },
+      {
+        "name": "issue-369-followup-final-r2-preservation",
+        "exitCode": 0,
+        "receiptSha256": "e3eff776f1b3b62bc06f16d1cd50622cbfba49302b78ba5e56c55f4f23707631",
+        "startedUtc": "2026-09-08T23:03:36.420918+00:00",
+        "finishedUtc": "2026-09-08T23:03:38.070017+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "command": [
+          "PRIVATE_UNCHANGED_DEFINITION_PRESERVATION_INSPECTOR"
+        ]
+      },
+      {
+        "name": "issue-369-followup-final-r2-wrapper",
+        "exitCode": 0,
+        "receiptSha256": "436f37d9d1951d32e26e74f220b235321ed79365599647fb1298553673a1681a",
+        "startedUtc": "2026-09-08T23:03:38.140690+00:00",
+        "finishedUtc": "2026-09-08T23:03:39.141728+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "command": [
+          "bash",
+          "scripts/check-gradle-wrapper.sh"
+        ]
+      },
+      {
+        "name": "issue-369-followup-final-r2-wrapper-checkout",
+        "exitCode": 0,
+        "receiptSha256": "d417b2e34e1000f615801aa327d6c290ceb145c7b42213a8583b20ec79398755",
+        "startedUtc": "2026-09-08T23:03:39.209172+00:00",
+        "finishedUtc": "2026-09-08T23:03:41.113291+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "command": [
+          "bash",
+          "scripts/tests/check-gradle-wrapper-test.sh"
+        ]
+      },
+      {
+        "name": "issue-369-followup-final-r2-layout",
+        "exitCode": 0,
+        "receiptSha256": "e820e6b9858bed4cb86ff417d3bc4512412fec29c975a327ef676e741a754baa",
+        "startedUtc": "2026-09-08T23:03:41.178840+00:00",
+        "finishedUtc": "2026-09-08T23:03:42.167038+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "command": [
+          "bash",
+          "scripts/tests/check-repository-layout.sh"
+        ]
+      },
+      {
+        "name": "issue-369-followup-final-r2-osv-lock",
+        "exitCode": 0,
+        "receiptSha256": "7cd1a718ba7442697ac99fb2849078dd79e85821af2b1db2b6ef0109b4d94ebd",
+        "startedUtc": "2026-09-08T23:03:42.230229+00:00",
+        "finishedUtc": "2026-09-08T23:03:43.121948+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "command": [
+          "bash",
+          "scripts/tests/check-osv-lockfile-coverage.sh"
+        ]
+      },
+      {
+        "name": "issue-369-followup-final-r2-links",
+        "exitCode": 0,
+        "receiptSha256": "0870869be491bb633bd2812f1874fb7061c7f2b50e14842460759da3f0397b36",
+        "startedUtc": "2026-09-08T23:03:43.172099+00:00",
+        "finishedUtc": "2026-09-08T23:03:44.164615+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "command": [
+          "bash",
+          "scripts/tests/check-markdown-links.sh"
+        ]
+      },
+      {
+        "name": "issue-369-followup-final-r2-metadata",
+        "exitCode": 0,
+        "receiptSha256": "4806b303cce9eaa75ec0b9bf0b6c32627f80f043e02bb7bac6df871fc9e577d0",
+        "startedUtc": "2026-09-08T23:03:44.228194+00:00",
+        "finishedUtc": "2026-09-08T23:03:45.119674+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "command": [
+          "bash",
+          "scripts/check-release-metadata.sh"
+        ]
+      },
+      {
+        "name": "issue-369-followup-final-r2-whitespace",
+        "exitCode": 0,
+        "receiptSha256": "5a671a00908f9389856c3fd041b4ada4a0528e3ee43b71bb14f7e308546a3b0b",
+        "startedUtc": "2026-09-08T23:03:45.193351+00:00",
+        "finishedUtc": "2026-09-08T23:03:46.080833+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "command": [
+          "bash",
+          "scripts/check-git-whitespace.sh"
+        ]
+      },
+      {
+        "name": "issue-369-followup-final-r2-working-diff",
+        "exitCode": 0,
+        "receiptSha256": "d538f13ff062d475f1ae874fbbb4f9177ca1edb2c5d80a586d56b27cfc5bc10a",
+        "startedUtc": "2026-09-08T23:03:46.144398+00:00",
+        "finishedUtc": "2026-09-08T23:03:46.881963+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ]
+      },
+      {
+        "name": "issue-369-followup-final-r2-staged-diff",
+        "exitCode": 0,
+        "receiptSha256": "16f158012d1aaa318da5f14a8b34a7fe3f3ef1a1cc4860af13916dc36d97fb8f",
+        "startedUtc": "2026-09-08T23:03:46.947324+00:00",
+        "finishedUtc": "2026-09-08T23:03:47.679239+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true,
+        "command": [
+          "git",
+          "diff",
+          "--cached",
+          "--check"
+        ]
+      }
+    ],
+    "hostMethods": 83,
+    "unchangedHostMethods": 78,
+    "newHostMethods": 5,
+    "unchangedDefinitions": 125,
+    "workflowMethods": 51,
+    "leafMethods": 27,
+    "consumerMethods": 32,
+    "historicalFailures": {
+      "issue-369-followup-original-red": "3 unittest methods;11 errors, including FileExistsError from reused write-once prerequisite reports; not clean reproduction",
+      "issue-369-followup-original-red-r2": "5 methods;2 classifier errors plus10 ownership-fixture assertion failures; fresh negative Host had not declared fixture ownership",
+      "issue-369-followup-original-red-r3": "5 methods;2 intended classifier errors and3 passing negative controls; clean actual-caller reproduction of trial2 banner rejection",
+      "issue-369-followup-final-r1-preservation": "Private inspector erroneously required unique nested function names; preserved checker corrected to compare ordered lists of every definition; repository unchanged"
+    },
+    "verificationSummarySha256": "ba2186a7b38cfb23d4c3b0912ed3a079677e903bd7fe5d05599f0abb9ca6c3d4",
+    "verificationManifestSha256": "d98384424b28620a7f85f801fb6230882a30e6cda9918d6f0ddf079ebdee8e77",
+    "sealedFiles": 143,
+    "sealedBytes": 464948,
+    "cleanup": {
+      "finalizedInvocationCount": 19,
+      "stopZero": 19,
+      "noOwnedSurvivors": true,
+      "removedOutputs": [],
+      "productXmlCases": 0,
+      "sourceUnchangedEachInvocation": true
+    },
+    "limitations": [
+      "Linux modeled Windows boundaries only",
+      "No new product Gradle check or native execution",
+      "Both real failed trials and remote cleanup NOT_PROVEN retained",
+      "Not independent interoperability/physical/crypto/release acceptance"
+    ],
+    "scope": "Same-369 source follow-up APPROVED after fourteen selected Linux fixture/static passes. The original precommit 638d+1ccc execution bindings and all failed attempts remain. Not clean-commit/product/native/administrative execution. Subsequent #370/#371 are separate source verdicts.",
+    "historicalRuns": [
+      {
+        "name": "issue-369-followup-final-r1-preservation",
+        "exitCode": 1,
+        "startedUtc": "2026-09-08T23:01:15.485417+00:00",
+        "finishedUtc": "2026-09-08T23:01:16.585935+00:00",
+        "unittestMethods": null,
+        "unittestSummary": [],
+        "sourceDiffSha256": "1ccc4bc02be3c538bea3e083bda07f8203866e886dc2ece2317388f270ae7d92"
+      },
+      {
+        "name": "issue-369-followup-green-r1",
+        "exitCode": 0,
+        "startedUtc": "2026-09-08T22:55:26.275168+00:00",
+        "finishedUtc": "2026-09-08T22:55:31.146021+00:00",
+        "unittestMethods": 83,
+        "unittestSummary": [
+          "OK"
+        ],
+        "sourceDiffSha256": "1ccc4bc02be3c538bea3e083bda07f8203866e886dc2ece2317388f270ae7d92"
+      },
+      {
+        "name": "issue-369-followup-original-red",
+        "exitCode": 1,
+        "startedUtc": "2026-09-08T22:43:49.042100+00:00",
+        "finishedUtc": "2026-09-08T22:43:50.189763+00:00",
+        "unittestMethods": 3,
+        "unittestSummary": [
+          "FAILED (errors=11)"
+        ],
+        "sourceDiffSha256": "e65ccfd9a385ee84cb22bf5d51c94bd88c41aa5976fb19d7d034d5337c093f94"
+      },
+      {
+        "name": "issue-369-followup-original-red-r2",
+        "exitCode": 1,
+        "startedUtc": "2026-09-08T22:54:07.024307+00:00",
+        "finishedUtc": "2026-09-08T22:54:07.832975+00:00",
+        "unittestMethods": 5,
+        "unittestSummary": [
+          "FAILED (failures=10, errors=2)"
+        ],
+        "sourceDiffSha256": "2f929a0b716749c2dcb9ba770f58d550e94593299817d047d92d6ee7b4801a2b"
+      },
+      {
+        "name": "issue-369-followup-original-red-r3",
+        "exitCode": 1,
+        "startedUtc": "2026-09-08T22:54:58.362254+00:00",
+        "finishedUtc": "2026-09-08T22:54:59.555978+00:00",
+        "unittestMethods": 5,
+        "unittestSummary": [
+          "FAILED (errors=2)"
+        ],
+        "sourceDiffSha256": "500c3c60a86fbcc275fff090be94dfe837a85b82f9541db43769a7c81bad49d7"
+      }
+    ],
+    "issue": 369,
+    "commit": "aab8cabf68958a7a3fdedcddc70c84a39e050df4",
+    "tree": "f094de05ca60a625e3b9f37abb4f3ce4f9b8dbc2",
+    "reviewer": "/root/review_369_followup",
+    "reviewVerdict": "APPROVE",
+    "reviewSealedUtc": "2026-09-08T23:22:21.421433+00:00",
+    "reviewSha256": "50c16b712d6bfd5099ced5c11c2064e2cc206fc0d033fa670d10d704dd02214e",
+    "sourceReadReceiptSha256": "95cfb978b2fbb6108a53671dc40ad721dbd43ded467aef6054561b398c152075",
+    "reviewSealSha256": "352ac37e4d6dac68473cb4bac8809ff264c828168d8ed1cf726d3654ccc01aae",
+    "actualCompleteSourceReads": [
+      {
+        "path": ".github/workflows/audit-host-validation.yml",
+        "sha256": "1e922727e45d28b8299a0eb926e2be10755f6e8681eddda51869737e00e3a7d2",
+        "blob": "c2d58f113faac3056d41f87dbe4fcd1216feb589",
+        "bytes": 34682,
+        "lines": 642,
+        "readCommit": null,
+        "fullTextActuallyRead": true,
+        "readScope": "Fresh independent reviewer complete finalprecommit text read; laterexactcommit binding not a newread/cleancommit execution."
+      },
+      {
+        "path": "docs/testing/audit-hosts.md",
+        "sha256": "ce5a75a66dbca6ce3f1c0f5b8ad75be0532459e5a9b22897534af5a3ef2c6dbe",
+        "blob": "b79c37ed7d74d990c704bfdb32d6ddfe7503982f",
+        "bytes": 20754,
+        "lines": 311,
+        "readCommit": null,
+        "fullTextActuallyRead": true,
+        "readScope": "Fresh independent reviewer complete finalprecommit text read; laterexactcommit binding not a newread/cleancommit execution."
+      },
+      {
+        "path": "scripts/run-audit-host.py",
+        "sha256": "feb364ecfe2f490bc07fa09f1ad3f152bd76e10a935293d65b1c8ef0c35a86cf",
+        "blob": "8570705943a60b71edded1f6553649bb603be401",
+        "bytes": 64981,
+        "lines": 1064,
+        "readCommit": null,
+        "fullTextActuallyRead": true,
+        "readScope": "Fresh independent reviewer complete finalprecommit text read; laterexactcommit binding not a newread/cleancommit execution."
+      },
+      {
+        "path": "scripts/tests/audit-host-test.py",
+        "sha256": "d8d388aa5500941694777ca06a547cd79b05a9ddab0622046baa0ff20adc6db4",
+        "blob": "48cc77abdfa02e7c604745343d0c65652c69ad43",
+        "bytes": 108527,
+        "lines": 1839,
+        "readCommit": null,
+        "fullTextActuallyRead": true,
+        "readScope": "Fresh independent reviewer complete finalprecommit text read; laterexactcommit binding not a newread/cleancommit execution."
+      }
+    ],
+    "actionableFindings": [],
+    "sourcePublication": "FOLLOWUP_LOCALLY_COMMITTED_NOT_PUSHED_INITIAL_SOURCE_PUBLISHED_WITH638D",
+    "nativeAcceptance": "TRIAL3_NOT_EXECUTED;TRIAL1_AND_TRIAL2_FAILED_PREINVOKE"
+  },
+  "sdk370SourceVerification": {
+    "status": "FINAL_SOURCE_APPROVED_PRECOMMIT_FIXTURE_STATIC_VERIFICATION_NOT_NATIVE_OR_PRODUCT_ACCEPTANCE",
+    "recordedUtc": "2026-09-09T00:20:51.694031+00:00",
+    "source": {
+      "recordedUtc": "2026-09-09T00:02:49.166954+00:00",
+      "commit": "aab8cabf68958a7a3fdedcddc70c84a39e050df4",
+      "tree": "f094de05ca60a625e3b9f37abb4f3ce4f9b8dbc2",
+      "stagedTree": "7baa8e2233bc7dd23a903178fa24dff7f9ae9ec2",
+      "status": "## audit/complete-2026-09-04...origin/audit/complete-2026-09-04 [ahead 1]\nM  docs/testing/audit-hosts.md\nM  scripts/run-audit-host.py\nM  scripts/tests/audit-host-test.py\n",
+      "diffSha256": "c21e66aa94d1113771b7a11ebd87a1eadb4c76428a7dabba43cb93409130a3be",
+      "files": {
+        "docs/testing/audit-hosts.md": {
+          "sha256": "9df41d2d7ed3c5540e4729b4165fee2b097a3e1eb08f438389cccd1fa5858249",
+          "blob": "6e2b7d5c3d10ce32c9113c01785e37a2207bdc5e",
+          "bytes": 21159
+        },
+        "scripts/run-audit-host.py": {
+          "sha256": "d2e67fe62f0bb3badb4430c3a280d623665733241c5b8ebca9c7a53cc8a8ed8e",
+          "blob": "2d5fedabcf3f692a4d3a0ccc18700a5823eba267",
+          "bytes": 64995
+        },
+        "scripts/tests/audit-host-test.py": {
+          "sha256": "672ee56f72999dcdbae30012e65eb1fa9023d817a115ec2b73a00b439fc2e0d5",
+          "blob": "c6240af1ea4f525ae85cc6029d9dc90abdcb56fa",
+          "bytes": 121727
+        }
+      }
+    },
+    "diffSha256": "c21e66aa94d1113771b7a11ebd87a1eadb4c76428a7dabba43cb93409130a3be",
+    "executionWasCleanCommit": false,
+    "finalSelectedGateCount": 18,
+    "finalGates": [
+      {
+        "name": "issue-370-final-r1-canonical-real-input",
+        "command": [
+          "python3",
+          "/root/p2pkit-audit-2026-09-08/issue-370-verification/canonical-replay.py",
+          "/root/p2pkit-audit-2026-09-08/issue-370-verification/canonical-real-input"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-canonical-real-input/receipt.json",
+        "receiptSha256": "7569e948b86b975340a20f0bf3f3b4adc9fc3778f67c766a8c04ecd41951392c",
+        "startedUtc": "2026-09-09T00:02:49.299694+00:00",
+        "finishedUtc": "2026-09-09T00:02:50.286306+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-mutation-unescaped-api",
+        "command": [
+          "python3",
+          "/root/p2pkit-audit-2026-09-08/issue-370-verification/mutation-control.py",
+          "unescaped-api",
+          "/root/p2pkit-audit-2026-09-08/issue-370-verification/mutation-unescaped-api"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-mutation-unescaped-api/receipt.json",
+        "receiptSha256": "e70eb9f2edb8bc9fc8f921921de6823e0209bd4eca9d7a5619e9fd76d5efab75",
+        "startedUtc": "2026-09-09T00:02:50.351514+00:00",
+        "finishedUtc": "2026-09-09T00:02:54.295438+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-mutation-unescaped-key",
+        "command": [
+          "python3",
+          "/root/p2pkit-audit-2026-09-08/issue-370-verification/mutation-control.py",
+          "unescaped-key",
+          "/root/p2pkit-audit-2026-09-08/issue-370-verification/mutation-unescaped-key"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-mutation-unescaped-key/receipt.json",
+        "receiptSha256": "54603fc42d30b919ac4f3b3524e823095a4c17f0f8117949308b1f1b20ba8593",
+        "startedUtc": "2026-09-09T00:02:54.347183+00:00",
+        "finishedUtc": "2026-09-09T00:02:57.885127+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-mutation-bypass-sdk",
+        "command": [
+          "python3",
+          "/root/p2pkit-audit-2026-09-08/issue-370-verification/mutation-control.py",
+          "bypass-sdk",
+          "/root/p2pkit-audit-2026-09-08/issue-370-verification/mutation-bypass-sdk"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-mutation-bypass-sdk/receipt.json",
+        "receiptSha256": "2879914483c93791ef94c9e27bcdd78754d589115cf12f345c23d6ad60525e26",
+        "startedUtc": "2026-09-09T00:02:57.946241+00:00",
+        "finishedUtc": "2026-09-09T00:03:00.425698+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-host",
+        "command": [
+          "python3",
+          "scripts/tests/audit-host-test.py",
+          "-v"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-host/receipt.json",
+        "receiptSha256": "1784726cec902006a72d5d8066abe0156f932f92ac38935c45d6189b9198a6ae",
+        "startedUtc": "2026-09-09T00:03:00.490143+00:00",
+        "finishedUtc": "2026-09-09T00:03:06.296087+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-workflow",
+        "command": [
+          "python3",
+          "scripts/tests/audit-host-workflow-test.py",
+          "-v"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-workflow/receipt.json",
+        "receiptSha256": "cc778ca3d242ec0ac49c08a0a61ec37682dc8f0032228f5d61a26c7e9e13d4fe",
+        "startedUtc": "2026-09-09T00:03:06.349270+00:00",
+        "finishedUtc": "2026-09-09T00:03:11.047447+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-leaf",
+        "command": [
+          "python3",
+          "scripts/tests/audit-leaf-hooks-test.py",
+          "-v"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-leaf/receipt.json",
+        "receiptSha256": "a1a04279fb68a643f2271d93d788b29055d81ea560af85315194a0b54ece38a4",
+        "startedUtc": "2026-09-09T00:03:11.111187+00:00",
+        "finishedUtc": "2026-09-09T00:03:34.426703+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-consumer",
+        "command": [
+          "python3",
+          "scripts/tests/audit-consumer-test.py",
+          "-v"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-consumer/receipt.json",
+        "receiptSha256": "2476dfcee9b1eb5bd731aa088f0e1dd79cf040c2da3fa31479767f22484bfa7f",
+        "startedUtc": "2026-09-09T00:03:34.489580+00:00",
+        "finishedUtc": "2026-09-09T00:05:16.752462+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-preservation",
+        "command": [
+          "python3",
+          "/root/p2pkit-audit-2026-09-08/issue-370-verification/check-preservation.py"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-preservation/receipt.json",
+        "receiptSha256": "be7353fb79a0cac65b95e81319828c97858e821157f9e8ecdcccfb2021f8f4a7",
+        "startedUtc": "2026-09-09T00:05:16.833533+00:00",
+        "finishedUtc": "2026-09-09T00:05:18.597022+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-wrapper",
+        "command": [
+          "bash",
+          "scripts/check-gradle-wrapper.sh"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-wrapper/receipt.json",
+        "receiptSha256": "b61608fd8c0ff377b36d0a203c22f764c2528e49ef31484803787af361c197f7",
+        "startedUtc": "2026-09-09T00:05:18.669259+00:00",
+        "finishedUtc": "2026-09-09T00:05:19.671523+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-wrapper-checkout",
+        "command": [
+          "bash",
+          "scripts/tests/check-gradle-wrapper-test.sh"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-wrapper-checkout/receipt.json",
+        "receiptSha256": "520106b7edd5833f69c80482057306ef828da9c0259077dc9d694639c93c47a7",
+        "startedUtc": "2026-09-09T00:05:19.741122+00:00",
+        "finishedUtc": "2026-09-09T00:05:21.696412+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-layout",
+        "command": [
+          "bash",
+          "scripts/tests/check-repository-layout.sh"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-layout/receipt.json",
+        "receiptSha256": "48b38e74edaa4d3ebe551988c2025b7ead158612952803e6c11a0fd397b20b41",
+        "startedUtc": "2026-09-09T00:05:21.768428+00:00",
+        "finishedUtc": "2026-09-09T00:05:22.921951+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-osv-lock",
+        "command": [
+          "bash",
+          "scripts/tests/check-osv-lockfile-coverage.sh"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-osv-lock/receipt.json",
+        "receiptSha256": "13572126c682b74b0853f6f46191cbf6b794e085776faa29fea7e07f3a57063c",
+        "startedUtc": "2026-09-09T00:05:22.994546+00:00",
+        "finishedUtc": "2026-09-09T00:05:24.048212+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-links",
+        "command": [
+          "bash",
+          "scripts/tests/check-markdown-links.sh"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-links/receipt.json",
+        "receiptSha256": "d8ac7f47c9525ce5243764e62cd3bb87e843aacd1f37d20e9c9d63e7f040bda9",
+        "startedUtc": "2026-09-09T00:05:24.120105+00:00",
+        "finishedUtc": "2026-09-09T00:05:25.162333+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-metadata",
+        "command": [
+          "bash",
+          "scripts/check-release-metadata.sh"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-metadata/receipt.json",
+        "receiptSha256": "1eafb1c698ff9d766d7842d79724103e451c089537a26ef59eae1c749f97321a",
+        "startedUtc": "2026-09-09T00:05:25.233140+00:00",
+        "finishedUtc": "2026-09-09T00:05:26.233990+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-whitespace",
+        "command": [
+          "bash",
+          "scripts/check-git-whitespace.sh"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-whitespace/receipt.json",
+        "receiptSha256": "dd63ebda90afff3b10a951caefd7604ee342dca40f17e4a31a4c6ce8c1e4294a",
+        "startedUtc": "2026-09-09T00:05:26.306695+00:00",
+        "finishedUtc": "2026-09-09T00:05:27.309429+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-working-diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-working-diff/receipt.json",
+        "receiptSha256": "7274252b1c16eda7e058974cb5fe823ade4fa292715fac6b48ad8a23536cf919",
+        "startedUtc": "2026-09-09T00:05:27.380696+00:00",
+        "finishedUtc": "2026-09-09T00:05:28.326978+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-370-final-r1-staged-diff",
+        "command": [
+          "git",
+          "diff",
+          "--cached",
+          "--check"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-370-final-r1-staged-diff/receipt.json",
+        "receiptSha256": "c151ac56da91e69303796784f5a6a6e034b8be940e0e495130d5acd11b8c7145",
+        "startedUtc": "2026-09-09T00:05:28.398735+00:00",
+        "finishedUtc": "2026-09-09T00:05:29.354401+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      }
+    ],
+    "historicalInvocations": [
+      {
+        "name": "sdk-metadata-original-actual-caller",
+        "receiptSha256": "8aa437585bd4aa8ae20608fde7eb1d4b93d7ae8c97c60eee98b224509e59c97f",
+        "startedUtc": "2026-09-08T23:47:09.499958+00:00",
+        "finishedUtc": "2026-09-08T23:47:10.634227+00:00",
+        "commandExitCode": 1,
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "sourceUnchanged": true,
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-370-original-regressions",
+        "receiptSha256": "3ce2b1eb6ca4cc922b947c3a6f62a7a034ac68704d91eb9cd91fe7ea6499b77a",
+        "startedUtc": "2026-09-08T23:56:57.560624+00:00",
+        "finishedUtc": "2026-09-08T23:57:01.162931+00:00",
+        "commandExitCode": 1,
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "sourceUnchanged": true,
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-370-focused-green-r1",
+        "receiptSha256": "3e264faaa397d434523b4e12eb826e2eb71f03322dbaa158200160f09be69912",
+        "startedUtc": "2026-09-08T23:59:19.960943+00:00",
+        "finishedUtc": "2026-09-08T23:59:23.668829+00:00",
+        "commandExitCode": 0,
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "sourceUnchanged": true,
+        "removedOutputs": []
+      }
+    ],
+    "finalSuites": {
+      "host": 91,
+      "workflow": 51,
+      "leaf": 27,
+      "consumer": 32
+    },
+    "mutationsExpectedAssertionFailures": {
+      "unescaped-api": 3,
+      "unescaped-key": 6,
+      "bypass-sdk": 9
+    },
+    "originalActualCaller": "2 methods: 1 canonical-input ValueError and 1 passing integer-37 control; exit1 retained",
+    "originalNewRegressions": "8 methods: 9 assertion failures and 6 canonical-input ValueErrors; exit1 retained",
+    "finalFocused": "8 methods PASS; overlaps final91, not additive",
+    "productXml": 0,
+    "nativeExecution": "NOT_EXECUTED",
+    "wholeAudit": "NOT_READY",
+    "verificationSummarySha256": "a16fbf339a1843fd49eaf945ccdae2404ceae65b8e1e228c9f1b5fdbd30cc553",
+    "verificationManifestSha256": "e4adcc0cf92eb6beb55c5a122f3de5f69a4f7028eacc085a49c3c35ae0ee24d9",
+    "sealedFiles": 216,
+    "sealedBytes": 2299601,
+    "sealer": {
+      "receiptSha256": "c28e569d05ab5c910ad85cbab655b3ccc3924e5d6819486ed52df560f30b53ad",
+      "startedUtc": "2026-09-09T00:09:36.982231+00:00",
+      "finishedUtc": "2026-09-09T00:09:38.034989+00:00",
+      "commandExitCode": 0,
+      "stopExitCode": 0,
+      "finalExitCode": 0,
+      "sourceUnchanged": true,
+      "ownedSurvivors": {},
+      "removedOutputs": [],
+      "scope": "Separate helper/seal invocation, not recursively in the216file manifest or an additional product test."
+    },
+    "cleanup": {
+      "underlyingInvocationCount": 21,
+      "plusSeparateSealer": 1,
+      "allStopZero": true,
+      "noOwnedSurvivors": true,
+      "sourceUnchangedEachInvocation": true,
+      "outputDeletions": 0
+    },
+    "scope": "Actual selected18final fixture/static gates at exact staged source, final independent source APPROVE separately bound. Original failures and cleanup limits preserved; not later cleancommit execution, independentadministrative or nativeforeignhost/product/release acceptance.",
+    "preSourceApprovalProjectionState": {
+      "status": "FINAL_VERIFICATION_SOURCE_REVIEW_AND_COMMIT_PENDING_NOT_CANDIDATE",
+      "scope": "Final fixture/static verification at aab8+stagedc21e; source review/commit not yet supplied. Original failed commands retained, modeled native/SDK-manager boundaries and zero productXML. No candidate/source/native approval by author.",
+      "recordedUtc": "2026-09-09T00:20:51.694031+00:00"
+    },
+    "reviewVerdict": "APPROVE",
+    "issue": 370,
+    "commit": "d3c812020b41aeceef45381b1d24871b9477607b",
+    "tree": "7baa8e2233bc7dd23a903178fa24dff7f9ae9ec2",
+    "reviewer": "/root/review_370_source",
+    "reviewSealedUtc": "2026-09-09T00:19:21.362033+00:00",
+    "reviewSha256": "aea94ab1109bec3f9607b8aec1cd209740152a7c7c65bdc5d1bb362aa3e77bff",
+    "sourceReadReceiptSha256": "a71a228d0571df2436c5cdc704d622f71c666bb130389c842fb6a76ec063732b",
+    "reviewSealSha256": "f5ece24e14f4b24665d9b9676435189395287fcd1876cd901ed6b27a6924b72e",
+    "actionableFindings": [],
+    "sourcePublication": "LOCALLY_COMMITTED_NOT_PUSHED",
+    "nativeAcceptance": "TRIAL3_NOT_EXECUTED;NO_NATIVE_SDK_RESULT"
+  },
+  "lastScopedVerification": {
+    "status": "FINAL_SOURCE_APPROVED_PRECOMMIT_FIXTURE_STATIC_VERIFICATION_NOT_NATIVE_OR_PRODUCT_ACCEPTANCE",
+    "recordedUtc": "2026-09-09T00:57:55.442632+00:00",
+    "source": {
+      "observedUtc": "2026-09-09T00:37:03.228778+00:00",
+      "baseCommit": "d3c812020b41aeceef45381b1d24871b9477607b",
+      "baseTree": "7baa8e2233bc7dd23a903178fa24dff7f9ae9ec2",
+      "stagedTree": "48343ddd4da5fd01e052493bc85f5e38cbbb2b5e",
+      "diffSha256": "f4531694fbad98238efd426f43a7b28d6352be9fcd2a3fc90e9763158b24e72e",
+      "files": {
+        "scripts/tests/run-audit-command-test.py": "2ca7ff9783b9e7d30ae51afd705cd483294e44674ce5a03c25f10bd03afd01d3"
+      },
+      "status": "## audit/complete-2026-09-04...origin/audit/complete-2026-09-04 [ahead 2]\nM  scripts/tests/run-audit-command-test.py"
+    },
+    "diffSha256": "f4531694fbad98238efd426f43a7b28d6352be9fcd2a3fc90e9763158b24e72e",
+    "executionWasCleanCommit": false,
+    "finalSelectedGateCount": 21,
+    "finalGates": [
+      {
+        "name": "issue-371-final-r1-actual-lf",
+        "command": [
+          "python3",
+          "-B",
+          "/root/p2pkit-audit-2026-09-08/native-newline-reproduction.py",
+          "lf",
+          "/root/p2pkit-audit-2026-09-08/issue-371-verification/final-actual-lf"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-actual-lf/receipt.json",
+        "receiptSha256": "a2e81fb9e509f3d0a6a300b8fff3e137c43721b9ffdf3dfdf0fc42af52321f25",
+        "startedUtc": "2026-09-09T00:43:29.002454+00:00",
+        "finishedUtc": "2026-09-09T00:43:31.082579+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-actual-crlf",
+        "command": [
+          "python3",
+          "-B",
+          "/root/p2pkit-audit-2026-09-08/native-newline-reproduction.py",
+          "crlf",
+          "/root/p2pkit-audit-2026-09-08/issue-371-verification/final-actual-crlf"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-actual-crlf/receipt.json",
+        "receiptSha256": "195d9664a79b448d7f79723404d803e15a5119906fc7957f765af577cc1bfb18",
+        "startedUtc": "2026-09-09T00:43:31.146511+00:00",
+        "finishedUtc": "2026-09-09T00:43:33.180164+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-mutation-stdout-text",
+        "command": [
+          "python3",
+          "-B",
+          "/root/p2pkit-audit-2026-09-08/issue-371-verification/mutation-control.py",
+          "stdout-text"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-mutation-stdout-text/receipt.json",
+        "receiptSha256": "b48fdeda371f23f79f1f3e54ae8d55e18ac4b6c47fadb78e02ba0aaa2ba37ad3",
+        "startedUtc": "2026-09-09T00:43:33.230046+00:00",
+        "finishedUtc": "2026-09-09T00:43:34.211994+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-mutation-stderr-text",
+        "command": [
+          "python3",
+          "-B",
+          "/root/p2pkit-audit-2026-09-08/issue-371-verification/mutation-control.py",
+          "stderr-text"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-mutation-stderr-text/receipt.json",
+        "receiptSha256": "550985d2bfc69546220d77188157e771cc398ac99dcc5451ccd6fef5fb743213",
+        "startedUtc": "2026-09-09T00:43:34.276378+00:00",
+        "finishedUtc": "2026-09-09T00:43:35.160239+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-mutation-stdout-unflushed",
+        "command": [
+          "python3",
+          "-B",
+          "/root/p2pkit-audit-2026-09-08/issue-371-verification/mutation-control.py",
+          "stdout-unflushed"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-mutation-stdout-unflushed/receipt.json",
+        "receiptSha256": "2f2f348813a154c144729136803d2f52cb9705f82c5587c5d8df20d661b96b95",
+        "startedUtc": "2026-09-09T00:43:35.223831+00:00",
+        "finishedUtc": "2026-09-09T00:43:36.093341+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-mutation-stop-status",
+        "command": [
+          "python3",
+          "-B",
+          "/root/p2pkit-audit-2026-09-08/issue-371-verification/mutation-control.py",
+          "stop-status"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-mutation-stop-status/receipt.json",
+        "receiptSha256": "221454fd85e9026622f8f0560c4138ef588376c0a766e33f2c0338e2777e111e",
+        "startedUtc": "2026-09-09T00:43:36.158771+00:00",
+        "finishedUtc": "2026-09-09T00:43:37.143814+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-native",
+        "command": [
+          "python3",
+          "-B",
+          "scripts/tests/run-audit-command-test.py",
+          "--expected-host",
+          "linux-x64",
+          "--evidence-root",
+          "/root/p2pkit-audit-2026-09-08/issue-371-verification/native-fixture-evidence"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-native/receipt.json",
+        "receiptSha256": "83f77c13c9949420e788507466cb9ab8cb4de5b706256c1bd0d16372b5158049",
+        "startedUtc": "2026-09-09T00:43:37.193744+00:00",
+        "finishedUtc": "2026-09-09T00:44:42.773569+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-host",
+        "command": [
+          "python3",
+          "-B",
+          "scripts/tests/audit-host-test.py",
+          "-v"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-host/receipt.json",
+        "receiptSha256": "543e5a1c5ebf422ac5261845c5e3a0a391d21eb6cb6aed0912971e0de6abb19c",
+        "startedUtc": "2026-09-09T00:44:42.839395+00:00",
+        "finishedUtc": "2026-09-09T00:44:49.633443+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-workflow",
+        "command": [
+          "python3",
+          "-B",
+          "scripts/tests/audit-host-workflow-test.py",
+          "-v"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-workflow/receipt.json",
+        "receiptSha256": "ef8663bf3445e2dbac8347242b2a7e2602fe94e4ec88b1a48de628574ce9f2a3",
+        "startedUtc": "2026-09-09T00:44:49.682132+00:00",
+        "finishedUtc": "2026-09-09T00:44:54.472252+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-leaf",
+        "command": [
+          "python3",
+          "-B",
+          "scripts/tests/audit-leaf-hooks-test.py",
+          "-v"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-leaf/receipt.json",
+        "receiptSha256": "bbaefc858eb01913b76dd52bb7b561bf4ce76f0a9fe27978f6ff08abc4b0c765",
+        "startedUtc": "2026-09-09T00:44:54.534213+00:00",
+        "finishedUtc": "2026-09-09T00:45:17.231577+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-consumer",
+        "command": [
+          "python3",
+          "-B",
+          "scripts/tests/audit-consumer-test.py",
+          "-v"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-consumer/receipt.json",
+        "receiptSha256": "33f3e45636923ca8d7d0a6e909fcbb2efdff93a3b37942cf8bae12bec01faef5",
+        "startedUtc": "2026-09-09T00:45:17.297192+00:00",
+        "finishedUtc": "2026-09-09T00:46:51.544729+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-preservation",
+        "command": [
+          "python3",
+          "-B",
+          "/root/p2pkit-audit-2026-09-08/issue-371-verification/check-preservation.py"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-preservation/receipt.json",
+        "receiptSha256": "43a6e6ea4922a240bf9bb21c904011dd945ad48b51982003d511d4689ea0a4e4",
+        "startedUtc": "2026-09-09T00:46:51.618312+00:00",
+        "finishedUtc": "2026-09-09T00:46:53.162671+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-wrapper",
+        "command": [
+          "bash",
+          "scripts/check-gradle-wrapper.sh"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-wrapper/receipt.json",
+        "receiptSha256": "8e89c35987beb671793c1fdb950064645949941265dbaf3705aa2a69d7ca87e3",
+        "startedUtc": "2026-09-09T00:46:53.232136+00:00",
+        "finishedUtc": "2026-09-09T00:46:54.278832+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-wrapper-checkout",
+        "command": [
+          "bash",
+          "scripts/tests/check-gradle-wrapper-test.sh"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-wrapper-checkout/receipt.json",
+        "receiptSha256": "c81dee2174d707a6d2bf2fefcc116849221117c719894047684beea6b6da7d20",
+        "startedUtc": "2026-09-09T00:46:54.353764+00:00",
+        "finishedUtc": "2026-09-09T00:46:56.346010+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-layout",
+        "command": [
+          "bash",
+          "scripts/tests/check-repository-layout.sh"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-layout/receipt.json",
+        "receiptSha256": "495014fe929948a49fee00a6f59a6cc9c1b4bb4da57403aea116989c855f2f8c",
+        "startedUtc": "2026-09-09T00:46:56.435449+00:00",
+        "finishedUtc": "2026-09-09T00:46:57.527673+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-osv-lock",
+        "command": [
+          "bash",
+          "scripts/tests/check-osv-lockfile-coverage.sh"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-osv-lock/receipt.json",
+        "receiptSha256": "7fc845d50c3b42a17a7d306ffbfcc4ccbea4be4a06e79930e5b8bb1a43dedd47",
+        "startedUtc": "2026-09-09T00:46:57.601883+00:00",
+        "finishedUtc": "2026-09-09T00:46:58.594509+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-links",
+        "command": [
+          "bash",
+          "scripts/tests/check-markdown-links.sh"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-links/receipt.json",
+        "receiptSha256": "6eda6a145c4e74890bf48e118ce1c9b1a22f43727e78966ff978ab52b43c05cb",
+        "startedUtc": "2026-09-09T00:46:58.666869+00:00",
+        "finishedUtc": "2026-09-09T00:46:59.759831+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-metadata",
+        "command": [
+          "bash",
+          "scripts/check-release-metadata.sh"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-metadata/receipt.json",
+        "receiptSha256": "790b4c0e680759a705f0875c9dd1e31b00fe74414e92af1f214cb1984627e0aa",
+        "startedUtc": "2026-09-09T00:46:59.831637+00:00",
+        "finishedUtc": "2026-09-09T00:47:00.824100+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-whitespace",
+        "command": [
+          "bash",
+          "scripts/check-git-whitespace.sh"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-whitespace/receipt.json",
+        "receiptSha256": "e1fc02edf78a827865301acb60c488b98d57fab111ab9f7d810291cdddee58d5",
+        "startedUtc": "2026-09-09T00:47:00.907265+00:00",
+        "finishedUtc": "2026-09-09T00:47:01.968390+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-working-diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-working-diff/receipt.json",
+        "receiptSha256": "3bde2f2f786211fa34099050cd2bd518eb9b1977d2a289e98e58b9c7634f6fe6",
+        "startedUtc": "2026-09-09T00:47:02.041553+00:00",
+        "finishedUtc": "2026-09-09T00:47:02.977100+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      },
+      {
+        "name": "issue-371-final-r1-staged-diff",
+        "command": [
+          "git",
+          "diff",
+          "--cached",
+          "--check"
+        ],
+        "exitCode": 0,
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-final-r1-staged-diff/receipt.json",
+        "receiptSha256": "620b5d1d845277c341f339fc6f6c8cb4d1e1015b6a6ebc30e5e6497cc50599fa",
+        "startedUtc": "2026-09-09T00:47:03.064609+00:00",
+        "finishedUtc": "2026-09-09T00:47:04.094063+00:00",
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "removedOutputs": [],
+        "sourceUnchanged": true
+      }
+    ],
+    "historicalInvocations": [
+      {
+        "name": "native-newline-original-lf",
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/native-newline-original-lf/receipt.json",
+        "sha256": "062ae1deaf019955a0512b0deeaf3beeb71f7f9d08d05ebad2efc82264faac94",
+        "startedUtc": "2026-09-09T00:28:05.801208+00:00",
+        "finishedUtc": "2026-09-09T00:28:08.155802+00:00",
+        "commandExitCode": 0,
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "sourceUnchanged": true,
+        "removedOutputs": []
+      },
+      {
+        "name": "native-newline-original-crlf",
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/native-newline-original-crlf/receipt.json",
+        "sha256": "efb7f16cff279583340c1fcd6c9196779b4fb9088e8ccfd4a41ce1af1be661b8",
+        "startedUtc": "2026-09-09T00:28:08.227700+00:00",
+        "finishedUtc": "2026-09-09T00:28:10.525111+00:00",
+        "commandExitCode": 1,
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "sourceUnchanged": true,
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-371-original-regression",
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-original-regression/receipt.json",
+        "sha256": "4571d830d4e7cfa341d1d6ab0c96ad3dd6577ca1d1a1fb40cea649aa1d4f7c86",
+        "startedUtc": "2026-09-09T00:36:03.961546+00:00",
+        "finishedUtc": "2026-09-09T00:36:05.109810+00:00",
+        "commandExitCode": 1,
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "sourceUnchanged": true,
+        "removedOutputs": []
+      },
+      {
+        "name": "issue-371-focused-green-r1",
+        "receipt": "/root/p2pkit-audit-2026-09-08/runs/issue-371-focused-green-r1/receipt.json",
+        "sha256": "d691e94a2417004223d8806d2a2a31d57a17767362dfc3ad2b8525348e14f382",
+        "startedUtc": "2026-09-09T00:37:03.327225+00:00",
+        "finishedUtc": "2026-09-09T00:37:04.482710+00:00",
+        "commandExitCode": 0,
+        "stopExitCode": 0,
+        "ownedSurvivors": {},
+        "sourceUnchanged": true,
+        "removedOutputs": []
+      }
+    ],
+    "finalSuites": {
+      "native": {
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "logSha256": "3cefdbdac73e5850b3acc33ec0ddd9355230749a568dd91c44377ab5d2eda4ed"
+      },
+      "host": {
+        "tests": 91,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "logSha256": "fab3a67b2cf1048ed61d885a5504b1d309ee5ab3c48d731596e9e5e129e1e5fd"
+      },
+      "workflow": {
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "logSha256": "dd565eadc585f37054b496980f85e8f7f9e4851eb4679ffc5cd791581168fadd"
+      },
+      "leaf": {
+        "tests": 27,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "logSha256": "25adaf7b7d8ffede2e2e85a4c50e3ebe8831f3a9836d95a8307e7dc0970d95e8"
+      },
+      "consumer": {
+        "tests": 32,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "logSha256": "522037aaca9850ffbccd2153cd968f4119708db412c774ff796d8e309eccf90d"
+      }
+    },
+    "mutationOracles": [
+      {
+        "mutation": "stdout-text",
+        "sourceSha256": "2ca7ff9783b9e7d30ae51afd705cd483294e44674ce5a03c25f10bd03afd01d3",
+        "originalFixtureSha256": "ef47763d89b6a01144c6e65a6c9b6979c86b408d26ddd1e4ab885fc20660d7c8",
+        "mutatedFixtureSha256": "1dcc0949286f454869d3723863c14e689adc8ab64c44211a1d84e2e494ea97a7",
+        "testsRun": 1,
+        "failures": 2,
+        "errors": 0,
+        "skips": 0,
+        "expectedFailures": 2,
+        "expectedDiagnostic": "b'STOP-ONLY-STDOUT\\r\\n'",
+        "innerExitCode": 1,
+        "scope": "In-memory mutation oracle, not product or native-host acceptance"
+      },
+      {
+        "mutation": "stderr-text",
+        "sourceSha256": "2ca7ff9783b9e7d30ae51afd705cd483294e44674ce5a03c25f10bd03afd01d3",
+        "originalFixtureSha256": "ef47763d89b6a01144c6e65a6c9b6979c86b408d26ddd1e4ab885fc20660d7c8",
+        "mutatedFixtureSha256": "82d253c5bce445af0112b2194d7b5ab4dba93d21083db442205cdfb4c2bb8914",
+        "testsRun": 1,
+        "failures": 2,
+        "errors": 0,
+        "skips": 0,
+        "expectedFailures": 2,
+        "expectedDiagnostic": "b'STOP-ONLY-STDERR\\r\\n'",
+        "innerExitCode": 1,
+        "scope": "In-memory mutation oracle, not product or native-host acceptance"
+      },
+      {
+        "mutation": "stdout-unflushed",
+        "sourceSha256": "2ca7ff9783b9e7d30ae51afd705cd483294e44674ce5a03c25f10bd03afd01d3",
+        "originalFixtureSha256": "ef47763d89b6a01144c6e65a6c9b6979c86b408d26ddd1e4ab885fc20660d7c8",
+        "mutatedFixtureSha256": "a5ebc5eee7b6396911e6bfe3d4526e4fe76efb6c87cdb05d48eadfa0550ba1dc",
+        "testsRun": 1,
+        "failures": 4,
+        "errors": 0,
+        "skips": 0,
+        "expectedFailures": 4,
+        "expectedDiagnostic": "b'' != b'STOP-ONLY-STDOUT\\n'",
+        "innerExitCode": 1,
+        "scope": "In-memory mutation oracle, not product or native-host acceptance"
+      },
+      {
+        "mutation": "stop-status",
+        "sourceSha256": "2ca7ff9783b9e7d30ae51afd705cd483294e44674ce5a03c25f10bd03afd01d3",
+        "originalFixtureSha256": "ef47763d89b6a01144c6e65a6c9b6979c86b408d26ddd1e4ab885fc20660d7c8",
+        "mutatedFixtureSha256": "933d7362328f51c8be0216be2a5c312bd6e6c639170152a8c158ecae1d054c01",
+        "testsRun": 1,
+        "failures": 2,
+        "errors": 0,
+        "skips": 0,
+        "expectedFailures": 2,
+        "expectedDiagnostic": "0 != 7",
+        "innerExitCode": 1,
+        "scope": "In-memory mutation oracle, not product or native-host acceptance"
+      }
+    ],
+    "preservation": {
+      "unchangedOriginalDefinitions": 99,
+      "unchangedOriginalTestMethods": 55,
+      "addedTestMethods": [
+        [
+          "PurePolicyTests",
+          "test_fixture_markers_are_flushed_raw_bytes_under_both_text_newline_policies"
+        ]
+      ],
+      "sourceSha256": "2ca7ff9783b9e7d30ae51afd705cd483294e44674ce5a03c25f10bd03afd01d3",
+      "fixtureOnlyChanges": "two stop print calls to byte writes/flushes"
+    },
+    "finalActualCallerReplays": [
+      {
+        "mode": "lf",
+        "testMethods": 1,
+        "exitCode": 0,
+        "leaf": "/root/p2pkit-audit-2026-09-08/issue-371-verification/final-actual-lf/actual-fixture-evidence/test_success_has_unchanged_stdout_stderr_and_same_home_stop/teardown-f5e3891398e84051ad6716d33ef3cec2/invocations/018fad9430b94a2aa2ec32736433fec7/receipt.json",
+        "scope": "Real Linux executor/ownership with LF or modeled CRLF text stdio",
+        "receiptSha256": "def68dedba31e240233e42bff3dea04e3a58982f03bb83b241e7ed85b40cf93a",
+        "actualLeaf": {
+          "productExitCode": 0,
+          "stopExitCode": 0,
+          "finalExitCode": 0,
+          "sourceUnchanged": true,
+          "errors": [],
+          "ownedSurvivors": [],
+          "host": "linux-x64"
+        },
+        "rawStopBytes": {
+          "stdout": "STOP-ONLY-STDOUT\\n",
+          "stderr": "STOP-ONLY-STDERR\\n",
+          "meaning": "Exact LF bytes; retained logs inspected, not normalized"
+        }
+      },
+      {
+        "mode": "crlf",
+        "testMethods": 1,
+        "exitCode": 0,
+        "leaf": "/root/p2pkit-audit-2026-09-08/issue-371-verification/final-actual-crlf/actual-fixture-evidence/test_success_has_unchanged_stdout_stderr_and_same_home_stop/teardown-22959866a2fd48c083ecda257d6c4b84/invocations/0c2aef64a6b6460c9d516e3e2bb5172b/receipt.json",
+        "scope": "Real Linux executor/ownership with LF or modeled CRLF text stdio",
+        "receiptSha256": "645a6896a78207361ef6e5d69494815f183eb2345e5116c3196d2e31078805c5",
+        "actualLeaf": {
+          "productExitCode": 0,
+          "stopExitCode": 0,
+          "finalExitCode": 0,
+          "sourceUnchanged": true,
+          "errors": [],
+          "ownedSurvivors": [],
+          "host": "linux-x64"
+        },
+        "rawStopBytes": {
+          "stdout": "STOP-ONLY-STDOUT\\n",
+          "stderr": "STOP-ONLY-STDERR\\n",
+          "meaning": "Exact LF bytes; retained logs inspected, not normalized"
+        }
+      }
+    ],
+    "fixtureCleanup": {
+      "retainedRecords": 41,
+      "uniqueBases": 38,
+      "allFinalRecordsCompleteAndBasesAbsent": true,
+      "historicalIncompleteRecords": [
+        {
+          "test": "test_consumer_partial_acquisition_never_promotes_subset_retirement_or_disposes_fixture",
+          "sha256": "8197e9bbbe0a71e650fa1d20baea32bf6eabae1923cb98e1e9e61158bb1d4d5b",
+          "scope": "Deliberately injected failure retained; later final cleanup separately complete."
+        },
+        {
+          "test": "test_cleanup_failures_still_archive_authentic_receipts_and_preserve_unresolved_fixture",
+          "sha256": "a83f0a75bd3cf87cc3c1496616f5aa4a7b4840b07937a73b15870f0705ad5ded",
+          "scope": "Deliberately injected failure retained; later final cleanup separately complete."
+        },
+        {
+          "test": "test_consumer_prebind_failure_preserves_fixture_until_complete_recovery_proof",
+          "sha256": "2534a232349621736df5318304f6f8cb65d1ba4bc6c7f217cff3fb800cd79a42",
+          "scope": "Deliberately injected failure retained; later final cleanup separately complete."
+        }
+      ]
+    },
+    "originalReproductions": "LF original1PASS; modeled CRLF original1assertion failure; new regression original1method4assertions; all failures retained",
+    "verificationSummarySha256": "9fceb4f13581cda4931e4fb8e8867f52e11f19a5f8e40a63db69ae3463a32975",
+    "verificationManifestSha256": "466f5765d0b55861aaa3f72508e1b1c67b020f5b940a93bd35f630270c26ff78",
+    "verificationSealSha256": "256688ab1940a36d8af5e2d19ff4927bc9f17aaa0f2e9f8cc891b1b5874a5b7c",
+    "sealedFiles": 1229,
+    "sealedBytes": 2190632,
+    "sealer": {
+      "receiptSha256": "fbcf6215f43594475e7916e779284ec649fa606dbd227cd99ca3816aeef6a0f6",
+      "startedUtc": "2026-09-09T00:51:35.863415+00:00",
+      "finishedUtc": "2026-09-09T00:51:36.749776+00:00",
+      "commandExitCode": 0,
+      "stopExitCode": 0,
+      "finalExitCode": 0,
+      "sourceUnchanged": true,
+      "ownedSurvivors": {},
+      "removedOutputs": [],
+      "scope": "Separate sealer outer wrapper-stop finalized after immutable seal. Not recursively counted among25leaves/1229files."
+    },
+    "cleanup": {
+      "underlyingInvocationCount": 25,
+      "plusSeparateSealer": 1,
+      "allOuterStopZero": true,
+      "noOuterOwnedSurvivors": true,
+      "sourceUnchangedEachInvocation": true,
+      "outerDisposableBuildOutputDeletions": 0,
+      "fixtureCleanupScope": "41retained cleanup records across38generated bases; three injected original incomplete records preserved; final records complete/bases absent. Not foreign-host cleanup."
+    },
+    "productXml": 0,
+    "nativeExecutionScope": "Linux native executor/ownership fixture suite only. LF/CRLF byte policy modeling is not native Windows or Apple execution.",
+    "limitations": [
+      "Actual Windows/Apple native execution remains required",
+      "No new product XML/whole-check/consumer product/release acceptance",
+      "Negative-oracle inner failures and injected incomplete cleanup records are retained, not relabeled",
+      "Whole audit NOT_READY; independent133 NOT_STARTED; physical/hostile-network/professional crypto/#120 separate"
+    ],
+    "scope": "Actual selected21final fixture/static gates at exact staged source, final independent source APPROVE separately bound. Original failures and cleanup limits preserved; not later cleancommit execution, independentadministrative or nativeforeignhost/product/release acceptance.",
+    "preSourceApprovalProjectionState": {
+      "status": "FINAL371_VERIFICATION_SOURCE_REVIEW_AND_COMMIT_NOT_YET_SUPPLIED_NOT_CANDIDATE",
+      "scope": "Linux native fixture controls and in-memory/stdout models, not real Gradle product execution or foreign-host acceptance. No additive overlapping test totals. Final source approval/commit remain separately pending at this projection time.",
+      "recordedUtc": "2026-09-09T00:57:55.442632+00:00"
+    },
+    "reviewVerdict": "APPROVE",
+    "reviewerPreVerdictCountCorrection": {
+      "sha256": "19147a9978c0f034ba014f9998a743653bb09242c2bb337924a24444f04377cc",
+      "scope": "Pre-verdict helper prefix arithmetic52 corrected to actual50selected Linux methods; no source/runtime failure."
+    },
+    "issue": 371,
+    "commit": "842d0aafa9d84a0114d895a9f933f1663cc01a9d",
+    "tree": "48343ddd4da5fd01e052493bc85f5e38cbbb2b5e",
+    "reviewer": "/root/review_371_source",
+    "reviewSealedUtc": "2026-09-09T00:59:08.951933+00:00",
+    "reviewSha256": "780700bdea9db1ec53f19113d539afd4ecd35ee6886770a305f4a56697213c15",
+    "sourceReadReceiptSha256": "4b3b0f51737c20401e86620d8fc4e56bc0189a25f8d01f5fcd7fe92ff579fbd7",
+    "reviewSealSha256": "9aca4440958aaf9eb1eca0652e380cec817450baaaf7a4bf0d7ea432e3b247cc",
+    "actionableFindings": [],
+    "sourcePublication": "LOCALLY_COMMITTED_NOT_PUSHED",
+    "nativeAcceptance": "TRIAL3_NOT_EXECUTED;LINUX_ACTUAL_CALLER_WITH_MODELED_CRLF_NOT_NATIVE_WINDOWS"
+  },
+  "cleanBd611ProductCorroboration369": {
+    "commit": "bd61175167337fee585855cbbe5bfae9c0122dc5",
+    "tree": "95bb599cebc45d80d0a5c632fb2b84e240e14a30",
+    "invocation": "issue-369-clean-linux-check-samples-dokka",
+    "result": "PASS",
+    "executionWasCleanCommit": true,
+    "sourceDiffEmpty": true,
+    "command": [
+      "./gradlew",
+      "check",
+      ":p2p-sample-android:assembleDebug",
+      ":p2p-sample-desktop:check",
+      ":p2p-sample-desktop:installDist",
+      ":p2p-sample-desktop-ui:test",
+      ":p2p-sample-desktop-ui:checkRuntime",
+      ":p2p-sample-desktop-ui:hotRunArgfile",
+      ":p2p-sample-desktop-ui:createDistributable",
+      ":p2p-core:dokkaGeneratePublicationHtml",
+      "--rerun-tasks",
+      "--no-build-cache",
+      "--no-configuration-cache",
+      "--dependency-verification",
+      "strict",
+      "-Pkotlin.compiler.execution.strategy=in-process",
+      "-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8",
+      "--max-workers=2",
+      "--no-parallel",
+      "--console=plain"
+    ],
+    "startedUtc": "2026-09-08T21:00:07.677161+00:00",
+    "commandEndedUtc": "2026-09-08T21:09:11.983070+00:00",
+    "finishedUtc": "2026-09-08T21:09:14.183239+00:00",
+    "commandExitCode": 0,
+    "stopExitCode": 0,
+    "finalExitCode": 0,
+    "sourceUnchanged": true,
+    "executedTasks": 245,
+    "xmlFiles": 199,
+    "executedTestResultsPassed": 1607,
+    "testFailures": 0,
+    "testErrors": 0,
+    "testSkips": 0,
+    "allRequestedTasksCompleted": true,
+    "receiptSha256": "1cb2fd800966fa7ce6e1f22390b97c57a0ed2bba2d535cbb83a11034913cded5",
+    "commandLogSha256": "499a7168400f29bddd2ae68e8b083c60238802c94bbb35a538a1da5dc771330b",
+    "independentCorroboration": {
+      "reviewer": "/root/review_linux_731",
+      "verdict": "CORROBORATED_WITHIN_RECORDED_LINUX_EXECUTION",
+      "reportSha256": "9e26468a38752a68304b03ba96ac51adf6fd661b04258b72041d50cac8fa5769",
+      "reviewManifestSha256": "52ab0ea90063786c13b08fb415270febd041dc379eb7f308d3561c0ab1bb64a4",
+      "retainedCurrentFiles": 889,
+      "retainedCurrentBytes": 4717943,
+      "xmlFilesParsedAcrossThreeCohorts": 597,
+      "exactTaskQualifiedCaseIdentitiesEqualPriorClean731AndPrecommit": true,
+      "addedCases": 0,
+      "lostCases": 0,
+      "duplicateIdentities": 0,
+      "changedOutcomes": 0
+    },
+    "cleanup": {
+      "wrapperStopExitCode": 0,
+      "stopLog": "1 Daemon stopped",
+      "ownedBeforeEscalationCount": 1,
+      "ownedSurvivors": {},
+      "removedOutputRoots": 11,
+      "removedOutputBytes": 1282428122,
+      "scope": "Retained helper/log/receipt corroboration, not live retrospective process/removal observation. Source/shared caches preserved; package/argfile/runtime/renderedDokka contents not retained."
+    },
+    "scope": "Later cleanbd611 Linux rootcheck+AndroidassembleDebug+CLIcheck/installDist+Desktoptest/runtime/argfile/distributable+coreDokka. Not a followup-source execution, Windows/Apple/ART/device, sample launch, isolated consumer or package-content inspection. Same1607cases as prior cohorts, not additive. Java17launcher/Java21Gradledaemon observed; alltestJVM17 not attested. AppleSKIPPED/sixcinterop-KLib warnings remain. Deliberately excluded from frozenR3 and added in this successor; not retroactive approval/evidence."
+  },
+  "currentCleanFollowupProductObservation": {
+    "status": "PASS_INDEPENDENTLY_CORROBORATED_CLEAN_AAB8_LINUX_ONLY",
+    "recordReference": "lastIntegratedAttempt",
+    "scope": "Canonical independently corroborated clean-aab8 product record stored once. It is not execution of the subsequently approved SDK or fixture source, Host.setup_sdk, native hosts or a new source-review verdict. Older clean-bd611/731 runs remain separate, not additive."
+  },
+  "administrativePublication369R3": {
+    "commit": "638d005784776a059c465d6940abac218e1a0d71",
+    "tree": "920191e495b90850a034b1f1debb2064bc121c26",
+    "parent": "bd61175167337fee585855cbbe5bfae9c0122dc5",
+    "commitFinishedUtc": "2026-09-08T22:26:00.557649+00:00",
+    "commitReceiptSha256": "aa6eb1a0bc7f33c82dd9a094fb8e8e937d390049fae97094c2fac35b5e181b24",
+    "changedFiles": 9,
+    "sourceFilesUnchanged": true,
+    "independentReview": {
+      "reviewer": "/root/review_369_admin",
+      "verdict": "APPROVE_EXACT_R3_AND_APPLIED_BYTES_ONLY",
+      "reportSha256": "ac40b3db9486537652df5dd8e6b2243be62c6d2c8b468fc1372ddcd5aefa4a52",
+      "appliedAddendumSha256": "71db8918c3606d4f49c62b8c08ed2f015069723110bfbc59bca893ce95ef43f6",
+      "r3DataComparisons": 59,
+      "appliedDataComparisons": 97,
+      "discrepancies": 0,
+      "history": "PriorR1/R2approvals, missedR2clauses/publicationhold, private inspector errors and both8gatecohorts remain historical; exactR3resolved final findings."
+    },
+    "approvedProposalPatchSha256": "303c482f9481968da25199ac0d64b48bf004f60d8a7870d8b0494bce5be706d2",
+    "canonicalStagedDiffSha256": "4613e58314e9433984d09365ea4aa37f46b39b226a924216571ea83ea683148d",
+    "staticApplicationGates": {
+      "count": 8,
+      "startedUtc": "2026-09-08T22:04:39.132271+00:00",
+      "finishedUtc": "2026-09-08T22:04:47.181902+00:00",
+      "result": "PASS",
+      "structuralAssertions": 6674,
+      "relativeLinks": 363,
+      "activeMarkdownFiles": 73,
+      "layoutProjects": 10,
+      "layoutNegativeControls": 15,
+      "osvLockfiles": 10,
+      "commandStopFinalExitsAllZero": true,
+      "ownedSurvivors": 0,
+      "outputDeletions": 0,
+      "productXmlCases": 0,
+      "gatesJsonSha256": "b2ee6e7db20dc221aab2aec5a5cadb04dcbe9400972680dfb9d70147fb8d1e49",
+      "scope": "Serialized administrative static gates, not product/native or vulnerability-scan execution."
+    },
+    "publication": {
+      "pushStartedUtc": "2026-09-08T22:27:35.727890+00:00",
+      "pushFinishedUtc": "2026-09-08T22:27:38.332526+00:00",
+      "pushExitCode": 0,
+      "pushReceiptSha256": "1f51f5ed440573b6297590b0ff6329eb3dffdb58d74dfee724969eac02e7f2b7",
+      "remoteIdentityObservationStartedUtc": "2026-09-08T22:28:32.005936+00:00",
+      "remoteIdentityObservationFinishedUtc": "2026-09-08T22:28:33.278325+00:00",
+      "commitTreeMatch": true,
+      "runIdentityMatch": true,
+      "remoteVerificationSha256": "73d30be7bbca0b48df27cf2e8b0023ae735bb4f04dc88c363c1ef47ecbfb8d85"
+    },
+    "scope": "Actual approvedR3publication also publishes initialbd611source; separate from later followupsource and native/product/cleanup acceptance."
+  },
+  "hostedTrial2": {
+    "runId": 34286015922,
+    "attempt": 1,
+    "url": "https://github.com/p2pKit/P2pKit/actions/runs/34286015922",
+    "commit": "638d005784776a059c465d6940abac218e1a0d71",
+    "tree": "920191e495b90850a034b1f1debb2064bc121c26",
+    "event": "push",
+    "branch": "audit/complete-2026-09-04",
+    "result": "FAIL_BEFORE_FIRST_AUDIT_INVOKE",
+    "windowsJob": {
+      "id": 102261680137,
+      "result": "FAILURE",
+      "startedUtc": "2026-09-08T22:27:44Z",
+      "finishedUtc": "2026-09-08T22:28:09Z",
+      "runner": "windows-2025",
+      "image": "win25-vs2026",
+      "imageVersion": "20260824.214.3"
+    },
+    "downstreamJobs": [
+      {
+        "role": "macos-arm64",
+        "id": 102261805782,
+        "result": "SKIPPED"
+      },
+      {
+        "role": "macos-x64",
+        "id": 102261805751,
+        "result": "SKIPPED"
+      }
+    ],
+    "failure": {
+      "exception": "ValueError: Not native x64 Git for Windows Bash",
+      "underlyingIssue": 369,
+      "isNewIssue": false,
+      "bashVersion": "GNU bash, version 5.3.15(2)-release (x86_64-pc-cygwin)",
+      "gitVersion": "git version 2.55.0.windows.5",
+      "absoluteGitInstallationBashSelected": true,
+      "allFiveVersionQueriesExitZero": true,
+      "cause": "Initial369msys-only banner predicate rejects actual bundledpc-cygwin shell after successful versionprobe; same locate-and-validate corrective path."
+    },
+    "components": [],
+    "nativeControls": "NOT_STARTED",
+    "androidSetup": "NOT_STARTED",
+    "wrapperFixture": "NOT_STARTED",
+    "windowsLibrariesAndDesktop": "NOT_STARTED",
+    "allApple": "NOT_STARTED",
+    "applicableAuditGradleInvocations": 0,
+    "gradleStop": "NOT_APPLICABLE_NO_AUDIT_INVOCATION_STARTED",
+    "safeToContinue": false,
+    "driverSafeOutput": false,
+    "evidenceUploadKind": "PARTIAL_SALVAGE",
+    "remoteCleanup": "NOT_PROVEN",
+    "fullTreeCompleteness": "NOT_PROVEN",
+    "artifact": {
+      "id": 10079489154,
+      "name": "audit-host-windows-x64-34286015922-1",
+      "bytes": 8165,
+      "sha256": "5babad8da288ab4e9455d1b4f71c1562702f1bf75bfde7bf84cfb707fe6dba25",
+      "regularMembers": 13,
+      "expandedBytes": 14135,
+      "bootstrapManifestEntries": 12,
+      "bootstrapManifestBytes": 12939,
+      "salvageManifestEntries": 7,
+      "salvageManifestBytes": 10161,
+      "nestedManifestEntries": 5,
+      "nestedManifestBytes": 9139,
+      "salvageCopiedFiles": 6,
+      "salvageCopiedBytes": 9563,
+      "reportedOmissions": 0,
+      "scope": "Matching returned manifest scopes overlap; no missing returned members does not prove original remote-tree completeness or process retirement."
+    },
+    "independentCorroboration": {
+      "reviewer": "/root/review_trial2_evidence",
+      "verdict": "CORROBORATE_TERMINAL_PREREQUISITE_FAILURE_ONLY",
+      "reportSha256": "9c9a652a322d013347c1449ecf95ead80d5ead9bc30e499aa37649044a87b772",
+      "sealSha256": "d4ee51d31aa345a1b25014a67b6fb89fd7fbf30a25d0448c3d66d5ae404ffa0e",
+      "bindingsSha256": "c038f4b459e8e7cd161bf6d88b1110d425b047e6caff530419267db942814830",
+      "comparisons": 191,
+      "scope": "Offline complete833-line joblog/all13ZIPmembers/source-order/manifest/identity corroboration; not newGET, reproduction, source approval or cleanup/native acceptance."
+    },
+    "operatorReconciliation": {
+      "recordedUtc": "2026-09-08T22:41:07.430307+00:00",
+      "reconciliationSha256": "47106762da70c8e7163d427df48ed81356d52ad3e1cb1944f8740e8fa18dd9d7",
+      "emptyActiveObservationStartedUtc": "2026-09-08T22:41:00.522134+00:00",
+      "emptyActiveObservationFinishedUtc": "2026-09-08T22:41:07.357279+00:00",
+      "localCooperativeLeaseReleasedUtc": "2026-09-08T22:41:20.970952+00:00",
+      "releaseReceiptSha256": "adafe36fb3209a053ea33fa8a740f0bdf327ba6fede9bffb9352b4f05fdc90a7",
+      "sourceFreezeViolations": 0,
+      "rawEvidenceDeleted": false,
+      "remoteStateDeleted": false,
+      "localOutputsDeleted": [],
+      "scope": "Only local cooperative lease released after terminal pre-first-invocation review/point observation. Not server-side lease, safe-host handoff, remote cleanup or host/product acceptance."
+    },
+    "privateInspectorOutcome": "Analyzerexit2/PARTIAL_EVIDENCE retained, consistent with unsafepartialhand-off; not passing cleanup/product gate.",
+    "scope": "Second authentic prerequisite failure within369; preserve initialtrial1. Setup/version subprocesses ran; zero auditinvoke does not prove descendant retirement. No wrapper/nativeWindows/Apple/product/external acceptance."
+  },
+  "sourcePublication370": {
+    "status": "LOCALLY_COMMITTED_NOT_PUSHED",
+    "commit": "d3c812020b41aeceef45381b1d24871b9477607b",
+    "tree": "7baa8e2233bc7dd23a903178fa24dff7f9ae9ec2",
+    "parentCommit": "aab8cabf68958a7a3fdedcddc70c84a39e050df4",
+    "localCommittedUtc": "2026-09-09T00:26:08.173624+00:00",
+    "localCommitReceiptSha256": "19ddf102f2fa3c4a69ab9dfff5631fbd90f4f6a31a8ced368b9c02e10d7b237d",
+    "scope": "Distinct SDK source commit only. No source push, final outcome comment, actual SDK install/native or product result inferred."
+  },
+  "sourcePublication371": {
+    "status": "LOCALLY_COMMITTED_NOT_PUSHED",
+    "commit": "842d0aafa9d84a0114d895a9f933f1663cc01a9d",
+    "tree": "48343ddd4da5fd01e052493bc85f5e38cbbb2b5e",
+    "parentCommit": "d3c812020b41aeceef45381b1d24871b9477607b",
+    "localCommittedUtc": "2026-09-09T01:01:43.715116+00:00",
+    "localCommitReceiptSha256": "e15a6e680eba9fa0528498092a794aa4bd4dda5795b1c32e50e6464bc99915f0",
+    "scope": "Distinct fixture source commit only. No source push, final outcome comment, native Windows/Apple or later product result inferred."
+  },
+  "outcomePublication370": {
+    "status": "ISSUE_FILED_NO_FINAL_REPAIR_OUTCOME_POSTED",
+    "url": "https://github.com/p2pKit/P2pKit/issues/370",
+    "latestObservedState": "open",
+    "scope": "Filing and final source review/local commit are not a posted final outcome comment or issue closure."
+  },
+  "outcomePublication371": {
+    "status": "ISSUE_FILED_NO_FINAL_REPAIR_OUTCOME_POSTED",
+    "url": "https://github.com/p2pKit/P2pKit/issues/371",
+    "latestObservedState": "open",
+    "scope": "Filing and final source review/local commit are not a posted final outcome comment or issue closure."
+  },
+  "completedInvestigation370": {
+    "issue": 370,
+    "status": "CONFIRMED_FILED_SEPARATELY_SOURCE_APPROVED",
+    "cause": "Canonical requested37.0metadata rejected by integer37/literalregex mismatch",
+    "originalActualCallerReference": "sdk370SourceVerification.historicalInvocations[0]",
+    "duplicateReviewSha256": "5c9cfc79c31737920ef1b1bd84b91d39546071f232d47c5194bdfbe1f2691c8c",
+    "officialMetadataScope": "Installed properties/packageXML plus bounded Google repository metadata corroborate37.0revision2; not new archive authentication or native manager installation.",
+    "filingReference": "issues.json issues[number=370].initialFilingObservation",
+    "currentSourceReference": "sdk370SourceVerification",
+    "nativeAcceptance": "NOT_EXECUTED"
+  },
+  "completedInvestigation371": {
+    "issue": 371,
+    "status": "CONFIRMED_FILED_SEPARATELY_SOURCE_APPROVED",
+    "cause": "Fixture textstopmarkers translate LFtoCRLF while exactraw byteassertion demandsLF",
+    "originalActualCallerReference": "lastScopedVerification.historicalInvocations[0:2]",
+    "duplicateVerdictSha256": "19519b350355ada8c89959e31fde78bc55991f2806adc6c3545462e3663079c6",
+    "officialSourceScope": "Earlier retained officialCPython3.12.10create_stdio corroboratesWindows textnewline translation, including unbuffered; not new request/native execution.",
+    "filingReference": "issues.json issues[number=371].initialFilingObservation",
+    "currentSourceReference": "lastScopedVerification",
+    "unconfirmedSeparateHypotheses": [
+      "general shell-checkout CRLF",
+      "generated-batch CRCRLF"
+    ],
+    "nativeForeignHostAcceptance": "NOT_EXECUTED"
+  },
+  "dispositionSequence370371": [
+    {
+      "event": "INITIAL369_APPROVED_PUBLISHED_R3",
+      "utc": "2026-09-08T22:27:38.332526+00:00",
+      "approved": 72,
+      "denominator": 183,
+      "remaining": 111,
+      "pendingRepairs": 89,
+      "externalRows": 21,
+      "architectureRows": 1,
+      "newAuditFindings": 50,
+      "evidenceReference": "administrativePublication369R3"
+    },
+    {
+      "event": "SAME369_FOLLOWUP_APPROVED_NO_SECOND_ROW",
+      "utc": "2026-09-08T23:22:21.421433+00:00",
+      "approved": 72,
+      "denominator": 183,
+      "remaining": 111,
+      "pendingRepairs": 89,
+      "externalRows": 21,
+      "architectureRows": 1,
+      "newAuditFindings": 50,
+      "evidenceReference": "same369FollowupSourceVerification"
+    },
+    {
+      "event": "370_FILED_NOT_YET_APPROVED",
+      "utc": "2026-09-08T23:51:42Z",
+      "approved": 72,
+      "denominator": 184,
+      "remaining": 112,
+      "pendingRepairs": 90,
+      "externalRows": 21,
+      "architectureRows": 1,
+      "newAuditFindings": 51,
+      "evidenceReference": "issues.json issues[number=370].initialFilingObservation"
+    },
+    {
+      "event": "370_FINAL_SOURCE_APPROVED",
+      "utc": "2026-09-09T00:19:21.362033+00:00",
+      "approved": 73,
+      "denominator": 184,
+      "remaining": 111,
+      "pendingRepairs": 89,
+      "externalRows": 21,
+      "architectureRows": 1,
+      "newAuditFindings": 51,
+      "evidenceReference": "sdk370SourceVerification"
+    },
+    {
+      "event": "371_FILED_NOT_YET_APPROVED",
+      "utc": "2026-09-09T00:32:54Z",
+      "approved": 73,
+      "denominator": 185,
+      "remaining": 112,
+      "pendingRepairs": 90,
+      "externalRows": 21,
+      "architectureRows": 1,
+      "newAuditFindings": 52,
+      "evidenceReference": "issues.json issues[number=371].initialFilingObservation"
+    },
+    {
+      "event": "371_FINAL_SOURCE_APPROVED",
+      "utc": "2026-09-09T00:59:08.951933+00:00",
+      "approved": 74,
+      "denominator": 185,
+      "remaining": 111,
+      "pendingRepairs": 89,
+      "externalRows": 21,
+      "architectureRows": 1,
+      "newAuditFindings": 52,
+      "evidenceReference": "lastScopedVerification"
+    }
+  ],
+  "operationalPointAfter371BeforeAdministration": {
+    "startedUtc": "2026-09-09T01:01:43.771913+00:00",
+    "finishedUtc": "2026-09-09T01:01:50.926844+00:00",
+    "statusQueryCounts": {
+      "queued": 0,
+      "in_progress": 0,
+      "waiting": 0,
+      "pending": 0,
+      "requested": 0
+    },
+    "activeUnion": [],
+    "auditCommit": "638d005784776a059c465d6940abac218e1a0d71",
+    "mainCommit": "eb444cccfc290be5435c5c10629c24183293606f",
+    "scope": "GET-only point-in-time operational observations; not a transaction, run approval, or server-side execution lease.",
+    "openPrHeadCount": 7,
+    "summarySha256": "a0a492abf770c66a827762444e499f92ff56f99f78582cf40d95d8bedef43f99",
+    "context": "Local371commit is separate; ref point observes remote638d before admin work, not proof about a later push/trial."
+  },
+  "additionalResourceCleanup0012": {
+    "startedUtc": "2026-09-09T00:11:55.062330+00:00",
+    "finishedUtc": "2026-09-09T00:11:55.186712+00:00",
+    "receiptSha256": "6b98b27b12b53c1c33e0ebf6f4702427e6f3727dfb27151bc57dc00f565a1716",
+    "sourceAtOperation": {
+      "head": "aab8cabf68958a7a3fdedcddc70c84a39e050df4",
+      "tree": "f094de05ca60a625e3b9f37abb4f3ce4f9b8dbc2",
+      "status": "## audit/complete-2026-09-04...origin/audit/complete-2026-09-04 [ahead 1]\nM  docs/testing/audit-hosts.md\nM  scripts/run-audit-host.py\nM  scripts/tests/audit-host-test.py\n",
+      "diffSha256": "c21e66aa94d1113771b7a11ebd87a1eadb4c76428a7dabba43cb93409130a3be"
+    },
+    "sourceUnchanged": true,
+    "removedRoots": [
+      {
+        "path": ".gradle",
+        "bytes": 21847712
+      },
+      {
+        "path": "buildSrc/.gradle",
+        "bytes": 53407
+      },
+      {
+        "path": ".kotlin",
+        "bytes": 0
+      }
+    ],
+    "removedBytes": 21901119,
+    "ownedLiveProcesses": [],
+    "openHolders": [],
+    "processInspectionErrors": [],
+    "diskFreeBytesAtObservation": 23830016000,
+    "scope": "Separate operator resource action after completed isolated-stop receipts and exclusive execution lock. Only enumerated project-local generated caches, no process stopped; source/index/protected guides/shared caches/private evidence/unrelated tasks preserved. Recorded historical operator inspection, not independent live removal observation or another build/test/product/native result."
+  },
+  "githubIncrementalObservation2133": {
+    "kind": "INCREMENTAL_FRESH_LISTS_AND_SELECTED_FULL_HISTORIES_NOT_COMPLETE_REFRESH",
+    "startedUtc": "2026-09-08T21:32:58.270028+00:00",
+    "endedUtc": "2026-09-08T21:33:17.806072+00:00",
+    "issues": 290,
+    "openIssues": 183,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "freshLocalHistories": [
+      369,
+      223,
+      367
+    ],
+    "reusedLocalHistories": 366,
+    "freshPrSets": 0,
+    "reusedPrSets": 79,
+    "reusedFirstHopUpstreamSets": 117,
+    "upstreamRequests": 0,
+    "reusedLocalHistoryWindowUtc": [
+      "2026-09-08T19:17:06.237470+00:00",
+      "2026-09-08T19:22:50.252664+00:00"
+    ],
+    "reusedUpstreamMainWindowUtc": [
+      "2026-09-08T19:24:05.838850+00:00",
+      "2026-09-08T19:30:42.647956+00:00"
+    ],
+    "reusedUpstreamSupplementWindowUtc": [
+      "2026-09-08T19:33:09.567975+00:00",
+      "2026-09-08T19:33:23.885385+00:00"
+    ],
+    "requests": 21,
+    "failedRequests": 0,
+    "allHttp200": true,
+    "paginationCollections": 10,
+    "paginationPages": 16,
+    "all183OpenIdsMatchInventory": true,
+    "startEndListsStable": true,
+    "upstreamVisibilityGapCount": 8,
+    "unavailableReportedInlineRecords": 7,
+    "unavailableReportedConversationRecords": 3,
+    "localOmittedPatchFieldsRetained": 402,
+    "upstreamOmittedPatchFieldsRetained": 33,
+    "reportSha256": "b07ef4c0e9ba5923bbeb1272aec4ce6b473d9192429c029ce6d2ba942bd79bb0",
+    "reconciliationSha256": "aadf65a575ad032a06a4bdd48a9f2a371ad867d4c30819dd1f40b712bbdd7eb8",
+    "manifestSha256": "deadb5d94662a3a38ba8ec80c6a7998262517ef3427aaa8ba1b3f45a19268872",
+    "sealedUtc": "2026-09-08T21:45:05.815287+00:00",
+    "sealedFiles": 93,
+    "sealedBytes": 20115351,
+    "scope": "Per-endpoint history/list observation, not execution lease/current all-narrative audit, new source approval or repair/closure/external acceptance.19hcomplete histories and known visibility gaps retain original scopes.",
+    "newListItems": [
+      369
+    ],
+    "newTimelineBacklinks": [
+      {
+        "target": 223,
+        "source": 369,
+        "createdUtc": "2026-09-08T20:00:01Z"
+      },
+      {
+        "target": 367,
+        "source": 369,
+        "createdUtc": "2026-09-08T20:00:01Z"
+      }
+    ],
+    "sourceAtCapture": {
+      "head": "bd61175167337fee585855cbbe5bfae9c0122dc5",
+      "tree": "95bb599cebc45d80d0a5c632fb2b84e240e14a30",
+      "cleanAtBothEndpoints": true,
+      "allTrackedWorktreeBytesUnchangedDuringCapture": true,
+      "trackedPaths": 1060,
+      "protectedInstructionsUnchanged": true
+    },
+    "closedDecisionScope": "All107closed-issue and72closed-PR list records have no item-relevant changes. Closed history payloads reused19h, not refetched. New369 links only open223/367; no new closed decision observed in this bounded delta scope.",
+    "inspectorHistory": "Initial offline reconciliation rejected368 because it incorrectly assumed every historical row had a non-null list-state. Historical368 deliberately retains listState=null and separately binds individualState=open; R2 compares that explicit basis without changing the row. Original script/log retained; no data mismatch or GitHub/source defect.",
+    "prior369State": "Initialsource locallyapproved; no outcomecomment observed, followup/secondtrial not yet executed at this observation."
+  },
+  "githubIncrementalObservation2252": {
+    "kind": "INCREMENTAL_FRESH_LISTS_AND_SELECTED_FULL_HISTORIES_NOT_COMPLETE_REFRESH",
+    "startedUtc": "2026-09-08T22:52:00.879067+00:00",
+    "endedUtc": "2026-09-08T22:52:22.453944+00:00",
+    "issues": 290,
+    "openIssues": 183,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "freshLocalHistories": [
+      133,
+      223,
+      268,
+      367,
+      369
+    ],
+    "reusedLocalHistories": 364,
+    "freshPrSets": 0,
+    "reusedPrSets": 79,
+    "reusedFirstHopUpstreamSets": 117,
+    "upstreamRequests": 0,
+    "reusedLocalHistoryWindowUtc": [
+      "2026-09-08T19:17:06.237470+00:00",
+      "2026-09-08T19:22:50.252664+00:00"
+    ],
+    "reusedUpstreamMainWindowUtc": [
+      "2026-09-08T19:24:05.838850+00:00",
+      "2026-09-08T19:30:42.647956+00:00"
+    ],
+    "reusedUpstreamSupplementWindowUtc": [
+      "2026-09-08T19:33:09.567975+00:00",
+      "2026-09-08T19:33:23.885385+00:00"
+    ],
+    "requests": 27,
+    "failedRequests": 0,
+    "allHttp200": true,
+    "paginationCollections": 14,
+    "paginationPages": 20,
+    "all183OpenIdsMatchInventory": true,
+    "startEndListsStable": true,
+    "upstreamVisibilityGapCount": 8,
+    "unavailableReportedInlineRecords": 7,
+    "unavailableReportedConversationRecords": 3,
+    "localOmittedPatchFieldsRetained": 402,
+    "upstreamOmittedPatchFieldsRetained": 33,
+    "reportSha256": "13172b4b48ee6d2b71726647a383d87288052270964d272cde9ba7bc25b0b9d6",
+    "reconciliationSha256": "0c3517da9a580842abdff30591405e9f1dae6c796b17430a5f2e7e5d71301a9e",
+    "manifestSha256": "cd5c57ef7ef57bbb4a69856804ac04a8406aa3e9ab4118b8a5b20a45a62206ee",
+    "sealedUtc": "2026-09-08T23:05:22.879719+00:00",
+    "sealedFiles": 113,
+    "sealedBytes": 20998235,
+    "scope": "Per-endpoint history/list observation, not execution lease/current all-narrative audit, new source approval or repair/closure/external acceptance.19hcomplete histories and known visibility gaps retain original scopes.",
+    "changedListItemIds": [
+      369
+    ],
+    "newListItems": [],
+    "newTimelineEvents": [
+      {
+        "item": 369,
+        "event": "commented",
+        "id": 5592852988,
+        "createdUtc": "2026-09-08T22:39:48Z"
+      },
+      {
+        "item": 133,
+        "event": "cross-referenced",
+        "source": 369,
+        "createdUtc": "2026-09-08T22:39:49Z"
+      },
+      {
+        "item": 268,
+        "event": "cross-referenced",
+        "source": 369,
+        "createdUtc": "2026-09-08T22:39:49Z"
+      }
+    ],
+    "sourceAtCapture": {
+      "head": "638d005784776a059c465d6940abac218e1a0d71",
+      "tree": "920191e495b90850a034b1f1debb2064bc121c26",
+      "status": "M scripts/tests/audit-host-test.py",
+      "trackedPaths": 1061,
+      "allTrackedBytesUnchangedAcrossCapture": true,
+      "pendingFixtureSha256": "9052f33d6d777fd3e9c374e7875ae1eeefe2d4ec689e4af024276d9436bc393f",
+      "protectedUnchanged": true,
+      "changesByThisTask": false
+    },
+    "fresh369Comment": {
+      "bodyUnchanged": true,
+      "addedComment": 5592852988,
+      "commentTextSha256": "1469bfd9e85d94f3f15f0e6f089f62f88e46f37d67ffbfe541c9b783ce4afeee",
+      "identityBodyAndTimestampsMatchPublishedRefetch": true,
+      "fullCommentJsonExactlyEqual": false,
+      "onlyAvatarUrlMetadataDiffers": true,
+      "publicationAndTrial2NativeFailureRecorded": true,
+      "distinctNewDefect": false,
+      "followup": "Existing369 shell locate-and-validate admission rejects observed native Git Bash x86_64-pc-cygwin; root sequential correction in progress, not approved by this refresh."
+    },
+    "closedDecisionScope": "No closed issue/PR list-level change or newly referenced closed decision from changed369. Relevant pre-existing closed histories/PR sets remain explicitly19h, not refetched. No new120decision signaled; its history reused19h.",
+    "inspectorHistory": "Initial offline verifier expected whole comment objects to match across the direct-comment endpoint and comments collection; rejected only actor avatar_url query variation. Original script/log preserved. Second offline attempt misread the publication receipt HTTP response-body SHA as the nested comment-text SHA; exact text equals the original3132-byte markdown. Both scripts/logs retained. Final verification records avatar metadata variation, matches all remaining fields, and independently binds comment text1469bfd9… versus full response JSONf1eeb36c…. No network or source/product failure.",
+    "prior369State": "Initial source approval historical; same-row followup active/unapproved by this capture. New final approval must have separate source/review binding."
+  },
+  "githubPre370FilingObservation": {
+    "startedUtc": "2026-09-08T23:47:35.793847+00:00",
+    "endedUtc": "2026-09-08T23:47:51.452573+00:00",
+    "issues": 290,
+    "openIssues": 183,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "completeHistoryRefreshPerformed": false,
+    "freshCompleteHistoryIds": [
+      325,
+      367,
+      369,
+      148,
+      157
+    ],
+    "allStateListEqualTo2252": true,
+    "priorityVerdict": "DISTINCT_SDK_METADATA_ADMISSION_CAUSE_NO_DUPLICATE_FOUND",
+    "priorityReviewSha256": "5c9cfc79c31737920ef1b1bd84b91d39546071f232d47c5194bdfbe1f2691c8c",
+    "scope": "Initial pre370all-state list and five freshly complete priority histories for cause-based duplicate review; the larger full capture was then still in progress. Not a complete post-filing refresh or execution lease."
+  },
+  "previousLatestGithubIncrementalObservation369Reference": "issues.json issues[number=369].initialFilingObservation (original20:00 individual addition, unchanged)",
+  "github370InitialAdditionContext": {
+    "kind": "PREFILING_LIST_AND_SELECTED_HISTORY_REFRESH_THEN_INDIVIDUAL370_ADDITION",
+    "preFilingObservationReference": "githubPre370FilingObservation",
+    "individualAdditionReference": "issues.json issues[number=370].initialFilingObservation",
+    "scope": "Initial separate pre-filing/individual addition observations. A later genuinely full capture and then narrower post371 addition are recorded separately without changing these inputs."
+  },
+  "latestKnownGithubCountsAfterIndividualAddition": {
+    "totalIssues": 292,
+    "openIssues": 185,
+    "pullRequests": 79,
+    "issue": 371,
+    "createdUtc": "2026-09-09T00:32:54Z",
+    "scope": "Known counts at individual371 creation/refetch; later all-state list and selected histories are separately dated, not a post371full refresh."
+  },
+  "latestGithubFullRefresh": {
+    "kind": "FRESH_ALL_LOCAL_RETURNED_HISTORIES_AND_PR_SETS_WITH_BOUNDED_FIRST_HOP_UPSTREAM",
+    "startedUtc": "2026-09-08T23:47:35.229190+00:00",
+    "endedUtc": "2026-09-09T00:18:17.149090+00:00",
+    "issues": 291,
+    "openIssues": 184,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "completeHistoryRefreshPerformed": true,
+    "freshCompleteIssueStyleHistories": 370,
+    "exactSealedHistoriesReused": 0,
+    "freshLocalPullDetails": 79,
+    "freshFirstHopUpstreamHistoriesAndPrSets": 117,
+    "ownConversationComments": 491,
+    "localTimelineEvents": 4216,
+    "localPullReviews": 0,
+    "localInlineComments": 0,
+    "localPullFileEntries": 1817,
+    "localPullCommitEntries": 277,
+    "upstreamConversationComments": 51,
+    "upstreamTimelineEvents": 8686,
+    "upstreamReviews": 292,
+    "upstreamInlineRecords": 184,
+    "upstreamFileEntries": 948,
+    "upstreamCommitEntries": 339,
+    "firstHopReferenceSetUnchanged": true,
+    "recursiveExpansion": false,
+    "requests": 2628,
+    "failedRequests": 0,
+    "allHttp200": true,
+    "apiParallelism": 1,
+    "paginationCollections": 1858,
+    "paginationPages": 1937,
+    "rawUncompressedBytes": 171564556,
+    "mainCapture": {
+      "endedUtc": "2026-09-09T00:17:53.740075+00:00",
+      "requests": 2600,
+      "originalStatusPreserved": "CAPTURED_RECONCILIATION_PENDING"
+    },
+    "post370ContextSupplement": {
+      "startedUtc": "2026-09-09T00:17:54.529681+00:00",
+      "endedUtc": "2026-09-09T00:18:17.199439+00:00",
+      "requests": 28,
+      "freshHistoryIds": [
+        325,
+        367,
+        369,
+        148,
+        157,
+        370
+      ],
+      "notSecondCompleteCapture": true
+    },
+    "all183ExistingLedgerIdsTitlesAndRecordedStatesMatch": true,
+    "onlyMissingThenLedgerIssue": 370,
+    "allPreviouslyExistingOwnBodiesAndConversationPayloadsUnchanged": true,
+    "allPrOwnVersionStateDecisionReviewInlineFileCommitPayloadsUnchanged": true,
+    "newLocalBacklinkTargetsFrom370": [
+      325,
+      367,
+      369,
+      148,
+      157
+    ],
+    "newLocalBacklinksCreatedUtc": "2026-09-08T23:51:43Z",
+    "changedMatchedLocalTimelineRecords": 1575,
+    "localMatchedChangesOnlyEmbeddedRepositoryMetadata": true,
+    "newUnrelatedUpstreamBacklink": {
+      "target": "actions/checkout#1924",
+      "source": "KenjiOhtsuka/pssw#9",
+      "createdUtc": "2026-09-08T23:12:42Z"
+    },
+    "previousUpstreamBacklinkNotReturned": {
+      "target": "actions/checkout#2454",
+      "source": "worganisation/home-assistant#2814",
+      "createdUtc": "2026-08-06T19:22:52Z",
+      "cause": "UNKNOWN",
+      "earlierEventRetained": true,
+      "secondHopSourceNotRefetched": true,
+      "positionsShifted": 102
+    },
+    "changedMatchedUpstreamTimelineRecords": 496,
+    "matchedUpstreamDeltaScope": "Embedded repository metadata except existing nested milestone counters/update time in checkout2286 and nested sourceupdated_at in checkout2464; no changed own/nested body or decision text. Not recursive source refresh.",
+    "upstreamVisibilityGaps": [
+      {
+        "pr": "actions/checkout#1941",
+        "collection": "inline",
+        "returned": 22,
+        "reported": 23
+      },
+      {
+        "pr": "actions/checkout#1977",
+        "collection": "inline",
+        "returned": 0,
+        "reported": 1
+      },
+      {
+        "pr": "actions/checkout#2044",
+        "collection": "inline",
+        "returned": 2,
+        "reported": 4
+      },
+      {
+        "pr": "actions/checkout#2194",
+        "collection": "conversation",
+        "returned": 0,
+        "reported": 1
+      },
+      {
+        "pr": "actions/checkout#2286",
+        "collection": "inline",
+        "returned": 21,
+        "reported": 22
+      },
+      {
+        "pr": "actions/checkout#2356",
+        "collection": "inline",
+        "returned": 6,
+        "reported": 8
+      },
+      {
+        "pr": "actions/checkout#2454",
+        "collection": "conversation",
+        "returned": 2,
+        "reported": 3
+      },
+      {
+        "pr": "actions/dependency-review-action#1077",
+        "collection": "conversation",
+        "returned": 0,
+        "reported": 1
+      }
+    ],
+    "reportedInlineRecordsNotReturned": 7,
+    "reportedConversationRecordsNotReturned": 3,
+    "freshExistingReviewCommentEndpoints": 78,
+    "additionalReturnedCommentIds": 0,
+    "omittedLocalPatchFields": 402,
+    "omittedUpstreamPatchFields": 33,
+    "offlineInspectorHistory": "Original identity inspector failed with recursive diff NameError from separate exec globals/locals; retained failed script/log. Corrected shared namespace passed. Not a network/product/native failure.",
+    "manifestSha256": "9820a67e9705258b9dc06b86eca4e4f891ab7ed9f88e9a197bbb5111c86867fb",
+    "reportSha256": "b5e4fe28bb9bbc27a4e3e8a7f774f377d2dcb743fb8cf5687224af2dcba9def0",
+    "sealSha256": "b86271d2964809773e35d339a3301803ef4be44f44d1057908a7bf42b8a151ab",
+    "reconciliationSha256": "c8621fcd4d49b2018833e33aa490079e14f0ad5c4d0f717ac9dc1a257af09364",
+    "semanticDeltaVerdictSha256": "23af9f272046da6666364dbcb55d199ba2a68a20d98510ca896a28f36f746e77",
+    "sealedUtc": "2026-09-09T00:37:31.308283+00:00",
+    "sealedFiles": 8596,
+    "sealedBytes": 253404649,
+    "scope": "Genuinely fresh returned local open/closed issue/PR bodies, comments, timelines, local PR metadata sets and117direct first-hop upstream sets. Not semantic proof of unchanged issue claims, full patch reconstruction, complete reported-comment visibility, an atomic/live lease or native/source/product acceptance. API window excludes371filing00:32:54; later narrow addendum is separate. Original19h/21:33/22:52 scopes remain unchanged."
+  },
+  "latestGithubFullRefreshListObservation": {
+    "startedUtc": "2026-09-09T00:18:11.529931+00:00",
+    "endedUtc": "2026-09-09T00:18:17.149090+00:00",
+    "issues": 291,
+    "openIssues": 184,
+    "closedIssues": 107,
+    "pullRequests": 79,
+    "openPullRequests": 7,
+    "closedPullRequests": 72,
+    "freshCompleteHistories": false,
+    "scope": "Final all-state lists in the six-history post370 supplement; full original histories are bound separately to23:47–00:18, not every history fetched during this final-list interval. Before371filing; not an execution lease."
+  },
+  "coverage369Followup370371PreservedReadRows": [
+    {
+      "path": ".github/workflows/audit-host-validation.yml",
+      "historicalReview": "NO_INHERITED_REVIEW",
+      "checkpointAssessment": "NEW_PATH_AFTER_TRANSFER_CHECKPOINT_NO_INHERITED_ASSESSMENT",
+      "assessmentCommit": "NOT_RECORDED",
+      "assessmentBlob": "NOT_RECORDED",
+      "corroborationStatus": "FULL_TEXT_CURRENT",
+      "corroborationReadLevel": "FULL_TEXT",
+      "corroborationReadCommit": "NOT_RECORDED",
+      "corroborationReadBlob": "b45feab647af51c1d58016fbab50514cfde075b5",
+      "corroborationMaterialRole": "CURRENT_REPOSITORY_CONTENT",
+      "corroborationReader": "/root/review_369_r1",
+      "corroborationEvidence": "issue-369-review-r1/readset.json; SHA256 39a34f0e5d3c2553a22641cc068849e02f7f8810832982e7e05c7e8b3463bfdf; REVIEW.md SHA256 becc0070d6f049399e206e98cc8ff872417abd91b74e07ce4c55c73dd745b8fe",
+      "corroborationScope": "Actual complete final precommit text read (642lines/34682bytes); SHA256 f81168e72278c1df4a998be0b1344497c59ef7472fc4c83a4db709d2189e841b. Later exactbd61175167337fee585855cbbe5bfae9c0122dc5/tree95bb599cebc45d80d0a5c632fb2b84e240e14a30 binding is not a retroactive readCommit or clean-commit execution.",
+      "corroborationLimitations": "Exact369source read/approval only; not native Windows/Apple/product/cleanup/release/external or whole-current-tree acceptance. Prior source/read bindings and all historical columns preserved separately. No final administrative approval or future hosted result inferred."
+    },
+    {
+      "path": "docs/testing/audit-hosts.md",
+      "historicalReview": "NO_INHERITED_REVIEW",
+      "checkpointAssessment": "NEW_PATH_AFTER_TRANSFER_CHECKPOINT_NO_INHERITED_ASSESSMENT",
+      "assessmentCommit": "NOT_RECORDED",
+      "assessmentBlob": "NOT_RECORDED",
+      "corroborationStatus": "FULL_TEXT_CURRENT",
+      "corroborationReadLevel": "FULL_TEXT",
+      "corroborationReadCommit": "NOT_RECORDED",
+      "corroborationReadBlob": "a792b390c1dc3019a6f6ad8d3d35f09fd2c9ad33",
+      "corroborationMaterialRole": "CURRENT_REPOSITORY_CONTENT",
+      "corroborationReader": "/root/review_369_r1",
+      "corroborationEvidence": "issue-369-review-r1/readset.json; SHA256 39a34f0e5d3c2553a22641cc068849e02f7f8810832982e7e05c7e8b3463bfdf; REVIEW.md SHA256 becc0070d6f049399e206e98cc8ff872417abd91b74e07ce4c55c73dd745b8fe",
+      "corroborationScope": "Actual complete final precommit text read (309lines/20585bytes); SHA256 d5f7c739ef1748bfc91ee039a4f80f19b3cc299e7e584a6be044c3c581588d4c. Later exactbd61175167337fee585855cbbe5bfae9c0122dc5/tree95bb599cebc45d80d0a5c632fb2b84e240e14a30 binding is not a retroactive readCommit or clean-commit execution.",
+      "corroborationLimitations": "Exact369source read/approval only; not native Windows/Apple/product/cleanup/release/external or whole-current-tree acceptance. Prior source/read bindings and all historical columns preserved separately. No final administrative approval or future hosted result inferred."
+    },
+    {
+      "path": "scripts/run-audit-host.py",
+      "historicalReview": "NO_INHERITED_REVIEW",
+      "checkpointAssessment": "NEW_PATH_AFTER_TRANSFER_CHECKPOINT_NO_INHERITED_ASSESSMENT",
+      "assessmentCommit": "NOT_RECORDED",
+      "assessmentBlob": "NOT_RECORDED",
+      "corroborationStatus": "FULL_TEXT_CURRENT",
+      "corroborationReadLevel": "FULL_TEXT",
+      "corroborationReadCommit": "NOT_RECORDED",
+      "corroborationReadBlob": "9909aca1aea4db96eedeb39829c501ebfb2d46e5",
+      "corroborationMaterialRole": "CURRENT_REPOSITORY_CONTENT",
+      "corroborationReader": "/root/review_369_r1",
+      "corroborationEvidence": "issue-369-review-r1/readset.json; SHA256 39a34f0e5d3c2553a22641cc068849e02f7f8810832982e7e05c7e8b3463bfdf; REVIEW.md SHA256 becc0070d6f049399e206e98cc8ff872417abd91b74e07ce4c55c73dd745b8fe",
+      "corroborationScope": "Actual complete final precommit text read (1062lines/64854bytes); SHA256 6b9991adeed0ce7beee4239c3a5aec1a32c80283e0b87d1e80e21321546fb6d0. Later exactbd61175167337fee585855cbbe5bfae9c0122dc5/tree95bb599cebc45d80d0a5c632fb2b84e240e14a30 binding is not a retroactive readCommit or clean-commit execution.",
+      "corroborationLimitations": "Exact369source read/approval only; not native Windows/Apple/product/cleanup/release/external or whole-current-tree acceptance. Prior source/read bindings and all historical columns preserved separately. No final administrative approval or future hosted result inferred."
+    },
+    {
+      "path": "scripts/tests/audit-host-test.py",
+      "historicalReview": "NO_INHERITED_REVIEW",
+      "checkpointAssessment": "NEW_PATH_AFTER_TRANSFER_CHECKPOINT_NO_INHERITED_ASSESSMENT",
+      "assessmentCommit": "NOT_RECORDED",
+      "assessmentBlob": "NOT_RECORDED",
+      "corroborationStatus": "FULL_TEXT_CURRENT",
+      "corroborationReadLevel": "FULL_TEXT",
+      "corroborationReadCommit": "NOT_RECORDED",
+      "corroborationReadBlob": "01314f0354014ce13360e8dc27e73a67560dca5e",
+      "corroborationMaterialRole": "CURRENT_REPOSITORY_CONTENT",
+      "corroborationReader": "/root/review_369_r1",
+      "corroborationEvidence": "issue-369-review-r1/readset.json; SHA256 39a34f0e5d3c2553a22641cc068849e02f7f8810832982e7e05c7e8b3463bfdf; REVIEW.md SHA256 becc0070d6f049399e206e98cc8ff872417abd91b74e07ce4c55c73dd745b8fe",
+      "corroborationScope": "Actual complete final precommit text read (1740lines/102088bytes); SHA256 d94f15465e0553eca22ad218090c0a6d7802bc9613219dfb9968ce723d7e5905. Later exactbd61175167337fee585855cbbe5bfae9c0122dc5/tree95bb599cebc45d80d0a5c632fb2b84e240e14a30 binding is not a retroactive readCommit or clean-commit execution.",
+      "corroborationLimitations": "Exact369source read/approval only; not native Windows/Apple/product/cleanup/release/external or whole-current-tree acceptance. Prior source/read bindings and all historical columns preserved separately. No final administrative approval or future hosted result inferred."
+    },
+    {
+      "path": "scripts/tests/run-audit-command-test.py",
+      "historicalReview": "NO_INHERITED_REVIEW",
+      "checkpointAssessment": "NEW_PATH_AFTER_TRANSFER_CHECKPOINT_NO_INHERITED_ASSESSMENT",
+      "assessmentCommit": "NOT_RECORDED",
+      "assessmentBlob": "NOT_RECORDED",
+      "corroborationStatus": "FULL_SEMANTIC_DELTA_CURRENT",
+      "corroborationReadLevel": "FULL_SEMANTIC_DELTA",
+      "corroborationReadCommit": "NOT_RECORDED",
+      "corroborationReadBlob": "d4d75a750ec1f781200ca56589b679fd995f2924",
+      "corroborationMaterialRole": "CURRENT_REPOSITORY_CONTENT",
+      "corroborationReader": "/root/review_host_native_r1",
+      "corroborationEvidence": "hosted-final-review-results/native/native-final-readset.json; SHA256 0abdcccd75f0f291d905f6113e4266b2450f3e40b2cfdcfd44bd23f2afee9883",
+      "corroborationScope": "Complete R1 source plus priorR2 corrections/helpers/controls and complete final430-line C1 correction delta/affected callers. Current native method selection checked against49 observations; not a fresh115854-byte scan. Exact candidate SHA256 08e4620ec0a5251b10c1341dae00b89989b9a962c99a9e37f2e92e3c560f9d1b; later identical commit731f98db90668f098c6025d3a0df6e863a951197/tree6b259c267299be73f5c089fc401b965eea48c307 is a separate binding, not a retroactive read event.",
+      "corroborationLimitations": "Actual scoped precommit reading/delta composition, not clean-commit execution, blanket correctness, another numbered repair, foreign-host/device/independent/release acceptance or final administrative approval. All historical cells and prior changed-row bindings preserved separately."
+    },
+    {
+      "path": "docs/audit/2026-09-04/hosted-validation.md",
+      "historicalReview": "NO_INHERITED_REVIEW",
+      "checkpointAssessment": "NEW_PATH_AFTER_TRANSFER_CHECKPOINT_NO_INHERITED_ASSESSMENT",
+      "assessmentCommit": "NOT_RECORDED",
+      "assessmentBlob": "NOT_RECORDED",
+      "corroborationStatus": "FULL_TEXT_CURRENT",
+      "corroborationReadLevel": "FULL_TEXT",
+      "corroborationReadCommit": "NOT_RECORDED",
+      "corroborationReadBlob": "5ff3f94e5aa12939c9ce08e776f1eb743e6d3316",
+      "corroborationMaterialRole": "HISTORICAL_FACILITY_AND_VERIFICATION_REPORT",
+      "corroborationReader": "/root/prepare_host_admin",
+      "corroborationEvidence": "issue-369-admin-proposal/report-read-receipt-r1.json; SHA256 00a19f1c4099f5fb023540af78028c898ea71217e40ed6be16655838d7b0d3cb",
+      "corroborationScope": "Actual full368-line final uncommitted report read by its author; candidate SHA256 5a5442b195da111d91b7263df392df9884c02c6a320d696d2eaf5ea7febf417b. Prior hosted report/read row retained separately. Applies only while byte-identical; no containing/read commit invented.",
+      "corroborationLimitations": "Author complete-text read only, NOT independent administrative/implementation approval, fresh execution, native Windows/Apple/product/cleanup/release/external acceptance. Does not promote six reopened administrative rows or self-bind coverage output."
+    },
+    {
+      "path": "docs/audit/2026-09-04/repairs/369.md",
+      "historicalReview": "NO_INHERITED_REVIEW",
+      "checkpointAssessment": "NEW_PATH_AFTER_TRANSFER_CHECKPOINT_NO_INHERITED_ASSESSMENT",
+      "assessmentCommit": "NOT_RECORDED",
+      "assessmentBlob": "NOT_RECORDED",
+      "corroborationStatus": "FULL_TEXT_CURRENT",
+      "corroborationReadLevel": "FULL_TEXT",
+      "corroborationReadCommit": "NOT_RECORDED",
+      "corroborationReadBlob": "1c991f8db9423b0da32b9fcb317d44d6e65becc1",
+      "corroborationMaterialRole": "HISTORICAL_REPAIR_REPORT",
+      "corroborationReader": "/root/prepare_host_admin",
+      "corroborationEvidence": "issue-369-admin-proposal/report-read-receipt-r1.json; SHA256 00a19f1c4099f5fb023540af78028c898ea71217e40ed6be16655838d7b0d3cb",
+      "corroborationScope": "Actual full115-line final uncommitted report read by its author; candidate SHA256 f72c0fc773ab7aa3ab9d8018c7ae123c500b1f7916802b5c65b6fcb4a853369c. Prior hosted report/read row retained separately. Applies only while byte-identical; no containing/read commit invented.",
+      "corroborationLimitations": "Author complete-text read only, NOT independent administrative/implementation approval, fresh execution, native Windows/Apple/product/cleanup/release/external acceptance. Does not promote six reopened administrative rows or self-bind coverage output."
+    }
+  ],
+  "corroborationProjection": {
+    "latestApprovedSourceCommit": "842d0aafa9d84a0114d895a9f933f1663cc01a9d",
+    "latestApprovedSourceTree": "48343ddd4da5fd01e052493bc85f5e38cbbb2b5e",
+    "lastNumberedApprovedRepair": 371,
+    "authoredAdministrativeBaselineCommit": "842d0aafa9d84a0114d895a9f933f1663cc01a9d",
+    "authoredAdministrativeBaselineTree": "48343ddd4da5fd01e052493bc85f5e38cbbb2b5e",
+    "previousLedgerInputCommit": "638d005784776a059c465d6940abac218e1a0d71",
+    "previousNineLedgerInputsByteIdenticalAtLatestSource": true,
+    "currentTrackedPaths": 1061,
+    "projectionPaths": 1063,
+    "newPaths": [
+      "docs/audit/2026-09-04/repairs/370.md",
+      "docs/audit/2026-09-04/repairs/371.md"
+    ],
+    "existingHistoricalFiveColumnCellsPreserved": 5305,
+    "unchangedEntireExistingRows": 1054,
+    "sixReopenedAdministrativeRowsAndCoverageSelfRowUnchanged": true,
+    "sourceReadSequence": [
+      {
+        "issue": 369,
+        "baselineCommit": "638d005784776a059c465d6940abac218e1a0d71",
+        "candidateDiffSha256": "1ccc4bc02be3c538bea3e083bda07f8203866e886dc2ece2317388f270ae7d92",
+        "laterExactSourceCommit": "aab8cabf68958a7a3fdedcddc70c84a39e050df4",
+        "laterExactSourceTree": "f094de05ca60a625e3b9f37abb4f3ce4f9b8dbc2",
+        "readCommit": null,
+        "reader": "/root/review_369_followup",
+        "readsetSha256": "95cfb978b2fbb6108a53671dc40ad721dbd43ded467aef6054561b398c152075",
+        "fullTextBindings": 4,
+        "paths": [
+          {
+            "path": ".github/workflows/audit-host-validation.yml",
+            "sha256": "1e922727e45d28b8299a0eb926e2be10755f6e8681eddda51869737e00e3a7d2",
+            "blob": "c2d58f113faac3056d41f87dbe4fcd1216feb589",
+            "bytes": 34682,
+            "lines": 642,
+            "readCommit": null,
+            "fullTextActuallyRead": true,
+            "readScope": "Fresh independent reviewer complete finalprecommit text read; laterexactcommit binding not a newread/cleancommit execution."
+          },
+          {
+            "path": "docs/testing/audit-hosts.md",
+            "sha256": "ce5a75a66dbca6ce3f1c0f5b8ad75be0532459e5a9b22897534af5a3ef2c6dbe",
+            "blob": "b79c37ed7d74d990c704bfdb32d6ddfe7503982f",
+            "bytes": 20754,
+            "lines": 311,
+            "readCommit": null,
+            "fullTextActuallyRead": true,
+            "readScope": "Fresh independent reviewer complete finalprecommit text read; laterexactcommit binding not a newread/cleancommit execution."
+          },
+          {
+            "path": "scripts/run-audit-host.py",
+            "sha256": "feb364ecfe2f490bc07fa09f1ad3f152bd76e10a935293d65b1c8ef0c35a86cf",
+            "blob": "8570705943a60b71edded1f6553649bb603be401",
+            "bytes": 64981,
+            "lines": 1064,
+            "readCommit": null,
+            "fullTextActuallyRead": true,
+            "readScope": "Fresh independent reviewer complete finalprecommit text read; laterexactcommit binding not a newread/cleancommit execution."
+          },
+          {
+            "path": "scripts/tests/audit-host-test.py",
+            "sha256": "d8d388aa5500941694777ca06a547cd79b05a9ddab0622046baa0ff20adc6db4",
+            "blob": "48cc77abdfa02e7c604745343d0c65652c69ad43",
+            "bytes": 108527,
+            "lines": 1839,
+            "readCommit": null,
+            "fullTextActuallyRead": true,
+            "readScope": "Fresh independent reviewer complete finalprecommit text read; laterexactcommit binding not a newread/cleancommit execution."
+          }
+        ],
+        "scope": "Actual complete final precommit text reads; three later SDK file reads supersede current row bindings, not this historical read event."
+      },
+      {
+        "issue": 370,
+        "baselineCommit": "aab8cabf68958a7a3fdedcddc70c84a39e050df4",
+        "candidateDiffSha256": "c21e66aa94d1113771b7a11ebd87a1eadb4c76428a7dabba43cb93409130a3be",
+        "laterExactSourceCommit": "d3c812020b41aeceef45381b1d24871b9477607b",
+        "laterExactSourceTree": "7baa8e2233bc7dd23a903178fa24dff7f9ae9ec2",
+        "readCommit": null,
+        "reader": "/root/review_370_source",
+        "readsetSha256": "a71a228d0571df2436c5cdc704d622f71c666bb130389c842fb6a76ec063732b",
+        "fullTextBindings": 3,
+        "paths": [
+          {
+            "path": "docs/testing/audit-hosts.md",
+            "sha256": "9df41d2d7ed3c5540e4729b4165fee2b097a3e1eb08f438389cccd1fa5858249",
+            "blob": "6e2b7d5c3d10ce32c9113c01785e37a2207bdc5e",
+            "bytes": 21159,
+            "lines": 317,
+            "readCommit": null,
+            "fullTextActuallyRead": true,
+            "readScope": "Complete final documentation. Actual reviewer final-precommit read; no later commit is invented as readCommit."
+          },
+          {
+            "path": "scripts/run-audit-host.py",
+            "sha256": "d2e67fe62f0bb3badb4430c3a280d623665733241c5b8ebca9c7a53cc8a8ed8e",
+            "blob": "2d5fedabcf3f692a4d3a0ccc18700a5823eba267",
+            "bytes": 64995,
+            "lines": 1064,
+            "readCommit": null,
+            "fullTextActuallyRead": true,
+            "readScope": "Complete final source and actual callers/finalization. Actual reviewer final-precommit read; no later commit is invented as readCommit."
+          },
+          {
+            "path": "scripts/tests/audit-host-test.py",
+            "sha256": "672ee56f72999dcdbae30012e65eb1fa9023d817a115ec2b73a00b439fc2e0d5",
+            "blob": "c6240af1ea4f525ae85cc6029d9dc90abdcb56fa",
+            "bytes": 121727,
+            "lines": 2053,
+            "readCommit": null,
+            "fullTextActuallyRead": true,
+            "readScope": "Complete final source; independent AST/text preservation against baseline. Actual reviewer final-precommit read; no later commit is invented as readCommit."
+          }
+        ],
+        "scope": "Actual complete final precommit SDK text reads. Unchanged workflow keeps actual369 read/blob. Later commit binding is not a new read or clean-commit execution."
+      },
+      {
+        "issue": 371,
+        "baselineCommit": "d3c812020b41aeceef45381b1d24871b9477607b",
+        "candidateDiffSha256": "f4531694fbad98238efd426f43a7b28d6352be9fcd2a3fc90e9763158b24e72e",
+        "laterExactSourceCommit": "842d0aafa9d84a0114d895a9f933f1663cc01a9d",
+        "laterExactSourceTree": "48343ddd4da5fd01e052493bc85f5e38cbbb2b5e",
+        "readCommit": null,
+        "reader": "/root/review_371_source",
+        "readsetSha256": "4b3b0f51737c20401e86620d8fc4e56bc0189a25f8d01f5fcd7fe92ff579fbd7",
+        "fullTextBindings": 1,
+        "paths": [
+          {
+            "path": "scripts/tests/run-audit-command-test.py",
+            "sha256": "2ca7ff9783b9e7d30ae51afd705cd483294e44674ce5a03c25f10bd03afd01d3",
+            "blob": "ab5377bb23b6fd430fc43c16ccd54292b52967f8",
+            "mode": "100755",
+            "bytes": 118223,
+            "lines": 1903,
+            "readCommit": null,
+            "fullTextActuallyRead": true,
+            "readScope": "Actual complete final precommit changed fixture source read; later exact commit binding is not retroactive readCommit or new execution."
+          }
+        ],
+        "scope": "Actual complete final precommit fixture text read. Earlier unchanged source files retain their actual reviewer/blob bindings; later commit is not a retroactive readCommit or execution."
+      }
+    ],
+    "newOrChangedReportsRead": {
+      "reader": "/root/prepare_host_admin",
+      "role": "AUTHOR_FULL_TEXT_READ_NOT_INDEPENDENT_ADMIN_APPROVAL",
+      "receiptRecordedUtc": "2026-09-09T01:19:36.536989+00:00",
+      "receiptSha256": "307be8047178581d842dcd6c2adda5418ef6bec22fc4e0080e7037e8fa5695e7",
+      "files": [
+        {
+          "path": "docs/audit/2026-09-04/hosted-validation.md",
+          "sha256": "350dad059ed558995b6fe9b2d1bdc03508f6f235f3bd3ae60b0bef7cb7863270",
+          "blob": "0eee25b0fbc62313d699c9223ff532532a2dc927",
+          "bytes": 54308,
+          "lines": 656
+        },
+        {
+          "path": "docs/audit/2026-09-04/repairs/369.md",
+          "sha256": "537288c094d1f8df991cb57fafd63658e63b8804bc4312b69c4a28254afa6be1",
+          "blob": "2bd61a87a9870a2207280afc7a464933b3271b4b",
+          "bytes": 16358,
+          "lines": 185
+        },
+        {
+          "path": "docs/audit/2026-09-04/repairs/370.md",
+          "sha256": "6e5fe04424e7939af219efff684645cd9c7012139f89faaf8099b18cdcef0318",
+          "blob": "deeb569336d6a3e4f70f3daec4ca0ce693f521e5",
+          "bytes": 9004,
+          "lines": 120
+        },
+        {
+          "path": "docs/audit/2026-09-04/repairs/371.md",
+          "sha256": "e0a0ec503f99556ef4a2181274f987d9865f200fe2fdee872b97c66ac6c81b36",
+          "blob": "06fd330e8441fa59b3752881fc76aed1ae2bbec0",
+          "bytes": 8832,
+          "lines": 114
+        }
+      ],
+      "scope": "Four actual complete final-byte author reads; two historical R3 blocks/rows preserved and two new reports appended. No self-binding or source/native/whole-tree approval."
+    },
+    "countsByReadStatus": {
+      "FULL_TEXT_CURRENT": 790,
+      "REOPENED_CHANGED_SINCE_RECORDED_READ": 6,
+      "STRUCTURAL_ONLY_CURRENT": 259,
+      "SELF_DESCRIBING_LEDGER_NO_CURRENT_SELF_BINDING": 1,
+      "PARTIAL_CURRENT": 1,
+      "FULL_SEMANTIC_DELTA_CURRENT": 6
+    },
+    "scope": "Two actual new repair-report paths. All5305 existing historical cells preserved; 5 actual source and two actual report rows rebound, two actual-read report rows appended. No current whole-tree or unapproved repair claim."
+  },
+  "successorAdministrativeScope369370371": {
+    "evidenceFrozenUtc": "2026-09-09T01:18:20.220814+00:00",
+    "priorAdministrativeCommit": "638d005784776a059c465d6940abac218e1a0d71",
+    "same369FollowupAddsNoSecondRow": true,
+    "distinctActuallyFiledNewIssues": [
+      370,
+      371
+    ],
+    "newIssueRows": 2,
+    "sourceAndReportApprovalSeparate": true,
+    "latestSourceCommit": "842d0aafa9d84a0114d895a9f933f1663cc01a9d",
+    "publicFiles": [
+      "AUDIT_CHECKPOINT.md",
+      "docs/audit/2026-09-04/README.md",
+      "docs/audit/2026-09-04/checkpoint.json",
+      "docs/audit/2026-09-04/issues.json",
+      "docs/audit/2026-09-04/issues.md",
+      "docs/audit/2026-09-04/coverage.tsv",
+      "docs/audit/2026-09-04/followups.md",
+      "docs/audit/2026-09-04/hosted-validation.md",
+      "docs/audit/2026-09-04/repairs/369.md",
+      "docs/audit/2026-09-04/repairs/370.md",
+      "docs/audit/2026-09-04/repairs/371.md"
+    ],
+    "old369MarkdownRow": "| [#369: [AUDIT][Low] Hosted Windows audit resolves Bash to WSL instead of Git Bash](https://github.com/p2pKit/P2pKit/issues/369) | low | New audit | `bd6117516733` |",
+    "oldFixedHeadingMarkdown": "## Repairs with recorded independent approval (72)",
+    "historicalPreservation": "Initial369 scoped verification/projection renamed, not duplicated. Full R3 root/readme/followups/hosted/369-report narratives retained with explicit historical scope. Clean731 product remains canonical in facility. Separate later source/trial/product/filer events; no recursive checkpoint history copies."
+  }
 }
