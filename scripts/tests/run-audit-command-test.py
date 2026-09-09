@@ -807,6 +807,235 @@ class PurePolicyTests(unittest.TestCase):
                 (24, 24, 104, 112, 64, 48, 144))
 
 
+class DarwinObservationTests(unittest.TestCase):
+    """Scripted Darwin API transitions, not native Mach/cleanup acceptance."""
+
+    def setUp(self):
+        self.scope = processes.DarwinScope.__new__(processes.DarwinScope)
+        self.scope.job, self.scope.invocation = "a" * 32, "b" * 32
+        self.scope.state, self.scope.home = "/fixture-state", "/fixture-home"
+        self.scope.known, self.scope.handles = {}, {}
+        self.scope.leaders, self.scope.launches = [], []
+        self.scope.discovery_errors, self.scope.baseline = set(), set()
+        self.scope.observation_reconciliations = []
+        self.scope.self_port, self.scope.argmax = 7, 4096
+        self.scope.system, self.scope.proc = mock.Mock(), mock.Mock()
+        self.identity = {"pid": 43210, "uid": 1000, "parentPid": 1, "group": 43210,
+                         "uniqueId": 99, "parentUniqueId": 1, "pidVersion": 3,
+                         "startSeconds": 123, "startMicroseconds": 456,
+                         "status": 2, "flags": 4, "live": True}
+        self.current = dict(self.identity)
+        self.scope._identity = mock.Mock(side_effect=lambda _pid, **_kwargs:
+                                        None if self.current is None else dict(self.current))
+        self.scope._pids = lambda: [self.identity["pid"]]
+        self.scope.system.task_name_for_pid.return_value = 5
+        self.scope.system.mach_port_deallocate.return_value = 0
+        self.elapsed = 0.0
+        self.on_sleep = lambda: None
+
+    @contextmanager
+    def clock(self):
+        def sleep(seconds):
+            self.assertGreater(seconds, 0)
+            self.elapsed += seconds
+            self.on_sleep()
+        with mock.patch.object(processes.time, "monotonic", side_effect=lambda: self.elapsed), \
+                mock.patch.object(processes.time, "sleep", side_effect=sleep):
+            yield
+
+    def test_exiting_task_name_error_reconciles_to_terminal_not_inexit(self):
+        for terminal in (None, {**self.identity, "status": 5, "live": False}):
+            with self.subTest(terminal=terminal):
+                self.current, self.elapsed = dict(self.identity), 0.0
+                self.on_sleep = lambda: setattr(self, "current", terminal)
+                with self.clock(), self.assertRaises(ProcessLookupError):
+                    self.scope._acquire(self.identity)
+                self.assertGreater(self.elapsed, 0, "INEXIT itself must not count as completed cleanup")
+                self.scope.system.task_info.assert_not_called()
+                self.scope.system.mach_port_deallocate.assert_not_called()
+
+    def test_transient_environment_error_recovers_without_poisoning_discovery(self):
+        environment = processes.ownership_environment({}, self.scope.job, self.scope.invocation,
+                                                        self.scope.state, self.scope.home)
+        raw = processes.struct.pack("=i", 1) + b"/fixture\0\0fixture\0" + b"\0".join(
+            key.encode() + b"=" + value.encode() for key, value in environment.items()) + b"\0"
+        for error in (errno.EINVAL, errno.EIO):
+            with self.subTest(errno=error):
+                self.scope.known.clear()
+                self.scope.handles.clear()
+                self.scope.discovery_errors.clear()
+                self.elapsed = 0.0
+                calls = []
+
+                def sysctl(_mib, _count, data, length, _new, _size):
+                    calls.append(True)
+                    if len(calls) == 1:
+                        ctypes.set_errno(error)
+                        return -1
+                    ctypes.memmove(data, raw, len(raw))
+                    ctypes.cast(length, ctypes.POINTER(processes.SIZE)).contents.value = len(raw)
+                    return 0
+
+                self.scope.system.sysctl.side_effect = sysctl
+                with self.clock(), mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                        mock.patch.object(self.scope, "_acquire", return_value=processes.AuditToken()):
+                    self.assertEqual(self.scope.discover(), [self.identity])
+                self.assertEqual(self.scope.discovery_errors, set())
+                self.assertEqual(len(calls), 2)
+
+    def test_persistent_live_or_inexit_denial_is_bounded_and_fatal(self):
+        for status, flags in ((2, 4), (2, 0), (2, 0x4000), (4, 0)):
+            with self.subTest(status=status, flags=flags):
+                self.current = {**self.identity, "status": status, "flags": flags}
+                self.elapsed = 0.0
+                self.scope.system.task_name_for_pid.reset_mock()
+                with self.clock(), self.assertRaisesRegex(processes.OwnershipError, "unresolved"):
+                    self.scope._acquire(self.identity)
+                self.assertGreater(self.elapsed, 0)
+                self.assertLessEqual(self.elapsed, 0.250001)
+                self.assertLessEqual(self.scope.system.task_name_for_pid.call_count, 26)
+                event = self.scope.description()["observationReconciliations"][-1]
+                self.assertEqual(event["outcome"], "unresolved")
+                self.assertEqual(event["lastIdentity"], self.current)
+                self.assertIn("Mach result 5", event["firstFailure"])
+
+    def test_reused_pid_does_not_acquire_or_signal_the_replacement(self):
+        self.on_sleep = lambda: setattr(self, "current", {**self.identity, "uniqueId": 100})
+        with self.clock(), self.assertRaises(ProcessLookupError):
+            self.scope._acquire(self.identity)
+        self.assertEqual(self.scope.system.task_name_for_pid.call_count, 1)
+        self.scope.system.task_info.assert_not_called()
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+        self.assertEqual(self.scope.observation_reconciliations[-1]["outcome"], "replaced")
+
+    def test_token_retries_release_ports_and_revalidate_exec_versions(self):
+        for failure in ("task-name", "task-info", "token-size", "exec-version"):
+            with self.subTest(failure=failure):
+                self.current, self.elapsed = dict(self.identity), 0.0
+                names, infos = [], []
+                self.scope.system.mach_port_deallocate.reset_mock()
+
+                def task_name(_self, _pid, port):
+                    names.append(True)
+                    ctypes.cast(port, ctypes.POINTER(processes.U32)).contents.value = 81
+                    return 5 if failure == "task-name" and len(names) == 1 else 0
+
+                def task_info(_port, _flavor, _token, count):
+                    infos.append(True)
+                    if len(names) == 1:
+                        if failure == "task-info":
+                            return 4
+                        if failure == "token-size":
+                            ctypes.cast(count, ctypes.POINTER(processes.U32)).contents.value = 7
+                        if failure == "exec-version":
+                            self.current["pidVersion"] += 1
+                    return 0
+
+                self.scope.system.task_name_for_pid.side_effect = task_name
+                self.scope.system.task_info.side_effect = task_info
+                with self.clock():
+                    token = self.scope._acquire(self.identity)
+                self.assertIsInstance(token, processes.AuditToken)
+                self.assertEqual((len(names), self.scope.system.mach_port_deallocate.call_count), (2, 2))
+                self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+                self.assertEqual(self.scope.observation_reconciliations[-1]["outcome"], "recovered")
+
+    def test_port_release_failure_is_never_retried_or_masked_by_later_exit(self):
+        def task_name(_self, _pid, port):
+            ctypes.cast(port, ctypes.POINTER(processes.U32)).contents.value = 81
+            return 5
+
+        def failed_release(*_args):
+            self.current = None
+            return 5
+
+        self.scope.system.task_name_for_pid.side_effect = task_name
+        self.scope.system.mach_port_deallocate.side_effect = failed_release
+        with self.clock(), self.assertRaisesRegex(processes.OwnershipError, "Cannot release"):
+            self.scope._acquire(self.identity)
+        self.assertEqual(self.elapsed, 0)
+        self.assertEqual(self.scope.system.task_name_for_pid.call_count, 1)
+        self.assertEqual(self.scope.system.mach_port_deallocate.call_count, 1)
+
+    def test_required_identity_denial_or_ambiguous_empty_response_is_not_absence(self):
+        self.scope._identity = processes.DarwinScope._identity.__get__(self.scope)
+        for error in (0, errno.EPERM, errno.EACCES):
+            with self.subTest(errno=error):
+                self.elapsed = 0.0
+
+                def unavailable(*_args):
+                    ctypes.set_errno(error)
+                    return 0
+
+                self.scope.proc.proc_pidinfo.side_effect = unavailable
+                with self.clock(), self.assertRaisesRegex(processes.OwnershipError, "unresolved"):
+                    self.scope._acquire(self.identity)
+                self.scope.system.task_name_for_pid.assert_not_called()
+                self.assertEqual(self.scope.observation_reconciliations[-1]["outcome"], "unresolved")
+
+    def test_native_status_flags_are_retained_but_only_zombie_is_terminal(self):
+        self.scope._identity = processes.DarwinScope._identity.__get__(self.scope)
+        for status, flags, live in ((2, 4, True), (2, 0x4000, True), (4, 0, True), (5, 4, False), (0, 4, None)):
+            with self.subTest(status=status, flags=flags):
+                def pidinfo(pid, _flavor, _arg, pointer, _size):
+                    value = ctypes.cast(pointer, ctypes.POINTER(processes.DarwinIdentity)).contents
+                    value.bsd.pid, value.bsd.uid = pid, 1000
+                    value.bsd.status, value.bsd.flags = status, flags
+                    return ctypes.sizeof(value)
+
+                self.scope.proc.proc_pidinfo.side_effect = pidinfo
+                if live is None:
+                    with self.assertRaises(processes.OwnershipError):
+                        self.scope._identity(self.identity["pid"], required=True)
+                else:
+                    result = self.scope._identity(self.identity["pid"], required=True)
+                    self.assertEqual((result["status"], result["flags"], result["live"]), (status, flags, live))
+
+    def test_persistent_environment_parser_failure_is_not_cleared_by_eligibility_read(self):
+        ordinary_reads = []
+
+        def identity(_pid, *, required=False):
+            if required:
+                return dict(self.identity)
+            ordinary_reads.append(True)
+            return dict(self.identity) if len(ordinary_reads) == 1 else None
+
+        def malformed(_mib, _count, _data, length, _new, _size):
+            ctypes.cast(length, ctypes.POINTER(processes.SIZE)).contents.value = 0
+            return 0
+
+        self.scope._identity.side_effect = identity
+        self.scope.system.sysctl.side_effect = malformed
+        with self.clock(), mock.patch.object(processes.os, "getuid", return_value=1000, create=True):
+            self.assertEqual(self.scope.discover(), [])
+        self.assertEqual(len(self.scope.discovery_errors), 1)
+        self.assertEqual(len(ordinary_reads), 1, "A reconciled fatal must not be reclassified as ineligible")
+        self.assertEqual(self.scope.observation_reconciliations[-1]["outcome"], "unresolved")
+
+    def test_owned_candidate_identity_denial_is_not_skipped_before_acquisition(self):
+        denied = False
+
+        def identity(_pid, *, required=False):
+            if denied:
+                if required:
+                    raise processes.DarwinObservationError("bound identity access denied")
+                return None
+            return dict(self.identity)
+
+        def ours(_environment):
+            nonlocal denied
+            denied = True
+            return True
+
+        self.scope._identity.side_effect = identity
+        with self.clock(), mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_inspect_environment", return_value={}), \
+                mock.patch.object(self.scope, "_ours", side_effect=ours), \
+                self.assertRaisesRegex(processes.OwnershipError, "bound identity access denied"):
+            self.scope.discover()
+        self.scope.system.task_name_for_pid.assert_not_called()
+
+
 class ExecutorFixtureTests(unittest.TestCase):
     def setUp(self):
         global CASE_EVIDENCE
@@ -2519,6 +2748,7 @@ def main():
     if native is None:
         parser.error("No native ownership fixture suite for this host")
     suite = unittest.TestSuite([unittest.defaultTestLoader.loadTestsFromTestCase(PurePolicyTests),
+                               unittest.defaultTestLoader.loadTestsFromTestCase(DarwinObservationTests),
                                unittest.defaultTestLoader.loadTestsFromTestCase(native)])
     print(f"Running current-host real executor fixtures: {processes.host_role()}; no other-host/native claims", flush=True)
     print(f"Retained fixture receipts/logs: {EVIDENCE_ROOT}", flush=True)

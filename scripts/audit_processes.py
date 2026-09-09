@@ -239,6 +239,15 @@ class PosixScope:
     def _environment(self, pid: int) -> dict[bytes, bytes]:
         raise NotImplementedError
 
+    def _inspect_environment(self, identity: dict[str, Any]) -> dict[bytes, bytes]:
+        try:
+            return self._environment(identity["pid"])
+        except (PermissionError, OwnershipError) as error:
+            current = self._identity(identity["pid"])
+            if current is None or not current["live"] or self._key(current) != self._key(identity):
+                raise ProcessLookupError(identity["pid"]) from error
+            raise
+
     def _acquire(self, identity: dict[str, Any]) -> Any:
         raise NotImplementedError
 
@@ -283,24 +292,22 @@ class PosixScope:
                 self.known[key] = identity
                 continue
             try:
-                environment = self._environment(pid)
+                environment = self._inspect_environment(identity)
             except (PermissionError, OwnershipError) as error:
-                current = self._identity(pid)
-                if current is not None and current["live"] and self._key(current) == key:
-                    self.discovery_errors.add(f"Cannot inspect new same-uid process {pid}: {type(error).__name__}")
+                self.discovery_errors.add(f"Cannot inspect new same-uid process {pid}: {type(error).__name__}")
                 continue
             except ProcessLookupError:
                 continue
             if not self._ours(environment):
                 continue
-            current = self._identity(pid)
-            if current is None or not current["live"] or self._key(current) != key:
-                continue
             try:
-                handle = self._acquire(current)
+                # Both native backends recheck the bound lifetime while acquiring
+                # the handle. A separate eligibility read here could hide denial
+                # as absence before this positively owned process is registered.
+                handle = self._acquire(identity)
             except ProcessLookupError:
                 continue
-            self.known[key] = current
+            self.known[key] = identity
             self.handles[key] = handle
         live = []
         for key, previous in list(self.known.items()):
@@ -474,10 +481,15 @@ class AuditToken(ctypes.Structure):
     _fields_ = [("val", U32 * 8)]
 
 
+class DarwinObservationError(OwnershipError):
+    """A failed observation, not proof of exit or an unreleased kernel right."""
+
+
 class DarwinScope(PosixScope):
     name = "darwin-libproc-audit-token"
 
     def _admit(self) -> None:
+        self.observation_reconciliations: list[dict[str, Any]] = []
         if (ctypes.sizeof(DarwinBsdInfo), ctypes.sizeof(DarwinUniqueInfo), ctypes.sizeof(DarwinIdentity),
                 ctypes.sizeof(AuditToken)) != (136, 56, 192, 32):
             raise OwnershipError("Unsupported Darwin process ABI layout")
@@ -511,7 +523,7 @@ class DarwinScope(PosixScope):
         identity = self._identity(os.getpid())
         if identity is None:
             raise OwnershipError("Cannot inspect the Darwin controller identity")
-        self._environment(os.getpid())
+        self._inspect_environment(identity)
         # Token acquisition admission is not proof that signaling controls pass;
         # the native fixture must exercise a real child and stale token.
         self._acquire(identity)
@@ -533,30 +545,80 @@ class DarwinScope(PosixScope):
             capacity *= 2
         raise OwnershipError("Darwin process list did not stabilize within its bound")
 
-    def _identity(self, pid: int) -> dict[str, Any] | None:
+    def _identity(self, pid: int, *, required: bool = False) -> dict[str, Any] | None:
         value = DarwinIdentity()
         ctypes.set_errno(0)
         got = self.proc.proc_pidinfo(pid, 18, 1, ctypes.byref(value), ctypes.sizeof(value))
         if got == 0:
             error = ctypes.get_errno()
-            if error in (0, errno.ESRCH, errno.ENOENT):
+            if error in (errno.ESRCH, errno.ENOENT) or (error == 0 and not required):
                 return None
-            if error in (errno.EPERM, errno.EACCES) and pid != os.getpid():
+            if not required and error in (errno.EPERM, errno.EACCES) and pid != os.getpid():
                 if any(key[0] == pid for key in self.known):
                     raise OwnershipError("Cannot reinspect a recorded Darwin process identity")
                 return None
-            raise OwnershipError(f"Darwin process identity failed: errno {error}")
+            raise DarwinObservationError(f"Darwin process identity failed: errno {error}")
         if got != ctypes.sizeof(value) or value.bsd.pid != pid:
             raise OwnershipError("Unsupported Darwin combined identity response")
+        if required and value.bsd.status not in (1, 2, 3, 4, 5):
+            raise DarwinObservationError("Unsupported Darwin bound process status")
         return {"pid": pid, "uid": value.bsd.uid, "parentPid": value.bsd.ppid, "group": value.bsd.pgid,
                 "uniqueId": value.unique.uniqueid, "parentUniqueId": value.unique.parentuniqueid,
                 "pidVersion": value.unique.pidversion, "startSeconds": value.bsd.startsec,
-                "startMicroseconds": value.bsd.startusec, "live": value.bsd.status not in (0, 5)}
+                "startMicroseconds": value.bsd.startusec, "realUid": value.bsd.ruid,
+                "status": value.bsd.status, "flags": value.bsd.flags, "live": value.bsd.status not in (0, 5)}
 
     def _key(self, identity: dict[str, Any]) -> tuple[int, ...]:
         # Exec can change pidVersion without changing process ownership. Signaling
         # obtains a fresh opaque token and checks the full current identity below.
         return (identity["pid"], identity["uniqueId"], identity["startSeconds"], identity["startMicroseconds"])
+
+    def _observe(self, identity: dict[str, Any], operation: str, action: Any) -> Any:
+        # libproc's zombie-list lookup can still return a non-SZOMB INEXIT proc
+        # after Mach/procargs lookup loses it. INEXIT is pending, not completion.
+        # Reconcile only failed observations; do not slow every process census or
+        # extend product deadlines. This bounds retries, not a blocking kernel API.
+        deadline = time.monotonic() + 0.25
+        first_error = last_error = None
+        current, outcome, attempts = identity, "unresolved", 0
+
+        def recheck():
+            nonlocal current, outcome
+            current = self._identity(identity["pid"], required=True)
+            if current is None or not current["live"] or self._key(current) != self._key(identity):
+                outcome = "absent" if current is None else "nonrunning" if not current["live"] else "replaced"
+                raise ProcessLookupError(identity["pid"])
+            return current
+
+        try:
+            for attempts in range(1, 27):
+                try:
+                    before = recheck()
+                    result = action(before)
+                    after = recheck()
+                    if after["pidVersion"] != before["pidVersion"]:
+                        raise DarwinObservationError("Darwin exec version changed during observation")
+                    outcome = "recovered"
+                    return result
+                except DarwinObservationError as error:
+                    last_error = str(error)
+                    if first_error is None:
+                        first_error = last_error
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or attempts == 26:
+                    break
+                time.sleep(min(0.01, remaining))
+            raise OwnershipError(f"Darwin {operation} unresolved after bounded observation: {last_error}")
+        finally:
+            if first_error is not None:
+                if len(self.observation_reconciliations) >= 1024:
+                    raise OwnershipError("Darwin observation evidence exceeds its bound")
+                self.observation_reconciliations.append({"operation": operation, "identity": identity,
+                    "lastIdentity": current, "attempts": attempts, "firstFailure": first_error,
+                    "lastFailure": last_error, "outcome": outcome})
+
+    def _inspect_environment(self, identity: dict[str, Any]) -> dict[bytes, bytes]:
+        return self._observe(identity, "environment", lambda before: self._environment(before["pid"]))
 
     def _environment(self, pid: int) -> dict[bytes, bytes]:
         mib = (I32 * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2.
@@ -565,43 +627,36 @@ class DarwinScope(PosixScope):
         ctypes.set_errno(0)
         if self.system.sysctl(mib, 3, data, ctypes.byref(length), None, 0) != 0:
             error = ctypes.get_errno()
-            if error in (errno.ESRCH, errno.ENOENT):
-                raise ProcessLookupError(pid)
-            if error in (errno.EPERM, errno.EACCES):
-                raise PermissionError(pid)
-            raise OwnershipError(f"Darwin process environment failed: errno {error}")
+            raise DarwinObservationError(f"Darwin process environment failed: errno {error}")
         if length.value > self.argmax:
             raise OwnershipError("Darwin process environment exceeded admitted bound")
-        return parse_procargs2(data.raw[:length.value])
+        try:
+            return parse_procargs2(data.raw[:length.value])
+        except OwnershipError as error:
+            raise DarwinObservationError(str(error)) from error
 
     def _acquire(self, identity: dict[str, Any]) -> AuditToken:
-        before = self._identity(identity["pid"])
-        if before is None or not before["live"] or self._key(before) != self._key(identity):
-            raise ProcessLookupError(identity["pid"])
+        return self._observe(identity, "task token", self._acquire_once)
+
+    def _acquire_once(self, identity: dict[str, Any]) -> AuditToken:
         port = U32()
-        result = self.system.task_name_for_pid(self.self_port, identity["pid"], ctypes.byref(port))
-        if result != 0 or not port.value:
-            current = self._identity(identity["pid"])
-            if current is None or not current["live"] or self._key(current) != self._key(identity):
-                raise ProcessLookupError(identity["pid"])
-            raise OwnershipError(f"Darwin task-name access unavailable: Mach result {result}")
         try:
+            result = self.system.task_name_for_pid(self.self_port, identity["pid"], ctypes.byref(port))
+            if result != 0 or not port.value:
+                raise DarwinObservationError(f"Darwin task-name access unavailable: Mach result {result}")
             token = AuditToken()
             count = U32(8)
             result = self.system.task_info(port, 15, ctypes.byref(token), ctypes.byref(count))
             if result != 0 or count.value != 8:
-                current = self._identity(identity["pid"])
-                if current is None or not current["live"] or self._key(current) != self._key(identity):
-                    raise ProcessLookupError(identity["pid"])
-                raise OwnershipError(f"Darwin TASK_AUDIT_TOKEN unavailable: Mach result {result}")
-            after = self._identity(identity["pid"])
-            if after is None or not after["live"] or self._key(after) != self._key(before) or \
-                    after["pidVersion"] != before["pidVersion"]:
-                raise ProcessLookupError(identity["pid"])
+                raise DarwinObservationError(f"Darwin TASK_AUDIT_TOKEN unavailable: Mach result {result}")
             return token
         finally:
-            if self.system.mach_port_deallocate(self.self_port, port) != 0:
+            if port.value and self.system.mach_port_deallocate(self.self_port, port) != 0:
+                # Never catch/retry a leaked right as an ordinary observation error.
                 raise OwnershipError("Cannot release the owned Darwin task-name port")
+
+    def description(self) -> dict[str, Any]:
+        return {**super().description(), "observationReconciliations": self.observation_reconciliations}
 
     def _send(self, identity: dict[str, Any], handle: AuditToken, signum: int) -> None:
         # A real token is reacquired after exec-version changes; never os.kill(pid).

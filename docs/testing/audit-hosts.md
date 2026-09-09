@@ -344,6 +344,17 @@ These mechanisms supervise controlled build descendants, not hostile code stripp
 ownership markers or delegating to unrelated OS services. Source inspection and
 mocked APIs do not prove native ownership capability.
 
+Darwin reconciles failed environment/task-token observations against the original
+process lifetime and each attempt's exec version. The retry policy allows at most
+26 attempts within a 250 ms window; it does not bound a blocking kernel call or
+extend product deadlines. `INEXIT` is only a pending transition, never completed
+cleanup; normal `EXEC` flags and stopped processes remain live. Persistent denial,
+malformed observations and unfinished exits fail closed. Every acquired Mach right
+is released, and a release failure is never retried or suppressed as process exit.
+Bounded `observationReconciliations` receipt entries retain first/last failures,
+status/flags and final disposition without argv/environment contents or changes
+to stdout/stderr. These observations do not replace the actual native controls.
+
 The workflow redirects stdout/stderr to separate fresh bootstrap logs and invokes
 the exact checked-out driver with `runpy` in the **same native Python process**.
 There is no extra unsupervised wrapper child, launcher replacement or product
