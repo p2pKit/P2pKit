@@ -33,20 +33,24 @@ import dev.p2pkit.provisioning.desktop.jvm
 import dev.p2pkit.transport.lan.JvmLanDiag
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -1061,10 +1065,11 @@ internal fun matches(peer: Peer, query: String): Boolean =
  * good and `sessions`/`send` kept reporting the dead session. The state
  * watcher below prunes the entry on terminal state. The two-arg remove is
  * identity-checked so a newer session already stored for the same peer is
- * never evicted, and the watcher cancels itself afterwards since a terminal
- * StateFlow never changes again.
+ * never evicted. A registration owns both hot-flow collectors as children;
+ * terminal state or outer cancellation retires the entire registration,
+ * including the file-offer collector's session-key cleanup.
  */
-private fun registerSession(
+internal fun registerSession(
     session: P2pSession,
     scope: CoroutineScope,
     sessions: ConcurrentHashMap<String, P2pSession>,
@@ -1073,30 +1078,49 @@ private fun registerSession(
 ) {
     // Publish the snapshot source and its diagnostic owner atomically with `diag start`.
     synchronized(CliDiagnostics) {
+        if (!scope.isActive) return
+        val initialState = session.state.value
+        if (initialState == ConnectionState.Closed || initialState == ConnectionState.Failed) {
+            // A late acquisition must not republish a retired session over its replacement.
+            CliDiagnostics.connection(session.id, session.peer.id.value, initialState.toString())
+            return
+        }
+        if (!wiredSessionIds.add(session.id)) return // do not republish an older duplicate either
         sessions[session.peer.id.value] = session
-        if (!wiredSessionIds.add(session.id)) return // collectors already wired on this instance
         CliDiagnostics.registerConnection(
             sessionId = session.id,
             peerId = session.peer.id.value,
-            state = session.state.value.toString()
+            state = initialState.toString()
         )
     }
-    wireIncoming(session, scope, pendingFileOffers)
-    scope.launch {
-        var previous: String? = session.state.value.toString()
-        session.state.collect { st ->
-            println("[state] ${session.peer.consoleId} → $st")
-            CliDiagnostics.connection(
-                sessionId = session.id,
-                peerId = session.peer.id.value,
-                state = st.toString(),
-                previous = previous
-            )
-            previous = st.toString()
-            if (st == ConnectionState.Closed || st == ConnectionState.Failed) {
+    // Enter finally before dispatch: cancellation after publication must not strand its marker.
+    // This adds no dispatch hop before wireIncoming schedules the receive subscriptions.
+    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        try {
+            supervisorScope {
+                try {
+                    wireIncoming(session, this, pendingFileOffers)
+                    var previous: String? = session.state.value.toString()
+                    session.state.first { st ->
+                        println("[state] ${session.peer.consoleId} → $st")
+                        CliDiagnostics.connection(
+                            sessionId = session.id,
+                            peerId = session.peer.id.value,
+                            state = st.toString(),
+                            previous = previous
+                        )
+                        previous = st.toString()
+                        st == ConnectionState.Closed || st == ConnectionState.Failed
+                    }
+                } finally {
+                    coroutineContext.cancelChildren()
+                }
+            }
+        } finally {
+            // The supervised collectors have finished, so their offer cleanup cannot race rewiring.
+            synchronized(CliDiagnostics) {
                 sessions.remove(session.peer.id.value, session)
                 wiredSessionIds.remove(session.id)
-                cancel()
             }
         }
     }
