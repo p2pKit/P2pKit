@@ -14,6 +14,8 @@ Those are immutable historical RC3 results. Current `main` is a post-RC3
 retroactively validate RC3, and RC3 results do not validate later fixes. The
 six campaigns below must use one separately frozen commit and artifact set.
 
+## Informational automated history (not release or campaign evidence)
+
 The final post-RC3 executable audit tree
 `588421f59efd1bcb4cc7d3b7e1205b1ab28b4f85` (PR #103 head
 `056708dfcda85d6b4aa9073c156ba386e17803b4`) passed complete gate

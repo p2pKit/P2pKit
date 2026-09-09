@@ -8,7 +8,7 @@ permissive; the library's default remains fail-closed authenticated v2.
 | Project | Role | Main test capabilities |
 | --- | --- | --- |
 | `:p2p-sample-android` | Android sender and receiver | Discovery/session controls, provisioning, file picker, progress, SHA-256, diagnostic viewer/export |
-| `:p2p-sample-desktop` | JVM CLI sender and receiver | REPL commands, manual endpoint, fault-test arguments, JSONL/evidence export |
+| `:p2p-sample-desktop` | JVM CLI sender and receiver | REPL commands, pinned manual endpoint (full out-of-band fingerprint required), fault-test arguments, JSONL/evidence export |
 | `:p2p-sample-desktop-ui` | Compose Desktop sender and receiver | Peer/session/file controls, diagnostic viewer, export, headful observation |
 | `:sample-kmp-shared` | KMP consumer smoke | Common call-site and Android/JVM runtime consumer coverage |
 | `:iosApp` | Swift iOS sender and receiver | Peer/session/file controls, deterministic files, lifecycle, diagnostics/share export |
@@ -55,6 +55,30 @@ storage reset or app removal can also require re-pairing. Manual CLI/Desktop
 dialing consumes the displayed full `p2f1-…` fingerprint; iOS manual dialing
 consumes the whole QR. `info` supplies CLI endpoints. These flows do not provide
 internet signaling, NAT traversal, or automatic fallback to plaintext.
+
+### Pinned manual CLI connection
+
+The CLI command is `manual <host>:<port> <full-p2f1-fingerprint>`. The full
+fingerprint is mandatory; missing or malformed pins are rejected before dialing.
+Unlike `connect-pinned`, this command takes the bare fingerprint, not the QR.
+
+1. Start Alice and Bob with the same explicit AppId as above. Enter `mesh off`
+   on both and close any existing connections before testing the manual path.
+   Keep Bob running; `disc off` may disable discovery without stopping its
+   listener, since manual dialing does not need mDNS.
+2. On Bob, enter `info`. Exchange a reachable address from `manual host(s)`,
+   `manual port`, and the complete `fingerprint` value with Alice through a
+   trusted out-of-band channel. `pairing` also displays the full fingerprint.
+3. On Alice, replace the placeholders and enter
+   `manual <bob-host>:<bob-port> <bob-full-p2f1-fingerprint>`. For an IPv6
+   address, use `[<bob-ipv6-address>]:<bob-port>`. Wait for
+   `connected manual peer <alias>`, then use `sessions` to inspect the session.
+4. Enter `to <bob-alias> hello` on Alice and check Bob's receive observation;
+   Alice's send result alone does not prove receipt. A wrong but well-formed
+   pin must fail authentication rather than fall back to an unpinned dial.
+
+Re-exchange pairing information after a JVM kit restart. This outgoing pin does
+not change the harness's permissive incoming admission policy described above.
 
 ## Android provisioning lifetime
 
@@ -202,6 +226,8 @@ Android APK output is under
 `samples/p2p-sample-android/build/outputs/apk/debug/`. The installed JVM CLI is
 under `samples/p2p-sample-desktop/build/install/`. The iOS project is generated
 from `samples/iosApp/project.yml`; do not hand-edit the ignored `.xcodeproj`.
+For XcodeGen, signing prerequisites, and the generated provenance phase, see the
+[iOS sample scripts guide](../../samples/iosApp/scripts/README.md).
 
 For validation controls, event names, evidence export, and two-peer
 correlation, follow the [validation handbook](../validation/README.md) and

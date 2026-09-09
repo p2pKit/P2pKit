@@ -46,16 +46,50 @@ production, public, or third-party network.
 
 ### 1.2 Immutable checkout and evidence directory
 
+Prepare the intended checkout first. Replace the three placeholders below; obtain
+the full expected commit SHA from the owner-approved campaign freeze, not from
+whichever checkout happens to be current. Run the blocks in the same shell.
+The setup refuses a non-root checkout, a different commit, or tracked/untracked
+source changes. Keep evidence in a private directory outside the checkout.
+
 ```sh
-export P2PKIT_ROOT=/Users/abdelrahman/Projects/P2pKit
+set -eu
+umask 077
+export P2PKIT_ROOT='<absolute-path-to-p2pkit-checkout>'
+export P2PKIT_EXPECTED_SHA='<full-owner-approved-commit-sha>'
+export EVIDENCE_ROOT='<absolute-path-to-private-evidence-directory>'
+
+for directory in "$P2PKIT_ROOT" "$EVIDENCE_ROOT"; do
+  case "$directory" in
+    /*) ;;
+    *) echo 'Checkout and evidence paths must be absolute.' >&2; exit 1 ;;
+  esac
+done
 cd "$P2PKIT_ROOT"
-git fetch origin
-git status --short
-git rev-parse HEAD
-export P2PKIT_SHA="$(git rev-parse HEAD)"
-export EVIDENCE="$P2PKIT_ROOT/.external-validation/$P2PKIT_SHA/$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p "$EVIDENCE"/{logs,screen,video,pcap,files,metadata}
+P2PKIT_ROOT="$(pwd -P)"
+CHECKOUT_TOP="$(git rev-parse --show-toplevel)"
+test "$P2PKIT_ROOT" = "$CHECKOUT_TOP"
+P2PKIT_SHA="$(git rev-parse --verify HEAD^{commit})"
+test "$P2PKIT_SHA" = "$P2PKIT_EXPECTED_SHA"
+P2PKIT_STATUS="$(git status --porcelain=v1 --untracked-files=all)"
+test -z "$P2PKIT_STATUS"
+
+mkdir -p "$EVIDENCE_ROOT"
+EVIDENCE_ROOT="$(cd "$EVIDENCE_ROOT" && pwd -P)"
+case "$EVIDENCE_ROOT/" in
+  "$P2PKIT_ROOT/"*) echo 'Evidence must be outside the checkout.' >&2; exit 1 ;;
+esac
+mkdir -p "$EVIDENCE_ROOT/$P2PKIT_SHA"
+EVIDENCE="$(mktemp -d "$EVIDENCE_ROOT/$P2PKIT_SHA/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
+export P2PKIT_SHA EVIDENCE
+mkdir -p "$EVIDENCE/logs" "$EVIDENCE/screen" "$EVIDENCE/video" \
+  "$EVIDENCE/pcap" "$EVIDENCE/files" "$EVIDENCE/metadata"
+printf '%s\n' "$P2PKIT_SHA" > "$EVIDENCE/metadata/repository-sha.txt"
 ```
+
+Do not switch commits or modify source during a campaign. Recheck the SHA and
+clean source state before building or collecting another case; a changed source
+requires a new frozen candidate and evidence run, not reuse of the earlier SHA.
 
 The protected user-owned review files must not be copied into evidence,
 staged, or modified. Hash every generated file:
@@ -92,20 +126,30 @@ adb -s "$ANDROID_SERIAL" shell am force-stop dev.p2pkit.sample.android
 adb -s "$ANDROID_SERIAL" shell monkey -p dev.p2pkit.sample.android 1
 ```
 
-Generate and build the iOS sample:
+Generate and build the iOS sample. Supply the local development signing
+team/profile as described in the
+[Apple handbook](apple-physical-awdl.md#build-sign-and-install); never commit it.
 
 ```sh
-(cd samples/iosApp && xcodegen generate)
-xcodebuild -project samples/iosApp/p2pkit-sample.xcodeproj \
+export IOS_DERIVED_DATA="$EVIDENCE/ios-device/DerivedData"
+export IOS_APP="$IOS_DERIVED_DATA/Build/Products/Debug-iphoneos/p2pkit-sample.app"
+test ! -e "$IOS_DERIVED_DATA"
+(cd "$P2PKIT_ROOT/samples/iosApp" && xcodegen generate)
+xcodebuild -project "$P2PKIT_ROOT/samples/iosApp/p2pkit-sample.xcodeproj" \
   -scheme p2pkit-sample-ui -configuration Debug \
-  -destination "platform=iOS,id=$IOS_UDID" build
+  -sdk iphoneos -destination "platform=iOS,id=$IOS_UDID" \
+  -derivedDataPath "$IOS_DERIVED_DATA" build \
+  > "$EVIDENCE/logs/ios-device-build.log" 2>&1
+test -d "$IOS_APP"
 ```
 
-Install/run the iOS app with Xcode or:
+The run-scoped DerivedData directory must be new, so a failed build cannot reuse
+an earlier `.app`. Retain failed build logs and use a new run directory for a
+retry. Install that exact product with Xcode or:
 
 ```sh
-xcrun devicectl device install app --device "$IOS_UDID" \
-  samples/iosApp/build/Build/Products/Debug-iphoneos/p2pkit-sample.app
+test -d "$IOS_APP"
+xcrun devicectl device install app --device "$IOS_UDID" "$IOS_APP"
 xcrun devicectl device process launch --device "$IOS_UDID" dev.p2pkit.sample
 ```
 
@@ -549,14 +593,30 @@ link-local addressing, and a sender able to set an owner-controlled display
 name/file name containing `../`, `..\\`, control characters, Unicode bidi
 marks, and long names.
 
-Actions: set safe/hostile names, use the iOS Manual connect fields with
-`[fe80::1%en0]:<port>` and unbracketed scoped forms where supported, connect
-using the full `p2f1` fingerprint, send a fixture, and inspect the receiver
-inbox and logs. Then repeat on a router-less physical Ethernet link with DHCP
-disabled so both hosts self-assign `169.254/16`; disable Wi-Fi/VPN/cellular,
-record the selected JmDNS interface/address, discover in both directions, and
-transfer the fixture. Repeat with scoped IPv6 link-local when both OSes expose
-it. PASS requires the connection uses the intended interface,
+Actions:
+
+1. Set safe/hostile names. In iOS **Manual connect**, enter the address in
+   **Host** and the numeric port separately in **Port**. Exercise scoped Host
+   values such as `fe80::1%en0` and bracketed forms such as `[fe80::1%en0]`
+   where supported, using the actual zone of the initiating device's interface;
+   do not paste a combined `<host>:<port>` into **Host**.
+2. In **Peer pairing QR text (p2pkit:v2:…)**, paste the complete peer QR
+   `p2pkit:v2:<app-binding>:<fingerprint>` obtained over a trusted out-of-band
+   channel for the same exact AppId. Follow the
+   [sample pairing instructions](../guides/samples.md#pairing-with-a-verified-fingerprint).
+   A bare `p2f1-…` fingerprint is CLI/Desktop input, not valid iOS QR input.
+   With an otherwise valid host/port, verify missing, malformed, bare-fingerprint,
+   and other-AppId QR inputs cannot register or dial a peer. Do not put real
+   pairing text or personal device/network identifiers in public evidence.
+3. Dial, send a fixture, and inspect the receiver inbox and logs. If input
+   validation rejects a required scoped form, record the failure; do not remove
+   its zone or omit the case to obtain a pass.
+4. Repeat on a router-less physical Ethernet link with DHCP disabled so both
+   hosts self-assign `169.254/16`; disable Wi-Fi/VPN/cellular, record the selected
+   JmDNS interface/address, discover in both directions, and transfer the fixture.
+   Repeat with scoped IPv6 link-local when both OSes expose it.
+
+PASS requires the connection uses the intended interface,
 the file remains inside the fixed inbox, and terminal/log output contains no
 control escape. The link-local case also requires symmetric discovery and
 bidirectional authenticated transfer with the scope/zone preserved in logs
@@ -771,18 +831,36 @@ must not share P2pKit's parser, test fixtures, or private keys.
 
 Procedure:
 
-1. Exchange version/capability vectors and confirm secure-v2 is selected only
-   when both peers advertise `file-commit-sha256-v1` and authenticated
-   metadata. Legacy-v1 must not silently upgrade.
-2. Run handshake with fresh keys, pinned expected key, wrong key, wrong AppId,
-   downgraded protocol version, malformed envelope, and replayed nonce.
-3. Send text and files with known metadata: message type, sender/recipient
+1. Configure both endpoints for `SecurityMode.AuthenticatedV2` with the same
+   exact AppId and independently verified peer authorization. Establish the
+   authenticated stream before exchanging encrypted HELLO messages. Security
+   mode is a whole-kit choice, never selected by peer capability negotiation.
+   Explicit legacy-v1 controls require both endpoints to select the legacy
+   profile; neither a missing feature nor authentication failure permits a
+   silent upgrade or plaintext fallback.
+2. Exchange HELLO version/capability vectors. Require the configured protocol
+   version and AppId to match, then verify the intersection of optional
+   `app-message-envelope-v1` and `file-commit-sha256-v1` features. A reduced
+   intersection does not change the authenticated security profile.
+3. Omit each optional feature separately. Without `app-message-envelope-v1`,
+   sending nonempty application metadata must fail with `UnsupportedFeature`;
+   without `file-commit-sha256-v1`, a prepared-file send must fail with
+   `FileTransferFailed(UNSUPPORTED_FEATURE, OFFER, NOT_RETRYABLE)` before an
+   offer is sent, and received file-transfer frames must cause `ProtocolError`.
+   These are operation-level refusals, not profile negotiation. Successful
+   authentication alone does not pass the required metadata/file cases.
+4. Run handshake with fresh keys, pinned expected key, wrong key, wrong AppId,
+   mismatched security profiles in both directions, and downgraded protocol
+   version. Refused handshakes must not publish a session or retry under another
+   security profile. Also reject malformed envelopes and replayed nonces without
+   accepting unauthenticated application data.
+5. Send text and files with known metadata: message type, sender/recipient
    IDs, protocol version, transfer ID, name, MIME, size, sequence, timestamp,
    content length, digest, and commit marker. Verify canonical encodings byte
    for byte against the independent vectors.
-4. Interrupt before offer, after accept, after final digest, before durable
+6. Interrupt before offer, after accept, after final digest, before durable
    commit, after commit, and after sender receives acknowledgement.
-5. Compare all terminal outcomes and typed error kinds. Confirm duplicate
+7. Compare all terminal outcomes and typed error kinds. Confirm duplicate
    retries are idempotent and do not create two committed files.
 
 PASS requires independent logs and packet/vector comparison, equal final

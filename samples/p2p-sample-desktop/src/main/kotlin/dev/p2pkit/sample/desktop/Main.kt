@@ -79,7 +79,7 @@ import java.util.concurrent.ConcurrentHashMap
  * - `send <text>`                 — broadcast to every active session
  * - `to <id-or-name> <text>`      — targeted send to one peer
  * - `close <id-or-name>`          — close one session
- * - `manual <host>:<port> <fingerprint>` — connect by IP without mDNS;
+ * - `manual <host>:<port> <full-p2f1-fingerprint>` — connect by IP without mDNS;
  *                                   uses the JVM provisioning module to register
  *                                   a synthetic peer and then dials it
  * - `sendfile <id-or-name> <path>` — stream a file from disk to one peer
@@ -522,11 +522,11 @@ private suspend fun repl(
                 val portToken = if (sep >= 0) endpoint.substring(sep + 1).trim() else null
                 val port = portToken?.toIntOrNull()
                 if (host.isEmpty()) {
-                    println("usage: manual <host>:<port>  (host is empty)")
+                    println("usage: manual <host>:<port> <full-p2f1-fingerprint>  (host is empty)")
                     continue
                 }
                 if (port == null || port !in 1..65_535) {
-                    println("usage: manual <host>:<port>  (port must be 1..65535, got <port omitted>)")
+                    println("usage: manual <host>:<port> <full-p2f1-fingerprint>  (port must be 1..65535)")
                     continue
                 }
                 // Light host-form sanity check — reject obvious garbage so the
@@ -965,7 +965,8 @@ private fun printHelp() {
           connect-pinned <peer-alias> <QR>   — pin a discovered peer with its trusted full QR
           send <text>                        — broadcast to every active session (room)
           to <id-or-name> <text>             — send to one peer
-          manual <host>:<port>               — connect by IP, no mDNS needed
+          manual <host>:<port> <full-p2f1-fingerprint>
+                                             — connect by IP with an out-of-band pin, no mDNS needed
           sendfile <id-or-name> <path>       — stream a file from disk to one peer
           offers                              — list incoming file offers awaiting consent
           accept <offer-id-prefix-or-selector>            — accept an offer within local storage limits
