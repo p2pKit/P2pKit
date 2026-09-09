@@ -1,3 +1,34 @@
+# Current continuation — September9 repair cohort
+
+**9 September 2026 — whole audit NOT_READY.** 100/191 independently approved repository-repair rows
+(52.4%); 91 remaining (47.6%): 69 Low repairs, 21 external-validation rows and architecture decision #120.
+58 new audit findings. These are repair-row counts, not effort, GitHub closure or platform acceptance.
+
+Nine local, independently source-reviewed commits end at `d5d0c1ea72324fd8f04dc55deae93692f3d0fe0f`
+(tree `e0aaf19895def88732c68742d73687be612f01ef`), **NOT_PUSHED in this record**. The cohort adds25 approved
+rows; #330/#341/#363 are source-prepared but remain pending their first affected Apple execution. #268 is
+now source-reviewed with applicable Linux verification; defensive copies remain. #133 independent interoperability
+is still NOT_STARTED. #145/#144/#360 remain approved; do not reimplement them.
+
+The cohort combined Linux attempt remains **FAIL** (1,630 passes/one failed source oracle; separate LAN
+strict-Dokka failure with32 unresolved Apple warnings). Its corrected oracle rerun is exactly **one fresh pass**,
+not a new full check. Android assembly, CLI/Desktop packaging and core Dokka passed. The separate focused-host
+facility has209 passing Linux script cases; corrected Windows375 and Apple gates remain unexecuted.
+Last successful integrated check remains the earlier clean`d1523e8`, not this source. All earlier failures remain.
+
+See the [cohort report](docs/audit/2026-09-04/repairs/cohort-2026-09-09.md) and [current issue tables](docs/audit/2026-09-04/issues.md).
+
+Next: bind/review the exact local source and safe ledgers, refresh Actions/refs, hold one global local/hosted
+build lease before any workflow-triggering push, then inspect the **focused Windows** selected-class/packaging
+run. The new workflow is not the old full Windows-to-Apple chain. Apple needs a separately reviewed literal
+selection/allocation; do not infer cleanup or acceptance from a partial run. Finish current whole-check, LAN Dokka,
+consumer/release and whole-repository corroboration, while continuing feasible pending repairs. No checkpoint stop.
+
+## Preserved pre-cohort handoff
+
+All following earlier checkpoint narratives/prompts retain their original dates and facts. The current section
+and the final current continuation prompt supersede their older queue/count/publication states, not their failures.
+
 # P2pKit continuation — approved #373 source after actual trial3 failure
 
 **9 September 2026. #373 source independently APPROVED at `128136ff8ab040f0b5c61dc5402d2b9736d63c86`,
@@ -921,7 +952,7 @@ not a patched-dependency or dismissed-alert claim. Reassess it in the dependency
 Overall status: **NOT PRODUCTION READY**. Report exact commits/state, issue dispositions, fix/review evidence,
 verification scope, blockers, cleanup and practical readiness limits at each handoff.
 
-## Prompt for the next agent
+## Historical pre-cohort prompt for the next agent
 
 > Continue the complete P2pKit audit from AUDIT_CHECKPOINT.md and docs/audit/2026-09-04/. Use only
 > audit/complete-2026-09-04; record actual HEAD/tree/status and preserve later commits/user changes. Read unchanged
@@ -961,3 +992,26 @@ verification scope, blockers, cleanup and practical readiness limits at each han
 > noforcepush/mainmerge/tag/settings/release/closure. Finishwhole-repositorycorroboration,./gradlew check --console=plain,
 > samples/isolatedconsumers/inspectedrelease/Applegates. Host/simulatorisnotphysical/ART/OEM/hostilenetwork/independent133/
 > professionalcryptoacceptance. #120productdecisionremains;wholeauditNOT_READY. Continueallfeasiblework.
+
+## Current continuation prompt — after the September9 cohort
+
+> Continue on audit/complete-2026-09-04 from actual HEAD/tree/status; preserve later commits and user changes.
+> Current recorded source d5d0c1ea72324fd8f04dc55deae93692f3d0fe0f/treee0aaf19895def88732c68742d73687be612f01ef,
+> nine local commits NOT_PUSHED in this record. Read unchanged AGENTS/CLAUDE and current ledgers/cohort report.
+> 100/191 approved52.4%,91remaining47.6%:69Low repairs,21external,#120;58newfindings. #268 reviewed; #133independent
+> NOT_STARTED. #330/#341/#363 source-approved but pending first Apple execution. #145/#144/#360 stay approved.
+> Cohort combined Linux FAIL remains:1630pass/1oraclefail,LAN strictDokka32warnings. Corrected oracle one fresh PASS,
+> not1513fresh or full-check pass. Last successful full integration is old clean-d152.209Linux host-script cases pass.
+> Publish safe audit-branch commits only with current Actions/ref observation, exact approved source freeze and one
+> global local/hosted build lease. Current workflow selects focused Windows durable-transfer/packaging only; inspect
+> exact XML/platform/source/stop/owned-output/full-or-salvage evidence. Corrected native375 NOT_RUN; trial4 failed
+> with separate unexplained Desktop output PermissionError. Diagnostics are not its repair or proof of old cleanup.
+> Apple requires a separately reviewed literal selection/allocation, not an assumed old chained job. Continue feasible
+> remaining repairs and affected whole-check/LAN-Dokka/consumer/release/whole-repository corroboration. No checkpoint stop.
+> One active repair; fresh nonimplementing reviewer after every fix, resolve actionable findings. Serialize builds,
+> bounded RAM/at most2workers/no parallel Gradle/strict verification. After every invocation retain required logs,
+> task-isolated wrapper--stop, retire only owned workers, remove only confirmed disposable outputs after dependencies.
+> Never blanket-delete build directories:buildSrc/src/main/java/dev/p2pkit/build is source; preserve shared caches,
+> source/user changes/evidence. Refresh full GitHub histories before relying on live state; deduplicate causes.
+> Host/simulator is not physical/ART/OEM/hostile-network/independent/professional-crypto validation. No force push,
+> main merge, issue closure, release, tag or settings changes. Whole audit remains NOT_READY.
