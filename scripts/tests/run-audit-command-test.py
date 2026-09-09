@@ -8,6 +8,7 @@ are mandatory; another host's tests are not selected or counted as native eviden
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import ctypes
 import errno
 import importlib.util
@@ -235,7 +236,160 @@ class Capture:
         return self.child.poll(), bytes(self.out), bytes(self.err)
 
 
+class StatFields:
+    """Override explicit metadata fields while forwarding the real no-follow result."""
+    def __init__(self, actual, **fields):
+        self.actual, self.fields = actual, fields
+
+    def __getattr__(self, name):
+        return self.fields[name] if name in self.fields else getattr(self.actual, name)
+
+
+@contextmanager
+def cleanup_metadata(test, *, cached_device=0, full_device=47, child_fields=None,
+                     entry_fields=None, child_error=None, blocked_scan=None):
+    """Real tiny tree with modeled stat boundaries; never a native Windows claim.
+
+    Windows DirEntry caches can have zero identity fields despite a nonzero full
+    path-stat device. Keep type/reparse classification independent of that full
+    observation so the tests cannot hide a removed no-follow or device guard.
+    """
+    with tempfile.TemporaryDirectory(prefix="audit cleanup metadata ") as temporary:
+        root = Path(temporary).resolve() / "output"
+        child, deeper = root / "nested", root / "nested/deeper"
+        deeper.mkdir(parents=True)
+        (deeper / "report.xml").write_bytes(b"synthetic report\n")
+        directories = {root, child, deeper}
+        events = []
+        real_lstat, real_stat, real_scandir = Path.lstat, Path.stat, os.scandir
+
+        def full_stat(path, *args, **kwargs):
+            if path in directories:
+                test.assertIs(kwargs.get("follow_symlinks", True), False, "Full stat must remain no-follow")
+            return real_stat(path, *args, **kwargs)
+
+        def full_lstat(path, *args, **kwargs):
+            if path in directories:
+                events.append(("lstat", path))
+                if path == child and child_error is not None:
+                    raise child_error
+            actual = real_lstat(path, *args, **kwargs)
+            if path not in directories:
+                return actual
+            fields = {"st_dev": full_device}
+            if path == child:
+                fields.update(child_fields or {})
+            return StatFields(actual, **fields)
+
+        class Entry:
+            def __init__(self, actual):
+                self.actual, self.name, self.path = actual, actual.name, actual.path
+
+            def stat(self, *, follow_symlinks=True):
+                test.assertIs(follow_symlinks, False, "Initial entry classification must remain no-follow")
+                events.append(("entry-stat", Path(self.path)))
+                fields = {"st_dev": cached_device, "st_ino": 0, "st_nlink": 0}
+                if Path(self.path) == child:
+                    fields.update(entry_fields or {})
+                return StatFields(self.actual.stat(follow_symlinks=follow_symlinks), **fields)
+
+        @contextmanager
+        def scan(path):
+            path = Path(path)
+            events.append(("scan", path))
+            if path == {"root": root, "child": child}.get(blocked_scan):
+                raise PermissionError("injected cleanup scan failure")
+            with real_scandir(path) as entries:
+                yield (Entry(entry) for entry in entries)
+
+        with mock.patch.object(Path, "stat", new=full_stat), \
+                mock.patch.object(Path, "lstat", new=full_lstat), mock.patch.object(os, "scandir", new=scan):
+            yield root, child, deeper, events
+
+
 class PurePolicyTests(unittest.TestCase):
+    def test_cleanup_directory_identity_uses_full_stat_not_cached_fields(self):
+        for cached, full in ((0, 47), (47, 47), (0, 0), (47, 0)):
+            with self.subTest(cached=cached, full=full), \
+                    cleanup_metadata(self, cached_device=cached, full_device=full) as (root, child, deeper, events):
+                inspection = runner.inspect_disposable_tree(root)
+                self.assertEqual(inspection["entryCount"], 3)
+                self.assertEqual(inspection["links"], [])
+                self.assertTrue(inspection["noTargetTraversal"])
+                self.assertEqual([path for kind, path in events if kind == "scan"], [root, child, deeper])
+                for directory in (child, deeper):
+                    self.assertIn(("lstat", directory), events)
+                    self.assertLess(events.index(("lstat", directory)), events.index(("scan", directory)))
+
+    def test_cleanup_rejects_actual_cross_device_before_descending(self):
+        for root_device, child_device in ((47, 53), (47, 0), (0, 53)):
+            for cached in (0, 47):
+                with self.subTest(root_device=root_device, child_device=child_device, cached=cached), \
+                        cleanup_metadata(self, cached_device=cached, full_device=root_device,
+                                         child_fields={"st_dev": child_device}) as fixture:
+                    root, child, _, events = fixture
+                    with self.assertRaisesRegex(runner.AuditError, "Cross-device descendant directory"):
+                        runner.inspect_disposable_tree(root)
+                    self.assertIn(("lstat", child), events)
+                    self.assertNotIn(("scan", child), events)
+
+    def test_cleanup_revalidates_directory_type_before_descending(self):
+        for mode in (stat.S_IFREG, stat.S_IFLNK, stat.S_IFIFO):
+            with self.subTest(mode=mode), cleanup_metadata(self, cached_device=47,
+                    child_fields={"st_mode": mode | 0o700, "st_file_attributes": 0}) as fixture:
+                root, child, _, events = fixture
+                with self.assertRaisesRegex(runner.AuditError, "Descendant changed from a physical directory"):
+                    runner.inspect_disposable_tree(root)
+                self.assertIn(("lstat", child), events)
+                self.assertNotIn(("scan", child), events)
+
+    def test_cleanup_revalidates_directory_reparse_before_descending(self):
+        for tag in (0xA0000003, 0xA000000C, 0x80000042):
+            with self.subTest(tag=tag), cleanup_metadata(self, cached_device=47,
+                    child_fields={"st_file_attributes": 0x400, "st_reparse_tag": tag}) as fixture:
+                root, child, _, events = fixture
+                with self.assertRaisesRegex(runner.AuditError, "Descendant changed from a physical directory"):
+                    runner.inspect_disposable_tree(root)
+                self.assertIn(("lstat", child), events)
+                self.assertNotIn(("scan", child), events)
+
+    def test_cleanup_rejects_unknown_cached_reparse_before_path_stat(self):
+        with cleanup_metadata(self, entry_fields={"st_file_attributes": 0x400, "st_reparse_tag": 0x80000042},
+                child_error=AssertionError("Unknown reparse must be rejected before full path lookup")) as fixture:
+            root, child, _, events = fixture
+            with mock.patch.object(os, "readlink", side_effect=AssertionError("Unknown reparse target was read")):
+                with self.assertRaisesRegex(runner.AuditError, "Unknown descendant reparse type"):
+                    runner.inspect_disposable_tree(root)
+            self.assertNotIn(("lstat", child), events)
+            self.assertNotIn(("scan", child), events)
+
+    def test_cleanup_directory_full_stat_errors_fail_closed(self):
+        for error in (FileNotFoundError("injected missing child"), PermissionError("injected child permission"),
+                      OSError(errno.EIO, "injected child I/O")):
+            with self.subTest(error=type(error).__name__), cleanup_metadata(self, child_error=error) as fixture:
+                root, child, _, events = fixture
+                with self.assertRaises(type(error)) as failure:
+                    runner.inspect_disposable_tree(root)
+                self.assertIs(failure.exception, error)
+                self.assertNotIn(("scan", child), events)
+
+    def test_cleanup_scan_failures_and_entry_bound_stay_fail_closed(self):
+        for blocked in ("root", "child"):
+            with self.subTest(blocked=blocked), cleanup_metadata(self, blocked_scan=blocked) as fixture:
+                with self.assertRaisesRegex(PermissionError, "injected cleanup scan failure"):
+                    runner.inspect_disposable_tree(fixture[0])
+        with cleanup_metadata(self) as fixture, mock.patch.object(runner, "MAX_CLEANUP_ENTRIES", 1):
+            with self.assertRaisesRegex(runner.AuditError, "Disposable output entry count exceeds its bound"):
+                runner.inspect_disposable_tree(fixture[0])
+
+    def test_cleanup_initial_special_file_is_rejected_before_path_stat(self):
+        with cleanup_metadata(self, entry_fields={"st_mode": stat.S_IFIFO | 0o600}) as fixture:
+            root, child, _, events = fixture
+            with self.assertRaisesRegex(runner.AuditError, "Unexpected special file blocks disposable-output cleanup"):
+                runner.inspect_disposable_tree(root)
+            self.assertNotIn(("lstat", child), events)
+            self.assertNotIn(("scan", child), events)
+
     def test_fixture_markers_are_flushed_raw_bytes_under_both_text_newline_policies(self):
         # Exercise the actual embedded program, not a duplicate marker implementation.
         # Buffered binary streams make a missing explicit flush observable before close.
@@ -948,6 +1102,37 @@ while True:
         self.git("add", "-f", "build/user-source.txt")
         self.assertEqual(self.cleanup_command(directory)[0], 125)
         self.assertEqual((directory / "user-source.txt").read_text(), "preserve\n")
+
+    def test_cleanup_preflights_all_targets_before_removing_any_output(self):
+        first, second = self.root / "build", self.state / "fixtures"
+        child = second / "nested"
+        first.mkdir()
+        child.mkdir(parents=True)
+        (first / "keep.txt").write_bytes(b"first output must survive rejected preflight\n")
+        (child / "keep.txt").write_bytes(b"second output must survive rejected preflight\n")
+        context_bytes = (self.state / "context.json").read_bytes()
+        real_lstat = Path.lstat
+        observed = []
+
+        def different_device(path, *args, **kwargs):
+            actual = real_lstat(path, *args, **kwargs)
+            if path == child:
+                observed.append(path)
+                return StatFields(actual, st_dev=actual.st_dev ^ 1)
+            return actual
+
+        # Real initialized context, source checks, leaf lock and cleanup caller;
+        # only the descendant device boundary is modeled, not a native mount.
+        with mock.patch.object(Path, "lstat", new=different_device):
+            with self.assertRaisesRegex(runner.AuditError, "Cross-device descendant directory"):
+                runner.cleanup(argparse.Namespace(state=str(self.state), path=[str(first), str(second)]))
+        self.assertTrue(observed)
+        self.assertEqual((first / "keep.txt").read_bytes(), b"first output must survive rejected preflight\n")
+        self.assertEqual((child / "keep.txt").read_bytes(), b"second output must survive rejected preflight\n")
+        self.assertEqual(list((self.state / "evidence").glob("cleanup-*.json")), [])
+        self.assertEqual((self.state / "context.json").read_bytes(), context_bytes)
+        self.assertEqual((self.root / "source.txt").read_text(), "original source\n")
+        self.assertTrue((self.root / "buildSrc/src/main/java/dev/p2pkit/build/Source.java").is_file())
 
     def test_cleanup_only_exact_new_xcode_project_and_preserves_preexisting_project(self):
         project = self.root / "samples/iosApp/p2pkit-sample.xcodeproj"
@@ -1814,6 +1999,49 @@ class WindowsNativeTests(ExecutorFixtureTests):
         self.assertEqual(inspection["entryCount"], 1)
         self.assertEqual(inspection["links"], [{"path": link.name, "kind": "junction", "reparseTag": 0xA0000003,
             "targetSha256": runner.digest(target_bytes), "targetBytes": len(target_bytes),
+            "policy": "unlink-entry-only; do-not-traverse-target"}])
+
+    def test_windows_cleanup_nested_outputs_and_junction_preserve_external_sentinel(self):
+        code, _, err, receipt = self.run_leaf(["report"])
+        self.assertEqual(code, 0, err.decode(errors="replace"))
+        directory = self.root / "build"
+        outside = self.base / "outside-nested-junction"
+        outside.mkdir()
+        sentinel = outside / "sentinel.txt"
+        sentinel.write_bytes(b"nested junction target sentinel\x00\xff\n")
+        link = directory / "test-results/fixture/runtime junction"
+        capture = Capture(self.scope.spawn([self.scope.api.cmd(), "/d", "/v:off", "/c", "mklink", "/J",
+            str(link), str(outside)], str(self.root), self.env))
+        code, _, err = capture.finish(self.scope)
+        self.assertEqual(code, 0, err.decode(errors="replace"))
+        self.assertEqual(link.lstat().st_reparse_tag, 0xA0000003)
+        target_bytes = os.fsencode(os.readlink(link))
+        with os.scandir(directory) as entries:
+            child = next(entry for entry in entries if entry.name == "test-results")
+            metadata = {"python": sys.version, "rootDevice": directory.lstat().st_dev,
+                        "cachedChildDevice": child.stat(follow_symlinks=False).st_dev,
+                        "fullChildDevice": Path(child.path).lstat().st_dev}
+        self.assertEqual(metadata["fullChildDevice"], metadata["rootDevice"])
+        # Record actual fields, but do not require future Python caches to be zero.
+        if CASE_EVIDENCE is not None:
+            (CASE_EVIDENCE / "nested-directory-metadata.json").write_text(json.dumps(metadata) + "\n")
+        source = self.root / "buildSrc/src/main/java/dev/p2pkit/build/Source.java"
+        source_bytes = source.read_bytes()
+        code, _, err = self.cleanup_command(directory)
+        self.assertEqual(code, 0, err.decode(errors="replace"))
+        self.assertFalse(directory.exists())
+        self.assertTrue(outside.is_dir())
+        self.assertEqual(sentinel.read_bytes(), b"nested junction target sentinel\x00\xff\n")
+        self.assertEqual(source.read_bytes(), source_bytes)
+        self.assertTrue((Path(receipt["evidenceDirectory"]) / "receipt.json").is_file())
+        record = self.cleanup_record()
+        self.assertEqual(record["removed"], [str(directory)])
+        self.assertTrue((self.state / "evidence" / f"cleanup-{record['id']}-start.json").is_file())
+        inspection = record["inspections"][0]
+        self.assertEqual(inspection["entryCount"], 4)
+        self.assertTrue(inspection["noTargetTraversal"])
+        self.assertEqual(inspection["links"], [{"path": "test-results/fixture/runtime junction", "kind": "junction",
+            "reparseTag": 0xA0000003, "targetSha256": runner.digest(target_bytes), "targetBytes": len(target_bytes),
             "policy": "unlink-entry-only; do-not-traverse-target"}])
 
     def test_actual_job_membership_is_verified_before_resume(self):

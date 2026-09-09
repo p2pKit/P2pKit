@@ -950,8 +950,15 @@ def inspect_disposable_tree(path: Path) -> dict[str, Any]:
                     require(metadata_bytes <= MAX_JSON_BYTES // 2, "Disposable link evidence exceeds its bound")
                     links.append(record)
                 elif stat.S_ISDIR(info.st_mode):
-                    require(info.st_dev == root_device, "Cross-device descendant directory blocks cleanup")
-                    pending.append((Path(entry.path), depth + 1))
+                    # Windows DirEntry caches have st_dev=0. Keep their initial
+                    # reparse classification above, but compare full path stats.
+                    child = Path(entry.path)
+                    physical = child.lstat()
+                    require(stat.S_ISDIR(physical.st_mode) and
+                            not (getattr(physical, "st_file_attributes", 0) & 0x400),
+                            "Descendant changed from a physical directory before cleanup")
+                    require(physical.st_dev == root_device, "Cross-device descendant directory blocks cleanup")
+                    pending.append((child, depth + 1))
                 else:
                     require(stat.S_ISREG(info.st_mode), "Unexpected special file blocks disposable-output cleanup")
     return {"path": str(path), "entryCount": count, "links": sorted(links, key=lambda item: item["path"]),
