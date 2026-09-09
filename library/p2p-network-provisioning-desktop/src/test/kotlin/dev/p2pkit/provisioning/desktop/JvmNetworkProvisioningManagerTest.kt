@@ -16,6 +16,7 @@ import dev.p2pkit.core.provisioning.LocalNetworkConfig
 import dev.p2pkit.core.provisioning.LocalNetworkResult
 import dev.p2pkit.core.provisioning.ManualPeerRegistrar
 import dev.p2pkit.core.provisioning.NetworkProvisioningConfig
+import dev.p2pkit.core.provisioning.NetworkProvisioningEvent
 import dev.p2pkit.core.provisioning.NetworkProvisioningState
 import dev.p2pkit.core.provisioning.NetworkState
 import dev.p2pkit.core.provisioning.ProvisioningContext
@@ -26,6 +27,8 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -34,6 +37,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlin.test.Test
@@ -42,6 +49,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class JvmNetworkProvisioningManagerTest {
@@ -215,6 +223,67 @@ class JvmNetworkProvisioningManagerTest {
         } finally {
             mgr.close()
         }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun pollFailureEscalationIsOncePerStreakAndRearmsAfterRecovery() = runTest {
+        val failure = IllegalStateException("synthetic enumeration failure")
+        val logger = RecordingProvisioningLogger()
+        var fail = true
+        val manager = JvmNetworkProvisioningManager(
+            ctx(logger = logger),
+            1_000,
+            { if (fail) throw failure else emptyList() },
+            StandardTestDispatcher(testScheduler)
+        )
+        val events = mutableListOf<NetworkProvisioningEvent>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            manager.events.collect { events += it }
+        }
+        try {
+            runCurrent() // One transient failure is diagnostic-only.
+            assertTrue(logger.warnings.isEmpty())
+            assertTrue(events.isEmpty())
+            fail = false
+            advanceTimeBy(1_000)
+            runCurrent()
+            assertEquals(NetworkState.NoNetwork, manager.networkState.value)
+            assertTrue(logger.warnings.isEmpty())
+
+            fail = true
+            advanceTimeBy(3_000)
+            runCurrent()
+            assertEquals(NetworkState.Unknown, manager.networkState.value)
+            assertSame(failure, logger.warnings.single())
+            assertSame(
+                failure,
+                assertIs<NetworkProvisioningError.PlatformError>(
+                    assertIs<NetworkProvisioningEvent.Failed>(events.single()).error
+                ).platformException
+            )
+            advanceTimeBy(20_000)
+            runCurrent()
+            assertEquals(1, logger.warnings.size)
+            assertEquals(1, events.size)
+
+            fail = false
+            advanceTimeBy(1_000)
+            runCurrent()
+            assertEquals(NetworkState.NoNetwork, manager.networkState.value)
+            fail = true
+            advanceTimeBy(3_000)
+            runCurrent()
+            assertEquals(listOf<Throwable?>(failure, failure), logger.warnings)
+            assertEquals(2, events.size)
+            assertEquals(NetworkProvisioningState.Idle, manager.state.value)
+        } finally {
+            manager.close()
+        }
+        val terminalLogs = logger.messages.toList()
+        advanceTimeBy(20_000)
+        runCurrent()
+        assertEquals(terminalLogs, logger.messages, "cancellation must not become a poll failure")
     }
 
     @Test
@@ -441,8 +510,12 @@ private class RecordingRegistrar : ManualPeerRegistrar {
 
 private class RecordingProvisioningLogger : P2pLogger {
     val messages = mutableListOf<String>()
+    val warnings = mutableListOf<Throwable?>()
     override fun debug(message: String) { messages += message }
     override fun info(message: String) { messages += message }
-    override fun warn(message: String, throwable: Throwable?) { messages += message }
+    override fun warn(message: String, throwable: Throwable?) {
+        messages += message
+        warnings += throwable
+    }
     override fun error(message: String, throwable: Throwable?) { messages += message }
 }

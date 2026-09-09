@@ -22,6 +22,7 @@ import java.net.NetworkInterface
 import java.net.SocketException
 import java.util.Collections
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -60,12 +61,18 @@ import kotlinx.coroutines.withContext
  * usable non-loopback addresses are present and [NetworkState.NoNetwork]
  * otherwise. Down, virtual, and link-local candidates are excluded; private
  * LAN addresses are ranked first. The SSID is always reported as `null`.
+ * A failed scan reports [NetworkState.Unknown] and keeps retrying. Three
+ * consecutive failures emit one [NetworkProvisioningEvent.Failed] and one
+ * warning with the cause; a successful scan rearms that diagnostic. This
+ * does not terminally fail the manager or turn ordinary cancellation into
+ * a poll failure.
  */
 @OptIn(ExperimentalP2pApi::class)
 public class JvmNetworkProvisioningManager private constructor(
     private val ctx: ProvisioningContext,
     pollIntervalMillisInput: Long,
-    private val addressScanner: NetworkAddressScanner
+    private val addressScanner: NetworkAddressScanner,
+    dispatcher: CoroutineDispatcher
 ) : NetworkProvisioningManager {
 
     private val pollIntervalMillis: Long = pollIntervalMillisInput.also {
@@ -80,17 +87,18 @@ public class JvmNetworkProvisioningManager private constructor(
     public constructor(
         ctx: ProvisioningContext,
         pollIntervalMillis: Long = DEFAULT_POLL_INTERVAL_MS
-    ) : this(ctx, pollIntervalMillis, NetworkAddressScanner { collectNonLoopbackAddresses() })
+    ) : this(ctx, pollIntervalMillis, NetworkAddressScanner { collectNonLoopbackAddresses() }, Dispatchers.IO)
 
     /** Host-test seam for deterministic address/fatal-error coverage. */
     internal constructor(
         ctx: ProvisioningContext,
         pollIntervalMillis: Long,
-        addressScanner: () -> List<String>
-    ) : this(ctx, pollIntervalMillis, NetworkAddressScanner(addressScanner))
+        addressScanner: () -> List<String>,
+        dispatcher: CoroutineDispatcher = Dispatchers.IO
+    ) : this(ctx, pollIntervalMillis, NetworkAddressScanner(addressScanner), dispatcher)
 
     private val scopeJob = SupervisorJob(parent = ctx.parentJob)
-    private val scope = CoroutineScope(Dispatchers.IO + scopeJob)
+    private val scope = CoroutineScope(dispatcher + scopeJob)
     private val closeLock = Mutex()
 
     @Volatile
@@ -226,9 +234,11 @@ public class JvmNetworkProvisioningManager private constructor(
     // --- internals --------------------------------------------------------
 
     private suspend fun pollNetworkLoop() {
+        var consecutiveFailures = 0
         while (scope.isActive) {
             try {
                 val ips = addressScanner.scan()
+                consecutiveFailures = 0
                 _networkState.value = if (ips.isEmpty()) {
                     NetworkState.NoNetwork
                 } else {
@@ -237,11 +247,19 @@ public class JvmNetworkProvisioningManager private constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                ctx.logger.debug(
-                    "provisioning: NetworkInterface poll failed with " +
-                        "${e::class.simpleName}: ${e.message ?: "(no message)"}"
-                )
                 _networkState.value = NetworkState.Unknown
+                // Saturate at the reporting threshold: one bounded diagnostic
+                // per failure streak, not an exception/stack trace every poll.
+                if (consecutiveFailures < POLL_FAILURE_THRESHOLD) {
+                    consecutiveFailures += 1
+                    if (consecutiveFailures == 1) {
+                        ctx.logger.debug("provisioning: network address poll failed; retrying")
+                    }
+                    if (consecutiveFailures == POLL_FAILURE_THRESHOLD) {
+                        _events.tryEmit(NetworkProvisioningEvent.Failed(NetworkProvisioningError.PlatformError(e)))
+                        ctx.logger.warn("provisioning: network address polling failed repeatedly; retrying", e)
+                    }
+                }
             }
             delay(pollIntervalMillis)
         }
@@ -324,3 +342,5 @@ internal fun selectUsableNetworkAddresses(
     .sortedWith(compareByDescending<NetworkAddressCandidate> { it.siteLocal })
     .map { it.hostAddress }
     .toList()
+
+private const val POLL_FAILURE_THRESHOLD = 3
