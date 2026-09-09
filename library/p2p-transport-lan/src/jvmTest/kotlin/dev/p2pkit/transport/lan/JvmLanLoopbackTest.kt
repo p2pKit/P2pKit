@@ -26,7 +26,6 @@ import java.net.Socket
 import java.nio.file.Files
 import java.security.MessageDigest
 import kotlin.test.AfterTest
-import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -49,17 +48,6 @@ class JvmLanLoopbackTest {
 
     private val unique = "p2pkit-itest-${System.currentTimeMillis()}"
     private val discoveryBackend = JvmDeterministicDiscoveryTestBackend()
-    private var globalStateLease: JvmGlobalStateTestGuard.Lease? = null
-
-    /**
-     * Select the process-local callback backend so hosted CI does not depend
-     * on its virtual LAN reflecting multicast. The production path remains
-     * unchanged because only an internal constructor accepts this backend.
-     */
-    @BeforeTest
-    fun setupBindAddress() {
-        globalStateLease = JvmGlobalStateTestGuard.acquire("user.home")
-    }
 
     private fun newKit(name: String): P2pKit = P2pKit.create {
         appId = AppId(unique)
@@ -80,39 +68,18 @@ class JvmLanLoopbackTest {
     }
 
     private val toStop = mutableListOf<P2pKit>()
-    private val tempHomes = mutableListOf<File>()
 
     @AfterTest
     fun teardown() {
-        try {
-            runBlocking {
-                toStop.forEach { runCatching { it.stop() } }
-                toStop.clear()
-                tempHomes.forEach { runCatching { it.deleteRecursively() } }
-                tempHomes.clear()
-            }
-        } finally {
-            globalStateLease?.close()
-            globalStateLease = null
+        runBlocking {
+            toStop.forEach { runCatching { it.stop() } }
+            toStop.clear()
         }
     }
 
-    /**
-     * Construct a [P2pKit] under a per-call temporary `user.home`. This forces
-     * the default JVM [dev.p2pkit.core.internal.PeerIdStorage] to write under a
-     * fresh directory, so two kits in the same JVM (sharing an `appId`) end up
-     * with **different** `PeerId`s — otherwise each would filter the other
-     * out of mDNS results as "self". The `user.home` swap is restored
-     * synchronously after [P2pKit.create] returns; the kit captures its
-     * `PeerId` at construction so later `user.home` changes don't affect it.
-     */
+    /** Each kit has its own in-memory secure identity store, independent of user.home. */
     private suspend fun startAndAdvertise(name: String): P2pKit {
-        val tempHome = Files.createTempDirectory("p2pkit-itest-${name}-").toFile()
-        tempHomes.add(tempHome)
-        val lease = checkNotNull(globalStateLease) { "global-state fixture was not acquired" }
-        val kit = lease.withValue("user.home", tempHome.absolutePath) {
-            newKit(name)
-        }
+        val kit = newKit(name)
         toStop.add(kit)
         kit.startAdvertising()
         kit.startDiscovery()

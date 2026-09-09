@@ -6,15 +6,12 @@ import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.provisioning.desktop.jvm
-import java.io.File
-import java.nio.file.Files
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -36,35 +33,15 @@ import kotlin.test.assertNotNull
 class KmpConsumerLoopbackTest {
 
     private val appId = "kmp-consumer-itest-${System.currentTimeMillis()}"
-    private val tempHomes = mutableListOf<File>()
-
-    @AfterTest
-    fun cleanup() {
-        tempHomes.forEach { runCatching { it.deleteRecursively() } }
-        tempHomes.clear()
-    }
 
     private fun createKit(
         deviceName: String,
         authorization: PeerAuthorizationPolicy = PeerAuthorizationPolicy.RejectUnknown
-    ): P2pKit {
-        val savedHome = System.getProperty("user.home")
-        val tempHome = Files.createTempDirectory("p2pkit-kmp-itest-${deviceName}-").toFile()
-        tempHomes.add(tempHome)
-        System.setProperty("user.home", tempHome.absolutePath)
-        return try {
-            createJvmP2pKit(
-                appId = appId,
-                deviceName = deviceName,
-                authorization = authorization
-            ) { jvm() }
-        } finally {
-            // clearProperty when originally unset, instead of poisoning
-            // user.home to "" (AUDIT-2026-06 fix).
-            if (savedHome != null) System.setProperty("user.home", savedHome)
-            else System.clearProperty("user.home")
-        }
-    }
+    ): P2pKit = createJvmP2pKit(
+        appId = appId,
+        deviceName = deviceName,
+        authorization = authorization
+    ) { jvm() }
 
     @Test
     fun sharedFactoryCreatesAKitThatCanGreetAManualPeer() {

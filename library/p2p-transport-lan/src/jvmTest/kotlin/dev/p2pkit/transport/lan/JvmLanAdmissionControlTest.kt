@@ -99,7 +99,7 @@ class JvmLanAdmissionControlTest {
             try {
                 // fd evidence, per socket: a transport-refused connection was
                 // closed with no HELLO; an admitted one received HELLO bytes.
-                val expectedRefusals = NEVER_HELLO_COUNT - PER_SOURCE_BOUND
+                val expectedRefusals = NEVER_HELLO_COUNT - MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE
                 var refusedClosed = 0
                 var admitted = 0
                 for (s in sockets) {
@@ -119,7 +119,7 @@ class JvmLanAdmissionControlTest {
                     "connections past the bound must be closed without any handshake bytes"
                 )
                 assertEquals(
-                    PER_SOURCE_BOUND, admitted,
+                    MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE, admitted,
                     "only the source's fair share may enter core handshake setup"
                 )
                 assertEquals(
@@ -189,7 +189,7 @@ class JvmLanAdmissionControlTest {
             }
             awaitTrue("all admitted never-HELLO setups surfaced as failures") {
                 bobLogger.warnings().count { it.contains("Incoming session setup failed") } >=
-                    PER_SOURCE_BOUND
+                    MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE
             }
 
             // Source A's slots were evicted on close, so another IPv4 peer can
@@ -337,11 +337,8 @@ class JvmLanAdmissionControlTest {
     }
 
     private companion object {
-        /** Mirrors [MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE]. */
-        const val PER_SOURCE_BOUND: Int = 2
-
         /** Raw connections opened that never send HELLO (> the bound). */
-        const val NEVER_HELLO_COUNT: Int = 4
+        const val NEVER_HELLO_COUNT: Int = MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE + 2
 
         /** Warn fragment logged on a pre-handshake admission refusal. */
         const val REFUSAL_FRAGMENT: String = "pre-handshake setups at capacity"
