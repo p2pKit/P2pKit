@@ -15,7 +15,7 @@ import dev.p2pkit.core.P2pLogger
  * through the same delegate.
  */
 internal fun P2pLogger.failureIsolated(): P2pLogger =
-    if (this is FailureIsolatingP2pLogger) this else FailureIsolatingP2pLogger(this)
+    if (this === P2pLogger.NoOp || this is FailureIsolatingP2pLogger) this else FailureIsolatingP2pLogger(this)
 
 private class FailureIsolatingP2pLogger(
     private val delegate: P2pLogger

@@ -20,6 +20,9 @@ import dev.p2pkit.core.transport.PeerAuthenticationHint
 import dev.p2pkit.core.transport.PeerOrigin
 import dev.p2pkit.core.transport.TransportSecurityProfile
 import dev.p2pkit.core.transport.TransportHint
+import kotlin.concurrent.atomics.AtomicBoolean
+import kotlin.concurrent.atomics.AtomicLong
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlin.jvm.JvmInline
@@ -86,8 +89,13 @@ internal class PeerRegistry(
         MutableStateFlow(PeerRegistryState())
     private val peerPublication: MutableStateFlow<PeerPublication> =
         MutableStateFlow(PeerPublication(0L, immutableListSnapshot(emptyList())))
-    private val loggedDiscoveryRejections: MutableStateFlow<Set<DiscoveryRejection>> =
-        MutableStateFlow(emptySet())
+    // Default kits retain the NoOp singleton through failure isolation. Do not
+    // allocate counters or read the diagnostic clock when logging is disabled.
+    private val rejectionWarnings = if (logger === P2pLogger.NoOp) {
+        null
+    } else {
+        Array(DiscoveryRejection.entries.size) { DiscoveryRejectionWindow() }
+    }
 
     /**
      * Public-facing peer list. Updated synchronously after every accepted
@@ -182,7 +190,7 @@ internal class PeerRegistry(
     private fun processEvent(source: DiscoverySource, event: PeerEvent): Boolean {
         if (registryState.value.closed) return false
         val admitted = admitDiscoveryEvent(event) ?: run {
-            warnDiscoveryRejectionOnce(DiscoveryRejection.InvalidEvent)
+            warnDiscoveryRejection(DiscoveryRejection.InvalidEvent)
             return false
         }
         val observation = if (admitted is AdmittedDiscoveryEvent.Upsert) {
@@ -202,7 +210,7 @@ internal class PeerRegistry(
                         // snapshot. The generation prevents an ABA-equivalent
                         // map from making this check accidentally succeed.
                         if (registryState.compareAndSet(current, current)) {
-                            warnDiscoveryRejectionOnce(DiscoveryRejection.CapacityExhausted)
+                            warnDiscoveryRejection(DiscoveryRejection.CapacityExhausted)
                             return false
                         }
                         continue
@@ -346,14 +354,15 @@ internal class PeerRegistry(
         }
     }
 
-    private fun warnDiscoveryRejectionOnce(rejection: DiscoveryRejection) {
-        while (true) {
-            val logged = loggedDiscoveryRejections.value
-            if (rejection in logged) return
-            if (loggedDiscoveryRejections.compareAndSet(logged, logged + rejection)) {
-                logger.warn(rejection.message)
-                return
-            }
+    private fun warnDiscoveryRejection(rejection: DiscoveryRejection) {
+        val windows = rejectionWarnings ?: return
+        val count = windows[rejection.ordinal].record(monotonicClock)
+        if (count == DiscoveryRejectionWindow.FIRST_WARNING) {
+            logger.warn(rejection.message)
+        } else if (count > 0L) {
+            val quantity = if (count == Long.MAX_VALUE) "at least $count" else count.toString()
+            val eventLabel = if (count == 1L) "event" else "events"
+            logger.warn("${rejection.message}; $quantity further rejected $eventLabel since the previous warning")
         }
     }
 
@@ -678,6 +687,59 @@ private data class DiscoveryObservation(
 private enum class DiscoveryRejection(val message: String) {
     InvalidEvent("Rejected an invalid discovery event"),
     CapacityExhausted("Rejected a discovery event because peer capacity is exhausted")
+}
+
+/**
+ * Fixed-size, event-driven diagnostics, independent of registry publication.
+ * A caller that loses the non-blocking claim only counts its event; it never
+ * waits for another reporter or a host logger. The claim is released before
+ * logging, after the timestamp and count snapshot have been committed.
+ */
+@OptIn(ExperimentalAtomicApi::class)
+private class DiscoveryRejectionWindow {
+    private val claimed = AtomicBoolean(false)
+    private val pending = AtomicLong(0L)
+    // Guarded by claimed, whose atomic acquire/release publishes both fields.
+    private var hasWarned = false
+    private var lastWarnedAtMillis = 0L
+
+    /** Zero suppresses output; a positive summary includes this triggering event. */
+    fun record(monotonicClock: () -> Long): Long {
+        if (!claimed.compareAndSet(false, true)) {
+            incrementPending()
+            return 0L
+        }
+        try {
+            val now = monotonicClock()
+            if (!hasWarned) {
+                hasWarned = true
+                lastWarnedAtMillis = now
+                return FIRST_WARNING
+            }
+            if (now - lastWarnedAtMillis < WARNING_INTERVAL_MS) {
+                incrementPending()
+                return 0L
+            }
+            lastWarnedAtMillis = now
+            // Arrivals after exchange remain pending for the next summary.
+            val suppressed = pending.exchange(0L)
+            return if (suppressed == Long.MAX_VALUE) suppressed else suppressed + 1L
+        } finally {
+            claimed.store(false)
+        }
+    }
+
+    private fun incrementPending() {
+        while (true) {
+            val current = pending.load()
+            if (current == Long.MAX_VALUE || pending.compareAndSet(current, current + 1L)) return
+        }
+    }
+
+    companion object {
+        const val FIRST_WARNING: Long = -1L
+        private const val WARNING_INTERVAL_MS: Long = 60_000L
+    }
 }
 
 private data class PeerPublication(

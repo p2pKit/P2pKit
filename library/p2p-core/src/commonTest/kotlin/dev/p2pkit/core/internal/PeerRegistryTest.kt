@@ -2,6 +2,7 @@ package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
@@ -26,6 +27,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flow
@@ -34,6 +36,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
+import kotlin.concurrent.atomics.AtomicLong
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -352,6 +357,171 @@ class PeerRegistryTest {
         } finally {
             supervisor.cancel()
         }
+    }
+
+    @Test
+    fun discoveryRejectionWarningsAreCountedPerReasonUsingMonotonicWindows() = runTest {
+        var epochNow = 1_000L
+        var monotonicNow = 50L
+        val logger = RecordingLogger()
+        val registry = PeerRegistry(
+            discoveryTransports = emptyList(),
+            scope = backgroundScope,
+            clock = { epochNow },
+            monotonicClock = { monotonicNow },
+            logger = logger,
+            maxDiscoveredPeers = 1
+        )
+        val sensitiveMarker = "private-discovery-marker"
+        val invalid = PeerEvent.Lost(PeerId("$sensitiveMarker\u0000"))
+        val overflow = PeerEvent.Found(
+            peer(sensitiveMarker).copy(
+                transportHints = listOf(TransportHint(TransportKind.LAN, "$sensitiveMarker.local", 9_000))
+            )
+        )
+        val invalidMessage = "Rejected an invalid discovery event"
+        val capacityMessage = "Rejected a discovery event because peer capacity is exhausted"
+        registry.processEvent(PeerEvent.Found(peer("retained")))
+        registry.processEvent(invalid)
+        registry.processEvent(overflow)
+
+        // Ten thousand rejections, split between both reasons, stay within
+        // their first windows without changing admission or exposing values.
+        repeat(5_000) {
+            registry.processEvent(invalid)
+            registry.processEvent(overflow)
+        }
+        epochNow += 86_400_000L
+        monotonicNow += 59_999L
+        registry.processEvent(invalid)
+        registry.processEvent(overflow)
+        assertEquals(listOf(invalidMessage, capacityMessage), logger.warnings)
+
+        epochNow -= 2 * 86_400_000L
+        monotonicNow += 1L
+        registry.processEvent(invalid)
+        registry.processEvent(overflow)
+        assertEquals(
+            listOf(
+                invalidMessage,
+                capacityMessage,
+                "$invalidMessage; 5002 further rejected events since the previous warning",
+                "$capacityMessage; 5002 further rejected events since the previous warning"
+            ),
+            logger.warnings
+        )
+        assertEquals(listOf(PeerId("retained")), registry.peers.value.map(Peer::id))
+
+        // An idle gap does not claim all counted events occurred in the last
+        // sixty seconds; only a new event triggers the next summary.
+        monotonicNow += 180_000L
+        registry.processEvent(invalid)
+        registry.processEvent(overflow)
+        assertEquals(
+            listOf(
+                "$invalidMessage; 1 further rejected event since the previous warning",
+                "$capacityMessage; 1 further rejected event since the previous warning"
+            ),
+            logger.warnings.takeLast(2)
+        )
+        assertEquals(6, logger.warnings.size)
+        assertTrue(logger.entries.none { sensitiveMarker in it.message || it.throwable != null })
+
+        registry.close()
+        monotonicNow += 60_000L
+        registry.processEvent(invalid)
+        registry.processEvent(overflow)
+        assertEquals(6, logger.warnings.size, "events begun after close must not produce diagnostics")
+        assertTrue(registry.peers.value.isEmpty())
+    }
+
+    @OptIn(ExperimentalAtomicApi::class)
+    @Test
+    fun concurrentRejectionSummariesDoNotWaitForOrDependOnTheHostLogger() = runBlocking {
+        val supervisor = SupervisorJob()
+        val workers = CoroutineScope(Dispatchers.Default + supervisor)
+        val enteredLogger = CompletableDeferred<Unit>()
+        val releaseLogger = CompletableDeferred<Unit>()
+        val recording = RecordingLogger()
+        val invalidMessage = "Rejected an invalid discovery event"
+        val logger = object : P2pLogger by recording {
+            override fun warn(message: String, throwable: Throwable?) {
+                recording.warn(message, throwable)
+                if (message == invalidMessage) {
+                    enteredLogger.complete(Unit)
+                    runBlocking { releaseLogger.await() }
+                }
+                throw CancellationException("synthetic host logger failure")
+            }
+        }.failureIsolated()
+        val now = AtomicLong(0L)
+        val registry = PeerRegistry(
+            discoveryTransports = emptyList(),
+            scope = workers,
+            clock = { 1_000L },
+            monotonicClock = { now.load() },
+            logger = logger
+        )
+        val invalid = PeerEvent.Lost(PeerId("invalid\u0000"))
+        val first = workers.async { registry.processEvent(invalid) }
+        try {
+            withTimeout(5_000) { enteredLogger.await() }
+            now.store(60_000L)
+            val releaseContenders = CompletableDeferred<Unit>()
+            val contenders = List(64) {
+                workers.async {
+                    releaseContenders.await()
+                    registry.processEvent(invalid)
+                }
+            }
+            releaseContenders.complete(Unit)
+            withTimeout(5_000) { contenders.awaitAll() }
+            assertEquals(
+                2,
+                recording.warnings.size,
+                "only one summary may win the due window, even while the first logger call is blocked"
+            )
+
+            now.store(120_000L)
+            registry.processEvent(invalid)
+            val warnings = recording.warnings
+            assertEquals(3, warnings.size)
+            val counts = warnings.drop(1).map { warning ->
+                assertTrue(warning.startsWith("$invalidMessage; "))
+                assertTrue(warning.endsWith(" since the previous warning"))
+                warning.substringAfter("; ").substringBefore(" further").toLong()
+            }
+            assertTrue(counts.all { it > 0L })
+            assertEquals(65L, counts.sum(), "every concurrent event and the later trigger is counted exactly once")
+            assertTrue(registry.peers.value.isEmpty())
+            releaseLogger.complete(Unit)
+            withTimeout(5_000) { first.await() }
+        } finally {
+            releaseLogger.complete(Unit)
+            supervisor.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun noOpDiscoveryRejectionsDoNotReadTheDiagnosticClock() = runTest {
+        var monotonicReads = 0
+        val registry = PeerRegistry(
+            discoveryTransports = emptyList(),
+            scope = backgroundScope,
+            clock = { 1_000L },
+            monotonicClock = {
+                monotonicReads += 1
+                1_000L
+            },
+            maxDiscoveredPeers = 1
+        )
+        repeat(3) { registry.processEvent(PeerEvent.Lost(PeerId("invalid\u0000"))) }
+        assertEquals(0, monotonicReads)
+
+        registry.processEvent(PeerEvent.Found(peer("retained")))
+        registry.processEvent(PeerEvent.Found(peer("overflow")))
+        assertEquals(2, monotonicReads, "valid upserts retain only their existing observation-clock read")
+        assertEquals(listOf(PeerId("retained")), registry.peers.value.map(Peer::id))
     }
 
     @OptIn(ExperimentalP2pApi::class)
