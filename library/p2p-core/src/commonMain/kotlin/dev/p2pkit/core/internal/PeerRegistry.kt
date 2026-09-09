@@ -860,11 +860,4 @@ private data class TrackedPeer(
         )
 
     val isEmpty: Boolean get() = manual == null && discoveredBy.isEmpty()
-
-    /**
-     * True for entries created by [PeerRegistry.registerManualPeer]; exempt
-     * from staleness eviction. Derived from [InternalPeer.origin] so there is
-     * a single source of provenance truth (no second flag that could drift).
-     */
-    val isManual: Boolean get() = manual != null
 }
