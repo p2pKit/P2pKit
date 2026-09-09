@@ -82,11 +82,11 @@ class JvmLanAdmissionControlTest {
             val bobLogger = KitTestDiagnostics.Recording()
             val bobTransport = newLanTransport("Bob")
             val bobStub = AdmissionStubDiscovery()
-            val bob = newKit("Bob", bobLogger, AdmissionPairFactory(bobTransport, bobStub)) { recording ->
+            val bob = newKit("Bob", bobLogger, AdmissionPairFactory(bobTransport, bobStub)) { entries ->
                 // Only admitted silent sockets reach HELLO setup. Transport refusals are not
                 // core warnings; no global-capacity, listener, cleanup or ERROR entry is allowed.
-                assertEquals(MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE, recording.entries.size)
-                recording.entries.forEach(::assertTruncatedHello)
+                assertEquals(MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE, entries.size)
+                entries.forEach(::assertTruncatedHello)
             }
             bob.start()
             val bobPort = requireNotNull(bobTransport.tcpPort.value)
@@ -260,11 +260,11 @@ class JvmLanAdmissionControlTest {
         name: String,
         kitLogger: KitTestDiagnostics.Recording,
         factory: TransportFactory,
-        verifyDiagnostics: (KitTestDiagnostics.Recording) -> Unit = { it.assertQuiet() }
+        verifyDiagnostics: (List<KitTestDiagnostics.Recording.Entry>) -> Unit = { assertEquals(emptyList(), it) }
     ): P2pKit {
         val tempHome = Files.createTempDirectory("p2pkit-itest-$name-").toFile()
         tempHomes.add(tempHome)
-        return diagnostics.create(kitLogger, verifyDiagnostics) { recording ->
+        return diagnostics.createWithFilePeerIdDiagnostics(tempHome, kitLogger, verifyDiagnostics) { recording ->
             JvmGlobalStateTestGuard.withValues(
                 mapOf("user.home" to tempHome.absolutePath)
             ) {

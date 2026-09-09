@@ -39,7 +39,10 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -81,10 +84,10 @@ class JvmLanAcceptLoopResilienceTest {
         runBlocking {
             val bobLogger = KitTestDiagnostics.Recording()
             val bobTransport = newLanTransport("Bob")
-            val bob = newKit("Bob", bobLogger, PairFactory(bobTransport)) { recording ->
+            val bob = newKit("Bob", bobLogger, PairFactory(bobTransport)) { entries ->
                 // Exactly the one deliberately truncated HELLO, after all kits have stopped.
-                assertEquals(1, recording.entries.size)
-                assertTruncatedHello(recording.entries.single())
+                assertEquals(1, entries.size)
+                assertTruncatedHello(entries.single())
             }
             bob.start()
             val bobPort = requireNotNull(bobTransport.tcpPort.value)
@@ -137,9 +140,9 @@ class JvmLanAcceptLoopResilienceTest {
         runBlocking {
             val bobLogger = KitTestDiagnostics.Recording()
             val bobTransport = newLanTransport("Bob")
-            val bob = newKit("Bob", bobLogger, PairFactory(bobTransport)) { recording ->
+            val bob = newKit("Bob", bobLogger, PairFactory(bobTransport)) { entries ->
                 // One real listener close must not become an unbounded retry warning stream.
-                val entry = recording.entries.single()
+                val entry = entries.single()
                 assertEquals(KitTestDiagnostics.Recording.Level.WARN, entry.level)
                 assertEquals("inbound acceptance ended for LAN", entry.message)
                 val cause = assertIs<SocketException>(entry.throwable)
@@ -209,6 +212,33 @@ class JvmLanAcceptLoopResilienceTest {
         }
     }
 
+    @Test
+    fun filePersistencePrefixDoesNotHideConstructorOrLateDiagnostics() = runBlocking {
+        val constructionFailure = IllegalStateException("injected constructor failure")
+        val failedHome = Files.createTempDirectory("p2pkit-itest-construction-").toFile()
+        tempHomes.add(failedHome)
+        var runtimeVerificationInvoked = false
+        assertSame(constructionFailure, assertFailsWith<IllegalStateException> {
+            diagnostics.createWithFilePeerIdDiagnostics(
+                home = failedHome,
+                recording = KitTestDiagnostics.Recording(),
+                verifyRuntimeDiagnostics = { runtimeVerificationInvoked = true }
+            ) { recording ->
+                recording.error("unexpected construction diagnostic")
+                throw constructionFailure
+            }
+        })
+        val constructorDiagnostic = assertFailsWith<AssertionError> { diagnostics.finish() }
+        assertTrue(constructorDiagnostic.message.orEmpty().contains("unexpected construction diagnostic"))
+        assertFalse(runtimeVerificationInvoked, "Failed construction must not use runtime warning allowances")
+
+        val lateLogger = KitTestDiagnostics.Recording()
+        newKit("LateDiagnostic", lateLogger, PairFactory(newLanTransport("LateDiagnostic")))
+        lateLogger.warn("unexpected warning after construction")
+        val lateDiagnostic = assertFailsWith<AssertionError> { diagnostics.finish() }
+        assertTrue(lateDiagnostic.message.orEmpty().contains("unexpected warning after construction"))
+    }
+
     // ---------------------------------------------------------------------
     // Harness
     // ---------------------------------------------------------------------
@@ -231,11 +261,11 @@ class JvmLanAcceptLoopResilienceTest {
         name: String,
         kitLogger: KitTestDiagnostics.Recording,
         factory: TransportFactory,
-        verifyDiagnostics: (KitTestDiagnostics.Recording) -> Unit = { it.assertQuiet() }
+        verifyDiagnostics: (List<KitTestDiagnostics.Recording.Entry>) -> Unit = { assertEquals(emptyList(), it) }
     ): P2pKit {
         val tempHome = Files.createTempDirectory("p2pkit-itest-$name-").toFile()
         tempHomes.add(tempHome)
-        return diagnostics.create(kitLogger, verifyDiagnostics) { recording ->
+        return diagnostics.createWithFilePeerIdDiagnostics(tempHome, kitLogger, verifyDiagnostics) { recording ->
             JvmGlobalStateTestGuard.withValues(
                 mapOf("user.home" to tempHome.absolutePath)
             ) {
