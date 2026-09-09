@@ -248,8 +248,9 @@ public class TransportsBuilder internal constructor() {
      * before any factory's build method can allocate a resource.
      */
     public fun register(factory: TransportFactory) {
-        require(registrations.none { it.factory === factory }) {
-            "The same TransportFactory instance cannot be registered more than once"
+        val duplicateKind = registrations.firstOrNull { it.factory === factory }?.descriptor?.kind
+        require(duplicateKind == null) {
+            "The same TransportFactory instance cannot be registered more than once (kind $duplicateKind)"
         }
         val descriptor = factory.descriptor
         require(registrations.none { it.descriptor.kind == descriptor.kind }) {

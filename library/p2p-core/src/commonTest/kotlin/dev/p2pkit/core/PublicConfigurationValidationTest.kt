@@ -17,38 +17,47 @@ class PublicConfigurationValidationTest {
 
     @Test
     fun keepAliveRejectsNonPositiveAndInvertedDeadlines() {
-        assertFailsWith<IllegalArgumentException> { KeepAliveConfig(0, 1) }
-        assertFailsWith<IllegalArgumentException> { KeepAliveConfig(1, 1) }
-        assertFailsWith<IllegalArgumentException> { KeepAliveConfig(2, 1) }
+        val nonPositive = assertFailsWith<IllegalArgumentException> { KeepAliveConfig(0, 1) }
+        assertContains(nonPositive.message.orEmpty(), "0")
+        val equal = assertFailsWith<IllegalArgumentException> { KeepAliveConfig(1, 1) }
+        assertContains(equal.message.orEmpty(), "1")
+        val inverted = assertFailsWith<IllegalArgumentException> { KeepAliveConfig(10_000, 5_000) }
+        assertContains(inverted.message.orEmpty(), "5000")
+        assertContains(inverted.message.orEmpty(), "10000")
     }
 
     @Test
     fun reconnectRejectsInvalidAttemptAndDelayValues() {
-        assertFailsWith<IllegalArgumentException> {
+        val attempts = assertFailsWith<IllegalArgumentException> {
             ReconnectPolicy.Enabled(maxAttempts = 0, retryDelayMillis = 0)
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertContains(attempts.message.orEmpty(), "0")
+        val delay = assertFailsWith<IllegalArgumentException> {
             ReconnectPolicy.Enabled(maxAttempts = 1, retryDelayMillis = -1)
         }
+        assertContains(delay.message.orEmpty(), "-1")
     }
 
     @Test
     fun fileTransferRejectsInvalidBoundsAndUnrepresentableChunkCounts() {
-        assertFailsWith<IllegalArgumentException> {
+        val fileSize = assertFailsWith<IllegalArgumentException> {
             FileTransferConfig(maxFileSizeBytes = 0)
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertContains(fileSize.message.orEmpty(), "0")
+        val incomingBudget = assertFailsWith<IllegalArgumentException> {
             FileTransferConfig(maxConcurrentIncomingBytes = 0)
         }
+        assertContains(incomingBudget.message.orEmpty(), "0")
         assertFailsWith<IllegalArgumentException> {
             FileTransferConfig(chunkSizeBytes = 0)
         }
         assertFailsWith<IllegalArgumentException> {
             FileTransferConfig(chunkSizeBytes = 4 * 1024 * 1024 + 1)
         }
-        assertFailsWith<IllegalArgumentException> {
+        val offerTimeout = assertFailsWith<IllegalArgumentException> {
             FileTransferConfig(offerTimeoutMillis = 0)
         }
+        assertContains(offerTimeout.message.orEmpty(), "0")
         assertFailsWith<IllegalArgumentException> {
             FileTransferConfig(
                 maxFileSizeBytes = Int.MAX_VALUE.toLong() + 1L,

@@ -7,11 +7,13 @@ import dev.p2pkit.core.protocol.HelloPayload
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.transport.TransportContext
+import dev.p2pkit.core.transport.TransportDescriptor
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
@@ -135,7 +137,7 @@ class LocalIdentityTest {
     @Test
     fun duplicateFactoryInstanceIsRejectedBeforeConstruction() {
         val factory = IdentityTestFactory(FakeDataTransport())
-        assertFailsWith<IllegalArgumentException> {
+        val failure = assertFailsWith<IllegalArgumentException> {
             createTestKit {
                 appId = AppId("com.example.duplicate-instance")
                 deviceName = "Duplicate"
@@ -145,6 +147,9 @@ class LocalIdentityTest {
                 }
             }
         }
+        assertContains(failure.message.orEmpty(), "LAN")
+        assertEquals(1, factory.descriptorReads, "duplicate diagnosis must use the snapshotted descriptor")
+        assertEquals(0, factory.buildCalls, "duplicate registration must fail before construction")
     }
 }
 
@@ -152,8 +157,16 @@ private class IdentityTestFactory(private val transport: FakeDataTransport) : Tr
     var buildCalls: Int = 0
         private set
 
-    override val descriptor =
-        dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
+    var descriptorReads: Int = 0
+        private set
+
+    private val declaredDescriptor = TransportDescriptor.dataOnly(transport.type)
+
+    override val descriptor: TransportDescriptor
+        get() {
+            descriptorReads += 1
+            return declaredDescriptor
+        }
     override fun build(context: TransportContext): TransportPair {
         buildCalls += 1
         return TransportPair(data = transport, discovery = null)

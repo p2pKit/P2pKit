@@ -16,8 +16,10 @@ public data class KeepAliveConfig(
     val timeoutMillis: Long = 30_000
 ) {
     init {
-        require(pingIntervalMillis > 0) { "pingIntervalMillis must be positive" }
-        require(timeoutMillis > pingIntervalMillis) { "timeoutMillis must exceed pingIntervalMillis" }
+        require(pingIntervalMillis > 0) { "pingIntervalMillis must be positive (got $pingIntervalMillis)" }
+        require(timeoutMillis > pingIntervalMillis) {
+            "timeoutMillis ($timeoutMillis) must exceed pingIntervalMillis ($pingIntervalMillis)"
+        }
     }
 }
 
@@ -58,8 +60,10 @@ public sealed class ReconnectPolicy {
      */
     public data class Enabled(val maxAttempts: Int, val retryDelayMillis: Long) : ReconnectPolicy() {
         init {
-            require(maxAttempts > 0) { "maxAttempts must be positive" }
-            require(retryDelayMillis >= 0) { "retryDelayMillis must be non-negative" }
+            require(maxAttempts > 0) { "maxAttempts must be positive (got $maxAttempts)" }
+            require(retryDelayMillis >= 0) {
+                "retryDelayMillis must be non-negative (got $retryDelayMillis)"
+            }
         }
     }
 }

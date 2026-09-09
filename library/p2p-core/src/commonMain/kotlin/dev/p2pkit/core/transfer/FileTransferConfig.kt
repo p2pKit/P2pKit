@@ -70,14 +70,14 @@ public data class FileTransferConfig(
     )
 
     init {
-        require(maxFileSizeBytes > 0) { "maxFileSizeBytes must be positive" }
+        require(maxFileSizeBytes > 0) { "maxFileSizeBytes must be positive (got $maxFileSizeBytes)" }
         require(maxConcurrentIncomingBytes > 0) {
-            "maxConcurrentIncomingBytes must be positive"
+            "maxConcurrentIncomingBytes must be positive (got $maxConcurrentIncomingBytes)"
         }
         require(chunkSizeBytes in 1..(4 * 1024 * 1024)) {
             "chunkSizeBytes must be in 1..4MiB (got $chunkSizeBytes)"
         }
-        require(offerTimeoutMillis > 0) { "offerTimeoutMillis must be positive" }
+        require(offerTimeoutMillis > 0) { "offerTimeoutMillis must be positive (got $offerTimeoutMillis)" }
         val maximumChunkCount = 1L + (maxFileSizeBytes - 1L) / chunkSizeBytes.toLong()
         require(maximumChunkCount <= Int.MAX_VALUE.toLong()) {
             "maxFileSizeBytes/chunkSizeBytes requires $maximumChunkCount chunks; " +
